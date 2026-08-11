@@ -272,8 +272,9 @@ mod tests {
     };
 
     use super::{
-        GlobalWindowsNativeRdpShutdown, begin_drain,
-        fail_closed_windows_native_rdp_for_platform_quit, shutdown_windows_native_rdp,
+        GlobalWindowsNativeRdpShutdown, WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL,
+        WindowsNativeRdpOwner, begin_drain, fail_closed_windows_native_rdp_for_platform_quit,
+        shutdown_windows_native_rdp,
     };
 
     #[gpui::test]
@@ -318,6 +319,171 @@ mod tests {
             assert_eq!(1, controller.registry.active_count());
             assert!(controller.registry.report().is_none());
         });
+    }
+
+    #[gpui::test]
+    fn dropping_polled_shutdown_task_preserves_progress_for_platform_quit(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (destroyed, pending) = cx.update(|cx| {
+            super::super::init(cx);
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                let destroyed = controller
+                    .registry
+                    .register(1)
+                    .expect("destroyed registration");
+                let pending = controller
+                    .registry
+                    .register(2)
+                    .expect("pending registration");
+                assert!(
+                    controller
+                        .owners
+                        .insert(pending, WindowsNativeRdpOwner::Detached)
+                        .is_none()
+                );
+                (destroyed, pending)
+            })
+        });
+
+        let task = cx.update(shutdown_windows_native_rdp);
+        cx.update(|cx| {
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                assert_eq!(
+                    WindowsRdpShutdownCompletion::Recorded,
+                    controller
+                        .registry
+                        .record_terminal(destroyed, WindowsRdpTerminalOutcome::Destroyed)
+                );
+            });
+        });
+
+        assert!(!task.is_ready());
+        assert!(
+            cx.executor().tick(),
+            "the spawned drain task should be runnable"
+        );
+        assert!(
+            !task.is_ready(),
+            "the first drain poll should wait on the bounded poll timer"
+        );
+        drop(task);
+
+        cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+            assert_eq!(
+                WindowsRdpShutdownLifecycle::Draining,
+                controller.registry.lifecycle()
+            );
+            assert_eq!(vec![pending], controller.registry.pending_registrations());
+            assert_eq!(1, controller.registry.active_count());
+            assert!(controller.registry.report().is_none());
+            assert!(matches!(
+                controller.owners.get(&pending),
+                Some(WindowsNativeRdpOwner::Detached)
+            ));
+        });
+
+        let report = cx.update(fail_closed_windows_native_rdp_for_platform_quit);
+
+        assert_eq!(2, report.requested());
+        assert_eq!(1, report.destroyed());
+        assert_eq!(0, report.timed_out_leaked());
+        assert_eq!(1, report.owner_lost());
+        assert!(!report.controller_unavailable());
+        assert!(report.incomplete());
+        cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+            assert_eq!(
+                WindowsRdpShutdownLifecycle::Draining,
+                controller.registry.lifecycle()
+            );
+            assert_eq!(vec![pending], controller.registry.pending_registrations());
+            assert_eq!(1, controller.registry.active_count());
+            assert!(controller.registry.report().is_none());
+            assert!(matches!(
+                controller.owners.get(&pending),
+                Some(WindowsNativeRdpOwner::Detached)
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn polled_shutdown_task_returns_latest_fail_closed_report_after_controller_loss(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (destroyed, pending) = cx.update(|cx| {
+            super::super::init(cx);
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                let destroyed = controller
+                    .registry
+                    .register(1)
+                    .expect("destroyed registration");
+                let pending = controller
+                    .registry
+                    .register(2)
+                    .expect("pending registration");
+                assert!(
+                    controller
+                        .owners
+                        .insert(pending, WindowsNativeRdpOwner::Detached)
+                        .is_none()
+                );
+                (destroyed, pending)
+            })
+        });
+
+        let task = cx.update(shutdown_windows_native_rdp);
+        cx.update(|cx| {
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                assert_eq!(
+                    WindowsRdpShutdownCompletion::Recorded,
+                    controller
+                        .registry
+                        .record_terminal(destroyed, WindowsRdpTerminalOutcome::Destroyed)
+                );
+            });
+        });
+
+        assert!(!task.is_ready());
+        assert!(
+            cx.executor().tick(),
+            "the spawned drain task should be runnable"
+        );
+        assert!(
+            !task.is_ready(),
+            "the first drain poll should wait on the bounded poll timer"
+        );
+
+        let controller = cx.update(|cx| cx.remove_global::<GlobalWindowsNativeRdpShutdown>());
+        cx.executor()
+            .advance_clock(WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL);
+        let report = cx.executor().block_on(task);
+
+        assert_eq!(2, report.requested());
+        assert_eq!(1, report.destroyed());
+        assert_eq!(0, report.timed_out_leaked());
+        assert_eq!(1, report.owner_lost());
+        assert!(!report.controller_unavailable());
+        assert!(report.incomplete());
+        assert_eq!(
+            WindowsRdpShutdownLifecycle::Draining,
+            controller.registry.lifecycle()
+        );
+        assert_eq!(vec![pending], controller.registry.pending_registrations());
+        assert_eq!(1, controller.registry.active_count());
+        assert!(controller.registry.report().is_none());
+        assert!(matches!(
+            controller.owners.get(&pending),
+            Some(WindowsNativeRdpOwner::Detached)
+        ));
+
+        let fallback = cx.update(fail_closed_windows_native_rdp_for_platform_quit);
+
+        assert_eq!(0, fallback.requested());
+        assert_eq!(0, fallback.destroyed());
+        assert_eq!(0, fallback.timed_out_leaked());
+        assert_eq!(0, fallback.owner_lost());
+        assert!(fallback.controller_unavailable());
+        assert!(fallback.incomplete());
     }
 
     #[gpui::test]

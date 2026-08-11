@@ -2176,6 +2176,14 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   前后 registry 中同一个 registration 仍 active/pending、stable terminal report 仍为
   `None`，已经覆盖本切片所需的 projection-without-mutation 语义。该 run 整体不能作为
   cancellation HEAD 的成功证据，修复提交仍需新的 Windows runner 核验。
+- **Corrected Windows runner verification:** public-report API correction HEAD
+  `0c8ecf3db9deb30b8769fc746086515be854c580` 的 GitHub Actions run
+  [`31458324056`](https://github.com/feigeCode/navop/actions/runs/31458324056)
+  已整体成功：x64 Native RDP probe 9m57s、i686 probe 2m42s、Windows x64 常规测试
+  19m54s，Icon audit 与 matrix preparation 也成功。x64 probe 的 feature-on
+  `remote_desktop_view` test command 已在真实 Windows/MSVC target 上编译运行修正后的
+  cancellation regression；因此 run `31457661050` 只保留为失败修正记录，不再是当前
+  HEAD 的待验证缺口。
 - **Remaining Task 7 scope and verification boundary:** Windows runner 成功最多证明
   x64/i686 MSVC/ATL build、x64 feature-on Native RDP tests 与 Windows x64 常规自动化
   tests；不证明真实交互式 ActiveX/RDP session、child `HWND` 视觉/焦点/Z-order、COM
@@ -2183,6 +2191,52 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   连接中/已连接/重连中关闭 tab及应用直接退出各重复 20 次的人工验证。下一自动化切片继续
   覆盖已 poll task cancellation 与 quit-aware controller loss；Task 7 与整个计划继续保持
   未完成。
+
+#### Execution Notes (2026-08-11) — polled shutdown cancellation and controller-loss preservation
+
+- **Polled cancellation regression:** 新增 Windows-only
+  `dropping_polled_shutdown_task_preserves_progress_for_platform_quit`。测试注册两个
+  synthetic registration，在 shutdown admission 同步进入 `Draining` 后先把其中一个记录为
+  真实 `Destroyed`，再用一次 `BackgroundExecutor::tick()` 只执行 drain task 的首次
+  runnable poll。该 poll 读取最新 registry snapshot，并停在 16ms bounded poll timer；
+  测试确认 task 尚未 ready 后 drop task，覆盖“task 已启动且已 poll”而不是上一切片的
+  “首次 poll 前取消”。取消后 registry 仍为 `Draining`，另一个 registration 仍 active /
+  pending，stable report 仍为 `None`，且 `Detached` owner sentinel 保持原样。
+- **Executor timing decision:** 当前锁定 GPUI test scheduler 的 `tick()` 最多运行一个
+  runnable task，因此适合精确停在首次 drain poll 的 timer wait；不能使用
+  `run_until_parked()` 建立该前置条件，因为后者会排空 runnable 并推进到后续 timer。
+  controller-loss case 在首次 poll 后移除 controller global，再推进一个
+  `WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL` 并 `block_on(task)`，从而让 task 在下一次
+  snapshot read 观察 controller 缺失。测试不依赖 production-only hook，也不增加 task
+  drop guard 或 cancellation cleanup。
+- **Fail-closed report distinction:** 已 poll task 在 controller 丢失时返回首次 poll 保存的
+  最新 conservative report，因此保留真实 `destroyed = 1`，把仍 active 的 registration
+  投影为 `owner_lost = 1`，并保持 `controller_unavailable = false`；这表示 controller
+  曾存在且 drain 已取得可信 progress。测试随后直接调用 platform quit fallback；由于
+  global 此时确实不存在，该独立入口返回零计数且
+  `controller_unavailable = true` 的 unavailable-controller report。两个报告不能互换，
+  也都不会把 conservative projection 写回 registry terminal state。
+- **Detached-owner boundary:** 两个测试都使用 `WindowsNativeRdpOwner::Detached` 作为
+  owner sentinel，使首次 poll 确定进入 stalled detached-owner 路径。deadline 未到时该
+  路径只保持 pending，不触发 native force-close、destroy、unregister 或 quarantine；
+  platform fallback 同样只读并投影 fail-closed report。测试在 task cancellation、
+  controller loss 和 fallback 后检查被保留/移出的 controller，确认 pending registration、
+  active count、owner metadata 和 stable report 均未被错误修改。
+- **Local automated verification:** macOS host 上
+  `cargo test --locked -p remote_desktop_view` 140 passed，
+  `cargo test --locked -p remote_desktop_view --features windows-native-rdp` 150 passed，
+  `cargo check --locked -p main --features windows-native-rdp`、
+  `cargo fmt --all -- --check` 与 `git diff --check` 均通过。三路独立只读核验确认
+  `Task::is_ready`、`App::remove_global`、`TestAppContext::executor`、
+  `BackgroundExecutor::tick/advance_clock/block_on` 的 API/cfg 可见性，首次 poll/timer
+  时序、cached report accounting 与 Detached owner no-cleanup 边界没有已确认阻断。
+  由于两个新增测试受 Windows + feature-on + `cfg(test)` 约束，本地 macOS 测试不会编译
+  它们；必须由推送后的 x64 Native RDP probe 真实编译运行。
+- **Remaining Task 7 scope and verification boundary:** 待补的 GitHub runner 证据最多
+  证明 x64/i686 MSVC/ATL build、x64 feature-on GPUI tests 与 Windows x64 常规自动化；
+  不证明真实 ActiveX/RDP session、child `HWND` 视觉/焦点/Z-order、COM apartment
+  teardown、全部 platform-driven quit race，或连接中/已连接/重连中关闭 tab与应用直接
+  退出各重复 20 次。Task 7 与整个计划继续保持未完成。
 
 ---
 
