@@ -1,11 +1,10 @@
-use crate::server_copy_command::DirectCopyAuthMode;
 use crate::server_copy_direct::{execute_direct_copy, prepare_direct_copy};
 use crate::{
     DirectoryConflictPolicy, FileEntry, ProgressCallback, RusshSftpClient, SftpClient,
     TransferCancelled,
 };
 use anyhow::Result;
-use ssh::{SshAuth, SshConnectConfig, SshSessionManager};
+use ssh::{SshConnectConfig, SshSessionManager};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -41,40 +40,15 @@ pub enum DirectCopyDecision {
     Cancel,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ServerCopyAuthKind {
-    Password,
-    PrivateKeyFile,
-    PrivateKeyContent,
-    Agent,
-    AutoPublicKey,
-}
-
-impl From<&SshAuth> for ServerCopyAuthKind {
-    fn from(auth: &SshAuth) -> Self {
-        match auth {
-            SshAuth::Password(_) => Self::Password,
-            SshAuth::PrivateKey { .. } => Self::PrivateKeyFile,
-            SshAuth::PrivateKeyContent { .. } => Self::PrivateKeyContent,
-            SshAuth::Agent => Self::Agent,
-            SshAuth::AutoPublicKey => Self::AutoPublicKey,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectCopyPreview {
     pub strategy: DirectCopyStrategy,
     pub source_host: String,
     pub source_port: u16,
     pub source_username: String,
-    pub navop_source_auth: ServerCopyAuthKind,
     pub target_host: String,
     pub target_port: u16,
     pub target_username: String,
-    pub navop_target_auth: ServerCopyAuthKind,
-    pub target_auth_has_passphrase: bool,
-    pub target_auth_has_certificate: bool,
     pub item_count: usize,
 }
 
@@ -85,20 +59,14 @@ impl DirectCopyPreview {
         target: &SshConnectConfig,
         item_count: usize,
     ) -> Self {
-        let (target_auth_has_passphrase, target_auth_has_certificate) =
-            DirectCopyAuthMode::from_auth(&target.auth).private_key_material_flags();
         Self {
             strategy,
             source_host: source.host.clone(),
             source_port: source.port,
             source_username: source.username.clone(),
-            navop_source_auth: ServerCopyAuthKind::from(&source.auth),
             target_host: target.host.clone(),
             target_port: target.port,
             target_username: target.username.clone(),
-            navop_target_auth: ServerCopyAuthKind::from(&target.auth),
-            target_auth_has_passphrase,
-            target_auth_has_certificate,
             item_count,
         }
     }

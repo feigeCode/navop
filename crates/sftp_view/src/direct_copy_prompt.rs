@@ -134,7 +134,7 @@ pub(crate) fn send_prompt_decision(sender: &PromptDecisionSender, decision: Dire
 #[cfg(test)]
 mod tests {
     use super::{direct_copy_approval_bridge, send_prompt_decision};
-    use sftp::{DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind};
+    use sftp::{DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tokio::sync::Mutex;
@@ -186,13 +186,9 @@ mod tests {
             source_host: "source.example".to_string(),
             source_port: 22,
             source_username: "source-user".to_string(),
-            navop_source_auth: ServerCopyAuthKind::Password,
             target_host: "target.example".to_string(),
             target_port: 2222,
             target_username: "target-user".to_string(),
-            navop_target_auth: ServerCopyAuthKind::PrivateKeyFile,
-            target_auth_has_passphrase: true,
-            target_auth_has_certificate: true,
             item_count: 2,
         }
     }

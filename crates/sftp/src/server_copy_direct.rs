@@ -4,16 +4,15 @@ use crate::remote_exec::{
 };
 use crate::server_copy::DirectCopyStrategy;
 use crate::server_copy_command::{
-    DIRECT_COPY_HOST_KEY_ALIAS, DirectCopyAuthMode, DirectCopyPayloadLengths,
-    build_direct_copy_wrapper, scp_item_is_safe, source_ssh_options_probe_command,
-    target_ssh_command, validate_endpoint,
+    DIRECT_COPY_HOST_KEY_ALIAS, DirectCopyPayloadLengths, build_direct_copy_wrapper,
+    scp_item_is_safe, source_ssh_options_probe_command, target_ssh_command, validate_endpoint,
 };
 use crate::{
     DirectoryConflictPolicy, RusshSftpClient, ServerCopyItem, SftpClient, TransferCancelled,
     TransferProgress,
 };
 use anyhow::{Result, anyhow, bail};
-use ssh::{SshAuth, SshConnectConfig, SshSessionManager};
+use ssh::{SshConnectConfig, SshSessionManager};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -39,7 +38,6 @@ pub(crate) struct DirectCopyCapabilities {
 
 pub(crate) struct DirectCopyPlan {
     strategy: DirectCopyStrategy,
-    auth_mode: DirectCopyAuthMode,
 }
 
 impl DirectCopyPlan {
@@ -48,55 +46,25 @@ impl DirectCopyPlan {
     }
 }
 
-struct DirectCopyCredentials {
-    auth_mode: DirectCopyAuthMode,
+struct DirectCopyHostKey {
     known_hosts: Vec<u8>,
-    private_key: Vec<u8>,
-    certificate: Vec<u8>,
-    secret: Vec<u8>,
 }
 
-impl DirectCopyCredentials {
-    fn empty(auth_mode: DirectCopyAuthMode, known_hosts: Vec<u8>) -> Self {
-        Self {
-            auth_mode,
-            known_hosts,
-            private_key: Vec::new(),
-            certificate: Vec::new(),
-            secret: Vec::new(),
-        }
-    }
-
+impl DirectCopyHostKey {
     fn lengths(&self) -> DirectCopyPayloadLengths {
         DirectCopyPayloadLengths {
             known_hosts: self.known_hosts.len(),
-            private_key: self.private_key.len(),
-            certificate: self.certificate.len(),
-            secret: self.secret.len(),
         }
     }
 
     fn payload(&self) -> Vec<u8> {
-        let mut payload = Vec::with_capacity(
-            self.known_hosts.len()
-                + self.private_key.len()
-                + self.certificate.len()
-                + self.secret.len(),
-        );
-        payload.extend_from_slice(&self.known_hosts);
-        payload.extend_from_slice(&self.private_key);
-        payload.extend_from_slice(&self.certificate);
-        payload.extend_from_slice(&self.secret);
-        payload
+        self.known_hosts.clone()
     }
 }
 
-impl Drop for DirectCopyCredentials {
+impl Drop for DirectCopyHostKey {
     fn drop(&mut self) {
         self.known_hosts.zeroize();
-        self.private_key.zeroize();
-        self.certificate.zeroize();
-        self.secret.zeroize();
     }
 }
 
@@ -142,13 +110,11 @@ pub(crate) async fn prepare_direct_copy(
         return Ok(None);
     }
 
-    let auth_mode = DirectCopyAuthMode::from_auth(&target_config.auth);
     let target_session = SshSessionManager::new(target_config.clone());
     let capabilities = probe_capabilities(
         source,
         &target_session,
         target_config.port,
-        auth_mode,
         items,
         cancelled.clone(),
     )
@@ -158,7 +124,6 @@ pub(crate) async fn prepare_direct_copy(
     };
     build_direct_copy_commands(
         strategy,
-        auth_mode,
         &target_config.username,
         &target_config.host,
         target_config.port,
@@ -167,10 +132,7 @@ pub(crate) async fn prepare_direct_copy(
     if cancelled.load(Ordering::Relaxed) {
         return Err(TransferCancelled.into());
     }
-    Ok(Some(DirectCopyPlan {
-        strategy,
-        auth_mode,
-    }))
+    Ok(Some(DirectCopyPlan { strategy }))
 }
 
 pub(crate) async fn execute_direct_copy(
@@ -183,10 +145,9 @@ pub(crate) async fn execute_direct_copy(
     progress: Arc<dyn Fn(TransferProgress) + Send + Sync>,
 ) -> Result<()> {
     ensure_not_cancelled(&cancelled)?;
-    let credentials =
-        load_direct_copy_credentials(target, target_config, plan.auth_mode, &cancelled).await?;
+    let host_key = load_direct_copy_host_key(target, &cancelled)?;
     ensure_not_cancelled(&cancelled)?;
-    authenticate_direct_copy(source, target_config, &credentials, cancelled.clone()).await?;
+    authenticate_direct_copy(source, target_config, &host_key, cancelled.clone()).await?;
 
     if !targets_are_absent(target, items, cancelled.clone()).await? {
         bail!(
@@ -197,7 +158,6 @@ or local relay was started"
 
     let commands = build_direct_copy_commands(
         plan.strategy,
-        plan.auth_mode,
         &target_config.username,
         &target_config.host,
         target_config.port,
@@ -222,8 +182,7 @@ or local relay was started"
         });
         reserve_target(target, item, item_index).await?;
         let output =
-            execute_authenticated_command(source, command, &credentials, cancelled.clone(), None)
-                .await?;
+            execute_direct_command(source, command, &host_key, cancelled.clone(), None).await?;
         if output.exit_status != 0 {
             bail!(
                 "{} direct copy failed with status {}: {}. Local relay was not started because \
@@ -243,12 +202,10 @@ the target may be partially written",
     Ok(())
 }
 
-async fn load_direct_copy_credentials(
+fn load_direct_copy_host_key(
     target_client: &RusshSftpClient,
-    target: &SshConnectConfig,
-    expected_mode: DirectCopyAuthMode,
     cancelled: &AtomicBool,
-) -> Result<DirectCopyCredentials> {
+) -> Result<DirectCopyHostKey> {
     ensure_not_cancelled(cancelled)?;
     let known_hosts = format!(
         "{DIRECT_COPY_HOST_KEY_ALIAS} {}\n",
@@ -257,99 +214,21 @@ async fn load_direct_copy_credentials(
             .ok_or_else(|| anyhow!("verified target SSH host key is unavailable"))?
     )
     .into_bytes();
-    let credentials = match &target.auth {
-        SshAuth::Password(password) => DirectCopyCredentials {
-            auth_mode: DirectCopyAuthMode::Password,
-            known_hosts,
-            private_key: Vec::new(),
-            certificate: Vec::new(),
-            secret: password.as_bytes().to_vec(),
-        },
-        SshAuth::PrivateKey {
-            key_path,
-            passphrase,
-            certificate_path,
-        } => DirectCopyCredentials {
-            auth_mode: DirectCopyAuthMode::from_auth(&target.auth),
-            known_hosts,
-            private_key: read_credential_file(key_path, "target private key", cancelled).await?,
-            certificate: read_optional_credential_file(
-                certificate_path.as_deref(),
-                "target SSH certificate",
-                cancelled,
-            )
-            .await?,
-            secret: passphrase
-                .as_deref()
-                .filter(|passphrase| !passphrase.is_empty())
-                .map_or_else(Vec::new, |passphrase| passphrase.as_bytes().to_vec()),
-        },
-        SshAuth::PrivateKeyContent {
-            private_key,
-            passphrase,
-            certificate_path,
-        } => DirectCopyCredentials {
-            auth_mode: DirectCopyAuthMode::from_auth(&target.auth),
-            known_hosts,
-            private_key: private_key.as_bytes().to_vec(),
-            certificate: read_optional_credential_file(
-                certificate_path.as_deref(),
-                "target SSH certificate",
-                cancelled,
-            )
-            .await?,
-            secret: passphrase
-                .as_deref()
-                .filter(|passphrase| !passphrase.is_empty())
-                .map_or_else(Vec::new, |passphrase| passphrase.as_bytes().to_vec()),
-        },
-        SshAuth::Agent | SshAuth::AutoPublicKey => {
-            DirectCopyCredentials::empty(DirectCopyAuthMode::ExistingIdentity, known_hosts)
-        }
-    };
-
     ensure_not_cancelled(cancelled)?;
-    if credentials.auth_mode != expected_mode {
-        bail!("target authentication changed while preparing direct server copy");
-    }
-    Ok(credentials)
-}
-
-async fn read_credential_file(
-    path: &str,
-    description: &str,
-    cancelled: &AtomicBool,
-) -> Result<Vec<u8>> {
-    ensure_not_cancelled(cancelled)?;
-    let credential = tokio::fs::read(path)
-        .await
-        .map_err(|error| anyhow!("failed to read configured {description}: {error}"))?;
-    ensure_not_cancelled(cancelled)?;
-    Ok(credential)
-}
-
-async fn read_optional_credential_file(
-    path: Option<&str>,
-    description: &str,
-    cancelled: &AtomicBool,
-) -> Result<Vec<u8>> {
-    match path.filter(|path| !path.is_empty()) {
-        Some(path) => read_credential_file(path, description, cancelled).await,
-        None => Ok(Vec::new()),
-    }
+    Ok(DirectCopyHostKey { known_hosts })
 }
 
 async fn authenticate_direct_copy(
     source: &SshSessionManager,
     target: &SshConnectConfig,
-    credentials: &DirectCopyCredentials,
+    host_key: &DirectCopyHostKey,
     cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
-    let command = target_ssh_command(target, credentials.auth_mode, "true")?;
-    let output = execute_authenticated_command(
+    let command = target_ssh_command(target, "true")?;
+    let output = execute_direct_command(
         source,
         &command,
-        credentials,
+        host_key,
         cancelled.clone(),
         Some(Instant::now() + DIRECT_COPY_AUTH_TIMEOUT),
     )
@@ -358,8 +237,9 @@ async fn authenticate_direct_copy(
         if error.is::<RemoteCommandTimeout>() {
             anyhow!(
                 "source server did not finish authenticating to the target within {} seconds: \
-{error}. Verify source-to-target network reachability and the configured target credentials. \
-Navop relay was not started",
+{error}. Verify source-to-target network reachability and configure the source server with an SSH \
+key or SSH agent authorized by the target. Navop does not send target passwords or private keys \
+for direct transfer. Navop relay was not started",
                 DIRECT_COPY_AUTH_TIMEOUT.as_secs()
             )
         } else {
@@ -371,22 +251,24 @@ Navop relay was not started",
     }
     bail!(
         "source server could not authenticate directly to the target (status {}): {}. Verify \
-source-to-target network reachability and the configured target credentials. The target host key \
-was pinned from Navop's verified target connection. Navop relay was not started",
+source-to-target network reachability and configure the source server with an SSH key or SSH agent \
+authorized by the target. Navop does not send target passwords or private keys for direct \
+transfer. The target host key was pinned from Navop's verified target connection. Navop relay was \
+not started",
         output.exit_status,
         command_error(&output.stderr, &output.stdout)
     )
 }
 
-async fn execute_authenticated_command(
+async fn execute_direct_command(
     source: &SshSessionManager,
     command: &str,
-    credentials: &DirectCopyCredentials,
+    host_key: &DirectCopyHostKey,
     cancelled: Arc<AtomicBool>,
     deadline: Option<Instant>,
 ) -> Result<crate::remote_exec::RemoteCommandOutput> {
-    let wrapper = build_direct_copy_wrapper(command, credentials.auth_mode, credentials.lengths())?;
-    let mut payload = credentials.payload();
+    let wrapper = build_direct_copy_wrapper(command, host_key.lengths())?;
+    let mut payload = host_key.payload();
     let result = match deadline {
         Some(deadline) => {
             exec_remote_command_with_input_deadline(
@@ -442,7 +324,6 @@ async fn probe_capabilities(
     source: &SshSessionManager,
     target: &SshSessionManager,
     target_port: u16,
-    auth_mode: DirectCopyAuthMode,
     items: &[ServerCopyItem],
     cancelled: Arc<AtomicBool>,
 ) -> Result<DirectCopyCapabilities> {
@@ -452,28 +333,23 @@ async fn probe_capabilities(
     }
     let source_ssh = probe(
         source,
-        &source_ssh_options_probe_command(target_port, auth_mode),
+        &source_ssh_options_probe_command(target_port),
         &cancelled,
     )
     .await?;
     if !source_ssh {
         return Ok(DirectCopyCapabilities::default());
     }
-    let source_auth_helpers = if auth_mode.needs_source_helpers() {
-        probe(
-            source,
-            "command -v mktemp >/dev/null 2>&1 && \
+    let source_auth_helpers = probe(
+        source,
+        "command -v mktemp >/dev/null 2>&1 && \
 command -v chmod >/dev/null 2>&1 && \
 command -v dd >/dev/null 2>&1 && \
 command -v rm >/dev/null 2>&1 && \
-command -v cat >/dev/null 2>&1 && \
 command -v wc >/dev/null 2>&1",
-            &cancelled,
-        )
-        .await?
-    } else {
-        true
-    };
+        &cancelled,
+    )
+    .await?;
     if !source_auth_helpers {
         return Ok(DirectCopyCapabilities {
             source_ssh,

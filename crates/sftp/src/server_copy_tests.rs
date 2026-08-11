@@ -1,10 +1,8 @@
 use super::{
-    DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind, ServerCopyItem,
-    build_copy_plan, build_item_copy_plan, direct_copy_is_selected, join_copy_path,
-    request_direct_copy_approval,
+    DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopyItem, build_copy_plan,
+    build_item_copy_plan, direct_copy_is_selected, join_copy_path, request_direct_copy_approval,
 };
 use crate::{DirectoryConflictPolicy, FileEntry, TransferCancelled};
-use ssh::SshAuth;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -90,13 +88,9 @@ fn preview() -> DirectCopyPreview {
         source_host: "source.example".to_string(),
         source_port: 22,
         source_username: "source".to_string(),
-        navop_source_auth: ServerCopyAuthKind::Password,
         target_host: "target.example".to_string(),
         target_port: 2222,
         target_username: "target".to_string(),
-        navop_target_auth: ServerCopyAuthKind::PrivateKeyFile,
-        target_auth_has_passphrase: true,
-        target_auth_has_certificate: true,
         item_count: 2,
     }
 }
@@ -131,28 +125,4 @@ fn direct_copy_decision_routes_cancel_as_transfer_cancellation() {
 
     let error = direct_copy_is_selected(DirectCopyDecision::Cancel).unwrap_err();
     assert!(error.is::<TransferCancelled>());
-}
-
-#[test]
-fn auth_kind_mapping_exposes_only_categories() {
-    let password = SshAuth::Password("PASSWORD-SECRET".to_string());
-    let key = SshAuth::PrivateKey {
-        key_path: "/secret/key".to_string(),
-        passphrase: Some("PASSPHRASE-SECRET".to_string()),
-        certificate_path: Some("/secret/cert".to_string()),
-    };
-    let key_content = SshAuth::PrivateKeyContent {
-        private_key: "PRIVATE-KEY-SECRET".to_string(),
-        passphrase: Some("PASSPHRASE-SECRET".to_string()),
-        certificate_path: Some("/secret/cert".to_string()),
-    };
-
-    assert_eq!(ServerCopyAuthKind::Password, (&password).into());
-    assert_eq!(ServerCopyAuthKind::PrivateKeyFile, (&key).into());
-    assert_eq!(ServerCopyAuthKind::PrivateKeyContent, (&key_content).into());
-    assert_eq!(ServerCopyAuthKind::Agent, (&SshAuth::Agent).into());
-    assert_eq!(
-        ServerCopyAuthKind::AutoPublicKey,
-        (&SshAuth::AutoPublicKey).into()
-    );
 }

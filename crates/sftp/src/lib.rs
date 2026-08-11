@@ -22,8 +22,8 @@ pub use remote_file_command::{RemoteFileOperation, build_remote_file_command};
 pub use russh_impl::RusshSftpClient;
 pub use server_copy::{
     CopyPlanEntry, DirectCopyApproval, DirectCopyApprovalFuture, DirectCopyDecision,
-    DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind, ServerCopyItem, ServerCopyRequest,
-    copy_between_servers, join_copy_path, relay_copy,
+    DirectCopyPreview, DirectCopyStrategy, ServerCopyItem, ServerCopyRequest, copy_between_servers,
+    join_copy_path, relay_copy,
 };
 
 #[derive(Debug, Clone)]
