@@ -1,6 +1,7 @@
 use crate::sql_editor::{SqlEditor, SqlSchema};
 use crate::sql_result_tab::{SessionSqlRun, SqlResultTabContainer};
 use db::{DbManager, GlobalDbState, StreamingSqlParser, format_sql};
+use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
     AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity,
@@ -20,7 +21,7 @@ use one_core::storage::{DatabaseType, QueryDirectoryScope, default_query_directo
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_ui::resize_handle::{ResizePanel, resize_handle};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rust_i18n::t;
 use smol::Timer;
 use std::fs::OpenOptions;
@@ -1991,6 +1992,89 @@ impl SqlEditorTab {
         });
     }
 
+    fn show_close_save_name_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("Query.enter_query_name").to_string())
+        });
+        let input_for_focus = input.clone();
+        let view = cx.entity();
+        let (tx, rx) = oneshot::channel::<bool>();
+        let tx = Arc::new(Mutex::new(Some(tx)));
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let input_for_save = input.clone();
+            let view_for_save = view.clone();
+            let tx_cancel = tx.clone();
+            let tx_discard = tx.clone();
+            let tx_save = tx.clone();
+
+            dialog
+                .title(t!("Query.save_query_title").to_string())
+                .w(px(380.0))
+                .overlay_closable(false)
+                .close_button(false)
+                .footer(move |_ok, _cancel, _window, _cx| {
+                    let input_for_save = input_for_save.clone();
+                    let view_for_save = view_for_save.clone();
+                    let tx_cancel = tx_cancel.clone();
+                    let tx_discard = tx_discard.clone();
+                    let tx_save = tx_save.clone();
+
+                    vec![
+                        Button::new("cancel-close-query")
+                            .label(t!("Common.cancel").to_string())
+                            .on_click(move |_, window: &mut Window, cx| {
+                                window.close_dialog(cx);
+                                if let Some(tx) = tx_cancel.lock().take() {
+                                    let _ = tx.send(false);
+                                }
+                            })
+                            .into_any_element(),
+                        Button::new("discard-close-query")
+                            .label(t!("Query.dont_save").to_string())
+                            .on_click(move |_, window: &mut Window, cx| {
+                                window.close_dialog(cx);
+                                if let Some(tx) = tx_discard.lock().take() {
+                                    let _ = tx.send(true);
+                                }
+                            })
+                            .into_any_element(),
+                        Button::new("save-close-query")
+                            .label(t!("Common.save").to_string())
+                            .primary()
+                            .on_click(move |_, window: &mut Window, cx| {
+                                let name = input_for_save.read(cx).value().trim().to_owned();
+                                let saved = view_for_save.update(cx, |view, cx| {
+                                    view.save_named_query(&name, window, cx)
+                                });
+                                if saved {
+                                    window.close_dialog(cx);
+                                    if let Some(tx) = tx_save.lock().take() {
+                                        let _ = tx.send(true);
+                                    }
+                                }
+                            })
+                            .into_any_element(),
+                    ]
+                })
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(h_flex().child(t!("Query.enter_query_name").to_string()))
+                        .child(Input::new(&input).w_full()),
+                )
+        });
+        window.defer(cx, move |window, cx| {
+            input_for_focus.update(cx, |input, cx| input.focus(window, cx));
+        });
+
+        cx.spawn(async move |_handle, _cx| rx.await.unwrap_or(false))
+    }
+
     fn save_named_query(
         &mut self,
         name: &str,
@@ -2489,6 +2573,9 @@ impl TabContent for SqlEditorTab {
         if self.manual_transaction.is_some() {
             window.push_notification(t!("Query.transaction_finish_before_close").to_string(), cx);
             return Task::ready(false);
+        }
+        if self.requires_name.load(Ordering::Relaxed) && !self.get_sql_text(cx).trim().is_empty() {
+            return self.show_close_save_name_dialog(window, cx);
         }
         Task::ready(self.save_query(window, cx))
     }

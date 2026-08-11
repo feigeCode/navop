@@ -1307,6 +1307,10 @@ Query:
     en: Enter a query name
     zh-CN: 请输入查询名称
     zh-HK: 請輸入查詢名稱
+  dont_save:
+    en: Don't Save
+    zh-CN: 不保存
+    zh-HK: 不儲存
   select_database:
     en: Select database...
     zh-CN: 选择数据库...
