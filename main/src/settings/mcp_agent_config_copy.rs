@@ -31,8 +31,7 @@ pub(crate) fn mcp_agent_config_copy_item_id() -> &'static str {
 }
 
 fn copy_agent_mcp_config(window: &mut Window, cx: &mut App) {
-    let result =
-        ClientConfigInstall::from_current_app().and_then(|install| agent_mcp_config_json(&install));
+    let result = agent_mcp_config_json(&ClientConfigInstall::from_current_app());
     match result {
         Ok(config) => {
             cx.write_to_clipboard(ClipboardItem::new_string(config));

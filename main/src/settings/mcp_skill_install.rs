@@ -126,24 +126,8 @@ fn skill_install_args(target: SkillTarget, force: bool) -> Vec<String> {
 }
 
 fn install_skill(target: SkillTarget, force: bool, window: &mut Window, cx: &mut App) {
-    let install = match ClientConfigInstall::from_current_app() {
-        Ok(install) => install,
-        Err(error) => {
-            window.push_notification(
-                Notification::error(
-                    t!(
-                        "Settings.General.Mcp.install_skill_failed",
-                        error = error.to_string()
-                    )
-                    .to_string(),
-                )
-                .autohide(true),
-                cx,
-            );
-            return;
-        }
-    };
-    let launcher = install.launcher_path;
+    let install = ClientConfigInstall::from_current_app();
+    let launcher = install.launch_spec.command;
     let args = skill_install_args(target, force);
     let target_window = window.window_handle();
     let task = cx.background_spawn(smol::unblock(move || {

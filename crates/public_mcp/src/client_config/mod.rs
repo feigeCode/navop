@@ -41,28 +41,22 @@ pub enum ClientConfigHealth {
     NeedsMigration,
     NeedsRepair,
     PackageVersionOutdated,
-    NpxUnavailable,
     MissingHelper,
     UnusableHelper,
 }
 
 impl ClientConfigInstall {
-    pub fn from_current_app() -> Result<Self> {
-        let npx =
-            resolve_program(NPX_COMMAND).ok_or_else(|| anyhow::anyhow!("npx is unavailable"))?;
-        Ok(Self::from_npx_path(
-            npx,
+    pub fn from_current_app() -> Self {
+        Self::from_npx_command(
             crate::discovery::public_mcp_discovery_path(),
             NAVOP_MCP_CLIENT_TAG,
-        ))
+        )
     }
 
-    pub fn from_npx_path(
-        npx_path: impl Into<PathBuf>,
+    pub fn from_npx_command(
         discovery_path: impl Into<PathBuf>,
         version: impl Into<String>,
     ) -> Self {
-        let launcher_path = npx_path.into();
         let discovery_path = discovery_path.into();
         let version = version.into();
         let args = vec![
@@ -79,7 +73,7 @@ impl ClientConfigInstall {
                 env: BTreeMap::new(),
                 package_version: Some(version),
             },
-            launcher_path,
+            launcher_path: PathBuf::from(NPX_COMMAND),
             discovery_path,
         }
     }
@@ -104,7 +98,7 @@ impl ClientConfigInstall {
 }
 
 pub fn default_helper_install_path() -> PathBuf {
-    resolve_program(NPX_COMMAND).unwrap_or_else(|| PathBuf::from(NPX_COMMAND))
+    PathBuf::from(NPX_COMMAND)
 }
 
 pub fn helper_install_path_from_data_dir(_data_dir: impl AsRef<Path>) -> PathBuf {
@@ -247,8 +241,7 @@ fn launcher_unavailable_health(
     install: &ClientConfigInstall,
 ) -> Result<Option<ClientConfigHealth>> {
     if install.launch_spec.package_version.is_some() {
-        return helper_unavailable_health(&install.launcher_path)
-            .map(|health| health.map(|_| ClientConfigHealth::NpxUnavailable));
+        return Ok(None);
     }
     helper_unavailable_health(&install.launcher_path)
 }
@@ -303,26 +296,6 @@ fn uninstall_json_mcp_servers_config(path: &Path) -> Result<()> {
         return Ok(());
     }
     write_user_only_file(path, serde_json::to_vec_pretty(&Value::Object(root))?)
-}
-
-fn resolve_program(name: &str) -> Option<PathBuf> {
-    let mut candidates = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .map(|dir| dir.join(executable_name(name)))
-        .collect::<Vec<_>>();
-    for root in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
-        candidates.push(Path::new(root).join(executable_name(name)));
-    }
-    candidates.into_iter().find(|path| path.is_file())
-}
-
-fn executable_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.cmd")
-    } else {
-        name.to_string()
-    }
 }
 
 fn path_string(path: &Path) -> String {

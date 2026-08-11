@@ -201,21 +201,31 @@ fn client_config_inspection_reports_unusable_helper_for_non_executable_file() {
 }
 
 #[test]
-fn helper_install_path_resolves_npx_instead_of_a_bundled_helper() {
+fn helper_install_path_uses_npx_command_without_resolving_an_absolute_path() {
     let path = helper_install_path_from_data_dir("/Users/me/.config/one-hub");
-    assert_eq!(Some("npx"), path.file_stem().and_then(|stem| stem.to_str()));
+    assert_eq!(std::path::PathBuf::from("npx"), path);
+}
+
+#[test]
+fn current_app_install_uses_npx_command_without_resolving_an_absolute_path() {
+    let install = ClientConfigInstall::from_current_app();
+
+    assert_eq!("npx", install.launch_spec.command);
+    assert_eq!(std::path::PathBuf::from("npx"), install.launcher_path);
 }
 
 #[test]
 fn npx_install_uses_latest_package_tag_and_navop_server_name() {
     let dir = tempfile::tempdir().unwrap();
-    let npx = dir.path().join("npx");
-    write_usable_helper(&npx);
-    let install = ClientConfigInstall::from_npx_path(&npx, "/tmp/navop/public-mcp.json", "latest");
+    let install = ClientConfigInstall::from_npx_command("/tmp/navop/public-mcp.json", "latest");
     assert_eq!("npx", install.launch_spec.command);
-    assert_eq!(npx, install.launcher_path);
+    assert_eq!(std::path::PathBuf::from("npx"), install.launcher_path);
 
     let config_path = dir.path().join("config.toml");
+    assert_eq!(
+        ClientConfigHealth::NotInstalled,
+        inspect_codex_config(&config_path, &install).unwrap()
+    );
     install_codex_config(&config_path, &install).unwrap();
     let text = std::fs::read_to_string(config_path).unwrap();
     assert!(text.contains("[mcp_servers.navop]"));

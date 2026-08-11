@@ -2469,13 +2469,9 @@ Settings:
         zh-CN: 外部 MCP 客户端通过 npx 启动 @navop/mcp@latest；npm 按需解析并缓存当前包，无需从扩展市场安装
         zh-HK: 外部 MCP 客戶端透過 npx 啟動 @navop/mcp@latest；npm 按需解析並快取目前套件，無需從擴充功能市集安裝
       runtime_requirements_ready:
-        en: "%{package} will run on demand through %{path}; no global npm install is required"
-        zh-CN: "%{package} 将通过 %{path} 按需启动；无需全局安装 npm 包"
-        zh-HK: "%{package} 將透過 %{path} 按需啟動；無需全域安裝 npm 套件"
-      runtime_requirements_missing:
-        en: "npx is unavailable: %{error}"
-        zh-CN: "npx 不可用：%{error}"
-        zh-HK: "npx 無法使用：%{error}"
+        en: "%{package} will run on demand through %{command}; no global npm install is required"
+        zh-CN: "%{package} 将通过 %{command} 按需启动；无需全局安装 npm 包"
+        zh-HK: "%{package} 將透過 %{command} 按需啟動；無需全域安裝 npm 套件"
       install_codex_config:
         en: Codex MCP Configuration
         zh-CN: Codex MCP 配置
@@ -2600,10 +2596,6 @@ Settings:
         en: "Package version is outdated; update the managed entry to %{package}"
         zh-CN: "npm 包版本已过期，请更新为 %{package}"
         zh-HK: "npm 套件版本已過期，請更新為 %{package}"
-      client_config_status_npx_unavailable:
-        en: npx is unavailable; install an npm distribution that includes npx and restart Navop
-        zh-CN: npx 不可用；请安装包含 npx 的 npm 发行版并重启 Navop
-        zh-HK: npx 無法使用；請安裝包含 npx 的 npm 發行版並重新啟動 Navop
       client_config_status_legacy_helper_missing:
         en: Legacy bundled helper is missing; install the npm-based config to migrate
         zh-CN: 旧版内置 helper 已缺失；请安装 npm 配置完成迁移

@@ -32,17 +32,11 @@ pub(crate) fn mcp_runtime_requirements_item_id() -> &'static str {
 }
 
 fn runtime_requirements_status() -> String {
-    match ClientConfigInstall::from_current_app() {
-        Ok(install) => t!(
-            "Settings.General.Mcp.runtime_requirements_ready",
-            path = install.launcher_path.display().to_string(),
-            package = format!("@navop/mcp@{NAVOP_MCP_CLIENT_TAG}")
-        )
-        .to_string(),
-        Err(error) => t!(
-            "Settings.General.Mcp.runtime_requirements_missing",
-            error = error.to_string()
-        )
-        .to_string(),
-    }
+    let install = ClientConfigInstall::from_current_app();
+    t!(
+        "Settings.General.Mcp.runtime_requirements_ready",
+        command = install.launch_spec.command,
+        package = format!("@navop/mcp@{NAVOP_MCP_CLIENT_TAG}")
+    )
+    .to_string()
 }

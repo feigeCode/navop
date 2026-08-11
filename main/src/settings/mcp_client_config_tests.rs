@@ -31,10 +31,6 @@ fn client_config_health_labels_match_config_states() {
         "Settings.General.Mcp.client_config_status_legacy_helper_unusable",
         client_config_health_label_key(ClientConfigHealth::UnusableHelper)
     );
-    assert_eq!(
-        "Settings.General.Mcp.client_config_status_npx_unavailable",
-        client_config_health_label_key(ClientConfigHealth::NpxUnavailable)
-    );
 }
 
 #[test]

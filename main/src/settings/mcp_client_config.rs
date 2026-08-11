@@ -4,7 +4,7 @@ use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item_id;
 use crate::settings::mcp_helper_install::mcp_runtime_requirements_item;
 #[cfg(test)]
 use crate::settings::mcp_helper_install::mcp_runtime_requirements_item_id;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use gpui::{App, ParentElement, Styled, Window, div};
 use gpui_component::{
     ActiveTheme, Disableable, WindowExt,
@@ -16,7 +16,7 @@ use gpui_component::{
 };
 use public_mcp::client_config::{
     ClientConfigHealth, ClientConfigInstall, NAVOP_MCP_CLIENT_TAG, claude_code_config_path,
-    codex_config_path, helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
+    codex_config_path, inspect_claude_code_config, inspect_codex_config,
     install_claude_code_config, install_codex_config, uninstall_claude_code_config,
     uninstall_codex_config,
 };
@@ -179,14 +179,7 @@ fn install_client_config(target: McpClientConfigTarget, window: &mut Window, cx:
 }
 
 fn install_client_config_for_target(target: McpClientConfigTarget) -> Result<PathBuf> {
-    let install = ClientConfigInstall::from_current_app()?;
-    if let Some(health) = helper_unavailable_health(&install.launcher_path)? {
-        bail!(
-            "{}: {}",
-            t!(client_config_health_label_key(health)),
-            install.launcher_path.display()
-        );
-    }
+    let install = ClientConfigInstall::from_current_app();
 
     let config_path = match target {
         McpClientConfigTarget::Codex => {
@@ -252,7 +245,7 @@ fn uninstall_client_config_for_target(target: McpClientConfigTarget) -> Result<P
 fn inspect_client_config_for_target(
     target: McpClientConfigTarget,
 ) -> Result<(PathBuf, ClientConfigHealth)> {
-    let install = ClientConfigInstall::from_current_app()?;
+    let install = ClientConfigInstall::from_current_app();
     let path = match target {
         McpClientConfigTarget::Codex => {
             let path = codex_config_path()
@@ -283,9 +276,6 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
         ClientConfigHealth::PackageVersionOutdated => {
             "Settings.General.Mcp.client_config_status_package_outdated"
         }
-        ClientConfigHealth::NpxUnavailable => {
-            "Settings.General.Mcp.client_config_status_npx_unavailable"
-        }
         ClientConfigHealth::MissingHelper => {
             "Settings.General.Mcp.client_config_status_legacy_helper_missing"
         }
@@ -298,9 +288,7 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
 fn client_config_action_enabled(health: ClientConfigHealth) -> bool {
     !matches!(
         health,
-        ClientConfigHealth::MissingHelper
-            | ClientConfigHealth::UnusableHelper
-            | ClientConfigHealth::NpxUnavailable
+        ClientConfigHealth::MissingHelper | ClientConfigHealth::UnusableHelper
     )
 }
 
