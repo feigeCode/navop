@@ -10,7 +10,8 @@ use agent_runtime::{
     ids::{ToolCallId, TurnId},
 };
 use rust_i18n::t;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::acp::{AcpPermissionOption, AcpPermissionRequest, AcpPublicMcpApprovalRequest};
 use crate::agent_cards::{
@@ -27,14 +28,42 @@ mod acp;
 /// 观测数据文本入卡片时的最大字符数(渲染时还会再截断展示)。
 const MAX_DATA_CHARS: usize = 2000;
 const MAX_TERMINAL_EXEC_DATA_CHARS: usize = 64_000;
+const MAX_TRANSCRIPT_MESSAGES: usize = 500;
+const MAX_TRANSCRIPT_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TRANSCRIPT_FIELD_BYTES: usize = 1024 * 1024;
+const MAX_ACTIVE_SUBAGENTS: usize = 64;
+const MAX_TERMINAL_EVENTS: usize = 1024;
+const MAX_CACHED_TOOL_INPUTS: usize = 128;
+const MAX_CACHED_TOOL_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_CARD_FIELD_BYTES: usize = 64 * 1024;
+const MAX_CARD_ITEM_FIELD_BYTES: usize = 8 * 1024;
+const MAX_CARD_COLLECTION_ITEMS: usize = 64;
+const TRANSCRIPT_TRUNCATION_MARKER: &str = "[...earlier content truncated...]\n";
 const DELEGATE_TASK_TOOL: &str = "delegate_task";
+
+#[derive(Clone, Copy, Debug)]
+struct TranscriptBudget {
+    max_messages: usize,
+    max_text_bytes: usize,
+    max_field_bytes: usize,
+}
+
+impl Default for TranscriptBudget {
+    fn default() -> Self {
+        Self {
+            max_messages: MAX_TRANSCRIPT_MESSAGES,
+            max_text_bytes: MAX_TRANSCRIPT_TEXT_BYTES,
+            max_field_bytes: MAX_TRANSCRIPT_FIELD_BYTES,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum TerminalEventKey {
     AwaitingInput {
         turn_id: TurnId,
         call_id: Option<ToolCallId>,
-        question: String,
+        question_hash: u64,
     },
     Final(TurnId),
 }
@@ -58,13 +87,31 @@ pub struct AgentTranscript {
     resource_labels: HashMap<String, String>,
     /// 当前会话工具调用的原始入参；用于把精简 ACP permission 与实际 MCP 调用精确关联。
     tool_inputs: HashMap<String, serde_json::Value>,
+    /// 原始工具入参插入顺序,用于淘汰长期未完成的陈旧调用。
+    tool_input_order: VecDeque<String>,
     /// 已归约的审批/终态事件,防止重复事件写入转录或触发持久化。
     terminal_events: HashSet<TerminalEventKey>,
+    /// 已归约事件插入顺序,只保留有限的近期去重窗口。
+    terminal_event_order: VecDeque<TerminalEventKey>,
+    /// UI transcript 的逻辑内存预算。
+    budget: TranscriptBudget,
 }
 
 impl AgentTranscript {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    fn with_limits(max_messages: usize, max_text_bytes: usize, max_field_bytes: usize) -> Self {
+        Self {
+            budget: TranscriptBudget {
+                max_messages,
+                max_text_bytes,
+                max_field_bytes,
+            },
+            ..Self::default()
+        }
     }
 
     /// 更新当前会话资源池快照,供后续工具 observation 展示目标资源。
@@ -85,7 +132,9 @@ impl AgentTranscript {
         self.latest_plan = None;
         self.active_subagents.clear();
         self.tool_inputs.clear();
+        self.tool_input_order.clear();
         self.terminal_events.clear();
+        self.terminal_event_order.clear();
     }
 
     /// 当前轮的最新计划(供输入框上方的 Tasks 面板渲染;不进消息流)。
@@ -130,7 +179,7 @@ impl AgentTranscript {
         } else {
             request.summary.clone()
         };
-        let data = AcpPermissionCardData {
+        let mut data = AcpPermissionCardData {
             request_id: request.request_id.clone(),
             session_id: request.session_id.clone(),
             tool_call_id: request.tool_call_id.clone(),
@@ -150,8 +199,10 @@ impl AgentTranscript {
             status: "pending".into(),
             selected_option_name: String::new(),
         };
+        bound_acp_permission_data(&mut data, self.card_field_limit());
         self.messages
             .push(ChatMessageUI::card(ACP_PERMISSION_CARD, data.to_json()));
+        self.enforce_budget();
     }
 
     /// 将 ACP 权限卡更新为用户已经选择的终态。
@@ -171,6 +222,7 @@ impl AgentTranscript {
         .into();
         data.selected_option_name = option.name.clone();
         self.replace_acp_permission_card(request_id, data);
+        self.enforce_budget();
     }
 
     /// 将未决 ACP 权限卡更新为取消态。
@@ -181,6 +233,7 @@ impl AgentTranscript {
         data.status = "cancelled".into();
         data.selected_option_name.clear();
         self.replace_acp_permission_card(request_id, data);
+        self.enforce_budget();
     }
 
     /// 用持久化的历史条目重建转录(切换 / 恢复会话时调用)。
@@ -229,15 +282,19 @@ impl AgentTranscript {
                     }
                 }
             }
+            // 历史恢复也逐项收敛,避免先完整装载大历史再统一淘汰的峰值。
+            self.enforce_budget();
         }
         if let Some(plan) = plan {
             self.upsert_plan(plan);
         }
+        self.enforce_budget();
     }
 
     /// 追加一条系统提示。
     pub fn push_system(&mut self, text: impl Into<String>) {
         self.messages.push(ChatMessageUI::system(text));
+        self.enforce_budget();
     }
 
     /// 追加用户消息(提交时由视图调用;`image_count` 用于提示附带图片)。
@@ -253,12 +310,13 @@ impl AgentTranscript {
             text.to_string()
         };
         self.messages.push(ChatMessageUI::user(content));
+        self.enforce_budget();
     }
 
     /// 应用一个运行时事件,更新消息列表。
     pub fn apply(&mut self, event: &RuntimeEvent) -> bool {
         if let Some(key) = terminal_event_key(event)
-            && !self.terminal_events.insert(key)
+            && !self.record_terminal_event(key)
         {
             return false;
         }
@@ -282,6 +340,7 @@ impl AgentTranscript {
             | RuntimeEvent::TurnCancelled { .. }
             | RuntimeEvent::TurnCompleted { .. } => self.apply_terminal_event(event),
         }
+        self.enforce_budget();
         true
     }
 
@@ -368,7 +427,7 @@ impl AgentTranscript {
             &tool_name,
             arguments.as_ref(),
         );
-        let data = ToolConfirmCardData {
+        let mut data = ToolConfirmCardData {
             call_id: pending_tool_call_id
                 .as_ref()
                 .map(ToString::to_string)
@@ -380,8 +439,10 @@ impl AgentTranscript {
             question: question.to_string(),
             status: "pending".into(),
         };
+        bound_tool_confirm_data(&mut data, self.card_field_limit());
         self.messages
             .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+        self.enforce_budget();
     }
 
     pub(crate) fn push_public_mcp_approval(&mut self, request: &AcpPublicMcpApprovalRequest) {
@@ -395,7 +456,7 @@ impl AgentTranscript {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         let input = build_tool_input_display(&request.tool_name, &arguments);
-        let data = ToolConfirmCardData {
+        let mut data = ToolConfirmCardData {
             call_id: request.request_id.clone(),
             tool_name: request.tool_name.clone(),
             items: Vec::new(),
@@ -408,8 +469,10 @@ impl AgentTranscript {
             .to_string(),
             status: "pending".into(),
         };
+        bound_tool_confirm_data(&mut data, self.card_field_limit());
         self.messages
             .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+        self.enforce_budget();
     }
 
     fn apply_terminal_event(&mut self, event: &RuntimeEvent) {
@@ -438,11 +501,13 @@ impl AgentTranscript {
         self.finish_active_status();
         if let Some(id) = &self.streaming_id {
             if let Some(msg) = self.messages.iter_mut().find(|m| &m.id == id) {
-                msg.content.push_str(delta);
+                append_bounded(&mut msg.content, delta, self.budget.max_field_bytes);
                 return;
             }
         }
-        let msg = ChatMessageUI::streaming_assistant().with_content(delta.to_string());
+        let mut content = String::new();
+        append_bounded(&mut content, delta, self.budget.max_field_bytes);
+        let msg = ChatMessageUI::streaming_assistant().with_content(content);
         self.streaming_id = Some(msg.id.clone());
         self.messages.push(msg);
     }
@@ -451,12 +516,20 @@ impl AgentTranscript {
         self.finish_active_status();
         if let Some(id) = &self.streaming_id {
             if let Some(msg) = self.messages.iter_mut().find(|m| &m.id == id) {
-                msg.reasoning_content.push_str(delta);
+                append_bounded(
+                    &mut msg.reasoning_content,
+                    delta,
+                    self.budget.max_field_bytes,
+                );
                 return;
             }
         }
         let mut msg = ChatMessageUI::streaming_assistant();
-        msg.reasoning_content.push_str(delta);
+        append_bounded(
+            &mut msg.reasoning_content,
+            delta,
+            self.budget.max_field_bytes,
+        );
         self.streaming_id = Some(msg.id.clone());
         self.messages.push(msg);
     }
@@ -529,10 +602,9 @@ impl AgentTranscript {
     fn push_tool_call(&mut self, call_id: &str, tool_name: &str, arguments: &serde_json::Value) {
         self.finish_active_status();
         self.close_streaming_segment();
-        self.tool_inputs
-            .insert(call_id.to_string(), arguments.clone());
+        self.cache_tool_input(call_id, arguments);
         let input = build_tool_input_display(tool_name, arguments);
-        let data = ToolCardData {
+        let mut data = ToolCardData {
             call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
             target_id: None,
@@ -544,6 +616,7 @@ impl AgentTranscript {
             summary: String::new(),
             data_text: String::new(),
         };
+        bound_tool_card_data(&mut data, self.card_field_limit());
         self.messages
             .push(ChatMessageUI::card(TOOL_CARD, data.to_json()));
     }
@@ -588,7 +661,7 @@ impl AgentTranscript {
     }
 
     fn finish_tool_call(&mut self, call_id: &str, success: bool) {
-        self.tool_inputs.remove(call_id);
+        self.remove_tool_input(call_id);
         if let Some(mut data) = self.find_tool_card(call_id) {
             data.running = false;
             data.success = Some(success);
@@ -606,6 +679,7 @@ impl AgentTranscript {
         };
         data.status = if approved { "approved" } else { "rejected" }.into();
         self.replace_confirm_card(call_id, data);
+        self.enforce_budget();
     }
 
     fn confirm_input_display(
@@ -728,7 +802,7 @@ impl AgentTranscript {
             return false;
         }
         let subagent_id = obs.call_id.as_str();
-        if self.find_subagent_card(subagent_id).is_none() {
+        if self.find_subagent(subagent_id).is_none() {
             return false;
         }
         let summary = history_subagent_summary(obs);
@@ -739,7 +813,7 @@ impl AgentTranscript {
     fn push_subagent(&mut self, subagent_id: &str, name: &str, task: &str) {
         self.finish_active_status();
         self.close_streaming_segment();
-        let data = SubAgentCardData {
+        let mut data = SubAgentCardData {
             subagent_id: subagent_id.to_string(),
             name: name.to_string(),
             task: task.to_string(),
@@ -747,13 +821,14 @@ impl AgentTranscript {
             success: None,
             summary: String::new(),
         };
+        bound_subagent_data(&mut data, self.card_field_limit());
         self.upsert_active_subagent(data.clone());
         self.messages
             .push(ChatMessageUI::card(SUBAGENT_CARD, data.to_json()));
     }
 
     fn update_subagent(&mut self, subagent_id: &str, summary: &str) {
-        if let Some(mut data) = self.find_subagent_card(subagent_id) {
+        if let Some(mut data) = self.find_subagent(subagent_id) {
             data.summary = summary.to_string();
             self.upsert_active_subagent(data.clone());
             self.replace_subagent_card(subagent_id, data);
@@ -761,7 +836,7 @@ impl AgentTranscript {
     }
 
     fn finish_subagent(&mut self, subagent_id: &str, success: bool, summary: &str) {
-        if let Some(mut data) = self.find_subagent_card(subagent_id) {
+        if let Some(mut data) = self.find_subagent(subagent_id) {
             data.running = false;
             data.success = Some(success);
             if !summary.is_empty() {
@@ -773,6 +848,8 @@ impl AgentTranscript {
     }
 
     fn upsert_active_subagent(&mut self, data: SubAgentCardData) {
+        let mut data = data;
+        bound_subagent_data(&mut data, self.card_field_limit());
         if let Some(existing) = self
             .active_subagents
             .iter_mut()
@@ -782,6 +859,23 @@ impl AgentTranscript {
         } else {
             self.active_subagents.push(data);
         }
+        while self.active_subagents.len() > MAX_ACTIVE_SUBAGENTS {
+            let index = self
+                .active_subagents
+                .iter()
+                .position(|item| !item.running)
+                .unwrap_or(0);
+            self.active_subagents.remove(index);
+        }
+    }
+
+    fn find_subagent(&self, subagent_id: &str) -> Option<SubAgentCardData> {
+        self.find_subagent_card(subagent_id).or_else(|| {
+            self.active_subagents
+                .iter()
+                .find(|item| item.subagent_id == subagent_id)
+                .cloned()
+        })
     }
 
     fn find_subagent_card(&self, subagent_id: &str) -> Option<SubAgentCardData> {
@@ -804,6 +898,296 @@ impl AgentTranscript {
             msg.content = json;
         }
     }
+
+    fn enforce_budget(&mut self) {
+        for message in &mut self.messages {
+            truncate_message_fields(message, self.budget.max_field_bytes);
+        }
+
+        loop {
+            let over_message_budget = self.messages.len() > self.budget.max_messages;
+            let over_text_budget =
+                transcript_text_bytes(&self.messages) > self.budget.max_text_bytes;
+            if !over_message_budget && !over_text_budget {
+                break;
+            }
+
+            let streaming_id = self.streaming_id.as_deref();
+            let active_status_id = self.active_status_id.as_deref();
+            let acp_status_id = self.acp_status_id.as_deref();
+            let index = self
+                .messages
+                .iter()
+                .position(|message| {
+                    !message_is_protected(message, streaming_id, active_status_id, acp_status_id)
+                })
+                // 正常优先淘汰已完成消息；若事务态本身填满预算，则退化为淘汰
+                // 最旧保护项，保证异常事件洪峰下仍有真正的硬上限。后续 observation、
+                // streaming delta 和子代理事件会通过各自的缺失状态防御逻辑恢复可渲染状态。
+                .unwrap_or(0);
+            self.remove_message(index);
+        }
+    }
+
+    fn card_field_limit(&self) -> usize {
+        self.budget.max_field_bytes.min(MAX_CARD_FIELD_BYTES)
+    }
+
+    fn cache_tool_input(&mut self, call_id: &str, arguments: &serde_json::Value) {
+        let input_bytes = serde_json::to_vec(arguments)
+            .map(|value| value.len())
+            .unwrap_or(usize::MAX);
+        self.remove_tool_input(call_id);
+        if input_bytes > MAX_CACHED_TOOL_INPUT_BYTES {
+            return;
+        }
+
+        let call_id = call_id.to_string();
+        self.tool_inputs.insert(call_id.clone(), arguments.clone());
+        self.tool_input_order.push_back(call_id);
+        while self.tool_input_order.len() > MAX_CACHED_TOOL_INPUTS {
+            if let Some(oldest) = self.tool_input_order.pop_front() {
+                self.tool_inputs.remove(&oldest);
+            }
+        }
+    }
+
+    fn remove_tool_input(&mut self, call_id: &str) {
+        self.tool_inputs.remove(call_id);
+        self.tool_input_order.retain(|item| item != call_id);
+    }
+
+    fn record_terminal_event(&mut self, key: TerminalEventKey) -> bool {
+        if !self.terminal_events.insert(key.clone()) {
+            return false;
+        }
+        self.terminal_event_order.push_back(key);
+        while self.terminal_event_order.len() > MAX_TERMINAL_EVENTS {
+            if let Some(oldest) = self.terminal_event_order.pop_front() {
+                self.terminal_events.remove(&oldest);
+            }
+        }
+        true
+    }
+
+    fn remove_message(&mut self, index: usize) {
+        let removed = self.messages.remove(index);
+        if self.streaming_id.as_deref() == Some(removed.id.as_str()) {
+            self.streaming_id = None;
+        }
+        if self.active_status_id.as_deref() == Some(removed.id.as_str()) {
+            self.active_status_id = None;
+        }
+        if self.acp_status_id.as_deref() == Some(removed.id.as_str()) {
+            self.acp_status_id = None;
+        }
+        if removed.variant.card_kind() == Some(TOOL_CARD)
+            && let Some(data) = ToolCardData::from_json(&removed.content)
+        {
+            self.remove_tool_input(&data.call_id);
+        }
+    }
+}
+
+fn transcript_text_bytes(messages: &[ChatMessageUI]) -> usize {
+    messages.iter().fold(0, |total, message| {
+        total.saturating_add(message_text_bytes(message))
+    })
+}
+
+fn message_text_bytes(message: &ChatMessageUI) -> usize {
+    let status_bytes = match &message.variant {
+        MessageVariant::Status { title, .. } => title.len(),
+        _ => 0,
+    };
+    message
+        .content
+        .len()
+        .saturating_add(message.reasoning_content.len())
+        .saturating_add(status_bytes)
+}
+
+fn truncate_message_fields(message: &mut ChatMessageUI, max_bytes: usize) {
+    if matches!(message.variant, MessageVariant::Text) {
+        truncate_to_recent(&mut message.content, max_bytes);
+    }
+    truncate_to_recent(&mut message.reasoning_content, max_bytes);
+    if let MessageVariant::Status { title, .. } = &mut message.variant {
+        truncate_to_recent(title, max_bytes);
+    }
+    truncate_card_fields(message, max_bytes.min(MAX_CARD_FIELD_BYTES));
+}
+
+fn truncate_card_fields(message: &mut ChatMessageUI, max_bytes: usize) {
+    let Some(kind) = message.variant.card_kind() else {
+        return;
+    };
+    match kind {
+        TOOL_CARD => {
+            if let Some(mut data) = ToolCardData::from_json(&message.content) {
+                bound_tool_card_data(&mut data, max_bytes);
+                message.content = data.to_json();
+            }
+        }
+        TOOL_CONFIRM_CARD => {
+            if let Some(mut data) = ToolConfirmCardData::from_json(&message.content) {
+                bound_tool_confirm_data(&mut data, max_bytes);
+                message.content = data.to_json();
+            }
+        }
+        ACP_PERMISSION_CARD => {
+            if let Some(mut data) = AcpPermissionCardData::from_json(&message.content) {
+                bound_acp_permission_data(&mut data, max_bytes);
+                message.content = data.to_json();
+            }
+        }
+        SUBAGENT_CARD => {
+            if let Some(mut data) = SubAgentCardData::from_json(&message.content) {
+                bound_subagent_data(&mut data, max_bytes);
+                message.content = data.to_json();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn bound_tool_card_data(data: &mut ToolCardData, max_bytes: usize) {
+    truncate_to_recent(&mut data.tool_name, max_bytes);
+    if let Some(target_id) = &mut data.target_id {
+        truncate_to_recent(target_id, max_bytes);
+    }
+    if let Some(target_label) = &mut data.target_label {
+        truncate_to_recent(target_label, max_bytes);
+    }
+    truncate_to_recent(&mut data.input_summary, max_bytes);
+    truncate_to_recent(&mut data.input_json, max_bytes);
+    truncate_to_recent(&mut data.summary, max_bytes);
+    truncate_to_recent(&mut data.data_text, max_bytes);
+}
+
+fn bound_tool_confirm_data(data: &mut ToolConfirmCardData, max_bytes: usize) {
+    truncate_to_recent(&mut data.tool_name, max_bytes);
+    truncate_to_recent(&mut data.input_summary, max_bytes);
+    truncate_to_recent(&mut data.input_json, max_bytes);
+    truncate_to_recent(&mut data.question, max_bytes);
+    data.items.truncate(MAX_CARD_COLLECTION_ITEMS);
+    let item_max_bytes = max_bytes.min(MAX_CARD_ITEM_FIELD_BYTES);
+    for item in &mut data.items {
+        truncate_to_recent(&mut item.tool_name, item_max_bytes);
+        truncate_to_recent(&mut item.input_summary, item_max_bytes);
+        truncate_to_recent(&mut item.input_json, item_max_bytes);
+    }
+}
+
+fn bound_acp_permission_data(data: &mut AcpPermissionCardData, max_bytes: usize) {
+    truncate_to_recent(&mut data.tool_name, max_bytes);
+    truncate_to_recent(&mut data.summary, max_bytes);
+    truncate_to_recent(&mut data.details_json, max_bytes);
+    truncate_to_recent(&mut data.selected_option_name, max_bytes);
+    data.options.truncate(MAX_CARD_COLLECTION_ITEMS);
+    let item_max_bytes = max_bytes.min(MAX_CARD_ITEM_FIELD_BYTES);
+    for option in &mut data.options {
+        truncate_to_recent(&mut option.name, item_max_bytes);
+    }
+}
+
+fn bound_subagent_data(data: &mut SubAgentCardData, max_bytes: usize) {
+    truncate_to_recent(&mut data.name, max_bytes);
+    truncate_to_recent(&mut data.task, max_bytes);
+    truncate_to_recent(&mut data.summary, max_bytes);
+}
+
+fn message_is_protected(
+    message: &ChatMessageUI,
+    streaming_id: Option<&str>,
+    active_status_id: Option<&str>,
+    acp_status_id: Option<&str>,
+) -> bool {
+    if streaming_id == Some(message.id.as_str())
+        || active_status_id == Some(message.id.as_str())
+        || acp_status_id == Some(message.id.as_str())
+        || message.is_streaming
+    {
+        return true;
+    }
+
+    match message.variant.card_kind() {
+        Some(TOOL_CARD) => {
+            ToolCardData::from_json(&message.content).is_some_and(|data| data.running)
+        }
+        Some(TOOL_CONFIRM_CARD) => ToolConfirmCardData::from_json(&message.content)
+            .is_some_and(|data| data.status == "pending"),
+        Some(ACP_PERMISSION_CARD) => AcpPermissionCardData::from_json(&message.content)
+            .is_some_and(|data| data.status == "pending"),
+        Some(SUBAGENT_CARD) => {
+            SubAgentCardData::from_json(&message.content).is_some_and(|data| data.running)
+        }
+        _ => matches!(
+            message.variant,
+            MessageVariant::Status { is_done: false, .. }
+        ),
+    }
+}
+
+fn append_bounded(target: &mut String, delta: &str, max_bytes: usize) {
+    if target.len().saturating_add(delta.len()) <= max_bytes {
+        target.push_str(delta);
+        return;
+    }
+    if max_bytes <= TRANSCRIPT_TRUNCATION_MARKER.len() {
+        *target = utf8_prefix(TRANSCRIPT_TRUNCATION_MARKER, max_bytes).to_string();
+        return;
+    }
+
+    let tail_budget = max_bytes - TRANSCRIPT_TRUNCATION_MARKER.len();
+    let existing = target
+        .strip_prefix(TRANSCRIPT_TRUNCATION_MARKER)
+        .unwrap_or(target);
+    let mut tail = String::with_capacity(tail_budget);
+    if delta.len() >= tail_budget {
+        tail.push_str(utf8_suffix(delta, tail_budget));
+    } else {
+        tail.push_str(utf8_suffix(existing, tail_budget - delta.len()));
+        tail.push_str(delta);
+    }
+    *target = format!("{TRANSCRIPT_TRUNCATION_MARKER}{tail}");
+}
+
+fn truncate_to_recent(target: &mut String, max_bytes: usize) {
+    if target.len() <= max_bytes {
+        return;
+    }
+    if max_bytes <= TRANSCRIPT_TRUNCATION_MARKER.len() {
+        *target = utf8_prefix(TRANSCRIPT_TRUNCATION_MARKER, max_bytes).to_string();
+        return;
+    }
+    let tail_budget = max_bytes - TRANSCRIPT_TRUNCATION_MARKER.len();
+    let source = target
+        .strip_prefix(TRANSCRIPT_TRUNCATION_MARKER)
+        .unwrap_or(target);
+    *target = format!(
+        "{TRANSCRIPT_TRUNCATION_MARKER}{}",
+        utf8_suffix(source, tail_budget)
+    );
+}
+
+fn utf8_prefix(text: &str, max_bytes: usize) -> &str {
+    let mut end = max_bytes.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn utf8_suffix(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut start = text.len() - max_bytes;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 fn terminal_event_key(event: &RuntimeEvent) -> Option<TerminalEventKey> {
@@ -816,7 +1200,7 @@ fn terminal_event_key(event: &RuntimeEvent) -> Option<TerminalEventKey> {
         } => Some(TerminalEventKey::AwaitingInput {
             turn_id: turn_id.clone(),
             call_id: pending_tool_call_id.clone(),
-            question: question.clone(),
+            question_hash: stable_hash(question),
         }),
         RuntimeEvent::TurnCompleted { turn_id, .. }
         | RuntimeEvent::TurnCancelled { turn_id, .. }
@@ -825,6 +1209,12 @@ fn terminal_event_key(event: &RuntimeEvent) -> Option<TerminalEventKey> {
         }
         _ => None,
     }
+}
+
+fn stable_hash(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 // ===== 枚举 → 卡片字符串 =====
@@ -946,6 +1336,398 @@ mod tests {
     }
     fn tid() -> TurnId {
         TurnId::from_string("t1")
+    }
+
+    #[test]
+    fn transcript_evicts_oldest_completed_messages_over_count_budget() {
+        let mut tr = AgentTranscript::with_limits(3, usize::MAX, usize::MAX);
+
+        tr.push_system("first");
+        tr.push_system("second");
+        tr.push_system("third");
+        tr.push_system("fourth");
+
+        assert_eq!(3, tr.messages.len());
+        assert_eq!(
+            vec!["second", "third", "fourth"],
+            tr.messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn transcript_preserves_pending_cards_and_status_when_evicting() {
+        let mut tr = AgentTranscript::with_limits(3, usize::MAX, usize::MAX);
+        let call_id = ToolCallId::from_string("call_pending");
+
+        tr.push_system("completed");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call_id.clone(),
+            tool_name: ToolName::new("terminal_exec"),
+            arguments: serde_json::json!({"command": "sleep 10"}),
+        });
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认继续吗？".into(),
+            pending_tool_call_id: Some(call_id),
+            tool_name: Some(ToolName::new("terminal_exec")),
+            arguments: Some(serde_json::json!({"command": "sleep 10"})),
+            pending_tool_calls: Vec::new(),
+        });
+        tr.set_acp_status("ACP 正在响应…");
+        tr.push_system("also completed");
+
+        assert_eq!(3, tr.messages.len());
+        assert!(tr.messages.iter().any(|message| {
+            message.variant.card_kind() == Some(TOOL_CARD)
+                && ToolCardData::from_json(&message.content).is_some_and(|data| data.running)
+        }));
+        assert!(tr.messages.iter().any(|message| {
+            message.variant.card_kind() == Some(TOOL_CONFIRM_CARD)
+                && ToolConfirmCardData::from_json(&message.content)
+                    .is_some_and(|data| data.status == "pending")
+        }));
+        assert!(tr.messages.iter().any(|message| {
+            matches!(
+                message.variant,
+                MessageVariant::Status { is_done: false, .. }
+            )
+        }));
+        assert!(
+            !tr.messages
+                .iter()
+                .any(|message| message.content == "completed")
+        );
+        assert!(
+            !tr.messages
+                .iter()
+                .any(|message| message.content == "also completed")
+        );
+    }
+
+    #[test]
+    fn load_history_applies_budget_without_breaking_tool_pairing() {
+        let mut tr = AgentTranscript::with_limits(2, usize::MAX, usize::MAX);
+        let call_id = ToolCallId::from_string("history_call");
+        let call = ToolCall::new(
+            ToolName::new("echo"),
+            serde_json::json!({"text": "history"}),
+        )
+        .with_call_id(call_id.clone());
+        let observation = ToolObservation::success(
+            call_id,
+            ToolName::new("echo"),
+            "done",
+            ObservationData::Text("history".into()),
+        );
+
+        tr.load_history(
+            &[
+                HistoryItem::User {
+                    text: "first".into(),
+                    images: Vec::new(),
+                },
+                HistoryItem::User {
+                    text: "second".into(),
+                    images: Vec::new(),
+                },
+                HistoryItem::ToolCall(call),
+                HistoryItem::Observation(observation),
+            ],
+            None,
+        );
+
+        assert_eq!(2, tr.messages.len());
+        let card = tr
+            .messages
+            .iter()
+            .find(|message| message.variant.card_kind() == Some(TOOL_CARD))
+            .expect("completed tool card should remain paired");
+        let data = ToolCardData::from_json(&card.content).unwrap();
+        assert!(!data.running);
+        assert_eq!(Some(true), data.success);
+        assert_eq!("done", data.summary);
+        assert_eq!("history", data.data_text);
+    }
+
+    #[test]
+    fn streaming_content_is_bounded_at_utf8_boundaries() {
+        let mut tr = AgentTranscript::with_limits(10, 256, 64);
+
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "开头".repeat(20),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "最新🙂内容".repeat(20),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert!(tr.messages[0].is_streaming);
+        assert!(tr.messages[0].content.len() <= 64);
+        assert!(
+            tr.messages[0]
+                .content
+                .starts_with(TRANSCRIPT_TRUNCATION_MARKER)
+        );
+        assert!(tr.messages[0].content.ends_with("内容"));
+    }
+
+    #[test]
+    fn reasoning_content_is_bounded_separately_from_answer() {
+        let mut tr = AgentTranscript::with_limits(10, 256, 64);
+
+        tr.apply(&RuntimeEvent::ReasoningDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "推理🙂".repeat(40),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "最终回答".into(),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert!(tr.messages[0].reasoning_content.len() <= 64);
+        assert!(
+            tr.messages[0]
+                .reasoning_content
+                .starts_with(TRANSCRIPT_TRUNCATION_MARKER)
+        );
+        assert_eq!("最终回答", tr.messages[0].content);
+    }
+
+    #[test]
+    fn transcript_text_budget_evicts_oldest_completed_messages() {
+        let mut tr = AgentTranscript::with_limits(10, 16, 64);
+
+        tr.push_system("12345678");
+        tr.push_system("abcdefgh");
+        tr.push_system("ABCDEFGH");
+
+        assert_eq!(2, tr.messages.len());
+        assert_eq!("abcdefgh", tr.messages[0].content);
+        assert_eq!("ABCDEFGH", tr.messages[1].content);
+    }
+
+    #[test]
+    fn protected_messages_use_hard_count_fallback() {
+        let mut tr = AgentTranscript::with_limits(1, usize::MAX, usize::MAX);
+
+        for index in 0..2 {
+            tr.apply(&RuntimeEvent::ToolCallStarted {
+                session_id: sid(),
+                turn_id: tid(),
+                call_id: ToolCallId::from_string(format!("call_{index}")),
+                tool_name: ToolName::new("terminal_exec"),
+                arguments: serde_json::json!({"command": format!("sleep {index}")}),
+            });
+        }
+
+        assert_eq!(1, tr.messages.len());
+        assert!(tr.tool_call_arguments("call_0").is_none());
+        assert!(tr.tool_call_arguments("call_1").is_some());
+    }
+
+    #[test]
+    fn hard_evicted_tool_call_is_recreated_by_later_observation() {
+        let mut tr = AgentTranscript::with_limits(1, usize::MAX, usize::MAX);
+        let call_0 = ToolCallId::from_string("call_0");
+        let call_1 = ToolCallId::from_string("call_1");
+
+        for call_id in [&call_0, &call_1] {
+            tr.apply(&RuntimeEvent::ToolCallStarted {
+                session_id: sid(),
+                turn_id: tid(),
+                call_id: call_id.clone(),
+                tool_name: ToolName::new("echo"),
+                arguments: serde_json::json!({"text": call_id.as_str()}),
+            });
+        }
+        assert!(tr.find_tool_card(call_0.as_str()).is_none());
+
+        tr.apply(&RuntimeEvent::ToolCallFinished {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call_1,
+            success: true,
+        });
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: ToolObservation::success(
+                call_0.clone(),
+                ToolName::new("echo"),
+                "recovered",
+                ObservationData::Text("late output".into()),
+            ),
+        });
+        tr.apply(&RuntimeEvent::ToolCallFinished {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call_0.clone(),
+            success: true,
+        });
+
+        let data = tr
+            .find_tool_card(call_0.as_str())
+            .expect("late observation should recreate a completed card");
+        assert!(!data.running);
+        assert_eq!(Some(true), data.success);
+        assert_eq!("recovered", data.summary);
+        assert_eq!("late output", data.data_text);
+    }
+
+    #[test]
+    fn terminal_event_dedup_history_is_bounded() {
+        let mut tr = AgentTranscript::new();
+
+        for index in 0..=MAX_TERMINAL_EVENTS {
+            assert!(
+                tr.record_terminal_event(TerminalEventKey::Final(TurnId::from_string(format!(
+                    "turn_{index}"
+                ))))
+            );
+        }
+
+        assert_eq!(MAX_TERMINAL_EVENTS, tr.terminal_events.len());
+        assert!(tr.record_terminal_event(TerminalEventKey::Final(TurnId::from_string("turn_0"))));
+    }
+
+    #[test]
+    fn acp_failure_dedup_history_is_bounded() {
+        let mut tr = AgentTranscript::new();
+        let error = crate::AcpError::empty_response("agent", "Agent");
+
+        for index in 0..=MAX_TERMINAL_EVENTS {
+            assert!(tr.apply_acp_failure(
+                &RuntimeEvent::TurnFailed {
+                    session_id: sid(),
+                    turn_id: TurnId::from_string(format!("acp_turn_{index}")),
+                    reason: "failed".into(),
+                },
+                &error,
+            ));
+        }
+
+        assert_eq!(MAX_TERMINAL_EVENTS, tr.terminal_events.len());
+        assert!(tr.apply_acp_failure(
+            &RuntimeEvent::TurnFailed {
+                session_id: sid(),
+                turn_id: TurnId::from_string("acp_turn_0"),
+                reason: "failed again".into(),
+            },
+            &error,
+        ));
+    }
+
+    #[test]
+    fn completed_subagent_history_and_fields_are_bounded() {
+        let mut tr = AgentTranscript::new();
+
+        for index in 0..=MAX_ACTIVE_SUBAGENTS {
+            let id = format!("sub_{index}");
+            tr.push_subagent(&id, &"n".repeat(MAX_CARD_FIELD_BYTES + 1), "task");
+            tr.finish_subagent(&id, true, "done");
+        }
+
+        assert_eq!(MAX_ACTIVE_SUBAGENTS, tr.active_subagents().len());
+        assert_eq!("sub_1", tr.active_subagents()[0].subagent_id);
+        assert!(tr.active_subagents()[0].name.len() <= MAX_CARD_FIELD_BYTES);
+    }
+
+    #[test]
+    fn hard_evicted_subagent_card_still_updates_active_panel() {
+        let mut tr = AgentTranscript::with_limits(1, usize::MAX, usize::MAX);
+        let subagent_0 = SubAgentId::from_string("sub_0");
+        let subagent_1 = SubAgentId::from_string("sub_1");
+
+        for subagent_id in [&subagent_0, &subagent_1] {
+            tr.apply(&RuntimeEvent::SubAgentStarted {
+                session_id: sid(),
+                turn_id: tid(),
+                subagent_id: subagent_id.clone(),
+                name: subagent_id.as_str().to_string(),
+                task: "inspect".into(),
+            });
+        }
+        assert!(tr.find_subagent_card(subagent_0.as_str()).is_none());
+
+        tr.apply(&RuntimeEvent::SubAgentFinished {
+            session_id: sid(),
+            turn_id: tid(),
+            subagent_id: subagent_0.clone(),
+            success: true,
+            summary: "finished after eviction".into(),
+        });
+
+        let data = tr
+            .active_subagents()
+            .iter()
+            .find(|data| data.subagent_id == subagent_0.as_str())
+            .expect("active panel should retain the evicted subagent state");
+        assert!(!data.running);
+        assert_eq!(Some(true), data.success);
+        assert_eq!("finished after eviction", data.summary);
+    }
+
+    #[test]
+    fn oversized_raw_tool_input_is_not_retained() {
+        let mut tr = AgentTranscript::new();
+        let arguments = serde_json::json!({
+            "command": "x".repeat(MAX_CACHED_TOOL_INPUT_BYTES + 1)
+        });
+
+        tr.push_tool_call("oversized", "terminal_exec", &arguments);
+
+        assert!(tr.tool_call_arguments("oversized").is_none());
+        let card = tr.find_tool_card("oversized").expect("tool card");
+        assert!(card.input_json.len() <= MAX_CARD_FIELD_BYTES);
+    }
+
+    #[test]
+    fn acp_permission_card_bounds_structured_fields_and_options() {
+        let mut tr = AgentTranscript::new();
+        let request = AcpPermissionRequest {
+            request_id: "request".into(),
+            session_id: "session".into(),
+            tool_call_id: "call".into(),
+            tool_name: "tool".into(),
+            summary: "s".repeat(MAX_CARD_FIELD_BYTES + 1),
+            details: serde_json::json!({
+                "rawInput": "d".repeat(MAX_CARD_FIELD_BYTES + 1)
+            }),
+            options: (0..=MAX_CARD_COLLECTION_ITEMS)
+                .map(|index| AcpPermissionOption {
+                    option_id: format!("option_{index}"),
+                    name: "n".repeat(MAX_CARD_ITEM_FIELD_BYTES + 1),
+                    kind: "allow_once".into(),
+                })
+                .collect(),
+        };
+
+        tr.push_acp_permission(&request, false);
+
+        let card = tr
+            .find_acp_permission_card("request")
+            .expect("permission card");
+        assert!(card.summary.len() <= MAX_CARD_FIELD_BYTES);
+        assert!(card.details_json.len() <= MAX_CARD_FIELD_BYTES);
+        assert_eq!(MAX_CARD_COLLECTION_ITEMS, card.options.len());
+        assert!(
+            card.options
+                .iter()
+                .all(|option| option.name.len() <= MAX_CARD_ITEM_FIELD_BYTES)
+        );
     }
 
     #[test]

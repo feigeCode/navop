@@ -13,11 +13,13 @@ impl AgentTranscript {
                 is_done: false,
             };
             message.is_streaming = true;
+            self.enforce_budget();
             return;
         }
         let message = ChatMessageUI::status(title, false);
         self.acp_status_id = Some(message.id.clone());
         self.messages.push(message);
+        self.enforce_budget();
     }
 
     pub(crate) fn set_acp_error(&mut self, error: &AcpError) {
@@ -27,14 +29,16 @@ impl AgentTranscript {
             && let Some(index) = self.messages.iter().position(|message| message.id == id)
         {
             self.messages[index] = ChatMessageUI::system(content).with_id(id);
+            self.enforce_budget();
             return;
         }
         self.messages.push(ChatMessageUI::system(content));
+        self.enforce_budget();
     }
 
     pub(crate) fn apply_acp_failure(&mut self, event: &RuntimeEvent, error: &AcpError) -> bool {
         if let Some(key) = super::terminal_event_key(event)
-            && !self.terminal_events.insert(key)
+            && !self.record_terminal_event(key)
         {
             return false;
         }
