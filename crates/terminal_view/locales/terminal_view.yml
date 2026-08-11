@@ -169,6 +169,10 @@ SSH:
     en: Save username
     zh-CN: 保存用户名
     zh-HK: 儲存使用者名稱
+  save_username_hint:
+    en: Save the username for future connections. When disabled, enter it again before connecting.
+    zh-CN: 保存用户名以便后续连接使用；关闭后，连接前需要重新输入用户名。
+    zh-HK: 儲存使用者名稱供後續連線使用；關閉後，連線前需要重新輸入使用者名稱。
   password:
     en: Password
     zh-CN: 密码
@@ -237,6 +241,10 @@ SSH:
     en: Two-factor authentication
     zh-CN: 双因素认证
     zh-HK: 雙因素認證
+  enable:
+    en: Enable
+    zh-CN: 启用
+    zh-HK: 啟用
   keyboard_interactive_desc:
     en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response.
     zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。

@@ -1765,31 +1765,31 @@ impl SshFormWindow {
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
             .child(self.render_form_row(&t!("SSH.host"), self.render_form_input(&self.host_input)))
             .child(self.render_form_row(&t!("SSH.port"), self.render_form_input(&self.port_input)))
+            .child(self.render_form_row(
+                &t!("SSH.username"),
+                self.render_form_input(&self.username_input),
+            ))
             .child(
                 self.render_form_row(
-                    &t!("SSH.username"),
-                    v_flex()
-                        .w_full()
-                        .gap_2()
-                        .child(self.render_form_input(&self.username_input))
+                    "",
+                    h_flex()
+                        .items_center()
+                        .gap_1()
                         .child(
-                            h_flex()
-                                .gap_2()
-                                .items_center()
-                                .child(
-                                    Checkbox::new("save-username")
-                                        .checked(self.save_username)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.save_username = !this.save_username;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(t!("SSH.save_username_desc").to_string()),
-                                ),
+                            Checkbox::new("save-username")
+                                .label(t!("SSH.save_username_desc").to_string())
+                                .checked(self.save_username)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.save_username = !this.save_username;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("save-username-help")
+                                .icon(IconName::Info)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(t!("SSH.save_username_hint").to_string()),
                         ),
                 ),
             )
@@ -1847,54 +1847,37 @@ impl SshFormWindow {
                 ),
             )
             .when(auth_method == AuthMethodSelection::Password, |this| {
-                this.child(
+                this.child(self.render_form_row(
+                    &t!("SSH.password"),
+                    self.render_form_input(&self.password_input).mask_toggle(),
+                ))
+                .child(
                     self.render_form_row(
-                        &t!("SSH.password"),
-                        v_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(self.render_form_input(&self.password_input).mask_toggle())
+                        "",
+                        h_flex()
+                            .items_center()
+                            .gap_1()
                             .child(
-                                h_flex()
-                                    .gap_2()
-                                    .items_start()
-                                    .child(
-                                        div().flex_shrink_0().child(
-                                            Checkbox::new("save-password")
-                                                .checked(self.save_password)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.save_password = !this.save_password;
-                                                    cx.notify();
-                                                })),
-                                        ),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .gap_1()
-                                            .child(
-                                                div().text_sm().child(
-                                                    t!("SSH.save_password_desc").to_string(),
-                                                ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(if self.save_password {
-                                                        cx.theme().muted_foreground
-                                                    } else {
-                                                        cx.theme().warning
-                                                    })
-                                                    .child(
-                                                        if self.save_password {
-                                                            t!("SSH.save_password_enabled_hint")
-                                                        } else {
-                                                            t!("SSH.save_password_disabled_hint")
-                                                        }
-                                                        .to_string(),
-                                                    ),
-                                            ),
+                                Checkbox::new("save-password")
+                                    .label(t!("SSH.save_password_desc").to_string())
+                                    .checked(self.save_password)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.save_password = !this.save_password;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("save-password-help")
+                                    .icon(IconName::Info)
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip(
+                                        if self.save_password {
+                                            t!("SSH.save_password_enabled_hint")
+                                        } else {
+                                            t!("SSH.save_password_disabled_hint")
+                                        }
+                                        .to_string(),
                                     ),
                             ),
                     ),
@@ -1946,25 +1929,23 @@ impl SshFormWindow {
                     &t!("SSH.keyboard_interactive"),
                     h_flex()
                         .w_full()
-                        .gap_2()
-                        .items_start()
+                        .gap_1()
+                        .items_center()
                         .child(
-                            div().flex_shrink_0().child(
-                                Checkbox::new("keyboard-interactive")
-                                    .checked(self.keyboard_interactive)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.keyboard_interactive = !this.keyboard_interactive;
-                                        cx.notify();
-                                    })),
-                            ),
+                            Checkbox::new("keyboard-interactive")
+                                .label(t!("SSH.enable").to_string())
+                                .checked(self.keyboard_interactive)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.keyboard_interactive = !this.keyboard_interactive;
+                                    cx.notify();
+                                })),
                         )
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("SSH.keyboard_interactive_desc").to_string()),
+                            Button::new("keyboard-interactive-help")
+                                .icon(IconName::Info)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(t!("SSH.keyboard_interactive_desc").to_string()),
                         ),
                 ),
             )

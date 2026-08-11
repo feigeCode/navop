@@ -288,7 +288,7 @@ smol = { opt-level = 3 }
 gpui = { opt-level = 3 }
 gpui_macros = { opt-level = 3 }
 tree-sitter = { opt-level = 3 }
-sum_tree = { opt-level = 3 }
+zed-sum-tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
 reqwest_client = { opt-level = 3 }
