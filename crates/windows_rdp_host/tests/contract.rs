@@ -1003,6 +1003,48 @@ fn native_entrypoints_validate_headers_and_contain_failures() {
 }
 
 #[test]
+fn native_type_library_bindings_are_generated_before_parallel_host_compilation() {
+    let build_script = &format!("{HOST_CRATE}/build.rs");
+    let importer = &format!("{HOST_CRATE}/native/mstscax_import.cpp");
+
+    assert_contains_all(
+        importer,
+        &[
+            "#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\"",
+            "raw_interfaces_only, named_guids, no_namespace, exclude(\"UINT_PTR\")",
+        ],
+    );
+    assert_contains_all(
+        build_script,
+        &[
+            "cargo:rerun-if-changed=native/mstscax_import.cpp",
+            ".file(\"native/mstscax_import.cpp\")",
+            ".try_compile_intermediates()",
+            "out_dir.join(\"mstscax.tlh\")",
+        ],
+    );
+    assert_tokens_in_scope(
+        build_script,
+        "fn build_native_host()",
+        "\n}",
+        &[
+            "generate_type_library_bindings(&out_dir);",
+            ".file(\"native/event_sink.cpp\")",
+            ".file(\"native/active_x_host.cpp\")",
+            ".compile(\"windows_rdp_host\");",
+        ],
+    );
+    for consumer in ["native/event_sink.cpp", "native/active_x_host.cpp"] {
+        let path = &format!("{HOST_CRATE}/{consumer}");
+        assert_contains_all(path, &["#include \"mstscax.tlh\""]);
+        assert_excludes_all(
+            path,
+            &["#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\""],
+        );
+    }
+}
+
+#[test]
 fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources() {
     let source = &format!("{HOST_CRATE}/native/active_x_host.cpp");
 
@@ -1012,7 +1054,6 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "#include <windows.h>",
             "#include <atlbase.h>",
             "#include <atlhost.h>",
-            "#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\"",
             "#include \"mstscax.tlh\"",
             "struct ActiveXCleanup",
             "HWND parent_window",

@@ -2077,6 +2077,45 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `#[gpui::test]` 的实际编译运行仍必须由修复提交推送后的 x64 Windows runner 核验；
   该 runner 证据不能替代真实 ActiveX/RDP runtime 与四类 20 次手工 race 场景。
 
+#### Execution Notes (2026-08-11) — deterministic MSVC RDP type-library import
+
+- **Runner evidence and root cause:** Windows-only GPUI test-support HEAD
+  `cc5f57ee6a591a84e6bebfc00f4c9bfd89ffed88` 的 GitHub Actions run
+  [`31453583139`](https://github.com/feigeCode/navop/actions/runs/31453583139)
+  已结束。i686 Native RDP probe 与 Windows x64 常规自动化测试成功，但 x64 Native
+  RDP probe 在 feature-on `remote_desktop_view` test graph 编译
+  `active_x_host.cpp` 时因 `OUT_DIR/mstscax.tlh` 不存在而失败，因此该 run 整体为
+  failure。完整 x64 graph 通过其他依赖统一激活 `cc 1.2.65` 的 `parallel` feature；
+  原先 `event_sink.cpp` 和 `active_x_host.cpp` 各自执行相同 MSVC `#import`，两个并行
+  compiler process 因而竞争生成和消费同名 `mstscax.tlh`/`mstscax.tli`。standalone
+  host/probe graph 没有激活该并行路径，所以 i686 与较小构建图不能证明该 race 不存在。
+- **Deterministic generation:** 新增单一 `native/mstscax_import.cpp`，集中保留
+  `raw_interfaces_only`、`named_guids`、`no_namespace` 与 i686 所需的
+  `exclude("UINT_PTR")`。build script 先用单 source
+  `try_compile_intermediates()` 同步执行 importer；即使 `cc` 启用 `parallel`，其
+  多对象并行分支也不会用于该单对象调用。importer 返回后显式检查
+  `OUT_DIR/mstscax.tlh`，随后才启动包含全部 host translation units 的 archive
+  compile。`event_sink.cpp` 与 `active_x_host.cpp` 现在只 include 已生成的 header，
+  不再并行执行 `#import`。intermediate importer object 不进入 host archive，也不通过
+  单独 `compile()` 引入额外 Rust static-library link metadata。
+- **Contract and local verification:** 新增 source/build contract，冻结唯一 importer、
+  `try_compile_intermediates()`、generated-header 检查、先生成后编译以及两个 consumer
+  禁止 `#import` 的顺序和边界。macOS host 上
+  `cargo fmt --all -- --check`、`cargo test --locked -p windows_rdp_host`、
+  `cargo test --locked -p windows-rdp-probe`、
+  `cargo test --locked -p remote_desktop_view`、feature-on
+  `remote_desktop_view` tests、`cargo check --locked -p main --features
+  windows-native-rdp` 与 `git diff --check` 均通过。两路独立只读核验未发现
+  link-metadata 污染、x86/i686 contract 回退、`UINT_PTR` 兼容约束丢失或复制/注册/
+  提交 `mstscax.dll`/generated headers 的阻断问题。
+- **Verification boundary:** 本地非 Windows 验证不能证明 MSVC `#import` 的实际生成
+  位置、双架构注册表 type-library 解析或最终 ATL link；当前实现会在路径假设不成立时
+  以明确的 generated-header assertion fail closed。该提交推送后必须由新的 Windows
+  x64/i686 probe 以及 x64 feature-on GPUI tests 核验。runner 成功也只证明
+  MSVC/ATL/type-library compile/link 与自动化测试，不证明真实交互式 ActiveX/RDP
+  session、child HWND/focus、COM apartment teardown、platform quit race 或四类各
+  20 次人工关闭场景；Task 7 与整个计划继续保持未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback

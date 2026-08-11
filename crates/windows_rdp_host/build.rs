@@ -1,9 +1,10 @@
 use std::env;
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(windows_rdp_host_native)");
+    println!("cargo:rerun-if-changed=native/mstscax_import.cpp");
     println!("cargo:rerun-if-changed=native/credential.cpp");
     println!("cargo:rerun-if-changed=native/event_dispatch.cpp");
     println!("cargo:rerun-if-changed=native/event_sink.cpp");
@@ -56,9 +57,9 @@ fn validate_windows_target() {
 #[cfg(windows)]
 fn build_native_host() {
     let out_dir = PathBuf::from(required_env("OUT_DIR"));
+    generate_type_library_bindings(&out_dir);
 
-    cc::Build::new()
-        .cpp(true)
+    native_cpp_build(&out_dir)
         .file("native/credential.cpp")
         .file("native/event_dispatch.cpp")
         .file("native/event_sink.cpp")
@@ -66,16 +67,6 @@ fn build_native_host() {
         .file("native/active_x_host.cpp")
         .file("native/configuration.cpp")
         .file("native/lifecycle.cpp")
-        .include("native")
-        .include(&out_dir)
-        .out_dir(&out_dir)
-        .flag("/EHsc")
-        .flag("/std:c++17")
-        .flag("/permissive-")
-        .flag("/W4")
-        .flag("/WX")
-        .define("UNICODE", None)
-        .define("_UNICODE", None)
         .compile("windows_rdp_host");
 
     let vc_tools = PathBuf::from(required_env("VCToolsInstallDir"));
@@ -100,4 +91,38 @@ fn build_native_host() {
         println!("cargo:rustc-link-lib={library}");
     }
     println!("cargo:rustc-cfg=windows_rdp_host_native");
+}
+
+#[cfg(windows)]
+fn generate_type_library_bindings(out_dir: &Path) {
+    let mut importer = native_cpp_build(out_dir);
+    importer.file("native/mstscax_import.cpp");
+    importer
+        .try_compile_intermediates()
+        .unwrap_or_else(|error| panic!("failed to import the system RDP type library: {error}"));
+
+    let generated_header = out_dir.join("mstscax.tlh");
+    assert!(
+        generated_header.is_file(),
+        "MSVC #import did not generate {}",
+        generated_header.display()
+    );
+}
+
+#[cfg(windows)]
+fn native_cpp_build(out_dir: &Path) -> cc::Build {
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .include("native")
+        .include(out_dir)
+        .out_dir(out_dir)
+        .flag("/EHsc")
+        .flag("/std:c++17")
+        .flag("/permissive-")
+        .flag("/W4")
+        .flag("/WX")
+        .define("UNICODE", None)
+        .define("_UNICODE", None);
+    build
 }
