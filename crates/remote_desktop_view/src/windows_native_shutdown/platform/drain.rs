@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gpui::{App, Task};
+use gpui::{App, BorrowAppContext, Task};
 use windows_rdp_host::{WindowsRdpRegistration, WindowsRdpTerminalOutcome};
 
 use super::{
@@ -115,7 +115,7 @@ fn poll_view_owner(
     owner: &gpui::WeakEntity<crate::view::RemoteDesktopView>,
     registration: WindowsRdpRegistration,
     deadline_elapsed: bool,
-    cx: &gpui::AsyncApp,
+    cx: &mut gpui::AsyncApp,
 ) {
     let result = owner.update(cx, |view, cx| {
         if deadline_elapsed {
@@ -175,7 +175,7 @@ fn poll_registration(
     registration: WindowsRdpRegistration,
     owner: Option<&WindowsNativeRdpOwner>,
     deadline_elapsed: bool,
-    cx: &gpui::AsyncApp,
+    cx: &mut gpui::AsyncApp,
 ) {
     match owner {
         None => record_missing_owner(registration, deadline_elapsed, cx),
@@ -194,7 +194,7 @@ fn completed_report(cx: &gpui::AsyncApp) -> Option<WindowsNativeRdpShutdownRepor
 }
 
 async fn drain(
-    cx: &gpui::AsyncApp,
+    cx: &mut gpui::AsyncApp,
     mut fail_closed_report: WindowsNativeRdpShutdownReport,
 ) -> WindowsNativeRdpShutdownReport {
     loop {

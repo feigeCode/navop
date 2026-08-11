@@ -1,3 +1,4 @@
+#[cfg(not(all(feature = "windows-native-rdp", target_os = "windows")))]
 use gpui::{App, Task};
 
 /// Stable, native-resource-free result of the application RDP shutdown drain.

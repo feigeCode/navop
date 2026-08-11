@@ -140,24 +140,16 @@ pub(crate) fn record_windows_native_rdp_terminal_async(
     outcome: WindowsRdpTerminalOutcome,
     cx: &gpui::AsyncApp,
 ) {
-    let result = cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+    cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
         record_terminal(controller, registration, outcome);
     });
-    if result.is_err() {
-        tracing::error!(
-            token = registration.token(),
-            generation = registration.generation(),
-            ?outcome,
-            "application released before Windows native RDP terminal completion was recorded"
-        );
-    }
 }
 
 pub(super) fn record_windows_native_rdp_view_owner_lost_async(
     registration: WindowsRdpRegistration,
     cx: &gpui::AsyncApp,
 ) {
-    let result = cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+    cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
         if matches!(
             controller.owners.get(&registration),
             Some(WindowsNativeRdpOwner::View(_))
@@ -169,13 +161,6 @@ pub(super) fn record_windows_native_rdp_view_owner_lost_async(
             );
         }
     });
-    if result.is_err() {
-        tracing::error!(
-            token = registration.token(),
-            generation = registration.generation(),
-            "application released before Windows native RDP view owner loss was recorded"
-        );
-    }
 }
 
 pub use drain::shutdown_windows_native_rdp;

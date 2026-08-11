@@ -476,6 +476,46 @@ fn windows_native_shutdown_controller_drains_on_the_foreground_and_leaks_before_
 }
 
 #[test]
+fn windows_native_shutdown_uses_locked_gpui_context_contracts() {
+    let facade = include_str!("../windows_native_shutdown.rs").replace("\r\n", "\n");
+    let platform = include_str!("../windows_native_shutdown/platform.rs").replace("\r\n", "\n");
+    let drain = include_str!("../windows_native_shutdown/platform/drain.rs").replace("\r\n", "\n");
+
+    assert!(
+        facade.starts_with(
+            "#[cfg(not(all(feature = \"windows-native-rdp\", target_os = \"windows\")))]\n\
+             use gpui::{App, Task};"
+        ),
+        "the non-Windows facade imports must not become unused in the native Windows build"
+    );
+    assert!(
+        drain.contains("use gpui::{App, BorrowAppContext, Task};"),
+        "the synchronous App drain entrypoint must import BorrowAppContext"
+    );
+    for signature in [
+        "fn poll_view_owner(\n",
+        "fn poll_registration(\n",
+        "async fn drain(\n",
+    ] {
+        let body = &drain[drain
+            .find(signature)
+            .unwrap_or_else(|| panic!("missing drain function: {signature}"))..];
+        assert!(
+            body.contains("cx: &mut gpui::AsyncApp"),
+            "{signature} must retain mutable AsyncApp access for WeakEntity::update"
+        );
+    }
+    assert!(
+        !platform.contains("let result = cx.update_global"),
+        "AsyncApp::update_global returns the closure result at the locked GPUI revision"
+    );
+    assert!(
+        !platform.contains("result.is_err()"),
+        "the native shutdown code must not treat an infallible global update as a Result"
+    );
+}
+
+#[test]
 fn windows_native_events_are_drained_on_the_gpui_owner_thread() {
     let view = include_str!("../view.rs").replace("\r\n", "\n");
     let native = include_str!("windows_native.rs").replace("\r\n", "\n");
