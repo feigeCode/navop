@@ -2128,6 +2128,52 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `remote_desktop_view` 150 tests、format 与 diff checks 通过；真实 Windows
   compile 仍由下一次 runner 核验。
 
+#### Execution Notes (2026-08-11) — shutdown task cancellation fail-closed preservation
+
+- **Prior Windows runner verification:** Windows-only GPUI trait-import correction HEAD
+  `b74e37d6e5c9a201e634d63a68efbfcbefb03176` 的 GitHub Actions run
+  [`31455979893`](https://github.com/feigeCode/navop/actions/runs/31455979893)
+  已整体成功。x64/i686 `Windows RDP probe` 与 Windows x64 常规自动化测试 job
+  均成功；其中 x64 probe 显式执行
+  `cargo test --locked -p remote_desktop_view --features windows-native-rdp --target
+  x86_64-pc-windows-msvc`，因此编译运行 Windows-only Native RDP GPUI tests。i686
+  probe 继续覆盖 x86 ATL/MSVC host build 与 `windows_rdp_host` tests，但不编译
+  `remote_desktop_view` 的 feature-on tests；Windows x64 常规 `cargo test --all`
+  同样不启用该 feature。
+- **Cancellation contract and regression:** 当前锁定 GPUI `Task` 的 drop 会立即取消
+  task，只有 `detach` 才允许继续运行；`shutdown_windows_native_rdp` 在创建 async
+  drain task 前同步调用 `begin_drain`。新增 Windows-only
+  `dropping_shutdown_task_preserves_fail_closed_registry_state`：注册一个 synthetic
+  pending generation，调用 shutdown 后在向测试 executor 让出前立即 drop 返回的
+  task，再 `run_until_parked`。断言 admission 保持关闭、registry lifecycle 保持
+  `Draining`、原 registration 仍 active/pending，且没有 stable terminal report。
+- **Fail-closed projection boundary:** 同一测试随后调用 platform quit fallback，返回
+  report 必须精确保留该 pending registration 并投影为 `OwnerLost`，同时
+  `requested = 1`、`destroyed = 0`、`timed_out_leaked = 0`、`incomplete = true`。
+  fallback 后 registry 仍为 `Draining`、registration 仍 active、stable report 仍为
+  `None`，证明 conservative `OwnerLost` 只存在于返回报告中，没有经
+  `record_terminal` 写回 tombstone 或伪造 native cleanup。
+- **Implementation decision:** 当前 production entrypoint 已在可取消 future 之外同步
+  完成 drain admission，因此本切片只增加 regression test；没有添加 Task drop guard、
+  cancellation-time async cleanup、wrong-thread COM/Win32 cleanup，也没有把 cancellation
+  伪造成 `Destroyed`、`TimedOutLeaked` 或 registry terminal `OwnerLost`。独立只读审查
+  确认该 fail-closed 状态机边界成立，并建议继续把“drop 前未向 executor 让出”和后续
+  已 poll cancellation/platform quit race 作为不同自动化时序分别验证。
+- **Local automated verification:** macOS host 上
+  `cargo test --locked -p remote_desktop_view` 140 passed，
+  `cargo test --locked -p remote_desktop_view --features windows-native-rdp` 150 passed，
+  `cargo check --locked -p main --features windows-native-rdp`、
+  `cargo fmt --all -- --check` 与 `git diff --check` 均通过。由于测试受 Windows +
+  `windows-native-rdp` + `cfg(test)` 约束，本地两组测试不会编译该新增 case；提交推送后
+  必须由 x64 RDP probe 的 feature-on test 命令补充真实 Windows 编译运行证据。
+- **Remaining Task 7 scope and verification boundary:** Windows runner 成功最多证明
+  x64/i686 MSVC/ATL build、x64 feature-on Native RDP tests 与 Windows x64 常规自动化
+  tests；不证明真实交互式 ActiveX/RDP session、child `HWND` 视觉/焦点/Z-order、COM
+  apartment teardown、已启动/已 poll drain task 与 platform quit 的全部 race，也不替代
+  连接中/已连接/重连中关闭 tab及应用直接退出各重复 20 次的人工验证。下一自动化切片继续
+  覆盖已 poll task cancellation 与 quit-aware controller loss；Task 7 与整个计划继续保持
+  未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback

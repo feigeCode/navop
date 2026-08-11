@@ -273,8 +273,53 @@ mod tests {
 
     use super::{
         GlobalWindowsNativeRdpShutdown, begin_drain,
-        fail_closed_windows_native_rdp_for_platform_quit,
+        fail_closed_windows_native_rdp_for_platform_quit, shutdown_windows_native_rdp,
     };
+
+    #[gpui::test]
+    fn dropping_shutdown_task_preserves_fail_closed_registry_state(cx: &mut gpui::TestAppContext) {
+        let pending = cx.update(|cx| {
+            super::super::init(cx);
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                controller
+                    .registry
+                    .register(1)
+                    .expect("pending registration")
+            })
+        });
+
+        let task = cx.update(shutdown_windows_native_rdp);
+        drop(task);
+        cx.run_until_parked();
+
+        cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+            assert_eq!(
+                WindowsRdpShutdownLifecycle::Draining,
+                controller.registry.lifecycle()
+            );
+            assert_eq!(vec![pending], controller.registry.pending_registrations());
+            assert_eq!(1, controller.registry.active_count());
+            assert!(controller.registry.report().is_none());
+        });
+
+        let report = cx.update(fail_closed_windows_native_rdp_for_platform_quit);
+
+        assert_eq!(1, report.requested());
+        assert_eq!(0, report.destroyed());
+        assert_eq!(0, report.timed_out_leaked());
+        assert_eq!(1, report.owner_lost());
+        assert_eq!(&[pending], report.owner_lost_registrations());
+        assert!(report.incomplete());
+        cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+            assert_eq!(
+                WindowsRdpShutdownLifecycle::Draining,
+                controller.registry.lifecycle()
+            );
+            assert_eq!(vec![pending], controller.registry.pending_registrations());
+            assert_eq!(1, controller.registry.active_count());
+            assert!(controller.registry.report().is_none());
+        });
+    }
 
     #[gpui::test]
     fn platform_quit_fail_closed_report_preserves_progress_without_mutating_pending_registration(
