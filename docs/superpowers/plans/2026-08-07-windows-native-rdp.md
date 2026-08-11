@@ -2147,8 +2147,8 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   pending generation，调用 shutdown 后在向测试 executor 让出前立即 drop 返回的
   task，再 `run_until_parked`。断言 admission 保持关闭、registry lifecycle 保持
   `Draining`、原 registration 仍 active/pending，且没有 stable terminal report。
-- **Fail-closed projection boundary:** 同一测试随后调用 platform quit fallback，返回
-  report 必须精确保留该 pending registration 并投影为 `OwnerLost`，同时
+- **Fail-closed projection boundary:** 同一测试随后调用 platform quit fallback，唯一
+  pending registration 必须在返回 report 中投影为 `OwnerLost`，同时
   `requested = 1`、`destroyed = 0`、`timed_out_leaked = 0`、`incomplete = true`。
   fallback 后 registry 仍为 `Draining`、registration 仍 active、stable report 仍为
   `None`，证明 conservative `OwnerLost` 只存在于返回报告中，没有经
@@ -2166,6 +2166,16 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `cargo fmt --all -- --check` 与 `git diff --check` 均通过。由于测试受 Windows +
   `windows-native-rdp` + `cfg(test)` 约束，本地两组测试不会编译该新增 case；提交推送后
   必须由 x64 RDP probe 的 feature-on test 命令补充真实 Windows 编译运行证据。
+- **First follow-up runner correction:** cancellation test HEAD
+  `bd57e70d86410da9012dd76657d453f5e10ce5b1` 的 run
+  [`31457661050`](https://github.com/feigeCode/navop/actions/runs/31457661050)
+  中，i686 Native RDP probe 成功，但 x64 feature-on test graph 在编译新增测试时失败：
+  测试错误地对 application-facing、只公开 scalar counts 的
+  `WindowsNativeRdpShutdownReport` 调用了 host registry report 才有的
+  `owner_lost_registrations()`。修复移除该越层断言；`owner_lost = 1` 加上 fallback
+  前后 registry 中同一个 registration 仍 active/pending、stable terminal report 仍为
+  `None`，已经覆盖本切片所需的 projection-without-mutation 语义。该 run 整体不能作为
+  cancellation HEAD 的成功证据，修复提交仍需新的 Windows runner 核验。
 - **Remaining Task 7 scope and verification boundary:** Windows runner 成功最多证明
   x64/i686 MSVC/ATL build、x64 feature-on Native RDP tests 与 Windows x64 常规自动化
   tests；不证明真实交互式 ActiveX/RDP session、child `HWND` 视觉/焦点/Z-order、COM

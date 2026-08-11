@@ -308,7 +308,6 @@ mod tests {
         assert_eq!(0, report.destroyed());
         assert_eq!(0, report.timed_out_leaked());
         assert_eq!(1, report.owner_lost());
-        assert_eq!(&[pending], report.owner_lost_registrations());
         assert!(report.incomplete());
         cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
             assert_eq!(
