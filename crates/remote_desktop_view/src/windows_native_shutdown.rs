@@ -21,8 +21,8 @@ pub(crate) enum WindowsNativeRdpTerminalDispatch {
 
 #[cfg(any(test, all(feature = "windows-native-rdp", target_os = "windows")))]
 impl WindowsNativeRdpTerminalDispatch {
-    pub(crate) fn from_result<T, E>(result: Result<T, E>) -> Self {
-        if result.is_ok() {
+    pub(crate) fn from_option<T>(result: Option<T>) -> Self {
+        if result.is_some() {
             Self::Delivered
         } else {
             Self::Rejected
@@ -100,8 +100,8 @@ mod tests {
 
     #[test]
     fn terminal_dispatch_preserves_delivery_rejection() {
-        let delivered = WindowsNativeRdpTerminalDispatch::from_result(Result::<(), ()>::Ok(()));
-        let rejected = WindowsNativeRdpTerminalDispatch::from_result(Result::<(), ()>::Err(()));
+        let delivered = WindowsNativeRdpTerminalDispatch::from_option(Some(()));
+        let rejected = WindowsNativeRdpTerminalDispatch::from_option(None::<()>);
 
         assert!(!delivered.was_rejected());
         assert!(rejected.was_rejected());
@@ -112,6 +112,13 @@ mod tests {
 pub(crate) fn init(_cx: &mut App) {}
 
 #[cfg(not(all(feature = "windows-native-rdp", target_os = "windows")))]
+pub fn fail_closed_windows_native_rdp_for_platform_quit(
+    _cx: &mut App,
+) -> WindowsNativeRdpShutdownReport {
+    WindowsNativeRdpShutdownReport::default()
+}
+
+#[cfg(not(all(feature = "windows-native-rdp", target_os = "windows")))]
 pub fn shutdown_windows_native_rdp(_cx: &mut App) -> Task<WindowsNativeRdpShutdownReport> {
     Task::ready(WindowsNativeRdpShutdownReport::default())
 }
@@ -120,10 +127,10 @@ pub fn shutdown_windows_native_rdp(_cx: &mut App) -> Task<WindowsNativeRdpShutdo
 mod platform;
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-pub use platform::shutdown_windows_native_rdp;
-#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 pub(crate) use platform::{
     detached_cleanup_deadline, init, mark_windows_native_rdp_detached,
     record_windows_native_rdp_terminal, record_windows_native_rdp_terminal_async,
     register_windows_native_rdp,
 };
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+pub use platform::{fail_closed_windows_native_rdp_for_platform_quit, shutdown_windows_native_rdp};

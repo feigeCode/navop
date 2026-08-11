@@ -106,11 +106,7 @@ fn record_stalled_detached_owner(
         "Windows native RDP detached cleanup did not report a terminal outcome before the \
          deadline; completing the bounded drain as owner-lost"
     );
-    record_windows_native_rdp_terminal_async(
-        registration,
-        WindowsRdpTerminalOutcome::OwnerLost,
-        cx,
-    );
+    record_windows_native_rdp_terminal_async(registration, WindowsRdpTerminalOutcome::OwnerLost, cx)
 }
 
 fn poll_view_owner(
@@ -238,6 +234,24 @@ async fn drain(
     }
 }
 
+/// Close Native RDP admission during a platform-driven GPUI shutdown and
+/// synchronously return the latest conservative report.
+///
+/// GPUI invokes quit observers after the platform has committed to quitting,
+/// but before it releases windows and entities. Their returned futures receive
+/// only a short fixed budget, so this synchronous fallback must not start owner
+/// polling or native cleanup that could be cancelled during teardown.
+pub fn fail_closed_windows_native_rdp_for_platform_quit(
+    cx: &mut App,
+) -> WindowsNativeRdpShutdownReport {
+    if !cx.has_global::<GlobalWindowsNativeRdpShutdown>() {
+        tracing::error!("Windows native RDP shutdown controller is unavailable");
+        return WindowsNativeRdpShutdownReport::unavailable_controller();
+    }
+    let start = begin_drain(cx);
+    start.completed_report.unwrap_or(start.fail_closed_report)
+}
+
 pub fn shutdown_windows_native_rdp(cx: &mut App) -> Task<WindowsNativeRdpShutdownReport> {
     if !cx.has_global::<GlobalWindowsNativeRdpShutdown>() {
         tracing::error!("Windows native RDP shutdown controller is unavailable");
@@ -248,4 +262,66 @@ pub fn shutdown_windows_native_rdp(cx: &mut App) -> Task<WindowsNativeRdpShutdow
         return Task::ready(report);
     }
     cx.spawn(async move |cx| drain(cx, start.fail_closed_report).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use windows_rdp_host::{
+        WindowsRdpShutdownCompletion, WindowsRdpShutdownLifecycle, WindowsRdpTerminalOutcome,
+    };
+
+    use super::{
+        GlobalWindowsNativeRdpShutdown, begin_drain,
+        fail_closed_windows_native_rdp_for_platform_quit,
+    };
+
+    #[gpui::test]
+    fn platform_quit_fail_closed_report_preserves_progress_without_mutating_pending_registration(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (destroyed, pending) = cx.update(|cx| {
+            super::super::init(cx);
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                (
+                    controller
+                        .registry
+                        .register(1)
+                        .expect("destroyed registration"),
+                    controller
+                        .registry
+                        .register(2)
+                        .expect("pending registration"),
+                )
+            })
+        });
+
+        cx.update(begin_drain);
+        cx.update(|cx| {
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                assert_eq!(
+                    WindowsRdpShutdownCompletion::Recorded,
+                    controller
+                        .registry
+                        .record_terminal(destroyed, WindowsRdpTerminalOutcome::Destroyed)
+                );
+            });
+        });
+
+        let report = cx.update(fail_closed_windows_native_rdp_for_platform_quit);
+
+        assert_eq!(2, report.requested());
+        assert_eq!(1, report.destroyed());
+        assert_eq!(0, report.timed_out_leaked());
+        assert_eq!(1, report.owner_lost());
+        assert!(report.incomplete());
+        cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+            assert_eq!(
+                WindowsRdpShutdownLifecycle::Draining,
+                controller.registry.lifecycle()
+            );
+            assert_eq!(vec![pending], controller.registry.pending_registrations());
+            assert_eq!(1, controller.registry.active_count());
+            assert!(controller.registry.report().is_none());
+        });
+    }
 }

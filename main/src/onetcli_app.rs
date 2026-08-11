@@ -119,6 +119,10 @@ fn init_ssh_session_service(cx: &mut App) {
     // GPUI only gives quit callbacks a short fixed budget, so it must not be
     // the primary owner shutdown path.
     cx.on_app_quit(move |cx| {
+        let rdp_shutdown_report =
+            remote_desktop_view::fail_closed_windows_native_rdp_for_platform_quit(cx);
+        log_windows_native_rdp_shutdown("gpui quit fallback", rdp_shutdown_report);
+
         let service = fallback_service.clone();
         let shutdown_task = Tokio::spawn(cx, async move { service.shutdown().await });
         async move {
@@ -2074,6 +2078,35 @@ mod tests {
         let update_dialog = include_str!("update/dialog.rs");
         assert!(update_dialog.contains("shutdown_application_resources_and_quit"));
         assert!(!update_dialog.contains("cx.quit()"));
+    }
+
+    #[test]
+    fn platform_quit_fails_closed_native_rdp_before_ssh_without_recursive_quit() {
+        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn init_ssh_session_service")
+            .expect("init_ssh_session_service");
+        let end = source[start..]
+            .find("\n}\n\nfn spawn_ssh_session_shutdown")
+            .map(|offset| start + offset)
+            .expect("init_ssh_session_service end");
+        let init = &source[start..end];
+        let callback_start = init
+            .find("cx.on_app_quit(move |cx|")
+            .expect("platform quit callback");
+        let callback = &init[callback_start..];
+        let fail_closed_rdp = callback
+            .find("remote_desktop_view::fail_closed_windows_native_rdp_for_platform_quit(cx)")
+            .expect("Native RDP platform-quit fail-closed fallback");
+        let spawn_ssh = callback
+            .find("Tokio::spawn(cx")
+            .expect("SSH platform-quit fallback");
+
+        assert!(fail_closed_rdp < spawn_ssh);
+        assert!(callback.contains("log_windows_native_rdp_shutdown"));
+        assert!(!callback.contains("shutdown_application_resources_and_quit"));
+        assert!(!callback.contains("shutdown_windows_native_rdp(cx)"));
+        assert!(!callback.contains("cx.quit()"));
     }
 
     #[test]

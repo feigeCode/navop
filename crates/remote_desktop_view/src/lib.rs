@@ -11,4 +11,7 @@ pub mod view;
 mod windows_native_shutdown;
 
 pub use view::{RemoteDesktopView, RemoteDesktopViewConfig, init, refresh_keybindings};
-pub use windows_native_shutdown::{WindowsNativeRdpShutdownReport, shutdown_windows_native_rdp};
+pub use windows_native_shutdown::{
+    WindowsNativeRdpShutdownReport, fail_closed_windows_native_rdp_for_platform_quit,
+    shutdown_windows_native_rdp,
+};

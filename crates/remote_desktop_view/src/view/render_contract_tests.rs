@@ -534,6 +534,19 @@ fn windows_native_shutdown_uses_locked_gpui_context_contracts() {
             "poll_registration must not discard terminal dispatcher rejection from {call}"
         );
     }
+    let try_update = function_body(
+        &platform,
+        "fn try_update_windows_native_rdp_shutdown<R>(",
+        "pub(crate) fn record_windows_native_rdp_terminal_async(",
+    );
+    assert!(
+        try_update.contains("try_read_global::<GlobalWindowsNativeRdpShutdown"),
+        "AsyncApp terminal dispatch must reject updates after GPUI begins quitting"
+    );
+    assert!(
+        try_update.contains("Some(cx.update_global(update))"),
+        "accepted AsyncApp terminal dispatch must update the shutdown global"
+    );
     for (signature, end) in [
         (
             "pub(crate) fn record_windows_native_rdp_terminal_async(",
@@ -541,16 +554,16 @@ fn windows_native_shutdown_uses_locked_gpui_context_contracts() {
         ),
         (
             "pub(super) fn record_windows_native_rdp_view_owner_lost_async(",
-            "pub use drain::shutdown_windows_native_rdp;",
+            "pub use drain::{",
         ),
     ] {
         let body = function_body(&platform, signature, end);
         assert!(
-            body.contains("let result = cx.update_global::<"),
+            body.contains("let result = try_update_windows_native_rdp_shutdown"),
             "{signature} must retain AsyncApp dispatcher rejection"
         );
         assert!(
-            body.contains("WindowsNativeRdpTerminalDispatch::from_result(result)"),
+            body.contains("WindowsNativeRdpTerminalDispatch::from_option(result)"),
             "{signature} must return observable dispatcher delivery"
         );
     }
@@ -566,6 +579,32 @@ fn windows_native_shutdown_uses_locked_gpui_context_contracts() {
         !rejection_branch.contains("force_close_windows_native"),
         "dispatcher rejection must not fall back to wrong-thread native cleanup"
     );
+
+    let platform_quit = function_body(
+        &drain,
+        "pub fn fail_closed_windows_native_rdp_for_platform_quit(",
+        "pub fn shutdown_windows_native_rdp(cx: &mut App)",
+    );
+    assert!(
+        platform_quit.contains("let start = begin_drain(cx);"),
+        "platform-driven quit must synchronously close Native RDP admission"
+    );
+    assert!(
+        platform_quit.contains("start.completed_report.unwrap_or(start.fail_closed_report)"),
+        "platform-driven quit must return a conservative report for every pending registration"
+    );
+    for forbidden in [
+        "cx.spawn",
+        "drain(cx, start.fail_closed_report)",
+        "poll_registration",
+        "force_close_windows_native",
+        "WindowsRdpTerminalOutcome::Destroyed",
+    ] {
+        assert!(
+            !platform_quit.contains(forbidden),
+            "late platform quit fallback must not perform owner-thread native cleanup: {forbidden}"
+        );
+    }
 }
 
 #[test]

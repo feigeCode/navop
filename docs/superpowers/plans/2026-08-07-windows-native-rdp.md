@@ -1999,6 +1999,61 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   platform-driven quit race，以及真实连接中/已连接/重连中关闭 tab与应用直接退出各重复
   20 次仍 pending。Task 7 与整个计划继续保持未完成。
 
+#### Execution Notes (2026-08-11) — platform-driven quit fallback 与 Windows dispatcher compile correction
+
+- **Red evidence:** `main` 的 platform-driven `on_app_quit` observer 原先只启动 SSH
+  fallback，没有同步关闭 Native RDP admission；新增
+  `platform_quit_fails_closed_native_rdp_before_ssh_without_recursive_quit` 后，生产源码缺少
+  RDP fallback 时 contract 按预期失败。`remote_desktop_view` 同步增加 source contract，
+  要求 platform quit 入口必须调用 `begin_drain`，返回 completed 或 conservative
+  report，并禁止 `spawn`、owner polling、wrong-thread force-close 或虚构
+  `Destroyed`。此外，dispatcher-rejection 提交
+  `cd3ffe9665b8c47d64d061f9a6844fce19092637` 的 GitHub Actions run
+  [`31450193531`](https://github.com/feigeCode/navop/actions/runs/31450193531)
+  暴露了本地 macOS cfg 无法发现的真实 Windows-only 编译错误：Detached owner helper
+  尾部分号把 terminal dispatch 丢成 `()`；同时实现错误地把
+  `AsyncApp::update_global` 当作 `Result`。
+- **Correction to the previous execution note:** GPUI 当前锁定版本的
+  `AsyncApp::update_global` 返回 closure 的 `R`，不是可观察的 `Result<R, _>`；上一节
+  “捕获 `cx.update_global(...)` 的 `Result`”以及“独立审查确认其返回类型”的描述不正确。
+  当前实现改为先用 quit-aware 的 `AsyncApp::try_read_global` 同步拒绝 app 已进入
+  quitting 或 controller 已不可读的更新，再在没有 `await`/调度让出的情况下执行
+  `update_global`；delivery 通过 `Option` 转换为
+  `WindowsNativeRdpTerminalDispatch::{Delivered, Rejected}`。Detached owner helper 的
+  尾部分号也已移除，恢复 terminal dispatch 返回值。run `31450193531` 中 i686 probe
+  与 Windows x64 常规自动化测试成功，但 x64 Native RDP probe 编译失败，所以该 run
+  整体为 failure，不能作为 dispatcher-rejection HEAD 的成功证据。
+- **Platform-driven quit behavior:** 新增
+  `fail_closed_windows_native_rdp_for_platform_quit`。GPUI 已决定退出、只给 quit
+  observer 很短固定预算时，该入口同步调用 `begin_drain` 关闭 admission：registry
+  已完成则返回稳定 completed report，否则返回保留既有 progress 的 conservative
+  fail-closed report。pending registration 只在返回报告中分类为 `OwnerLost`；入口不
+  修改 registry terminal state，不写 tombstone，不宣称 `Destroyed`，也不启动 task、
+  owner polling、native force-close、destroy、quarantine 或 unregister。`main` 在
+  启动/等待 SSH fallback 前先调用并记录该 RDP report；platform callback 不递归进入
+  full application shutdown helper，也不调用 `cx.quit()`。
+- **Windows-only behavior test:** 新增
+  `platform_quit_fail_closed_report_preserves_progress_without_mutating_pending_registration`：
+  两个 synthetic registration 开始 drain 后，先记录一个 `Destroyed`，再执行 platform
+  quit fallback；报告必须保留 `destroyed = 1` 并把另一个 pending registration
+  保守报告为 `owner_lost = 1`，同时 registry 仍保持 `Draining`、一个 active pending
+  registration、且稳定 terminal `report()` 仍为 `None`。该测试受
+  Windows + `windows-native-rdp` cfg 约束，必须由 Windows x64 RDP probe job 编译运行。
+- **Local automated verification:** macOS host 上
+  `cargo fmt --all -- --check`、`git diff --check`、`windows_rdp_host` unit 107 passed
+  加 contract 20 passed、`remote_desktop_view` default 140 passed、feature-on 150
+  passed、`main` 425 passed；`cargo check -p main` default/feature-on 均通过。
+  `remote_desktop_view --all-targets --features windows-native-rdp --no-deps` 在仅豁免
+  仓库既有 `frame_sync.rs` `derivable_impls` 后以 `-D warnings` 通过。两路独立只读
+  核验没有发现当前六个生产/contract 文件的已确认阻断问题，并确认 CI 的
+  `Windows RDP probe (x86_64-pc-windows-msvc)` 会显式启用 feature、编译并运行上述
+  Windows-only test；i686 probe 继续覆盖 x86 ATL/MSVC host build 与 host tests。
+- **Verification boundary:** 待推送 HEAD 的 GitHub runner 只能证明 x64/i686
+  MSVC/ATL 编译链接和自动化测试，不能证明真实交互式 ActiveX/RDP session、child HWND
+  行为、COM apartment teardown，或连接中/已连接/重连中关闭 tab与应用直接退出的真实
+  race。上述四类场景各重复 20 次仍 pending；GPUI/UI shutdown task cancellation 也仍是
+  Task 7 的下一自动化切片。因此 Task 7 与整个计划继续保持未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback

@@ -135,31 +135,38 @@ pub(crate) fn detached_cleanup_deadline(local_deadline: Instant, cx: &gpui::Asyn
     .unwrap_or(local_deadline)
 }
 
+fn try_update_windows_native_rdp_shutdown<R>(
+    cx: &gpui::AsyncApp,
+    update: impl FnOnce(&mut GlobalWindowsNativeRdpShutdown, &mut App) -> R,
+) -> Option<R> {
+    cx.try_read_global::<GlobalWindowsNativeRdpShutdown, _>(|_, _| ())?;
+    Some(cx.update_global(update))
+}
+
 pub(crate) fn record_windows_native_rdp_terminal_async(
     registration: WindowsRdpRegistration,
     outcome: WindowsRdpTerminalOutcome,
     cx: &gpui::AsyncApp,
 ) -> WindowsNativeRdpTerminalDispatch {
-    let result = cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+    let result = try_update_windows_native_rdp_shutdown(cx, |controller, _| {
         record_terminal(controller, registration, outcome);
     });
-    if let Err(error) = &result {
+    if result.is_none() {
         tracing::error!(
-            ?error,
             token = registration.token(),
             generation = registration.generation(),
             ?outcome,
             "Windows native RDP terminal dispatcher rejected the completion"
         );
     }
-    WindowsNativeRdpTerminalDispatch::from_result(result)
+    WindowsNativeRdpTerminalDispatch::from_option(result)
 }
 
 pub(super) fn record_windows_native_rdp_view_owner_lost_async(
     registration: WindowsRdpRegistration,
     cx: &gpui::AsyncApp,
 ) -> WindowsNativeRdpTerminalDispatch {
-    let result = cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+    let result = try_update_windows_native_rdp_shutdown(cx, |controller, _| {
         if matches!(
             controller.owners.get(&registration),
             Some(WindowsNativeRdpOwner::View(_))
@@ -171,15 +178,14 @@ pub(super) fn record_windows_native_rdp_view_owner_lost_async(
             );
         }
     });
-    if let Err(error) = &result {
+    if result.is_none() {
         tracing::error!(
-            ?error,
             token = registration.token(),
             generation = registration.generation(),
             "Windows native RDP terminal dispatcher rejected view-owner loss"
         );
     }
-    WindowsNativeRdpTerminalDispatch::from_result(result)
+    WindowsNativeRdpTerminalDispatch::from_option(result)
 }
 
-pub use drain::shutdown_windows_native_rdp;
+pub use drain::{fail_closed_windows_native_rdp_for_platform_quit, shutdown_windows_native_rdp};
