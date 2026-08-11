@@ -212,6 +212,38 @@ struct SharedProgress {
     current_file_total: AtomicU64,
 }
 
+const MAX_TRANSFER_ERROR_SUMMARY_CHARS: usize = 500;
+
+fn transfer_error_summary(error: &anyhow::Error) -> String {
+    let error = error.to_string();
+    let mut summary = String::with_capacity(error.len().min(MAX_TRANSFER_ERROR_SUMMARY_CHARS));
+    let mut previous_was_whitespace = false;
+    let mut character_count = 0;
+    for character in error.chars() {
+        let character = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        if character.is_whitespace() {
+            if previous_was_whitespace {
+                continue;
+            }
+            previous_was_whitespace = true;
+            summary.push(' ');
+        } else {
+            previous_was_whitespace = false;
+            summary.push(character);
+        }
+        character_count += 1;
+        if character_count >= MAX_TRANSFER_ERROR_SUMMARY_CHARS {
+            summary.push('…');
+            break;
+        }
+    }
+    summary.trim().to_string()
+}
+
 #[derive(Clone)]
 struct TransferTask {
     id: usize,
@@ -3379,7 +3411,15 @@ impl SftpView {
             };
             let succeeded = result.is_ok();
             let _ = this.update(cx, |this, cx| {
+                let error_notification = result.as_ref().err().and_then(|error| {
+                    (!Self::is_transfer_cancelled(error)).then(|| {
+                        t!("Error.copy_failed", error = transfer_error_summary(error)).to_string()
+                    })
+                });
                 this.update_task_state_from_result(task_id, result, cx);
+                if let Some(error_message) = error_notification {
+                    this.push_notification(Notification::error(error_message), cx);
+                }
                 if succeeded && !this.close_state.is_closing() {
                     match target_side {
                         PaneSide::Left => this.refresh_left_remote_dir(cx),
@@ -3669,6 +3709,15 @@ impl SftpView {
             task.shared_progress
                 .scanning
                 .store(false, Ordering::Relaxed);
+            if let Ok(mut current_file) = task.shared_progress.current_file.write() {
+                *current_file = None;
+            }
+            task.shared_progress
+                .current_file_transferred
+                .store(0, Ordering::Relaxed);
+            task.shared_progress
+                .current_file_total
+                .store(0, Ordering::Relaxed);
             match result {
                 Ok(_) => {
                     task.state = TransferTaskState::Completed;
@@ -6758,7 +6807,8 @@ mod tests {
         TransferOperation, TransferQueue, TransferTask, TransferTaskState, acquire_transfer_client,
         bounded_disconnect, is_valid_entry_name, join_remote_path,
         mark_server_copy_directory_replacements, server_copy_conflict_flags,
-        should_apply_local_listing, should_apply_remote_listing, upload_directory_conflict_policy,
+        should_apply_local_listing, should_apply_remote_listing, transfer_error_summary,
+        upload_directory_conflict_policy,
     };
     use sftp::{DirectoryConflictPolicy, ServerCopyItem};
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
@@ -6788,6 +6838,17 @@ mod tests {
             }),
             error: None,
         }
+    }
+
+    #[test]
+    fn transfer_error_summary_removes_control_characters_and_limits_length() {
+        let long_error = format!("password failed\r\n{}\0secret", "x".repeat(600));
+        let summary = transfer_error_summary(&anyhow::anyhow!(long_error));
+
+        assert!(!summary.chars().any(char::is_control));
+        assert!(summary.starts_with("password failed "));
+        assert!(summary.ends_with('…'));
+        assert!(summary.chars().count() <= 501);
     }
 
     fn transfer_pool_config() -> SshConnectConfig {

@@ -252,11 +252,49 @@ fn finish_prompt(
     window: &mut Window,
     cx: &mut gpui::App,
 ) {
+    let _ = view.update(cx, |this, _cx| {
+        this.update_server_copy_route_status(task_id, decision);
+    });
     send_prompt_decision(response, decision);
     let _ = view.update(cx, |this, _cx| {
         let _ = this.resolve_direct_copy_prompt(task_id, decision);
     });
     window.close_dialog_by_handle(dialog_handle, cx);
+}
+
+impl SftpView {
+    fn update_server_copy_route_status(&mut self, task_id: usize, decision: DirectCopyDecision) {
+        let status = match decision {
+            DirectCopyDecision::UseDirect => {
+                Some(t!("Transfer.direct_copy_authenticating").to_string())
+            }
+            DirectCopyDecision::UseRelay => Some(t!("Transfer.relay_copy_starting").to_string()),
+            DirectCopyDecision::Cancel => None,
+        };
+        let Some(status) = status else {
+            return;
+        };
+        let Some(task) = self
+            .transfer_queue
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+        else {
+            return;
+        };
+        if task.state != super::TransferTaskState::Running
+            || task.shared_progress.cancelled.load(Ordering::Relaxed)
+            || !matches!(&task.operation, super::TransferOperation::ServerCopy(_))
+        {
+            return;
+        }
+        task.shared_progress
+            .scanning
+            .store(false, Ordering::Relaxed);
+        if let Ok(mut current_file) = task.shared_progress.current_file.write() {
+            *current_file = Some(status);
+        }
+    }
 }
 
 fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement {

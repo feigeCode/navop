@@ -294,7 +294,8 @@ fn ssh_options(
 ) -> String {
     let common = "-o StrictHostKeyChecking=yes -o ForwardAgent=no -o RequestTTY=no \
 -o ClearAllForwardings=yes -o ProxyJump=none -o ProxyCommand=none \
--o ControlMaster=no -o ControlPath=none -o ConnectTimeout=10";
+-o ControlMaster=no -o ControlPath=none -o ConnectTimeout=10 \
+-o ServerAliveInterval=5 -o ServerAliveCountMax=3";
     let host_key = match path_style {
         AuthPathStyle::ShellArguments => {
             "-o UserKnownHostsFile=\"$navop_known_hosts\" \

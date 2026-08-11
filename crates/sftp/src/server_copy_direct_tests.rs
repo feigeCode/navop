@@ -802,6 +802,8 @@ fn assert_common_security_options(command: &str) {
     assert!(command.contains("-o ControlMaster=no"));
     assert!(command.contains("-o ControlPath=none"));
     assert!(command.contains("-o ConnectTimeout=10"));
+    assert!(command.contains("-o ServerAliveInterval=5"));
+    assert!(command.contains("-o ServerAliveCountMax=3"));
 }
 
 fn assert_protected_wrapper(wrapper: &str) {

@@ -821,6 +821,14 @@ Transfer:
     en: Direct transfer
     zh-CN: 直接传输
     zh-HK: 直接傳輸
+  direct_copy_authenticating:
+    en: Verifying source-to-target connection
+    zh-CN: 正在验证源服务器到目标服务器的连接
+    zh-HK: 正在驗證來源伺服器到目標伺服器的連線
+  relay_copy_starting:
+    en: Starting transfer through Navop
+    zh-CN: 正在启动 Navop 中转
+    zh-HK: 正在啟動 Navop 中轉
   direct_copy_use_relay:
     en: Through Navop
     zh-CN: 通过 Navop

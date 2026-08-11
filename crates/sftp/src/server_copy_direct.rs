@@ -1,4 +1,7 @@
-use crate::remote_exec::{exec_remote_command, exec_remote_command_with_input};
+use crate::remote_exec::{
+    RemoteCommandTimeout, exec_remote_command, exec_remote_command_with_input,
+    exec_remote_command_with_input_deadline,
+};
 use crate::server_copy::DirectCopyStrategy;
 use crate::server_copy_command::{
     DIRECT_COPY_HOST_KEY_ALIAS, DirectCopyAuthMode, DirectCopyPayloadLengths,
@@ -13,9 +16,13 @@ use anyhow::{Result, anyhow, bail};
 use ssh::{SshAuth, SshConnectConfig, SshSessionManager};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use tokio::time::Instant;
 use zeroize::Zeroize;
 
 pub(crate) use crate::server_copy_command::build_direct_copy_commands;
+
+const DIRECT_COPY_AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DirectCopyCapabilities {
@@ -206,9 +213,17 @@ or local relay was started"
         if cancelled.load(Ordering::Relaxed) {
             return Err(TransferCancelled.into());
         }
+        progress(TransferProgress {
+            transferred,
+            total,
+            current_file: Some(item.source_path.clone()),
+            current_file_total: item.size,
+            ..TransferProgress::default()
+        });
         reserve_target(target, item, item_index).await?;
         let output =
-            execute_authenticated_command(source, command, &credentials, cancelled.clone()).await?;
+            execute_authenticated_command(source, command, &credentials, cancelled.clone(), None)
+                .await?;
         if output.exit_status != 0 {
             bail!(
                 "{} direct copy failed with status {}: {}. Local relay was not started because \
@@ -331,8 +346,26 @@ async fn authenticate_direct_copy(
     cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
     let command = target_ssh_command(target, credentials.auth_mode, "true")?;
-    let output =
-        execute_authenticated_command(source, &command, credentials, cancelled.clone()).await?;
+    let output = execute_authenticated_command(
+        source,
+        &command,
+        credentials,
+        cancelled.clone(),
+        Some(Instant::now() + DIRECT_COPY_AUTH_TIMEOUT),
+    )
+    .await
+    .map_err(|error| {
+        if error.is::<RemoteCommandTimeout>() {
+            anyhow!(
+                "source server did not finish authenticating to the target within {} seconds: \
+{error}. Verify source-to-target network reachability and the configured target credentials. \
+Navop relay was not started",
+                DIRECT_COPY_AUTH_TIMEOUT.as_secs()
+            )
+        } else {
+            error
+        }
+    })?;
     if output.exit_status == 0 {
         return Ok(());
     }
@@ -350,11 +383,23 @@ async fn execute_authenticated_command(
     command: &str,
     credentials: &DirectCopyCredentials,
     cancelled: Arc<AtomicBool>,
+    deadline: Option<Instant>,
 ) -> Result<crate::remote_exec::RemoteCommandOutput> {
     let wrapper = build_direct_copy_wrapper(command, credentials.auth_mode, credentials.lengths())?;
     let mut payload = credentials.payload();
-    let result =
-        exec_remote_command_with_input(source, &wrapper, &payload, cancelled.clone()).await;
+    let result = match deadline {
+        Some(deadline) => {
+            exec_remote_command_with_input_deadline(
+                source,
+                &wrapper,
+                &payload,
+                cancelled.clone(),
+                deadline,
+            )
+            .await
+        }
+        None => exec_remote_command_with_input(source, &wrapper, &payload, cancelled.clone()).await,
+    };
     payload.zeroize();
     result
 }
