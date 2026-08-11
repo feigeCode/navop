@@ -2260,6 +2260,46 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   teardown、全部 platform-driven quit race，或连接中/已连接/重连中关闭 tab与应用直接
   退出各重复 20 次。Task 7 与整个计划继续保持未完成。
 
+#### Execution Notes (2026-08-11) — GPUI app-shutdown quit-observer lifecycle
+
+- **Lifecycle regression:** 新增 Windows-only GPUI test
+  `app_shutdown_quit_observer_closes_admission_before_async_teardown`。测试在
+  `TestAppContext` 中注册一个 synthetic pending Native RDP registration，再安装
+  `on_app_quit` observer 并调用 `TestAppContext::quit()`。该测试 seam 会进入锁定 GPUI
+  revision 的真实 `App::shutdown()` 实现：先移除并同步调用 quit observers，再释放
+  windows、设置 quitting 状态并在固定预算内等待 observer futures。observer 的同步部分
+  因而实际执行 `fail_closed_windows_native_rdp_for_platform_quit`，而不是像前述测试那样
+  直接调用 fallback 函数。
+- **Fail-closed assertions:** observer 必须留下
+  `requested = 1`、`destroyed = 0`、`timed_out_leaked = 0`、`owner_lost = 1`、
+  `controller_unavailable = false`、`incomplete = true` 的 conservative report。
+  app shutdown 返回后 registry 仍保持 `Draining`，原 registration 仍 active/pending，
+  stable terminal report 仍为 `None`；这锁定 admission close 与 report projection 发生在
+  observer 同步阶段，同时没有把 `OwnerLost` projection 写回 tombstone，也没有虚构 native
+  destroy、leak quarantine 或 terminal cleanup。
+- **Implementation boundary:** 本切片只增加 regression test，不引入 production hook。
+  测试 observer 返回立即 ready 的 future，因此证明的是
+  `TestAppContext::quit → App::shutdown → on_app_quit` 的同步 admission/fail-closed 时序，
+  不是 observer fixed-budget future 中的 owner polling、native destroy、COM release 或
+  apartment teardown。生产 `main` 的 platform-driven observer 仍负责先同步调用同一 RDP
+  fallback，再启动并等待 SSH fallback；正常 Navop 退出路径仍以完整
+  Native RDP drain → SSH shutdown → `cx.quit()` 为主。
+- **Local automated verification:** macOS host 上
+  `cargo test --locked -p remote_desktop_view` 140 passed，
+  `cargo test --locked -p remote_desktop_view --features windows-native-rdp` 150 passed，
+  `cargo check --locked -p main --features windows-native-rdp`、
+  `cargo fmt --all -- --check` 与 `git diff --check` 均通过。两路独立只读核验确认
+  `TestAppContext::quit()` 到 `App::shutdown()` 的调用链、detached observer subscription、
+  `Rc<RefCell<_>>` 生命周期、测试宏结束时第二次空 shutdown，以及与已有直接 fallback /
+  task-drop regressions 的职责差异没有已确认阻断。由于新增测试受 Windows +
+  feature-on + `cfg(test)` 约束，本地 macOS 测试不会编译该 case；必须由推送后的 x64
+  Native RDP probe 真实编译运行。
+- **Remaining Task 7 scope and verification boundary:** 即使 Windows runner 成功，本切片
+  也只证明真实 Windows/MSVC target 上的 synthetic GPUI observer lifecycle regression；
+  它不经过真实 Windows platform quit hook，不创建真实 ActiveX/RDP session，不证明 child
+  `HWND`、COM apartment teardown 或全部 UI/platform shutdown race，也不替代连接中、已连接、
+  重连中关闭 tab及应用直接退出各重复 20 次的人工验证。Task 7 与整个计划继续保持未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback

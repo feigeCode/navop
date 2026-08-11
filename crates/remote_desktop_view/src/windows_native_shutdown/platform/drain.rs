@@ -266,6 +266,8 @@ pub fn shutdown_windows_native_rdp(cx: &mut App) -> Task<WindowsNativeRdpShutdow
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use gpui::BorrowAppContext as _;
     use windows_rdp_host::{
         WindowsRdpShutdownCompletion, WindowsRdpShutdownLifecycle, WindowsRdpTerminalOutcome,
@@ -309,6 +311,54 @@ mod tests {
         assert_eq!(0, report.destroyed());
         assert_eq!(0, report.timed_out_leaked());
         assert_eq!(1, report.owner_lost());
+        assert!(report.incomplete());
+        cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+            assert_eq!(
+                WindowsRdpShutdownLifecycle::Draining,
+                controller.registry.lifecycle()
+            );
+            assert_eq!(vec![pending], controller.registry.pending_registrations());
+            assert_eq!(1, controller.registry.active_count());
+            assert!(controller.registry.report().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn app_shutdown_quit_observer_closes_admission_before_async_teardown(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let pending = cx.update(|cx| {
+            super::super::init(cx);
+            cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+                controller
+                    .registry
+                    .register(1)
+                    .expect("pending registration")
+            })
+        });
+        let observed_report = Rc::new(RefCell::new(None));
+        let report_for_observer = observed_report.clone();
+        cx.update(|cx| {
+            cx.on_app_quit(move |cx| {
+                report_for_observer
+                    .borrow_mut()
+                    .replace(fail_closed_windows_native_rdp_for_platform_quit(cx));
+                async {}
+            })
+            .detach();
+        });
+
+        cx.quit();
+
+        let report = observed_report
+            .borrow_mut()
+            .take()
+            .expect("the GPUI quit observer should run during app shutdown");
+        assert_eq!(1, report.requested());
+        assert_eq!(0, report.destroyed());
+        assert_eq!(0, report.timed_out_leaked());
+        assert_eq!(1, report.owner_lost());
+        assert!(!report.controller_unavailable());
         assert!(report.incomplete());
         cx.read_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
             assert_eq!(
