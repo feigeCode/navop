@@ -174,9 +174,10 @@ enum AuthPathStyle {
 }
 
 fn ssh_options(port_flag: &str, port: u16, path_style: AuthPathStyle) -> String {
+    // Keep the source server's proxy configuration available. Some SSH clients also interpret
+    // ProxyJump=none as a literal jump host named "none" instead of disabling proxying.
     let common = "-o StrictHostKeyChecking=yes -o ForwardAgent=no -o RequestTTY=no \
--o ClearAllForwardings=yes -o ProxyJump=none -o ProxyCommand=none \
--o ControlMaster=no -o ControlPath=none -o ConnectTimeout=10 \
+-o ClearAllForwardings=yes -o ControlMaster=no -o ControlPath=none -o ConnectTimeout=10 \
 -o ServerAliveInterval=5 -o ServerAliveCountMax=3";
     let host_key = match path_style {
         AuthPathStyle::ShellArguments => {

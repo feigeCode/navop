@@ -330,7 +330,8 @@ fn ssh_option_probe_parses_public_key_options_without_credentials() {
     assert!(command.contains("-o PasswordAuthentication=no"));
     assert!(command.contains("-o KbdInteractiveAuthentication=no"));
     assert!(command.contains("-o StrictHostKeyChecking=yes"));
-    assert!(command.contains("-o ProxyJump=none"));
+    assert!(!command.contains("-o ProxyJump="));
+    assert!(!command.contains("-o ProxyCommand="));
     assert!(command.contains("navop@navop.invalid >/dev/null 2>&1"));
     assert!(!command.contains("$navop_"));
     assert!(!command.contains("SSH_ASKPASS"));
@@ -503,8 +504,8 @@ fn assert_common_security_options(command: &str) {
     assert!(command.contains("-o ForwardAgent=no"));
     assert!(command.contains("-o RequestTTY=no"));
     assert!(command.contains("-o ClearAllForwardings=yes"));
-    assert!(command.contains("-o ProxyJump=none"));
-    assert!(command.contains("-o ProxyCommand=none"));
+    assert!(!command.contains("-o ProxyJump="));
+    assert!(!command.contains("-o ProxyCommand="));
     assert!(command.contains("-o ControlMaster=no"));
     assert!(command.contains("-o ControlPath=none"));
     assert!(command.contains("-o ConnectTimeout=10"));
