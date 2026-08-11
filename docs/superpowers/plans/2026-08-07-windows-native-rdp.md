@@ -2294,6 +2294,17 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   task-drop regressions 的职责差异没有已确认阻断。由于新增测试受 Windows +
   feature-on + `cfg(test)` 约束，本地 macOS 测试不会编译该 case；必须由推送后的 x64
   Native RDP probe 真实编译运行。
+- **Windows CI verification:** GitHub Actions
+  [run 31463515893](https://github.com/feigeCode/navop/actions/runs/31463515893)
+  在 commit `070e746ac1f75c747c8d76eed589d47188dd672f` 上完整成功：
+  x64 Native RDP probe 10m35s、i686 probe 2m23s、Windows workspace tests 18m31s、
+  Linux tests 7m38s、macOS tests 10m33s、icon audit 1m28s、matrix preparation 4s。
+  `script/build-windows-rdp-probe.ps1` 的 x64 分支真实执行
+  `cargo test --locked -p remote_desktop_view --features windows-native-rdp
+  --target x86_64-pc-windows-msvc`，因此新增 Windows-only GPUI observer lifecycle
+  regression 已在 Windows/MSVC 上编译并运行；i686 分支只证明该架构的
+  `windows-rdp-probe` build 与 `windows_rdp_host` tests，不声称运行受 x64 feature gate
+  约束的 `remote_desktop_view` regression。
 - **Remaining Task 7 scope and verification boundary:** 即使 Windows runner 成功，本切片
   也只证明真实 Windows/MSVC target 上的 synthetic GPUI observer lifecycle regression；
   它不经过真实 Windows platform quit hook，不创建真实 ActiveX/RDP session，不证明 child
