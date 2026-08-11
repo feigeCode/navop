@@ -8,7 +8,7 @@
 //! [`AgentComposerContext`],注入模型 / 工具执行模式的下拉选项,并处理输入框
 //! emit 的选择事件(目标轮换、模型 / 模式切换)。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -93,6 +93,8 @@ pub enum AgentChatViewEvent {
 /// 根据模型选项构建对应运行时。
 pub type AgentRuntimeFactory =
     Arc<dyn Fn(&ComposerModelOption) -> anyhow::Result<Arc<Runtime>> + Send + Sync + 'static>;
+
+const MAX_CACHED_SESSION_TRANSCRIPTS: usize = 32;
 
 /// 当前驱动后端:自研内核(One_Agent)或外部 ACP agent。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -750,6 +752,8 @@ pub struct AgentChatView {
     live_sessions: Vec<SessionSummary>,
     /// 非当前会话的实时转录，切换回来时可继续看到流式进度。
     session_transcripts: HashMap<String, AgentTranscript>,
+    /// 非当前会话转录的 LRU 顺序，队首为最久未访问项。
+    session_transcript_order: VecDeque<String>,
     /// 当前 Runtime 中仍在执行的会话集合。
     running_sessions: HashSet<String>,
     /// 本地 stop 后不再允许影响后续轮次状态的旧 turn。
@@ -1001,6 +1005,7 @@ impl AgentChatView {
             sessions,
             live_sessions,
             session_transcripts: HashMap::new(),
+            session_transcript_order: VecDeque::new(),
             running_sessions,
             ignored_local_turns: HashSet::new(),
             local_operation_generations: HashMap::new(),
@@ -1497,6 +1502,7 @@ impl AgentChatView {
             match self.start_submission(session_uid, &submission, cx) {
                 SubmissionStart::Started => {
                     self.pending_submissions.pop_front(session_uid);
+                    self.trim_session_transcripts();
                     if session_uid == self.current_session {
                         self.sync_pending_preview(cx);
                     }
@@ -1510,6 +1516,7 @@ impl AgentChatView {
                 }
                 SubmissionStart::Rejected => {
                     self.pending_submissions.pop_front(session_uid);
+                    self.trim_session_transcripts();
                     if session_uid == self.current_session {
                         self.sync_pending_preview(cx);
                     }
@@ -1850,16 +1857,20 @@ impl AgentChatView {
             self.transcript.push_user(text, image_count);
             return;
         }
-        let transcript = self
-            .session_transcripts
-            .entry(session_uid.to_string())
-            .or_insert_with(|| {
-                let mut transcript = AgentTranscript::new();
-                transcript.set_resource_context(resources);
-                transcript
-            });
-        transcript.set_resource_context(resources);
-        transcript.push_user(text, image_count);
+        {
+            let transcript = self
+                .session_transcripts
+                .entry(session_uid.to_string())
+                .or_insert_with(|| {
+                    let mut transcript = AgentTranscript::new();
+                    transcript.set_resource_context(resources);
+                    transcript
+                });
+            transcript.set_resource_context(resources);
+            transcript.push_user(text, image_count);
+        }
+        self.touch_session_transcript(session_uid);
+        self.trim_session_transcripts();
     }
 
     fn request_acp_cancel_for_session(&mut self, session_uid: &str) -> bool {
@@ -2089,6 +2100,7 @@ impl AgentChatView {
                 self.cancel_pending_acp_permissions(cx);
                 self.set_session_running(&session_uid, false, cx);
                 self.acp_turn_owner = None;
+                self.trim_session_transcripts();
                 if acp_connection_is_unavailable(acp_terminal_phase.as_ref()) {
                     self.invalidate_unavailable_acp_connection(cx);
                 }
@@ -2115,21 +2127,31 @@ impl AgentChatView {
             _ => None,
         };
         let resources = self.resources.clone();
-        let transcript = if is_current_session {
-            &mut self.transcript
+        let applied = if is_current_session {
+            if let Some(error) = acp_error.as_ref() {
+                self.transcript.apply_acp_failure(&event, error)
+            } else {
+                self.transcript.apply(&event)
+            }
         } else {
-            self.session_transcripts
-                .entry(session_uid.clone())
-                .or_insert_with(|| {
-                    let mut transcript = AgentTranscript::new();
-                    transcript.set_resource_context(&resources);
-                    transcript
-                })
-        };
-        let applied = if let Some(error) = acp_error.as_ref() {
-            transcript.apply_acp_failure(&event, error)
-        } else {
-            transcript.apply(&event)
+            let applied = {
+                let transcript = self
+                    .session_transcripts
+                    .entry(session_uid.clone())
+                    .or_insert_with(|| {
+                        let mut transcript = AgentTranscript::new();
+                        transcript.set_resource_context(&resources);
+                        transcript
+                    });
+                if let Some(error) = acp_error.as_ref() {
+                    transcript.apply_acp_failure(&event, error)
+                } else {
+                    transcript.apply(&event)
+                }
+            };
+            self.touch_session_transcript(&session_uid);
+            self.trim_session_transcripts();
+            applied
         };
         if !applied {
             return;
@@ -2149,6 +2171,7 @@ impl AgentChatView {
             self.set_session_running(&session_uid, false, cx);
             if backend == Backend::Acp && is_real_terminal {
                 self.acp_turn_owner = None;
+                self.trim_session_transcripts();
             }
         }
         if backend == Backend::Acp
@@ -2241,6 +2264,7 @@ impl AgentChatView {
 
     fn next_acp_operation(&mut self) -> AcpOperationToken {
         self.acp_session_transition = None;
+        self.trim_session_transcripts();
         self.acp_operation_generation = self.acp_operation_generation.wrapping_add(1);
         if self.acp_operation_generation == 0 {
             self.acp_operation_generation = 1;
@@ -2344,6 +2368,7 @@ impl AgentChatView {
             .is_some_and(|transition| transition.operation == operation)
         {
             self.acp_session_transition = None;
+            self.trim_session_transcripts();
         }
     }
 
@@ -2352,6 +2377,7 @@ impl AgentChatView {
             self.running_sessions.insert(session_uid.to_string());
         } else {
             self.running_sessions.remove(session_uid);
+            self.trim_session_transcripts();
         }
         if session_uid == self.current_session {
             self.is_running = running;
@@ -2369,10 +2395,14 @@ impl AgentChatView {
         if session_uid == self.current_session {
             self.transcript.push_system(message);
         } else {
-            self.session_transcripts
-                .entry(session_uid.to_string())
-                .or_default()
-                .push_system(message);
+            {
+                self.session_transcripts
+                    .entry(session_uid.to_string())
+                    .or_default()
+                    .push_system(message);
+            }
+            self.touch_session_transcript(session_uid);
+            self.trim_session_transcripts();
         }
     }
 
@@ -2386,16 +2416,18 @@ impl AgentChatView {
         if session_uid == self.current_session {
             return Some(&mut self.transcript);
         }
-        let resources = self.resources.clone();
-        Some(
+        if !self.session_transcripts.contains_key(session_uid) {
+            let mut transcript = AgentTranscript::new();
+            transcript.set_resource_context(&self.resources);
             self.session_transcripts
-                .entry(session_uid.to_string())
-                .or_insert_with(|| {
-                    let mut transcript = AgentTranscript::new();
-                    transcript.set_resource_context(&resources);
-                    transcript
-                }),
-        )
+                .insert(session_uid.to_string(), transcript);
+        }
+        self.touch_session_transcript(session_uid);
+        self.trim_session_transcripts_to_preserving(
+            MAX_CACHED_SESSION_TRANSCRIPTS,
+            Some(session_uid),
+        );
+        self.session_transcripts.get_mut(session_uid)
     }
 
     /// 重建并把展示上下文推给输入框。
@@ -2535,7 +2567,7 @@ impl AgentChatView {
                 self.sync_session_skills();
                 self.selected_model = binding.selected_model;
                 self.current_session = self.session_id.to_string();
-                self.session_transcripts.clear();
+                self.clear_cached_session_transcripts();
                 self.live_sessions.clear();
                 self.ignored_local_turns.clear();
                 self.closed_sessions.clear();
@@ -2637,6 +2669,7 @@ impl AgentChatView {
                 self.pending_submissions.clear_session(&session_uid);
             }
             self.acp_turn_owner = None;
+            self.trim_session_transcripts();
             self.sync_pending_preview(cx);
             let operation =
                 self.begin_acp_session_transition(agent_id.clone(), session_uid.clone());
@@ -2734,6 +2767,7 @@ impl AgentChatView {
         self.sync_session_skills();
         self.current_session = self.session_id.to_string();
         self.closed_sessions.remove(&self.current_session);
+        self.trim_session_transcripts();
         self.transcript = AgentTranscript::new();
         self.transcript.set_resource_context(&self.resources);
         self.is_running = false;
@@ -2816,6 +2850,73 @@ impl AgentChatView {
             .insert(0, SessionSummary::new(uid, title, updated_at));
     }
 
+    fn touch_session_transcript(&mut self, uid: &str) {
+        if !self.session_transcripts.contains_key(uid) {
+            return;
+        }
+        self.session_transcript_order.retain(|item| item != uid);
+        self.session_transcript_order.push_back(uid.to_string());
+    }
+
+    fn cache_session_transcript(&mut self, uid: String, transcript: AgentTranscript) {
+        self.session_transcripts.insert(uid.clone(), transcript);
+        self.touch_session_transcript(&uid);
+        self.trim_session_transcripts();
+    }
+
+    fn remove_cached_session_transcript(&mut self, uid: &str) -> Option<AgentTranscript> {
+        self.session_transcript_order.retain(|item| item != uid);
+        self.session_transcripts.remove(uid)
+    }
+
+    fn clear_cached_session_transcripts(&mut self) {
+        self.session_transcripts.clear();
+        self.session_transcript_order.clear();
+    }
+
+    fn session_transcript_is_protected(&self, uid: &str) -> bool {
+        uid == self.current_session
+            || self.running_sessions.contains(uid)
+            || self.pending_submissions.len(uid) > 0
+            || self
+                .acp_turn_owner
+                .as_ref()
+                .is_some_and(|owner| owner.session_uid == uid)
+            || self
+                .acp_session_transition
+                .as_ref()
+                .is_some_and(|transition| transition.session_uid == uid)
+    }
+
+    fn trim_session_transcripts(&mut self) {
+        self.trim_session_transcripts_to(MAX_CACHED_SESSION_TRANSCRIPTS);
+    }
+
+    fn trim_session_transcripts_to(&mut self, max_entries: usize) {
+        self.trim_session_transcripts_to_preserving(max_entries, None);
+    }
+
+    fn trim_session_transcripts_to_preserving(
+        &mut self,
+        max_entries: usize,
+        preserve_uid: Option<&str>,
+    ) {
+        while self.session_transcripts.len() > max_entries {
+            let Some(index) = self.session_transcript_order.iter().position(|uid| {
+                preserve_uid != Some(uid.as_str())
+                    && self.session_transcripts.contains_key(uid)
+                    && !self.session_transcript_is_protected(uid)
+            }) else {
+                break;
+            };
+            let uid = self
+                .session_transcript_order
+                .remove(index)
+                .expect("session transcript LRU index must remain valid");
+            self.session_transcripts.remove(&uid);
+        }
+    }
+
     fn stash_current_transcript(&mut self) {
         if self.backend != Backend::Local {
             return;
@@ -2823,8 +2924,7 @@ impl AgentChatView {
         let mut replacement = AgentTranscript::new();
         replacement.set_resource_context(&self.resources);
         let transcript = std::mem::replace(&mut self.transcript, replacement);
-        self.session_transcripts
-            .insert(self.current_session.clone(), transcript);
+        self.cache_session_transcript(self.current_session.clone(), transcript);
     }
 
     fn discard_live_session(&mut self, uid: &str) {
@@ -2850,7 +2950,7 @@ impl AgentChatView {
         }
         self.runtime.close_session(&session_id);
         self.pending_submissions.remove_session(uid);
-        self.session_transcripts.remove(uid);
+        self.remove_cached_session_transcript(uid);
         self.live_sessions.retain(|summary| summary.id != uid);
     }
 
@@ -2874,7 +2974,8 @@ impl AgentChatView {
             session
         } else {
             let Some(snapshot) = persistence::load_snapshot(cx, uid) else {
-                if let Some(transcript) = self.session_transcripts.remove(&self.current_session) {
+                let current_session = self.current_session.clone();
+                if let Some(transcript) = self.remove_cached_session_transcript(&current_session) {
                     self.transcript = transcript;
                 }
                 self.reload_sessions(cx);
@@ -2889,7 +2990,7 @@ impl AgentChatView {
         self.session_id = target.id().clone();
         self.system_instruction = target.system_instruction();
         self.current_session = self.session_id.to_string();
-        if let Some(transcript) = self.session_transcripts.remove(uid) {
+        if let Some(transcript) = self.remove_cached_session_transcript(uid) {
             self.transcript = transcript;
         } else {
             let snapshot = target.snapshot();
@@ -2897,6 +2998,7 @@ impl AgentChatView {
                 .load_history(&snapshot.history, snapshot.plan.as_ref());
             self.transcript.set_resource_context(&self.resources);
         }
+        self.trim_session_transcripts();
         self.is_running = self.running_sessions.contains(uid);
         self.input
             .update(cx, |input, cx| input.set_running(self.is_running, cx));
@@ -4886,6 +4988,116 @@ mod tests {
         assert!(!owner.mark_cancel_requested("session-a", false));
         assert!(owner.mark_cancel_requested("session-a", true));
         assert!(!owner.mark_cancel_requested("session-a", true));
+    }
+
+    #[gpui::test]
+    fn cached_session_transcripts_evict_oldest_idle_entry(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _| {
+            for index in 0..=MAX_CACHED_SESSION_TRANSCRIPTS {
+                view.cache_session_transcript(format!("cached-{index}"), AgentTranscript::new());
+            }
+
+            assert_eq!(
+                MAX_CACHED_SESSION_TRANSCRIPTS,
+                view.session_transcripts.len()
+            );
+            assert!(!view.session_transcripts.contains_key("cached-0"));
+            assert!(
+                view.session_transcripts
+                    .contains_key(&format!("cached-{MAX_CACHED_SESSION_TRANSCRIPTS}"))
+            );
+            assert!(
+                !view.closed_sessions.contains("cached-0"),
+                "cache eviction must not create a closed-session tombstone"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn cached_session_transcripts_preserve_active_sessions_until_release(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _| {
+            let running_uid = "cached-running".to_string();
+            let pending_uid = "cached-pending".to_string();
+            let owner_uid = "cached-owner".to_string();
+            let transition_uid = "cached-transition".to_string();
+            let idle_uid = "cached-idle".to_string();
+
+            for uid in [
+                &running_uid,
+                &pending_uid,
+                &owner_uid,
+                &transition_uid,
+                &idle_uid,
+            ] {
+                view.cache_session_transcript(uid.clone(), AgentTranscript::new());
+            }
+            view.running_sessions.insert(running_uid.clone());
+            view.pending_submissions
+                .enqueue(&pending_uid, pending_submission("queued"));
+            view.acp_turn_owner = Some(AcpTurnOwner {
+                event_session_id: SessionId::from_string("acp:cached-owner"),
+                session_uid: owner_uid.clone(),
+                turn_id: TurnId::from_string("turn-cached-owner"),
+                cancel_requested: false,
+            });
+            view.acp_session_transition = Some(AcpSessionTransition {
+                operation: AcpOperationToken(1),
+                agent_id: "cached-agent".into(),
+                session_uid: transition_uid.clone(),
+                phase: AcpSessionTransitionPhase::Creating,
+            });
+
+            view.trim_session_transcripts_to(1);
+
+            assert_eq!(4, view.session_transcripts.len());
+            assert!(view.session_transcripts.contains_key(&running_uid));
+            assert!(view.session_transcripts.contains_key(&pending_uid));
+            assert!(view.session_transcripts.contains_key(&owner_uid));
+            assert!(view.session_transcripts.contains_key(&transition_uid));
+            assert!(!view.session_transcripts.contains_key(&idle_uid));
+
+            view.running_sessions.remove(&running_uid);
+            view.pending_submissions.remove_session(&pending_uid);
+            view.acp_turn_owner = None;
+            view.acp_session_transition = None;
+            view.trim_session_transcripts_to(1);
+
+            assert_eq!(1, view.session_transcripts.len());
+            assert!(view.session_transcripts.contains_key(&transition_uid));
+        });
+    }
+
+    #[gpui::test]
+    fn cached_session_transcript_access_refreshes_recency(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _| {
+            view.cache_session_transcript("cached-a".into(), AgentTranscript::new());
+            view.cache_session_transcript("cached-b".into(), AgentTranscript::new());
+            view.touch_session_transcript("cached-a");
+            view.cache_session_transcript("cached-c".into(), AgentTranscript::new());
+            view.trim_session_transcripts_to(2);
+
+            assert!(view.session_transcripts.contains_key("cached-a"));
+            assert!(!view.session_transcripts.contains_key("cached-b"));
+            assert!(view.session_transcripts.contains_key("cached-c"));
+        });
     }
 
     #[gpui::test]
