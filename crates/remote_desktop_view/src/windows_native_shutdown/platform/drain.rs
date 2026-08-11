@@ -456,7 +456,12 @@ mod tests {
         let controller = cx.update(|cx| cx.remove_global::<GlobalWindowsNativeRdpShutdown>());
         cx.executor()
             .advance_clock(WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL);
-        let report = cx.executor().block_on(task);
+        cx.executor().run_until_parked();
+        assert!(
+            task.is_ready(),
+            "the drain task should complete after the bounded poll interval"
+        );
+        let report = futures::executor::block_on(task);
 
         assert_eq!(2, report.requested());
         assert_eq!(1, report.destroyed());

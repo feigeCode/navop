@@ -2206,9 +2206,11 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   runnable task，因此适合精确停在首次 drain poll 的 timer wait；不能使用
   `run_until_parked()` 建立该前置条件，因为后者会排空 runnable 并推进到后续 timer。
   controller-loss case 在首次 poll 后移除 controller global，再推进一个
-  `WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL` 并 `block_on(task)`，从而让 task 在下一次
-  snapshot read 观察 controller 缺失。测试不依赖 production-only hook，也不增加 task
-  drop guard 或 cancellation cleanup。
+  `WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL`，随后用
+  `BackgroundExecutor::run_until_parked()` 驱动 timer 唤醒后的 continuation；测试先用
+  `Task::is_ready()` 确认 drain 已完成，再用 `futures::executor::block_on(task)` 仅消费
+  ready result，从而让 task 在下一次 snapshot read 观察 controller 缺失。测试不依赖
+  production-only hook，也不增加 task drop guard 或 cancellation cleanup。
 - **Fail-closed report distinction:** 已 poll task 在 controller 丢失时返回首次 poll 保存的
   最新 conservative report，因此保留真实 `destroyed = 1`，把仍 active 的 registration
   投影为 `owner_lost = 1`，并保持 `controller_unavailable = false`；这表示 controller
@@ -2226,12 +2228,22 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `cargo test --locked -p remote_desktop_view` 140 passed，
   `cargo test --locked -p remote_desktop_view --features windows-native-rdp` 150 passed，
   `cargo check --locked -p main --features windows-native-rdp`、
-  `cargo fmt --all -- --check` 与 `git diff --check` 均通过。三路独立只读核验确认
+  `cargo fmt --all -- --check` 与 `git diff --check` 均通过。独立只读核验确认
   `Task::is_ready`、`App::remove_global`、`TestAppContext::executor`、
-  `BackgroundExecutor::tick/advance_clock/block_on` 的 API/cfg 可见性，首次 poll/timer
-  时序、cached report accounting 与 Detached owner no-cleanup 边界没有已确认阻断。
+  `BackgroundExecutor::tick/advance_clock/run_until_parked` 的 API/cfg 可见性，首次
+  poll/timer 时序、cached report accounting 与 Detached owner no-cleanup 边界没有已确认
+  阻断。
   由于两个新增测试受 Windows + feature-on + `cfg(test)` 约束，本地 macOS 测试不会编译
   它们；必须由推送后的 x64 Native RDP probe 真实编译运行。
+- **First Windows runner correction:** GitHub Actions run `31460111705`（commit
+  `98cabed5adb49caa200236ca89fe41db887cab4b`）的 i686 ATL/MSVC probe、Windows x64
+  常规 tests、Linux tests、macOS tests、Icon audit 与 matrix preparation 均成功，但 x64
+  Native RDP probe 在编译新增 Windows-only regression 时失败：
+  `BackgroundExecutor` 不提供 `block_on`。该 run 只作为真实 Windows 编译暴露测试 API
+  误用的失败修正记录，不是当前切片的成功证据。修复改为
+  `advance_clock -> run_until_parked -> Task::is_ready ->
+  futures::executor::block_on`，并把 `futures` 声明为该 crate 的直接 dev-dependency；
+  修复后仍需新的 x64 probe 真实编译运行。
 - **Remaining Task 7 scope and verification boundary:** 待补的 GitHub runner 证据最多
   证明 x64/i686 MSVC/ATL build、x64 feature-on GPUI tests 与 Windows x64 常规自动化；
   不证明真实 ActiveX/RDP session、child `HWND` 视觉/焦点/Z-order、COM apartment
