@@ -2054,6 +2054,29 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   race。上述四类场景各重复 20 次仍 pending；GPUI/UI shutdown task cancellation 也仍是
   Task 7 的下一自动化切片。因此 Task 7 与整个计划继续保持未完成。
 
+#### Execution Notes (2026-08-11) — Windows-only GPUI test-support correction
+
+- **Runner evidence:** platform-quit fallback HEAD
+  `3e69053704452f03cf1b98ed0ea5182d6c981d10` 的 GitHub Actions run
+  [`31452350636`](https://github.com/feigeCode/navop/actions/runs/31452350636)
+  已结束：i686 Native RDP probe 与 Windows x64 常规自动化测试成功，但 x64 Native RDP
+  probe 在编译 `remote_desktop_view` 的 Windows-only lib test 时失败。错误集中在
+  `#[gpui::test]` 展开的 `gpui::run_test`/`gpui::TestAppContext` 不可见，以及测试闭包中
+  `&mut gpui::App` 的 `update_global` trait method 未进入作用域；因此该 run 整体为
+  failure，不能作为 platform-quit fallback HEAD 的完整 Windows 成功证据。
+- **Root cause and correction:** `gpui` 的测试 API 受 `test-support` feature 门控；
+  `remote_desktop_view` 原先没有像仓库其他 GPUI crate 一样在 dev-dependency 中启用该
+  feature。现在增加
+  `gpui = { workspace = true, features = ["test-support"] }`，并在 Windows-only test
+  module 中导入 `gpui::AppContext as _`。行为测试本身保留，不以删除或降级测试来绕过
+  Windows 编译证据。
+- **Local automated verification:** 修复后 macOS host 上
+  `cargo fmt --all -- --check`、`git diff --check`、`remote_desktop_view` default
+  140 passed、feature-on 150 passed，且
+  `cargo check --locked -p main --features windows-native-rdp` 通过。Windows-only
+  `#[gpui::test]` 的实际编译运行仍必须由修复提交推送后的 x64 Windows runner 核验；
+  该 runner 证据不能替代真实 ActiveX/RDP runtime 与四类 20 次手工 race 场景。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback

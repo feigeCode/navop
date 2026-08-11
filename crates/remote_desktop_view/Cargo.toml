@@ -24,6 +24,7 @@ rust-i18n = { workspace = true }
 cocoa = "=0.26.0"
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 
 [features]
