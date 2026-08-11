@@ -814,6 +814,8 @@ pub struct AppSettings {
     pub personal_sync: PersonalSyncSettings,
     #[serde(default)]
     pub remote_file_editor: RemoteFileEditorUserSettings,
+    #[serde(default = "default_true")]
+    pub direct_server_transfer_enabled: bool,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -1152,6 +1154,7 @@ impl Default for AppSettings {
             ai_chat: AiChatSettings::default(),
             personal_sync: PersonalSyncSettings::default(),
             remote_file_editor: RemoteFileEditorUserSettings::default(),
+            direct_server_transfer_enabled: true,
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -1411,6 +1414,29 @@ mod tests {
     #[test]
     fn app_settings_disables_sync_by_default() {
         assert!(!AppSettings::default().sync_enabled);
+    }
+
+    #[test]
+    fn app_settings_enables_direct_server_transfer_by_default() {
+        assert!(AppSettings::default().direct_server_transfer_enabled);
+    }
+
+    #[test]
+    fn legacy_app_settings_keep_direct_server_transfer_enabled() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert!(settings.direct_server_transfer_enabled);
+    }
+
+    #[test]
+    fn app_settings_deserializes_direct_server_transfer_choice() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "direct_server_transfer_enabled": false
+        }))
+        .expect("服务器间直接传输设置应能反序列化");
+
+        assert!(!settings.direct_server_transfer_enabled);
     }
 
     #[test]

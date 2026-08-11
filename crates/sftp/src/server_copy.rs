@@ -83,6 +83,7 @@ pub struct ServerCopyRequest {
     pub items: Vec<ServerCopyItem>,
     pub cancelled: Arc<AtomicBool>,
     pub progress: Arc<dyn Fn(crate::TransferProgress) + Send + Sync>,
+    pub direct_copy_enabled: bool,
     pub direct_copy_approval: Option<DirectCopyApproval>,
 }
 
@@ -267,13 +268,14 @@ pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<()> {
         items,
         cancelled,
         progress,
+        direct_copy_enabled,
         direct_copy_approval,
     } = request;
     ensure_not_cancelled(&cancelled)?;
     let mut target = RusshSftpClient::connect(target_config.clone()).await?;
     ensure_not_cancelled(&cancelled)?;
 
-    if direct_copy_route_is_simple(&source_config, &target_config) {
+    if should_prepare_direct_copy(direct_copy_enabled, &source_config, &target_config) {
         let source_session = SshSessionManager::new(source_config.clone());
         if let Some(plan) = prepare_direct_copy(
             &source_session,
@@ -335,6 +337,14 @@ fn direct_copy_route_is_simple(source: &SshConnectConfig, target: &SshConnectCon
         && source.proxy.is_none()
         && target.jump_server.is_none()
         && target.proxy.is_none()
+}
+
+fn should_prepare_direct_copy(
+    direct_copy_enabled: bool,
+    source: &SshConnectConfig,
+    target: &SshConnectConfig,
+) -> bool {
+    direct_copy_enabled && direct_copy_route_is_simple(source, target)
 }
 
 async fn request_direct_copy_approval(

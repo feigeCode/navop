@@ -334,14 +334,6 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
                     .child(t!("Transfer.direct_copy_security").to_string()),
             ),
         )
-        .child(
-            div().p_3().rounded_md().bg(cx.theme().secondary).child(
-                v_flex()
-                    .gap_2()
-                    .child(t!("Transfer.direct_copy_navop_relay_heading").to_string())
-                    .child(t!("Transfer.direct_copy_navop_relay_detail").to_string()),
-            ),
-        )
         .into_any_element()
 }
 

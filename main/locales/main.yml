@@ -1753,6 +1753,22 @@ Settings:
         en: Choose the card or list layout for the existing connection list on Home
         zh-CN: 选择主页现有连接列表使用卡片或列表布局
         zh-HK: 選擇主頁現有連線列表使用卡片或列表佈局
+
+    # 文件传输设置
+    FileTransfer:
+      group_title:
+        en: File Transfer
+        zh-CN: 文件传输
+        zh-HK: 檔案傳輸
+      direct_server_transfer:
+        en: Direct Server Transfer
+        zh-CN: 服务器间直接传输
+        zh-HK: 伺服器間直接傳輸
+      direct_server_transfer_desc:
+        en: When available, offer direct transfer between servers. Turn this off to always relay server-to-server copies through Navop.
+        zh-CN: 可用时提供服务器间直接传输；关闭后，服务器间复制将始终通过 Navop 中转。
+        zh-HK: 可用時提供伺服器間直接傳輸；關閉後，伺服器間複製將始終透過 Navop 中轉。
+
     # 笔记设置
     Notes:
       group_title:

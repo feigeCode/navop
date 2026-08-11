@@ -45,6 +45,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
+use one_core::settings::AppSettings;
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
@@ -3409,20 +3410,25 @@ impl SftpView {
     fn start_server_copy_task(&mut self, input: ServerCopyTaskInput, cx: &mut Context<Self>) {
         input.progress.scanning.store(true, Ordering::Relaxed);
         let cancelled = input.progress.cancelled.clone();
-        let (direct_copy_approval, prompt_request) =
-            direct_copy_prompt::direct_copy_approval_bridge(
+        let direct_copy_enabled = AppSettings::global(cx).direct_server_transfer_enabled;
+        let direct_copy_approval = if direct_copy_enabled {
+            let (approval, prompt_request) = direct_copy_prompt::direct_copy_approval_bridge(
                 input.task_id,
                 cancelled.clone(),
                 self.direct_copy_prompt_lock.clone(),
             );
-        cx.spawn(async move |this, cx| {
-            if let Ok(request) = prompt_request.await {
-                let _ = this.update_in(cx, |this, window, cx| {
-                    this.open_direct_copy_prompt(request, window, cx);
-                });
-            }
-        })
-        .detach();
+            cx.spawn(async move |this, cx| {
+                if let Ok(request) = prompt_request.await {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.open_direct_copy_prompt(request, window, cx);
+                    });
+                }
+            })
+            .detach();
+            Some(approval)
+        } else {
+            None
+        };
 
         let shared_progress = input.progress.clone();
         let task_id = input.task_id;
@@ -3454,7 +3460,8 @@ impl SftpView {
                         .current_file_total
                         .store(progress.current_file_total, Ordering::Relaxed);
                 }),
-                direct_copy_approval: Some(direct_copy_approval),
+                direct_copy_enabled,
+                direct_copy_approval,
             })
             .await
             .map(|_| ())

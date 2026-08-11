@@ -659,6 +659,30 @@ impl SettingsPanel {
                                     .to_string(),
                             ),
                         ]),
+                    SettingGroup::new()
+                        .title(t!("Settings.General.FileTransfer.group_title"))
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.FileTransfer.direct_server_transfer"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).direct_server_transfer_enabled
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.direct_server_transfer_enabled = value;
+                                        });
+                                    },
+                                )
+                                .default_value(default_settings.direct_server_transfer_enabled),
+                            )
+                            .description(
+                                t!(
+                                    "Settings.General.FileTransfer.direct_server_transfer_desc"
+                                )
+                                .to_string(),
+                            ),
+                        ),
                     notes_setting_group(),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
