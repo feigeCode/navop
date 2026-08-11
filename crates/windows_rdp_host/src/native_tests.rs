@@ -4,13 +4,14 @@ use std::ptr;
 
 use crate::ffi::{
     ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, EVENT_CLOSE_CONFIRMED, EVENT_CONNECTED,
-    EVENT_DISCONNECTED, EVENT_NETWORK_STATUS_CHANGED, EVENT_RECONNECTING,
-    EVENT_REMOTE_DESKTOP_SIZE_CHANGED, MAX_EVENT_PAYLOAD_BYTES, NativeEventCallback, NativeRdpHost,
-    NativeResult, NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds,
-    NavopRdpConnectionOptions, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
-    NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, NavopRdpLastError,
-    RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT,
-    RESULT_OK, RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
+    EVENT_DISCONNECTED, EVENT_FATAL_ERROR, EVENT_LOGON_ERROR, EVENT_NETWORK_STATUS_CHANGED,
+    EVENT_RECONNECTING, EVENT_REMOTE_DESKTOP_SIZE_CHANGED, EVENT_WARNING, MAX_EVENT_PAYLOAD_BYTES,
+    NativeEventCallback, NativeRdpHost, NativeResult, NavopRdpBorrowedSecret,
+    NavopRdpBorrowedUtf16, NavopRdpBounds, NavopRdpConnectionOptions, NavopRdpCreateOptions,
+    NavopRdpCreateWithParentOptions, NavopRdpCredentialBundle, NavopRdpEvent,
+    NavopRdpEventCallbackOptions, NavopRdpLastError, RESULT_ABI_MISMATCH,
+    RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT, RESULT_OK,
+    RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
 };
 
 const VT_I4: u16 = 3;
@@ -976,6 +977,124 @@ fn active_x_event_sink_maps_known_events_and_ignores_unknown_or_malformed_invoca
         RESULT_OK
     );
     assert_eq!(context.calls, 7);
+
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn active_x_diagnostic_events_preserve_signed_codes_and_ignore_malformed_invocations() {
+    let generation = 0x1020_3040_5060_7080;
+    let mut context = RecordingContext::default();
+    let mut host = unsafe { create_host(generation) };
+    unsafe {
+        register_callback(
+            host,
+            generation,
+            record_callback,
+            (&mut context as *mut RecordingContext).cast(),
+        );
+    }
+
+    let mut fatal_arguments = [100];
+    let fatal_types = [VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                10,
+                fatal_arguments.as_mut_ptr(),
+                fatal_types.as_ptr(),
+                fatal_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 1);
+    assert_eq!(context.kind, EVENT_FATAL_ERROR);
+    assert_eq!(context.code, 100);
+    assert!(context.payload.is_empty());
+
+    let mut warning_arguments = [-7];
+    let warning_types = [VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                11,
+                warning_arguments.as_mut_ptr(),
+                warning_types.as_ptr(),
+                warning_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 2);
+    assert_eq!(context.kind, EVENT_WARNING);
+    assert_eq!(context.code, -7);
+    assert!(context.payload.is_empty());
+
+    let status_logon_failure = -1_073_741_715;
+    let mut logon_arguments = [status_logon_failure];
+    let logon_types = [VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                22,
+                logon_arguments.as_mut_ptr(),
+                logon_types.as_ptr(),
+                logon_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 3);
+    assert_eq!(context.kind, EVENT_LOGON_ERROR);
+    assert_eq!(context.code, status_logon_failure);
+    assert!(context.payload.is_empty());
+
+    assert_eq!(
+        unsafe { navop_rdp_test_invoke_active_x_event(host, 10, ptr::null_mut(), ptr::null(), 0) },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 3);
+
+    let mut excess_arguments = [1, 2];
+    let excess_types = [VT_I4, VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                11,
+                excess_arguments.as_mut_ptr(),
+                excess_types.as_ptr(),
+                excess_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 3);
+
+    let mut unsigned_arguments = [status_logon_failure];
+    let unsigned_types = [VT_UI4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                22,
+                unsigned_arguments.as_mut_ptr(),
+                unsigned_types.as_ptr(),
+                unsigned_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 3);
 
     assert_eq!(
         unsafe { navop_rdp_unregister_event_callback(host) },

@@ -595,6 +595,30 @@ mod tests {
     }
 
     #[test]
+    fn identical_primary_and_extended_values_use_independent_code_spaces() {
+        let primary = WindowsRdpDisconnectReason::from_native_codes(264, None);
+        assert_eq!(primary.category(), WindowsRdpDiagnosticCategory::Network);
+        assert_eq!(primary.disconnect_code(), 264);
+        assert_eq!(primary.extended_code(), None);
+
+        let extended = WindowsRdpDisconnectReason::from_native_codes(i32::MIN, Some(264));
+        assert_eq!(
+            extended.category(),
+            WindowsRdpDiagnosticCategory::CertificateOrSecurity
+        );
+        assert_eq!(extended.disconnect_code(), i32::MIN);
+        assert_eq!(extended.extended_code(), Some(264));
+
+        let precedence = WindowsRdpDisconnectReason::from_native_codes(264, Some(264));
+        assert_eq!(
+            precedence.category(),
+            WindowsRdpDiagnosticCategory::CertificateOrSecurity
+        );
+        assert_eq!(precedence.disconnect_code(), 264);
+        assert_eq!(precedence.extended_code(), Some(264));
+    }
+
+    #[test]
     fn known_extended_reason_overrides_primary_and_unknown_extended_reason_falls_back() {
         let extended_override = WindowsRdpDisconnectReason::from_native_codes(2308, Some(768));
         assert_eq!(
