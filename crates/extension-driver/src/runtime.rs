@@ -186,8 +186,8 @@ where
     )
     .await;
 
-    // reader 结束(EOF / shutdown):中止 pump。worker 线程随 reader 的 workers map
-    // 析构而退出(cmd_tx 被 drop);若有 worker 卡在长查询,进程退出时由 OS 回收。
+    // reader 结束(EOF / shutdown):中止 pump。workers map 析构会断开命令 channel；
+    // worker 完成当前调用并排空队列后，会在专属线程上关闭连接再退出。
     pump.abort();
     let _ = pump.await;
     result
@@ -738,8 +738,9 @@ fn worker_loop(
         let cmd = match cmd_rx.recv() {
             Ok(cmd) => cmd,
             Err(_) => {
-                if let Some(id) = pending_close.lock().expect("pending close poisoned").take() {
-                    connection.close();
+                let close_id = pending_close.lock().expect("pending close poisoned").take();
+                connection.close();
+                if let Some(id) = close_id {
                     let _ = out_tx.send(Outcome {
                         id,
                         method: None,
@@ -1309,6 +1310,36 @@ mod tests {
                 .cancelled
                 .contains(&request_id)
         );
+    }
+
+    #[test]
+    fn worker_closes_connection_when_command_channel_disconnects() {
+        struct CloseTrackingConn(Arc<AtomicBool>);
+
+        impl DriverConnection for CloseTrackingConn {
+            fn call(&mut self, _method: &str, _params: &Value) -> Result<Value, ProtocolError> {
+                Ok(Value::Null)
+            }
+
+            fn close(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let closed = Arc::new(AtomicBool::new(false));
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::sync_channel(1);
+        let (out_tx, _out_rx) = mpsc::unbounded_channel();
+        drop(cmd_tx);
+
+        worker_loop(
+            Box::new(CloseTrackingConn(Arc::clone(&closed))),
+            cmd_rx,
+            out_tx,
+            Arc::new(StdMutex::new(WorkerState::default())),
+            Arc::new(StdMutex::new(None)),
+        );
+
+        assert!(closed.load(Ordering::SeqCst));
     }
 
     #[test]
