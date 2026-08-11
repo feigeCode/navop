@@ -188,12 +188,17 @@ impl DatabaseTabView {
 
         let status_msg = cx.new(|_| "Ready".to_string());
         let is_connected = cx.new(|_| true);
+        let connection_ids = connections
+            .iter()
+            .filter_map(|connection| connection.id.map(|id| id.to_string()))
+            .collect::<Vec<_>>();
 
         let event_handler = cx.new(|cx| {
             DatabaseEventHandler::new(
                 &db_tree_view,
                 tab_container.clone(),
                 objects_panel.clone(),
+                connection_ids.clone(),
                 window,
                 cx,
             )
@@ -304,6 +309,10 @@ impl DatabaseTabView {
     ) {
         // 获取第一个连接的信息用于创建新编辑器
         let first_conn = connections.first().cloned();
+        let available_connection_ids = connections
+            .iter()
+            .filter_map(|connection| connection.id.map(|id| id.to_string()))
+            .collect::<Vec<_>>();
 
         // 操作1：插入到当前编辑器
         let tab_container_for_insert = tab_container.clone();
@@ -353,6 +362,7 @@ impl DatabaseTabView {
                 let tab_id_clone = tab_id.clone();
                 let conn_id_clone = connection_id.clone();
                 let code_clone = code.clone();
+                let available_connection_ids = available_connection_ids.clone();
 
                 tab_container_for_new.update(cx, |container, cx| {
                     container.activate_or_add_tab_lazy(
@@ -363,6 +373,7 @@ impl DatabaseTabView {
                                     crate::sql_editor_view::SqlEditorTabConfig {
                                         title: "AI Query".into(),
                                         connection_id: connection_id.clone(),
+                                        available_connection_ids: available_connection_ids.clone(),
                                         database_type,
                                         file_path: None,
                                         new_file_directory: None,

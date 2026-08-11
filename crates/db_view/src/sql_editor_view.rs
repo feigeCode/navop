@@ -1,16 +1,17 @@
-use crate::sql_editor::SqlEditor;
+use crate::sql_editor::{SqlEditor, SqlSchema};
 use crate::sql_result_tab::{SessionSqlRun, SqlResultTabContainer};
 use db::{DbManager, GlobalDbState, StreamingSqlParser, format_sql};
 use gpui::prelude::*;
 use gpui::{
-    App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent, NoAction,
-    ParentElement, Pixels, Point, Render, SharedString, Styled, Task, WeakEntity, Window, div, px,
+    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity,
+    EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent,
+    NoAction, ParentElement, Pixels, Point, Render, SharedString, Styled, Task, WeakEntity, Window,
+    div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputContextMenuItem, InputEvent, InputState};
 use gpui_component::notification::Notification;
-use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
+use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
 };
@@ -609,6 +610,92 @@ fn transaction_control_failed(result: &anyhow::Result<Vec<db::SqlResult>>) -> bo
     }
 }
 
+fn query_connection_context_label(connection_name: &str, server_info: &str) -> String {
+    let connection_name = connection_name.trim();
+    let server_info = server_info.trim();
+
+    match (connection_name.is_empty(), server_info.is_empty()) {
+        (false, false) => format!("{connection_name} · {server_info}"),
+        (false, true) => connection_name.to_string(),
+        (true, false) => server_info.to_string(),
+        (true, true) => String::new(),
+    }
+}
+
+fn query_connection_ids(available_connection_ids: &[String], connection_id: &str) -> Vec<String> {
+    let mut connection_ids = Vec::new();
+    for available_connection_id in available_connection_ids {
+        let available_connection_id = available_connection_id.trim();
+        if !available_connection_id.is_empty()
+            && !connection_ids
+                .iter()
+                .any(|connection_id| connection_id == available_connection_id)
+        {
+            connection_ids.push(available_connection_id.to_string());
+        }
+    }
+
+    let connection_id = connection_id.trim();
+    if !connection_id.is_empty()
+        && !connection_ids
+            .iter()
+            .any(|available_connection_id| available_connection_id == connection_id)
+    {
+        connection_ids.push(connection_id.to_string());
+    }
+    connection_ids
+}
+
+fn can_switch_query_connection(is_executing: bool, has_manual_transaction: bool) -> bool {
+    !is_executing && !has_manual_transaction
+}
+
+fn is_current_query_context_generation(expected: u64, current: u64) -> bool {
+    expected == current
+}
+
+#[derive(Clone, Debug)]
+struct QueryConnectionOption {
+    id: String,
+    label: SharedString,
+}
+
+impl SelectItem for QueryConnectionOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+fn query_connection_options(
+    available_connection_ids: &[String],
+    connection_id: &str,
+    global_state: &GlobalDbState,
+) -> Vec<QueryConnectionOption> {
+    query_connection_ids(available_connection_ids, connection_id)
+        .into_iter()
+        .map(|connection_id| {
+            let label = global_state
+                .get_config(&connection_id)
+                .map(|connection| {
+                    query_connection_context_label(&connection.name, &connection.server_info())
+                })
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(|| connection_id.clone())
+                .into();
+            QueryConnectionOption {
+                id: connection_id,
+                label,
+            }
+        })
+        .collect()
+}
+
 // Events emitted by SqlEditorTabContent
 #[derive(Debug, Clone)]
 pub enum SqlEditorEvent {
@@ -622,6 +709,7 @@ pub enum SqlEditorEvent {
 pub struct SqlEditorTabConfig {
     pub title: SharedString,
     pub connection_id: String,
+    pub available_connection_ids: Vec<String>,
     pub database_type: DatabaseType,
     pub file_path: Option<PathBuf>,
     pub new_file_directory: Option<PathBuf>,
@@ -635,6 +723,7 @@ pub struct SqlEditorTab {
     connection_id: String,
     database_type: DatabaseType,
     sql_result_tab_container: Entity<SqlResultTabContainer>,
+    connection_select: Entity<SelectState<SearchableVec<QueryConnectionOption>>>,
     database_select: Entity<SelectState<SearchableVec<String>>>,
     schema_select: Entity<SelectState<SearchableVec<String>>>,
     transaction_mode_select: Entity<SelectState<SearchableVec<TransactionModeOption>>>,
@@ -653,6 +742,8 @@ pub struct SqlEditorTab {
     auto_save_seq: Arc<AtomicU64>,
     /// 是否有未保存的修改
     is_dirty: Arc<AtomicBool>,
+    /// 查询上下文代次，用于丢弃连接、数据库或 Schema 切换前发起的异步回写。
+    context_generation: Arc<AtomicU64>,
 }
 
 impl SqlEditorTab {
@@ -663,6 +754,26 @@ impl SqlEditorTab {
     ) -> Self {
         let editor = cx.new(|cx| SqlEditor::new(window, cx));
         let focus_handle = cx.focus_handle();
+        let global_state = cx.global::<GlobalDbState>().clone();
+        let connection_id = config.connection_id;
+        let connection_options = query_connection_options(
+            &config.available_connection_ids,
+            &connection_id,
+            &global_state,
+        );
+        let selected_connection_index = connection_options
+            .iter()
+            .position(|option| option.id == connection_id)
+            .map(IndexPath::new);
+        let connection_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(connection_options),
+                selected_connection_index,
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let database_select =
             cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx));
         let schema_select =
@@ -676,11 +787,9 @@ impl SqlEditorTab {
             )
         });
 
-        let global_state = cx.global::<GlobalDbState>().clone();
         let capabilities = global_state.capabilities(&config.database_type);
         let supports_schema = capabilities.supports_schema;
         let uses_schema_as_database = capabilities.uses_schema_as_database;
-        let connection_id = config.connection_id;
         let initial_database = config.initial_database;
         let initial_schema = config.initial_schema;
         let initial_select_value = initial_database_select_value(
@@ -705,6 +814,7 @@ impl SqlEditorTab {
 
         let auto_save_seq = Arc::new(AtomicU64::new(0));
         let is_dirty = Arc::new(AtomicBool::new(false));
+        let context_generation = Arc::new(AtomicU64::new(0));
 
         let instance = Self {
             title: config.title,
@@ -712,6 +822,7 @@ impl SqlEditorTab {
             connection_id,
             database_type: config.database_type,
             sql_result_tab_container: cx.new(|cx| SqlResultTabContainer::new(window, cx)),
+            connection_select: connection_select.clone(),
             database_select: database_select.clone(),
             schema_select: schema_select.clone(),
             transaction_mode_select: transaction_mode_select.clone(),
@@ -728,10 +839,11 @@ impl SqlEditorTab {
             manual_transaction: None,
             auto_save_seq: auto_save_seq.clone(),
             is_dirty: is_dirty.clone(),
+            context_generation,
         };
 
         instance.configure_editor_context_menu(cx);
-        instance.bind_select_event(cx);
+        instance.bind_select_event(window, cx);
         instance.bind_transaction_mode_select_event(window, cx);
         instance.bind_auto_save(auto_save_seq, is_dirty, requires_name, window, cx);
         instance.load_databases_async(
@@ -739,6 +851,7 @@ impl SqlEditorTab {
             initial_schema,
             resolved_file_path,
             should_load_file,
+            0,
             cx,
             window,
         );
@@ -813,47 +926,182 @@ impl SqlEditorTab {
         self.file_path.read().clone()
     }
 
-    fn bind_select_event(&self, cx: &mut Context<Self>) {
-        let this = self.clone();
-        cx.subscribe(&self.database_select, move |_this, _select, event, cx| {
-            let global_state = cx.global::<GlobalDbState>().clone();
-            if let SelectEvent::Confirm(Some(db_name)) = event {
-                let db = db_name.clone();
-                let instance = this.clone();
-                cx.spawn(async move |_handle, cx| {
-                    // Load schemas if supported
-                    if instance.supports_schema && !instance.uses_schema_as_database {
-                        instance
-                            .load_schemas_for_db(global_state.clone(), &db, None, cx)
-                            .await;
-                    }
-                    instance.update_schema_for_db(global_state, &db, cx).await;
-                })
-                .detach();
-            }
-        })
+    fn bind_select_event(&self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.subscribe_in(
+            &self.connection_select,
+            window,
+            |this,
+             _select,
+             event: &SelectEvent<SearchableVec<QueryConnectionOption>>,
+             window,
+             cx| {
+                if let SelectEvent::Confirm(Some(connection_id)) = event {
+                    this.switch_connection(connection_id, window, cx);
+                }
+            },
+        )
         .detach();
 
-        // Bind schema select event
-        let this_for_schema = self.clone();
-        cx.subscribe(&self.schema_select, move |_this, _select, event, cx| {
-            let global_state = cx.global::<GlobalDbState>().clone();
-            if let SelectEvent::Confirm(Some(schema_name)) = event {
-                let instance = this_for_schema.clone();
-                let database_or_schema = if instance.uses_schema_as_database {
-                    Some(schema_name.clone())
-                } else {
-                    instance.database_select.read(cx).selected_value().cloned()
-                };
-                if let Some(db) = database_or_schema {
+        cx.subscribe_in(
+            &self.database_select,
+            window,
+            |this, _select, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                let global_state = cx.global::<GlobalDbState>().clone();
+                if let SelectEvent::Confirm(Some(db_name)) = event {
+                    let generation = this.next_context_generation();
+                    let window_handle = window.window_handle();
+                    if this.supports_schema && !this.uses_schema_as_database {
+                        Self::clear_string_select(&this.schema_select, window, cx);
+                    }
+                    let db = db_name.clone();
+                    let instance = this.clone();
                     cx.spawn(async move |_handle, cx| {
-                        instance.update_schema_for_db(global_state, &db, cx).await;
+                        if instance.supports_schema && !instance.uses_schema_as_database {
+                            instance
+                                .load_schemas_for_db(
+                                    global_state.clone(),
+                                    &db,
+                                    None,
+                                    generation,
+                                    window_handle,
+                                    cx,
+                                )
+                                .await;
+                        }
+                        instance
+                            .update_schema_for_db(global_state, &db, generation, cx)
+                            .await;
                     })
                     .detach();
                 }
-            }
-        })
+            },
+        )
         .detach();
+
+        cx.subscribe_in(
+            &self.schema_select,
+            window,
+            |this, _select, event: &SelectEvent<SearchableVec<String>>, _window, cx| {
+                let global_state = cx.global::<GlobalDbState>().clone();
+                if let SelectEvent::Confirm(Some(schema_name)) = event {
+                    let generation = this.next_context_generation();
+                    let database_or_schema = if this.uses_schema_as_database {
+                        Some(schema_name.clone())
+                    } else {
+                        this.database_select.read(cx).selected_value().cloned()
+                    };
+                    if let Some(db) = database_or_schema {
+                        let instance = this.clone();
+                        cx.spawn(async move |_handle, cx| {
+                            instance
+                                .update_schema_for_db(global_state, &db, generation, cx)
+                                .await;
+                        })
+                        .detach();
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn clear_string_select(
+        select: &Entity<SelectState<SearchableVec<String>>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        select.update(cx, |state, cx| {
+            state.set_items(SearchableVec::new(Vec::new()), window, cx);
+            state.set_selected_index(None, window, cx);
+        });
+    }
+
+    fn next_context_generation(&self) -> u64 {
+        self.context_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn is_context_generation_current(&self, generation: u64) -> bool {
+        is_current_query_context_generation(
+            generation,
+            self.context_generation.load(Ordering::SeqCst),
+        )
+    }
+
+    fn restore_connection_selection(&self, window: &mut Window, cx: &mut App) {
+        self.connection_select.update(cx, |state, cx| {
+            state.set_selected_value(&self.connection_id, window, cx);
+        });
+    }
+
+    fn switch_connection(
+        &mut self,
+        connection_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if connection_id == self.connection_id {
+            return;
+        }
+
+        let is_executing = self.sql_result_tab_container.read(cx).is_executing(cx);
+        if !can_switch_query_connection(is_executing, self.manual_transaction.is_some()) {
+            self.restore_connection_selection(window, cx);
+            let message = if self.manual_transaction.is_some() {
+                t!("Query.transaction_finish_before_switch_connection").to_string()
+            } else {
+                t!("Query.connection_switch_during_execution").to_string()
+            };
+            window.push_notification(message, cx);
+            return;
+        }
+
+        let global_state = cx.global::<GlobalDbState>().clone();
+        let Some(connection) = global_state.get_config(connection_id) else {
+            self.restore_connection_selection(window, cx);
+            window.push_notification(t!("Query.connection_unavailable").to_string(), cx);
+            return;
+        };
+
+        let generation = self.next_context_generation();
+        let capabilities = global_state.capabilities(&connection.database_type);
+        self.connection_id = connection_id.to_string();
+        self.database_type = connection.database_type.clone();
+        self.supports_schema = capabilities.supports_schema;
+        self.uses_schema_as_database = capabilities.uses_schema_as_database;
+        cx.emit(TabContentEvent::SourceChanged {
+            from: self.connection_id.clone().into(),
+        });
+
+        Self::clear_string_select(&self.database_select, window, cx);
+        Self::clear_string_select(&self.schema_select, window, cx);
+
+        if !supports_manual_transactions(&self.database_type) {
+            self.transaction_mode = SqlTransactionMode::Auto;
+            self.transaction_mode_select.update(cx, |state, cx| {
+                state.set_selected_value(&SqlTransactionMode::Auto, window, cx);
+            });
+        }
+
+        let completion_info = DbManager::default()
+            .get_plugin(&self.database_type)
+            .map(|plugin| plugin.get_completion_info())
+            .unwrap_or_default();
+        self.editor.update(cx, |editor, cx| {
+            editor.set_db_completion_info(completion_info, SqlSchema::default(), cx);
+        });
+        self.sql_result_tab_container
+            .update(cx, |container, cx| container.hide(cx));
+
+        self.load_databases_async(
+            None,
+            None,
+            self.get_file_path(),
+            false,
+            generation,
+            cx,
+            window,
+        );
+        cx.notify();
     }
 
     fn bind_transaction_mode_select_event(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -979,10 +1227,17 @@ impl SqlEditorTab {
         global_state: GlobalDbState,
         database: &str,
         initial_schema: Option<String>,
+        generation: u64,
+        window_handle: AnyWindowHandle,
         cx: &mut AsyncApp,
     ) {
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
+
         let connection_id = self.connection_id.clone();
         let schema_select = self.schema_select.clone();
+        let context_generation = self.context_generation.clone();
         let db = database.to_string();
 
         let schemas = match global_state
@@ -995,38 +1250,39 @@ impl SqlEditorTab {
                 return;
             }
         };
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
 
-        let _ = cx.update(|cx| {
-            if let Some(window_id) = cx.active_window() {
-                let _ = cx.update_window(window_id, |_entity, window, cx| {
-                    schema_select.update(cx, |state, cx| {
-                        if schemas.is_empty() {
-                            let items = SearchableVec::new(vec![
-                                t!("Common.no_available", item = &t!("Schema.schema")).to_string(),
-                            ]);
-                            state.set_items(items, window, cx);
-                            state.set_selected_index(None, window, cx);
-                        } else {
-                            let items = SearchableVec::new(schemas.clone());
-                            state.set_items(items, window, cx);
-
-                            if let Some(schema_name) = initial_schema.as_ref() {
-                                if let Some(index) = schemas.iter().position(|s| s == schema_name) {
-                                    state.set_selected_index(
-                                        Some(IndexPath::new(index)),
-                                        window,
-                                        cx,
-                                    );
-                                } else if !schemas.is_empty() {
-                                    state.set_selected_index(Some(IndexPath::new(0)), window, cx);
-                                }
-                            } else if !schemas.is_empty() {
-                                state.set_selected_index(Some(IndexPath::new(0)), window, cx);
-                            }
-                        }
-                    });
-                });
+        let _ = cx.update_window(window_handle, |_entity, window, cx| {
+            if !is_current_query_context_generation(
+                generation,
+                context_generation.load(Ordering::SeqCst),
+            ) {
+                return;
             }
+            schema_select.update(cx, |state, cx| {
+                if schemas.is_empty() {
+                    let items = SearchableVec::new(vec![
+                        t!("Common.no_available", item = &t!("Schema.schema")).to_string(),
+                    ]);
+                    state.set_items(items, window, cx);
+                    state.set_selected_index(None, window, cx);
+                } else {
+                    let items = SearchableVec::new(schemas.clone());
+                    state.set_items(items, window, cx);
+
+                    if let Some(schema_name) = initial_schema.as_ref() {
+                        if let Some(index) = schemas.iter().position(|s| s == schema_name) {
+                            state.set_selected_index(Some(IndexPath::new(index)), window, cx);
+                        } else {
+                            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+                        }
+                    } else {
+                        state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+                    }
+                }
+            });
         });
     }
 
@@ -1041,10 +1297,11 @@ impl SqlEditorTab {
         init_schema: Option<String>,
         file_path: PathBuf,
         should_load_file: bool,
+        generation: u64,
         cx: &mut Context<Self>,
         window: &mut Window,
     ) {
-        let _ = window;
+        let window_handle = window.window_handle();
         let global_state = cx.global::<GlobalDbState>().clone();
         let connection_id = self.connection_id.clone();
         let database_select = self.database_select.clone();
@@ -1052,9 +1309,14 @@ impl SqlEditorTab {
         let editor = self.editor.clone();
         let initial_database = init_db.clone();
         let instance = self.clone();
+        let context_generation = self.context_generation.clone();
         let uses_schema_as_database = self.uses_schema_as_database;
 
         cx.spawn(async move |_handle, cx: &mut AsyncApp| {
+            if !instance.is_context_generation_current(generation) {
+                return;
+            }
+
             let select_items = if uses_schema_as_database {
                 match global_state
                     .list_schemas(cx, connection_id.clone(), String::new())
@@ -1063,7 +1325,9 @@ impl SqlEditorTab {
                     Ok(result) => result,
                     Err(e) => {
                         error!("Failed to load schemas for {}: {}", connection_id, e);
-                        Self::notify_async(cx, format!("Failed to load schemas: {}", e));
+                        if instance.is_context_generation_current(generation) {
+                            Self::notify_async(cx, format!("Failed to load schemas: {}", e));
+                        }
                         return;
                     }
                 }
@@ -1072,11 +1336,16 @@ impl SqlEditorTab {
                     Ok(result) => result,
                     Err(e) => {
                         error!("Failed to load databases for {}: {}", connection_id, e);
-                        Self::notify_async(cx, format!("Failed to load databases: {}", e));
+                        if instance.is_context_generation_current(generation) {
+                            Self::notify_async(cx, format!("Failed to load databases: {}", e));
+                        }
                         return;
                     }
                 }
             };
+            if !instance.is_context_generation_current(generation) {
+                return;
+            }
 
             let sql_content = if should_load_file && file_path.exists() {
                 match std::fs::read_to_string(&file_path) {
@@ -1089,54 +1358,70 @@ impl SqlEditorTab {
             } else {
                 None
             };
+            if !instance.is_context_generation_current(generation) {
+                return;
+            }
 
             let selected_name = initial_database
                 .clone()
                 .or_else(|| select_items.first().cloned());
             let resolved_database = selected_name.clone();
 
-            cx.update(|cx: &mut App| {
-                if let Some(window_id) = cx.active_window() {
-                    cx.update_window(window_id, |_entity, window, cx| {
-                        let target_select = if uses_schema_as_database {
-                            schema_select.clone()
-                        } else {
-                            database_select.clone()
-                        };
-                        let empty_label = if uses_schema_as_database {
-                            t!("Schema.schema").to_string()
-                        } else {
-                            t!("Database.database").to_string()
-                        };
-                        target_select.update(cx, |state, cx| {
-                            set_select_items_with_initial_value(
-                                state,
-                                select_items.clone(),
-                                selected_name.as_deref(),
-                                empty_label,
-                                window,
-                                cx,
-                            );
-                        });
-                        if let Some(sql) = sql_content {
-                            editor.update(cx, |e, cx| {
-                                e.set_value(sql.clone(), window, cx);
-                            });
-                        }
-                    })
-                } else {
-                    Err(anyhow::anyhow!("No active window"))
+            let _ = cx.update_window(window_handle, |_entity, window, cx| {
+                if !is_current_query_context_generation(
+                    generation,
+                    context_generation.load(Ordering::SeqCst),
+                ) {
+                    return;
                 }
-            })
-            .ok();
+                let target_select = if uses_schema_as_database {
+                    schema_select.clone()
+                } else {
+                    database_select.clone()
+                };
+                let empty_label = if uses_schema_as_database {
+                    t!("Schema.schema").to_string()
+                } else {
+                    t!("Database.database").to_string()
+                };
+                target_select.update(cx, |state, cx| {
+                    set_select_items_with_initial_value(
+                        state,
+                        select_items.clone(),
+                        selected_name.as_deref(),
+                        empty_label,
+                        window,
+                        cx,
+                    );
+                });
+                if let Some(sql) = sql_content {
+                    editor.update(cx, |e, cx| {
+                        e.set_value(sql.clone(), window, cx);
+                    });
+                }
+            });
 
+            if !instance.is_context_generation_current(generation) {
+                return;
+            }
             if let Some(ref db) = resolved_database {
                 if instance.supports_schema && !instance.uses_schema_as_database {
                     instance
-                        .load_schemas_for_db(global_state.clone(), db, init_schema, cx)
+                        .load_schemas_for_db(
+                            global_state.clone(),
+                            db,
+                            init_schema,
+                            generation,
+                            window_handle,
+                            cx,
+                        )
                         .await;
                 }
-                instance.update_schema_for_db(global_state, db, cx).await;
+                if instance.is_context_generation_current(generation) {
+                    instance
+                        .update_schema_for_db(global_state, db, generation, cx)
+                        .await;
+                }
             }
         })
         .detach();
@@ -1147,9 +1432,12 @@ impl SqlEditorTab {
         &self,
         global_state: GlobalDbState,
         database: &str,
+        generation: u64,
         cx: &mut AsyncApp,
     ) {
-        use crate::sql_editor::SqlSchema;
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
 
         let connection_id = self.connection_id.clone();
         let editor = self.editor.clone();
@@ -1181,6 +1469,9 @@ impl SqlEditorTab {
                 return;
             }
         };
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
 
         // Get database-specific completion info
         let db_completion_info = match global_state.get_completion_info(cx, connection_id.clone()) {
@@ -1190,6 +1481,9 @@ impl SqlEditorTab {
                 return;
             }
         };
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
 
         let mut schema = SqlSchema::default();
 
@@ -1219,6 +1513,9 @@ impl SqlEditorTab {
                 )
                 .await
             {
+                if !self.is_context_generation_current(generation) {
+                    return;
+                }
                 let column_items: Vec<(String, String, String)> = columns
                     .iter()
                     .map(|c| {
@@ -1233,10 +1530,13 @@ impl SqlEditorTab {
             }
         }
 
-        if let Ok(functions) = global_state
+        let functions = global_state
             .list_functions(cx, connection_id.clone(), db.clone())
-            .await
-        {
+            .await;
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
+        if let Ok(functions) = functions {
             let function_items = functions.into_iter().map(|function| {
                 let signature = if function.parameters.is_empty() {
                     format!("{}()", function.name)
@@ -1253,6 +1553,9 @@ impl SqlEditorTab {
         }
 
         // Update editor with schema and database-specific completion info
+        if !self.is_context_generation_current(generation) {
+            return;
+        }
         _ = editor.update(cx, |e, cx| {
             e.set_db_completion_info(db_completion_info, schema, cx);
         });
@@ -1936,6 +2239,7 @@ impl SqlEditorTab {
 
     fn render_sql_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.clone();
+        let connection_select = self.connection_select.clone();
         let database_select = self.database_select.clone();
         let schema_select = self.schema_select.clone();
         let transaction_mode_select = self.transaction_mode_select.clone();
@@ -1965,6 +2269,14 @@ impl SqlEditorTab {
                     .rounded_md()
                     .items_center()
                     .w_full()
+                    .child(
+                        Select::new(&connection_select)
+                            .with_size(Size::Small)
+                            .placeholder(t!("Query.select_connection"))
+                            .search_placeholder(t!("Query.search_connection"))
+                            .disabled(is_query_executing || has_manual_transaction)
+                            .w(px(220.)),
+                    )
                     .when(!uses_schema_as_database, |this| {
                         this.child(
                             // Database selector (for non-Oracle databases)
@@ -2119,6 +2431,7 @@ impl Clone for SqlEditorTab {
             connection_id: self.connection_id.clone(),
             database_type: self.database_type.clone(),
             sql_result_tab_container: self.sql_result_tab_container.clone(),
+            connection_select: self.connection_select.clone(),
             database_select: self.database_select.clone(),
             schema_select: self.schema_select.clone(),
             transaction_mode_select: self.transaction_mode_select.clone(),
@@ -2135,6 +2448,7 @@ impl Clone for SqlEditorTab {
             manual_transaction: self.manual_transaction.clone(),
             auto_save_seq: self.auto_save_seq.clone(),
             is_dirty: self.is_dirty.clone(),
+            context_generation: self.context_generation.clone(),
         }
     }
 }
@@ -2273,7 +2587,9 @@ mod tests {
         ManualTransactionAction, ManualTransactionSession, QueryFileNameError,
         RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
         SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment,
-        initial_database_select_value, manual_transaction_control_sql, query_file_path_for_name,
+        can_switch_query_connection, initial_database_select_value,
+        is_current_query_context_generation, manual_transaction_control_sql,
+        query_connection_context_label, query_connection_ids, query_file_path_for_name,
         should_render_schema_select, sql_text_for_run_all, sql_text_for_run_current,
         sql_text_for_run_cursor_statement, sql_text_for_toolbar_run, supports_manual_transactions,
         toggle_sql_line_comments, write_new_sql_file, write_sql_file,
@@ -2317,6 +2633,60 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).expect("temporary query directory should be created");
         path
+    }
+
+    #[test]
+    fn query_connection_context_distinguishes_same_database_across_connections() {
+        let production = query_connection_context_label("生产环境", "prod.example.com:5432");
+        let staging = query_connection_context_label("测试环境", "staging.example.com:5432");
+
+        assert_eq!("生产环境 · prod.example.com:5432", production);
+        assert_eq!("测试环境 · staging.example.com:5432", staging);
+        assert_ne!(production, staging);
+    }
+
+    #[test]
+    fn query_connection_context_uses_available_connection_details() {
+        assert_eq!(
+            "本地数据库",
+            query_connection_context_label("本地数据库", "")
+        );
+        assert_eq!(
+            "/tmp/app.db",
+            query_connection_context_label("", "/tmp/app.db")
+        );
+    }
+
+    #[test]
+    fn query_connection_ids_keep_workspace_order_and_current_connection() {
+        let available = vec![
+            "connection-2".to_string(),
+            "connection-1".to_string(),
+            "connection-2".to_string(),
+        ];
+
+        assert_eq!(
+            vec!["connection-2", "connection-1"],
+            query_connection_ids(&available, "connection-1")
+        );
+        assert_eq!(
+            vec!["connection-2", "connection-1", "connection-3"],
+            query_connection_ids(&available, "connection-3")
+        );
+    }
+
+    #[test]
+    fn query_connection_switch_is_blocked_while_query_or_transaction_is_active() {
+        assert!(can_switch_query_connection(false, false));
+        assert!(!can_switch_query_connection(true, false));
+        assert!(!can_switch_query_connection(false, true));
+        assert!(!can_switch_query_connection(true, true));
+    }
+
+    #[test]
+    fn stale_query_context_generation_is_rejected() {
+        assert!(is_current_query_context_generation(3, 3));
+        assert!(!is_current_query_context_generation(2, 3));
     }
 
     #[test]

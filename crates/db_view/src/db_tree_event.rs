@@ -175,6 +175,7 @@ impl DatabaseEventHandler {
         db_tree_view: &Entity<DbTreeView>,
         tab_container: Entity<TabContainer>,
         objects_panel: Entity<DatabaseObjectsPanel>,
+        available_connection_ids: Vec<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -182,6 +183,7 @@ impl DatabaseEventHandler {
         let objects_panel_clone = objects_panel.clone();
         let global_state = cx.global::<GlobalDbState>().clone();
         let tree_view_clone = db_tree_view.clone();
+        let tree_available_connection_ids = available_connection_ids.clone();
 
         let tree_subscription = cx.subscribe_in(
             db_tree_view,
@@ -208,7 +210,13 @@ impl DatabaseEventHandler {
                     }
                     DbTreeViewEvent::CreateNewQuery { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
-                            Self::handle_create_new_query(node, tab_container, window, cx);
+                            Self::handle_create_new_query(
+                                node,
+                                tab_container,
+                                tree_available_connection_ids.clone(),
+                                window,
+                                cx,
+                            );
                         }
                     }
                     DbTreeViewEvent::AddQueryDirectory { node_id } => {
@@ -518,6 +526,7 @@ impl DatabaseEventHandler {
         let tab_container_for_objects = tab_container.clone();
         let global_state_for_objects = cx.global::<GlobalDbState>().clone();
         let tree_view_for_objects = db_tree_view.clone();
+        let objects_available_connection_ids = available_connection_ids;
 
         let database_objects = objects_panel.read(cx).database_objects().clone();
         let objects_subscription = cx.subscribe_in(
@@ -663,7 +672,13 @@ impl DatabaseEventHandler {
                         );
                     }
                     DatabaseObjectsEvent::CreateNewQuery { node } => {
-                        Self::handle_create_new_query(node.clone(), tab_container, window, cx);
+                        Self::handle_create_new_query(
+                            node.clone(),
+                            tab_container,
+                            objects_available_connection_ids.clone(),
+                            window,
+                            cx,
+                        );
                     }
                     DatabaseObjectsEvent::OpenNamedQuery { node } => {
                         Self::handle_open_named_query(node.clone(), tab_container, window, cx);
@@ -799,6 +814,7 @@ impl DatabaseEventHandler {
     fn handle_create_new_query(
         node: DbNode,
         tab_container: Entity<TabContainer>,
+        available_connection_ids: Vec<String>,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -840,6 +856,7 @@ impl DatabaseEventHandler {
                             crate::sql_editor_view::SqlEditorTabConfig {
                                 title: title.clone().into(),
                                 connection_id: connection_id.clone(),
+                                available_connection_ids: available_connection_ids.clone(),
                                 database_type,
                                 file_path: None,
                                 new_file_directory: new_file_directory.clone(),
@@ -1326,6 +1343,9 @@ impl DatabaseEventHandler {
                                             crate::sql_editor_view::SqlEditorTabConfig {
                                                 title: format!("{} - Function", function).into(),
                                                 connection_id: connection_id.clone(),
+                                                available_connection_ids: vec![
+                                                    connection_id.clone(),
+                                                ],
                                                 database_type,
                                                 file_path: None,
                                                 new_file_directory: None,
@@ -1414,6 +1434,9 @@ impl DatabaseEventHandler {
                                             crate::sql_editor_view::SqlEditorTabConfig {
                                                 title: format!("{} - Procedure", procedure).into(),
                                                 connection_id: connection_id.clone(),
+                                                available_connection_ids: vec![
+                                                    connection_id.clone(),
+                                                ],
                                                 database_type,
                                                 file_path: None,
                                                 new_file_directory: None,
@@ -3969,6 +3992,7 @@ impl DatabaseEventHandler {
                                 crate::sql_editor_view::SqlEditorTabConfig {
                                     title: query_title.clone().into(),
                                     connection_id: connection_id.clone(),
+                                    available_connection_ids: vec![connection_id.clone()],
                                     database_type,
                                     file_path: Some(path.clone()),
                                     new_file_directory: None,

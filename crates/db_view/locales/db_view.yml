@@ -1119,6 +1119,26 @@ Procedure:
 
 # 查询操作
 Query:
+  select_connection:
+    en: Select connection...
+    zh-CN: 选择连接...
+    zh-HK: 選擇連線...
+  search_connection:
+    en: Search connections...
+    zh-CN: 搜索连接...
+    zh-HK: 搜尋連線...
+  connection_switch_during_execution:
+    en: Wait for the current query to finish before switching connections
+    zh-CN: 请等待当前查询执行完成后再切换连接
+    zh-HK: 請等待目前查詢執行完成後再切換連線
+  transaction_finish_before_switch_connection:
+    en: Commit or roll back the current transaction before switching connections
+    zh-CN: 请先提交或回滚当前事务，再切换连接
+    zh-HK: 請先提交或回滾目前交易，再切換連線
+  connection_unavailable:
+    en: The selected connection is unavailable
+    zh-CN: 所选连接当前不可用
+    zh-HK: 所選連線目前不可用
   compress:
     en: Compress
     zh-CN: 压缩

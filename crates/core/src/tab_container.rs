@@ -179,6 +179,8 @@ pub enum TabContentEvent {
     StateChanged,
     /// Tab content changed while it may be inactive.
     ContentChanged,
+    /// Update the source identifier used to associate this content with its owner.
+    SourceChanged { from: SharedString },
     /// Ask the owning container to close this content through its normal
     /// close lifecycle.
     CloseRequested,
@@ -191,6 +193,10 @@ impl std::fmt::Debug for TabContentEvent {
         match self {
             Self::StateChanged => formatter.write_str("StateChanged"),
             Self::ContentChanged => formatter.write_str("ContentChanged"),
+            Self::SourceChanged { from } => formatter
+                .debug_struct("SourceChanged")
+                .field("from", from)
+                .finish(),
             Self::CloseRequested => formatter.write_str("CloseRequested"),
             Self::OpenTab { tab, mode } => formatter
                 .debug_struct("OpenTab")
@@ -558,6 +564,14 @@ impl TabItem {
 
     pub fn from(&self) -> SharedString {
         self.from.clone()
+    }
+
+    fn set_from(&mut self, from: SharedString) -> bool {
+        if self.from == from {
+            return false;
+        }
+        self.from = from;
+        true
     }
 
     pub fn content(&self) -> &Arc<dyn TabContentView> {
@@ -1284,6 +1298,12 @@ impl TabContainer {
                     cx.notify();
                 }
             }
+            TabContentEvent::SourceChanged { from } => {
+                if self.update_content_source(content_id, from.clone(), cx) {
+                    cx.emit(TabContainerEvent::LayoutChanged);
+                    cx.notify();
+                }
+            }
             TabContentEvent::CloseRequested => {
                 if let Some(index) = self
                     .tabs
@@ -1297,6 +1317,19 @@ impl TabContainer {
                 self.add_tab_with_mode(tab.clone(), *mode, window, cx);
             }
         }
+    }
+
+    fn update_content_source(
+        &mut self,
+        content_id: EntityId,
+        from: SharedString,
+        cx: &App,
+    ) -> bool {
+        self.tabs
+            .iter_mut()
+            .chain(self.pinned_tabs.iter_mut())
+            .find(|tab| tab.content().content_id(cx) == content_id)
+            .is_some_and(|tab| tab.set_from(from))
     }
 
     fn mark_content_activity(&mut self, content_id: EntityId, cx: &App) -> bool {
@@ -4146,6 +4179,10 @@ mod tests {
             self.status = None;
             cx.notify();
         }
+
+        fn change_source(&mut self, from: &str, cx: &mut Context<Self>) {
+            cx.emit(TabContentEvent::SourceChanged { from: from.into() });
+        }
     }
 
     impl EventEmitter<TabContentEvent> for TestTab {}
@@ -4398,6 +4435,41 @@ mod tests {
                 container
             })
             .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn content_source_change_updates_owning_tab(cx: &mut TestAppContext) {
+        let container = Arc::new(Mutex::new(None));
+        let container_for_window = container.clone();
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let content = cx.new(|cx| TestTab::new("query", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("query", "connection-1", content.clone()),
+                        window,
+                        cx,
+                    );
+                });
+                content.update(cx, |content, cx| {
+                    content.change_source("connection-2", cx);
+                });
+                *container_for_window.lock().unwrap() = Some(container.clone());
+                container
+            })
+            .expect("window opens");
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let container = container.lock().unwrap().clone().unwrap();
+            assert_eq!(
+                "connection-2",
+                container.read(cx).active_tab().unwrap().from().as_ref()
+            );
         });
     }
 
