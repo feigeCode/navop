@@ -91,7 +91,33 @@ impl RemoteDesktopView {
         command: presentation::PresentationCommand,
         cx: &mut Context<Self>,
     ) {
-        self.presentation_queue.push(command);
+        match self.presentation_queue.push(command) {
+            presentation::PresentationQueuePushResult::Queued => {}
+            presentation::PresentationQueuePushResult::DeltaDropped {
+                generation,
+                width,
+                height,
+                recovery_required,
+            } => {
+                if generation == self.frame_sync.snapshot().session_generation {
+                    if recovery_required {
+                        self.supersede_pending_presentation_frames();
+                    }
+                    self.record_rejected_delta(
+                        width,
+                        height,
+                        if recovery_required {
+                            "pending presentation deltas exceeded the memory budget"
+                        } else {
+                            "presentation queue is awaiting a new base frame"
+                        },
+                    );
+                    if recovery_required {
+                        self.send_input(RemoteDesktopInput::Reconnect);
+                    }
+                }
+            }
+        }
         self.pump_presentation_queue(cx);
     }
 
@@ -167,7 +193,15 @@ impl RemoteDesktopView {
                 }
             }
             presentation::PresentationResult::Prepared(frame) => {
-                if frame.generation == generation {
+                let current_ticket = self
+                    .latest_presentation_frame_ticket
+                    .load(Ordering::Acquire);
+                if should_commit_prepared_frame(
+                    frame.generation,
+                    generation,
+                    frame.ticket,
+                    current_ticket,
+                ) {
                     let has_newer_frame =
                         self.presentation_queue.has_pending_frame(frame.generation);
                     match frame.kind {
@@ -224,13 +258,15 @@ impl RemoteDesktopView {
         let drain_started_at = Instant::now();
         let batch = output_rx.drain();
         let stats = batch.stats;
+        let frame_sync_lost = batch.frame_sync_lost;
         let before = self.frame_sync.snapshot();
-        for output in batch
-            .control
-            .into_iter()
-            .chain(batch.latest_frame)
-            .chain(batch.latest_delta)
-        {
+        for output in batch.control {
+            self.apply_output(output, window, cx);
+        }
+        if frame_sync_lost {
+            self.recover_from_output_delta_overflow(cx);
+        }
+        for output in batch.latest_frame.into_iter().chain(batch.latest_delta) {
             self.apply_output(output, window, cx);
         }
         if stats.outputs_received > 0 {
@@ -256,6 +292,24 @@ impl RemoteDesktopView {
                 "remote desktop output batch applied"
             );
         }
+    }
+
+    fn recover_from_output_delta_overflow(&mut self, cx: &mut Context<Self>) {
+        let generation = self.frame_sync.snapshot().session_generation;
+        let recovery_required = self.presentation_queue.require_base(generation);
+        if recovery_required {
+            self.supersede_pending_presentation_frames();
+        }
+        let (width, height) = self.remote_size.unwrap_or_default();
+        self.record_rejected_delta(
+            width,
+            height,
+            "pending output deltas exceeded the memory budget",
+        );
+        if recovery_required {
+            self.send_input(RemoteDesktopInput::Reconnect);
+        }
+        self.pump_presentation_queue(cx);
     }
 
     fn apply_output(
@@ -672,6 +726,15 @@ impl RemoteDesktopView {
 
 fn should_apply_remote_cursor_output(protocol: RemoteDesktopProtocol) -> bool {
     protocol == RemoteDesktopProtocol::Rdp
+}
+
+fn should_commit_prepared_frame(
+    frame_generation: u64,
+    current_generation: u64,
+    frame_ticket: u64,
+    current_ticket: u64,
+) -> bool {
+    frame_generation == current_generation && frame_ticket == current_ticket
 }
 
 #[cfg(test)]

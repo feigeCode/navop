@@ -14,6 +14,8 @@ use super::surface::RemoteDesktopSurface;
 
 const MAX_MERGED_DELTA_RECTS: usize = 4096;
 const MAX_MERGED_DELTA_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PENDING_DELTA_RECTS: usize = 8192;
+const MAX_PENDING_DELTA_BYTES: usize = 16 * 1024 * 1024;
 const FRAME_PRESENTATION_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(super) enum PresentationFrame {
@@ -47,6 +49,13 @@ impl PresentationFrame {
     fn is_delta(&self) -> bool {
         matches!(self, Self::BgraRects { .. })
     }
+
+    fn delta_size(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::BgraRects { rects, bgra, .. } => Some((rects.len(), bgra.len())),
+            _ => None,
+        }
+    }
 }
 
 pub(super) enum PresentationCommand {
@@ -73,18 +82,48 @@ impl PresentationCommand {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PresentationQueueLimits {
+    max_delta_rects: usize,
+    max_delta_bytes: usize,
+}
+
+impl Default for PresentationQueueLimits {
+    fn default() -> Self {
+        Self {
+            max_delta_rects: MAX_PENDING_DELTA_RECTS,
+            max_delta_bytes: MAX_PENDING_DELTA_BYTES,
+        }
+    }
+}
+
+pub(super) enum PresentationQueuePushResult {
+    Queued,
+    DeltaDropped {
+        generation: u64,
+        width: u16,
+        height: u16,
+        recovery_required: bool,
+    },
+}
+
 #[derive(Default)]
 pub(super) struct PresentationQueue {
     pending: VecDeque<PresentationCommand>,
+    pending_delta_rects: usize,
+    pending_delta_bytes: usize,
+    awaiting_base_generation: Option<u64>,
+    limits: PresentationQueueLimits,
 }
 
 impl PresentationQueue {
-    pub(super) fn push(&mut self, command: PresentationCommand) {
+    pub(super) fn push(&mut self, command: PresentationCommand) -> PresentationQueuePushResult {
         match command {
             PresentationCommand::Reset { generation } => {
-                self.pending.clear();
+                self.clear();
                 self.pending
                     .push_back(PresentationCommand::Reset { generation });
+                PresentationQueuePushResult::Queued
             }
             PresentationCommand::Connected { generation } => {
                 self.pending.retain(|command| {
@@ -95,8 +134,11 @@ impl PresentationQueue {
                         } if *barrier_generation == generation
                     )
                 });
+                self.reset_delta_accounting();
+                self.awaiting_base_generation = None;
                 self.pending
                     .push_back(PresentationCommand::Connected { generation });
+                PresentationQueuePushResult::Queued
             }
             PresentationCommand::Frame {
                 generation,
@@ -105,6 +147,31 @@ impl PresentationQueue {
             } => {
                 self.retain_generation_commands(generation);
                 if frame.is_delta() {
+                    let (width, height) = frame.dimensions();
+                    if self.awaiting_base_generation == Some(generation) {
+                        return PresentationQueuePushResult::DeltaDropped {
+                            generation,
+                            width,
+                            height,
+                            recovery_required: false,
+                        };
+                    }
+                    let (delta_rects, delta_bytes) = frame
+                        .delta_size()
+                        .expect("delta frame must report its payload size");
+                    if self.pending_delta_rects.saturating_add(delta_rects)
+                        > self.limits.max_delta_rects
+                        || self.pending_delta_bytes.saturating_add(delta_bytes)
+                            > self.limits.max_delta_bytes
+                    {
+                        let recovery_required = self.require_base(generation);
+                        return PresentationQueuePushResult::DeltaDropped {
+                            generation,
+                            width,
+                            height,
+                            recovery_required,
+                        };
+                    }
                     if let Some(PresentationCommand::Frame {
                         generation: previous_generation,
                         ticket: previous_ticket,
@@ -130,12 +197,20 @@ impl PresentationQueue {
                             previous_rects.append(rects);
                             previous_bgra.append(bgra);
                             *previous_ticket = ticket;
-                            return;
+                            self.pending_delta_rects =
+                                self.pending_delta_rects.saturating_add(delta_rects);
+                            self.pending_delta_bytes =
+                                self.pending_delta_bytes.saturating_add(delta_bytes);
+                            return PresentationQueuePushResult::Queued;
                         }
                     }
+                    self.pending_delta_rects = self.pending_delta_rects.saturating_add(delta_rects);
+                    self.pending_delta_bytes = self.pending_delta_bytes.saturating_add(delta_bytes);
                 } else {
                     self.pending
                         .retain(|command| !matches!(command, PresentationCommand::Frame { .. }));
+                    self.reset_delta_accounting();
+                    self.awaiting_base_generation = None;
                 }
 
                 self.pending.push_back(PresentationCommand::Frame {
@@ -143,16 +218,40 @@ impl PresentationQueue {
                     ticket,
                     frame,
                 });
+                PresentationQueuePushResult::Queued
             }
         }
     }
 
     pub(super) fn pop_front(&mut self) -> Option<PresentationCommand> {
-        self.pending.pop_front()
+        let command = self.pending.pop_front()?;
+        if let PresentationCommand::Frame { frame, .. } = &command
+            && let Some((rects, bytes)) = frame.delta_size()
+        {
+            self.pending_delta_rects = self.pending_delta_rects.saturating_sub(rects);
+            self.pending_delta_bytes = self.pending_delta_bytes.saturating_sub(bytes);
+        }
+        Some(command)
     }
 
     pub(super) fn clear(&mut self) {
         self.pending.clear();
+        self.reset_delta_accounting();
+        self.awaiting_base_generation = None;
+    }
+
+    /// Discard every pending frame for this generation and reject later deltas
+    /// until a complete frame re-establishes the predecessor chain.
+    ///
+    /// Returns `true` only for the first transition into this recovery epoch.
+    pub(super) fn require_base(&mut self, generation: u64) -> bool {
+        self.retain_generation_commands(generation);
+        self.pending
+            .retain(|command| !matches!(command, PresentationCommand::Frame { .. }));
+        self.reset_delta_accounting();
+        let recovery_required = self.awaiting_base_generation != Some(generation);
+        self.awaiting_base_generation = Some(generation);
+        recovery_required
     }
 
     pub(super) fn front_is_frame(&self) -> bool {
@@ -179,9 +278,47 @@ impl PresentationQueue {
         self.pending.len()
     }
 
+    #[cfg(test)]
+    fn with_delta_limits(max_delta_rects: usize, max_delta_bytes: usize) -> Self {
+        Self {
+            limits: PresentationQueueLimits {
+                max_delta_rects,
+                max_delta_bytes,
+            },
+            ..Self::default()
+        }
+    }
+
     fn retain_generation_commands(&mut self, generation: u64) {
         self.pending
             .retain(|command| command.generation() == generation);
+        self.recalculate_delta_accounting();
+    }
+
+    fn recalculate_delta_accounting(&mut self) {
+        let (rects, bytes) = self
+            .pending
+            .iter()
+            .filter_map(|command| match command {
+                PresentationCommand::Frame { frame, .. } => frame.delta_size(),
+                _ => None,
+            })
+            .fold(
+                (0usize, 0usize),
+                |(total_rects, total_bytes), (rects, bytes)| {
+                    (
+                        total_rects.saturating_add(rects),
+                        total_bytes.saturating_add(bytes),
+                    )
+                },
+            );
+        self.pending_delta_rects = rects;
+        self.pending_delta_bytes = bytes;
+    }
+
+    fn reset_delta_accounting(&mut self) {
+        self.pending_delta_rects = 0;
+        self.pending_delta_bytes = 0;
     }
 }
 
@@ -242,6 +379,7 @@ impl Default for PresentationState {
 
 pub(super) struct PreparedFrame {
     pub(super) generation: u64,
+    pub(super) ticket: u64,
     pub(super) width: u16,
     pub(super) height: u16,
     pub(super) surface: Option<Arc<RemoteDesktopSurface>>,
@@ -411,6 +549,7 @@ impl PresentationState {
         let visible_surface = is_latest_frame(ticket, latest_frame_ticket).then_some(surface);
         prepared_frame(
             generation,
+            ticket,
             width,
             height,
             visible_surface,
@@ -469,6 +608,7 @@ impl PresentationState {
         let visible_surface = is_latest_frame(ticket, latest_frame_ticket).then_some(surface);
         prepared_frame(
             generation,
+            ticket,
             width,
             height,
             visible_surface,
@@ -483,6 +623,7 @@ fn is_latest_frame(ticket: u64, latest_frame_ticket: &AtomicU64) -> bool {
 
 fn prepared_frame(
     generation: u64,
+    ticket: u64,
     width: u16,
     height: u16,
     surface: Option<Arc<RemoteDesktopSurface>>,
@@ -490,6 +631,7 @@ fn prepared_frame(
 ) -> PresentationResult {
     PresentationResult::Prepared(PreparedFrame {
         generation,
+        ticket,
         width,
         height,
         surface,
@@ -518,7 +660,7 @@ mod tests {
     use super::{
         FRAME_PRESENTATION_INTERVAL, MAX_MERGED_DELTA_BYTES, MAX_MERGED_DELTA_RECTS, PreparedFrame,
         PreparedFrameKind, PresentationCommand, PresentationFrame, PresentationPacer,
-        PresentationQueue, PresentationResult, PresentationState,
+        PresentationQueue, PresentationQueuePushResult, PresentationResult, PresentationState,
     };
     use remote_desktop::RemoteDesktopFrameRect;
     use std::time::{Duration, Instant};
@@ -806,6 +948,106 @@ mod tests {
     }
 
     #[test]
+    fn total_pending_delta_rect_budget_starts_recovery_and_preserves_barriers() {
+        let mut queue = PresentationQueue::with_delta_limits(2, usize::MAX);
+        queue.push(PresentationCommand::Reset { generation: 7 });
+        queue.push(PresentationCommand::Connected { generation: 7 });
+        assert!(matches!(
+            queue.push(delta(7, 1)),
+            PresentationQueuePushResult::Queued
+        ));
+        assert!(matches!(
+            queue.push(delta(7, 2)),
+            PresentationQueuePushResult::Queued
+        ));
+
+        assert!(matches!(
+            queue.push(delta(7, 3)),
+            PresentationQueuePushResult::DeltaDropped {
+                generation: 7,
+                recovery_required: true,
+                ..
+            }
+        ));
+        assert_eq!(2, queue.len());
+        assert!(matches!(
+            queue.pop_front(),
+            Some(PresentationCommand::Reset { generation: 7 })
+        ));
+        assert!(matches!(
+            queue.pop_front(),
+            Some(PresentationCommand::Connected { generation: 7 })
+        ));
+    }
+
+    #[test]
+    fn total_pending_delta_byte_budget_drops_following_deltas_until_a_base() {
+        let mut queue = PresentationQueue::with_delta_limits(usize::MAX, 8);
+        queue.push(PresentationCommand::Reset { generation: 7 });
+        queue.push(PresentationCommand::Connected { generation: 7 });
+        queue.push(delta(7, 1));
+        queue.push(delta(7, 2));
+
+        assert!(matches!(
+            queue.push(delta(7, 3)),
+            PresentationQueuePushResult::DeltaDropped {
+                recovery_required: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            queue.push(delta(7, 4)),
+            PresentationQueuePushResult::DeltaDropped {
+                recovery_required: false,
+                ..
+            }
+        ));
+        assert_eq!(2, queue.len());
+
+        assert!(matches!(
+            queue.push(PresentationCommand::Frame {
+                generation: 7,
+                ticket: 5,
+                frame: PresentationFrame::Bgra {
+                    width: 2,
+                    height: 1,
+                    bgra: vec![0; 8],
+                },
+            }),
+            PresentationQueuePushResult::Queued
+        ));
+        assert!(matches!(
+            queue.push(delta(7, 6)),
+            PresentationQueuePushResult::Queued
+        ));
+        assert_eq!(4, queue.len());
+    }
+
+    #[test]
+    fn popping_and_clearing_frames_release_the_pending_delta_budget() {
+        let mut queue = PresentationQueue::with_delta_limits(1, 4);
+        queue.push(delta(7, 1));
+        assert!(matches!(
+            queue.pop_front(),
+            Some(PresentationCommand::Frame {
+                frame: PresentationFrame::BgraRects { .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            queue.push(delta(7, 2)),
+            PresentationQueuePushResult::Queued
+        ));
+
+        queue.clear();
+
+        assert!(matches!(
+            queue.push(delta(7, 3)),
+            PresentationQueuePushResult::Queued
+        ));
+    }
+
+    #[test]
     fn delta_waits_after_a_pending_full_frame_instead_of_patching_the_old_base() {
         let mut queue = PresentationQueue::default();
         queue.push(PresentationCommand::Reset { generation: 7 });
@@ -924,6 +1166,7 @@ mod tests {
         assert!(matches!(
             base.result,
             PresentationResult::Prepared(PreparedFrame {
+                ticket: 1,
                 kind: PreparedFrameKind::Base { encoding: "bgra" },
                 surface: Some(_),
                 ..
@@ -975,6 +1218,7 @@ mod tests {
         assert!(matches!(
             stale.result,
             PresentationResult::Prepared(PreparedFrame {
+                ticket: 2,
                 kind: PreparedFrameKind::Delta,
                 surface: None,
                 ..
@@ -993,6 +1237,7 @@ mod tests {
             .state
             .process(delta_with_ticket(4, 3, 0), &latest_ticket);
         let PresentationResult::Prepared(PreparedFrame {
+            ticket: 3,
             surface: Some(surface),
             kind: PreparedFrameKind::Delta,
             ..
@@ -1037,6 +1282,7 @@ mod tests {
         assert!(matches!(
             stale_base.result,
             PresentationResult::Prepared(PreparedFrame {
+                ticket: 1,
                 kind: PreparedFrameKind::Base { encoding: "bgra" },
                 surface: None,
                 ..

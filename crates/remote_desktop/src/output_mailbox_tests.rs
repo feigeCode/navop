@@ -229,6 +229,125 @@ fn keeps_keyframe_when_coalescing_dirty_rectangles() {
 }
 
 #[test]
+fn pending_delta_chain_stays_within_the_rect_budget() {
+    let (tx, rx) = output_mailbox();
+    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS / 2))
+        .unwrap();
+    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS / 2))
+        .unwrap();
+
+    let batch = rx.drain();
+
+    assert!(!batch.frame_sync_lost);
+    let Some(RemoteDesktopOutput::FrameBgraRects { rects, bgra, .. }) = batch.latest_delta else {
+        panic!("expected a bounded merged delta");
+    };
+    assert_eq!(MAX_PENDING_DELTA_RECTS, rects.len());
+    assert!(bgra.is_empty());
+    assert_eq!(1, batch.stats.delta_frames_merged);
+    assert_eq!(0, batch.stats.frames_dropped);
+}
+
+#[test]
+fn delta_overflow_discards_the_chain_and_reports_sync_loss() {
+    let (tx, rx) = output_mailbox();
+    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS))
+        .unwrap();
+    tx.send(delta_with_rect_count(1)).unwrap();
+
+    let batch = rx.drain();
+
+    assert_eq!(None, batch.latest_delta);
+    assert!(batch.frame_sync_lost);
+    assert_eq!(2, batch.stats.frames_dropped);
+}
+
+#[test]
+fn oversized_delta_payload_is_rejected_without_retaining_it() {
+    let (tx, rx) = output_mailbox();
+    tx.send(RemoteDesktopOutput::FrameBgraRects {
+        width: 1,
+        height: 1,
+        rects: vec![RemoteDesktopFrameRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            byte_len: MAX_PENDING_DELTA_BYTES + 1,
+        }],
+        bgra: vec![0; MAX_PENDING_DELTA_BYTES + 1],
+    })
+    .unwrap();
+
+    let batch = rx.drain();
+
+    assert_eq!(None, batch.latest_delta);
+    assert!(batch.frame_sync_lost);
+    assert_eq!(1, batch.stats.frames_dropped);
+}
+
+#[test]
+fn deltas_are_dropped_until_a_full_frame_recovers_sync() {
+    let (tx, rx) = output_mailbox();
+    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS + 1))
+        .unwrap();
+    let overflow = rx.drain();
+    assert!(overflow.frame_sync_lost);
+
+    tx.send(delta_with_rect_count(1)).unwrap();
+    let dropped = rx.drain();
+    assert_eq!(None, dropped.latest_delta);
+    assert!(!dropped.frame_sync_lost);
+    assert_eq!(1, dropped.stats.frames_dropped);
+
+    tx.send(frame(3)).unwrap();
+    tx.send(delta_with_rect_count(1)).unwrap();
+    let recovered = rx.drain();
+    assert_eq!(Some(frame(3)), recovered.latest_frame);
+    assert!(matches!(
+        recovered.latest_delta,
+        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+    ));
+    assert!(!recovered.frame_sync_lost);
+}
+
+#[test]
+fn full_frame_before_drain_cancels_a_pending_sync_loss_notification() {
+    let (tx, rx) = output_mailbox();
+    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS + 1))
+        .unwrap();
+    tx.send(frame(5)).unwrap();
+    tx.send(delta_with_rect_count(1)).unwrap();
+
+    let batch = rx.drain();
+
+    assert_eq!(Some(frame(5)), batch.latest_frame);
+    assert!(matches!(
+        batch.latest_delta,
+        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+    ));
+    assert!(!batch.frame_sync_lost);
+}
+
+#[tokio::test]
+async fn frame_sync_loss_wakes_an_otherwise_empty_mailbox() {
+    let (tx, rx) = output_mailbox();
+    let mut subscription = rx.subscribe();
+
+    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS + 1))
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), subscription.wait())
+        .await
+        .expect("delta overflow should wake the receiver")
+        .unwrap();
+    let batch = rx.drain();
+    assert!(batch.frame_sync_lost);
+    assert_eq!(None, batch.latest_delta);
+    assert_eq!(1, batch.stats.wakeups);
+}
+
+#[test]
 fn coalesces_adjacent_cursor_positions() {
     let (tx, rx) = output_mailbox();
     tx.send(RemoteDesktopOutput::CursorPosition { x: 1, y: 2 })
@@ -382,4 +501,22 @@ fn cursor(value: u8) -> RemoteDesktopOutput {
         hotspot_y: 0,
         rgba: vec![value, 0, 0, 255],
     })
+}
+
+fn delta_with_rect_count(rect_count: usize) -> RemoteDesktopOutput {
+    RemoteDesktopOutput::FrameBgraRects {
+        width: 1,
+        height: 1,
+        rects: vec![
+            RemoteDesktopFrameRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+                byte_len: 0,
+            };
+            rect_count
+        ],
+        bgra: Vec::new(),
+    }
 }
