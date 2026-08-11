@@ -61,6 +61,8 @@ pub mod error_codes {
     pub const UNKNOWN_IMPORT_ID: ErrorCode = -32010;
     /// 资源已被关闭
     pub const RESOURCE_CLOSED: ErrorCode = -32011;
+    /// 资源暂时繁忙；请求尚未开始，可稍后重试
+    pub const RESOURCE_BUSY: ErrorCode = -32012;
 
     // -- 连接错误 (-33001 ~ -33099) --
     pub const IO_CONNECTION_REFUSED: ErrorCode = -33001;
@@ -305,6 +307,8 @@ mod tests {
     #[test]
     fn is_protocol_error_classifies_correctly() {
         assert!(ProtocolError::new(-32001, "x").is_protocol_error());
+        assert!(ProtocolError::new(error_codes::RESOURCE_BUSY, "x").is_protocol_error());
+        assert_eq!(error_codes::RESOURCE_BUSY, -32012);
         assert!(ProtocolError::new(-32099, "x").is_protocol_error());
         assert!(!ProtocolError::new(-32100, "x").is_protocol_error());
         assert!(!ProtocolError::new(-32000, "x").is_protocol_error());

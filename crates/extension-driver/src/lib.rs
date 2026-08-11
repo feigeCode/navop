@@ -56,6 +56,8 @@ where
 /// 硬取消钩子:包裹驱动私有的中断机制(例如 DuckDB 的 `InterruptHandle::interrupt`)。
 ///
 /// 由 reader 在 worker 线程**正阻塞于查询**时从另一线程调用,要求实现 `Send + Sync`。
+/// 钩子必须快速、非阻塞地发出中断信号，不得等待 worker 调用返回；运行时会在持有
+/// 请求状态锁时调用它，以保证中断不会误伤同连接的后续请求。
 /// 返回 `None` 表示该驱动暂不支持硬中断(取消只能等当前调用自然结束后归一为
 /// `REQUEST_CANCELLED`)。
 pub type InterruptHook = Arc<dyn Fn() + Send + Sync>;

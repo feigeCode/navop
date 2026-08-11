@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use extension_protocol::conn::ConnId;
 use extension_protocol::envelope::{Notification, Request, RequestId, Response, RpcMessage};
-use extension_protocol::error::{ProtocolError, error_codes};
+use extension_protocol::error::{ErrorData, ProtocolError, error_codes};
 use extension_protocol::framing::{recv_msg_async, send_msg_async};
 use extension_protocol::method;
 use serde_json::Value;
@@ -19,6 +19,11 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, warn};
 
 use crate::{Driver, DriverConnection, OpenedConnection};
+
+/// 单连接允许积压的调用数。
+///
+/// 连接调用在专属线程上串行执行；限制队列可避免慢查询期间完整 JSON 请求无限堆积。
+const WORKER_QUEUE_CAPACITY: usize = 64;
 
 /// 发给 worker 线程的命令。
 enum WorkerCmd {
@@ -48,12 +53,22 @@ struct OpenOutcome {
 
 /// reader 持有的每连接句柄。
 struct Worker {
-    cmd_tx: std::sync::mpsc::Sender<WorkerCmd>,
-    /// 当前正在执行的请求 id(worker 设置/清除);取消时据此判断是否要硬中断。
-    running: Arc<StdMutex<Option<RequestId>>>,
-    /// 已被取消的请求 id 集合:worker 在出队/执行后据此把结果归一为 cancelled。
-    cancelled: Arc<StdMutex<HashSet<RequestId>>>,
+    cmd_tx: std::sync::mpsc::SyncSender<WorkerCmd>,
+    /// 请求排队、执行与取消状态；必须在同一把锁内转换，避免迟到取消留下 tombstone。
+    state: Arc<StdMutex<WorkerState>>,
+    /// 队列满时无法插入 Close；sender drop 后由 worker 排空队列并执行该关闭请求。
+    pending_close: Arc<StdMutex<Option<RequestId>>>,
     interrupt: Option<crate::InterruptHook>,
+}
+
+#[derive(Default)]
+struct WorkerState {
+    /// 已进入 worker 生命周期、但尚未出队执行的请求 id。
+    pending: HashSet<RequestId>,
+    /// 当前正在执行的请求 id。
+    running: Option<RequestId>,
+    /// 活跃且已被取消的请求 id；由 worker 在出队/执行完成时消费。
+    cancelled: HashSet<RequestId>,
 }
 
 type Inflight = Arc<StdMutex<HashMap<RequestId, ConnId>>>;
@@ -118,6 +133,21 @@ where
     R: AsyncReadExt + Unpin + Send,
     W: AsyncWriteExt + Unpin + Send + 'static,
 {
+    serve_with_worker_queue_capacity(driver, reader, writer, WORKER_QUEUE_CAPACITY).await
+}
+
+async fn serve_with_worker_queue_capacity<D, R, W>(
+    driver: D,
+    reader: R,
+    writer: W,
+    worker_queue_capacity: usize,
+) -> anyhow::Result<()>
+where
+    D: Driver,
+    R: AsyncReadExt + Unpin + Send,
+    W: AsyncWriteExt + Unpin + Send + 'static,
+{
+    debug_assert!(worker_queue_capacity > 0);
     let driver = Arc::new(driver);
     let writer = Arc::new(Mutex::new(writer));
     let inflight: Inflight = Arc::new(StdMutex::new(HashMap::new()));
@@ -152,6 +182,7 @@ where
         import_routes,
         tx_routes,
         background,
+        worker_queue_capacity,
     )
     .await;
 
@@ -176,6 +207,7 @@ async fn reader_loop<D, R, W>(
     import_routes: ImportRoutes,
     tx_routes: TxRoutes,
     background: BackgroundRequests,
+    worker_queue_capacity: usize,
 ) -> anyhow::Result<()>
 where
     D: Driver,
@@ -225,7 +257,15 @@ where
                 }
             }
             Some(opened) = open_rx.recv() => {
-                handle_open_outcome(&writer, &out_tx, &background, &mut workers, opened).await;
+                handle_open_outcome(
+                    &writer,
+                    &out_tx,
+                    &background,
+                    &mut workers,
+                    opened,
+                    worker_queue_capacity,
+                )
+                .await;
             }
         }
     }
@@ -317,13 +357,21 @@ where
                         .lock()
                         .expect("inflight poisoned")
                         .insert(id.clone(), cid);
-                    if worker
-                        .cmd_tx
-                        .send(WorkerCmd::Close { id: id.clone() })
-                        .is_err()
-                    {
-                        inflight.lock().expect("inflight poisoned").remove(&id);
-                        write_result(writer, id, Ok(Value::Null)).await;
+                    match worker.cmd_tx.try_send(WorkerCmd::Close { id: id.clone() }) {
+                        Ok(()) => {}
+                        Err(std::sync::mpsc::TrySendError::Full(WorkerCmd::Close { id })) => {
+                            // worker 已从 map 移除，不会再有新调用进入。drop sender 后，
+                            // worker 排空当前队列，再在原线程上执行 connection.close()。
+                            *worker.pending_close.lock().expect("pending close poisoned") =
+                                Some(id);
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                            inflight.lock().expect("inflight poisoned").remove(&id);
+                            write_result(writer, id, Ok(Value::Null)).await;
+                        }
+                        Err(std::sync::mpsc::TrySendError::Full(WorkerCmd::Call { .. })) => {
+                            unreachable!("conn/close enqueues only WorkerCmd::Close");
+                        }
                     }
                     // worker 处理完 Close 后自行退出;此处 drop 其句柄即可。
                 }
@@ -382,6 +430,12 @@ where
             {
                 match workers.get(&cid) {
                     Some(worker) => {
+                        worker
+                            .state
+                            .lock()
+                            .expect("worker state poisoned")
+                            .pending
+                            .insert(id.clone());
                         inflight
                             .lock()
                             .expect("inflight poisoned")
@@ -391,17 +445,36 @@ where
                             method: method_name,
                             params: req.params,
                         };
-                        if worker.cmd_tx.send(cmd).is_err() {
-                            inflight.lock().expect("inflight poisoned").remove(&id);
-                            write_result(
-                                writer,
-                                id,
-                                Err(ProtocolError::new(
-                                    error_codes::RESOURCE_CLOSED,
-                                    "connection worker is gone",
-                                )),
-                            )
-                            .await;
+                        match worker.cmd_tx.try_send(cmd) {
+                            Ok(()) => {}
+                            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                {
+                                    let mut state =
+                                        worker.state.lock().expect("worker state poisoned");
+                                    state.pending.remove(&id);
+                                    state.cancelled.remove(&id);
+                                }
+                                inflight.lock().expect("inflight poisoned").remove(&id);
+                                write_result(writer, id, Err(worker_queue_full_error())).await;
+                            }
+                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                {
+                                    let mut state =
+                                        worker.state.lock().expect("worker state poisoned");
+                                    state.pending.remove(&id);
+                                    state.cancelled.remove(&id);
+                                }
+                                inflight.lock().expect("inflight poisoned").remove(&id);
+                                write_result(
+                                    writer,
+                                    id,
+                                    Err(ProtocolError::new(
+                                        error_codes::RESOURCE_CLOSED,
+                                        "connection worker is gone",
+                                    )),
+                                )
+                                .await;
+                            }
                         }
                     }
                     None => {
@@ -504,6 +577,7 @@ async fn handle_open_outcome<W>(
     background: &BackgroundRequests,
     workers: &mut HashMap<ConnId, Worker>,
     outcome: OpenOutcome,
+    worker_queue_capacity: usize,
 ) where
     W: AsyncWriteExt + Unpin + Send + 'static,
 {
@@ -518,7 +592,7 @@ async fn handle_open_outcome<W>(
 
     match outcome.result {
         Ok(opened) => {
-            let open_result = spawn_worker(workers, opened, out_tx.clone());
+            let open_result = spawn_worker(workers, opened, out_tx.clone(), worker_queue_capacity);
             write_result(writer, outcome.id, Ok(open_result)).await;
         }
         Err(error) => write_result(writer, outcome.id, Err(error)).await,
@@ -591,17 +665,21 @@ fn handle_notification(
     let Some(worker) = workers.get(&cid) else {
         return;
     };
-    // 标记取消:无论现在是否在跑,worker 出队/执行后都会据此归一为 cancelled。
-    worker
-        .cancelled
-        .lock()
-        .expect("cancelled poisoned")
-        .insert(target.clone());
-    // 仅当该请求确实正在执行时才硬中断(否则会误伤同连接上正在跑的别的请求)。
-    let running_now = worker.running.lock().expect("running poisoned").as_ref() == Some(&target);
-    if running_now {
-        if let Some(hook) = &worker.interrupt {
-            hook();
+    {
+        let mut state = worker.state.lock().expect("worker state poisoned");
+        let is_running = state.running.as_ref() == Some(&target);
+        if !is_running && !state.pending.contains(&target) {
+            // Outcome 已发出但 pump 尚未清理 inflight 时，迟到的 cancel 直接忽略。
+            return;
+        }
+        // 判断活跃状态与写入取消标记必须原子完成，避免 worker 在两者之间结束请求。
+        state.cancelled.insert(target);
+        if is_running {
+            // 必须在状态锁内触发：否则目标请求可能先结束、下一个请求开始，
+            // 迟到的 hook 就会误中断后一个请求。InterruptHook 契约要求快速返回。
+            if let Some(hook) = &worker.interrupt {
+                hook();
+            }
         }
     }
 }
@@ -611,6 +689,7 @@ fn spawn_worker(
     workers: &mut HashMap<ConnId, Worker>,
     opened: OpenedConnection,
     out_tx: mpsc::UnboundedSender<Outcome>,
+    queue_capacity: usize,
 ) -> Value {
     let OpenedConnection {
         conn_id,
@@ -618,23 +697,29 @@ fn spawn_worker(
         connection,
     } = opened;
     let interrupt = connection.interrupt_hook();
-    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<WorkerCmd>();
-    let running = Arc::new(StdMutex::new(None));
-    let cancelled = Arc::new(StdMutex::new(HashSet::new()));
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::sync_channel::<WorkerCmd>(queue_capacity);
+    let state = Arc::new(StdMutex::new(WorkerState::default()));
+    let pending_close = Arc::new(StdMutex::new(None));
 
-    let worker_running = Arc::clone(&running);
-    let worker_cancelled = Arc::clone(&cancelled);
+    let worker_state = Arc::clone(&state);
+    let worker_pending_close = Arc::clone(&pending_close);
     // detached:线程在 cmd_tx 被 drop 或处理完 Close 后自行退出。
     std::thread::spawn(move || {
-        worker_loop(connection, cmd_rx, out_tx, worker_running, worker_cancelled);
+        worker_loop(
+            connection,
+            cmd_rx,
+            out_tx,
+            worker_state,
+            worker_pending_close,
+        );
     });
 
     workers.insert(
         conn_id,
         Worker {
             cmd_tx,
-            running,
-            cancelled,
+            state,
+            pending_close,
             interrupt,
         },
     );
@@ -646,14 +731,36 @@ fn worker_loop(
     mut connection: Box<dyn DriverConnection>,
     cmd_rx: std::sync::mpsc::Receiver<WorkerCmd>,
     out_tx: mpsc::UnboundedSender<Outcome>,
-    running: Arc<StdMutex<Option<RequestId>>>,
-    cancelled: Arc<StdMutex<HashSet<RequestId>>>,
+    state: Arc<StdMutex<WorkerState>>,
+    pending_close: Arc<StdMutex<Option<RequestId>>>,
 ) {
-    while let Ok(cmd) = cmd_rx.recv() {
+    loop {
+        let cmd = match cmd_rx.recv() {
+            Ok(cmd) => cmd,
+            Err(_) => {
+                if let Some(id) = pending_close.lock().expect("pending close poisoned").take() {
+                    connection.close();
+                    let _ = out_tx.send(Outcome {
+                        id,
+                        method: None,
+                        params: None,
+                        result: Ok(Value::Null),
+                    });
+                }
+                break;
+            }
+        };
         match cmd {
             WorkerCmd::Call { id, method, params } => {
+                let cancelled_before_start = {
+                    let mut state = state.lock().expect("worker state poisoned");
+                    state.running = Some(id.clone());
+                    state.pending.remove(&id);
+                    state.cancelled.remove(&id)
+                };
                 // 出队即取消:还没开跑就被取消,直接回 cancelled。
-                if cancelled.lock().expect("cancelled poisoned").remove(&id) {
+                if cancelled_before_start {
+                    state.lock().expect("worker state poisoned").running = None;
                     let _ = out_tx.send(Outcome {
                         id,
                         method: Some(method),
@@ -663,12 +770,13 @@ fn worker_loop(
                     continue;
                 }
 
-                *running.lock().expect("running poisoned") = Some(id.clone());
                 let raw = connection.call(&method, &params);
-                *running.lock().expect("running poisoned") = None;
-
                 // 执行期间被取消:把(被中断产生的)错误归一为 cancelled。
-                let was_cancelled = cancelled.lock().expect("cancelled poisoned").remove(&id);
+                let was_cancelled = {
+                    let mut state = state.lock().expect("worker state poisoned");
+                    state.running = None;
+                    state.cancelled.remove(&id)
+                };
                 let result = match raw {
                     Err(_) if was_cancelled => Err(cancelled_error()),
                     other => other,
@@ -968,9 +1076,18 @@ fn cancelled_error() -> ProtocolError {
     ProtocolError::new(error_codes::REQUEST_CANCELLED, "request cancelled")
 }
 
+fn worker_queue_full_error() -> ProtocolError {
+    ProtocolError::new(
+        error_codes::RESOURCE_BUSY,
+        "connection request queue is full",
+    )
+    .with_data(ErrorData::new().retryable(true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Condvar;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
@@ -1080,6 +1197,10 @@ mod tests {
                     }
                     Ok(serde_json::json!({ "done": true }))
                 }
+                "brief_slow" => {
+                    std::thread::sleep(Duration::from_millis(300));
+                    Ok(serde_json::json!({ "done": true }))
+                }
                 other => Err(ProtocolError::new(error_codes::METHOD_NOT_FOUND, other)),
             }
         }
@@ -1095,10 +1216,25 @@ mod tests {
         WriteHalf<tokio::io::DuplexStream>,
         ReadHalf<tokio::io::DuplexStream>,
     ) {
+        start_with_worker_queue_capacity(WORKER_QUEUE_CAPACITY)
+    }
+
+    fn start_with_worker_queue_capacity(
+        worker_queue_capacity: usize,
+    ) -> (
+        WriteHalf<tokio::io::DuplexStream>,
+        ReadHalf<tokio::io::DuplexStream>,
+    ) {
         let (client, server) = duplex(64 * 1024);
         let (s_read, s_write) = tokio::io::split(server);
         tokio::spawn(async move {
-            let _ = serve(FakeDriver, s_read, s_write).await;
+            let _ = serve_with_worker_queue_capacity(
+                FakeDriver,
+                s_read,
+                s_write,
+                worker_queue_capacity,
+            )
+            .await;
         });
         let (c_read, c_write) = tokio::io::split(client);
         (c_write, c_read)
@@ -1140,6 +1276,98 @@ mod tests {
         .await;
         let open = resp_of(recv(r).await);
         assert!(open.body.is_ok());
+    }
+
+    #[test]
+    fn late_cancel_after_worker_completion_does_not_leave_tombstone() {
+        let request_id = RequestId::Number(42);
+        let (cmd_tx, _cmd_rx) = std::sync::mpsc::sync_channel(1);
+        let state = Arc::new(StdMutex::new(WorkerState::default()));
+        let workers = HashMap::from([(
+            1,
+            Worker {
+                cmd_tx,
+                state: Arc::clone(&state),
+                pending_close: Arc::new(StdMutex::new(None)),
+                interrupt: None,
+            },
+        )]);
+        // 模拟 worker 已发送 Outcome，但 pump 还没来得及从 inflight 删除该请求。
+        let inflight = Arc::new(StdMutex::new(HashMap::from([(request_id.clone(), 1)])));
+
+        handle_notification(
+            Notification::new(method::CANCEL_REQUEST, serde_json::json!({ "id": 42 })),
+            &workers,
+            &inflight,
+            &BackgroundRequests::new(),
+        );
+
+        assert!(
+            !state
+                .lock()
+                .expect("worker state poisoned")
+                .cancelled
+                .contains(&request_id)
+        );
+    }
+
+    #[test]
+    fn running_cancel_holds_state_until_interrupt_is_dispatched() {
+        let request_id = RequestId::Number(43);
+        let (cmd_tx, _cmd_rx) = std::sync::mpsc::sync_channel(1);
+        let state = Arc::new(StdMutex::new(WorkerState {
+            running: Some(request_id.clone()),
+            ..WorkerState::default()
+        }));
+        let gate = Arc::new((StdMutex::new((false, false)), Condvar::new()));
+        let hook_gate = Arc::clone(&gate);
+        let workers = HashMap::from([(
+            1,
+            Worker {
+                cmd_tx,
+                state: Arc::clone(&state),
+                pending_close: Arc::new(StdMutex::new(None)),
+                interrupt: Some(Arc::new(move || {
+                    let (lock, ready) = &*hook_gate;
+                    let mut phase = lock.lock().expect("hook gate poisoned");
+                    phase.0 = true;
+                    ready.notify_one();
+                    while !phase.1 {
+                        phase = ready.wait(phase).expect("hook gate poisoned");
+                    }
+                })),
+            },
+        )]);
+        let inflight = Arc::new(StdMutex::new(HashMap::from([(request_id.clone(), 1)])));
+
+        let cancel = std::thread::spawn(move || {
+            handle_notification(
+                Notification::new(method::CANCEL_REQUEST, serde_json::json!({ "id": 43 })),
+                &workers,
+                &inflight,
+                &BackgroundRequests::new(),
+            );
+        });
+
+        let (lock, ready) = &*gate;
+        let mut phase = lock.lock().expect("hook gate poisoned");
+        while !phase.0 {
+            phase = ready.wait(phase).expect("hook gate poisoned");
+        }
+        // hook 尚未返回时 worker 不得完成目标请求或切换到下一个请求。
+        assert!(state.try_lock().is_err());
+        phase.1 = true;
+        ready.notify_one();
+        drop(phase);
+        cancel.join().expect("cancel thread panicked");
+
+        assert!(
+            state
+                .lock()
+                .expect("worker state poisoned")
+                .cancelled
+                .contains(&request_id)
+        );
     }
 
     #[tokio::test]
@@ -1635,6 +1863,158 @@ mod tests {
         let first = resp_of(recv(&mut r).await);
         assert_eq!(first.id, RequestId::Number(11));
         assert!(first.result().unwrap()["pong"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn full_worker_queue_rejects_without_blocking_reader_or_leaking_cancel_state() {
+        let (mut w, mut r) = start_with_worker_queue_capacity(1);
+        init_and_open(&mut w, &mut r).await;
+
+        send(&mut w, req(10, "slow", serde_json::json!({ "conn_id": 1 }))).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        send(
+            &mut w,
+            req(
+                11,
+                "echo",
+                serde_json::json!({ "conn_id": 1, "v": "queued" }),
+            ),
+        )
+        .await;
+        send(
+            &mut w,
+            req(
+                12,
+                "echo",
+                serde_json::json!({ "conn_id": 1, "v": "rejected" }),
+            ),
+        )
+        .await;
+        send(&mut w, req(13, method::PING, serde_json::json!({}))).await;
+
+        let busy = tokio::time::timeout(Duration::from_millis(200), recv(&mut r))
+            .await
+            .expect("queue-full response should not wait for the worker");
+        let busy = resp_of(busy);
+        assert_eq!(busy.id, RequestId::Number(12));
+        let error = busy.error().expect("queue-full request should fail");
+        assert_eq!(error.code, error_codes::RESOURCE_BUSY);
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.retryable),
+            Some(true)
+        );
+
+        let ping = tokio::time::timeout(Duration::from_millis(200), recv(&mut r))
+            .await
+            .expect("ping should not be blocked by the full worker queue");
+        let ping = resp_of(ping);
+        assert_eq!(ping.id, RequestId::Number(13));
+        assert_eq!(ping.result().unwrap()["pong"], true);
+
+        // 被拒绝的请求必须已从 inflight 移除；对它的晚到 cancel 不应污染
+        // worker.cancelled，否则复用同一个 JSON-RPC id 会被误取消。
+        send(
+            &mut w,
+            RpcMessage::Notification(Notification::new(
+                method::CANCEL_REQUEST,
+                serde_json::json!({ "id": 12 }),
+            )),
+        )
+        .await;
+        send(
+            &mut w,
+            RpcMessage::Notification(Notification::new(
+                method::CANCEL_REQUEST,
+                serde_json::json!({ "id": 10 }),
+            )),
+        )
+        .await;
+
+        let cancelled = resp_of(
+            tokio::time::timeout(Duration::from_secs(1), recv(&mut r))
+                .await
+                .expect("running request should be interrupted"),
+        );
+        assert_eq!(cancelled.id, RequestId::Number(10));
+        assert_eq!(
+            cancelled.error().unwrap().code,
+            error_codes::REQUEST_CANCELLED
+        );
+
+        let queued = resp_of(recv(&mut r).await);
+        assert_eq!(queued.id, RequestId::Number(11));
+        assert_eq!(queued.result().unwrap()["v"], "queued");
+
+        send(
+            &mut w,
+            req(
+                12,
+                "echo",
+                serde_json::json!({ "conn_id": 1, "v": "reused" }),
+            ),
+        )
+        .await;
+        let reused = resp_of(recv(&mut r).await);
+        assert_eq!(reused.id, RequestId::Number(12));
+        assert_eq!(reused.result().unwrap()["v"], "reused");
+    }
+
+    #[tokio::test]
+    async fn close_full_worker_queue_does_not_block_reader_and_eventually_closes() {
+        let (mut w, mut r) = start_with_worker_queue_capacity(1);
+        init_and_open(&mut w, &mut r).await;
+
+        send(
+            &mut w,
+            req(20, "brief_slow", serde_json::json!({ "conn_id": 1 })),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        send(
+            &mut w,
+            req(
+                21,
+                "echo",
+                serde_json::json!({ "conn_id": 1, "v": "queued" }),
+            ),
+        )
+        .await;
+        send(
+            &mut w,
+            req(22, method::CONN_CLOSE, serde_json::json!({ "conn_id": 1 })),
+        )
+        .await;
+        send(&mut w, req(23, method::PING, serde_json::json!({}))).await;
+
+        let ping = tokio::time::timeout(Duration::from_millis(200), recv(&mut r))
+            .await
+            .expect("conn/close must not block the reader when the queue is full");
+        let ping = resp_of(ping);
+        assert_eq!(ping.id, RequestId::Number(23));
+        assert_eq!(ping.result().unwrap()["pong"], true);
+
+        let slow = resp_of(
+            tokio::time::timeout(Duration::from_secs(1), recv(&mut r))
+                .await
+                .expect("running call should finish before close"),
+        );
+        assert_eq!(slow.id, RequestId::Number(20));
+        assert_eq!(slow.result().unwrap()["done"], true);
+
+        let queued = resp_of(recv(&mut r).await);
+        assert_eq!(queued.id, RequestId::Number(21));
+        assert_eq!(queued.result().unwrap()["v"], "queued");
+
+        let closed = resp_of(recv(&mut r).await);
+        assert_eq!(closed.id, RequestId::Number(22));
+        assert_eq!(closed.result().unwrap(), &Value::Null);
+
+        send(&mut w, req(24, "echo", serde_json::json!({ "conn_id": 1 }))).await;
+        let after_close = resp_of(recv(&mut r).await);
+        assert_eq!(
+            after_close.error().unwrap().code,
+            error_codes::UNKNOWN_CONN_ID
+        );
     }
 
     #[tokio::test]
