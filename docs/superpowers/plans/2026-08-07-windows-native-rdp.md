@@ -1957,6 +1957,48 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   per-monitor DPI/跨 monitor、连接中/已连接/重连中关 tab以及应用直接退出各重复 20 次仍
   pending。因此 Task 5、Task 6、Task 7 与整个计划继续保持未完成。
 
+#### Execution Notes (2026-08-11) — dispatcher rejection fail-closed convergence
+
+- **Red evidence:** 先加强
+  `windows_native_shutdown_uses_locked_gpui_context_contracts`，要求 detached/view-owner
+  terminal update 不再丢弃 `AsyncApp::update_global` 的 dispatcher delivery result；
+  生产代码仍静默忽略该 `Result` 时，目标 contract 按预期以
+  `AsyncApp terminal updates must preserve dispatcher rejection` 失败。
+- **Observable delivery:** 新增稳定内部结果
+  `WindowsNativeRdpTerminalDispatch::{Delivered, Rejected}`。detached terminal update
+  与 view-owner-lost update 都捕获 `cx.update_global(...)` 的 `Result`、记录 token 与
+  generation，并把 dispatcher rejection 显式返回给调用方；普通非 Windows production
+  build 通过精确 cfg 不引入 dead-code warning。
+- **Fail-closed convergence:** application drain 在每次 owner poll 前保存 registry 的
+  最新 `fail_closed_report`。任一 missing、Detached 或 View owner terminal update 被
+  dispatcher 拒绝时，drain 立即返回该保守报告；仍 active 的 registration 因而只分类为
+  `OwnerLost`，不会冒充 `Destroyed`，也不会继续无意义地等待下一次 16ms poll。独立只读
+  审查发现初版 `poll_registration` 的 Detached/View match arm 尾部误加分号，会丢弃
+  delivery result 并造成 Windows-only 类型错误；提交前已移除分号，并增加 contract 防止
+  两个分支再次静默丢弃 rejection。
+- **Detached cleanup boundary:** detached owner-thread cleanup 在确认 `Destroyed`，或先
+  leak 完整 adapter 再确认 `TimedOutLeaked` 后，观察 terminal delivery rejection 并记录
+  错误；它不会重试 native destroy，不会从 rejection 路径调用 `force_close`，也不会增加
+  wrong-thread COM/Win32 cleanup fallback。
+- **Local automated verification:** macOS host 上
+  `cargo fmt --all -- --check`、`git diff --check`、`remote_desktop_view` default
+  140 passed、feature-on 150 passed，`cargo check -p main` default/feature-on 均通过；
+  `remote_desktop_view --all-targets --features windows-native-rdp --no-deps` 在仅豁免
+  仓库既有 `frame_sync.rs` `derivable_impls` 后以 `-D warnings` 通过。两路独立只读审查
+  随后确认 `AsyncApp::update_global` 返回类型、cfg、`#[must_use]` 消费、报告分类与
+  no-wrong-thread-cleanup 边界；审查发现的 Windows-only match-arm 阻断问题已修复并由
+  focused contracts 复验。
+- **Previous Windows runner evidence:** 前一 application-exit drain HEAD
+  `49950a760bb6568dab77040e6622adb907c633f9` 的 GitHub Actions run
+  [`31448900925`](https://github.com/feigeCode/navop/actions/runs/31448900925) 已全部成功：
+  x64/i686 `Windows RDP probe` 的 `Build ATL/MSVC probe` 与
+  `Test (windows, x86_64-pc-windows-msvc)` 的 `Test Windows` 均成功。该证据仅证明该
+  HEAD 的 Windows 编译链接和自动化测试，不证明真实交互式 ActiveX/RDP runtime 行为；
+  当前 dispatcher-rejection 提交仍需推送后单独由同类 Windows runner 核验。
+- **Remaining Task 7 scope:** GPUI/UI shutdown task cancellation、
+  platform-driven quit race，以及真实连接中/已连接/重连中关闭 tab与应用直接退出各重复
+  20 次仍 pending。Task 7 与整个计划继续保持未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback

@@ -11,6 +11,29 @@ pub struct WindowsNativeRdpShutdownReport {
     controller_unavailable: bool,
 }
 
+#[cfg(any(test, all(feature = "windows-native-rdp", target_os = "windows")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use = "terminal dispatcher rejection must remain observable"]
+pub(crate) enum WindowsNativeRdpTerminalDispatch {
+    Delivered,
+    Rejected,
+}
+
+#[cfg(any(test, all(feature = "windows-native-rdp", target_os = "windows")))]
+impl WindowsNativeRdpTerminalDispatch {
+    pub(crate) fn from_result<T, E>(result: Result<T, E>) -> Self {
+        if result.is_ok() {
+            Self::Delivered
+        } else {
+            Self::Rejected
+        }
+    }
+
+    pub(crate) const fn was_rejected(self) -> bool {
+        matches!(self, Self::Rejected)
+    }
+}
+
 impl WindowsNativeRdpShutdownReport {
     #[cfg(any(test, all(feature = "windows-native-rdp", target_os = "windows")))]
     pub(crate) const fn unavailable_controller() -> Self {
@@ -61,7 +84,7 @@ impl WindowsNativeRdpShutdownReport {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowsNativeRdpShutdownReport;
+    use super::{WindowsNativeRdpShutdownReport, WindowsNativeRdpTerminalDispatch};
 
     #[test]
     fn unavailable_controller_is_reported_as_incomplete_without_inventing_a_registration() {
@@ -73,6 +96,15 @@ mod tests {
         assert_eq!(report.owner_lost(), 0);
         assert!(report.controller_unavailable());
         assert!(report.incomplete());
+    }
+
+    #[test]
+    fn terminal_dispatch_preserves_delivery_rejection() {
+        let delivered = WindowsNativeRdpTerminalDispatch::from_result(Result::<(), ()>::Ok(()));
+        let rejected = WindowsNativeRdpTerminalDispatch::from_result(Result::<(), ()>::Err(()));
+
+        assert!(!delivered.was_rejected());
+        assert!(rejected.was_rejected());
     }
 }
 

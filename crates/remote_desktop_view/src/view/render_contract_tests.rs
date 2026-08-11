@@ -165,7 +165,7 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "cx.spawn(async move |cx|",
         "native.force_close(&mut focus_parent)",
         "NativeDestroyProgress::PendingCallbacks",
-        "record_windows_native_rdp_terminal_async",
+        "record_detached_windows_native_terminal",
         "WindowsRdpTerminalOutcome::Destroyed",
         "WindowsRdpTerminalOutcome::TimedOutLeaked",
         "Duration::from_millis(16)",
@@ -179,6 +179,20 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
     }
     assert!(!detached_cleanup.contains("background_spawn"));
     assert!(!detached_cleanup.contains("tokio::spawn"));
+    let detached_terminal = function_body(
+        &view,
+        "fn record_detached_windows_native_terminal(",
+        "fn detach_windows_native_cleanup(",
+    );
+    assert!(detached_terminal.contains("record_windows_native_rdp_terminal_async"));
+    assert!(
+        detached_terminal.contains(".was_rejected()"),
+        "detached cleanup must observe terminal dispatcher rejection"
+    );
+    assert!(
+        !detached_terminal.contains("native.force_close"),
+        "terminal dispatcher rejection must never trigger direct native cleanup"
+    );
     let foreground_spawn = detached_cleanup
         .find("cx.spawn(async move |cx|")
         .expect("foreground cleanup spawn");
@@ -505,13 +519,52 @@ fn windows_native_shutdown_uses_locked_gpui_context_contracts() {
             "{signature} must retain mutable AsyncApp access for WeakEntity::update"
         );
     }
+    let poll_registration =
+        function_body(&drain, "fn poll_registration(\n", "fn completed_report(");
+    for call in [
+        "record_stalled_detached_owner(registration, deadline_elapsed, cx)",
+        "poll_view_owner(owner, registration, deadline_elapsed, cx)",
+    ] {
+        assert!(
+            poll_registration.contains(call),
+            "poll_registration must preserve terminal dispatcher delivery from {call}"
+        );
+        assert!(
+            !poll_registration.contains(&format!("{call};")),
+            "poll_registration must not discard terminal dispatcher rejection from {call}"
+        );
+    }
+    for (signature, end) in [
+        (
+            "pub(crate) fn record_windows_native_rdp_terminal_async(",
+            "pub(super) fn record_windows_native_rdp_view_owner_lost_async(",
+        ),
+        (
+            "pub(super) fn record_windows_native_rdp_view_owner_lost_async(",
+            "pub use drain::shutdown_windows_native_rdp;",
+        ),
+    ] {
+        let body = function_body(&platform, signature, end);
+        assert!(
+            body.contains("let result = cx.update_global::<"),
+            "{signature} must retain AsyncApp dispatcher rejection"
+        );
+        assert!(
+            body.contains("WindowsNativeRdpTerminalDispatch::from_result(result)"),
+            "{signature} must return observable dispatcher delivery"
+        );
+    }
+    let rejection = drain
+        .find(".was_rejected()")
+        .expect("bounded drain dispatcher rejection branch");
+    let fail_closed_return = drain[rejection..]
+        .find("return fail_closed_report;")
+        .map(|offset| rejection + offset)
+        .expect("dispatcher rejection must return the last conservative report");
+    let rejection_branch = &drain[rejection..fail_closed_return];
     assert!(
-        !platform.contains("let result = cx.update_global"),
-        "AsyncApp::update_global returns the closure result at the locked GPUI revision"
-    );
-    assert!(
-        !platform.contains("result.is_err()"),
-        "the native shutdown code must not treat an infallible global update as a Result"
+        !rejection_branch.contains("force_close_windows_native"),
+        "dispatcher rejection must not fall back to wrong-thread native cleanup"
     );
 }
 

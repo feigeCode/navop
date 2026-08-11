@@ -9,7 +9,7 @@ use windows_rdp_host::{
     WindowsRdpShutdownRegistry, WindowsRdpTerminalOutcome,
 };
 
-use super::WindowsNativeRdpShutdownReport;
+use super::{WindowsNativeRdpShutdownReport, WindowsNativeRdpTerminalDispatch};
 use crate::view::RemoteDesktopView;
 
 #[derive(Clone, Debug)]
@@ -139,17 +139,27 @@ pub(crate) fn record_windows_native_rdp_terminal_async(
     registration: WindowsRdpRegistration,
     outcome: WindowsRdpTerminalOutcome,
     cx: &gpui::AsyncApp,
-) {
-    cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+) -> WindowsNativeRdpTerminalDispatch {
+    let result = cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
         record_terminal(controller, registration, outcome);
     });
+    if let Err(error) = &result {
+        tracing::error!(
+            ?error,
+            token = registration.token(),
+            generation = registration.generation(),
+            ?outcome,
+            "Windows native RDP terminal dispatcher rejected the completion"
+        );
+    }
+    WindowsNativeRdpTerminalDispatch::from_result(result)
 }
 
 pub(super) fn record_windows_native_rdp_view_owner_lost_async(
     registration: WindowsRdpRegistration,
     cx: &gpui::AsyncApp,
-) {
-    cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
+) -> WindowsNativeRdpTerminalDispatch {
+    let result = cx.update_global::<GlobalWindowsNativeRdpShutdown, _>(|controller, _| {
         if matches!(
             controller.owners.get(&registration),
             Some(WindowsNativeRdpOwner::View(_))
@@ -161,6 +171,15 @@ pub(super) fn record_windows_native_rdp_view_owner_lost_async(
             );
         }
     });
+    if let Err(error) = &result {
+        tracing::error!(
+            ?error,
+            token = registration.token(),
+            generation = registration.generation(),
+            "Windows native RDP terminal dispatcher rejected view-owner loss"
+        );
+    }
+    WindowsNativeRdpTerminalDispatch::from_result(result)
 }
 
 pub use drain::shutdown_windows_native_rdp;

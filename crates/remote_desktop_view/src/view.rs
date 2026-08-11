@@ -132,6 +132,30 @@ fn next_windows_native_rdp_generation() -> u64 {
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn record_detached_windows_native_terminal(
+    registration: windows_rdp_host::WindowsRdpRegistration,
+    outcome: windows_rdp_host::WindowsRdpTerminalOutcome,
+    generation: u64,
+    reason: &'static str,
+    cx: &gpui::AsyncApp,
+) {
+    if crate::windows_native_shutdown::record_windows_native_rdp_terminal_async(
+        registration,
+        outcome,
+        cx,
+    )
+    .was_rejected()
+    {
+        tracing::error!(
+            generation,
+            reason,
+            ?outcome,
+            "Windows native RDP detached cleanup terminal dispatcher became unavailable"
+        );
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 fn detach_windows_native_cleanup(
     mut native: windows_native::WindowsNativeAdapter,
     registration: Option<windows_rdp_host::WindowsRdpRegistration>,
@@ -146,9 +170,11 @@ fn detach_windows_native_cleanup(
             match native.force_close(&mut focus_parent) {
                 Ok(windows_native::NativeDestroyProgress::Destroyed) => {
                     if let Some(registration) = registration {
-                        crate::windows_native_shutdown::record_windows_native_rdp_terminal_async(
+                        record_detached_windows_native_terminal(
                             registration,
                             windows_rdp_host::WindowsRdpTerminalOutcome::Destroyed,
+                            generation,
+                            reason,
                             cx,
                         );
                     }
@@ -157,9 +183,11 @@ fn detach_windows_native_cleanup(
                 Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {}
                 Err(_) if native.is_destroyed() => {
                     if let Some(registration) = registration {
-                        crate::windows_native_shutdown::record_windows_native_rdp_terminal_async(
+                        record_detached_windows_native_terminal(
                             registration,
                             windows_rdp_host::WindowsRdpTerminalOutcome::Destroyed,
+                            generation,
+                            reason,
                             cx,
                         );
                     }
@@ -185,9 +213,11 @@ fn detach_windows_native_cleanup(
                 );
                 let _ = Box::leak(Box::new(native));
                 if let Some(registration) = registration {
-                    crate::windows_native_shutdown::record_windows_native_rdp_terminal_async(
+                    record_detached_windows_native_terminal(
                         registration,
                         windows_rdp_host::WindowsRdpTerminalOutcome::TimedOutLeaked,
+                        generation,
+                        reason,
                         cx,
                     );
                 }

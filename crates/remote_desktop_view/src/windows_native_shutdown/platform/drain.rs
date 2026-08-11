@@ -7,7 +7,9 @@ use super::{
     GlobalWindowsNativeRdpShutdown, WindowsNativeRdpOwner,
     record_windows_native_rdp_terminal_async, record_windows_native_rdp_view_owner_lost_async,
 };
-use crate::windows_native_shutdown::WindowsNativeRdpShutdownReport;
+use crate::windows_native_shutdown::{
+    WindowsNativeRdpShutdownReport, WindowsNativeRdpTerminalDispatch,
+};
 
 const WINDOWS_NATIVE_RDP_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const WINDOWS_NATIVE_RDP_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -68,7 +70,7 @@ fn record_missing_owner(
     registration: WindowsRdpRegistration,
     deadline_elapsed: bool,
     cx: &gpui::AsyncApp,
-) {
+) -> WindowsNativeRdpTerminalDispatch {
     if deadline_elapsed {
         tracing::error!(
             token = registration.token(),
@@ -76,27 +78,27 @@ fn record_missing_owner(
             "Windows native RDP shutdown registration has no owner; \
              completing the bounded drain as owner-lost"
         );
-        record_windows_native_rdp_terminal_async(
+        return record_windows_native_rdp_terminal_async(
             registration,
             WindowsRdpTerminalOutcome::OwnerLost,
             cx,
         );
-    } else {
-        tracing::warn!(
-            token = registration.token(),
-            generation = registration.generation(),
-            "Windows native RDP shutdown registration has no owner"
-        );
     }
+    tracing::warn!(
+        token = registration.token(),
+        generation = registration.generation(),
+        "Windows native RDP shutdown registration has no owner"
+    );
+    WindowsNativeRdpTerminalDispatch::Delivered
 }
 
 fn record_stalled_detached_owner(
     registration: WindowsRdpRegistration,
     deadline_elapsed: bool,
     cx: &gpui::AsyncApp,
-) {
+) -> WindowsNativeRdpTerminalDispatch {
     if !deadline_elapsed {
-        return;
+        return WindowsNativeRdpTerminalDispatch::Delivered;
     }
     tracing::error!(
         token = registration.token(),
@@ -116,7 +118,7 @@ fn poll_view_owner(
     registration: WindowsRdpRegistration,
     deadline_elapsed: bool,
     cx: &mut gpui::AsyncApp,
-) {
+) -> WindowsNativeRdpTerminalDispatch {
     let result = owner.update(cx, |view, cx| {
         if deadline_elapsed {
             view.quarantine_windows_native_for_shutdown(registration, cx)
@@ -126,7 +128,7 @@ fn poll_view_owner(
         }
     });
     match result {
-        Ok(true) => {}
+        Ok(true) => WindowsNativeRdpTerminalDispatch::Delivered,
         Ok(false) => record_mismatched_view_owner(registration, deadline_elapsed, cx),
         Err(error) => {
             tracing::debug!(
@@ -135,7 +137,7 @@ fn poll_view_owner(
                 generation = registration.generation(),
                 "Windows native RDP view released while shutdown drain was polling"
             );
-            record_released_view_owner(registration, deadline_elapsed, cx);
+            record_released_view_owner(registration, deadline_elapsed, cx)
         }
     }
 }
@@ -144,31 +146,32 @@ fn record_mismatched_view_owner(
     registration: WindowsRdpRegistration,
     deadline_elapsed: bool,
     cx: &gpui::AsyncApp,
-) {
+) -> WindowsNativeRdpTerminalDispatch {
     if !deadline_elapsed {
-        return;
+        return WindowsNativeRdpTerminalDispatch::Delivered;
     }
     tracing::error!(
         token = registration.token(),
         generation = registration.generation(),
         "Windows native RDP view no longer owns its registered adapter at the drain deadline"
     );
-    record_windows_native_rdp_view_owner_lost_async(registration, cx);
+    record_windows_native_rdp_view_owner_lost_async(registration, cx)
 }
 
 fn record_released_view_owner(
     registration: WindowsRdpRegistration,
     deadline_elapsed: bool,
     cx: &gpui::AsyncApp,
-) {
+) -> WindowsNativeRdpTerminalDispatch {
     if deadline_elapsed {
         tracing::error!(
             token = registration.token(),
             generation = registration.generation(),
             "Windows native RDP view released before the drain deadline completed"
         );
-        record_windows_native_rdp_view_owner_lost_async(registration, cx);
+        return record_windows_native_rdp_view_owner_lost_async(registration, cx);
     }
+    WindowsNativeRdpTerminalDispatch::Delivered
 }
 
 fn poll_registration(
@@ -176,14 +179,14 @@ fn poll_registration(
     owner: Option<&WindowsNativeRdpOwner>,
     deadline_elapsed: bool,
     cx: &mut gpui::AsyncApp,
-) {
+) -> WindowsNativeRdpTerminalDispatch {
     match owner {
         None => record_missing_owner(registration, deadline_elapsed, cx),
         Some(WindowsNativeRdpOwner::Detached) => {
-            record_stalled_detached_owner(registration, deadline_elapsed, cx);
+            record_stalled_detached_owner(registration, deadline_elapsed, cx)
         }
         Some(WindowsNativeRdpOwner::View(owner)) => {
-            poll_view_owner(owner, registration, deadline_elapsed, cx);
+            poll_view_owner(owner, registration, deadline_elapsed, cx)
         }
     }
 }
@@ -209,12 +212,22 @@ async fn drain(
 
         let deadline_elapsed = Instant::now() >= snapshot.deadline;
         for registration in snapshot.pending {
-            poll_registration(
+            if poll_registration(
                 registration,
                 snapshot.owners.get(&registration),
                 deadline_elapsed,
                 cx,
-            );
+            )
+            .was_rejected()
+            {
+                tracing::error!(
+                    token = registration.token(),
+                    generation = registration.generation(),
+                    "Windows native RDP shutdown dispatcher became unavailable; \
+                     returning the last fail-closed report"
+                );
+                return fail_closed_report;
+            }
         }
         if let Some(report) = completed_report(cx) {
             return report;
