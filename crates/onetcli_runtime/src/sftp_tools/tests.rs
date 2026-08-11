@@ -28,7 +28,7 @@ fn sftp_list_entry_json_exposes_remote_owner_metadata() {
         group: Some("operators".to_string()),
     });
 
-    assert_eq!(json!("deploy (1001)"), value["owner"]);
+    assert_eq!(json!("deploy"), value["owner"]);
     assert_eq!(json!(1001), value["uid"]);
     assert_eq!(json!(1002), value["gid"]);
     assert_eq!(json!("deploy"), value["user"]);
