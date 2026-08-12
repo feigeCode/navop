@@ -61,7 +61,24 @@ jobs:
           $nasmDir = Join-Path $env:ProgramFiles "NASM"
           $nasmExe = Join-Path $nasmDir "nasm.exe"
           if (-not (Test-Path -LiteralPath $nasmExe -PathType Leaf)) {
-            throw "NASM executable was not found at '$nasmExe'"
+            Write-Warning "Chocolatey did not install NASM; downloading the pinned upstream archive"
+            $nasmVersion = "3.01"
+            $nasmArchive = Join-Path $env:RUNNER_TEMP "nasm-$nasmVersion-win64.zip"
+            $nasmExtractRoot = Join-Path $env:RUNNER_TEMP "nasm-$nasmVersion-win64"
+            Invoke-WebRequest `
+              -Uri "https://www.nasm.us/pub/nasm/releasebuilds/$nasmVersion/win64/nasm-$nasmVersion-win64.zip" `
+              -OutFile $nasmArchive
+            $expectedHash = "e0ba5157007abc7b1a65118a96657a961ddf55f7e3f632ee035366dfce039ca4"
+            $actualHash = (Get-FileHash -LiteralPath $nasmArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualHash -ne $expectedHash) {
+              throw "NASM archive checksum mismatch: expected $expectedHash, got $actualHash"
+            }
+            Expand-Archive -LiteralPath $nasmArchive -DestinationPath $nasmExtractRoot -Force
+            $nasmDir = Join-Path $nasmExtractRoot "nasm-$nasmVersion"
+            $nasmExe = Join-Path $nasmDir "nasm.exe"
+            if (-not (Test-Path -LiteralPath $nasmExe -PathType Leaf)) {
+              throw "NASM executable was not found at '$nasmExe'"
+            }
           }
           $env:Path = "$nasmDir;$env:Path"
           $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
