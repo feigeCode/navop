@@ -16,6 +16,7 @@ pub(crate) const RESULT_UNAVAILABLE: NativeResult = 5;
 pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
 pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
 pub(crate) const RESULT_INVALID_STATE: NativeResult = 8;
+#[allow(dead_code)]
 pub(crate) const LAST_ERROR_LEGACY_SIZE: u32 = 24;
 
 #[allow(dead_code)]
