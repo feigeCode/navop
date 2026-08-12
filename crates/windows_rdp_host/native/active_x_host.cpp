@@ -57,7 +57,6 @@ struct ActiveXCleanup {
     bool atl_initialized = false;
     HWND parent_window = nullptr;
     HWND host_window = nullptr;
-    HWND control_window = nullptr;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
     CComPtr<IMsRdpClient9> client;
@@ -66,15 +65,12 @@ struct ActiveXCleanup {
     ~ActiveXCleanup() noexcept {
         destroy_event_subscription(event_subscription);
         event_subscription = nullptr;
-        if (control_window != nullptr) {
-            DestroyWindow(control_window);
-        }
-        if (host_window != nullptr) {
-            DestroyWindow(host_window);
-        }
         client.Release();
         control.Release();
         container.Release();
+        if (host_window != nullptr) {
+            DestroyWindow(host_window);
+        }
         if (atl_initialized) {
             AtlAxWinTerm();
         }
@@ -151,13 +147,11 @@ NavopRdpResult validate_resources(
     NativeRdpActiveXResources* resources) noexcept {
     if (resources == nullptr ||
         resources->state.parent_window == nullptr ||
-        resources->state.host_window == nullptr ||
-        resources->state.control_window == nullptr) {
+        resources->state.host_window == nullptr) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
     if (!IsWindow(resources->state.parent_window) ||
-        !IsWindow(resources->state.host_window) ||
-        !IsWindow(resources->state.control_window)) {
+        !IsWindow(resources->state.host_window)) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
     if (resources->state.control == nullptr || resources->state.client == nullptr) {
@@ -246,8 +240,10 @@ NavopRdpResult create_active_x_resources(
     }
 
     // GPUI's HWND owns Rust window state. Keep ATL and ActiveX window traffic
-    // below an inert native child so synchronous parent notifications cannot
-    // enter GPUI's Rust window procedure directly.
+    // below a dedicated native child so synchronous parent notifications
+    // cannot enter GPUI's Rust window procedure directly. AtlAxAttachControl
+    // subclasses this window into the ActiveX host after the RDP control has
+    // been explicitly constructed and initialized.
     SetLastError(ERROR_SUCCESS);
     trace_native_stage("create.host_window.before");
     resources->state.host_window = CreateWindowExW(
@@ -270,42 +266,6 @@ NavopRdpResult create_active_x_resources(
         const DWORD win32_code = GetLastError();
         trace_native_win32(
             "create.host_window.failed",
-            static_cast<uint32_t>(win32_code));
-        return record_last_stage_win32(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            NAVOP_RDP_CREATE_STAGE_CREATE_WINDOW,
-            static_cast<uint32_t>(win32_code));
-    }
-
-    // Create an empty real ATL host first. ActiveX construction must not run
-    // from the AtlAxWin WM_CREATE callback: that callback previously crossed
-    // into the GPUI window stack and either terminated the process or stalled
-    // without diagnostics. The inert native parent keeps ATL notifications
-    // away from GPUI, while the explicit CoCreateInstance/AtlAxAttachControl
-    // sequence mirrors the object-first lifecycle used by WinForms AxHost.
-    SetLastError(ERROR_SUCCESS);
-    trace_native_stage("create.control_window.before");
-    resources->state.control_window = CreateWindowExW(
-        WS_EX_NOPARENTNOTIFY,
-        TEXT(ATLAXWIN_CLASS),
-        L"",
-        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        0,
-        0,
-        1,
-        1,
-        resources->state.host_window,
-        nullptr,
-        instance,
-        nullptr);
-    trace_native_pointer(
-        "create.control_window.after",
-        reinterpret_cast<uintptr_t>(resources->state.control_window));
-    if (resources->state.control_window == nullptr) {
-        const DWORD win32_code = GetLastError();
-        trace_native_win32(
-            "create.control_window.failed",
             static_cast<uint32_t>(win32_code));
         return record_last_stage_win32(
             owner,
@@ -444,7 +404,7 @@ NavopRdpResult create_active_x_resources(
     trace_native_stage("create.attach_control.before");
     const HRESULT attach_result = AtlAxAttachControl(
         resources->state.control,
-        resources->state.control_window,
+        resources->state.host_window,
         &resources->state.container);
     trace_native_hresult(
         "create.attach_control.after",
@@ -509,16 +469,6 @@ NavopRdpResult set_active_x_bounds(
             SWP_NOZORDER | SWP_NOACTIVATE)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
-    if (!SetWindowPos(
-            resources->state.control_window,
-            nullptr,
-            0,
-            0,
-            bounds.width,
-            bounds.height,
-            SWP_NOZORDER | SWP_NOACTIVATE)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
-    }
     return NAVOP_RDP_RESULT_OK;
 }
 
@@ -531,25 +481,18 @@ NavopRdpResult set_active_x_visible(
     }
 
     if (!visible &&
-        window_or_descendant_has_focus(resources->state.control_window)) {
+        window_or_descendant_has_focus(resources->state.host_window)) {
         SetFocus(resources->state.parent_window);
     }
     ShowWindow(
         resources->state.host_window,
         visible ? SW_SHOWNA : SW_HIDE);
-    ShowWindow(
-        resources->state.control_window,
-        visible ? SW_SHOWNA : SW_HIDE);
 
     const LONG_PTR host_style = GetWindowLongPtrW(
         resources->state.host_window,
         GWL_STYLE);
-    const LONG_PTR control_style = GetWindowLongPtrW(
-        resources->state.control_window,
-        GWL_STYLE);
     const bool host_is_visible = (host_style & WS_VISIBLE) != 0;
-    const bool control_is_visible = (control_style & WS_VISIBLE) != 0;
-    if (host_is_visible != visible || control_is_visible != visible) {
+    if (host_is_visible != visible) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
@@ -564,16 +507,12 @@ NavopRdpResult focus_active_x(
     if ((GetWindowLongPtrW(
              resources->state.host_window,
              GWL_STYLE) &
-         WS_VISIBLE) == 0 ||
-        (GetWindowLongPtrW(
-             resources->state.control_window,
-             GWL_STYLE) &
          WS_VISIBLE) == 0) {
         return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
     }
 
-    SetFocus(resources->state.control_window);
-    if (!window_or_descendant_has_focus(resources->state.control_window)) {
+    SetFocus(resources->state.host_window);
+    if (!window_or_descendant_has_focus(resources->state.host_window)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;

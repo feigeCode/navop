@@ -1096,7 +1096,7 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
 }
 
 #[test]
-fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
+fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resources() {
     let source = &format!("{HOST_CRATE}/native/active_x_host.cpp");
 
     assert_contains_all(
@@ -1112,7 +1112,6 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
             "struct ActiveXCleanup",
             "HWND parent_window",
             "HWND host_window",
-            "HWND control_window",
             "CComPtr<IUnknown> container;",
             "CComPtr<IUnknown> control;",
             "CComPtr<IMsRdpClient9> client;",
@@ -1123,7 +1122,6 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
             "AtlAxWinInit()",
             "CreateWindowExW(",
             "WS_EX_NOPARENTNOTIFY",
-            "TEXT(ATLAXWIN_CLASS)",
             "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS",
             "CoCreateInstance(",
             "AtlAxAttachControl(",
@@ -1163,8 +1161,6 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
             "ensure_native_host_window_class(instance)",
             "resources->state.host_window = CreateWindowExW(",
             "WS_EX_NOPARENTNOTIFY",
-            "resources->state.control_window = CreateWindowExW(",
-            "TEXT(ATLAXWIN_CLASS)",
             "L\"\"",
             "const HRESULT control_result = CoCreateInstance(",
             "kMsRdpClient9NotSafeForScriptingClsid",
@@ -1180,6 +1176,7 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
             "owner,",
             "&resources->state.event_subscription",
             "const HRESULT attach_result = AtlAxAttachControl(",
+            "resources->state.host_window",
             "&resources->state.container",
             "const HRESULT ui_parent_result =\n        non_scriptable->put_UIParentWindowHandle(\n            reinterpret_cast<wireHWND>(parent));",
             "if (FAILED(ui_parent_result))",
@@ -1199,8 +1196,6 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
             "trace_native_win32(\n        \"create.host_class.after\"",
             "trace_native_stage(\"create.host_window.before\")",
             "trace_native_pointer(\n        \"create.host_window.after\"",
-            "trace_native_stage(\"create.control_window.before\")",
-            "trace_native_pointer(\n        \"create.control_window.after\"",
             "trace_native_stage(\"create.control_instance.before\")",
             "trace_native_hresult(\n        \"create.control_instance.after\"",
             "trace_native_stage(\"create.query_client.before\")",
@@ -1223,11 +1218,10 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
         &[
             "destroy_event_subscription(event_subscription);",
             "event_subscription = nullptr;",
-            "DestroyWindow(control_window);",
-            "DestroyWindow(host_window);",
             "client.Release();",
             "control.Release();",
             "container.Release();",
+            "DestroyWindow(host_window);",
             "AtlAxWinTerm();",
             "OleUninitialize();",
         ],
@@ -1237,11 +1231,12 @@ fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
         &[
             "DestroyWindow(parent)",
             "L\"AtlAxWin\"",
+            "TEXT(ATLAXWIN_CLASS)",
+            "control_window",
             "AtlAxCreateControlEx(",
             "AtlAxGetControl(",
             "AtlAxGetHost(",
             "945EE98E-B376-4EC2-B2E5-64C9410F93B7",
-            "AtlAxAttachControl(\n        resources->state.control,\n        resources->state.host_window",
             "SetParent(",
             "put_UIParentWindowHandle(static_cast<LONG>",
             "put_UIParentWindowHandle(static_cast<long>",
@@ -1331,11 +1326,10 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
         "\n    }\n};",
         &[
             "destroy_event_subscription(event_subscription);",
-            "DestroyWindow(control_window);",
-            "DestroyWindow(host_window);",
             "client.Release();",
             "control.Release();",
             "container.Release();",
+            "DestroyWindow(host_window);",
             "AtlAxWinTerm();",
             "OleUninitialize();",
         ],
