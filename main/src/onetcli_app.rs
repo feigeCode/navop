@@ -46,6 +46,7 @@ actions!(
         SwitchNextTab,
         SwitchPreviousTab,
         ToggleConnectionSidebar,
+        CloseActiveWindow,
         QuitApp,
     ]
 );
@@ -276,7 +277,7 @@ fn initial_content_layout(
 #[cfg(target_os = "macos")]
 use gpui::px;
 
-use gpui_component::dock::{ClosePanel, ToggleZoom};
+use gpui_component::dock::ToggleZoom;
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::settings::{AppSettings, HomePageStyle, MainWindowSize, StartupDefaultPage};
@@ -847,9 +848,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             .map(|key| KeyBinding::new(&key, ToggleZoom, None)),
     );
     keybindings.extend(
-        shortcuts_for(cx, action_id::WINDOW_CLOSE_PANEL, &["ctrl-w"])
+        shortcuts_for(cx, action_id::WINDOW_CLOSE_ACTIVE_WINDOW, &["ctrl-w"])
             .into_iter()
-            .map(|key| KeyBinding::new(&key, ClosePanel, None)),
+            .map(|key| KeyBinding::new(&key, CloseActiveWindow, None)),
     );
     keybindings.extend(
         shortcuts_for(
@@ -973,10 +974,10 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     ));
     keybindings.extend(rebind_keybindings(
         cx,
-        action_id::WINDOW_CLOSE_PANEL,
+        action_id::WINDOW_CLOSE_ACTIVE_WINDOW,
         &["ctrl-w"],
         None,
-        ClosePanel,
+        CloseActiveWindow,
     ));
     keybindings.extend(rebind_keybindings(
         cx,
@@ -1058,6 +1059,7 @@ fn init_action_handlers(cx: &mut App) {
     cx.on_action(|_: &OpenTabSwitcher, cx| open_tab_switcher(cx));
     cx.on_action(|_: &SwitchNextTab, cx| switch_tab(TabCycleDirection::Next, cx));
     cx.on_action(|_: &SwitchPreviousTab, cx| switch_tab(TabCycleDirection::Previous, cx));
+    cx.on_action(|_: &CloseActiveWindow, cx| close_active_window(cx));
     cx.on_action(|_: &QuitApp, cx| quit_app(cx));
     cx.on_action(|_: &OpenConnectionQuickOpen, cx| {
         let Some(active_window) = cx.active_window() else {
@@ -1124,6 +1126,19 @@ fn init_action_handlers(cx: &mut App) {
                 });
             });
         });
+    });
+}
+
+fn close_active_window(cx: &mut App) {
+    let Some(active_window) = crate::app_init::resolve_active_non_main_window(cx) else {
+        return;
+    };
+    if remote_file_editor::request_close_window_if_editor(active_window, cx) {
+        return;
+    }
+
+    cx.defer(move |cx| {
+        let _ = active_window.update(cx, |_, window, _| window.remove_window());
     });
 }
 
@@ -1812,6 +1827,28 @@ mod tests {
                 .matches("home_page.read(cx).startup_master_key_lock_active(cx)")
                 .count()
         );
+    }
+
+    #[test]
+    fn ctrl_w_closes_only_the_active_auxiliary_window() {
+        let source = include_str!("onetcli_app.rs");
+        let keybindings = source
+            .split("fn init_keybindings(")
+            .nth(1)
+            .and_then(|source| source.split("\nfn refreshable_keybindings").next())
+            .expect("init_keybindings source");
+        let close_handler = source
+            .split("fn close_active_window(")
+            .nth(1)
+            .and_then(|source| source.split("\n}\n\n").next())
+            .expect("close_active_window source");
+
+        assert!(keybindings.contains("action_id::WINDOW_CLOSE_ACTIVE_WINDOW"));
+        assert!(keybindings.contains("CloseActiveWindow"));
+        assert!(!keybindings.contains("ClosePanel"));
+        assert!(close_handler.contains("resolve_active_non_main_window(cx)"));
+        assert!(close_handler.contains("request_close_window_if_editor"));
+        assert!(close_handler.contains("window.remove_window()"));
     }
 
     #[test]

@@ -3062,9 +3062,9 @@ Settings:
       zh-CN: 切换面板缩放
       zh-HK: 切換面板縮放
     close_panel:
-      en: Close Panel
-      zh-CN: 关闭面板
-      zh-HK: 關閉面板
+      en: Close Active Window
+      zh-CN: 关闭当前窗口
+      zh-HK: 關閉目前視窗
     toggle_connection_sidebar:
       en: Toggle Connection Sidebar
       zh-CN: 切换连接树

@@ -148,6 +148,32 @@ fn clear_editor_window() {
     }
 }
 
+pub fn request_close_window_if_editor(window_handle: AnyWindowHandle, cx: &mut App) -> bool {
+    let Some(editor_window) = current_editor_window() else {
+        return false;
+    };
+    if editor_window.window != window_handle {
+        return false;
+    }
+
+    cx.defer(move |cx| {
+        let result = window_handle.update(cx, |_, window, cx| {
+            if editor_window
+                .view
+                .update(cx, |this, cx| this.request_close_window(window, cx))
+                .is_err()
+            {
+                clear_editor_window();
+                window.remove_window();
+            }
+        });
+        if result.is_err() {
+            clear_editor_window();
+        }
+    });
+    true
+}
+
 fn init_keybindings(cx: &mut App) {
     REMOTE_EDITOR_KEYBINDINGS_INIT.call_once(|| {
         cx.bind_keys(init_keybinding_items(cx));
@@ -660,6 +686,12 @@ impl RemoteFileEditorWindow {
                 self.show_unsaved_changes_prompt(PendingCloseAction::Window, window, cx);
                 false
             }
+        }
+    }
+
+    fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.handle_window_should_close(window, cx) {
+            window.remove_window();
         }
     }
 
