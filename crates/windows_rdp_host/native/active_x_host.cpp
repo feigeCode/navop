@@ -4,6 +4,7 @@
 
 #include <atlbase.h>
 #include <atlhost.h>
+#include <ocidl.h>
 
 #include "mstscax.tlh"
 
@@ -15,8 +16,17 @@ namespace {
 
 constexpr wchar_t kNativeHostWindowClassName[] =
     L"Navop.WindowsRdpHost.Container";
-constexpr wchar_t kRdpControlClassName[] =
-    L"CLSID:{945EE98E-B376-4EC2-B2E5-64C9410F93B7}";
+
+// 1Remote deliberately hosts the broadly deployed
+// MsRdpClient9NotSafeForScripting control instead of the newest RDP control.
+// Keep the native smoke host on the same conservative control generation
+// until the GPUI/ActiveX hosting path is proven on real Windows machines.
+constexpr CLSID kMsRdpClient9NotSafeForScriptingClsid = {
+    0x8b918b82,
+    0x7985,
+    0x4c24,
+    {0x89, 0xdf, 0xc3, 0x3a, 0xd2, 0xbb, 0xfb, 0xcd},
+};
 
 LRESULT CALLBACK native_host_window_procedure(
     HWND window,
@@ -50,7 +60,7 @@ struct ActiveXCleanup {
     HWND control_window = nullptr;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
-    CComPtr<IMsRdpClient10> client;
+    CComPtr<IMsRdpClient9> client;
     NativeRdpEventSubscription* event_subscription = nullptr;
 
     ~ActiveXCleanup() noexcept {
@@ -268,18 +278,18 @@ NavopRdpResult create_active_x_resources(
             static_cast<uint32_t>(win32_code));
     }
 
-    // ATL's hosting helpers require an AtlAxWin host. Passing the custom
-    // container HWND directly to AtlAxCreateControlEx caused an access
-    // violation on Windows. Create the real ATL host with the RDP CLSID as
-    // its window name so the control is installed during WM_CREATE, avoiding
-    // both the invalid custom-host call and the empty AtlAxWin intermediate
-    // state that previously stalled on some systems.
+    // Create an empty real ATL host first. ActiveX construction must not run
+    // from the AtlAxWin WM_CREATE callback: that callback previously crossed
+    // into the GPUI window stack and either terminated the process or stalled
+    // without diagnostics. The inert native parent keeps ATL notifications
+    // away from GPUI, while the explicit CoCreateInstance/AtlAxAttachControl
+    // sequence mirrors the object-first lifecycle used by WinForms AxHost.
     SetLastError(ERROR_SUCCESS);
     trace_native_stage("create.control_window.before");
     resources->state.control_window = CreateWindowExW(
         WS_EX_NOPARENTNOTIFY,
         TEXT(ATLAXWIN_CLASS),
-        kRdpControlClassName,
+        L"",
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         0,
         0,
@@ -304,12 +314,14 @@ NavopRdpResult create_active_x_resources(
             static_cast<uint32_t>(win32_code));
     }
 
-    trace_native_stage("create.get_control.before");
-    const HRESULT control_result = AtlAxGetControl(
-        resources->state.control_window,
-        &resources->state.control);
+    trace_native_stage("create.control_instance.before");
+    const HRESULT control_result = CoCreateInstance(
+        kMsRdpClient9NotSafeForScriptingClsid,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&resources->state.control));
     trace_native_hresult(
-        "create.get_control.after",
+        "create.control_instance.after",
         static_cast<int32_t>(control_result));
     if (FAILED(control_result) || resources->state.control == nullptr) {
         if (FAILED(control_result)) {
@@ -318,27 +330,6 @@ NavopRdpResult create_active_x_resources(
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
                 NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
                 static_cast<int32_t>(control_result));
-        }
-        return record_last_stage_error(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL);
-    }
-
-    trace_native_stage("create.get_host.before");
-    const HRESULT host_result = AtlAxGetHost(
-        resources->state.control_window,
-        &resources->state.container);
-    trace_native_hresult(
-        "create.get_host.after",
-        static_cast<int32_t>(host_result));
-    if (FAILED(host_result) || resources->state.container == nullptr) {
-        if (FAILED(host_result)) {
-            return record_last_stage_hresult(
-                owner,
-                NAVOP_RDP_RESULT_INTERNAL_ERROR,
-                NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
-                static_cast<int32_t>(host_result));
         }
         return record_last_stage_error(
             owner,
@@ -388,21 +379,49 @@ NavopRdpResult create_active_x_resources(
             NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE);
     }
 
-    trace_native_stage("create.set_ui_parent.before");
-    const HRESULT ui_parent_result =
-        non_scriptable->put_UIParentWindowHandle(
-            reinterpret_cast<wireHWND>(parent));
+    // AtlAxAttachControl treats the supplied object as already initialized and
+    // deliberately skips IPersistStreamInit::InitNew. WinForms AxHost, which
+    // 1Remote uses, initializes a newly created control before it starts the
+    // event sinks and activates the control. Reproduce that required step
+    // explicitly before handing the object to ATL.
+    CComPtr<IPersistStreamInit> persist_stream_init;
+    trace_native_stage("create.query_persist_stream_init.before");
+    const HRESULT persist_query_result =
+        resources->state.control->QueryInterface(
+            IID_PPV_ARGS(&persist_stream_init));
     trace_native_hresult(
-        "create.set_ui_parent.after",
-        static_cast<int32_t>(ui_parent_result));
-    if (FAILED(ui_parent_result)) {
+        "create.query_persist_stream_init.after",
+        static_cast<int32_t>(persist_query_result));
+    if (FAILED(persist_query_result) || persist_stream_init == nullptr) {
+        if (FAILED(persist_query_result)) {
+            return record_last_stage_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
+                static_cast<int32_t>(persist_query_result));
+        }
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL);
+    }
+
+    trace_native_stage("create.initialize_control.before");
+    const HRESULT initialize_result = persist_stream_init->InitNew();
+    trace_native_hresult(
+        "create.initialize_control.after",
+        static_cast<int32_t>(initialize_result));
+    if (FAILED(initialize_result)) {
         return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            NAVOP_RDP_CREATE_STAGE_SET_PARENT,
-            static_cast<int32_t>(ui_parent_result));
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
+            static_cast<int32_t>(initialize_result));
     }
 
+    // 1Remote registers managed event handlers before EndInit/CreateControl.
+    // AxHost turns those handlers into COM event sinks after initialization.
+    // Advise after InitNew but before ATL's in-place activation.
     trace_native_stage("create.event_subscription.before");
     const NavopRdpResult subscription_result = create_event_subscription(
         owner,
@@ -420,6 +439,43 @@ NavopRdpResult create_active_x_resources(
             owner->has_last_hresult,
             owner->last_win32_code,
             owner->has_last_win32_code);
+    }
+
+    trace_native_stage("create.attach_control.before");
+    const HRESULT attach_result = AtlAxAttachControl(
+        resources->state.control,
+        resources->state.control_window,
+        &resources->state.container);
+    trace_native_hresult(
+        "create.attach_control.after",
+        static_cast<int32_t>(attach_result));
+    if (FAILED(attach_result) || resources->state.container == nullptr) {
+        if (FAILED(attach_result)) {
+            return record_last_stage_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
+                static_cast<int32_t>(attach_result));
+        }
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL);
+    }
+
+    trace_native_stage("create.set_ui_parent.before");
+    const HRESULT ui_parent_result =
+        non_scriptable->put_UIParentWindowHandle(
+            reinterpret_cast<wireHWND>(parent));
+    trace_native_hresult(
+        "create.set_ui_parent.after",
+        static_cast<int32_t>(ui_parent_result));
+    if (FAILED(ui_parent_result)) {
+        return record_last_stage_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_SET_PARENT,
+            static_cast<int32_t>(ui_parent_result));
     }
 
     *out_resources = resources.release();

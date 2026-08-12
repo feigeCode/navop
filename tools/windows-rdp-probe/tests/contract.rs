@@ -82,10 +82,13 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
             "#include \"mstscax.tlh\"",
             "AtlAxWinInit",
             "L\"AtlAxWin\"",
-            "AtlAxCreateControlEx",
-            "945EE98E-B376-4EC2-B2E5-64C9410F93B7",
+            "CoCreateInstance",
+            "AtlAxAttachControl",
+            "8B918B82-7985-4C24-89DF-C33AD2BBFBCD",
+            "CComPtr<IPersistStreamInit>",
+            "persist_stream_init->InitNew()",
             "B2B3FA47-3F11-4148-AD24-DFF8684A16D0",
-            "IMsRdpClient10",
+            "IMsRdpClient9",
             "CComPtr<IUnknown>",
             "QueryInterface",
             "get_Version",
@@ -104,11 +107,13 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
         &[
             "IMsRdpClient11",
             "IMsRdpClient12",
+            "IMsRdpClient10",
             "#include <mstscax.h>",
             "#include \"mstscax.h\"",
             "#import \"mstscax.dll\"",
             "#import <mstscax.dll>",
             "CLSID_MsRdpClient12",
+            "AtlAxCreateControlEx",
             "ATLAXWIN_CLASS,",
             "ATLAXWIN_CLASSW",
             "CComPtr<IMsRdpClientNonScriptable8>",
@@ -138,18 +143,18 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
 }
 
 #[test]
-fn native_probe_uses_the_published_msrdpclient12_and_nonscriptable8_guids() {
+fn native_probe_uses_the_1remote_msrdpclient9_and_nonscriptable8_guids() {
     let path = "tools/windows-rdp-probe/native/windows_rdp_probe.cpp";
 
     assert_tokens_in_scope(
         path,
-        "constexpr CLSID kMsRdpClient12Clsid = {",
+        "constexpr CLSID kMsRdpClient9NotSafeForScriptingClsid = {",
         "\n};",
         &[
-            "0x945ee98e",
-            "0xb376",
-            "0x4ec2",
-            "{0xb2, 0xe5, 0x64, 0xc9, 0x41, 0x0f, 0x93, 0xb7}",
+            "0x8b918b82",
+            "0x7985",
+            "0x4c24",
+            "{0x89, 0xdf, 0xc3, 0x3a, 0xd2, 0xbb, 0xfb, 0xcd}",
         ],
     );
     assert_tokens_in_scope(
@@ -174,7 +179,7 @@ fn optional_nonscriptable8_probe_uses_an_explicit_iid_without_a_generated_vtable
         "int inspect_control(IUnknown* control) {",
         "\n}\n\nint run_probe",
         &[
-            "CComPtr<IMsRdpClient10>",
+            "CComPtr<IMsRdpClient9>",
             "IID_PPV_ARGS(&client)",
             "CComPtr<IUnknown>",
             "QueryInterface",

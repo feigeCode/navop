@@ -5,6 +5,7 @@
 
 #include <atlbase.h>
 #include <atlhost.h>
+#include <ocidl.h>
 
 #import "libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489" \
     raw_interfaces_only, named_guids, no_namespace, exclude("UINT_PTR")
@@ -16,12 +17,13 @@
 
 namespace {
 
-// MsRdpClient12 CLSID: 945EE98E-B376-4EC2-B2E5-64C9410F93B7
-constexpr CLSID kMsRdpClient12Clsid = {
-    0x945ee98e,
-    0xb376,
-    0x4ec2,
-    {0xb2, 0xe5, 0x64, 0xc9, 0x41, 0x0f, 0x93, 0xb7},
+// MsRdpClient9NotSafeForScripting CLSID:
+// 8B918B82-7985-4C24-89DF-C33AD2BBFBCD
+constexpr CLSID kMsRdpClient9NotSafeForScriptingClsid = {
+    0x8b918b82,
+    0x7985,
+    0x4c24,
+    {0x89, 0xdf, 0xc3, 0x3a, 0xd2, 0xbb, 0xfb, 0xcd},
 };
 
 // IMsRdpClientNonScriptable8 IID: B2B3FA47-3F11-4148-AD24-DFF8684A16D0
@@ -138,24 +140,31 @@ HWND create_host_window(HWND parent) {
 }
 
 HRESULT create_rdp_control(ProbeResources& resources) {
-    LPOLESTR class_id = nullptr;
-    HRESULT result = StringFromCLSID(kMsRdpClient12Clsid, &class_id);
+    HRESULT result = CoCreateInstance(
+        kMsRdpClient9NotSafeForScriptingClsid,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&resources.control));
     if (FAILED(result)) {
         return result;
     }
 
-    std::wstring control_name = L"CLSID:";
-    control_name += class_id;
-    CoTaskMemFree(class_id);
+    CComPtr<IPersistStreamInit> persist_stream_init;
+    result = resources.control->QueryInterface(
+        IID_PPV_ARGS(&persist_stream_init));
+    if (FAILED(result)) {
+        return result;
+    }
 
-    return AtlAxCreateControlEx(
-        control_name.c_str(),
+    result = persist_stream_init->InitNew();
+    if (FAILED(result)) {
+        return result;
+    }
+
+    return AtlAxAttachControl(
+        resources.control,
         resources.host,
-        nullptr,
-        &resources.container,
-        &resources.control,
-        IID_NULL,
-        nullptr);
+        &resources.container);
 }
 
 bool read_loaded_dll_version(
@@ -212,10 +221,10 @@ bool read_loaded_dll_version(
 }
 
 int inspect_control(IUnknown* control) {
-    CComPtr<IMsRdpClient10> client;
+    CComPtr<IMsRdpClient9> client;
     HRESULT result = control->QueryInterface(IID_PPV_ARGS(&client));
     if (FAILED(result)) {
-        log_hresult("query-imsrdpclient10", "error", result);
+        log_hresult("query-imsrdpclient9", "error", result);
         return 7;
     }
 
@@ -292,7 +301,10 @@ int run_probe(ProbeResources& resources) {
 
     result = create_rdp_control(resources);
     if (FAILED(result)) {
-        log_hresult("create-msrdpclient12", "unavailable", result);
+        log_hresult(
+            "create-msrdpclient9-not-safe-for-scripting",
+            "unavailable",
+            result);
         return 6;
     }
 
