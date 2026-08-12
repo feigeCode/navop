@@ -419,7 +419,9 @@ impl ExternalDbConnection {
 }
 
 fn max_rows_to_u64(max_rows: Option<usize>) -> Option<u64> {
-    max_rows.map(|rows| u64::try_from(rows).unwrap_or(u64::MAX))
+    max_rows
+        .filter(|rows| *rows > 0)
+        .map(|rows| u64::try_from(rows).unwrap_or(u64::MAX))
 }
 
 /// 用 SQL 前缀判断是 SELECT-like 还是 DDL/DML。
@@ -1134,6 +1136,13 @@ mod tests {
         .unwrap();
         driver.dialect.compatible_database_type = compatible;
         driver
+    }
+
+    #[test]
+    fn max_rows_to_u64_treats_zero_as_unlimited() {
+        assert_eq!(None, max_rows_to_u64(None));
+        assert_eq!(None, max_rows_to_u64(Some(0)));
+        assert_eq!(Some(25), max_rows_to_u64(Some(25)));
     }
 
     #[test]

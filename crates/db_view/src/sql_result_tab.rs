@@ -1,7 +1,7 @@
 // 2. 外部 crate 导入（按字母顺序）
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -30,10 +30,12 @@ use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use ai_chat_view::AskAiButton;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
+use parking_lot::Mutex;
 // 3. 当前 crate 导入（按模块分组）
 use db::{GlobalDbState, SqlErrorInfo, SqlResult, SqlSource};
 use gpui_component::checkbox::Checkbox;
 use rust_i18n::t;
+use tokio_util::sync::CancellationToken;
 
 // Structure to hold a single SQL result with its metadata
 #[derive(Clone)]
@@ -86,6 +88,7 @@ struct ResultsBatchUpdate {
     current: usize,
     total: usize,
     execution: ResultExecutionContext,
+    generation: u64,
 }
 
 struct ResultsBatchRender {
@@ -199,6 +202,10 @@ pub struct SqlResultTabContainer {
     pub execution_start: Entity<Option<Instant>>,
     /// 停止计时器的标志
     timer_stop_flag: Arc<AtomicBool>,
+    /// 当前执行的取消令牌
+    execution_cancellation: Arc<Mutex<Option<CancellationToken>>>,
+    /// 执行代次，用于阻止已取消任务覆盖后续查询状态
+    execution_generation: Arc<AtomicU64>,
 }
 
 impl SqlResultTabContainer {
@@ -215,6 +222,8 @@ impl SqlResultTabContainer {
         let total_elapsed_ms = cx.new(|_| 0.0);
         let execution_start = cx.new(|_| None);
         let timer_stop_flag = Arc::new(AtomicBool::new(false));
+        let execution_cancellation = Arc::new(Mutex::new(None));
+        let execution_generation = Arc::new(AtomicU64::new(0));
         SqlResultTabContainer {
             result_tabs,
             active_result_tab,
@@ -228,11 +237,68 @@ impl SqlResultTabContainer {
             total_elapsed_ms,
             execution_start,
             timer_stop_flag,
+            execution_cancellation,
+            execution_generation,
         }
     }
 }
 
 impl SqlResultTabContainer {
+    fn begin_execution(&mut self) -> (u64, CancellationToken) {
+        if let Some(cancellation) = self.execution_cancellation.lock().take() {
+            cancellation.cancel();
+        }
+        let generation = self.execution_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let cancellation = CancellationToken::new();
+        *self.execution_cancellation.lock() = Some(cancellation.clone());
+        (generation, cancellation)
+    }
+
+    fn is_current_execution(&self, generation: u64) -> bool {
+        self.execution_generation.load(Ordering::SeqCst) == generation
+    }
+
+    fn finish_execution(&self, generation: u64) {
+        if self.is_current_execution(generation) {
+            self.execution_cancellation.lock().take();
+        }
+    }
+
+    /// 取消当前 SQL 执行。返回是否确实存在运行中的任务。
+    pub fn cancel_execution(&mut self, cx: &mut App) -> bool {
+        if !self.is_executing(cx) {
+            return false;
+        }
+
+        self.execution_generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(cancellation) = self.execution_cancellation.lock().take() {
+            cancellation.cancel();
+        }
+        self.timer_stop_flag.store(true, Ordering::SeqCst);
+
+        let elapsed_ms = self
+            .execution_start
+            .read(cx)
+            .as_ref()
+            .map(|start| start.elapsed().as_millis() as f64);
+        self.execution_start.update(cx, |start, cx| {
+            *start = None;
+            cx.notify();
+        });
+        self.execution_state.update(cx, |state, cx| {
+            *state = ExecutionState::Completed;
+            cx.notify();
+        });
+        if let Some(elapsed_ms) = elapsed_ms {
+            self.total_elapsed_ms.update(cx, |elapsed, cx| {
+                *elapsed = elapsed_ms;
+                cx.notify();
+            });
+        }
+
+        true
+    }
+
     pub fn handle_run_query(
         &mut self,
         sql: String,
@@ -246,6 +312,7 @@ impl SqlResultTabContainer {
         let connection_id_clone = connection_id.clone();
         let database_clone = current_database_value.clone();
         let schema_clone = current_schema_value.clone();
+        let (generation, cancellation) = self.begin_execution();
 
         self.clear_results(cx);
 
@@ -338,18 +405,22 @@ impl SqlResultTabContainer {
                 max_rows,
                 ..Default::default()
             };
-            let mut rx = match global_state.execute_streaming(
+            let mut rx = match global_state.execute_streaming_cancellable(
                 cx,
                 connection_id_clone.clone(),
                 SqlSource::Script(sql.clone()),
                 current_database_value,
                 current_schema_value,
                 Some(exec_opts),
+                cancellation,
             ) {
                 Ok(receiver) => receiver,
                 Err(e) => {
                     error!("Error starting streaming execution: {:?}", e);
                     cx.update(|cx| {
+                        if !clone_self.is_current_execution(generation) {
+                            return;
+                        }
                         // 停止计时器
                         clone_self.timer_stop_flag.store(true, Ordering::SeqCst);
                         // 清除开始时间
@@ -361,6 +432,7 @@ impl SqlResultTabContainer {
                             *state = ExecutionState::Idle;
                             cx.notify();
                         });
+                        clone_self.finish_execution(generation);
                     });
                     return None;
                 }
@@ -387,6 +459,9 @@ impl SqlResultTabContainer {
                     Some(p) => p,
                     None => break,
                 };
+                if !clone_self.is_current_execution(generation) {
+                    return None;
+                }
 
                 let (current, total) = (progress.current, progress.total);
                 let result = progress.result;
@@ -413,6 +488,7 @@ impl SqlResultTabContainer {
                             current,
                             total,
                             execution: execution.clone(),
+                            generation,
                         },
                         cx,
                     );
@@ -423,6 +499,9 @@ impl SqlResultTabContainer {
             if !pending_results.is_empty() {
                 let results_to_send = pending_results;
                 cx.update(|cx| {
+                    if !clone_self.is_current_execution(generation) {
+                        return;
+                    }
                     if let Some(window_id) = cx.active_window() {
                         if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
                             clone_self.add_streaming_results_batch(
@@ -443,6 +522,9 @@ impl SqlResultTabContainer {
             // 最终状态更新
             let total_elapsed = execution_start.elapsed().as_secs_f64();
             cx.update(|cx| {
+                if !clone_self.is_current_execution(generation) {
+                    return;
+                }
                 // 停止计时器
                 clone_self.timer_stop_flag.store(true, Ordering::SeqCst);
 
@@ -472,6 +554,7 @@ impl SqlResultTabContainer {
                         clone_self.tab_scroll_handle.scroll_to_item(active_idx);
                     }
                 }
+                clone_self.finish_execution(generation);
             });
             Some(())
         })
@@ -481,6 +564,7 @@ impl SqlResultTabContainer {
     pub(crate) fn handle_run_query_with_session(&mut self, request: SessionSqlRun, cx: &mut App) {
         let clone_self = self.clone();
         let execution_start = Instant::now();
+        let (generation, cancellation) = self.begin_execution();
 
         self.clear_results(cx);
         self.timer_stop_flag.store(true, Ordering::SeqCst);
@@ -522,13 +606,30 @@ impl SqlResultTabContainer {
             };
             let session_id = request.session_id.clone();
             let sql = request.sql.clone();
-            let results = match Tokio::spawn_result(cx, async move {
-                global_state
+            let execution_state = global_state.clone();
+            let execution_task = Tokio::spawn_result(cx, async move {
+                execution_state
                     .execute_session(session_id, sql, Some(exec_opts))
                     .await
-            })
-            .await
-            {
+            });
+            let execution_result = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => None,
+                result = execution_task => Some(result),
+            };
+            let Some(execution_result) = execution_result else {
+                if let Err(error) = global_state
+                    .close_session(cx, request.session_id.clone())
+                    .await
+                {
+                    error!(
+                        "Failed to close cancelled manual transaction session: {:?}",
+                        error
+                    );
+                }
+                return None;
+            };
+            let results = match execution_result {
                 Ok(results) => results,
                 Err(error) => vec![SqlResult::Error(SqlErrorInfo {
                     sql: request.sql.clone(),
@@ -548,6 +649,9 @@ impl SqlResultTabContainer {
             };
 
             cx.update(|cx| {
+                if !clone_self.is_current_execution(generation) {
+                    return;
+                }
                 if let Some(window_id) = cx.active_window() {
                     if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
                         clone_self.add_streaming_results_batch(
@@ -579,6 +683,7 @@ impl SqlResultTabContainer {
                     });
                     clone_self.tab_scroll_handle.scroll_to_item(1);
                 }
+                clone_self.finish_execution(generation);
             });
             Some(())
         })
@@ -610,6 +715,9 @@ impl SqlResultTabContainer {
 
     fn update_results_batch(&self, update: ResultsBatchUpdate, cx: &mut AsyncApp) {
         cx.update(|cx| {
+            if !self.is_current_execution(update.generation) {
+                return;
+            }
             if let Some(window_id) = cx.active_window() {
                 if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
                     self.execution_state.update(cx, |state, cx| {

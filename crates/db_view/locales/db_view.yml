@@ -1283,6 +1283,10 @@ Query:
     en: Running...
     zh-CN: 运行中...
     zh-HK: 執行中...
+  stop:
+    en: Stop
+    zh-CN: 停止
+    zh-HK: 停止
   run_selected:
     en: Run Selected
     zh-CN: 运行选中

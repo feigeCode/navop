@@ -651,6 +651,23 @@ fn can_switch_query_connection(is_executing: bool, has_manual_transaction: bool)
     !is_executing && !has_manual_transaction
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryToolbarAction {
+    Run,
+    RunSelected,
+    Stop,
+}
+
+fn query_toolbar_action(is_executing: bool, has_selection: bool) -> QueryToolbarAction {
+    if is_executing {
+        QueryToolbarAction::Stop
+    } else if has_selection {
+        QueryToolbarAction::RunSelected
+    } else {
+        QueryToolbarAction::Run
+    }
+}
+
 fn is_current_query_context_generation(expected: u64, current: u64) -> bool {
     expected == current
 }
@@ -1838,6 +1855,15 @@ impl SqlEditorTab {
         self.execute_sql_text(sql, window, cx);
     }
 
+    fn handle_stop_query(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let cancelled = self
+            .sql_result_tab_container
+            .update(cx, |container, cx| container.cancel_execution(cx));
+        if cancelled && self.manual_transaction.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn handle_run_current_query_action(
         &mut self,
         _: &RunCurrentQuery,
@@ -2340,6 +2366,7 @@ impl SqlEditorTab {
 
         // Check if there is selected text in the editor
         let has_selection = !self.editor.read(cx).get_selected_text(cx).trim().is_empty();
+        let toolbar_action = query_toolbar_action(is_query_executing, has_selection);
 
         v_flex()
             .size_full()
@@ -2417,21 +2444,26 @@ impl SqlEditorTab {
                                 .on_click(cx.listener(Self::handle_rollback_transaction)),
                         )
                     })
-                    .child(
-                        Button::new("run-query")
+                    .child(match toolbar_action {
+                        QueryToolbarAction::Stop => Button::new("stop-query")
+                            .with_size(Size::Small)
+                            .danger()
+                            .label(t!("Query.stop"))
+                            .icon(IconName::CircleX)
+                            .on_click(cx.listener(Self::handle_stop_query)),
+                        QueryToolbarAction::RunSelected => Button::new("run-query")
                             .with_size(Size::Small)
                             .primary()
-                            .loading(is_query_executing)
-                            .label(if is_query_executing {
-                                t!("Query.running")
-                            } else if has_selection {
-                                t!("Query.run_selected")
-                            } else {
-                                t!("Query.run")
-                            })
+                            .label(t!("Query.run_selected"))
                             .icon(IconName::ArrowRight)
                             .on_click(cx.listener(Self::handle_run_query)),
-                    )
+                        QueryToolbarAction::Run => Button::new("run-query")
+                            .with_size(Size::Small)
+                            .primary()
+                            .label(t!("Query.run"))
+                            .icon(IconName::ArrowRight)
+                            .on_click(cx.listener(Self::handle_run_query)),
+                    })
                     .child(
                         Button::new("explain-sql")
                             .with_size(Size::Small)
@@ -2671,15 +2703,15 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManualTransactionAction, ManualTransactionSession, QueryFileNameError,
+        ManualTransactionAction, ManualTransactionSession, QueryFileNameError, QueryToolbarAction,
         RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
         SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment,
         can_switch_query_connection, initial_database_select_value,
         is_current_query_context_generation, manual_transaction_control_sql,
         query_connection_context_label, query_connection_ids, query_file_path_for_name,
-        should_render_schema_select, sql_text_for_run_all, sql_text_for_run_current,
-        sql_text_for_run_cursor_statement, sql_text_for_toolbar_run, supports_manual_transactions,
-        toggle_sql_line_comments, write_new_sql_file, write_sql_file,
+        query_toolbar_action, should_render_schema_select, sql_text_for_run_all,
+        sql_text_for_run_current, sql_text_for_run_cursor_statement, sql_text_for_toolbar_run,
+        supports_manual_transactions, toggle_sql_line_comments, write_new_sql_file, write_sql_file,
     };
     use db::DbManager;
     use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
@@ -3126,6 +3158,17 @@ mod tests {
         assert!(!supports_manual_transactions(&DatabaseType::External {
             driver_id: "demo".to_string(),
         }));
+    }
+
+    #[test]
+    fn executing_query_toolbar_action_is_stop_and_remains_clickable() {
+        assert_eq!(QueryToolbarAction::Stop, query_toolbar_action(true, false));
+        assert_eq!(QueryToolbarAction::Stop, query_toolbar_action(true, true));
+        assert_eq!(
+            QueryToolbarAction::RunSelected,
+            query_toolbar_action(false, true)
+        );
+        assert_eq!(QueryToolbarAction::Run, query_toolbar_action(false, false));
     }
 
     #[test]

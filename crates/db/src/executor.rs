@@ -62,7 +62,7 @@ pub(crate) fn apply_query_max_rows(
     max_rows: Option<usize>,
     is_query: bool,
 ) -> Cow<'_, str> {
-    let Some(max_rows) = max_rows else {
+    let Some(max_rows) = max_rows.filter(|rows| *rows > 0) else {
         return Cow::Borrowed(sql);
     };
     let Some(tokens) = simple_select_tokens(&db_type, sql) else {
@@ -393,6 +393,10 @@ mod tests {
         assert_eq!(
             "select * from users",
             apply_query_max_rows(DatabaseType::MySQL, "select * from users", None, true)
+        );
+        assert_eq!(
+            "select * from users",
+            apply_query_max_rows(DatabaseType::MySQL, "select * from users", Some(0), true)
         );
         assert_eq!(
             "show tables",

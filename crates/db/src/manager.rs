@@ -34,6 +34,7 @@ type ExternalRegistryReloader = dyn Fn() -> IpcDriverRegistry + Send + Sync;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, RwLock, mpsc};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 const BUSY_CLOSE_ON_RELEASE_RETRY_DELAY: Duration = Duration::from_millis(10);
@@ -890,6 +891,7 @@ struct StreamingExecutionRequest {
     tx: mpsc::Sender<StreamingProgress>,
     cache: Option<GlobalNodeCache>,
     cache_invalidation: StreamingCacheInvalidation,
+    cancellation: CancellationToken,
 }
 
 enum StreamingCacheInvalidation {
@@ -934,14 +936,19 @@ impl StreamingExecutionRequest {
             }
         };
 
-        let exec_result = self.execute_on_session(&session_id, plugin.as_ref()).await;
+        let cancellation = self.cancellation.clone();
+        let exec_result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => None,
+            result = self.execute_on_session(&session_id, plugin.as_ref()) => Some(result),
+        };
         let _ = self
             .state
             .connection_manager
             .close_session(&session_id)
             .await;
 
-        if let Err(error) = exec_result {
+        if let Some(Err(error)) = exec_result {
             error!("Streaming execution error: {error}");
             send_streaming_error(&self.tx, error.to_string(), total_size).await;
         }
@@ -1685,6 +1692,31 @@ impl GlobalDbState {
         schema: Option<String>,
         opts: Option<ExecOptions>,
     ) -> anyhow::Result<mpsc::Receiver<StreamingProgress>> {
+        self.execute_streaming_cancellable(
+            cx,
+            connection_id,
+            source,
+            database,
+            schema,
+            opts,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Execute SQL with streaming progress and an externally controlled cancellation token.
+    ///
+    /// Cancelling the token drops the in-flight driver future, closes the temporary session,
+    /// and then closes the progress channel.
+    pub fn execute_streaming_cancellable(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        source: SqlSource,
+        database: Option<String>,
+        schema: Option<String>,
+        opts: Option<ExecOptions>,
+        cancellation: CancellationToken,
+    ) -> anyhow::Result<mpsc::Receiver<StreamingProgress>> {
         let (tx, rx) = mpsc::channel::<StreamingProgress>(100);
         let mut config = self
             .get_config(&connection_id)
@@ -1716,6 +1748,7 @@ impl GlobalDbState {
             tx,
             cache,
             cache_invalidation,
+            cancellation,
         };
         let execution_task = Tokio::spawn(cx, request.run());
 
@@ -3044,9 +3077,17 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use tokio::sync::mpsc;
+
+    struct StreamingDropMarker(Arc<AtomicBool>);
+
+    impl Drop for StreamingDropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     struct MockConnection {
         config: DbConnectionConfig,
@@ -3054,6 +3095,8 @@ mod tests {
         disconnect_count: Arc<AtomicUsize>,
         executed_sql: Option<Arc<StdMutex<Vec<String>>>>,
         switched_schemas: Option<Arc<StdMutex<Vec<String>>>>,
+        streaming_started: Option<Arc<AtomicBool>>,
+        streaming_dropped: Option<Arc<AtomicBool>>,
     }
 
     impl MockConnection {
@@ -3064,6 +3107,8 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: None,
                 switched_schemas: None,
+                streaming_started: None,
+                streaming_dropped: None,
             }
         }
 
@@ -3078,6 +3123,8 @@ mod tests {
                 disconnect_count,
                 executed_sql: None,
                 switched_schemas: None,
+                streaming_started: None,
+                streaming_dropped: None,
             }
         }
 
@@ -3091,6 +3138,8 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: Some(executed_sql),
                 switched_schemas: None,
+                streaming_started: None,
+                streaming_dropped: None,
             }
         }
 
@@ -3104,6 +3153,25 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: None,
                 switched_schemas: Some(switched_schemas),
+                streaming_started: None,
+                streaming_dropped: None,
+            }
+        }
+
+        fn with_blocking_streaming(
+            config: DbConnectionConfig,
+            disconnect_count: Arc<AtomicUsize>,
+            streaming_started: Arc<AtomicBool>,
+            streaming_dropped: Arc<AtomicBool>,
+        ) -> Self {
+            Self {
+                config,
+                healthy: true,
+                disconnect_count,
+                executed_sql: None,
+                switched_schemas: None,
+                streaming_started: Some(streaming_started),
+                streaming_dropped: Some(streaming_dropped),
             }
         }
     }
@@ -3508,6 +3576,15 @@ mod tests {
             _options: ExecOptions,
             sender: mpsc::Sender<StreamingProgress>,
         ) -> Result<(), DbError> {
+            if let (Some(streaming_started), Some(streaming_dropped)) =
+                (&self.streaming_started, &self.streaming_dropped)
+            {
+                let _drop_marker = StreamingDropMarker(streaming_dropped.clone());
+                streaming_started.store(true, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                unreachable!("blocking streaming mock must be cancelled");
+            }
+
             let SqlSource::Script(sql) = source else {
                 return Ok(());
             };
@@ -3847,6 +3924,89 @@ mod tests {
         assert!(
             !tables_cached,
             "SQL files may contain DDL, so connection metadata must be invalidated"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_streaming_execution_drops_query_and_closes_session() {
+        let state = GlobalDbState::new();
+        let config = test_config("streaming-cancel-test");
+
+        let disconnect_count = Arc::new(AtomicUsize::new(0));
+        let streaming_started = Arc::new(AtomicBool::new(false));
+        let streaming_dropped = Arc::new(AtomicBool::new(false));
+
+        let session = ConnectionSession::new(
+            Box::new(MockConnection::with_blocking_streaming(
+                config.clone(),
+                disconnect_count.clone(),
+                streaming_started.clone(),
+                streaming_dropped.clone(),
+            )),
+            format!("{}:session:1", config.id),
+            false,
+        );
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        let cancellation = CancellationToken::new();
+        let (tx, mut progress) = mpsc::channel(1);
+        let request = StreamingExecutionRequest {
+            state: state.clone(),
+            config: config.clone(),
+            source: Some(SqlSource::Script("SELECT pg_sleep(60)".to_string())),
+            schema: Some("public".to_string()),
+            opts: ExecOptions::default(),
+            tx,
+            cache: None,
+            cache_invalidation: StreamingCacheInvalidation::Script(
+                "SELECT pg_sleep(60)".to_string(),
+            ),
+            cancellation: cancellation.clone(),
+        };
+        let execution = tokio::spawn(request.run());
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !streaming_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("streaming execution should start");
+
+        cancellation.cancel();
+
+        tokio::time::timeout(Duration::from_secs(2), execution)
+            .await
+            .expect("cancelled streaming execution should finish")
+            .expect("streaming execution task should not panic");
+        assert!(
+            progress.recv().await.is_none(),
+            "cancelled streaming progress should close"
+        );
+
+        assert!(
+            streaming_dropped.load(Ordering::SeqCst),
+            "cancellation must drop the in-flight driver future"
+        );
+        assert_eq!(
+            1,
+            disconnect_count.load(Ordering::SeqCst),
+            "cancellation must disconnect the temporary session"
+        );
+        assert!(
+            state
+                .connection_manager
+                .list_sessions(&config.id)
+                .await
+                .is_empty(),
+            "cancelled temporary session must be removed from the pool"
         );
     }
 
