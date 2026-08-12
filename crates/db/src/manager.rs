@@ -1000,6 +1000,7 @@ impl StreamingExecutionRequest {
                         script,
                         current_database,
                         self.schema.as_deref(),
+                        &self.config.database_type,
                         Some(&cache_ctx),
                     )
                     .await
@@ -1584,6 +1585,7 @@ impl GlobalDbState {
         let config_id = config.id.clone();
         let current_database = config.database.clone().unwrap_or_default();
         let current_schema = schema_to_switch.clone();
+        let database_type = config.database_type.clone();
         let script_for_ddl = script.clone();
 
         let result = Tokio::spawn_result(cx, async move {
@@ -1655,6 +1657,7 @@ impl GlobalDbState {
                         &script_for_ddl,
                         &current_database,
                         current_schema.as_deref(),
+                        &database_type,
                         cache_ctx.as_ref(),
                     )
                     .await)

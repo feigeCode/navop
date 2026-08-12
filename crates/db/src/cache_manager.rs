@@ -16,6 +16,7 @@ use crate::types::{
 };
 use anyhow::Result;
 use gpui::{App, Global};
+use one_core::storage::DatabaseType;
 use one_core::storage::manager::get_config_dir;
 use std::path::Path;
 use std::sync::Arc;
@@ -440,9 +441,15 @@ impl GlobalNodeCache {
         sql: &str,
         current_database: &str,
         current_schema: Option<&str>,
+        database_type: &DatabaseType,
         cache_ctx: Option<&CacheContext>,
     ) -> Option<(String, String, Option<String>)> {
-        let events = DdlInvalidator::parse_ddl_events(sql, current_database, current_schema);
+        let events = DdlInvalidator::parse_ddl_events_for_database(
+            sql,
+            current_database,
+            current_schema,
+            database_type,
+        );
 
         if events.is_empty() {
             return None;
