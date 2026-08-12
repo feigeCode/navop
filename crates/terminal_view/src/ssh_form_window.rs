@@ -28,7 +28,8 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SshAuthMethod,
-    SshParams, StoredConnection, StoredTerminalEncoding, Workspace, ssh_os_icon,
+    SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType, Workspace,
+    ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -147,6 +148,23 @@ impl SelectItem for TerminalEncodingSelectItem {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TerminalTypeSelectItem {
+    terminal_type: StoredTerminalType,
+}
+
+impl SelectItem for TerminalTypeSelectItem {
+    type Value = StoredTerminalType;
+
+    fn title(&self) -> SharedString {
+        self.terminal_type.label().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.terminal_type
+    }
+}
+
 pub struct SshFormWindow {
     focus_handle: FocusHandle,
     is_editing: bool,
@@ -173,6 +191,7 @@ pub struct SshFormWindow {
     save_password: bool,
     keyboard_interactive: bool,
     terminal_encoding_select: Entity<SelectState<Vec<TerminalEncodingSelectItem>>>,
+    terminal_type_select: Entity<SelectState<Vec<TerminalTypeSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
 
@@ -612,6 +631,16 @@ impl SshFormWindow {
             state.set_selected_value(&StoredTerminalEncoding::Utf8, window, cx);
             state
         });
+        let terminal_type_items = StoredTerminalType::all()
+            .iter()
+            .copied()
+            .map(|terminal_type| TerminalTypeSelectItem { terminal_type })
+            .collect::<Vec<_>>();
+        let terminal_type_select = cx.new(|cx| {
+            let mut state = SelectState::new(terminal_type_items, None, window, cx);
+            state.set_selected_value(&StoredTerminalType::default(), window, cx);
+            state
+        });
 
         let team_select = create_team_select(&config.teams, None, window, cx);
 
@@ -708,6 +737,9 @@ impl SshFormWindow {
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
                 terminal_encoding_select.update(cx, |select, cx| {
                     select.set_selected_value(&params.terminal_encoding, window, cx);
+                });
+                terminal_type_select.update(cx, |select, cx| {
+                    select.set_selected_value(&params.terminal_type, window, cx);
                 });
 
                 // 加载跳板机设置
@@ -816,6 +848,7 @@ impl SshFormWindow {
             save_password,
             keyboard_interactive,
             terminal_encoding_select,
+            terminal_type_select,
             workspace_select,
             team_select,
             enable_jump_server,
@@ -1041,6 +1074,12 @@ impl SshFormWindow {
             keyboard_interactive: (!self.keyboard_interactive).then_some(false),
             terminal_encoding: self
                 .terminal_encoding_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
+            terminal_type: self
+                .terminal_type_select
                 .read(cx)
                 .selected_value()
                 .copied()
@@ -2396,6 +2435,10 @@ impl SshFormWindow {
             .w_full()
             .gap_2()
             .child(self.render_form_row(
+                &t!("SSH.terminal_type"),
+                Select::new(&self.terminal_type_select).w_full(),
+            ))
+            .child(self.render_form_row(
                 &t!("SSH.connect_timeout"),
                 self.render_form_input(&self.connect_timeout_input),
             ))
@@ -2650,7 +2693,9 @@ mod tests {
     use anyhow::Context as _;
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
-    use one_core::storage::{SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding};
+    use one_core::storage::{
+        SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+    };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
     use std::sync::Arc;
@@ -2666,6 +2711,7 @@ mod tests {
             prompt_password: None,
             keyboard_interactive: None,
             terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
             connect_timeout: Some(30),
             keepalive_interval: Some(60),
             keepalive_max: Some(3),
@@ -2757,13 +2803,14 @@ mod tests {
     }
 
     #[gpui::test]
-    fn ssh_form_prefills_and_builds_terminal_encoding(cx: &mut TestAppContext) {
+    fn ssh_form_prefills_and_builds_terminal_settings(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_global(AppSettings::default());
             gpui_component::init(cx);
         });
         let mut params = sample_params();
         params.terminal_encoding = StoredTerminalEncoding::EucJp;
+        params.terminal_type = StoredTerminalType::Xterm;
         let initial_connection = StoredConnection::new_ssh("imported".to_string(), params, None);
         let (form, cx) = cx.add_window_view(|window, cx| {
             super::SshFormWindow::new(
@@ -2783,6 +2830,7 @@ mod tests {
             .read_with(cx, |form, cx| form.build_ssh_params(cx))
             .expect("预填 SSH 表单应能构建参数");
         assert_eq!(built.terminal_encoding, StoredTerminalEncoding::EucJp);
+        assert_eq!(built.terminal_type, StoredTerminalType::Xterm);
     }
 
     #[gpui::test]

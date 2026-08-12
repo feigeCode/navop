@@ -20,6 +20,7 @@ fn ssh_connection(id: i64) -> StoredConnection {
             prompt_password: None,
             keyboard_interactive: None,
             terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
             connect_timeout: Some(12),
             keepalive_interval: Some(20),
             keepalive_max: Some(3),

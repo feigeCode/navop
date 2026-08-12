@@ -86,6 +86,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: Some(12),
                 keepalive_interval: None,
                 keepalive_max: None,

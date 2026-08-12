@@ -122,6 +122,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: Some(15),
                 keepalive_interval: Some(30),
                 keepalive_max: Some(3),

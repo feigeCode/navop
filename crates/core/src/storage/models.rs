@@ -296,6 +296,36 @@ impl StoredTerminalEncoding {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredTerminalType {
+    #[default]
+    #[serde(rename = "xterm-256color")]
+    Xterm256Color,
+    #[serde(rename = "xterm")]
+    Xterm,
+}
+
+impl StoredTerminalType {
+    pub const fn all() -> &'static [Self] {
+        &[Self::Xterm256Color, Self::Xterm]
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Xterm256Color => "xterm-256color",
+            Self::Xterm => "xterm",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        self.as_str()
+    }
+
+    fn is_default(value: &Self) -> bool {
+        *value == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshParams {
     pub host: String,
@@ -316,6 +346,9 @@ pub struct SshParams {
     /// SSH 终端文本编码；旧连接缺少此字段时保持 UTF-8。
     #[serde(default, skip_serializing_if = "StoredTerminalEncoding::is_utf8")]
     pub terminal_encoding: StoredTerminalEncoding,
+    /// SSH PTY 终端类型；旧连接缺少此字段时保持 xterm-256color。
+    #[serde(default, skip_serializing_if = "StoredTerminalType::is_default")]
+    pub terminal_type: StoredTerminalType,
     /// 连接超时（秒）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connect_timeout: Option<u64>,
@@ -1625,6 +1658,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: Some(15),
                 keepalive_interval: Some(30),
                 keepalive_max: Some(3),
@@ -1807,6 +1841,7 @@ mod tests {
             prompt_password: None,
             keyboard_interactive: None,
             terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,
@@ -2621,6 +2656,7 @@ mod serial_tests {
             prompt_password: None,
             keyboard_interactive: None,
             terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,
@@ -2731,6 +2767,7 @@ mod serial_tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,
@@ -2790,6 +2827,26 @@ mod serial_tests {
         assert_eq!(parsed.terminal_encoding, StoredTerminalEncoding::EucJp);
         assert!(StoredTerminalEncoding::all().contains(&StoredTerminalEncoding::EucJp));
         assert_eq!(StoredTerminalEncoding::EucJp.label(), "EUC-JP");
+    }
+
+    #[test]
+    fn ssh_terminal_type_defaults_and_round_trips_through_json() {
+        let mut params: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧连接缺少终端类型字段时应可反序列化");
+        assert_eq!(params.terminal_type, StoredTerminalType::Xterm256Color);
+
+        let default_json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(!default_json.contains("terminal_type"));
+
+        params.terminal_type = StoredTerminalType::Xterm;
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(json.contains("\"terminal_type\":\"xterm\""));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+        assert_eq!(parsed.terminal_type, StoredTerminalType::Xterm);
+        assert_eq!(StoredTerminalType::Xterm.as_str(), "xterm");
     }
 
     #[test]

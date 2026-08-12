@@ -206,6 +206,7 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
             prompt_password: None,
             keyboard_interactive: None,
             terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
             connect_timeout: Some(SSH_CONNECT_TIMEOUT_SECS),
             keepalive_interval: None,
             keepalive_max: None,

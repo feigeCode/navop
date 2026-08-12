@@ -413,6 +413,7 @@ mod sensitive_copy_tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,

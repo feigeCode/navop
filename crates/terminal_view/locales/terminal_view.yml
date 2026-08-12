@@ -253,6 +253,10 @@ SSH:
     en: Terminal Encoding
     zh-CN: 终端字符集
     zh-HK: 終端字元集
+  terminal_type:
+    en: Terminal Type
+    zh-CN: 终端类型
+    zh-HK: 終端類型
   auto_publickey_hint:
     en: Try SSH Agent first, then default private keys under ~/.ssh.
     zh-CN: 将优先尝试 SSH Agent，若不可用则尝试 ~/.ssh 下的默认私钥。

@@ -550,6 +550,8 @@ fn resolve_ssh_connection(
     };
     let keyboard_interactive_enabled = params.keyboard_interactive_enabled();
     let terminal_encoding = params.terminal_encoding.into();
+    let mut pty_config = PtyConfig::default();
+    pty_config.term = params.terminal_type.as_str().to_string();
     let init_commands = build_ssh_init_commands(
         update.working_dir.as_deref(),
         params.default_directory.as_deref(),
@@ -588,7 +590,7 @@ fn resolve_ssh_connection(
     Ok(ResolvedSshConnection {
         config: SshTerminalConfig {
             ssh_config,
-            pty_config: PtyConfig::default(),
+            pty_config,
             terminal_encoding,
             disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
         },
@@ -4530,6 +4532,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: one_core::storage::StoredTerminalType::Xterm,
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,
@@ -4565,6 +4568,7 @@ mod tests {
             resolved.config.ssh_config.auth,
             SshAuth::Password(ref password) if password == "latest-password"
         ));
+        assert_eq!("xterm", resolved.config.pty_config.term);
         assert_eq!(Some(42), resolved.connection_id);
         assert_eq!("Latest SSH", resolved.connection_name);
         assert!(
@@ -4590,6 +4594,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,
@@ -4658,6 +4663,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: Some(false),
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,
@@ -4712,6 +4718,7 @@ mod tests {
                 prompt_password: None,
                 keyboard_interactive: None,
                 terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,
