@@ -1,6 +1,7 @@
 use gpui::{Anchor, AnyElement, IntoElement, ParentElement, Styled, div};
 use gpui_component::{
-    IconName,
+    Disableable, IconName, Sizable,
+    button::Toggle,
     button::{IconButton, IconButtonRole},
     h_flex,
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
@@ -52,11 +53,11 @@ impl PersistentConnectionSidebar {
                 self.home_page.clone(),
                 selected_ids,
             ))
-            .child(clear_selection_button(view))
+            .child(exit_batch_mode_button(view))
             .into_any_element()
     }
 
-    fn manageable_visible_connection_ids(
+    pub(super) fn manageable_visible_connection_ids(
         &self,
         rows: &[ConnectionTreeRow],
         cx: &gpui::App,
@@ -84,16 +85,34 @@ impl PersistentConnectionSidebar {
     }
 }
 
+pub(super) fn batch_mode_toggle(
+    view: gpui::Entity<PersistentConnectionSidebar>,
+    active: bool,
+    palette: SidebarPalette,
+) -> Toggle {
+    Toggle::new("persistent-batch-connections")
+        .icon(IconName::Check)
+        .checked(active)
+        .xsmall()
+        .text_color(palette.foreground)
+        .tooltip(t!("Connection.batch_operations"))
+        .on_click(move |checked, _, cx| {
+            view.update(cx, |this, cx| this.set_batch_mode(*checked, cx));
+        })
+}
+
 fn select_visible_button(
     view: gpui::Entity<PersistentConnectionSidebar>,
     visible_ids: Vec<i64>,
 ) -> IconButton {
+    let disabled = visible_ids.is_empty();
     IconButton::new("persistent-select-visible-connections", IconName::Check)
         .role(IconButtonRole::Compact)
         .tooltip(t!("Connection.batch_select_visible"))
+        .disabled(disabled)
         .on_click(move |_, _, cx| {
             view.update(cx, |this, cx| {
-                this.connection_selection.replace(visible_ids.clone());
+                this.connection_selection.select_visible(&visible_ids);
                 cx.notify();
             });
         })
@@ -105,9 +124,11 @@ fn move_connections_button(
     selected_ids: Vec<i64>,
     move_targets: Vec<(Option<i64>, String)>,
 ) -> AnyElement {
+    let disabled = selected_ids.is_empty();
     IconButton::new("persistent-move-selected-connections", IconName::Folder)
         .role(IconButtonRole::Compact)
         .tooltip(t!("Connection.move_to_group"))
+        .disabled(disabled)
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
             append_move_targets(menu, &view, &home, &selected_ids, &move_targets)
         })
@@ -144,9 +165,11 @@ fn delete_connections_button(
     home: gpui::Entity<crate::home_tab::HomePage>,
     selected_ids: Vec<i64>,
 ) -> IconButton {
+    let disabled = selected_ids.is_empty();
     IconButton::new("persistent-delete-selected-connections", IconName::Delete)
         .role(IconButtonRole::Compact)
         .tooltip(t!("Common.delete"))
+        .disabled(disabled)
         .on_click(move |_, window, cx| {
             home.update(cx, |home, cx| {
                 home.confirm_delete_connections(selected_ids.clone(), window, cx);
@@ -154,26 +177,23 @@ fn delete_connections_button(
         })
 }
 
-fn clear_selection_button(view: gpui::Entity<PersistentConnectionSidebar>) -> IconButton {
-    IconButton::new("persistent-clear-connection-selection", IconName::Close)
+fn exit_batch_mode_button(view: gpui::Entity<PersistentConnectionSidebar>) -> IconButton {
+    IconButton::new("persistent-exit-batch-connections", IconName::Close)
         .role(IconButtonRole::Compact)
-        .tooltip(t!("Connection.batch_clear_selection"))
+        .tooltip(t!("Connection.batch_exit"))
         .on_click(move |_, _, cx| {
-            view.update(cx, |this, cx| {
-                this.connection_selection.clear();
-                cx.notify();
-            });
+            view.update(cx, |this, cx| this.set_batch_mode(false, cx));
         })
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn toolbar_exposes_move_delete_select_visible_and_clear_actions() {
+    fn toolbar_exposes_move_delete_select_visible_and_exit_actions() {
         let source = include_str!("batch_toolbar.rs");
         assert!(source.contains("persistent-select-visible-connections"));
         assert!(source.contains("persistent-move-selected-connections"));
         assert!(source.contains("persistent-delete-selected-connections"));
-        assert!(source.contains("persistent-clear-connection-selection"));
+        assert!(source.contains("persistent-exit-batch-connections"));
     }
 }

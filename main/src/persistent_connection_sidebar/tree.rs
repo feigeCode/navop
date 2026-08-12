@@ -11,6 +11,7 @@ use gpui_component::{
 };
 use rust_i18n::t;
 
+use super::batch_toolbar::batch_mode_toggle;
 use super::tree_model::{
     ConnectionNodeInput, ConnectionTreeRow, WorkspaceNodeInput, build_connection_tree_rows,
     filter_connection_tree_inputs, hide_empty_workspace_inputs,
@@ -38,7 +39,7 @@ impl PersistentConnectionSidebar {
             .text_color(palette.foreground)
             .child(self.render_tree_header(palette, cx))
             .child(self.render_tree_search(palette, cx))
-            .when(!self.connection_selection.is_empty(), |tree| {
+            .when(self.connection_selection.is_active(), |tree| {
                 tree.child(self.render_batch_toolbar(&rows, palette, cx))
             })
             .child(
@@ -69,7 +70,7 @@ impl PersistentConnectionSidebar {
             .into_any_element()
     }
 
-    fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
+    pub(super) fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
         let home = self.home_page.read(cx);
         let query = self.search_input.read(cx).value().trim().to_lowercase();
         let collapsed_workspaces = home
@@ -173,6 +174,7 @@ impl PersistentConnectionSidebar {
                 .count()
         };
         let view_for_collapse = cx.entity();
+        let view_for_batch = cx.entity();
         let view_for_hide_empty = cx.entity();
         let layout = cx.theme().geometry.layout;
         h_flex()
@@ -224,6 +226,11 @@ impl PersistentConnectionSidebar {
             .child(
                 h_flex()
                     .gap_1()
+                    .child(batch_mode_toggle(
+                        view_for_batch,
+                        self.connection_selection.is_active(),
+                        palette,
+                    ))
                     .child(
                         IconButton::new("persistent-collapse-all-groups", IconName::ChevronsUpDown)
                             .role(IconButtonRole::Compact)

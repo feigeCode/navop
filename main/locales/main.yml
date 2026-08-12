@@ -1256,14 +1256,18 @@ Connection:
     en: "%{count} selected"
     zh-CN: "已选择 %{count} 项"
     zh-HK: "已選擇 %{count} 項"
+  batch_operations:
+    en: Batch Operations
+    zh-CN: 批量操作
+    zh-HK: 批量操作
   batch_select_visible:
-    en: Select Visible Connections
-    zh-CN: 选择当前可见连接
-    zh-HK: 選擇目前可見連線
-  batch_clear_selection:
-    en: Clear Selection
-    zh-CN: 清除选择
-    zh-HK: 清除選擇
+    en: Select or Deselect Visible Connections
+    zh-CN: 选择或取消选择当前可见连接
+    zh-HK: 選擇或取消選擇目前可見連線
+  batch_exit:
+    en: Exit Batch Operations
+    zh-CN: 退出批量操作
+    zh-HK: 退出批量操作
   batch_delete_confirm:
     en: "Are you sure you want to delete the %{count} selected connections?"
     zh-CN: "确定要删除选中的 %{count} 个连接吗？"
