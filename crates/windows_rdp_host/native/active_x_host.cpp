@@ -45,7 +45,6 @@ struct ActiveXCleanup {
     bool atl_initialized = false;
     HWND parent_window = nullptr;
     HWND host_window = nullptr;
-    HWND child_window = nullptr;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
     CComPtr<IMsRdpClient10> client;
@@ -54,9 +53,6 @@ struct ActiveXCleanup {
     ~ActiveXCleanup() noexcept {
         destroy_event_subscription(event_subscription);
         event_subscription = nullptr;
-        if (child_window != nullptr) {
-            DestroyWindow(child_window);
-        }
         if (host_window != nullptr) {
             DestroyWindow(host_window);
         }
@@ -79,7 +75,7 @@ HRESULT create_rdp_control(ActiveXCleanup& resources) noexcept {
         L"CLSID:{945EE98E-B376-4EC2-B2E5-64C9410F93B7}";
     return AtlAxCreateControlEx(
         class_name,
-        resources.child_window,
+        resources.host_window,
         nullptr,
         &resources.container,
         &resources.control,
@@ -154,13 +150,11 @@ NavopRdpResult validate_resources(
     NativeRdpActiveXResources* resources) noexcept {
     if (resources == nullptr ||
         resources->state.parent_window == nullptr ||
-        resources->state.host_window == nullptr ||
-        resources->state.child_window == nullptr) {
+        resources->state.host_window == nullptr) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
     if (!IsWindow(resources->state.parent_window) ||
-        !IsWindow(resources->state.host_window) ||
-        !IsWindow(resources->state.child_window)) {
+        !IsWindow(resources->state.host_window)) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
     if (resources->state.control == nullptr || resources->state.client == nullptr) {
@@ -248,11 +242,13 @@ NavopRdpResult create_active_x_resources(
             static_cast<uint32_t>(host_class_error));
     }
 
-    // GPUI's HWND owns Rust window state. Creating an ATL child directly below
-    // it can synchronously re-enter the GPUI window procedure through parent
-    // notifications; the observed failure escaped that callback as
-    // STATUS_FATAL_USER_CALLBACK_EXCEPTION. Keep all ATL and ActiveX window
-    // traffic below this inert native container instead.
+    // GPUI's HWND owns Rust window state. Creating an AtlAxWin child directly
+    // below it can synchronously re-enter the GPUI window procedure, and on
+    // some Windows installations creating an empty AtlAxWin below an
+    // intermediate child never returns. AtlAxCreateControlEx can turn an
+    // existing window of almost any class into the ActiveX host, so use the
+    // inert native child itself as the host instead of creating a second ATL
+    // window.
     SetLastError(ERROR_SUCCESS);
     trace_native_stage("create.host_window.before");
     resources->state.host_window = CreateWindowExW(
@@ -275,36 +271,6 @@ NavopRdpResult create_active_x_resources(
         const DWORD win32_code = GetLastError();
         trace_native_win32(
             "create.host_window.failed",
-            static_cast<uint32_t>(win32_code));
-        return record_last_stage_win32(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            NAVOP_RDP_CREATE_STAGE_CREATE_WINDOW,
-            static_cast<uint32_t>(win32_code));
-    }
-
-    SetLastError(ERROR_SUCCESS);
-    trace_native_stage("create.window.before");
-    resources->state.child_window = CreateWindowExW(
-        WS_EX_NOPARENTNOTIFY,
-        TEXT(ATLAXWIN_CLASS),
-        L"",
-        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        0,
-        0,
-        0,
-        0,
-        resources->state.host_window,
-        nullptr,
-        instance,
-        nullptr);
-    trace_native_pointer(
-        "create.window.after",
-        reinterpret_cast<uintptr_t>(resources->state.child_window));
-    if (resources->state.child_window == nullptr) {
-        const DWORD win32_code = GetLastError();
-        trace_native_win32(
-            "create.window.failed",
             static_cast<uint32_t>(win32_code));
         return record_last_stage_win32(
             owner,
@@ -439,16 +405,6 @@ NavopRdpResult set_active_x_bounds(
             SWP_NOZORDER | SWP_NOACTIVATE)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
-    if (!SetWindowPos(
-            resources->state.child_window,
-            nullptr,
-            0,
-            0,
-            bounds.width,
-            bounds.height,
-            SWP_NOZORDER | SWP_NOACTIVATE)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
-    }
     return NAVOP_RDP_RESULT_OK;
 }
 
@@ -461,25 +417,18 @@ NavopRdpResult set_active_x_visible(
     }
 
     if (!visible &&
-        window_or_descendant_has_focus(resources->state.child_window)) {
+        window_or_descendant_has_focus(resources->state.host_window)) {
         SetFocus(resources->state.parent_window);
     }
     ShowWindow(
         resources->state.host_window,
         visible ? SW_SHOWNA : SW_HIDE);
-    ShowWindow(
-        resources->state.child_window,
-        visible ? SW_SHOWNA : SW_HIDE);
 
     const LONG_PTR host_style = GetWindowLongPtrW(
         resources->state.host_window,
         GWL_STYLE);
-    const LONG_PTR child_style = GetWindowLongPtrW(
-        resources->state.child_window,
-        GWL_STYLE);
     const bool host_is_visible = (host_style & WS_VISIBLE) != 0;
-    const bool child_is_visible = (child_style & WS_VISIBLE) != 0;
-    if (host_is_visible != visible || child_is_visible != visible) {
+    if (host_is_visible != visible) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
@@ -494,16 +443,12 @@ NavopRdpResult focus_active_x(
     if ((GetWindowLongPtrW(
              resources->state.host_window,
              GWL_STYLE) &
-         WS_VISIBLE) == 0 ||
-        (GetWindowLongPtrW(
-             resources->state.child_window,
-             GWL_STYLE) &
          WS_VISIBLE) == 0) {
         return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
     }
 
-    SetFocus(resources->state.child_window);
-    if (!window_or_descendant_has_focus(resources->state.child_window)) {
+    SetFocus(resources->state.host_window);
+    if (!window_or_descendant_has_focus(resources->state.host_window)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
