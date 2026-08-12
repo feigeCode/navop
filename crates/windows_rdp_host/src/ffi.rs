@@ -247,6 +247,13 @@ pub(crate) struct NavopRdpEventCallbackOptions {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub(crate) struct NavopRdpBorrowedUtf16 {
+    pub(crate) data: *const u16,
+    pub(crate) len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub(crate) struct NavopRdpBorrowedSecret {
     pub(crate) data: *const u16,
     pub(crate) len: u32,
@@ -259,13 +266,8 @@ pub(crate) struct NavopRdpCredentialBundle {
     pub(crate) server_password: NavopRdpBorrowedSecret,
     pub(crate) gateway_password: NavopRdpBorrowedSecret,
     pub(crate) flags: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct NavopRdpBorrowedUtf16 {
-    pub(crate) data: *const u16,
-    pub(crate) len: u32,
+    pub(crate) username: NavopRdpBorrowedUtf16,
+    pub(crate) domain: NavopRdpBorrowedUtf16,
 }
 
 #[repr(C)]
@@ -370,6 +372,11 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, struct_size) == 0);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, abi_version) == 4);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, server_password) == 8);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, username) > 8);
+    assert!(
+        std::mem::offset_of!(NavopRdpCredentialBundle, domain)
+            > std::mem::offset_of!(NavopRdpCredentialBundle, username)
+    );
     assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, data) == 0);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, struct_size) == 0);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, abi_version) == 4);
@@ -383,10 +390,12 @@ const _: () = {
     assert!(size_of::<NavopRdpBorrowedSecret>() == 16);
     assert!(align_of::<NavopRdpBorrowedSecret>() == 8);
     assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 8);
-    assert!(size_of::<NavopRdpCredentialBundle>() == 48);
+    assert!(size_of::<NavopRdpCredentialBundle>() == 80);
     assert!(align_of::<NavopRdpCredentialBundle>() == 8);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 24);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 40);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, username) == 48);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, domain) == 64);
     assert!(size_of::<NavopRdpBorrowedUtf16>() == 16);
     assert!(align_of::<NavopRdpBorrowedUtf16>() == 8);
     assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len) == 8);
@@ -406,10 +415,12 @@ const _: () = {
     assert!(size_of::<NavopRdpBorrowedSecret>() == 8);
     assert!(align_of::<NavopRdpBorrowedSecret>() == 4);
     assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 4);
-    assert!(size_of::<NavopRdpCredentialBundle>() == 28);
+    assert!(size_of::<NavopRdpCredentialBundle>() == 44);
     assert!(align_of::<NavopRdpCredentialBundle>() == 4);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 16);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 24);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, username) == 28);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, domain) == 36);
     assert!(size_of::<NavopRdpBorrowedUtf16>() == 8);
     assert!(align_of::<NavopRdpBorrowedUtf16>() == 4);
     assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len) == 4);
@@ -875,12 +886,18 @@ unsafe fn apply_credentials(
     host: *mut NativeRdpHost,
     credentials: *const NavopRdpCredentialBundle,
 ) -> NativeResult {
+    const LEGACY_CREDENTIAL_SIZE: u32 = if cfg!(target_pointer_width = "64") {
+        48
+    } else {
+        28
+    };
+
     if host.is_null() || credentials.is_null() {
         return RESULT_INVALID_ARGUMENT;
     }
 
     let struct_size = unsafe { std::ptr::addr_of!((*credentials).struct_size).read() };
-    if struct_size < size_of::<NavopRdpCredentialBundle>() as u32 {
+    if struct_size < LEGACY_CREDENTIAL_SIZE {
         return RESULT_INVALID_ARGUMENT;
     }
     let abi_version = unsafe { std::ptr::addr_of!((*credentials).abi_version).read() };
@@ -899,6 +916,25 @@ unsafe fn apply_credentials(
     let gateway_password = unsafe { std::ptr::addr_of!((*credentials).gateway_password).read() };
     if gateway_password.len > 0 && gateway_password.data.is_null() {
         return RESULT_INVALID_ARGUMENT;
+    }
+
+    if struct_size
+        >= (std::mem::offset_of!(NavopRdpCredentialBundle, username)
+            + size_of::<NavopRdpBorrowedUtf16>()) as u32
+    {
+        let username = unsafe { std::ptr::addr_of!((*credentials).username).read() };
+        if username.len > 0 && username.data.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+    }
+    if struct_size
+        >= (std::mem::offset_of!(NavopRdpCredentialBundle, domain)
+            + size_of::<NavopRdpBorrowedUtf16>()) as u32
+    {
+        let domain = unsafe { std::ptr::addr_of!((*credentials).domain).read() };
+        if domain.len > 0 && domain.data.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
     }
 
     RESULT_UNAVAILABLE
@@ -1097,13 +1133,15 @@ mod tests {
             assert_eq!(size_of::<NavopRdpBorrowedSecret>(), 16);
             assert_eq!(align_of::<NavopRdpBorrowedSecret>(), 8);
             assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, len), 8);
-            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 48);
+            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 80);
             assert_eq!(align_of::<NavopRdpCredentialBundle>(), 8);
             assert_eq!(
                 std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
                 24
             );
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, flags), 40);
+            assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, username), 48);
+            assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, domain), 64);
         }
 
         #[cfg(target_pointer_width = "32")]
@@ -1111,13 +1149,15 @@ mod tests {
             assert_eq!(size_of::<NavopRdpBorrowedSecret>(), 8);
             assert_eq!(align_of::<NavopRdpBorrowedSecret>(), 4);
             assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, len), 4);
-            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 28);
+            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 44);
             assert_eq!(align_of::<NavopRdpCredentialBundle>(), 4);
             assert_eq!(
                 std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
                 16
             );
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, flags), 24);
+            assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, username), 28);
+            assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, domain), 36);
         }
     }
 
@@ -1231,6 +1271,14 @@ mod tests {
                 len: 0,
             },
             flags: 0,
+            username: NavopRdpBorrowedUtf16 {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            domain: NavopRdpBorrowedUtf16 {
+                data: std::ptr::null(),
+                len: 0,
+            },
         };
 
         credentials.struct_size = 4;
@@ -1254,6 +1302,29 @@ mod tests {
         );
 
         credentials.server_password.len = 0;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_UNAVAILABLE
+        );
+
+        credentials.username.len = 1;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_INVALID_ARGUMENT
+        );
+        credentials.username.len = 0;
+        credentials.domain.len = 1;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_INVALID_ARGUMENT
+        );
+        credentials.domain.len = 0;
+
+        credentials.struct_size = if cfg!(target_pointer_width = "64") {
+            48
+        } else {
+            28
+        };
         assert_eq!(
             unsafe { apply_credentials(host, &credentials) },
             RESULT_UNAVAILABLE

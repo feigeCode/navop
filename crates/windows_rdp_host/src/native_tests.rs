@@ -223,7 +223,25 @@ fn assert_invalid_events_rejected(
     );
 }
 
-fn credential_bundle(server: Option<&[u16]>, gateway: Option<&[u16]>) -> NavopRdpCredentialBundle {
+fn credential_bundle(
+    username: Option<&[u16]>,
+    domain: Option<&[u16]>,
+    server: Option<&[u16]>,
+    gateway: Option<&[u16]>,
+) -> NavopRdpCredentialBundle {
+    fn borrowed_utf16(text: Option<&[u16]>) -> NavopRdpBorrowedUtf16 {
+        match text {
+            Some(text) if !text.is_empty() => NavopRdpBorrowedUtf16 {
+                data: text.as_ptr(),
+                len: text.len() as u32,
+            },
+            _ => NavopRdpBorrowedUtf16 {
+                data: ptr::null(),
+                len: 0,
+            },
+        }
+    }
+
     fn borrowed_secret(secret: Option<&[u16]>) -> NavopRdpBorrowedSecret {
         match secret {
             Some(secret) if !secret.is_empty() => NavopRdpBorrowedSecret {
@@ -243,6 +261,8 @@ fn credential_bundle(server: Option<&[u16]>, gateway: Option<&[u16]>) -> NavopRd
         server_password: borrowed_secret(server),
         gateway_password: borrowed_secret(gateway),
         flags: 0,
+        username: borrowed_utf16(username),
+        domain: borrowed_utf16(domain),
     }
 }
 
@@ -1467,15 +1487,24 @@ fn wrong_thread_dispatch_unregister_and_destroy_are_rejected() {
 }
 
 #[test]
-fn native_credentials_accept_empty_and_separate_server_gateway_secrets() {
+fn native_credentials_accept_identity_and_separate_server_gateway_secrets() {
+    let username = [
+        0x006f, 0x0070, 0x0065, 0x0072, 0x0061, 0x0074, 0x006f, 0x0072,
+    ];
+    let domain = [0x0045, 0x0058, 0x0041, 0x004d, 0x0050, 0x004c, 0x0045];
     let server = [0x0073, 0x0065, 0x0072, 0x0076, 0x0065, 0x0072];
     let gateway = [0x0067, 0x0061, 0x0074, 0x0065];
     let mut host = unsafe { create_host(42) };
     let cases = [
-        credential_bundle(None, None),
-        credential_bundle(Some(&server), None),
-        credential_bundle(None, Some(&gateway)),
-        credential_bundle(Some(&server), Some(&gateway)),
+        credential_bundle(None, None, None, None),
+        credential_bundle(Some(&username), Some(&domain), Some(&server), None),
+        credential_bundle(None, None, None, Some(&gateway)),
+        credential_bundle(
+            Some(&username),
+            Some(&domain),
+            Some(&server),
+            Some(&gateway),
+        ),
     ];
 
     for credentials in &cases {
@@ -1491,9 +1520,13 @@ fn native_credentials_accept_empty_and_separate_server_gateway_secrets() {
 
 #[test]
 fn native_credentials_reject_invalid_layout_and_borrowed_secrets() {
+    let username = [
+        0x006f, 0x0070, 0x0065, 0x0072, 0x0061, 0x0074, 0x006f, 0x0072,
+    ];
+    let domain = [0x0045, 0x0058, 0x0041, 0x004d, 0x0050, 0x004c, 0x0045];
     let server = [0x0073, 0x0065, 0x0072, 0x0076, 0x0065, 0x0072];
     let mut host = unsafe { create_host(42) };
-    let valid = credential_bundle(Some(&server), None);
+    let valid = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
 
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(ptr::null_mut(), &valid) },
@@ -1504,28 +1537,32 @@ fn native_credentials_reject_invalid_layout_and_borrowed_secrets() {
         RESULT_INVALID_ARGUMENT
     );
 
-    let mut short = credential_bundle(Some(&server), None);
-    short.struct_size -= 1;
+    let mut short = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
+    short.struct_size = if cfg!(target_pointer_width = "64") {
+        47
+    } else {
+        27
+    };
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &short) },
         RESULT_INVALID_ARGUMENT
     );
 
-    let mut wrong_abi = credential_bundle(Some(&server), None);
+    let mut wrong_abi = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
     wrong_abi.abi_version += 1;
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &wrong_abi) },
         RESULT_ABI_MISMATCH
     );
 
-    let mut flags = credential_bundle(Some(&server), None);
+    let mut flags = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
     flags.flags = 1;
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &flags) },
         RESULT_INVALID_ARGUMENT
     );
 
-    let mut null_server = credential_bundle(Some(&server), None);
+    let mut null_server = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
     null_server.server_password = NavopRdpBorrowedSecret {
         data: ptr::null(),
         len: 1,
@@ -1535,7 +1572,7 @@ fn native_credentials_reject_invalid_layout_and_borrowed_secrets() {
         RESULT_INVALID_ARGUMENT
     );
 
-    let mut null_gateway = credential_bundle(Some(&server), None);
+    let mut null_gateway = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
     null_gateway.gateway_password = NavopRdpBorrowedSecret {
         data: ptr::null(),
         len: 1,
@@ -1543,6 +1580,37 @@ fn native_credentials_reject_invalid_layout_and_borrowed_secrets() {
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &null_gateway) },
         RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_username = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
+    null_username.username = NavopRdpBorrowedUtf16 {
+        data: ptr::null(),
+        len: 1,
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &null_username) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_domain = credential_bundle(Some(&username), Some(&domain), Some(&server), None);
+    null_domain.domain = NavopRdpBorrowedUtf16 {
+        data: ptr::null(),
+        len: 1,
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &null_domain) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut legacy = credential_bundle(None, None, Some(&server), None);
+    legacy.struct_size = if cfg!(target_pointer_width = "64") {
+        48
+    } else {
+        28
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &legacy) },
+        RESULT_OK
     );
 
     assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
@@ -1557,14 +1625,14 @@ fn native_credentials_preserve_owner_thread_and_open_gate_rules() {
 
     let wrong_thread_result = std::thread::spawn(move || {
         let host = host_address as *mut NativeRdpHost;
-        let credentials = credential_bundle(None, None);
+        let credentials = credential_bundle(None, None, None, None);
         unsafe { navop_rdp_apply_credentials(host, &credentials) }
     })
     .join()
     .expect("wrong-thread credential test worker should not panic");
     assert_eq!(wrong_thread_result, RESULT_WRONG_THREAD);
 
-    let credentials = credential_bundle(None, None);
+    let credentials = credential_bundle(None, None, None, None);
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &credentials) },
         RESULT_OK

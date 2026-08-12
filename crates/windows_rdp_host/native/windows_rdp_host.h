@@ -21,6 +21,13 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_RESULT_INVALID_STATE INT32_C(8)
 #define NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS UINT32_C(255)
 #define NAVOP_RDP_LAST_ERROR_LEGACY_SIZE UINT32_C(24)
+#if INTPTR_MAX == INT64_MAX
+#define NAVOP_RDP_CREDENTIAL_LEGACY_SIZE UINT32_C(48)
+#elif INTPTR_MAX == INT32_MAX
+#define NAVOP_RDP_CREDENTIAL_LEGACY_SIZE UINT32_C(28)
+#else
+#error Unsupported pointer width for the Windows RDP credential ABI
+#endif
 
 #define NAVOP_RDP_CREATE_STAGE_NONE UINT32_C(0)
 #define NAVOP_RDP_CREATE_STAGE_OLE_INITIALIZE UINT32_C(1)
@@ -203,6 +210,8 @@ typedef struct NavopRdpCredentialBundle {
     NavopRdpBorrowedSecret server_password;
     NavopRdpBorrowedSecret gateway_password;
     uint32_t flags;
+    NavopRdpBorrowedUtf16 username;
+    NavopRdpBorrowedUtf16 domain;
 } NavopRdpCredentialBundle;
 
 /*
@@ -227,10 +236,15 @@ typedef struct NavopRdpCredentialBundle {
  * later owner-thread turn after the callback returns.
  */
 /*
- * Credential code units are borrowed only for the synchronous call. A zero
- * length accepts a null pointer; a non-zero length requires a non-null pointer.
- * The native host must not retain either pointer after apply returns. Server
- * and Gateway passwords remain separate fields and flags must be zero.
+ * Identity and credential code units are borrowed only for the synchronous call.
+ * A zero length accepts a null pointer; a non-zero length requires a non-null
+ * pointer. The native host must not retain caller-owned pointers after apply
+ * returns. Server and Gateway passwords remain separate fields and flags must
+ * be zero.
+ *
+ * The first NAVOP_RDP_CREDENTIAL_LEGACY_SIZE bytes are the stable legacy
+ * password-only prefix. username and domain are append-only fields; callers
+ * using the legacy prefix are accepted and treated as supplying no identity.
  */
 #ifdef __cplusplus
 extern "C" {
@@ -353,18 +367,28 @@ static_assert(offsetof(NavopRdpCredentialBundle, server_password) == 8);
 static_assert(sizeof(NavopRdpBorrowedSecret) == 16);
 static_assert(alignof(NavopRdpBorrowedSecret) == 8);
 static_assert(offsetof(NavopRdpBorrowedSecret, len) == 8);
-static_assert(sizeof(NavopRdpCredentialBundle) == 48);
+static_assert(sizeof(NavopRdpCredentialBundle) == 80);
 static_assert(alignof(NavopRdpCredentialBundle) == 8);
 static_assert(offsetof(NavopRdpCredentialBundle, gateway_password) == 24);
 static_assert(offsetof(NavopRdpCredentialBundle, flags) == 40);
+static_assert(offsetof(NavopRdpCredentialBundle, username) == 48);
+static_assert(offsetof(NavopRdpCredentialBundle, domain) == 64);
+static_assert(
+    offsetof(NavopRdpCredentialBundle, username) ==
+    NAVOP_RDP_CREDENTIAL_LEGACY_SIZE);
 #elif INTPTR_MAX == INT32_MAX
 static_assert(sizeof(NavopRdpBorrowedSecret) == 8);
 static_assert(alignof(NavopRdpBorrowedSecret) == 4);
 static_assert(offsetof(NavopRdpBorrowedSecret, len) == 4);
-static_assert(sizeof(NavopRdpCredentialBundle) == 28);
+static_assert(sizeof(NavopRdpCredentialBundle) == 44);
 static_assert(alignof(NavopRdpCredentialBundle) == 4);
 static_assert(offsetof(NavopRdpCredentialBundle, gateway_password) == 16);
 static_assert(offsetof(NavopRdpCredentialBundle, flags) == 24);
+static_assert(offsetof(NavopRdpCredentialBundle, username) == 28);
+static_assert(offsetof(NavopRdpCredentialBundle, domain) == 36);
+static_assert(
+    offsetof(NavopRdpCredentialBundle, username) ==
+    NAVOP_RDP_CREDENTIAL_LEGACY_SIZE);
 #else
 #error Unsupported pointer width for the Windows RDP credential ABI
 #endif

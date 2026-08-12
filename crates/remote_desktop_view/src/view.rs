@@ -711,6 +711,20 @@ impl RemoteDesktopView {
                 return;
             }
         };
+        let mut credentials = windows_rdp_host::WindowsRdpCredentialBundle::new();
+        if let Some(username) = self.options.username.as_ref() {
+            credentials.set_username(username.clone());
+        }
+        if let Some(domain) = self.options.domain.as_ref() {
+            credentials.set_domain(domain.clone());
+        }
+        if let Some(password) = self.options.password.as_ref() {
+            credentials.set_server_password(password.clone());
+        }
+        if let Err(error) = native.apply_credentials(&credentials) {
+            self.fail_windows_native_presentation(native, registration, "credentials", error, cx);
+            return;
+        }
         if let Err(error) = native.connect(&connection_options) {
             self.fail_windows_native_presentation(native, registration, "connect", error, cx);
             return;

@@ -38,6 +38,13 @@ NavopRdpResult connect_active_x(
     NativeRdpActiveXResources* resources,
     const NavopRdpConnectionOptions& options) noexcept;
 
+NavopRdpResult apply_active_x_credentials(
+    NativeRdpHost* owner,
+    NativeRdpActiveXResources* resources,
+    NavopRdpBorrowedUtf16 username,
+    NavopRdpBorrowedUtf16 domain,
+    NavopRdpBorrowedSecret server_password) noexcept;
+
 NavopRdpResult get_active_x_connection_state(
     NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,

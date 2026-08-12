@@ -100,12 +100,14 @@ impl WindowsRdpHost {
         matches!(self.lifecycle, WindowsRdpHostLifecycle::Closed)
     }
 
-    /// Applies borrowed UTF-16 credentials during one synchronous native call.
+    /// Applies borrowed UTF-16 identity and credentials during one synchronous
+    /// native call.
     ///
-    /// The native boundary copies each supplied secret into a temporary
-    /// zeroizing buffer and must not retain either Rust-owned pointer after
-    /// this method returns. Credentials are intentionally not stored on the
-    /// host and do not change the host lifecycle.
+    /// Caller-owned pointers are valid only for this call. The native boundary
+    /// copies each supplied password into a temporary zeroizing buffer and
+    /// applies the identity and server password to the ActiveX control before
+    /// connecting. Neither the Rust nor native host stores this bundle, and
+    /// server/Gateway passwords remain independent.
     pub fn apply_credentials(
         &mut self,
         credentials: &WindowsRdpCredentialBundle,
@@ -540,7 +542,7 @@ mod tests {
         destroy_calls: usize,
         credential_calls: usize,
         credential_results: std::collections::VecDeque<NativeResult>,
-        captured_credentials: Vec<(Vec<u16>, Vec<u16>)>,
+        captured_credentials: Vec<(Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)>,
         connect_calls: usize,
         connect_results: std::collections::VecDeque<NativeResult>,
         captured_connection_options: Vec<(Vec<u16>, u32, i32, i32, i32)>,
@@ -712,7 +714,7 @@ mod tests {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_parent_create)
     }
 
-    fn captured_credentials() -> Vec<(Vec<u16>, Vec<u16>)> {
+    fn captured_credentials() -> Vec<(Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_credentials.clone())
     }
 
@@ -1099,8 +1101,31 @@ mod tests {
 
         // SAFETY: the production facade passes a valid current-layout bundle
         // whose borrowed pointers remain valid for the duration of this fake
-        // synchronous call. The fake copies both slices and retains no pointer.
+        // synchronous call. The fake copies all slices and retains no pointer.
         let credentials = unsafe { &*credentials };
+        let username = if credentials.username.len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: non-empty identity slices are backed by the owner
+            // bundle's live UTF-16 vectors during this synchronous call.
+            unsafe {
+                std::slice::from_raw_parts(
+                    credentials.username.data,
+                    credentials.username.len as usize,
+                )
+                .to_vec()
+            }
+        };
+        let domain = if credentials.domain.len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: non-empty identity slices are backed by the owner
+            // bundle's live UTF-16 vectors during this synchronous call.
+            unsafe {
+                std::slice::from_raw_parts(credentials.domain.data, credentials.domain.len as usize)
+                    .to_vec()
+            }
+        };
         let server = if credentials.server_password.len == 0 {
             Vec::new()
         } else {
@@ -1131,7 +1156,7 @@ mod tests {
             state
                 .borrow_mut()
                 .captured_credentials
-                .push((server, gateway));
+                .push((username, domain, server, gateway));
         });
         RESULT_OK
     }
@@ -1684,9 +1709,12 @@ mod tests {
                 .expect("fake create should succeed");
 
         host.apply_credentials(
-            &WindowsRdpCredentialBundle::new().with_server_password("server-only".to_owned()),
+            &WindowsRdpCredentialBundle::new()
+                .with_username("operator".to_owned())
+                .with_domain("EXAMPLE".to_owned())
+                .with_server_password("server-only".to_owned()),
         )
-        .expect("server-only credentials should apply");
+        .expect("identity and server credentials should apply");
         host.apply_credentials(
             &WindowsRdpCredentialBundle::new().with_gateway_password("gateway-only".to_owned()),
         )
@@ -1703,13 +1731,25 @@ mod tests {
         assert_eq!(
             captured_credentials(),
             vec![
-                ("server-only".encode_utf16().collect(), Vec::new()),
-                (Vec::new(), "gateway-only".encode_utf16().collect()),
                 (
+                    "operator".encode_utf16().collect(),
+                    "EXAMPLE".encode_utf16().collect(),
+                    "server-only".encode_utf16().collect(),
+                    Vec::new(),
+                ),
+                (
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    "gateway-only".encode_utf16().collect(),
+                ),
+                (
+                    Vec::new(),
+                    Vec::new(),
                     "server-secret".encode_utf16().collect(),
                     "gateway-secret".encode_utf16().collect(),
                 ),
-                (Vec::new(), Vec::new()),
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             ]
         );
     }

@@ -7,6 +7,7 @@
 
 #include "mstscax.tlh"
 
+#include <limits>
 #include <memory>
 #include <new>
 
@@ -60,6 +61,52 @@ bool window_or_descendant_has_focus(HWND window) noexcept {
     return focused != nullptr &&
         (focused == window || IsChild(window, focused));
 }
+
+class SensitiveBstr {
+public:
+    SensitiveBstr() noexcept = default;
+
+    ~SensitiveBstr() noexcept {
+        reset();
+    }
+
+    SensitiveBstr(const SensitiveBstr&) = delete;
+    SensitiveBstr& operator=(const SensitiveBstr&) = delete;
+    SensitiveBstr(SensitiveBstr&&) = delete;
+    SensitiveBstr& operator=(SensitiveBstr&&) = delete;
+
+    NavopRdpResult assign(NavopRdpBorrowedSecret secret) noexcept {
+        reset();
+        if (secret.len == UINT32_C(0)) {
+            return NAVOP_RDP_RESULT_OK;
+        }
+        value_ = SysAllocStringLen(
+            reinterpret_cast<const OLECHAR*>(secret.data),
+            secret.len);
+        return value_ == nullptr
+            ? NAVOP_RDP_RESULT_ALLOCATION_FAILED
+            : NAVOP_RDP_RESULT_OK;
+    }
+
+    BSTR get() const noexcept {
+        return value_;
+    }
+
+private:
+    void reset() noexcept {
+        if (value_ == nullptr) {
+            return;
+        }
+        SecureZeroMemory(
+            value_,
+            static_cast<size_t>(SysStringByteLen(value_)) +
+                sizeof(OLECHAR));
+        SysFreeString(value_);
+        value_ = nullptr;
+    }
+
+    BSTR value_ = nullptr;
+};
 
 NavopRdpResult validate_resources(
     NativeRdpActiveXResources* resources) noexcept;
@@ -395,6 +442,106 @@ NavopRdpResult connect_active_x(
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
             static_cast<int32_t>(result));
     }
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult apply_active_x_credentials(
+    NativeRdpHost* owner,
+    NativeRdpActiveXResources* resources,
+    NavopRdpBorrowedUtf16 username,
+    NavopRdpBorrowedUtf16 domain,
+    NavopRdpBorrowedSecret server_password) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return record_last_error(owner, resource_result);
+    }
+
+    short connected = 0;
+    HRESULT result = resources->state.client->get_Connected(&connected);
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+    if (connected != 0) {
+        return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_STATE);
+    }
+
+    if (username.len > static_cast<uint32_t>((std::numeric_limits<int>::max)()) ||
+        domain.len > static_cast<uint32_t>((std::numeric_limits<int>::max)())) {
+        return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
+    }
+
+    if (username.len != UINT32_C(0)) {
+        CComBSTR username_bstr(
+            static_cast<int>(username.len),
+            reinterpret_cast<LPCOLESTR>(username.data));
+        if (username_bstr.m_str == nullptr) {
+            return record_last_error(
+                owner,
+                NAVOP_RDP_RESULT_ALLOCATION_FAILED);
+        }
+        result = resources->state.client->put_UserName(username_bstr);
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+    }
+
+    if (domain.len != UINT32_C(0)) {
+        CComBSTR domain_bstr(
+            static_cast<int>(domain.len),
+            reinterpret_cast<LPCOLESTR>(domain.data));
+        if (domain_bstr.m_str == nullptr) {
+            return record_last_error(
+                owner,
+                NAVOP_RDP_RESULT_ALLOCATION_FAILED);
+        }
+        result = resources->state.client->put_Domain(domain_bstr);
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+    }
+
+    if (server_password.len != UINT32_C(0)) {
+        SensitiveBstr password_bstr;
+        const NavopRdpResult password_result =
+            password_bstr.assign(server_password);
+        if (password_result != NAVOP_RDP_RESULT_OK) {
+            return record_last_error(owner, password_result);
+        }
+
+        CComPtr<IMsRdpClientAdvancedSettings> advanced_settings;
+        result = resources->state.control->QueryInterface(
+            IID_PPV_ARGS(&advanced_settings));
+        if (FAILED(result) || advanced_settings == nullptr) {
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    owner,
+                    NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                    static_cast<int32_t>(result));
+            }
+            return record_last_error(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        }
+
+        result =
+            advanced_settings->put_ClearTextPassword(password_bstr.get());
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+    }
+
     return NAVOP_RDP_RESULT_OK;
 }
 

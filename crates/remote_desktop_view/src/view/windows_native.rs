@@ -278,6 +278,13 @@ impl WindowsNativeAdapter {
         self.host.connect(options)
     }
 
+    pub(crate) fn apply_credentials(
+        &mut self,
+        credentials: &windows_rdp_host::WindowsRdpCredentialBundle,
+    ) -> Result<(), windows_rdp_host::WindowsRdpHostError> {
+        self.host.apply_credentials(credentials)
+    }
+
     pub(crate) fn activate(&mut self, focus_child: bool) -> anyhow::Result<()> {
         let mut sink = WindowsNativeHostSink {
             host: &mut self.host,
