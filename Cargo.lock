@@ -5023,6 +5023,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-rdp-smoke"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+ "raw-window-handle",
+ "windows_rdp_host",
+]
+
+[[package]]
 name = "gpui-wry"
 version = "0.5.0"
 dependencies = [
