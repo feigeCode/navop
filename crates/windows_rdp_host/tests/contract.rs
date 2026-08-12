@@ -842,6 +842,7 @@ fn native_credentials_validate_copy_and_wipe_on_every_exit_path() {
             "NavopRdpResult apply_active_x_credentials(",
             "put_UserName(",
             "put_Domain(",
+            "resources->state.non_scriptable->put_ClearTextPassword(",
             "put_ClearTextPassword(",
             "class SensitiveBstr",
             "SecureZeroMemory(",
@@ -849,6 +850,23 @@ fn native_credentials_validate_copy_and_wipe_on_every_exit_path() {
             "record_last_hresult(",
             "get_Connected(",
             "NAVOP_RDP_RESULT_INVALID_STATE",
+        ],
+    );
+    assert_tokens_in_scope(
+        &format!("{HOST_CRATE}/native/active_x_host.cpp"),
+        "NavopRdpResult apply_active_x_credentials(",
+        "\n}\n\nNavopRdpResult get_active_x_connection_state(",
+        &[
+            "trace_native_stage(\"credentials.set_password.before\")",
+            "resources->state.non_scriptable->put_ClearTextPassword(",
+            "trace_native_hresult(\n            \"credentials.set_password.after\"",
+        ],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/native/active_x_host.cpp"),
+        &[
+            "resources->state.control->QueryInterface(\n            IID_PPV_ARGS(&advanced_settings))",
+            "advanced_settings->put_ClearTextPassword(",
         ],
     );
     assert_contains_all(
@@ -1134,8 +1152,8 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "persist_stream_init->InitNew()",
             "QueryInterface(",
             "IID_PPV_ARGS(&resources->state.client)",
-            "IID_PPV_ARGS(&non_scriptable)",
-            "put_UIParentWindowHandle(\n            reinterpret_cast<wireHWND>(parent))",
+            "IID_PPV_ARGS(&resources->state.non_scriptable)",
+            "resources->state.non_scriptable->put_UIParentWindowHandle(\n            reinterpret_cast<wireHWND>(parent))",
             "*out_resources = resources.release();",
             "validate_resources(",
             "IsWindow(",
@@ -1185,9 +1203,8 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "const HRESULT control_result = CoCreateInstance(",
             "kMsRdpClient9NotSafeForScriptingClsid",
             "IID_PPV_ARGS(&resources->state.client)",
-            "CComPtr<IMsRdpClientNonScriptable2> non_scriptable;",
-            "IID_PPV_ARGS(&non_scriptable)",
-            "if (FAILED(non_scriptable_result) || non_scriptable == nullptr)",
+            "IID_PPV_ARGS(&resources->state.non_scriptable)",
+            "resources->state.non_scriptable == nullptr",
             "CComPtr<IPersistStreamInit> persist_stream_init;",
             "IID_PPV_ARGS(&persist_stream_init)",
             "const HRESULT initialize_result = persist_stream_init->InitNew();",
@@ -1196,7 +1213,7 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "owner,",
             "&resources->state.event_subscription",
             "const HRESULT attach_result =\n        attach_control_with_traces(resources->state);",
-            "const HRESULT ui_parent_result =\n        non_scriptable->put_UIParentWindowHandle(\n            reinterpret_cast<wireHWND>(parent));",
+            "const HRESULT ui_parent_result =\n        resources->state.non_scriptable->put_UIParentWindowHandle(\n            reinterpret_cast<wireHWND>(parent));",
             "if (FAILED(ui_parent_result))",
             "*out_resources = resources.release();",
         ],
@@ -1235,6 +1252,7 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
         &[
             "destroy_event_subscription(event_subscription);",
             "event_subscription = nullptr;",
+            "non_scriptable.Release();",
             "client.Release();",
             "control.Release();",
             "container.Release();",
@@ -1515,7 +1533,7 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
         &[
             "get_Connected",
             "put_Server",
-            "QueryInterface",
+            "get_AdvancedSettings2",
             "put_RDPPort",
             "put_DesktopWidth",
             "put_DesktopHeight",

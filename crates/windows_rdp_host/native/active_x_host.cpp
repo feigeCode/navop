@@ -70,11 +70,13 @@ struct ActiveXCleanup {
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
     CComPtr<IMsRdpClient9> client;
+    CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
     NativeRdpEventSubscription* event_subscription = nullptr;
 
     ~ActiveXCleanup() noexcept {
         destroy_event_subscription(event_subscription);
         event_subscription = nullptr;
+        non_scriptable.Release();
         client.Release();
         control.Release();
         container.Release();
@@ -367,15 +369,15 @@ NavopRdpResult create_active_x_resources(
             NAVOP_RDP_CREATE_STAGE_QUERY_CLIENT);
     }
 
-    CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
     trace_native_stage("create.query_non_scriptable.before");
     const HRESULT non_scriptable_result =
         resources->state.control->QueryInterface(
-            IID_PPV_ARGS(&non_scriptable));
+            IID_PPV_ARGS(&resources->state.non_scriptable));
     trace_native_hresult(
         "create.query_non_scriptable.after",
         static_cast<int32_t>(non_scriptable_result));
-    if (FAILED(non_scriptable_result) || non_scriptable == nullptr) {
+    if (FAILED(non_scriptable_result) ||
+        resources->state.non_scriptable == nullptr) {
         if (FAILED(non_scriptable_result)) {
             return record_last_stage_hresult(
                 owner,
@@ -469,7 +471,7 @@ NavopRdpResult create_active_x_resources(
 
     trace_native_stage("create.set_ui_parent.before");
     const HRESULT ui_parent_result =
-        non_scriptable->put_UIParentWindowHandle(
+        resources->state.non_scriptable->put_UIParentWindowHandle(
             reinterpret_cast<wireHWND>(parent));
     trace_native_hresult(
         "create.set_ui_parent.after",
@@ -599,8 +601,12 @@ NavopRdpResult connect_active_x(
     }
 
     CComPtr<IMsRdpClientAdvancedSettings> advanced_settings;
-    result = resources->state.control->QueryInterface(
-        IID_PPV_ARGS(&advanced_settings));
+    trace_native_stage("connect.get_advanced_settings.before");
+    result = resources->state.client->get_AdvancedSettings2(
+        &advanced_settings);
+    trace_native_hresult(
+        "connect.get_advanced_settings.after",
+        static_cast<int32_t>(result));
     if (FAILED(result) || advanced_settings == nullptr) {
         if (FAILED(result)) {
             return record_last_hresult(
@@ -724,23 +730,12 @@ NavopRdpResult apply_active_x_credentials(
             return record_last_error(owner, password_result);
         }
 
-        CComPtr<IMsRdpClientAdvancedSettings> advanced_settings;
-        result = resources->state.control->QueryInterface(
-            IID_PPV_ARGS(&advanced_settings));
-        if (FAILED(result) || advanced_settings == nullptr) {
-            if (FAILED(result)) {
-                return record_last_hresult(
-                    owner,
-                    NAVOP_RDP_RESULT_INTERNAL_ERROR,
-                    static_cast<int32_t>(result));
-            }
-            return record_last_error(
-                owner,
-                NAVOP_RDP_RESULT_INTERNAL_ERROR);
-        }
-
-        result =
-            advanced_settings->put_ClearTextPassword(password_bstr.get());
+        trace_native_stage("credentials.set_password.before");
+        result = resources->state.non_scriptable->put_ClearTextPassword(
+            password_bstr.get());
+        trace_native_hresult(
+            "credentials.set_password.after",
+            static_cast<int32_t>(result));
         if (FAILED(result)) {
             return record_last_hresult(
                 owner,
