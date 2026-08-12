@@ -38,6 +38,9 @@ impl PersistentConnectionSidebar {
             .text_color(palette.foreground)
             .child(self.render_tree_header(palette, cx))
             .child(self.render_tree_search(palette, cx))
+            .when(!self.connection_selection.is_empty(), |tree| {
+                tree.child(self.render_batch_toolbar(&rows, palette, cx))
+            })
             .child(
                 div()
                     .flex_1()

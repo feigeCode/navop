@@ -200,6 +200,7 @@ impl ConnectionCredentialExportIdentity {
 }
 
 mod auth;
+mod batch_connection_actions;
 mod cloud_sync;
 mod connection_actions;
 mod connection_badge;

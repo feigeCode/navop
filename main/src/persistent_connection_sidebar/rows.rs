@@ -13,6 +13,7 @@ use super::row_parts::{
     child_group_button, connection_team_indicator, delete_group_button, edit_group_button,
     tree_chevron, tree_count, tree_label,
 };
+use super::selection::connection_selection_checkbox;
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::connection_visuals::ConnectionVisualSize;
@@ -174,8 +175,15 @@ impl PersistentConnectionSidebar {
         let open_connection = connection.clone();
         let home_for_open = home.clone();
         let home_for_select = home.clone();
-        let selected = home.read(cx).selected_connection_id == Some(id);
+        let selection_active = !self.connection_selection.is_empty();
+        let selected = if selection_active {
+            self.connection_selection.contains(id)
+        } else {
+            home.read(cx).selected_connection_id == Some(id)
+        };
         let can_drag = home.read(cx).can_move_connection(id);
+        let view_for_select = cx.entity();
+        let view_for_checkbox = view_for_select.clone();
         let team_indicator = connection.as_ref().and_then(|connection| {
             connection_team_indicator(connection, home.read(cx).cached_team_options(), cx)
         });
@@ -246,7 +254,11 @@ impl PersistentConnectionSidebar {
                     });
                 }
             })
-            .on_click(move |_, _, cx| {
+            .on_click(move |event, _, cx| {
+                let additive = event.modifiers().secondary();
+                view_for_select.update(cx, |this, cx| {
+                    this.select_connection_from_row(id, additive, can_drag, cx);
+                });
                 home_for_select.update(cx, |home, cx| {
                     home.selected_connection_id = Some(id);
                     cx.notify();
@@ -254,6 +266,13 @@ impl PersistentConnectionSidebar {
             })
             .context_menu(move |menu, window, cx| {
                 Self::build_connection_context_menu(menu, &view_for_menu, id, window, cx)
+            })
+            .when(can_drag, |row| {
+                row.child(connection_selection_checkbox(
+                    view_for_checkbox,
+                    id,
+                    self.connection_selection.contains(id),
+                ))
             })
             .child(icon)
             .child(tree_label(name))

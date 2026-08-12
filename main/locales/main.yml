@@ -1252,6 +1252,26 @@ Connection:
     en: Move to Group
     zh-CN: 移动到分组
     zh-HK: 移動到分組
+  batch_selected:
+    en: "%{count} selected"
+    zh-CN: "已选择 %{count} 项"
+    zh-HK: "已選擇 %{count} 項"
+  batch_select_visible:
+    en: Select Visible Connections
+    zh-CN: 选择当前可见连接
+    zh-HK: 選擇目前可見連線
+  batch_clear_selection:
+    en: Clear Selection
+    zh-CN: 清除选择
+    zh-HK: 清除選擇
+  batch_delete_confirm:
+    en: "Are you sure you want to delete the %{count} selected connections?"
+    zh-CN: "确定要删除选中的 %{count} 个连接吗？"
+    zh-HK: "確定要刪除選中的 %{count} 個連線嗎？"
+  batch_delete_in_use:
+    en: "%{count} selected connections are in use. Close them before deleting."
+    zh-CN: "选中的连接中有 %{count} 个正在使用，请先关闭后再删除。"
+    zh-HK: "選中的連線中有 %{count} 個正在使用，請先關閉後再刪除。"
   FullInfo:
     title:
       en: "[Full Connection Info]"
