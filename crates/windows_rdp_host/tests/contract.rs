@@ -1096,7 +1096,7 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
 }
 
 #[test]
-fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources() {
+fn active_x_host_creates_an_isolated_atl_child_and_releases_owned_resources() {
     let source = &format!("{HOST_CRATE}/native/active_x_host.cpp");
 
     assert_contains_all(
@@ -1112,6 +1112,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "struct ActiveXCleanup",
             "HWND parent_window",
             "HWND host_window",
+            "HWND control_window",
             "CComPtr<IUnknown> container;",
             "CComPtr<IUnknown> control;",
             "CComPtr<IMsRdpClient10> client;",
@@ -1121,8 +1122,10 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "AtlAxWinInit()",
             "CreateWindowExW(",
             "WS_EX_NOPARENTNOTIFY",
+            "TEXT(ATLAXWIN_CLASS)",
             "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS",
-            "AtlAxCreateControlEx(",
+            "AtlAxGetControl(",
+            "AtlAxGetHost(",
             "CLSID:{945EE98E-B376-4EC2-B2E5-64C9410F93B7}",
             "QueryInterface(",
             "IID_PPV_ARGS(&resources->state.client)",
@@ -1158,7 +1161,11 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "ensure_native_host_window_class(instance)",
             "resources->state.host_window = CreateWindowExW(",
             "WS_EX_NOPARENTNOTIFY",
-            "const HRESULT control_result = create_rdp_control(resources->state);",
+            "resources->state.control_window = CreateWindowExW(",
+            "TEXT(ATLAXWIN_CLASS)",
+            "kRdpControlClassName",
+            "const HRESULT control_result = AtlAxGetControl(",
+            "const HRESULT host_result = AtlAxGetHost(",
             "IID_PPV_ARGS(&resources->state.client)",
             "CComPtr<IMsRdpClientNonScriptable2> non_scriptable;",
             "IID_PPV_ARGS(&non_scriptable)",
@@ -1184,8 +1191,12 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "trace_native_win32(\n        \"create.host_class.after\"",
             "trace_native_stage(\"create.host_window.before\")",
             "trace_native_pointer(\n        \"create.host_window.after\"",
-            "trace_native_stage(\"create.control.before\")",
-            "trace_native_hresult(\n        \"create.control.after\"",
+            "trace_native_stage(\"create.control_window.before\")",
+            "trace_native_pointer(\n        \"create.control_window.after\"",
+            "trace_native_stage(\"create.get_control.before\")",
+            "trace_native_hresult(\n        \"create.get_control.after\"",
+            "trace_native_stage(\"create.get_host.before\")",
+            "trace_native_hresult(\n        \"create.get_host.after\"",
             "trace_native_stage(\"create.query_client.before\")",
             "trace_native_stage(\"create.query_non_scriptable.before\")",
             "trace_native_stage(\"create.set_ui_parent.before\")",
@@ -1200,6 +1211,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
         &[
             "destroy_event_subscription(event_subscription);",
             "event_subscription = nullptr;",
+            "DestroyWindow(control_window);",
             "DestroyWindow(host_window);",
             "client.Release();",
             "control.Release();",
@@ -1213,8 +1225,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
         &[
             "DestroyWindow(parent)",
             "L\"AtlAxWin\"",
-            "ATLAXWIN_CLASS",
-            "HWND child_window",
+            "AtlAxCreateControlEx(",
             "SetParent(",
             "put_UIParentWindowHandle(static_cast<LONG>",
             "put_UIParentWindowHandle(static_cast<long>",
@@ -1304,6 +1315,7 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
         "\n    }\n};",
         &[
             "destroy_event_subscription(event_subscription);",
+            "DestroyWindow(control_window);",
             "DestroyWindow(host_window);",
             "client.Release();",
             "control.Release();",
