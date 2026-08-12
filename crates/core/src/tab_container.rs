@@ -850,6 +850,7 @@ pub struct TabContainer {
     rename_input: Option<Entity<InputState>>,
     rename_input_subscription: Option<Subscription>,
     show_tab_bar_when_empty: bool,
+    show_tab_content: bool,
     show_window_controls: bool,
     #[cfg(test)]
     force_windows_titlebar_for_test: bool,
@@ -898,6 +899,7 @@ impl TabContainer {
             rename_input: None,
             rename_input_subscription: None,
             show_tab_bar_when_empty: false,
+            show_tab_content: true,
             show_window_controls: false,
             #[cfg(test)]
             force_windows_titlebar_for_test: false,
@@ -966,6 +968,13 @@ impl TabContainer {
     pub fn with_tab_bar_when_empty(mut self, show: bool) -> Self {
         self.show_tab_bar_when_empty = show;
         self
+    }
+
+    pub fn set_tab_content_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.show_tab_content != visible {
+            self.show_tab_content = visible;
+            cx.notify();
+        }
     }
 
     pub fn set_navigation_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
@@ -4103,23 +4112,25 @@ impl Render for TabContainer {
             .when(show_tab_bar, |this| {
                 this.child(self.render_tab_bar(window, cx))
             })
-            .child(
-                v_flex()
-                    .absolute()
-                    .top(if show_tab_bar {
-                        tab_bar_height
-                    } else {
-                        px(0.0)
-                    })
-                    .right_0()
-                    .bottom_0()
-                    .left_0()
-                    .min_w_0()
-                    .min_h_0()
-                    .items_stretch()
-                    .overflow_hidden()
-                    .child(self.render_tab_content(window, cx)),
-            )
+            .when(self.show_tab_content, |this| {
+                this.child(
+                    v_flex()
+                        .absolute()
+                        .top(if show_tab_bar {
+                            tab_bar_height
+                        } else {
+                            px(0.0)
+                        })
+                        .right_0()
+                        .bottom_0()
+                        .left_0()
+                        .min_w_0()
+                        .min_h_0()
+                        .items_stretch()
+                        .overflow_hidden()
+                        .child(self.render_tab_content(window, cx)),
+                )
+            })
     }
 }
 
@@ -4677,6 +4688,73 @@ mod tests {
             dropdown.right(),
             "the tab switcher must consume the trailing edge instead of following the tabs' intrinsic width"
         );
+    }
+
+    #[gpui::test]
+    fn hiding_tab_content_keeps_the_active_tab_out_of_layout(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+
+        let container = Arc::new(Mutex::new(None));
+        let container_for_window = container.clone();
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let tab = cx.new(|cx| TestTab::new("terminal", cx));
+                    let tabs = cx.new(|cx| TabContainer::new(window, cx));
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("terminal", "test", tab),
+                            window,
+                            cx,
+                        );
+                    });
+                    *container_for_window.lock().unwrap() = Some(tabs.clone());
+
+                    let root = cx.new(|_| TestWindow {
+                        tab_container: tabs,
+                    });
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tab-bar").is_some());
+        assert!(cx.debug_bounds("tab-content").is_some());
+        assert!(cx.debug_bounds("test-tab-root").is_some());
+
+        let tabs = container.lock().unwrap().clone().expect("tab container");
+        cx.update(|_, cx| {
+            tabs.update(cx, |tabs, cx| {
+                tabs.set_tab_content_visible(false, cx);
+            });
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tab-bar").is_some());
+        assert!(cx.debug_bounds("tab-content").is_none());
+        assert!(cx.debug_bounds("test-tab-root").is_none());
+
+        cx.update(|_, cx| {
+            tabs.update(cx, |tabs, cx| {
+                tabs.set_tab_content_visible(true, cx);
+            });
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tab-content").is_some());
+        assert!(cx.debug_bounds("test-tab-root").is_some());
     }
 
     #[gpui::test]

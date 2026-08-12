@@ -1270,6 +1270,7 @@ impl OnetCliApp {
             home.set_home_active(main_content == MainContent::Home, cx)
         });
         tab_container.update(cx, |tc, cx| {
+            tc.set_tab_content_visible(main_content == MainContent::Tabs, cx);
             if layout.pin_home {
                 let home_tab = TabItem::new(layout.home_tab_id, "app", home_page.clone());
                 tc.insert_pinned_tab_at(0, home_tab, cx);
@@ -1370,6 +1371,9 @@ impl OnetCliApp {
     }
 
     fn set_main_content(&mut self, main_content: MainContent, cx: &mut Context<Self>) {
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);
+        });
         if self.main_content == main_content {
             return;
         }
@@ -1705,6 +1709,10 @@ mod tests {
 
         assert!(constructor.contains("home_page: home_page.clone()"));
         assert!(constructor.contains("main_content"));
+        assert!(
+            constructor
+                .contains("tc.set_tab_content_visible(main_content == MainContent::Tabs, cx)")
+        );
         assert!(!constructor.contains("set_base_content"));
         assert!(constructor.contains("let home_tab ="));
         assert!(
@@ -1752,6 +1760,24 @@ mod tests {
         assert_eq!(
             MainContentPresentation::Tabs,
             main_content_presentation(MainContent::Tabs)
+        );
+    }
+
+    #[test]
+    fn modern_home_does_not_layout_the_active_tab_content() {
+        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let setter = source
+            .split("fn set_main_content(")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("\n    fn show_home_if_tab_container_is_empty")
+                    .next()
+            })
+            .expect("set_main_content source");
+
+        assert!(
+            setter.contains("tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);")
         );
     }
 

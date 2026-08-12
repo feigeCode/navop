@@ -513,8 +513,29 @@ fn keyboard_interactive_answers_for_terminal(
 }
 
 fn is_ssh_password_prompt(prompt: &str) -> bool {
-    let prompt = prompt.trim().trim_end_matches(':');
-    prompt.eq_ignore_ascii_case("password") || prompt.to_ascii_lowercase().ends_with("'s password")
+    let prompt = prompt.trim().trim_end_matches(':').trim();
+    let prompt = prompt.to_ascii_lowercase();
+
+    if [
+        "one-time password",
+        "one time password",
+        "otp",
+        "verification code",
+        "security code",
+        "authentication code",
+        "passcode",
+        "token",
+    ]
+    .iter()
+    .any(|marker| prompt.contains(marker))
+    {
+        return false;
+    }
+
+    prompt == "password"
+        || prompt.ends_with("'s password")
+        || prompt.starts_with("password for ")
+        || prompt == "enter password"
 }
 
 fn resolve_ssh_connection(
@@ -3618,7 +3639,7 @@ mod tests {
         TerminalSessionMode, TerminalSshCredentials, build_cd_command,
         build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
         compose_ssh_init_commands, flush_pending_terminal_events, format_connection_error,
-        host_key_verification_request, is_reconnect_generation,
+        host_key_verification_request, is_reconnect_generation, is_ssh_password_prompt,
         keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
         resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
@@ -5320,6 +5341,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(vec!["123456".to_string()], answers);
+    }
+
+    #[test]
+    fn terminal_mfa_recognizes_common_login_password_prompts_without_misclassifying_codes() {
+        for prompt in [
+            "Password:",
+            "root@host's password:",
+            "Password for navop:",
+            "Enter password:",
+        ] {
+            assert!(is_ssh_password_prompt(prompt), "{prompt}");
+        }
+
+        for prompt in [
+            "One-time password:",
+            "OTP:",
+            "Verification code:",
+            "Security code:",
+            "Authentication code:",
+            "Passcode:",
+            "Token:",
+        ] {
+            assert!(!is_ssh_password_prompt(prompt), "{prompt}");
+        }
     }
 
     #[test]

@@ -750,6 +750,16 @@ fn auth_result_allows_keyboard_interactive(auth_result: &client::AuthResult) -> 
     }
 }
 
+const MAX_KEYBOARD_INTERACTIVE_RESTARTS: usize = 3;
+
+fn keyboard_interactive_failure_can_retry(
+    remaining_methods: &russh::MethodSet,
+    restart_count: usize,
+) -> bool {
+    remaining_methods.contains(&russh::MethodKind::KeyboardInteractive)
+        && restart_count < MAX_KEYBOARD_INTERACTIVE_RESTARTS
+}
+
 async fn authenticate_keyboard_interactive<H>(
     session: &mut client::Handle<H>,
     username: &str,
@@ -763,11 +773,40 @@ where
     let mut response = session
         .authenticate_keyboard_interactive_start(username, None::<String>)
         .await?;
+    let mut restart_count = 0;
 
     loop {
         response = match response {
             client::KeyboardInteractiveAuthResponse::Success => return Ok(()),
-            client::KeyboardInteractiveAuthResponse::Failure { .. } => {
+            client::KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods,
+                partial_success,
+            } if keyboard_interactive_failure_can_retry(&remaining_methods, restart_count) => {
+                restart_count += 1;
+                tracing::debug!(
+                    target = ?target,
+                    partial_success,
+                    remaining_methods = ?remaining_methods,
+                    restart_count,
+                    max_restarts = MAX_KEYBOARD_INTERACTIVE_RESTARTS,
+                    "SSH keyboard-interactive requires another authentication round"
+                );
+                session
+                    .authenticate_keyboard_interactive_start(username, None::<String>)
+                    .await?
+            }
+            client::KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
+                tracing::debug!(
+                    target = ?target,
+                    partial_success,
+                    remaining_methods = ?remaining_methods,
+                    restart_count,
+                    max_restarts = MAX_KEYBOARD_INTERACTIVE_RESTARTS,
+                    "SSH keyboard-interactive authentication failed"
+                );
                 anyhow::bail!(messages.keyboard_interactive_failed.clone());
             }
             client::KeyboardInteractiveAuthResponse::InfoRequest {
@@ -1287,6 +1326,31 @@ mod tests {
         };
 
         assert!(auth_result_allows_keyboard_interactive(&result));
+    }
+
+    #[test]
+    fn keyboard_interactive_failure_retries_only_when_allowed_and_bounded() {
+        let keyboard_interactive =
+            russh::MethodSet::from(&[russh::MethodKind::KeyboardInteractive][..]);
+        let password = russh::MethodSet::from(&[russh::MethodKind::Password][..]);
+
+        assert!(keyboard_interactive_failure_can_retry(
+            &keyboard_interactive,
+            0
+        ));
+        assert!(keyboard_interactive_failure_can_retry(
+            &keyboard_interactive,
+            MAX_KEYBOARD_INTERACTIVE_RESTARTS - 1
+        ));
+        assert!(!keyboard_interactive_failure_can_retry(
+            &keyboard_interactive,
+            MAX_KEYBOARD_INTERACTIVE_RESTARTS
+        ));
+        assert!(!keyboard_interactive_failure_can_retry(&password, 0));
+        assert!(!keyboard_interactive_failure_can_retry(
+            &russh::MethodSet::empty(),
+            0
+        ));
     }
 
     #[tokio::test]
