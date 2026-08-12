@@ -12,10 +12,89 @@ pub(super) enum NativeRdpConnectionPhase {
     Disconnected,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum NativeRdpUiEffect {
     CloseConfirmed,
     FocusReleased,
+    Connecting {
+        generation: u64,
+    },
+    Connected {
+        generation: u64,
+    },
+    LoginComplete {
+        generation: u64,
+    },
+    Reconnecting {
+        generation: u64,
+        attempt: u32,
+        max_attempts: Option<u32>,
+    },
+    Reconnected {
+        generation: u64,
+    },
+    Warning {
+        generation: u64,
+        warning: WindowsRdpWarning,
+    },
+    FatalError {
+        generation: u64,
+        error: WindowsRdpFatalError,
+    },
+    LogonError {
+        generation: u64,
+        error: WindowsRdpLogonError,
+    },
+    Disconnected {
+        generation: u64,
+        reason: WindowsRdpDisconnectReason,
+    },
+    Unknown {
+        event: WindowsRdpRawEvent,
+    },
+}
+
+pub(super) fn diagnostic_text(effect: &NativeRdpUiEffect) -> Option<String> {
+    match effect {
+        NativeRdpUiEffect::Warning {
+            generation,
+            warning,
+        } => Some(format!(
+            "Windows native RDP diagnostic\nevent=Warning\ngeneration={generation}\nkind={:?}\ncode={}",
+            warning.kind(),
+            warning.code(),
+        )),
+        NativeRdpUiEffect::FatalError { generation, error } => Some(format!(
+            "Windows native RDP diagnostic\nevent=FatalError\ngeneration={generation}\nkind={:?}\ncode={}",
+            error.kind(),
+            error.code(),
+        )),
+        NativeRdpUiEffect::LogonError { generation, error } => Some(format!(
+            "Windows native RDP diagnostic\nevent=LogonError\ngeneration={generation}\nkind={:?}\ncode={}",
+            error.kind(),
+            error.code(),
+        )),
+        NativeRdpUiEffect::Disconnected { generation, reason } => Some(format!(
+            "Windows native RDP diagnostic\nevent=Disconnected\ngeneration={generation}\ncategory={:?}\ndisconnect_code={}\nextended_code={:?}",
+            reason.category(),
+            reason.disconnect_code(),
+            reason.extended_code(),
+        )),
+        NativeRdpUiEffect::Unknown { event } => Some(format!(
+            "Windows native RDP diagnostic\nevent=Unknown\ngeneration={}\nkind={}\ncode={}\npayload_len={}",
+            event.generation,
+            event.kind,
+            event.code,
+            event.payload.len(),
+        )),
+        NativeRdpUiEffect::CloseConfirmed
+        | NativeRdpUiEffect::FocusReleased
+        | NativeRdpUiEffect::Connecting { .. }
+        | NativeRdpUiEffect::Connected { .. }
+        | NativeRdpUiEffect::LoginComplete { .. }
+        | NativeRdpUiEffect::Reconnecting { .. }
+        | NativeRdpUiEffect::Reconnected { .. } => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,22 +160,37 @@ impl NativeRdpEventState {
             WindowsRdpEvent::HostReady { capabilities, .. } => {
                 self.host_ready = capabilities.is_available();
             }
-            WindowsRdpEvent::Connecting { .. } => {
+            WindowsRdpEvent::Connecting { generation } => {
                 self.phase = NativeRdpConnectionPhase::Connecting;
+                return Some(NativeRdpUiEffect::Connecting { generation });
             }
-            WindowsRdpEvent::Connected { .. }
-            | WindowsRdpEvent::LoginComplete { .. }
-            | WindowsRdpEvent::Reconnected { .. } => {
+            WindowsRdpEvent::Connected { generation } => {
                 self.phase = NativeRdpConnectionPhase::Active;
                 self.reconnect_attempt = None;
+                return Some(NativeRdpUiEffect::Connected { generation });
+            }
+            WindowsRdpEvent::LoginComplete { generation } => {
+                self.phase = NativeRdpConnectionPhase::Active;
+                self.reconnect_attempt = None;
+                return Some(NativeRdpUiEffect::LoginComplete { generation });
+            }
+            WindowsRdpEvent::Reconnected { generation } => {
+                self.phase = NativeRdpConnectionPhase::Active;
+                self.reconnect_attempt = None;
+                return Some(NativeRdpUiEffect::Reconnected { generation });
             }
             WindowsRdpEvent::Reconnecting {
+                generation,
                 attempt,
                 max_attempts,
-                ..
             } => {
                 self.phase = NativeRdpConnectionPhase::Reconnecting;
                 self.reconnect_attempt = Some((attempt, max_attempts));
+                return Some(NativeRdpUiEffect::Reconnecting {
+                    generation,
+                    attempt,
+                    max_attempts,
+                });
             }
             WindowsRdpEvent::NetworkStatusChanged { quality, .. } => {
                 self.network_quality = quality;
@@ -110,19 +204,29 @@ impl NativeRdpEventState {
             WindowsRdpEvent::AuthenticationWarning { visible, .. } => {
                 self.authentication_warning_visible = visible;
             }
-            WindowsRdpEvent::Warning { warning, .. } => {
+            WindowsRdpEvent::Warning {
+                generation,
+                warning,
+            } => {
                 self.last_warning = Some(warning);
+                return Some(NativeRdpUiEffect::Warning {
+                    generation,
+                    warning,
+                });
             }
-            WindowsRdpEvent::FatalError { error, .. } => {
+            WindowsRdpEvent::FatalError { generation, error } => {
                 self.last_fatal_error = Some(error);
+                return Some(NativeRdpUiEffect::FatalError { generation, error });
             }
-            WindowsRdpEvent::LogonError { error, .. } => {
+            WindowsRdpEvent::LogonError { generation, error } => {
                 self.last_logon_error = Some(error);
+                return Some(NativeRdpUiEffect::LogonError { generation, error });
             }
-            WindowsRdpEvent::Disconnected { reason, .. } => {
+            WindowsRdpEvent::Disconnected { generation, reason } => {
                 self.phase = NativeRdpConnectionPhase::Disconnected;
                 self.reconnect_attempt = None;
                 self.last_disconnect = Some(reason);
+                return Some(NativeRdpUiEffect::Disconnected { generation, reason });
             }
             WindowsRdpEvent::CloseConfirmed { .. } => {
                 self.close_confirmed = true;
@@ -132,7 +236,9 @@ impl NativeRdpEventState {
                 self.focus_release_pending = true;
                 return Some(NativeRdpUiEffect::FocusReleased);
             }
-            WindowsRdpEvent::Unknown { .. } => {}
+            WindowsRdpEvent::Unknown { event } => {
+                return Some(NativeRdpUiEffect::Unknown { event });
+            }
         }
 
         None
@@ -239,28 +345,47 @@ mod tests {
     fn connection_and_reconnection_events_reach_active_state() {
         let mut state = NativeRdpEventState::new(8);
 
-        apply(&mut state, WindowsRdpEvent::Connecting { generation: 8 });
+        assert_eq!(
+            Some(NativeRdpUiEffect::Connecting { generation: 8 }),
+            apply(&mut state, WindowsRdpEvent::Connecting { generation: 8 })
+        );
         assert_eq!(NativeRdpConnectionPhase::Connecting, state.phase);
 
-        apply(&mut state, WindowsRdpEvent::Connected { generation: 8 });
+        assert_eq!(
+            Some(NativeRdpUiEffect::Connected { generation: 8 }),
+            apply(&mut state, WindowsRdpEvent::Connected { generation: 8 })
+        );
         assert_eq!(NativeRdpConnectionPhase::Active, state.phase);
 
-        apply(
-            &mut state,
-            WindowsRdpEvent::Reconnecting {
+        assert_eq!(
+            Some(NativeRdpUiEffect::Reconnecting {
                 generation: 8,
                 attempt: 3,
                 max_attempts: Some(10),
-            },
+            }),
+            apply(
+                &mut state,
+                WindowsRdpEvent::Reconnecting {
+                    generation: 8,
+                    attempt: 3,
+                    max_attempts: Some(10),
+                },
+            )
         );
         assert_eq!(NativeRdpConnectionPhase::Reconnecting, state.phase);
         assert_eq!(Some((3, Some(10))), state.reconnect_attempt);
 
-        apply(&mut state, WindowsRdpEvent::Reconnected { generation: 8 });
+        assert_eq!(
+            Some(NativeRdpUiEffect::Reconnected { generation: 8 }),
+            apply(&mut state, WindowsRdpEvent::Reconnected { generation: 8 })
+        );
         assert_eq!(NativeRdpConnectionPhase::Active, state.phase);
         assert_eq!(None, state.reconnect_attempt);
 
-        apply(&mut state, WindowsRdpEvent::LoginComplete { generation: 8 });
+        assert_eq!(
+            Some(NativeRdpUiEffect::LoginComplete { generation: 8 }),
+            apply(&mut state, WindowsRdpEvent::LoginComplete { generation: 8 })
+        );
         assert_eq!(NativeRdpConnectionPhase::Active, state.phase);
     }
 
@@ -270,12 +395,18 @@ mod tests {
         let reason =
             WindowsRdpDisconnectReason::new(WindowsRdpDiagnosticCategory::Network, 2308, Some(262));
 
-        apply(
-            &mut state,
-            WindowsRdpEvent::Disconnected {
+        assert_eq!(
+            Some(NativeRdpUiEffect::Disconnected {
                 generation: 8,
                 reason,
-            },
+            }),
+            apply(
+                &mut state,
+                WindowsRdpEvent::Disconnected {
+                    generation: 8,
+                    reason,
+                },
+            )
         );
 
         assert_eq!(NativeRdpConnectionPhase::Disconnected, state.phase);
@@ -289,29 +420,50 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_keep_signed_raw_codes_without_creating_ui_text() {
+    fn diagnostics_keep_signed_raw_codes_and_produce_owner_thread_effects() {
         let mut state = NativeRdpEventState::new(8);
 
-        apply(
-            &mut state,
-            WindowsRdpEvent::Warning {
+        let warning = WindowsRdpWarning::from_native_code(1);
+        assert_eq!(
+            Some(NativeRdpUiEffect::Warning {
                 generation: 8,
-                warning: WindowsRdpWarning::from_native_code(1),
-            },
+                warning,
+            }),
+            apply(
+                &mut state,
+                WindowsRdpEvent::Warning {
+                    generation: 8,
+                    warning,
+                },
+            )
         );
-        apply(
-            &mut state,
-            WindowsRdpEvent::FatalError {
+        let fatal_error = WindowsRdpFatalError::from_native_code(100);
+        assert_eq!(
+            Some(NativeRdpUiEffect::FatalError {
                 generation: 8,
-                error: WindowsRdpFatalError::from_native_code(100),
-            },
+                error: fatal_error,
+            }),
+            apply(
+                &mut state,
+                WindowsRdpEvent::FatalError {
+                    generation: 8,
+                    error: fatal_error,
+                },
+            )
         );
-        apply(
-            &mut state,
-            WindowsRdpEvent::LogonError {
+        let logon_error = WindowsRdpLogonError::from_native_code(-1_073_741_715);
+        assert_eq!(
+            Some(NativeRdpUiEffect::LogonError {
                 generation: 8,
-                error: WindowsRdpLogonError::from_native_code(-1_073_741_715),
-            },
+                error: logon_error,
+            }),
+            apply(
+                &mut state,
+                WindowsRdpEvent::LogonError {
+                    generation: 8,
+                    error: logon_error,
+                },
+            )
         );
 
         assert_eq!(
@@ -334,6 +486,71 @@ mod tests {
         assert_eq!(
             Some(-1_073_741_715),
             state.last_logon_error.map(WindowsRdpLogonError::code)
+        );
+    }
+
+    #[test]
+    fn diagnostic_text_preserves_native_event_classification_and_raw_codes() {
+        assert_eq!(
+            Some(
+                "Windows native RDP diagnostic\n\
+                 event=FatalError\n\
+                 generation=8\n\
+                 kind=WinsockInitialization\n\
+                 code=100"
+                    .to_owned()
+            ),
+            diagnostic_text(&NativeRdpUiEffect::FatalError {
+                generation: 8,
+                error: WindowsRdpFatalError::from_native_code(100),
+            })
+        );
+        assert_eq!(
+            Some(
+                "Windows native RDP diagnostic\n\
+                 event=LogonError\n\
+                 generation=8\n\
+                 kind=BadCredentials\n\
+                 code=-1073741715"
+                    .to_owned()
+            ),
+            diagnostic_text(&NativeRdpUiEffect::LogonError {
+                generation: 8,
+                error: WindowsRdpLogonError::from_native_code(-1_073_741_715),
+            })
+        );
+        assert_eq!(
+            Some(
+                "Windows native RDP diagnostic\n\
+                 event=Disconnected\n\
+                 generation=8\n\
+                 category=Network\n\
+                 disconnect_code=2308\n\
+                 extended_code=Some(262)"
+                    .to_owned()
+            ),
+            diagnostic_text(&NativeRdpUiEffect::Disconnected {
+                generation: 8,
+                reason: WindowsRdpDisconnectReason::new(
+                    WindowsRdpDiagnosticCategory::Network,
+                    2308,
+                    Some(262),
+                ),
+            })
+        );
+        assert_eq!(
+            Some(
+                "Windows native RDP diagnostic\n\
+                 event=Unknown\n\
+                 generation=8\n\
+                 kind=99\n\
+                 code=-7\n\
+                 payload_len=12"
+                    .to_owned()
+            ),
+            diagnostic_text(&NativeRdpUiEffect::Unknown {
+                event: raw(8, 99, -7, [0; 12]),
+            })
         );
     }
 
@@ -405,7 +622,13 @@ mod tests {
         apply(&mut state, WindowsRdpEvent::Connected { generation: 8 });
         let before = state.clone();
 
-        apply(&mut state, raw(8, EVENT_CONNECTING, 1, []).into());
+        let event = raw(8, EVENT_CONNECTING, 1, []);
+        assert_eq!(
+            Some(NativeRdpUiEffect::Unknown {
+                event: event.clone(),
+            }),
+            apply(&mut state, event.into())
+        );
 
         assert_eq!(before, state);
     }
@@ -432,7 +655,21 @@ mod tests {
                 .last_disconnect
                 .map(WindowsRdpDisconnectReason::category)
         );
-        assert_eq!(vec![NativeRdpUiEffect::CloseConfirmed], effects);
+        assert_eq!(
+            vec![
+                NativeRdpUiEffect::Connecting { generation: 8 },
+                NativeRdpUiEffect::Disconnected {
+                    generation: 8,
+                    reason: WindowsRdpDisconnectReason::new(
+                        WindowsRdpDiagnosticCategory::Network,
+                        2308,
+                        Some(262),
+                    ),
+                },
+                NativeRdpUiEffect::CloseConfirmed,
+            ],
+            effects
+        );
         assert!(state.close_confirmed());
         assert!(source.drain_events().is_empty());
         assert!(drain_native_events(&source, &mut state).is_empty());
@@ -454,7 +691,10 @@ mod tests {
 
         state.reset_for_generation(9);
         let source = FakeEventSource::new(9, vec![raw(9, EVENT_CONNECTING, 0, [])]);
-        assert!(drain_native_events(&source, &mut state).is_empty());
+        assert_eq!(
+            vec![NativeRdpUiEffect::Connecting { generation: 9 }],
+            drain_native_events(&source, &mut state)
+        );
         assert_eq!(NativeRdpConnectionPhase::Connecting, state.phase);
     }
 }

@@ -97,6 +97,10 @@ RemoteDesktop:
     en: Retry with Canvas
     zh-CN: 使用 Canvas 重试
     zh-HK: 使用 Canvas 重試
+  copy_diagnostic:
+    en: Copy diagnostics
+    zh-CN: 复制诊断
+    zh-HK: 複製診斷
   session_taken_over_notification:
     en: Another user connected to the remote server. This RDP session was disconnected and the tab was closed.
     zh-CN: 另一位用户已连接到远程服务器，当前 RDP 会话已断开，页签已自动关闭。

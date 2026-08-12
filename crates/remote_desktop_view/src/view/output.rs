@@ -54,6 +54,7 @@ impl RemoteDesktopView {
         self._output_ready_task = Some(output_ready_task);
         self.last_resize_size = Some(size);
         self.connected = false;
+        self.failure_detail = None;
         self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
     }
 
@@ -330,6 +331,7 @@ impl RemoteDesktopView {
                 self.remote_size = Some((width, height));
                 self.capabilities = Some(capabilities);
                 self.connected = true;
+                self.failure_detail = None;
                 self.frame_sync.connected();
                 let generation = self.frame_sync.snapshot().session_generation;
                 self.enqueue_presentation(

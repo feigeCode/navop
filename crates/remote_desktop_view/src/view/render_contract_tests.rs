@@ -627,7 +627,9 @@ fn windows_native_events_are_drained_on_the_gpui_owner_thread() {
         "fn poll_windows_native_close",
     );
     assert!(poll.contains("native.drain_events(event_state)"));
-    assert!(poll.contains("event_state.take_focus_release_pending()"));
+    assert!(poll.contains("for effect in effects"));
+    assert!(poll.contains("self.apply_windows_native_ui_effect(effect)"));
+    assert!(poll.contains("NativeRdpEventState::take_focus_release_pending"));
     assert!(poll.contains("self.tab_active"));
     assert!(poll.contains("self.focus_handle.clone()"));
 
@@ -766,6 +768,7 @@ fn explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_st
     assert!(close_canvas < select_canvas);
     assert!(retry.contains("self.output_rx = None;"));
     assert!(retry.contains("fallback_reason: None"));
+    assert!(retry.contains("self.failure_detail = None;"));
     assert!(retry.contains("cx.notify();"));
     assert!(
         !retry.contains("start_runtime"),
@@ -961,13 +964,16 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     );
 
     let status = &content[content
-        .find(".when(show_empty_status")
+        .find("show_empty_status && (!uses_windows_native || show_failure_detail)")
         .expect("empty-frame status")..];
     assert!(status.contains(".min_w_0()"));
     assert!(status.contains(".max_w_full()"));
     assert!(status.contains(".flex_shrink_0()"));
     assert!(status.contains(".overflow_hidden()"));
-    assert!(status.contains(".whitespace_nowrap()"));
+    assert!(status.contains(".whitespace_normal()"));
+    assert!(status.contains(".overflow_scrollbar()"));
+    assert!(status.contains("remote-desktop-copy-diagnostic"));
+    assert!(status.contains("ClipboardItem::new_string"));
     assert!(status.contains(".text_center()"));
     for constraint in [
         ".size_full()",

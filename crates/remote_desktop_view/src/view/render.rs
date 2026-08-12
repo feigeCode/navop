@@ -1,5 +1,7 @@
 use gpui::prelude::FluentBuilder;
-use gpui_component::{ElementExt as _, Sizable as _, button::Button};
+use gpui_component::{
+    ElementExt as _, Sizable as _, button::Button, scroll::ScrollableElement as _,
+};
 
 use super::*;
 use crate::pointer::scale_filled_remote_cursor_bounds;
@@ -446,6 +448,8 @@ impl Render for RemoteDesktopView {
             cursor: self.cursor.paint_state(self.remote_size),
         };
         let uses_windows_native = self.uses_windows_native_presentation();
+        let failure_detail = self.failure_detail.clone();
+        let show_failure_detail = failure_detail.is_some();
         let show_presentation_status = self.options.protocol == RemoteDesktopProtocol::Rdp;
         let presentation_initialization = self.presentation_initialization;
         let presentation_backend = localized_presentation_backend(presentation_initialization);
@@ -540,21 +544,62 @@ impl Render for RemoteDesktopView {
                     }))
                     .child(remote_desktop_frame_canvas(canvas_paint))
             })
-            .when(show_empty_status && !uses_windows_native, |this| {
-                this.child(
-                    div()
-                        .min_w_0()
-                        .max_w_full()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_center()
-                        .px_4()
-                        .py_2()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.status.clone()),
-                )
-            })
+            .when(
+                show_empty_status && (!uses_windows_native || show_failure_detail),
+                |this| {
+                    this.child(
+                        div()
+                            .min_w_0()
+                            .max_w_full()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_3()
+                            .text_center()
+                            .px_4()
+                            .py_2()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .whitespace_normal()
+                                    .child(self.status.clone()),
+                            )
+                            .when_some(failure_detail, |this, detail| {
+                                let clipboard_detail = detail.clone();
+                                this.child(
+                                    div()
+                                        .w_full()
+                                        .max_h(px(320.0))
+                                        .overflow_scrollbar()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .bg(cx.theme().muted)
+                                        .p_3()
+                                        .text_left()
+                                        .text_xs()
+                                        .whitespace_normal()
+                                        .child(detail),
+                                )
+                                .child(
+                                    Button::new("remote-desktop-copy-diagnostic")
+                                        .small()
+                                        .outline()
+                                        .compact()
+                                        .label(t!("RemoteDesktop.copy_diagnostic").to_string())
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                clipboard_detail.to_string(),
+                                            ));
+                                        }),
+                                )
+                            }),
+                    )
+                },
+            )
             .on_prepaint(move |bounds, window, cx| {
                 view.update(cx, |view, view_cx| {
                     view.update_content_bounds(bounds, window.scale_factor(), view_cx);
