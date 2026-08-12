@@ -14,7 +14,9 @@ use crate::ipc::registry::{
 use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
-use crate::plugin::{ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{
+    ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo, format_binary_literal_for_database,
+};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::postgresql::PostgresPlugin;
 use crate::schema_preferences::{
@@ -1449,6 +1451,15 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         }
     }
 
+    fn format_binary_literal(&self, bytes: &[u8]) -> String {
+        self.driver
+            .dialect
+            .compatible_database_type
+            .as_ref()
+            .map(|database_type| format_binary_literal_for_database(database_type, bytes))
+            .unwrap_or_else(|| format_binary_literal_for_database(&self.name(), bytes))
+    }
+
     fn build_explain_statement(&self, sql: &str) -> String {
         self.driver
             .dialect
@@ -2432,6 +2443,25 @@ mod tests {
         assert_ne!(
             alpha.ui.form.unwrap().forms[0].title_i18n_key,
             plugin.ui_manifest().forms[0].title_i18n_key
+        );
+    }
+
+    #[test]
+    fn fixed_driver_plugin_formats_binary_for_compatible_database() {
+        let mut postgres = driver_manifest("postgres-compatible", true, "postgres.connection");
+        postgres.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let postgres = ExternalDatabasePlugin::for_driver(postgres);
+        assert_eq!(
+            "decode('0001ff', 'hex')",
+            postgres.format_binary_literal(&[0x00, 0x01, 0xff])
+        );
+
+        let mut duckdb = driver_manifest("duckdb-compatible", false, "duckdb.connection");
+        duckdb.dialect.compatible_database_type = Some(DatabaseType::DuckDB);
+        let duckdb = ExternalDatabasePlugin::for_driver(duckdb);
+        assert_eq!(
+            "from_hex('0001ff')",
+            duckdb.format_binary_literal(&[0x00, 0x01, 0xff])
         );
     }
 

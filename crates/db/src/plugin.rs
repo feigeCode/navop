@@ -2140,6 +2140,15 @@ pub trait DatabasePlugin: Send + Sync {
         self.escape_copy_string(v)
     }
 
+    /// Format exact binary bytes as a database-specific SQL expression.
+    ///
+    /// This is intentionally separate from [`DatabasePlugin::format_binary_value`], which receives
+    /// a display string used by copy SQL. Import/export callers with lossless bytes should use this
+    /// method instead of trying to infer binary values from their display representation.
+    fn format_binary_literal(&self, bytes: &[u8]) -> String {
+        format_binary_literal_for_database(&self.name(), bytes)
+    }
+
     /// Escape string for copy SQL (database-specific, can be overridden)
     fn escape_copy_string(&self, s: &str) -> String {
         let escaped = s.replace('\'', "''");
@@ -2909,6 +2918,23 @@ fn foreign_key_action_sql(action: &str) -> Option<String> {
     match action.as_str() {
         "CASCADE" | "RESTRICT" | "NO ACTION" | "SET NULL" | "SET DEFAULT" => Some(action),
         _ => None,
+    }
+}
+
+pub(crate) fn format_binary_literal_for_database(
+    database_type: &DatabaseType,
+    bytes: &[u8],
+) -> String {
+    let hex = hex::encode(bytes);
+    match database_type {
+        DatabaseType::PostgreSQL => format!("decode('{hex}', 'hex')"),
+        DatabaseType::MSSQL => format!("0x{hex}"),
+        DatabaseType::Oracle => format!("HEXTORAW('{hex}')"),
+        DatabaseType::DuckDB => format!("from_hex('{hex}')"),
+        DatabaseType::ClickHouse => format!("unhex('{hex}')"),
+        DatabaseType::MySQL | DatabaseType::SQLite | DatabaseType::External { .. } => {
+            format!("X'{hex}'")
+        }
     }
 }
 

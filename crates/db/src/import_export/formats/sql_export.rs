@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashMap;
 
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
@@ -113,8 +114,21 @@ fn sql_dump_page(
         output.push('\n');
         *wrote_header = true;
     }
-    for row in &query_result.rows {
-        push_insert_statement(plugin, &mut output, table_ident, &query_result.columns, row);
+    let binary_cells = query_result
+        .binary_cells
+        .iter()
+        .map(|cell| ((cell.row_index, cell.column_index), cell.bytes.as_slice()))
+        .collect::<HashMap<_, _>>();
+    for (row_index, row) in query_result.rows.iter().enumerate() {
+        push_insert_statement(
+            plugin,
+            &mut output,
+            table_ident,
+            &query_result.columns,
+            row_index,
+            row,
+            &binary_cells,
+        );
     }
     output
 }
@@ -124,7 +138,9 @@ fn push_insert_statement(
     output: &mut String,
     table_ident: &str,
     columns: &[String],
+    row_index: usize,
     row: &[Option<String>],
+    binary_cells: &HashMap<(usize, usize), &[u8]>,
 ) {
     output.push_str("INSERT INTO ");
     output.push_str(table_ident);
@@ -141,7 +157,11 @@ fn push_insert_statement(
         if index > 0 {
             output.push_str(", ");
         }
-        push_sql_value(output, value.as_deref());
+        if let Some(bytes) = binary_cells.get(&(row_index, index)) {
+            output.push_str(&plugin.format_binary_literal(bytes));
+        } else {
+            push_sql_value(output, value.as_deref());
+        }
     }
     output.push_str(");\n");
 }
