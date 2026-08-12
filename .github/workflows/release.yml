@@ -114,14 +114,14 @@ jobs:
           RELEASE_PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
-          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
-          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
-          linux_x64_portable='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":false,"portable_linux":true}'
-          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":true,"portable_linux":false}'
-          linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":true,"portable_linux":true}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"portable_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
-          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"portable_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
+          linux_x64_portable='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":false,"windows_native_rdp":false,"portable_linux":true}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":true,"windows_native_rdp":false,"portable_linux":false}'
+          linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":true,"windows_native_rdp":false,"portable_linux":true}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
 
           case "$RELEASE_PLATFORM" in
             all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_x64_portable,$linux_arm64,$linux_arm64_portable,$windows_x64,$windows_x86]" ;;
@@ -308,6 +308,10 @@ jobs:
               --target "${{ matrix.target }}.2.28" \
               --no-default-features \
               --features wasm-components
+          elif [ "${{ matrix.windows_native_rdp }}" = "true" ]; then
+            cargo_features=()
+            cargo_features+=(--features windows-native-rdp)
+            cargo build --release -p main "${cargo_features[@]}" --target ${{ matrix.target }}
           else
             cargo build --release -p main --target "${{ matrix.target }}"
           fi

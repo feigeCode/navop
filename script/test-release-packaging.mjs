@@ -466,6 +466,56 @@ test("Windows release builds an installable per-user MSI", () => {
   assert.match(wix, /Root="HKCU"/);
 });
 
+test("Windows application builds include the native RDP backend", () => {
+  const release = read(".github/workflows/release.yml");
+  const manual = read(".github/workflows/build-windows-msi.yml");
+  const releaseBuild = release.match(
+    /- name: Build release binary[\s\S]*?(?=\n      - name:)/,
+  )?.[0];
+
+  assert.ok(releaseBuild, "missing release binary build step");
+  for (const target of [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+  ]) {
+    assert.match(
+      release,
+      new RegExp(
+        `"target":"${target}"[^']*"windows_native_rdp":false`,
+      ),
+    );
+  }
+  for (const target of [
+    "x86_64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+  ]) {
+    assert.match(
+      release,
+      new RegExp(
+        `"target":"${target}"[^']*"windows_native_rdp":true`,
+      ),
+    );
+  }
+  assert.match(
+    releaseBuild,
+    /if \[ "\$\{\{ matrix\.windows_native_rdp \}\}" = "true" \]; then/,
+  );
+  assert.match(
+    releaseBuild,
+    /cargo_features\+=\(--features windows-native-rdp\)/,
+  );
+  assert.match(
+    releaseBuild,
+    /cargo build --release -p main "\$\{cargo_features\[@\]\}" --target \$\{\{ matrix\.target \}\}/,
+  );
+  assert.match(
+    manual,
+    /cargo build --release -p main --features windows-native-rdp --target \$env:WINDOWS_TARGET/,
+  );
+});
+
 test("Windows release publishes 32-bit x86 artifacts and updater metadata", () => {
   const release = read(".github/workflows/release.yml");
   const manual = read(".github/workflows/build-windows-msi.yml");
@@ -841,7 +891,7 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(workflow, /WINDOWS_BASENAME/);
   assert.match(
     workflow,
-    /cargo build --release -p main --target \$env:WINDOWS_TARGET/,
+    /cargo build --release -p main --features windows-native-rdp --target \$env:WINDOWS_TARGET/,
   );
   assert.match(workflow, /wix --version 6\.0\.2/);
   assert.match(workflow, /WixToolset\.UI\.wixext\/6\.0\.2/);
