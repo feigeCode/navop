@@ -230,7 +230,6 @@ mod windows_app {
     impl SmokeView {
         fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
             let timeout = Duration::from_secs(config.timeout_seconds);
-            let (host, status, last_bounds) = initialize_host(config, window);
 
             let poll_task = cx.spawn(async move |view, cx| {
                 loop {
@@ -242,6 +241,16 @@ mod windows_app {
                         break;
                     }
                 }
+            });
+
+            cx.defer_in(window, move |view, window, cx| {
+                println!("initialize: deferred GPUI window callback started");
+                let (host, status, last_bounds) = initialize_host(config, window);
+                view.host = host;
+                view.status = status;
+                view.started_at = Instant::now();
+                view.last_bounds = last_bounds;
+                cx.notify();
             });
 
             let bounds_subscription = cx.observe_window_bounds(window, |view, window, cx| {
@@ -257,15 +266,15 @@ mod windows_app {
             });
 
             Self {
-                host,
-                status,
+                host: None,
+                status: "GPUI window ready; native RDP initialization is deferred".to_owned(),
                 started_at: Instant::now(),
                 timeout,
                 login_complete: false,
                 terminal_failure: false,
                 timed_out: false,
                 last_connection_state: None,
-                last_bounds,
+                last_bounds: None,
                 _poll_task: poll_task,
                 _bounds_subscription: bounds_subscription,
             }

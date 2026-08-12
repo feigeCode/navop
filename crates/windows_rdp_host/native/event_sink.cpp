@@ -510,8 +510,12 @@ NavopRdpResult create_event_subscription(
         *out_subscription = nullptr;
 
         CComPtr<IConnectionPointContainer> connection_point_container;
+        trace_native_stage("event_subscription.query_container.before");
         HRESULT result = control->QueryInterface(
             IID_PPV_ARGS(&connection_point_container));
+        trace_native_hresult(
+            "event_subscription.query_container.after",
+            static_cast<int32_t>(result));
         if (FAILED(result) || connection_point_container == nullptr) {
             if (FAILED(result)) {
                 return record_last_hresult(
@@ -523,9 +527,13 @@ NavopRdpResult create_event_subscription(
         }
 
         CComPtr<IConnectionPoint> connection_point;
+        trace_native_stage("event_subscription.find_connection_point.before");
         result = connection_point_container->FindConnectionPoint(
             __uuidof(IMsTscAxEvents),
             &connection_point);
+        trace_native_hresult(
+            "event_subscription.find_connection_point.after",
+            static_cast<int32_t>(result));
         if (FAILED(result) || connection_point == nullptr) {
             if (FAILED(result)) {
                 return record_last_hresult(
@@ -536,24 +544,32 @@ NavopRdpResult create_event_subscription(
             return record_last_error(host, NAVOP_RDP_RESULT_UNAVAILABLE);
         }
 
+        trace_native_stage("event_subscription.allocate.before");
         auto subscription = std::unique_ptr<NativeRdpEventSubscription>(
             new (std::nothrow) NativeRdpEventSubscription());
         if (!subscription) {
+            trace_native_stage("event_subscription.allocate.failed");
             return record_last_error(
                 host,
                 NAVOP_RDP_RESULT_ALLOCATION_FAILED);
         }
         RdpEventSink* sink = new (std::nothrow) RdpEventSink(host);
         if (sink == nullptr) {
+            trace_native_stage("event_subscription.sink_allocate.failed");
             return record_last_error(
                 host,
                 NAVOP_RDP_RESULT_ALLOCATION_FAILED);
         }
+        trace_native_stage("event_subscription.allocate.after");
 
         DWORD advise_cookie = 0;
+        trace_native_stage("event_subscription.advise.before");
         result = connection_point->Advise(
             static_cast<IDispatch*>(sink),
             &advise_cookie);
+        trace_native_hresult(
+            "event_subscription.advise.after",
+            static_cast<int32_t>(result));
         if (FAILED(result) || advise_cookie == 0) {
             sink->Release();
             if (FAILED(result)) {
@@ -569,6 +585,7 @@ NavopRdpResult create_event_subscription(
         subscription->sink = sink;
         subscription->advise_cookie = advise_cookie;
         *out_subscription = subscription.release();
+        trace_native_stage("event_subscription.complete");
         return NAVOP_RDP_RESULT_OK;
     } catch (...) {
         return record_last_error(host, NAVOP_RDP_RESULT_INTERNAL_ERROR);

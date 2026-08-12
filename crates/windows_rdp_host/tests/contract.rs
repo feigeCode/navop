@@ -1079,6 +1079,7 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
         "\n}",
         &[
             "generate_type_library_bindings(&out_dir);",
+            ".file(\"native/diagnostic.cpp\")",
             ".file(\"native/event_sink.cpp\")",
             ".file(\"native/active_x_host.cpp\")",
             ".compile(\"windows_rdp_host\");",
@@ -1166,6 +1167,26 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
     );
     assert_tokens_in_scope(
         source,
+        "NavopRdpResult create_active_x_resources(",
+        "\n}\n\nvoid destroy_active_x_resources",
+        &[
+            "trace_native_stage(\"create.ole_initialize.before\")",
+            "trace_native_hresult(\n        \"create.ole_initialize.after\"",
+            "trace_native_stage(\"create.atl_ax_win_init.before\")",
+            "trace_native_stage(\"create.atl_ax_win_init.after\")",
+            "trace_native_stage(\"create.window.before\")",
+            "trace_native_pointer(\n        \"create.window.after\"",
+            "trace_native_stage(\"create.control.before\")",
+            "trace_native_hresult(\n        \"create.control.after\"",
+            "trace_native_stage(\"create.query_client.before\")",
+            "trace_native_stage(\"create.query_non_scriptable.before\")",
+            "trace_native_stage(\"create.set_ui_parent.before\")",
+            "trace_native_stage(\"create.event_subscription.before\")",
+            "trace_native_stage(\"create.complete\")",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
         "~ActiveXCleanup() noexcept",
         "\n    }\n};",
         &[
@@ -1219,6 +1240,10 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "IConnectionPointContainer",
             "FindConnectionPoint(",
             "connection_point->Advise(",
+            "trace_native_stage(\"event_subscription.query_container.before\")",
+            "trace_native_stage(\"event_subscription.find_connection_point.before\")",
+            "trace_native_stage(\"event_subscription.advise.before\")",
+            "trace_native_stage(\"event_subscription.complete\")",
             "DWORD advise_cookie = 0;",
             "subscription->advise_cookie = advise_cookie;",
             "NAVOP_RDP_EVENT_CONNECTING",

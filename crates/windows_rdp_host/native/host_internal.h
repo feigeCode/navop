@@ -14,6 +14,24 @@ struct NativeRdpHost;
 struct NativeRdpActiveXResources;
 struct NativeRdpEventSubscription;
 
+void trace_native_stage(const char* stage) noexcept;
+
+void trace_native_hresult(
+    const char* stage,
+    int32_t hresult) noexcept;
+
+void trace_native_result(
+    const char* stage,
+    NavopRdpResult result) noexcept;
+
+void trace_native_win32(
+    const char* stage,
+    uint32_t win32_code) noexcept;
+
+void trace_native_pointer(
+    const char* stage,
+    uintptr_t pointer) noexcept;
+
 NavopRdpResult create_active_x_resources(
     NativeRdpHost* owner,
     uintptr_t parent_hwnd,
