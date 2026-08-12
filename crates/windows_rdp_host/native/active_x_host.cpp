@@ -13,10 +13,38 @@
 
 namespace {
 
+constexpr wchar_t kNativeHostWindowClassName[] =
+    L"Navop.WindowsRdpHost.Container";
+
+LRESULT CALLBACK native_host_window_procedure(
+    HWND window,
+    UINT message,
+    WPARAM wparam,
+    LPARAM lparam) noexcept {
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+DWORD ensure_native_host_window_class(HINSTANCE instance) noexcept {
+    WNDCLASSEXW window_class{};
+    window_class.cbSize = sizeof(window_class);
+    window_class.lpfnWndProc = native_host_window_procedure;
+    window_class.hInstance = instance;
+    window_class.lpszClassName = kNativeHostWindowClassName;
+
+    SetLastError(ERROR_SUCCESS);
+    if (RegisterClassExW(&window_class) != 0) {
+        return ERROR_SUCCESS;
+    }
+
+    const DWORD error = GetLastError();
+    return error == ERROR_CLASS_ALREADY_EXISTS ? ERROR_SUCCESS : error;
+}
+
 struct ActiveXCleanup {
     bool ole_initialized = false;
     bool atl_initialized = false;
     HWND parent_window = nullptr;
+    HWND host_window = nullptr;
     HWND child_window = nullptr;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
@@ -28,6 +56,9 @@ struct ActiveXCleanup {
         event_subscription = nullptr;
         if (child_window != nullptr) {
             DestroyWindow(child_window);
+        }
+        if (host_window != nullptr) {
+            DestroyWindow(host_window);
         }
         client.Release();
         control.Release();
@@ -123,10 +154,12 @@ NavopRdpResult validate_resources(
     NativeRdpActiveXResources* resources) noexcept {
     if (resources == nullptr ||
         resources->state.parent_window == nullptr ||
+        resources->state.host_window == nullptr ||
         resources->state.child_window == nullptr) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
     if (!IsWindow(resources->state.parent_window) ||
+        !IsWindow(resources->state.host_window) ||
         !IsWindow(resources->state.child_window)) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
@@ -200,11 +233,31 @@ NavopRdpResult create_active_x_resources(
     trace_native_stage("create.atl_ax_win_init.after");
     resources->state.atl_initialized = true;
 
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    trace_native_stage("create.host_class.before");
+    const DWORD host_class_error =
+        ensure_native_host_window_class(instance);
+    trace_native_win32(
+        "create.host_class.after",
+        static_cast<uint32_t>(host_class_error));
+    if (host_class_error != ERROR_SUCCESS) {
+        return record_last_stage_win32(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_WINDOW,
+            static_cast<uint32_t>(host_class_error));
+    }
+
+    // GPUI's HWND owns Rust window state. Creating an ATL child directly below
+    // it can synchronously re-enter the GPUI window procedure through parent
+    // notifications; the observed failure escaped that callback as
+    // STATUS_FATAL_USER_CALLBACK_EXCEPTION. Keep all ATL and ActiveX window
+    // traffic below this inert native container instead.
     SetLastError(ERROR_SUCCESS);
-    trace_native_stage("create.window.before");
-    resources->state.child_window = CreateWindowExW(
-        0,
-        TEXT(ATLAXWIN_CLASS),
+    trace_native_stage("create.host_window.before");
+    resources->state.host_window = CreateWindowExW(
+        WS_EX_NOPARENTNOTIFY,
+        kNativeHostWindowClassName,
         L"",
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         0,
@@ -213,7 +266,37 @@ NavopRdpResult create_active_x_resources(
         0,
         parent,
         nullptr,
-        GetModuleHandleW(nullptr),
+        instance,
+        nullptr);
+    trace_native_pointer(
+        "create.host_window.after",
+        reinterpret_cast<uintptr_t>(resources->state.host_window));
+    if (resources->state.host_window == nullptr) {
+        const DWORD win32_code = GetLastError();
+        trace_native_win32(
+            "create.host_window.failed",
+            static_cast<uint32_t>(win32_code));
+        return record_last_stage_win32(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_WINDOW,
+            static_cast<uint32_t>(win32_code));
+    }
+
+    SetLastError(ERROR_SUCCESS);
+    trace_native_stage("create.window.before");
+    resources->state.child_window = CreateWindowExW(
+        WS_EX_NOPARENTNOTIFY,
+        TEXT(ATLAXWIN_CLASS),
+        L"",
+        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+        0,
+        0,
+        0,
+        0,
+        resources->state.host_window,
+        nullptr,
+        instance,
         nullptr);
     trace_native_pointer(
         "create.window.after",
@@ -347,10 +430,20 @@ NavopRdpResult set_active_x_bounds(
     }
 
     if (!SetWindowPos(
-            resources->state.child_window,
+            resources->state.host_window,
             nullptr,
             bounds.x,
             bounds.y,
+            bounds.width,
+            bounds.height,
+            SWP_NOZORDER | SWP_NOACTIVATE)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    if (!SetWindowPos(
+            resources->state.child_window,
+            nullptr,
+            0,
+            0,
             bounds.width,
             bounds.height,
             SWP_NOZORDER | SWP_NOACTIVATE)) {
@@ -372,14 +465,21 @@ NavopRdpResult set_active_x_visible(
         SetFocus(resources->state.parent_window);
     }
     ShowWindow(
+        resources->state.host_window,
+        visible ? SW_SHOWNA : SW_HIDE);
+    ShowWindow(
         resources->state.child_window,
         visible ? SW_SHOWNA : SW_HIDE);
 
-    const LONG_PTR style = GetWindowLongPtrW(
+    const LONG_PTR host_style = GetWindowLongPtrW(
+        resources->state.host_window,
+        GWL_STYLE);
+    const LONG_PTR child_style = GetWindowLongPtrW(
         resources->state.child_window,
         GWL_STYLE);
-    const bool has_visible_style = (style & WS_VISIBLE) != 0;
-    if (has_visible_style != visible) {
+    const bool host_is_visible = (host_style & WS_VISIBLE) != 0;
+    const bool child_is_visible = (child_style & WS_VISIBLE) != 0;
+    if (host_is_visible != visible || child_is_visible != visible) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
@@ -392,6 +492,10 @@ NavopRdpResult focus_active_x(
         return resource_result;
     }
     if ((GetWindowLongPtrW(
+             resources->state.host_window,
+             GWL_STYLE) &
+         WS_VISIBLE) == 0 ||
+        (GetWindowLongPtrW(
              resources->state.child_window,
              GWL_STYLE) &
          WS_VISIBLE) == 0) {
