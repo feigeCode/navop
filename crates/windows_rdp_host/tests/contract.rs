@@ -1115,7 +1115,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "OleInitialize(nullptr)",
             "AtlAxWinInit()",
             "CreateWindowExW(",
-            "ATLAXWIN_CLASS",
+            "TEXT(ATLAXWIN_CLASS)",
             "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS",
             "AtlAxCreateControlEx(",
             "CLSID:{945EE98E-B376-4EC2-B2E5-64C9410F93B7}",

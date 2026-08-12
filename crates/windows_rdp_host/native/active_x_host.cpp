@@ -182,7 +182,7 @@ NavopRdpResult create_active_x_resources(
     SetLastError(ERROR_SUCCESS);
     resources->state.child_window = CreateWindowExW(
         0,
-        ATLAXWIN_CLASS,
+        TEXT(ATLAXWIN_CLASS),
         L"",
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         0,
