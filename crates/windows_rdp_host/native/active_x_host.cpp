@@ -28,6 +28,16 @@ constexpr CLSID kMsRdpClient9NotSafeForScriptingClsid = {
     {0x89, 0xdf, 0xc3, 0x3a, 0xd2, 0xbb, 0xfb, 0xcd},
 };
 
+// CAxHostWindow::_CreatorClass constructs a CComObject<CAxHostWindow>.
+// CComObject takes an ATL module lock in its constructor, so an executable
+// which only links this native code through a Rust static library must still
+// provide a live CAtlModule. Without it, ATL dereferences a null _pAtlModule
+// inside AtlAxAttachControl before that inline helper can return an HRESULT.
+class WindowsRdpAtlModule final :
+    public CAtlModuleT<WindowsRdpAtlModule> {};
+
+WindowsRdpAtlModule windows_rdp_atl_module;
+
 LRESULT CALLBACK native_host_window_procedure(
     HWND window,
     UINT message,
@@ -79,6 +89,46 @@ struct ActiveXCleanup {
         }
     }
 };
+
+HRESULT attach_control_with_traces(ActiveXCleanup& resources) noexcept {
+    // AtlAxAttachControl is an inline wrapper around three distinct ATL
+    // operations. Keep them explicit here so a Windows crash identifies
+    // whether ATL fails while allocating its host object, exposing
+    // IAxWinHostWindow, or activating the RDP control.
+    trace_native_pointer(
+        "create.atl_module",
+        reinterpret_cast<uintptr_t>(ATL::_pAtlModule));
+    trace_native_stage("create.atl_container_instance.before");
+    HRESULT result = CAxHostWindow::_CreatorClass::CreateInstance(
+        nullptr,
+        __uuidof(IUnknown),
+        reinterpret_cast<void**>(&resources.container));
+    trace_native_hresult(
+        "create.atl_container_instance.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result) || resources.container == nullptr) {
+        return FAILED(result) ? result : E_UNEXPECTED;
+    }
+
+    CComPtr<IAxWinHostWindow> host;
+    trace_native_stage("create.query_ax_host.before");
+    result = resources.container->QueryInterface(&host);
+    trace_native_hresult(
+        "create.query_ax_host.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result) || host == nullptr) {
+        return FAILED(result) ? result : E_NOINTERFACE;
+    }
+
+    trace_native_stage("create.ax_host_attach.before");
+    result = host->AttachControl(
+        resources.control,
+        resources.host_window);
+    trace_native_hresult(
+        "create.ax_host_attach.after",
+        static_cast<int32_t>(result));
+    return result;
+}
 
 bool window_or_descendant_has_focus(HWND window) noexcept {
     const HWND focused = GetFocus();
@@ -401,14 +451,8 @@ NavopRdpResult create_active_x_resources(
             owner->has_last_win32_code);
     }
 
-    trace_native_stage("create.attach_control.before");
-    const HRESULT attach_result = AtlAxAttachControl(
-        resources->state.control,
-        resources->state.host_window,
-        &resources->state.container);
-    trace_native_hresult(
-        "create.attach_control.after",
-        static_cast<int32_t>(attach_result));
+    const HRESULT attach_result =
+        attach_control_with_traces(resources->state);
     if (FAILED(attach_result) || resources->state.container == nullptr) {
         if (FAILED(attach_result)) {
             return record_last_stage_hresult(
