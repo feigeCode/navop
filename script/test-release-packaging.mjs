@@ -472,8 +472,12 @@ test("Windows application builds include the native RDP backend", () => {
   const releaseBuild = release.match(
     /- name: Build release binary[\s\S]*?(?=\n      - name:)/,
   )?.[0];
+  const manualBuild = manual.match(
+    /- name: Build release binary[\s\S]*?(?=\n      - name:)/,
+  )?.[0];
 
   assert.ok(releaseBuild, "missing release binary build step");
+  assert.ok(manualBuild, "missing manual Windows release binary build step");
   for (const target of [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -514,6 +518,16 @@ test("Windows application builds include the native RDP backend", () => {
     manual,
     /cargo build --release -p main --features windows-native-rdp --target \$env:WINDOWS_TARGET/,
   );
+  assert.match(
+    release,
+    /- name: Configure MSVC environment[\s\S]*?if: runner\.os == 'Windows'[\s\S]*?uses: ilammy\/msvc-dev-cmd@v1[\s\S]*?arch: \$\{\{ matrix\.windows_arch \}\}/,
+  );
+  assert.match(
+    manual,
+    /- name: Configure MSVC environment[\s\S]*?uses: ilammy\/msvc-dev-cmd@v1[\s\S]*?arch: \$\{\{ env\.WINDOWS_WIX_ARCH \}\}/,
+  );
+  assert.match(releaseBuild, /VCToolsInstallDir/);
+  assert.match(manualBuild, /VCToolsInstallDir/);
 });
 
 test("Windows release publishes 32-bit x86 artifacts and updater metadata", () => {

@@ -260,6 +260,12 @@ jobs:
           ./script/build-windows-rdp-probe.ps1
           -Target "${{ matrix.target }}"
 
+      - name: Configure MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.windows_arch }}
+
       - name: Set environment variables
         shell: bash
         run: |
@@ -309,6 +315,10 @@ jobs:
               --no-default-features \
               --features wasm-components
           elif [ "${{ matrix.windows_native_rdp }}" = "true" ]; then
+            if [ -z "${VCToolsInstallDir:-}" ]; then
+              echo "::error::VCToolsInstallDir is not configured"
+              exit 1
+            fi
             cargo_features=()
             cargo_features+=(--features windows-native-rdp)
             cargo build --release -p main "${cargo_features[@]}" --target ${{ matrix.target }}
