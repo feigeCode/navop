@@ -39,14 +39,24 @@ unsafe extern "system" {
         instance: *mut c_void,
         parameter: *mut c_void,
     ) -> *mut c_void;
+    pub(crate) fn ChildWindowFromPointEx(
+        parent: *mut c_void,
+        point: Point,
+        flags: u32,
+    ) -> *mut c_void;
     pub(crate) fn DestroyWindow(window: *mut c_void) -> i32;
+    pub(crate) fn GetAncestor(window: *mut c_void, flags: u32) -> *mut c_void;
+    pub(crate) fn GetClassNameW(window: *mut c_void, class_name: *mut u16, max_count: i32) -> i32;
     pub(crate) fn GetClientRect(window: *mut c_void, rect: *mut Rect) -> i32;
+    pub(crate) fn GetDpiForWindow(window: *mut c_void) -> u32;
     pub(crate) fn GetParent(window: *mut c_void) -> *mut c_void;
     pub(crate) fn GetWindow(window: *mut c_void, command: u32) -> *mut c_void;
     pub(crate) fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
     pub(crate) fn GetWindowRect(window: *mut c_void, rect: *mut Rect) -> i32;
+    pub(crate) fn GetWindowThreadProcessId(window: *mut c_void, process_id: *mut u32) -> u32;
     pub(crate) fn IsIconic(window: *mut c_void) -> i32;
     pub(crate) fn IsWindow(window: *mut c_void) -> i32;
+    pub(crate) fn IsWindowEnabled(window: *mut c_void) -> i32;
     pub(crate) fn IsWindowVisible(window: *mut c_void) -> i32;
     pub(crate) fn ScreenToClient(window: *mut c_void, point: *mut Point) -> i32;
     pub(crate) fn SetWindowPos(
@@ -60,4 +70,5 @@ unsafe extern "system" {
     ) -> i32;
     pub(crate) fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
     pub(crate) fn ShowWindow(window: *mut c_void, command: i32) -> i32;
+    pub(crate) fn WindowFromPoint(point: Point) -> *mut c_void;
 }

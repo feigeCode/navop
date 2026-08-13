@@ -804,6 +804,78 @@ NavopRdpResult set_active_x_bounds(
     return NAVOP_RDP_RESULT_OK;
 }
 
+NavopRdpResult update_active_x_session_display_settings(
+    NativeRdpHost* owner,
+    NativeRdpActiveXResources* resources,
+    const NavopRdpSessionDisplaySettings& settings) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return record_last_error(owner, resource_result);
+    }
+
+    short connected = 0;
+    HRESULT result = resources->state.client->get_Connected(&connected);
+    trace_native_hresult(
+        "display.get_connected.after",
+        static_cast<int32_t>(result));
+    trace_native_win32(
+        "display.connected_state",
+        static_cast<uint32_t>(static_cast<uint16_t>(connected)));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+    if (connected != 1) {
+        return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_STATE);
+    }
+
+    trace_native_win32(
+        "display.desktop_width",
+        settings.desktop_width);
+    trace_native_win32(
+        "display.desktop_height",
+        settings.desktop_height);
+    trace_native_win32(
+        "display.physical_width",
+        settings.physical_width);
+    trace_native_win32(
+        "display.physical_height",
+        settings.physical_height);
+    trace_native_win32(
+        "display.orientation",
+        settings.orientation);
+    trace_native_win32(
+        "display.desktop_scale_factor",
+        settings.desktop_scale_factor);
+    trace_native_win32(
+        "display.device_scale_factor",
+        settings.device_scale_factor);
+
+    trace_native_stage(
+        "display.update_session_display_settings.before");
+    result = resources->state.client->UpdateSessionDisplaySettings(
+        static_cast<ULONG>(settings.desktop_width),
+        static_cast<ULONG>(settings.desktop_height),
+        static_cast<ULONG>(settings.physical_width),
+        static_cast<ULONG>(settings.physical_height),
+        static_cast<ULONG>(settings.orientation),
+        static_cast<ULONG>(settings.desktop_scale_factor),
+        static_cast<ULONG>(settings.device_scale_factor));
+    trace_native_hresult(
+        "display.update_session_display_settings.after",
+        static_cast<int32_t>(result));
+
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+    return NAVOP_RDP_RESULT_OK;
+}
+
 NavopRdpResult set_active_x_visible(
     NativeRdpActiveXResources* resources,
     bool visible) noexcept {

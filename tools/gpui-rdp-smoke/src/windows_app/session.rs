@@ -52,8 +52,8 @@ pub(super) fn initialize(config: Config, window: &Window) -> Initialization {
 
 fn log_config(config: &Config) {
     println!(
-        "config: host={} port={} username_present={} domain_present={} password_env_present={} desktop={}x{} timeout_seconds={}",
-        config.host,
+        "config: host_present={} port={} username_present={} domain_present={} password_env_present={} desktop={}x{} timeout_seconds={}",
+        !config.host.is_empty(),
         config.port,
         config.username.is_some(),
         config.domain.is_some(),
@@ -157,7 +157,7 @@ fn finish_initialization(
         bounds.1,
         window.scale_factor()
     );
-    if let Err(error) = session.overlay.synchronize(0, 0, bounds.0, bounds.1) {
+    if let Err(error) = session.overlay.synchronize((0, 0, bounds.0, bounds.1)) {
         return failed_after_overlay_error(session, "initial_overlay_bounds", error);
     }
     if let Err(error) = configure_presentation(&mut session, bounds) {

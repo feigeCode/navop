@@ -319,6 +319,7 @@ impl TabContent for RemoteDesktopView {
 
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
         {
+            self.windows_native_display.reset();
             let Some(native) = self.windows_native.as_mut() else {
                 return Task::ready(true);
             };

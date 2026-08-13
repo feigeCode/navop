@@ -55,6 +55,10 @@ mod surface;
 // sink are only constructed by the Windows native-RDP build.
 #[allow(dead_code)]
 mod windows_native;
+#[allow(dead_code)]
+mod windows_native_display;
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+mod windows_native_display_integration;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
@@ -288,6 +292,8 @@ pub struct RemoteDesktopView {
     windows_native_registration: Option<windows_rdp_host::WindowsRdpRegistration>,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     native_event_state: Option<native_events::NativeRdpEventState>,
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    windows_native_display: windows_native_display::WindowsNativeDisplayState,
 }
 
 impl RemoteDesktopView {
@@ -312,6 +318,7 @@ impl RemoteDesktopView {
             loop {
                 let focus_handle = match this.update(cx, |this, cx| {
                     let focus_handle = this.poll_windows_native_events();
+                    this.flush_windows_native_display_settings(Instant::now());
                     cx.notify();
                     focus_handle
                 }) {
@@ -333,6 +340,10 @@ impl RemoteDesktopView {
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            {
+                this.windows_native_display.reset();
+            }
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             if let Some(mut native) = this.windows_native.take() {
                 let registration = this.windows_native_registration.take();
@@ -466,6 +477,8 @@ impl RemoteDesktopView {
             windows_native_registration: None,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             native_event_state: None,
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            windows_native_display: Default::default(),
         }
     }
 
@@ -759,11 +772,14 @@ impl RemoteDesktopView {
         }
 
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-        if self.windows_native.is_some() {
-            tracing::warn!(
-                "refusing Canvas retry while a Windows native RDP child is still attached"
-            );
-            return;
+        {
+            if self.windows_native.is_some() {
+                tracing::warn!(
+                    "refusing Canvas retry while a Windows native RDP child is still attached"
+                );
+                return;
+            }
+            self.windows_native_display.reset();
         }
 
         close_runtime_once(&mut self.input_tx);
@@ -786,6 +802,7 @@ impl RemoteDesktopView {
         error: impl std::fmt::Debug,
         cx: &mut Context<Self>,
     ) {
+        self.windows_native_display.reset();
         let failure_detail =
             format!("Windows native RDP diagnostic\nstage={stage}\nerror={error:?}");
         tracing::warn!(?error, stage, "failed to initialize Windows native RDP");
@@ -829,6 +846,7 @@ impl RemoteDesktopView {
         error: impl std::fmt::Debug,
         cx: &mut Context<Self>,
     ) {
+        self.windows_native_display.reset();
         let failure_detail =
             format!("Windows native RDP diagnostic\nstage={stage}\nerror={error:?}");
         tracing::warn!(
@@ -871,11 +889,14 @@ impl RemoteDesktopView {
             presentation.generation(),
             "Windows native RDP registration must match the attached adapter"
         );
-        self.native_event_state = Some(native_events::NativeRdpEventState::new(
-            presentation.generation(),
-        ));
+        let generation = presentation.generation();
+        self.windows_native_display.attach(generation);
+        self.native_event_state = Some(native_events::NativeRdpEventState::new(generation));
         self.windows_native_registration = Some(registration);
         self.windows_native = Some(presentation);
+        if let Some(bounds) = self.content_bounds {
+            self.observe_windows_native_viewport(bounds, window.scale_factor());
+        }
         if self.tab_active && self.activate_windows_native(false) {
             cx.defer_in(window, |this, _, _| {
                 if this.tab_active {
@@ -984,6 +1005,8 @@ impl RemoteDesktopView {
             NativeRdpUiEffect::LoginComplete { generation } => {
                 tracing::info!(generation, "Windows native RDP login completed");
                 self.mark_windows_native_connected();
+                self.windows_native_display
+                    .login_complete(generation, Instant::now());
             }
             NativeRdpUiEffect::Reconnecting {
                 generation,
@@ -999,10 +1022,13 @@ impl RemoteDesktopView {
                 self.connected = false;
                 self.failure_detail = None;
                 self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
+                self.windows_native_display.reconnecting(generation);
             }
             NativeRdpUiEffect::Reconnected { generation } => {
                 tracing::info!(generation, "Windows native RDP reconnected");
                 self.mark_windows_native_connected();
+                self.windows_native_display
+                    .reconnected(generation, Instant::now());
             }
             NativeRdpUiEffect::Warning {
                 generation,
@@ -1034,6 +1060,7 @@ impl RemoteDesktopView {
                 self.show_windows_native_failure(diagnostic);
             }
             NativeRdpUiEffect::Disconnected { generation, reason } => {
+                self.windows_native_display.reset();
                 tracing::warn!(
                     generation,
                     category = ?reason.category(),
@@ -1071,6 +1098,7 @@ impl RemoteDesktopView {
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     fn show_windows_native_failure(&mut self, diagnostic: Option<SharedString>) {
+        self.windows_native_display.reset();
         self.connected = false;
         self.status = SharedString::from(t!("RemoteDesktop.failure_generic").to_string());
         self.failure_detail = diagnostic;
@@ -1104,6 +1132,7 @@ impl RemoteDesktopView {
                 .is_some_and(windows_native::WindowsNativeAdapter::is_destroyed),
             "terminal completion requires confirmed native destruction"
         );
+        self.windows_native_display.reset();
         self.windows_native.take();
         self.native_event_state.take();
         let stored_registration = self.windows_native_registration.take();
@@ -1122,6 +1151,7 @@ impl RemoteDesktopView {
         registration: windows_rdp_host::WindowsRdpRegistration,
         cx: &mut Context<Self>,
     ) {
+        self.windows_native_display.reset();
         let _ = self.force_close_windows_native(registration, cx);
     }
 
@@ -1144,6 +1174,7 @@ impl RemoteDesktopView {
             .windows_native
             .take()
             .expect("matching registration must own an adapter");
+        self.windows_native_display.reset();
         self.native_event_state.take();
         let stored_registration = self.windows_native_registration.take();
         debug_assert_eq!(stored_registration, Some(registration));
@@ -1239,6 +1270,7 @@ impl RemoteDesktopView {
         registration: windows_rdp_host::WindowsRdpRegistration,
         cx: &mut Context<Self>,
     ) -> WindowsNativeClosePoll {
+        self.windows_native_display.reset();
         if self.windows_native_registration.is_none() && self.windows_native.is_none() {
             return WindowsNativeClosePoll::Closed;
         }

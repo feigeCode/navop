@@ -3,11 +3,16 @@ use std::time::{Duration, Instant};
 use gpui::{
     Context, IntoElement, ParentElement, Render, Styled, Subscription, Task, Window, div, px, rgb,
 };
-use windows_rdp_host::{WindowsRdpConnectionState, WindowsRdpEvent, WindowsRdpHostLifecycle};
+use windows_rdp_host::{
+    WindowsRdpConnectionState, WindowsRdpHostLifecycle, WindowsRdpSessionDisplaySettings,
+};
 
 use super::{log_host_error, physical_viewport_size, session};
 use crate::cli::Config;
 
+mod display;
+mod events;
+mod presentation;
 mod support;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -23,6 +28,10 @@ pub(super) struct SmokeView {
     timed_out: bool,
     last_connection_state: Option<WindowsRdpConnectionState>,
     last_bounds: Option<(i32, i32)>,
+    latest_session_display_settings: Option<WindowsRdpSessionDisplaySettings>,
+    last_session_display_settings: Option<WindowsRdpSessionDisplaySettings>,
+    display_epoch: u64,
+    display_retry_after: Option<Instant>,
     _poll_task: Task<()>,
     login_presentation_refresh_task: Option<Task<()>>,
     _bounds_subscription: Subscription,
@@ -45,6 +54,10 @@ impl SmokeView {
             timed_out: false,
             last_connection_state: None,
             last_bounds: None,
+            latest_session_display_settings: None,
+            last_session_display_settings: None,
+            display_epoch: 0,
+            display_retry_after: None,
             _poll_task: poll_task,
             login_presentation_refresh_task: None,
             _bounds_subscription: bounds_subscription,
@@ -53,11 +66,11 @@ impl SmokeView {
 
     pub(super) fn poll_host(&mut self, window: &Window, cx: &mut Context<Self>) {
         let previous_status = self.status.clone();
-        self.synchronize_presentation(window);
         if !self.host_is_open() {
             return;
         }
         self.poll_events(window, cx);
+        self.synchronize_presentation(window);
         self.poll_connection_state();
         self.check_timeout();
         if self.status != previous_status {
@@ -69,42 +82,6 @@ impl SmokeView {
         self.session
             .as_ref()
             .is_some_and(|session| session.host.lifecycle() == WindowsRdpHostLifecycle::Open)
-    }
-
-    fn poll_events(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let events = self
-            .session
-            .as_ref()
-            .expect("open host requires a session")
-            .host
-            .drain_events();
-        for raw in events {
-            println!("raw event: {raw:?}");
-            let event = WindowsRdpEvent::from(raw);
-            println!("event: {event:?}");
-            self.handle_event(event, window, cx);
-        }
-    }
-
-    fn poll_connection_state(&mut self) {
-        let result = self
-            .session
-            .as_mut()
-            .expect("session remains present while polling")
-            .host
-            .connection_state();
-        match result {
-            Ok(state) if self.last_connection_state != Some(state) => {
-                println!("connection state: {state:?}");
-                self.last_connection_state = Some(state);
-            }
-            Ok(_) => {}
-            Err(error) => {
-                log_host_error("connection_state", error);
-                self.status = "Failed to query RDP connection state; see console".to_owned();
-                self.terminal_failure = true;
-            }
-        }
     }
 
     fn check_timeout(&mut self) {
@@ -126,140 +103,46 @@ impl SmokeView {
         eprintln!("RESULT: TIMEOUT");
     }
 
-    fn handle_event(&mut self, event: WindowsRdpEvent, window: &Window, cx: &mut Context<Self>) {
-        match event {
-            WindowsRdpEvent::Connecting { .. } => self.status = "RDP is connecting".to_owned(),
-            WindowsRdpEvent::Connected { .. } => {
-                self.status = "RDP transport connected; waiting for login".to_owned();
-                self.refresh_connected_presentation(window, "host shown after connected");
-            }
-            WindowsRdpEvent::LoginComplete { .. } => self.handle_login_complete(window, cx),
-            WindowsRdpEvent::Warning { warning, .. } => eprintln!(
-                "diagnostic: event=Warning kind={:?} code={}",
-                warning.kind(),
-                warning.code()
-            ),
-            WindowsRdpEvent::FatalError { error, .. } => self.handle_fatal_error(error),
-            WindowsRdpEvent::LogonError { error, .. } => self.handle_logon_error(error),
-            WindowsRdpEvent::Disconnected { reason, .. } => self.handle_disconnected(reason),
-            WindowsRdpEvent::CloseConfirmed { .. } => println!("close: native close confirmed"),
-            _ => {}
-        }
-    }
-
-    fn handle_login_complete(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.refresh_connected_presentation(window, "host refreshed after login complete");
-        self.login_complete = true;
-        self.status = "RDP login complete".to_owned();
-        if let Some(generation) = self
-            .session
-            .as_ref()
-            .map(|session| session.host.generation())
-        {
-            println!(
-                "presentation: scheduling delayed login refresh generation={generation} delay_ms={}",
-                LOGIN_PRESENTATION_REFRESH_DELAY.as_millis()
-            );
-            self.login_presentation_refresh_task = Some(support::spawn_login_presentation_refresh(
-                generation,
-                LOGIN_PRESENTATION_REFRESH_DELAY,
-                cx,
-            ));
-        }
-        println!("RESULT: LOGIN_COMPLETE");
-    }
-
-    fn refresh_connected_presentation(&mut self, window: &Window, stage: &'static str) {
-        let bounds = physical_viewport_size(window);
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        if session.host.lifecycle() != WindowsRdpHostLifecycle::Open {
-            return;
-        }
-        if let Err(error) = session.overlay.refresh(0, 0, bounds.0, bounds.1) {
-            eprintln!("ERROR: stage=refresh_connected_overlay error={error}");
-            return;
-        }
-        if let Err(error) = session.host.set_bounds(0, 0, bounds.0, bounds.1) {
-            log_host_error("refresh_connected_bounds", error);
-            return;
-        }
-        if let Err(error) = session.host.set_visible(true) {
-            log_host_error("refresh_connected_visible", error);
-            return;
-        }
-        self.last_bounds = Some(bounds);
-        println!("presentation: {stage}");
-        if let Err(error) = session.host.focus() {
-            log_host_error("refresh_connected_focus_best_effort", error);
-        } else {
-            println!("focus: success after native presentation refresh");
-        }
-    }
-
-    fn handle_fatal_error(&mut self, error: windows_rdp_host::WindowsRdpFatalError) {
-        self.terminal_failure = true;
-        self.status = "RDP fatal error; see console".to_owned();
-        eprintln!(
-            "diagnostic: event=FatalError kind={:?} code={}",
-            error.kind(),
-            error.code()
-        );
-        eprintln!("RESULT: FATAL_ERROR");
-    }
-
-    fn handle_logon_error(&mut self, error: windows_rdp_host::WindowsRdpLogonError) {
-        self.terminal_failure = true;
-        self.status = "RDP logon error; see console".to_owned();
-        eprintln!(
-            "diagnostic: event=LogonError kind={:?} code={}",
-            error.kind(),
-            error.code()
-        );
-        eprintln!("RESULT: LOGON_ERROR");
-    }
-
-    fn handle_disconnected(&mut self, reason: windows_rdp_host::WindowsRdpDisconnectReason) {
-        self.status = "RDP disconnected; see console".to_owned();
-        eprintln!(
-            "diagnostic: event=Disconnected category={:?} disconnect_code={} extended_code={:?}",
-            reason.category(),
-            reason.disconnect_code(),
-            reason.extended_code()
-        );
-        if !self.login_complete {
-            self.terminal_failure = true;
-            eprintln!("RESULT: DISCONNECTED_BEFORE_LOGIN");
-        }
-    }
-
     fn synchronize_presentation(&mut self, window: &Window) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        if session.host.lifecycle() != WindowsRdpHostLifecycle::Open {
+        if !self.host_is_open() {
             return;
         }
         let bounds = physical_viewport_size(window);
-        if let Err(error) = session.overlay.synchronize(0, 0, bounds.0, bounds.1) {
-            eprintln!("ERROR: stage=synchronize_overlay error={error}");
-            return;
+        let bounds_changed = self.last_bounds != Some(bounds);
+        {
+            let session = self.session.as_mut().expect("open host requires a session");
+            if let Err(error) = session.overlay.synchronize((0, 0, bounds.0, bounds.1)) {
+                eprintln!("ERROR: stage=synchronize_overlay error={error}");
+                return;
+            }
+            if bounds_changed {
+                println!(
+                    "resize: physical_width={} physical_height={}",
+                    bounds.0, bounds.1
+                );
+                if let Err(error) = session.host.set_bounds(0, 0, bounds.0, bounds.1) {
+                    log_host_error("set_bounds", error);
+                    return;
+                }
+            }
         }
-        if self.last_bounds == Some(bounds) {
-            return;
+        if bounds_changed {
+            self.last_bounds = Some(bounds);
         }
-        self.last_bounds = Some(bounds);
-        println!(
-            "resize: physical_width={} physical_height={}",
-            bounds.0, bounds.1
-        );
-        if let Err(error) = session.host.set_bounds(0, 0, bounds.0, bounds.1) {
-            log_host_error("set_bounds", error);
+        let display_updated =
+            self.synchronize_session_display_settings(window, false, "viewport_changed");
+        if bounds_changed || display_updated {
+            self.log_composition_diagnostics("viewport_changed");
         }
     }
 
     fn prepare_close(&mut self) -> bool {
+        self.display_epoch = self.display_epoch.wrapping_add(1);
+        self.login_complete = false;
+        self.login_presentation_refresh_task = None;
+        self.display_retry_after = None;
+        self.latest_session_display_settings = None;
+        self.last_session_display_settings = None;
         let Some(mut session) = self.session.take() else {
             return true;
         };

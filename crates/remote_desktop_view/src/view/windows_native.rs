@@ -255,6 +255,18 @@ impl WindowsNativeAdapter {
         self.host.generation()
     }
 
+    pub(crate) fn is_open(&self) -> bool {
+        self.presentation.state == NativePresentationState::Open
+            && self.host.lifecycle() == windows_rdp_host::WindowsRdpHostLifecycle::Open
+    }
+
+    pub(crate) fn update_session_display_settings(
+        &mut self,
+        settings: windows_rdp_host::WindowsRdpSessionDisplaySettings,
+    ) -> Result<(), windows_rdp_host::WindowsRdpHostError> {
+        self.host.update_session_display_settings(settings)
+    }
+
     pub(crate) fn update_bounds(
         &mut self,
         bounds: Bounds<Pixels>,

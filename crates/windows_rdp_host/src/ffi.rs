@@ -4,6 +4,7 @@ use std::mem::{align_of, size_of};
 
 pub(crate) const ABI_VERSION: u32 = 1;
 pub(crate) const CREATE_WITH_PARENT_ABI_VERSION: u32 = 1;
+pub(crate) const SESSION_DISPLAY_SETTINGS_ABI_VERSION: u32 = 1;
 
 pub(crate) type NativeResult = i32;
 
@@ -210,6 +211,44 @@ impl NavopRdpBounds {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NavopRdpSessionDisplaySettings {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) desktop_width: u32,
+    pub(crate) desktop_height: u32,
+    pub(crate) physical_width: u32,
+    pub(crate) physical_height: u32,
+    pub(crate) orientation: u32,
+    pub(crate) desktop_scale_factor: u32,
+    pub(crate) device_scale_factor: u32,
+}
+
+impl NavopRdpSessionDisplaySettings {
+    pub(crate) const fn current(
+        desktop_width: u32,
+        desktop_height: u32,
+        physical_width: u32,
+        physical_height: u32,
+        orientation: u32,
+        desktop_scale_factor: u32,
+        device_scale_factor: u32,
+    ) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: SESSION_DISPLAY_SETTINGS_ABI_VERSION,
+            desktop_width,
+            desktop_height,
+            physical_width,
+            physical_height,
+            orientation,
+            desktop_scale_factor,
+            device_scale_factor,
+        }
+    }
+}
+
+#[repr(C)]
 pub(crate) struct NavopRdpEvent {
     pub(crate) struct_size: u32,
     pub(crate) abi_version: u32,
@@ -350,6 +389,18 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpBounds, width) == 8);
     assert!(std::mem::offset_of!(NavopRdpBounds, height) == 12);
 
+    assert!(size_of::<NavopRdpSessionDisplaySettings>() == 36);
+    assert!(align_of::<NavopRdpSessionDisplaySettings>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, desktop_width) == 8);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, desktop_height) == 12);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, physical_width) == 16);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, physical_height) == 20);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, orientation) == 24);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, desktop_scale_factor) == 28);
+    assert!(std::mem::offset_of!(NavopRdpSessionDisplaySettings, device_scale_factor) == 32);
+
     assert!(size_of::<NavopRdpEvent>() == 32);
     assert!(align_of::<NavopRdpEvent>() == 4);
     assert!(std::mem::offset_of!(NavopRdpEvent, struct_size) == 0);
@@ -464,6 +515,10 @@ pub(crate) type GetLastErrorFn =
     unsafe fn(host: *mut NativeRdpHost, out_error: *mut NavopRdpLastError) -> NativeResult;
 pub(crate) type SetBoundsFn =
     unsafe fn(host: *mut NativeRdpHost, bounds: *const NavopRdpBounds) -> NativeResult;
+pub(crate) type UpdateSessionDisplaySettingsFn = unsafe fn(
+    host: *mut NativeRdpHost,
+    settings: *const NavopRdpSessionDisplaySettings,
+) -> NativeResult;
 pub(crate) type SetVisibleFn = unsafe fn(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
 pub(crate) type FocusFn = unsafe fn(host: *mut NativeRdpHost) -> NativeResult;
 pub(crate) type DestroyFn = unsafe fn(host: *mut *mut NativeRdpHost) -> NativeResult;
@@ -493,6 +548,7 @@ pub(crate) struct NativeBindings {
     pub(crate) create_with_parent_v2: CreateWithParentV2Fn,
     pub(crate) get_last_error: GetLastErrorFn,
     pub(crate) set_bounds: SetBoundsFn,
+    pub(crate) update_session_display_settings: UpdateSessionDisplaySettingsFn,
     pub(crate) set_visible: SetVisibleFn,
     pub(crate) focus: FocusFn,
     pub(crate) destroy: DestroyFn,
@@ -511,6 +567,7 @@ pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     create_with_parent_v2,
     get_last_error,
     set_bounds,
+    update_session_display_settings,
     set_visible,
     focus,
     destroy,
@@ -545,6 +602,10 @@ unsafe extern "C" {
     fn navop_rdp_set_bounds(
         host: *mut NativeRdpHost,
         bounds: *const NavopRdpBounds,
+    ) -> NativeResult;
+    fn navop_rdp_update_session_display_settings(
+        host: *mut NativeRdpHost,
+        settings: *const NavopRdpSessionDisplaySettings,
     ) -> NativeResult;
     fn navop_rdp_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
     fn navop_rdp_focus(host: *mut NativeRdpHost) -> NativeResult;
@@ -608,6 +669,14 @@ unsafe fn get_last_error(
 #[cfg(windows_rdp_host_native)]
 unsafe fn set_bounds(host: *mut NativeRdpHost, bounds: *const NavopRdpBounds) -> NativeResult {
     unsafe { navop_rdp_set_bounds(host, bounds) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn update_session_display_settings(
+    host: *mut NativeRdpHost,
+    settings: *const NavopRdpSessionDisplaySettings,
+) -> NativeResult {
+    unsafe { navop_rdp_update_session_display_settings(host, settings) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -831,6 +900,41 @@ unsafe fn set_bounds(host: *mut NativeRdpHost, bounds: *const NavopRdpBounds) ->
         return RESULT_INVALID_ARGUMENT;
     }
 
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn update_session_display_settings(
+    host: *mut NativeRdpHost,
+    settings: *const NavopRdpSessionDisplaySettings,
+) -> NativeResult {
+    if host.is_null() || settings.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let struct_size = unsafe { std::ptr::addr_of!((*settings).struct_size).read() };
+    if struct_size < size_of::<NavopRdpSessionDisplaySettings>() as u32 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let abi_version = unsafe { std::ptr::addr_of!((*settings).abi_version).read() };
+    if abi_version != SESSION_DISPLAY_SETTINGS_ABI_VERSION {
+        return RESULT_ABI_MISMATCH;
+    }
+    let desktop_width = unsafe { std::ptr::addr_of!((*settings).desktop_width).read() };
+    let desktop_height = unsafe { std::ptr::addr_of!((*settings).desktop_height).read() };
+    let physical_width = unsafe { std::ptr::addr_of!((*settings).physical_width).read() };
+    let physical_height = unsafe { std::ptr::addr_of!((*settings).physical_height).read() };
+    let desktop_scale_factor =
+        unsafe { std::ptr::addr_of!((*settings).desktop_scale_factor).read() };
+    let device_scale_factor = unsafe { std::ptr::addr_of!((*settings).device_scale_factor).read() };
+    if desktop_width == 0
+        || desktop_height == 0
+        || physical_width == 0
+        || physical_height == 0
+        || desktop_scale_factor == 0
+        || device_scale_factor == 0
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
     RESULT_UNAVAILABLE
 }
 
@@ -1082,6 +1186,44 @@ mod tests {
         assert_eq!(std::mem::offset_of!(NavopRdpBounds, y), 4);
         assert_eq!(std::mem::offset_of!(NavopRdpBounds, width), 8);
         assert_eq!(std::mem::offset_of!(NavopRdpBounds, height), 12);
+        assert_eq!(size_of::<NavopRdpSessionDisplaySettings>(), 36);
+        assert_eq!(align_of::<NavopRdpSessionDisplaySettings>(), 4);
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, struct_size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, abi_version),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, desktop_width),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, desktop_height),
+            12
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, physical_width),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, physical_height),
+            20
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, orientation),
+            24
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, desktop_scale_factor),
+            28
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpSessionDisplaySettings, device_scale_factor),
+            32
+        );
         assert_eq!(size_of::<NavopRdpEvent>(), 32);
         assert_eq!(align_of::<NavopRdpEvent>(), 4);
         assert_eq!(size_of::<NavopRdpEventCallbackOptions>(), 16);

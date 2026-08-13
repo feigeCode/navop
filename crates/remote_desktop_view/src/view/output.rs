@@ -598,6 +598,8 @@ impl RemoteDesktopView {
         self.content_bounds = Some(bounds);
         self.display_scale_factor = resize::scale_factor_percent(display_scale_factor);
         if self.update_windows_native_bounds(bounds, display_scale_factor) {
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            self.observe_windows_native_viewport(bounds, display_scale_factor);
             return;
         }
         let Some(size) = resize::resize_dimensions(bounds, display_scale_factor) else {

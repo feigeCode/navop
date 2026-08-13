@@ -497,6 +497,60 @@ extern "C" NavopRdpResult navop_rdp_set_bounds(
     }
 }
 
+extern "C" NavopRdpResult navop_rdp_update_session_display_settings(
+    NativeRdpHost* host,
+    const NavopRdpSessionDisplaySettings* settings) noexcept {
+    try {
+        if (host == nullptr) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+        const NavopRdpResult owner_result = ensure_owner_thread(host);
+        if (owner_result != NAVOP_RDP_RESULT_OK) {
+            return owner_result;
+        }
+        clear_last_error(host);
+        if (settings == nullptr) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_INVALID_ARGUMENT);
+        }
+        NavopRdpResult result = validate_struct_size(
+            settings->struct_size,
+            static_cast<uint32_t>(
+                sizeof(NavopRdpSessionDisplaySettings)));
+        if (result != NAVOP_RDP_RESULT_OK) {
+            return record_last_error(host, result);
+        }
+        if (settings->abi_version !=
+            NAVOP_RDP_SESSION_DISPLAY_SETTINGS_ABI_VERSION) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_ABI_MISMATCH);
+        }
+        if (settings->desktop_width == UINT32_C(0) ||
+            settings->desktop_height == UINT32_C(0) ||
+            settings->physical_width == UINT32_C(0) ||
+            settings->physical_height == UINT32_C(0) ||
+            settings->desktop_scale_factor == UINT32_C(0) ||
+            settings->device_scale_factor == UINT32_C(0)) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_INVALID_ARGUMENT);
+        }
+        if (host->callback_state != CallbackState::Open) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_INVALID_STATE);
+        }
+        return update_active_x_session_display_settings(
+            host,
+            host->active_x_resources,
+            *settings);
+    } catch (...) {
+        return record_last_error(host, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+}
+
 extern "C" NavopRdpResult navop_rdp_set_visible(
     NativeRdpHost* host,
     uint32_t visible) noexcept {

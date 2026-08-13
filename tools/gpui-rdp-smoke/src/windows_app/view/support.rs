@@ -6,6 +6,12 @@ use super::{POLL_INTERVAL, SmokeView};
 use crate::cli::Config;
 use crate::windows_app::session;
 
+#[derive(Clone, Copy)]
+pub(super) struct LoginPresentationRefreshToken {
+    pub(super) generation: u64,
+    pub(super) epoch: u64,
+}
+
 pub(super) fn spawn_poll_task(cx: &mut Context<SmokeView>) -> Task<()> {
     cx.spawn(async move |view, cx| {
         loop {
@@ -21,7 +27,7 @@ pub(super) fn spawn_poll_task(cx: &mut Context<SmokeView>) -> Task<()> {
 }
 
 pub(super) fn spawn_login_presentation_refresh(
-    generation: u64,
+    token: LoginPresentationRefreshToken,
     delay: Duration,
     cx: &mut Context<SmokeView>,
 ) -> Task<()> {
@@ -32,21 +38,28 @@ pub(super) fn spawn_login_presentation_refresh(
                 .session
                 .as_ref()
                 .map(|session| session.host.generation());
-            if current_generation != Some(generation) || !view.login_complete {
+            let host_open = view.host_is_open();
+            let stale = current_generation != Some(token.generation)
+                || view.display_epoch != token.epoch
+                || !view.login_complete
+                || !host_open;
+            if stale {
                 println!(
-                    "presentation: delayed login refresh skipped scheduled_generation={generation} current_generation={current_generation:?} login_complete={}",
-                    view.login_complete
+                    "presentation: delayed login refresh skipped scheduled_generation={} current_generation={current_generation:?} scheduled_epoch={} current_epoch={} login_complete={} host_open={host_open}",
+                    token.generation,
+                    token.epoch,
+                    view.display_epoch,
+                    view.login_complete,
                 );
                 return;
             }
             println!(
-                "presentation: delayed login refresh running generation={generation} delay_ms={}",
+                "presentation: delayed login refresh running generation={} epoch={} delay_ms={}",
+                token.generation,
+                token.epoch,
                 delay.as_millis()
             );
-            view.refresh_connected_presentation(
-                window,
-                "host refreshed 300ms after login complete",
-            );
+            view.present_login_complete(window, "login_complete_compensation");
         });
     })
 }

@@ -5,6 +5,7 @@
 
 #define NAVOP_RDP_ABI_VERSION UINT32_C(1)
 #define NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)
+#define NAVOP_RDP_SESSION_DISPLAY_SETTINGS_ABI_VERSION UINT32_C(1)
 
 typedef struct NativeRdpHost NativeRdpHost;
 
@@ -137,6 +138,25 @@ typedef struct NavopRdpBounds {
     int32_t width;
     int32_t height;
 } NavopRdpBounds;
+
+/*
+ * Session display settings are the post-login RDP framebuffer dimensions and
+ * scale factors passed to IMsRdpClient9::UpdateSessionDisplaySettings. They are
+ * distinct from NavopRdpBounds, which only positions the native child window.
+ * Width, height, and scale values must be non-zero. orientation is forwarded
+ * verbatim; callers currently use zero for landscape.
+ */
+typedef struct NavopRdpSessionDisplaySettings {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t desktop_width;
+    uint32_t desktop_height;
+    uint32_t physical_width;
+    uint32_t physical_height;
+    uint32_t orientation;
+    uint32_t desktop_scale_factor;
+    uint32_t device_scale_factor;
+} NavopRdpSessionDisplaySettings;
 
 #define NAVOP_RDP_EVENT_CONNECTING UINT32_C(1)
 #define NAVOP_RDP_EVENT_CONNECTED UINT32_C(2)
@@ -342,6 +362,19 @@ static_assert(offsetof(NavopRdpBounds, x) == 0);
 static_assert(offsetof(NavopRdpBounds, y) == 4);
 static_assert(offsetof(NavopRdpBounds, width) == 8);
 static_assert(offsetof(NavopRdpBounds, height) == 12);
+static_assert(sizeof(NavopRdpSessionDisplaySettings) == 36);
+static_assert(alignof(NavopRdpSessionDisplaySettings) == 4);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, struct_size) == 0);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, abi_version) == 4);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, desktop_width) == 8);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, desktop_height) == 12);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, physical_width) == 16);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, physical_height) == 20);
+static_assert(offsetof(NavopRdpSessionDisplaySettings, orientation) == 24);
+static_assert(
+    offsetof(NavopRdpSessionDisplaySettings, desktop_scale_factor) == 28);
+static_assert(
+    offsetof(NavopRdpSessionDisplaySettings, device_scale_factor) == 32);
 static_assert(sizeof(NavopRdpEvent) == 32);
 static_assert(alignof(NavopRdpEvent) == 4);
 static_assert(offsetof(NavopRdpEvent, struct_size) == 0);
@@ -433,6 +466,10 @@ NavopRdpResult navop_rdp_get_last_error(
 NavopRdpResult navop_rdp_set_bounds(
     NativeRdpHost* host,
     const NavopRdpBounds* bounds) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_update_session_display_settings(
+    NativeRdpHost* host,
+    const NavopRdpSessionDisplaySettings* settings) NAVOP_RDP_NOEXCEPT;
 
 /*
  * visible must be exactly 0 or 1. Showing uses non-activating Win32 semantics.

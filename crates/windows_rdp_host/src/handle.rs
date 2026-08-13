@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use crate::capabilities::WindowsRdpHostCapabilities;
 use crate::credential::WindowsRdpCredentialBundle;
+use crate::display::WindowsRdpSessionDisplaySettings;
 use crate::error::{WindowsRdpHostError, WindowsRdpHresult, check_native_result};
 use crate::event::{EventBridge, WindowsRdpRawEvent, native_event_callback};
 use crate::ffi::{
@@ -12,7 +13,8 @@ use crate::ffi::{
     CREATE_STAGE_NONE, NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NativeResult,
     NavopRdpBounds, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
     NavopRdpEventCallbackOptions, NavopRdpLastError, NavopRdpProbeOptions, NavopRdpProbeResult,
-    REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS, RESULT_OK,
+    NavopRdpSessionDisplaySettings, REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS,
+    RESULT_OK,
 };
 use crate::lifecycle::WindowsRdpHostLifecycle;
 use crate::options::{WindowsRdpConnectionOptions, WindowsRdpHostOptions, WindowsRdpParentWindow};
@@ -227,6 +229,39 @@ impl WindowsRdpHost {
         // - bounds is a current-layout stack value live for the synchronous call.
         // - the native boundary does not retain the borrowed bounds pointer.
         let result = unsafe { (self.bindings.set_bounds)(self.raw, &bounds) };
+        check_host_result(self.bindings, self.raw, result)
+    }
+
+    /// Synchronizes the connected RDP session framebuffer with the viewport.
+    ///
+    /// This calls `IMsRdpClient9::UpdateSessionDisplaySettings`; it does not
+    /// move or resize the native child window.
+    pub fn update_session_display_settings(
+        &mut self,
+        settings: WindowsRdpSessionDisplaySettings,
+    ) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) {
+            return Err(WindowsRdpHostError::InvalidState);
+        }
+        if self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let native_settings = NavopRdpSessionDisplaySettings::current(
+            settings.desktop_width(),
+            settings.desktop_height(),
+            settings.physical_width(),
+            settings.physical_height(),
+            settings.orientation(),
+            settings.desktop_scale_factor(),
+            settings.device_scale_factor(),
+        );
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - native_settings is live for this synchronous call.
+        // - the native boundary does not retain the borrowed pointer.
+        let result =
+            unsafe { (self.bindings.update_session_display_settings)(self.raw, &native_settings) };
         check_host_result(self.bindings, self.raw, result)
     }
 
@@ -557,6 +592,9 @@ mod tests {
         bounds_calls: usize,
         captured_bounds: Vec<(i32, i32, i32, i32)>,
         bounds_results: std::collections::VecDeque<NativeResult>,
+        display_settings_calls: usize,
+        captured_display_settings: Vec<NavopRdpSessionDisplaySettings>,
+        display_settings_results: std::collections::VecDeque<NativeResult>,
         visible_calls: usize,
         captured_visibility: Vec<bool>,
         visible_results: std::collections::VecDeque<NativeResult>,
@@ -601,6 +639,9 @@ mod tests {
                 bounds_calls: 0,
                 captured_bounds: Vec::new(),
                 bounds_results: std::collections::VecDeque::new(),
+                display_settings_calls: 0,
+                captured_display_settings: Vec::new(),
+                display_settings_results: std::collections::VecDeque::new(),
                 visible_calls: 0,
                 captured_visibility: Vec::new(),
                 visible_results: std::collections::VecDeque::new(),
@@ -744,6 +785,14 @@ mod tests {
 
     fn captured_bounds() -> Vec<(i32, i32, i32, i32)> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_bounds.clone())
+    }
+
+    fn display_settings_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().display_settings_calls)
+    }
+
+    fn captured_display_settings() -> Vec<NavopRdpSessionDisplaySettings> {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().captured_display_settings.clone())
     }
 
     fn visible_calls() -> usize {
@@ -1279,6 +1328,25 @@ mod tests {
         result
     }
 
+    unsafe fn fake_update_session_display_settings(
+        host: *mut NativeRdpHost,
+        settings: *const NavopRdpSessionDisplaySettings,
+    ) -> NativeResult {
+        if host.is_null() || settings.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        let settings = unsafe { *settings };
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.display_settings_calls += 1;
+            state.captured_display_settings.push(settings);
+            state
+                .display_settings_results
+                .pop_front()
+                .unwrap_or(RESULT_OK)
+        })
+    }
+
     unsafe fn fake_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult {
         if host.is_null() || visible > 1 {
             return RESULT_INVALID_ARGUMENT;
@@ -1309,6 +1377,7 @@ mod tests {
             create_with_parent_v2: fake_create_with_parent,
             get_last_error: fake_get_last_error,
             set_bounds: fake_set_bounds,
+            update_session_display_settings: fake_update_session_display_settings,
             set_visible: fake_set_visible,
             focus: fake_focus,
             destroy: fake_destroy,
@@ -2017,6 +2086,51 @@ mod tests {
     }
 
     #[test]
+    fn session_display_settings_forward_the_current_abi_and_all_fields() {
+        reset_fake_state();
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let settings = WindowsRdpSessionDisplaySettings::viewport(1600, 900, 150)
+            .expect("display settings should be valid");
+
+        host.update_session_display_settings(settings)
+            .expect("display settings should be forwarded");
+
+        let captured = captured_display_settings();
+        assert_eq!(display_settings_calls(), 1);
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0],
+            NavopRdpSessionDisplaySettings::current(1600, 900, 1600, 900, 0, 150, 100)
+        );
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn session_display_settings_failures_map_without_changing_lifecycle() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .display_settings_results
+                .push_back(RESULT_INVALID_STATE);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let settings = WindowsRdpSessionDisplaySettings::viewport(1280, 720, 100)
+            .expect("display settings should be valid");
+
+        assert_eq!(
+            host.update_session_display_settings(settings),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+        assert_eq!(display_settings_calls(), 1);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
     fn negative_presentation_dimensions_are_rejected_before_native_call() {
         reset_fake_state();
         let mut host =
@@ -2095,6 +2209,35 @@ mod tests {
         );
         assert_eq!(host.focus(), Err(WindowsRdpHostError::InvalidArgument));
         assert_eq!((bounds_calls(), visible_calls(), focus_calls()), (0, 0, 0));
+    }
+
+    #[test]
+    fn session_display_settings_are_rejected_before_native_when_closing_or_closed() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().unregister_failures_remaining = 1;
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let settings = WindowsRdpSessionDisplaySettings::viewport(1280, 720, 100)
+            .expect("display settings should be valid");
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        assert_eq!(
+            host.update_session_display_settings(settings),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+        assert_eq!(display_settings_calls(), 0);
+
+        host.close().expect("closing host should remain retryable");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
+        assert_eq!(
+            host.update_session_display_settings(settings),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+        assert_eq!(display_settings_calls(), 0);
     }
 
     #[test]

@@ -72,6 +72,11 @@ NavopRdpResult set_active_x_bounds(
     NativeRdpActiveXResources* resources,
     const NavopRdpBounds& bounds) noexcept;
 
+NavopRdpResult update_active_x_session_display_settings(
+    NativeRdpHost* owner,
+    NativeRdpActiveXResources* resources,
+    const NavopRdpSessionDisplaySettings& settings) noexcept;
+
 NavopRdpResult set_active_x_visible(
     NativeRdpActiveXResources* resources,
     bool visible) noexcept;

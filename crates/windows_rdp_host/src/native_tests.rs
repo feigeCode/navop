@@ -10,9 +10,10 @@ use crate::ffi::{
     MAX_EVENT_PAYLOAD_BYTES, NativeEventCallback, NativeRdpHost, NativeResult,
     NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds, NavopRdpConnectionOptions,
     NavopRdpCreateOptions, NavopRdpCreateWithParentOptions, NavopRdpCredentialBundle,
-    NavopRdpEvent, NavopRdpEventCallbackOptions, NavopRdpLastError, RESULT_ABI_MISMATCH,
-    RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT, RESULT_OK,
-    RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
+    NavopRdpEvent, NavopRdpEventCallbackOptions, NavopRdpLastError, NavopRdpSessionDisplaySettings,
+    RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT,
+    RESULT_INVALID_STATE, RESULT_OK, RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
+    SESSION_DISPLAY_SETTINGS_ABI_VERSION,
 };
 
 const VT_I4: u16 = 3;
@@ -41,6 +42,10 @@ unsafe extern "C" {
     fn navop_rdp_set_bounds(
         host: *mut NativeRdpHost,
         bounds: *const NavopRdpBounds,
+    ) -> NativeResult;
+    fn navop_rdp_update_session_display_settings(
+        host: *mut NativeRdpHost,
+        settings: *const NavopRdpSessionDisplaySettings,
     ) -> NativeResult;
     fn navop_rdp_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
     fn navop_rdp_focus(host: *mut NativeRdpHost) -> NativeResult;
@@ -277,6 +282,10 @@ fn connection_options(host: &[u16]) -> NavopRdpConnectionOptions {
         720,
         32,
     )
+}
+
+fn session_display_settings() -> NavopRdpSessionDisplaySettings {
+    NavopRdpSessionDisplaySettings::current(1280, 720, 1280, 720, 0, 100, 100)
 }
 
 fn create_hidden_test_parent() -> *mut c_void {
@@ -561,6 +570,104 @@ fn native_presentation_controls_validate_lifecycle_thread_and_arguments() {
         RESULT_INVALID_ARGUMENT
     );
     assert_eq!(unsafe { navop_rdp_focus(host) }, RESULT_INVALID_ARGUMENT);
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_session_display_settings_validate_lifecycle_thread_and_arguments() {
+    let generation = 0x1122_3344_aabb_ccdd;
+    let settings = session_display_settings();
+
+    assert_eq!(
+        unsafe { navop_rdp_update_session_display_settings(ptr::null_mut(), &settings) },
+        RESULT_INVALID_ARGUMENT
+    );
+    let mut host = unsafe { create_host(generation) };
+    assert_eq!(
+        unsafe { navop_rdp_update_session_display_settings(host, ptr::null()) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut invalid = settings;
+    invalid.struct_size -= 1;
+    assert_eq!(
+        unsafe { navop_rdp_update_session_display_settings(host, &invalid) },
+        RESULT_INVALID_ARGUMENT
+    );
+    invalid = settings;
+    invalid.abi_version = SESSION_DISPLAY_SETTINGS_ABI_VERSION + 1;
+    assert_eq!(
+        unsafe { navop_rdp_update_session_display_settings(host, &invalid) },
+        RESULT_ABI_MISMATCH
+    );
+
+    for invalid in [
+        NavopRdpSessionDisplaySettings {
+            desktop_width: 0,
+            ..settings
+        },
+        NavopRdpSessionDisplaySettings {
+            desktop_height: 0,
+            ..settings
+        },
+        NavopRdpSessionDisplaySettings {
+            physical_width: 0,
+            ..settings
+        },
+        NavopRdpSessionDisplaySettings {
+            physical_height: 0,
+            ..settings
+        },
+        NavopRdpSessionDisplaySettings {
+            desktop_scale_factor: 0,
+            ..settings
+        },
+        NavopRdpSessionDisplaySettings {
+            device_scale_factor: 0,
+            ..settings
+        },
+    ] {
+        assert_eq!(
+            unsafe { navop_rdp_update_session_display_settings(host, &invalid) },
+            RESULT_INVALID_ARGUMENT
+        );
+    }
+    assert_eq!(
+        unsafe { navop_rdp_update_session_display_settings(host, &settings) },
+        RESULT_UNAVAILABLE
+    );
+
+    let host_address = host as usize;
+    let wrong_thread_result = std::thread::spawn(move || unsafe {
+        navop_rdp_update_session_display_settings(
+            host_address as *mut NativeRdpHost,
+            &session_display_settings(),
+        )
+    })
+    .join()
+    .expect("wrong-thread display settings test worker should finish");
+    assert_eq!(wrong_thread_result, RESULT_WRONG_THREAD);
+
+    assert_eq!(
+        unsafe {
+            navop_rdp_register_event_callback(
+                host,
+                &NavopRdpEventCallbackOptions::current(generation),
+                Some(record_callback),
+                ptr::null_mut(),
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_update_session_display_settings(host, &settings) },
+        RESULT_INVALID_STATE
+    );
     assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
     assert!(host.is_null());
 }

@@ -8,6 +8,7 @@
 mod capabilities;
 mod credential;
 mod diagnostic;
+mod display;
 mod error;
 mod event;
 mod ffi;
@@ -24,6 +25,7 @@ pub use diagnostic::{
     WindowsRdpDiagnosticContext, WindowsRdpDiagnosticSnapshot, WindowsRdpRedactedValue,
     WindowsRdpUsernameRedaction,
 };
+pub use display::WindowsRdpSessionDisplaySettings;
 pub use error::WindowsRdpHostError;
 pub use error::WindowsRdpHresult;
 pub use error::WindowsRdpHresultKind;

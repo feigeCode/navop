@@ -132,6 +132,7 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "int32_t color_depth;",
             "uint32_t flags;",
             "NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)",
+            "NAVOP_RDP_SESSION_DISPLAY_SETTINGS_ABI_VERSION UINT32_C(1)",
             "typedef struct NavopRdpCreateWithParentOptions",
             "uintptr_t parent_hwnd;",
             "typedef struct NavopRdpLastError",
@@ -148,6 +149,16 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "int32_t height;",
             "parent window's client-area physical pixels",
             "width and height must be non-negative",
+            "typedef struct NavopRdpSessionDisplaySettings",
+            "uint32_t desktop_width;",
+            "uint32_t desktop_height;",
+            "uint32_t physical_width;",
+            "uint32_t physical_height;",
+            "uint32_t orientation;",
+            "uint32_t desktop_scale_factor;",
+            "uint32_t device_scale_factor;",
+            "post-login RDP framebuffer",
+            "distinct from NavopRdpBounds",
             "caller-owned",
             "non-owning native window handle",
             "owns only its hidden",
@@ -167,6 +178,7 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "navop_rdp_create_with_parent_v2(",
             "navop_rdp_get_last_error(",
             "navop_rdp_set_bounds(",
+            "navop_rdp_update_session_display_settings(",
             "navop_rdp_set_visible(",
             "navop_rdp_focus(",
             "navop_rdp_connect(",
@@ -275,6 +287,17 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "static_assert(offsetof(NavopRdpBounds, y) == 4)",
             "static_assert(offsetof(NavopRdpBounds, width) == 8)",
             "static_assert(offsetof(NavopRdpBounds, height) == 12)",
+            "static_assert(sizeof(NavopRdpSessionDisplaySettings) == 36)",
+            "static_assert(alignof(NavopRdpSessionDisplaySettings) == 4)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, struct_size) == 0)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, abi_version) == 4)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, desktop_width) == 8)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, desktop_height) == 12)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, physical_width) == 16)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, physical_height) == 20)",
+            "static_assert(offsetof(NavopRdpSessionDisplaySettings, orientation) == 24)",
+            "offsetof(NavopRdpSessionDisplaySettings, desktop_scale_factor) == 28",
+            "offsetof(NavopRdpSessionDisplaySettings, device_scale_factor) == 32",
         ],
     );
     assert_contains_all(
@@ -311,6 +334,19 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "offset_of!(NavopRdpBounds, y) == 4",
             "offset_of!(NavopRdpBounds, width) == 8",
             "offset_of!(NavopRdpBounds, height) == 12",
+            "SESSION_DISPLAY_SETTINGS_ABI_VERSION",
+            "struct NavopRdpSessionDisplaySettings",
+            "size_of::<NavopRdpSessionDisplaySettings>() == 36",
+            "align_of::<NavopRdpSessionDisplaySettings>() == 4",
+            "offset_of!(NavopRdpSessionDisplaySettings, struct_size) == 0",
+            "offset_of!(NavopRdpSessionDisplaySettings, abi_version) == 4",
+            "offset_of!(NavopRdpSessionDisplaySettings, desktop_width) == 8",
+            "offset_of!(NavopRdpSessionDisplaySettings, desktop_height) == 12",
+            "offset_of!(NavopRdpSessionDisplaySettings, physical_width) == 16",
+            "offset_of!(NavopRdpSessionDisplaySettings, physical_height) == 20",
+            "offset_of!(NavopRdpSessionDisplaySettings, orientation) == 24",
+            "offset_of!(NavopRdpSessionDisplaySettings, desktop_scale_factor) == 28",
+            "offset_of!(NavopRdpSessionDisplaySettings, device_scale_factor) == 32",
             "struct NavopRdpBorrowedUtf16",
             "struct NavopRdpConnectionOptions",
             "size_of::<NavopRdpBorrowedUtf16>() == 16",
@@ -1372,15 +1408,29 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
     assert_contains_all(
         "tools/gpui-rdp-smoke/src/native_overlay.rs",
         &[
-            "const WS_CHILD: u32",
             "ensure_owner_clips_children(owner_window)?",
+            "GetParent(overlay)",
+        ],
+    );
+    assert_contains_all(
+        "tools/gpui-rdp-smoke/src/native_overlay/window.rs",
+        &[
+            "const WS_CHILD: u32",
             "SetWindowLongPtrW(owner, GWL_STYLE, style_after as isize)",
             "style_before | WS_CLIPCHILDREN as usize",
             "SWP_FRAMECHANGED",
-            "GetParent(overlay)",
-            "GetWindow(window_pointer(self.window), GW_HWNDFIRST)",
-            "ScreenToClient(owner, &mut observed_origin)",
             "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT",
+            "CreateWindowExW(",
+            "WS_EX_NOPARENTNOTIFY",
+            "SetWindowPos(",
+            "SWP_NOACTIVATE | SWP_SHOWWINDOW",
+        ],
+    );
+    assert_contains_all(
+        "tools/gpui-rdp-smoke/src/native_overlay/diagnostics.rs",
+        &[
+            "GetWindow(window, GW_HWNDFIRST)",
+            "ScreenToClient(owner, &mut origin)",
             "owner_clip_children={}",
             "overlay_is_first={}",
         ],
@@ -1394,7 +1444,7 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
         "fn finish_initialization(",
         "\n}\n\nfn configure_presentation",
         &[
-            "session.overlay.synchronize(0, 0, bounds.0, bounds.1)",
+            "session.overlay.synchronize((0, 0, bounds.0, bounds.1))",
             "configure_presentation(&mut session, bounds)",
             "connect_session(&mut session, &credentials, &connection_options)",
         ],
@@ -1404,9 +1454,15 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
         &[
             "const LOGIN_PRESENTATION_REFRESH_DELAY: Duration = Duration::from_millis(300)",
             "login_presentation_refresh_task: Option<Task<()>>",
-            "support::spawn_login_presentation_refresh(",
-            "session.overlay.refresh(0, 0, bounds.0, bounds.1)",
         ],
+    );
+    assert_contains_all(
+        "tools/gpui-rdp-smoke/src/windows_app/view/events.rs",
+        &["support::spawn_login_presentation_refresh("],
+    );
+    assert_contains_all(
+        "tools/gpui-rdp-smoke/src/windows_app/view/presentation.rs",
+        &["session.overlay.refresh((0, 0, bounds.0, bounds.1))"],
     );
     assert_tokens_in_scope(
         "tools/gpui-rdp-smoke/src/windows_app/view/support.rs",
@@ -1415,8 +1471,8 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
         &[
             "cx.background_executor().timer(delay).await",
             "view.update_in(cx, |view, window, _cx|",
-            "current_generation != Some(generation)",
-            "view.refresh_connected_presentation(",
+            "current_generation != Some(token.generation)",
+            "view.present_login_complete(",
         ],
     );
 }
@@ -1664,6 +1720,76 @@ fn native_connection_entrypoints_validate_gate_outputs_and_exceptions() {
 }
 
 #[test]
+fn native_session_display_entrypoint_validates_headers_and_state() {
+    assert_tokens_in_scope(
+        &format!("{HOST_CRATE}/native/host.cpp"),
+        "extern \"C\" NavopRdpResult navop_rdp_update_session_display_settings(",
+        "extern \"C\" NavopRdpResult navop_rdp_set_visible(",
+        &[
+            "try {",
+            "if (host == nullptr)",
+            "const NavopRdpResult owner_result = ensure_owner_thread(host)",
+            "if (owner_result != NAVOP_RDP_RESULT_OK)",
+            "clear_last_error(host)",
+            "settings == nullptr",
+            "validate_struct_size(",
+            "settings->struct_size",
+            "sizeof(NavopRdpSessionDisplaySettings)",
+            "settings->abi_version",
+            "NAVOP_RDP_SESSION_DISPLAY_SETTINGS_ABI_VERSION",
+            "settings->desktop_width == UINT32_C(0)",
+            "settings->desktop_height == UINT32_C(0)",
+            "settings->physical_width == UINT32_C(0)",
+            "settings->physical_height == UINT32_C(0)",
+            "settings->desktop_scale_factor == UINT32_C(0)",
+            "settings->device_scale_factor == UINT32_C(0)",
+            "host->callback_state != CallbackState::Open",
+            "NAVOP_RDP_RESULT_INVALID_STATE",
+            "update_active_x_session_display_settings(",
+            "catch (...)",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+        ],
+    );
+}
+
+#[test]
+fn active_x_session_display_requires_connected_and_preserves_hresult() {
+    assert_tokens_in_scope(
+        &format!("{HOST_CRATE}/native/active_x_host.cpp"),
+        "NavopRdpResult update_active_x_session_display_settings(",
+        "NavopRdpResult set_active_x_visible(",
+        &[
+            "validate_resources(resources)",
+            "short connected = 0;",
+            "resources->state.client->get_Connected(&connected)",
+            "\"display.get_connected.after\"",
+            "\"display.connected_state\"",
+            "if (FAILED(result))",
+            "record_last_hresult(",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+            "static_cast<int32_t>(result)",
+            "if (connected != 1)",
+            "record_last_error(owner, NAVOP_RDP_RESULT_INVALID_STATE)",
+            "\"display.update_session_display_settings.before\"",
+            "resources->state.client->UpdateSessionDisplaySettings(",
+            "static_cast<ULONG>(settings.desktop_width)",
+            "static_cast<ULONG>(settings.desktop_height)",
+            "static_cast<ULONG>(settings.physical_width)",
+            "static_cast<ULONG>(settings.physical_height)",
+            "static_cast<ULONG>(settings.orientation)",
+            "static_cast<ULONG>(settings.desktop_scale_factor)",
+            "static_cast<ULONG>(settings.device_scale_factor)",
+            "\"display.update_session_display_settings.after\"",
+            "if (FAILED(result))",
+            "record_last_hresult(",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+            "static_cast<int32_t>(result)",
+            "return NAVOP_RDP_RESULT_OK;",
+        ],
+    );
+}
+
+#[test]
 fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
     let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
     assert_tokens_in_scope(
@@ -1757,6 +1883,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "WindowsRdpConnectionState",
             "WindowsRdpHost",
             "WindowsRdpRequestCloseStatus",
+            "pub use display::WindowsRdpSessionDisplaySettings;",
             "pub use lifecycle::WindowsRdpHostLifecycle;",
             "WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS",
             "WindowsRdpColorDepth",
@@ -1764,6 +1891,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "WindowsRdpHostOptions",
             "WindowsRdpParentWindow",
             "mod diagnostic;",
+            "mod display;",
             "mod event;",
             "mod lifecycle;",
         ],
@@ -1777,6 +1905,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub fn create(",
             "pub unsafe fn create_with_parent(",
             "pub fn set_bounds(",
+            "pub fn update_session_display_settings(",
             "pub fn set_visible(",
             "pub fn focus(",
             "pub fn connect(",
@@ -1799,18 +1928,23 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "if self.close().is_err() && self.callback_registered",
             "Box::leak(event_bridge)",
             "(self.bindings.set_bounds)(self.raw, &bounds)",
+            "(self.bindings.update_session_display_settings)(self.raw, &native_settings)",
             "(self.bindings.set_visible)",
             "(self.bindings.focus)(self.raw)",
             "presentation_controls_forward_bounds_visibility_and_focus",
             "negative_presentation_dimensions_are_rejected_before_native_call",
             "presentation_failures_map_without_changing_lifecycle",
             "presentation_controls_are_rejected_before_native_when_closing_or_closed",
+            "session_display_settings_forward_the_current_abi_and_all_fields",
+            "session_display_settings_failures_map_without_changing_lifecycle",
+            "session_display_settings_are_rejected_before_native_when_closing_or_closed",
         ],
     );
     assert_contains_all(
         &format!("{HOST_CRATE}/src/ffi.rs"),
         &[
             "type SetBoundsFn",
+            "type UpdateSessionDisplaySettingsFn",
             "type SetVisibleFn",
             "type FocusFn",
             "type ConnectFn",
@@ -1818,6 +1952,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "type RequestCloseFn",
             "type DisconnectFn",
             "set_bounds: SetBoundsFn",
+            "update_session_display_settings: UpdateSessionDisplaySettingsFn",
             "set_visible: SetVisibleFn",
             "focus: FocusFn",
             "connect: ConnectFn",
@@ -1825,6 +1960,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "request_close: RequestCloseFn",
             "disconnect: DisconnectFn",
             "navop_rdp_set_bounds(",
+            "navop_rdp_update_session_display_settings(",
             "navop_rdp_set_visible(",
             "navop_rdp_focus(",
         ],
