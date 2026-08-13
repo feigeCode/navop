@@ -1798,14 +1798,85 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlockRect, CellData, RenderCache, TextRunFontRole, block_cursor_glyph_from_cell,
-        block_element_geometry, ensure_minimum_contrast, terminal_bold_weight,
-        terminal_text_font_role,
+        AddonManager, BlockRect, CellData, RenderCache, TextRunFontRole,
+        block_cursor_glyph_from_cell, block_element_geometry, ensure_minimum_contrast,
+        terminal_bold_weight, terminal_text_font_role,
     };
+    use crate::theme::TerminalTheme;
+    use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::term::cell::{Cell, Flags};
     use alacritty_terminal::term::color::Colors;
-    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+    use alacritty_terminal::term::{Config as TermConfig, Term};
+    use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, StdSyncHandler};
     use gpui::{FontWeight, rgb};
+    use terminal::pty_backend::GpuiEventProxy;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    struct TestTermDimensions {
+        columns: usize,
+        screen_lines: usize,
+    }
+
+    impl Dimensions for TestTermDimensions {
+        fn total_lines(&self) -> usize {
+            self.screen_lines
+        }
+
+        fn screen_lines(&self) -> usize {
+            self.screen_lines
+        }
+
+        fn columns(&self) -> usize {
+            self.columns
+        }
+    }
+
+    fn cached_screen_rows(cache: &RenderCache) -> Vec<String> {
+        cache
+            .lines
+            .iter()
+            .map(|line| {
+                let mut row = vec![' '; cache.num_cols];
+                for run in &line.text_runs {
+                    let mut column = run.start_col;
+                    for character in run.text.chars() {
+                        if column < row.len() {
+                            row[column] = character;
+                        }
+                        column += run.cell_width_cols;
+                    }
+                    assert_eq!(run.start_col + run.column_count, column);
+                }
+                row.into_iter().collect()
+            })
+            .collect()
+    }
+
+    fn renderable_screen_rows(term: &Term<GpuiEventProxy>) -> Vec<String> {
+        let columns = term.columns();
+        let screen_lines = term.screen_lines();
+        let content = term.renderable_content();
+        let display_offset = content.display_offset;
+        let mut rows = vec![vec![' '; columns]; screen_lines];
+
+        for cell in content.display_iter {
+            let screen_line = cell.point.line.0 + display_offset as i32;
+            let Ok(row) = usize::try_from(screen_line) else {
+                continue;
+            };
+            if row >= screen_lines || cell.point.column.0 >= columns {
+                continue;
+            }
+            if cell.c == '\0' || cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+            rows[row][cell.point.column.0] = cell.c;
+        }
+
+        rows.into_iter()
+            .map(|row| row.into_iter().collect())
+            .collect()
+    }
 
     fn approx_eq(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
@@ -1829,6 +1900,56 @@ mod tests {
             bg: Color::Named(NamedColor::Background),
             flags,
             is_selected: false,
+        }
+    }
+
+    #[test]
+    fn incremental_cache_preserves_chunked_soft_wrapped_output() {
+        let dimensions = TestTermDimensions {
+            columns: 16,
+            screen_lines: 6,
+        };
+        let (event_tx, _event_rx) = unbounded_channel();
+        let mut term = Term::new(
+            TermConfig::default(),
+            &dimensions,
+            GpuiEventProxy::new(event_tx),
+        );
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        let addon_manager = AddonManager::new();
+        let theme = TerminalTheme::midnight();
+        let mut cache =
+            RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+        let chunks: &[&[u8]] = &[
+            b"portmap: [v1] ",
+            b"UPnP reply Locat",
+            b"ion:http://172.",
+            b"16.0.1:1900/igd",
+            b".xml Server:vxWo",
+            b"rks/5.5\r\n* UDP: true",
+        ];
+
+        for chunk in chunks {
+            processor.advance(&mut term, chunk);
+            cache.update(&mut term, &addon_manager, &theme, None);
+
+            let mut rebuilt =
+                RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+            rebuilt.rebuild_all(&term, None);
+            let actual = cached_screen_rows(&cache);
+
+            assert_eq!(
+                renderable_screen_rows(&term),
+                actual,
+                "incremental cache diverged after chunk {:?}",
+                String::from_utf8_lossy(chunk)
+            );
+            assert_eq!(
+                cached_screen_rows(&rebuilt),
+                actual,
+                "incremental cache diverged from a full rebuild after chunk {:?}",
+                String::from_utf8_lossy(chunk)
+            );
         }
     }
 

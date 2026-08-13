@@ -3636,9 +3636,9 @@ mod tests {
     use super::with_local_terminal_default_env;
     use super::{
         CommandRecordGate, ConnectionState, HostKeyVerificationReason, HostKeyVerificationRequest,
-        SshConnectionUpdate, SshCredentialPromptPolicy, Terminal, TerminalConnectionKind,
-        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalScrollProxy,
-        TerminalSessionMode, TerminalSshCredentials, build_cd_command,
+        SshConnectionUpdate, SshCredentialPromptPolicy, TermDimensions, Terminal,
+        TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
+        TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials, build_cd_command,
         build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
         compose_ssh_init_commands, flush_pending_terminal_events, format_connection_error,
         host_key_verification_request, is_reconnect_generation, is_ssh_password_prompt,
@@ -3669,6 +3669,8 @@ mod tests {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line, Point, Side};
     use alacritty_terminal::selection::SelectionType;
+    use alacritty_terminal::term::TermDamage;
+    use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
     use one_core::storage::models::{SshAuthMethod, SshParams, StoredConnection};
@@ -5653,6 +5655,100 @@ mod tests {
         assert_eq!(2, snapshot.returned_lines);
         assert!(snapshot.available_lines >= 4);
         assert!(snapshot.history_size >= 1);
+    }
+
+    #[test]
+    fn long_output_soft_wraps_without_losing_trailing_fields() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, _event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term(10, 4, 10_000, event_tx);
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+
+        processor.advance(&mut *term.lock(), b"0123456789ABCDEFGHIJabcdefghij");
+
+        let term = term.lock();
+        let screen_line = |line: i32| -> String {
+            term.grid()[Line(line)][..]
+                .iter()
+                .map(|cell| cell.c)
+                .collect()
+        };
+
+        assert_eq!("0123456789", screen_line(0));
+        assert_eq!("ABCDEFGHIJ", screen_line(1));
+        assert_eq!("abcdefghij", screen_line(2));
+        assert!(
+            term.grid()[Line(0)][Column(9)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        );
+        assert!(
+            term.grid()[Line(1)][Column(9)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        );
+    }
+
+    #[test]
+    fn resize_reflows_wrapped_output_without_losing_trailing_fields() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, _event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term(20, 4, 10_000, event_tx);
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+
+        processor.advance(&mut *term.lock(), b"0123456789ABCDEFGHIJabcdefghij");
+
+        {
+            let mut term = term.lock();
+            term.reset_damage();
+            term.resize(TermDimensions { cols: 10, rows: 4 });
+            assert!(matches!(term.damage(), TermDamage::Full));
+        }
+
+        {
+            let term = term.lock();
+            let line_text = |line: i32| -> String {
+                term.grid()[Line(line)][..]
+                    .iter()
+                    .map(|cell| cell.c)
+                    .collect::<String>()
+                    .trim_end_matches(|character: char| character == ' ' || character == '\0')
+                    .to_string()
+            };
+            let logical_lines = (-(term.history_size() as i32)..term.screen_lines() as i32)
+                .map(line_text)
+                .collect::<Vec<_>>();
+
+            assert!(
+                logical_lines
+                    .windows(3)
+                    .any(|lines| lines == ["0123456789", "ABCDEFGHIJ", "abcdefghij"]),
+                "reflowed output not found: {logical_lines:?}"
+            );
+        }
+
+        {
+            let mut term = term.lock();
+            term.reset_damage();
+            term.resize(TermDimensions { cols: 40, rows: 4 });
+            assert!(matches!(term.damage(), TermDamage::Full));
+        }
+
+        let term = term.lock();
+        let matching_line =
+            (-(term.history_size() as i32)..term.screen_lines() as i32).find(|line| {
+                term.grid()[Line(*line)][..]
+                    .iter()
+                    .map(|cell| cell.c)
+                    .collect::<String>()
+                    .starts_with("0123456789ABCDEFGHIJabcdefghij")
+            });
+        let matching_line = matching_line.expect("expanded output was not found in the grid");
+        assert!(
+            !term.grid()[Line(matching_line)][Column(39)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        );
     }
 
     #[test]

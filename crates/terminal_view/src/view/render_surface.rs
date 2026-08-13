@@ -36,6 +36,24 @@ pub(super) fn connection_status_presentation(
     }
 }
 
+pub(super) fn terminal_viewport_bounds(
+    surface_bounds: Bounds<Pixels>,
+    content_mask_bounds: Bounds<Pixels>,
+) -> Bounds<Pixels> {
+    let intersection = surface_bounds.intersect(&content_mask_bounds);
+    if intersection.size.width <= px(0.0) || intersection.size.height <= px(0.0) {
+        return Bounds::new(surface_bounds.origin, size(px(0.0), px(0.0)));
+    }
+
+    Bounds::new(
+        surface_bounds.origin,
+        size(
+            (intersection.right() - surface_bounds.origin.x).max(px(0.0)),
+            (intersection.bottom() - surface_bounds.origin.y).max(px(0.0)),
+        ),
+    )
+}
+
 #[cfg(test)]
 pub(super) fn should_show_connection_overlay(
     connection_state: &ConnectionState,
@@ -164,33 +182,17 @@ impl TerminalView {
     }
 
     fn render_input_canvas(&self, cx: &mut Context<Self>) -> AnyElement {
-        let entity = cx.entity().downgrade();
         let focus_handle = self.focus_handle.clone();
-        canvas(
-            move |bounds, _window, cx| {
+        canvas(|_bounds, _window, _cx| {}, {
+            let entity = cx.entity().downgrade();
+            let focus_handle = focus_handle.clone();
+            move |bounds, _state, window, cx| {
                 if let Some(entity) = entity.upgrade() {
-                    entity.update(cx, |this, cx| {
-                        this.terminal_bounds = bounds;
-                        let mut metrics = this.scrollbar_metrics.borrow_mut();
-                        metrics.viewport_size = bounds.size;
-                        metrics.line_height = this.line_height;
-                        metrics.cell_width = this.cell_width;
-                        drop(metrics);
-                        this.resize_if_needed(bounds, cx);
-                    });
+                    let input_handler = ElementInputHandler::new(bounds, entity);
+                    window.handle_input(&focus_handle, input_handler, cx);
                 }
-            },
-            {
-                let entity = cx.entity().downgrade();
-                let focus_handle = focus_handle.clone();
-                move |bounds, _state, window, cx| {
-                    if let Some(entity) = entity.upgrade() {
-                        let input_handler = ElementInputHandler::new(bounds, entity);
-                        window.handle_input(&focus_handle, input_handler, cx);
-                    }
-                }
-            },
-        )
+            }
+        })
         .absolute()
         .left(px(12.0))
         .right(px(12.0))
@@ -205,6 +207,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = cx.entity().clone();
+        let bounds_view = cx.entity().downgrade();
         let sidebar = self.sidebar.clone();
         let terminal_surface = div()
             .absolute()
@@ -214,6 +217,19 @@ impl TerminalView {
             .bottom(px(12.0))
             .bg(self.current_theme.background)
             .overflow_hidden()
+            .on_prepaint(move |bounds, window, cx| {
+                let viewport_bounds =
+                    terminal_viewport_bounds(bounds, window.content_mask().bounds);
+                let _ = bounds_view.update(cx, |this, cx| {
+                    this.terminal_bounds = viewport_bounds;
+                    let mut metrics = this.scrollbar_metrics.borrow_mut();
+                    metrics.viewport_size = viewport_bounds.size;
+                    metrics.line_height = this.line_height;
+                    metrics.cell_width = this.cell_width;
+                    drop(metrics);
+                    this.resize_if_needed(viewport_bounds, cx);
+                });
+            })
             .child(self.render_terminal(state.font_family.clone(), cx))
             .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
                 this.child(overlay)

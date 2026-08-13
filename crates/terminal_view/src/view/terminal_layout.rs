@@ -1,12 +1,18 @@
 use super::*;
 
+pub(super) fn terminal_grid_size(
+    viewport_size: Size<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+) -> (usize, usize) {
+    let cols = (viewport_size.width / cell_width).floor() as usize;
+    let rows = (viewport_size.height / line_height).floor() as usize;
+    (cols.max(1), rows.max(1))
+}
+
 impl TerminalView {
     pub(super) fn resize_if_needed(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
-        let cols = (bounds.size.width / self.cell_width).floor() as usize;
-        let rows = (bounds.size.height / self.line_height).floor() as usize;
-
-        let cols = cols.max(1);
-        let rows = rows.max(1);
+        let (cols, rows) = terminal_grid_size(bounds.size, self.cell_width, self.line_height);
 
         let new_size = (cols, rows);
         if self.last_size != Some(new_size) {

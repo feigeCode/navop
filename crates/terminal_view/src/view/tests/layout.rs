@@ -495,15 +495,15 @@ fn command_bar_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
     assert!(viewport.contains(".flex_1()"));
     assert!(viewport.contains(".min_h_0()"));
 
-    let canvas = render_surface_source
-        .split("fn render_input_canvas")
+    let surface = render_surface_source
+        .split("fn render_terminal_surface")
         .nth(1)
-        .and_then(|source| source.split("fn render_terminal_surface").next())
-        .expect("terminal input canvas implementation should exist");
-    assert!(canvas.contains("this.resize_if_needed(bounds, cx);"));
+        .and_then(|source| source.split("fn render_addon_tooltip").next())
+        .expect("terminal surface implementation should exist");
+    assert!(surface.contains("window.content_mask().bounds"));
+    assert!(surface.contains("this.resize_if_needed(viewport_bounds, cx);"));
 
-    assert!(terminal_layout_source.contains("bounds.size.width / self.cell_width"));
-    assert!(terminal_layout_source.contains("bounds.size.height / self.line_height"));
+    assert!(terminal_layout_source.contains("terminal_grid_size("));
     assert!(terminal_layout_source.contains("terminal.resize("));
     assert!(
         !render_layout_source.contains("COMMAND_BAR_COLLAPSED_HEIGHT"),
@@ -513,6 +513,47 @@ fn command_bar_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
         !command_bar_source.contains("resize_if_needed"),
         "the command bar must let the canvas bounds drive the existing resize path"
     );
+}
+
+#[test]
+fn clipped_terminal_surface_uses_the_visible_width_for_grid_columns() {
+    let surface_bounds = Bounds::new(Point::new(px(12.0), px(12.0)), size(px(1000.0), px(420.0)));
+    let content_mask_bounds =
+        Bounds::new(Point::new(px(12.0), px(12.0)), size(px(800.0), px(380.0)));
+
+    let viewport_bounds = terminal_viewport_bounds(surface_bounds, content_mask_bounds);
+
+    assert_eq!(
+        viewport_bounds,
+        Bounds::new(Point::new(px(12.0), px(12.0)), size(px(800.0), px(380.0)))
+    );
+    assert_eq!(
+        terminal_grid_size(viewport_bounds.size, px(10.0), px(20.0)),
+        (80, 19)
+    );
+    assert_eq!(
+        terminal_grid_size(surface_bounds.size, px(10.0), px(20.0)),
+        (100, 21),
+        "the unclipped surface would tell the PTY to wrap twenty columns too late"
+    );
+}
+
+#[test]
+fn terminal_viewport_bounds_preserves_the_grid_origin_when_clipped() {
+    let surface_bounds = Bounds::new(Point::new(px(100.0), px(80.0)), size(px(500.0), px(300.0)));
+    let offset_mask = Bounds::new(Point::new(px(140.0), px(120.0)), size(px(300.0), px(180.0)));
+    let disjoint_mask = Bounds::new(Point::new(px(700.0), px(500.0)), size(px(100.0), px(100.0)));
+
+    assert_eq!(
+        terminal_viewport_bounds(surface_bounds, offset_mask),
+        Bounds::new(Point::new(px(100.0), px(80.0)), size(px(340.0), px(220.0))),
+        "clipping must not shift the terminal grid origin used by mouse and IME coordinates"
+    );
+
+    let empty = terminal_viewport_bounds(surface_bounds, disjoint_mask);
+    assert_eq!(empty.origin, surface_bounds.origin);
+    assert_eq!(empty.size, size(px(0.0), px(0.0)));
+    assert_eq!(terminal_grid_size(empty.size, px(10.0), px(20.0)), (1, 1));
 }
 
 #[test]
