@@ -12,9 +12,10 @@ mod file_policy;
 mod language;
 mod remote_mutation;
 
-pub use editor_window::{
-    open_remote_file_editor, refresh_keybindings, request_close_window_if_editor,
-};
+#[cfg(test)]
+mod window_close_contract_tests;
+
+pub use editor_window::{open_remote_file_editor, refresh_keybindings};
 pub use external_editor::{
     ExternalEditorOpenRequest, external_editor_menu_label, external_editors_for_file,
     open_remote_file_external_editor,

@@ -32,9 +32,12 @@ pub mod settings;
 pub mod themes;
 pub mod utils;
 pub mod when_clause;
+pub mod window_close;
 
 #[cfg(test)]
 mod extension_core_contract_tests;
+#[cfg(test)]
+mod popup_window_tests;
 #[cfg(test)]
 mod sidebar_contribution_tests;
 #[cfg(test)]
@@ -57,6 +60,7 @@ pub fn init(cx: &mut App) {
     llm::init(cx);
     agent::init(cx);
     connection_notifier::init(cx);
+    window_close::init(cx);
     popup_window::init(cx);
     tab_container::init(cx);
 }

@@ -1133,13 +1133,8 @@ fn close_active_window(cx: &mut App) {
     let Some(active_window) = crate::app_init::resolve_active_non_main_window(cx) else {
         return;
     };
-    if remote_file_editor::request_close_window_if_editor(active_window, cx) {
-        return;
-    }
 
-    cx.defer(move |cx| {
-        let _ = active_window.update(cx, |_, window, _| window.remove_window());
-    });
+    one_core::window_close::request_close_window(active_window, cx);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1847,8 +1842,9 @@ mod tests {
         assert!(keybindings.contains("CloseActiveWindow"));
         assert!(!keybindings.contains("ClosePanel"));
         assert!(close_handler.contains("resolve_active_non_main_window(cx)"));
-        assert!(close_handler.contains("request_close_window_if_editor"));
-        assert!(close_handler.contains("window.remove_window()"));
+        assert!(close_handler.contains("one_core::window_close::request_close_window"));
+        assert!(!close_handler.contains("remote_file_editor"));
+        assert!(!close_handler.contains("window.remove_window()"));
     }
 
     #[test]

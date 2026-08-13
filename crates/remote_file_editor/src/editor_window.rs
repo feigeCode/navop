@@ -23,6 +23,7 @@ use one_core::{
     gpui_tokio::Tokio,
     keybindings::{action_id, rebind_keybindings, shortcuts_for},
     popup_window::{PopupWindowOptions, open_popup_window},
+    window_close::set_window_close_handler,
 };
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
@@ -85,6 +86,7 @@ pub fn open_remote_file_editor<T: 'static>(
                         window: window.window_handle(),
                         view: view.downgrade(),
                     });
+                    register_window_close_handler(window.window_handle(), view.downgrade(), cx);
                     view
                 },
                 cx,
@@ -148,18 +150,26 @@ fn clear_editor_window() {
     }
 }
 
-pub fn request_close_window_if_editor(window_handle: AnyWindowHandle, cx: &mut App) -> bool {
-    let Some(editor_window) = current_editor_window() else {
-        return false;
-    };
-    if editor_window.window != window_handle {
-        return false;
-    }
+fn register_window_close_handler(
+    window_handle: AnyWindowHandle,
+    view: WeakEntity<RemoteFileEditorWindow>,
+    cx: &mut App,
+) {
+    set_window_close_handler(
+        window_handle,
+        move |window_handle, cx| request_editor_window_close(window_handle, view.clone(), cx),
+        cx,
+    );
+}
 
+fn request_editor_window_close(
+    window_handle: AnyWindowHandle,
+    view: WeakEntity<RemoteFileEditorWindow>,
+    cx: &mut App,
+) {
     cx.defer(move |cx| {
         let result = window_handle.update(cx, |_, window, cx| {
-            if editor_window
-                .view
+            if view
                 .update(cx, |this, cx| this.request_close_window(window, cx))
                 .is_err()
             {
@@ -171,7 +181,6 @@ pub fn request_close_window_if_editor(window_handle: AnyWindowHandle, cx: &mut A
             clear_editor_window();
         }
     });
-    true
 }
 
 fn init_keybindings(cx: &mut App) {
