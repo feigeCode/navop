@@ -16,6 +16,8 @@ namespace {
 
 constexpr wchar_t kNativeHostWindowClassName[] =
     L"Navop.WindowsRdpHost.Container";
+constexpr ULONG kDefaultDesktopScaleFactor = static_cast<ULONG>(100);
+constexpr ULONG kDefaultDeviceScaleFactor = static_cast<ULONG>(100);
 
 // 1Remote deliberately hosts the broadly deployed
 // MsRdpClient9NotSafeForScripting control instead of the newest RDP control.
@@ -930,6 +932,38 @@ NavopRdpResult focus_active_x(
     return NAVOP_RDP_RESULT_OK;
 }
 
+void configure_extended_display_settings(IUnknown* control) noexcept {
+    CComPtr<IMsRdpExtendedSettings> extended_settings;
+    trace_native_stage("connect.query_extended_settings.before");
+    HRESULT result = control == nullptr
+        ? E_POINTER
+        : control->QueryInterface(IID_PPV_ARGS(&extended_settings));
+    trace_native_hresult(
+        "connect.query_extended_settings.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result) || extended_settings == nullptr) {
+        return;
+    }
+
+    CComVariant desktop_scale_factor(kDefaultDesktopScaleFactor);
+    trace_native_stage("connect.set_desktop_scale_factor.before");
+    result = extended_settings->put_Property(
+        CComBSTR(L"DesktopScaleFactor"),
+        &desktop_scale_factor);
+    trace_native_hresult(
+        "connect.set_desktop_scale_factor.after",
+        static_cast<int32_t>(result));
+
+    CComVariant device_scale_factor(kDefaultDeviceScaleFactor);
+    trace_native_stage("connect.set_device_scale_factor.before");
+    result = extended_settings->put_Property(
+        CComBSTR(L"DeviceScaleFactor"),
+        &device_scale_factor);
+    trace_native_hresult(
+        "connect.set_device_scale_factor.after",
+        static_cast<int32_t>(result));
+}
+
 NavopRdpResult connect_active_x(
     NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
@@ -1004,6 +1038,8 @@ NavopRdpResult connect_active_x(
             static_cast<int32_t>(result));
     }
 
+    configure_extended_display_settings(resources->state.control);
+
     trace_native_stage("connect.set_smart_sizing.before");
     result = advanced_settings->put_SmartSizing(VARIANT_FALSE);
     trace_native_hresult(
@@ -1031,6 +1067,19 @@ NavopRdpResult connect_active_x(
                 static_cast<int32_t>(result));
         }
         return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    trace_native_stage(
+        "connect.set_container_handled_full_screen.before");
+    result = advanced_settings6->put_ContainerHandledFullScreen(VARIANT_TRUE);
+    trace_native_hresult(
+        "connect.set_container_handled_full_screen.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
 
     trace_native_stage("connect.set_public_mode.before");

@@ -1790,6 +1790,63 @@ fn active_x_session_display_requires_connected_and_preserves_hresult() {
 }
 
 #[test]
+fn active_x_connect_aligns_initial_display_properties_with_axhost() {
+    let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+
+    assert_contains_all(
+        active_x,
+        &[
+            "constexpr ULONG kDefaultDesktopScaleFactor = static_cast<ULONG>(100);",
+            "constexpr ULONG kDefaultDeviceScaleFactor = static_cast<ULONG>(100);",
+            "CComPtr<IMsRdpExtendedSettings> extended_settings;",
+            "CComVariant desktop_scale_factor(",
+            "CComVariant device_scale_factor(",
+            "CComBSTR(L\"DesktopScaleFactor\")",
+            "CComBSTR(L\"DeviceScaleFactor\")",
+            "put_ContainerHandledFullScreen(VARIANT_TRUE)",
+            "connect.query_extended_settings.before",
+            "connect.query_extended_settings.after",
+            "connect.set_desktop_scale_factor.before",
+            "connect.set_desktop_scale_factor.after",
+            "connect.set_device_scale_factor.before",
+            "connect.set_device_scale_factor.after",
+            "connect.set_container_handled_full_screen.before",
+            "connect.set_container_handled_full_screen.after",
+        ],
+    );
+    assert_tokens_in_scope(
+        active_x,
+        "void configure_extended_display_settings(",
+        "\n}\n\nNavopRdpResult connect_active_x(",
+        &[
+            "control->QueryInterface(IID_PPV_ARGS(&extended_settings))",
+            "extended_settings->put_Property(",
+            "CComBSTR(L\"DesktopScaleFactor\")",
+            "&desktop_scale_factor",
+            "extended_settings->put_Property(",
+            "CComBSTR(L\"DeviceScaleFactor\")",
+            "&device_scale_factor",
+        ],
+    );
+    assert_tokens_in_scope(
+        active_x,
+        "NavopRdpResult connect_active_x(",
+        "NavopRdpResult apply_active_x_credentials(",
+        &[
+            "get_AdvancedSettings2",
+            "configure_extended_display_settings(resources->state.control);",
+            "put_SmartSizing",
+            "get_AdvancedSettings6",
+            "put_ContainerHandledFullScreen(VARIANT_TRUE)",
+            "put_PublicMode",
+            "put_DesktopWidth",
+            "put_DesktopHeight",
+            "Connect",
+        ],
+    );
+}
+
+#[test]
 fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
     let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
     assert_tokens_in_scope(
