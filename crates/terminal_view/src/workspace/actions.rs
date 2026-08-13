@@ -1,4 +1,4 @@
-use gpui::{Context, Entity, Focusable as _, Window};
+use gpui::{AppContext as _, Context, Entity, Focusable as _, Window};
 use gpui_component::Placement;
 use one_core::tab_container::{TabContent as _, TabContentEvent};
 
@@ -7,6 +7,35 @@ use super::{TerminalPaneId, TerminalWorkspace};
 use crate::view::{TerminalPaneEvent, TerminalView};
 
 impl TerminalWorkspace {
+    pub(super) fn split_pane(
+        &mut self,
+        target: TerminalPaneId,
+        placement: Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(source_pane) = self.panes.get(&target).cloned() else {
+            return false;
+        };
+        if !source_pane.read(cx).duplicate_supported(cx) {
+            return false;
+        }
+        let Some(source) = source_pane.read(cx).duplicate_source_snapshot(cx) else {
+            return false;
+        };
+        let pane = cx.new(|cx| {
+            TerminalView::new_from_duplicate_source(source, window, cx).with_workspace_pane()
+        });
+        self.insert_pane(
+            target,
+            placement,
+            pane,
+            TerminalPaneTabMetadata::generated(),
+            window,
+            cx,
+        )
+    }
+
     pub(super) fn subscribe_to_pane(
         &mut self,
         pane_id: TerminalPaneId,

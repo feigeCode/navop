@@ -83,9 +83,7 @@ impl TerminalWorkspace {
                     .overflow_hidden()
                     .child(pane),
             )
-            .when(split, |this| {
-                this.child(self.render_pane_floating_tool(pane_id, title, cx))
-            })
+            .child(self.render_pane_floating_tool(pane_id, title, cx))
             .into_any_element();
         self.render_tab_drop_target(pane_id, content, cx)
     }

@@ -1,6 +1,26 @@
 _version: 2
 
 TerminalWorkspace:
+  split:
+    en: Split Terminal
+    zh-CN: 终端分屏
+    zh-HK: 終端分屏
+  split_left:
+    en: Split Left
+    zh-CN: 向左分屏
+    zh-HK: 向左分屏
+  split_right:
+    en: Split Right
+    zh-CN: 向右分屏
+    zh-HK: 向右分屏
+  split_top:
+    en: Split Top
+    zh-CN: 向上分屏
+    zh-HK: 向上分屏
+  split_bottom:
+    en: Split Bottom
+    zh-CN: 向下分屏
+    zh-HK: 向下分屏
   cancel_split:
     en: Cancel Split and Return to Tab Bar
     zh-CN: 取消分屏并返回标签栏
