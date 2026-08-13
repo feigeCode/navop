@@ -29,11 +29,11 @@ use gpui_component::{
 use rust_i18n::t;
 
 fn data_column_selection_bounds(
-    data_column_count: usize,
+    total_column_count: usize,
     row_number_offset: usize,
 ) -> Option<(usize, usize)> {
-    let last_data_column = data_column_count.checked_sub(1)?;
-    Some((row_number_offset, row_number_offset + last_data_column))
+    let last_column = total_column_count.checked_sub(1)?;
+    (row_number_offset <= last_column).then_some((row_number_offset, last_column))
 }
 
 fn selected_delegate_column_range(
@@ -3115,9 +3115,10 @@ mod tests {
 
     #[test]
     fn data_column_bounds_include_every_data_column_after_row_numbers() {
-        assert_eq!(Some((1, 4)), data_column_selection_bounds(4, 1));
+        assert_eq!(Some((1, 8)), data_column_selection_bounds(9, 1));
         assert_eq!(Some((0, 3)), data_column_selection_bounds(4, 0));
         assert_eq!(None, data_column_selection_bounds(0, 1));
+        assert_eq!(None, data_column_selection_bounds(1, 1));
     }
 
     #[test]
