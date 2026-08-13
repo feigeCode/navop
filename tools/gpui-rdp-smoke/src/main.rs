@@ -181,6 +181,7 @@ fn run(config: Config) -> ExitCode {
 
 #[cfg(target_os = "windows")]
 mod windows_app {
+    use std::ffi::c_void;
     use std::time::{Duration, Instant};
 
     use gpui::{
@@ -198,6 +199,34 @@ mod windows_app {
     use super::Config;
 
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    const GWL_STYLE: i32 = -16;
+    const WS_CLIPCHILDREN: isize = 0x0200_0000;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetLastError() -> u32;
+        fn SetLastError(code: u32);
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
+        fn SetWindowLongPtrW(window: *mut c_void, index: i32, new_value: isize) -> isize;
+        fn SetWindowPos(
+            window: *mut c_void,
+            insert_after: *mut c_void,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            flags: u32,
+        ) -> i32;
+    }
 
     pub(super) fn run(config: Config) {
         let window_width = config.width as f32;
@@ -573,6 +602,15 @@ mod windows_app {
         };
         let hwnd = handle.hwnd.get() as usize;
         println!("create: parent_hwnd=0x{hwnd:016X}");
+        if let Err(error) = enable_parent_child_clipping(hwnd) {
+            eprintln!("ERROR: stage=enable_parent_child_clipping error={error}");
+            return (
+                None,
+                "Failed to prepare the GPUI HWND for native child presentation; see console"
+                    .to_owned(),
+                None,
+            );
+        }
         let parent = unsafe { WindowsRdpParentWindow::from_raw(hwnd) };
         let mut host = match unsafe {
             WindowsRdpHost::create_with_parent(parent, WindowsRdpHostOptions::new(1))
@@ -627,6 +665,82 @@ mod windows_app {
             "RDP connect requested; waiting for native events".to_owned(),
             Some(bounds),
         )
+    }
+
+    fn enable_parent_child_clipping(hwnd: usize) -> Result<(), String> {
+        let window = hwnd as *mut c_void;
+        let style_before = read_window_style(window)?;
+        println!("presentation: parent_style_before=0x{style_before:016X}");
+
+        let style_after = style_before | WS_CLIPCHILDREN;
+        if style_after != style_before {
+            // SAFETY: the handle is live and this only adds WS_CLIPCHILDREN to
+            // the caller-owned top-level window style. SetLastError is required
+            // because a zero return is also a valid previous LONG_PTR value.
+            let (previous_style, win32_error) = unsafe {
+                SetLastError(0);
+                let previous_style = SetWindowLongPtrW(window, GWL_STYLE, style_after);
+                (previous_style, GetLastError())
+            };
+            if previous_style == 0 && win32_error != 0 {
+                return Err(format!(
+                    "SetWindowLongPtrW(GWL_STYLE) failed with Win32 code 0x{win32_error:08X} ({win32_error})"
+                ));
+            }
+        }
+
+        // Make Windows immediately re-evaluate the changed style without
+        // changing the GPUI window's position, size, activation, or z-order.
+        // SAFETY: both HWND arguments are either the live GPUI HWND or null,
+        // and SWP_NOMOVE/SWP_NOSIZE make the geometry arguments unused.
+        let positioned = unsafe {
+            SetWindowPos(
+                window,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+        if positioned == 0 {
+            // SAFETY: GetLastError reads the calling thread's Win32 error slot.
+            let win32_error = unsafe { GetLastError() };
+            return Err(format!(
+                "SetWindowPos(SWP_FRAMECHANGED) failed with Win32 code 0x{win32_error:08X} ({win32_error})"
+            ));
+        }
+
+        let observed_style = read_window_style(window)?;
+        let clip_children_enabled = observed_style & WS_CLIPCHILDREN != 0;
+        println!(
+            "presentation: parent_style_after=0x{observed_style:016X} parent_clip_children_enabled={clip_children_enabled}"
+        );
+        if !clip_children_enabled {
+            return Err(format!(
+                "WS_CLIPCHILDREN was not retained (expected=0x{style_after:016X}, observed=0x{observed_style:016X})"
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn read_window_style(window: *mut c_void) -> Result<isize, String> {
+        // SAFETY: callers pass GPUI's live HWND and these Win32 calls neither
+        // retain nor take ownership of it. SetLastError disambiguates a valid
+        // zero LONG_PTR from GetWindowLongPtrW failure.
+        let (style, win32_error) = unsafe {
+            SetLastError(0);
+            let style = GetWindowLongPtrW(window, GWL_STYLE);
+            (style, GetLastError())
+        };
+        if style == 0 && win32_error != 0 {
+            return Err(format!(
+                "GetWindowLongPtrW(GWL_STYLE) failed with Win32 code 0x{win32_error:08X} ({win32_error})"
+            ));
+        }
+        Ok(style)
     }
 
     fn failed_after_create(
