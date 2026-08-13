@@ -39,8 +39,8 @@ fn run(_config: Config) -> ExitCode {
 
 #[cfg(target_os = "windows")]
 fn run(config: Config) -> ExitCode {
-    // This environment switch is retained as a diagnostic control, while the
-    // owned native overlay avoids sharing GPUI's swap-chain HWND altogether.
+    // Native child HWNDs must use the classic HWND composition path rather
+    // than GPUI's DirectComposition swap-chain presentation.
     unsafe {
         env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
     }

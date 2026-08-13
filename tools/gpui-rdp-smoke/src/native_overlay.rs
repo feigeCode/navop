@@ -3,15 +3,14 @@ use std::ptr;
 
 use super::native_overlay_ffi::*;
 
-const WS_POPUP: u32 = 0x8000_0000;
+const WS_CHILD: u32 = 0x4000_0000;
 const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
-const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
 const SS_BLACKRECT: u32 = 0x0000_0004;
 const SW_HIDE: i32 = 0;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_SHOWWINDOW: u32 = 0x0040;
-const GW_OWNER: u32 = 4;
 const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 
@@ -46,7 +45,7 @@ const OVERLAY_TITLE: [u16; 18] = [
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ScreenBounds {
+struct ChildBounds {
     x: i32,
     y: i32,
     width: i32,
@@ -56,7 +55,7 @@ struct ScreenBounds {
 pub(crate) struct NativeOverlay {
     owner: usize,
     window: usize,
-    last_bounds: Option<ScreenBounds>,
+    last_bounds: Option<ChildBounds>,
     shown: bool,
 }
 
@@ -71,19 +70,19 @@ impl NativeOverlay {
             return Err(last_error("GetModuleHandleW(current process)"));
         }
         let overlay = create_overlay_window(owner_window, instance)?;
-        let overlay_owner = unsafe { GetWindow(overlay, GW_OWNER) } as usize;
+        let overlay_parent = unsafe { GetParent(overlay) } as usize;
         let style = unsafe { GetWindowLongPtrW(overlay, GWL_STYLE) };
         let ex_style = unsafe { GetWindowLongPtrW(overlay, GWL_EXSTYLE) };
         println!(
-            "presentation: overlay_created hwnd=0x{:016X} owner=0x{overlay_owner:016X} style=0x{style:016X} ex_style=0x{ex_style:016X}",
+            "presentation: overlay_created hwnd=0x{:016X} parent=0x{overlay_parent:016X} style=0x{style:016X} ex_style=0x{ex_style:016X}",
             overlay as usize
         );
-        if overlay_owner != owner {
+        if overlay_parent != owner {
             unsafe {
                 DestroyWindow(overlay);
             }
             return Err(format!(
-                "owned RDP overlay retained unexpected owner 0x{overlay_owner:016X}"
+                "child RDP overlay retained unexpected parent 0x{overlay_parent:016X}"
             ));
         }
 
@@ -106,7 +105,7 @@ impl NativeOverlay {
         width: i32,
         height: i32,
     ) -> Result<(), String> {
-        let Some(bounds) = self.screen_bounds(local_x, local_y, width, height)? else {
+        let Some(bounds) = self.child_bounds(local_x, local_y, width, height)? else {
             self.hide()?;
             return Ok(());
         };
@@ -128,7 +127,7 @@ impl NativeOverlay {
             )
         };
         if positioned == 0 {
-            return Err(last_error("SetWindowPos(owned RDP overlay)"));
+            return Err(last_error("SetWindowPos(child RDP overlay)"));
         }
 
         self.shown = true;
@@ -148,7 +147,7 @@ impl NativeOverlay {
             ShowWindow(window_pointer(self.window), SW_HIDE);
         }
         if unsafe { IsWindowVisible(window_pointer(self.window)) } != 0 {
-            return Err("ShowWindow(SW_HIDE) left the owned RDP overlay visible".to_owned());
+            return Err("ShowWindow(SW_HIDE) left the child RDP overlay visible".to_owned());
         }
         self.shown = false;
         self.last_bounds = None;
@@ -166,7 +165,7 @@ impl NativeOverlay {
             return Ok(());
         }
         if unsafe { DestroyWindow(window) } == 0 {
-            return Err(last_error("DestroyWindow(owned RDP overlay)"));
+            return Err(last_error("DestroyWindow(child RDP overlay)"));
         }
         self.window = 0;
         self.last_bounds = None;
@@ -174,13 +173,13 @@ impl NativeOverlay {
         Ok(())
     }
 
-    fn screen_bounds(
+    fn child_bounds(
         &self,
         local_x: i32,
         local_y: i32,
         width: i32,
         height: i32,
-    ) -> Result<Option<ScreenBounds>, String> {
+    ) -> Result<Option<ChildBounds>, String> {
         let owner = window_pointer(self.owner);
         if unsafe { IsWindow(owner) } == 0 {
             return Err("GPUI owner HWND was destroyed before the RDP overlay".to_owned());
@@ -201,33 +200,37 @@ impl NativeOverlay {
             return Ok(None);
         }
 
-        let mut origin = Point { x: left, y: top };
-        if unsafe { ClientToScreen(owner, &mut origin) } == 0 {
-            return Err(last_error("ClientToScreen(GPUI owner)"));
-        }
-        Ok(Some(ScreenBounds {
-            x: origin.x,
-            y: origin.y,
+        Ok(Some(ChildBounds {
+            x: left,
+            y: top,
             width: right - left,
             height: bottom - top,
         }))
     }
 
-    fn log_observed_bounds(&self, expected: ScreenBounds) -> Result<(), String> {
+    fn log_observed_bounds(&self, expected: ChildBounds) -> Result<(), String> {
         let mut observed = Rect::default();
         if unsafe { GetWindowRect(window_pointer(self.window), &mut observed) } == 0 {
-            return Err(last_error("GetWindowRect(owned RDP overlay)"));
+            return Err(last_error("GetWindowRect(child RDP overlay)"));
+        }
+        let owner = window_pointer(self.owner);
+        let mut observed_origin = Point {
+            x: observed.left,
+            y: observed.top,
+        };
+        if unsafe { ScreenToClient(owner, &mut observed_origin) } == 0 {
+            return Err(last_error("ScreenToClient(GPUI owner)"));
         }
         println!(
-            "presentation: overlay_bounds expected={{x={},y={},width={},height={}}} observed={{left={},top={},right={},bottom={}}} visible={}",
+            "presentation: overlay_bounds expected={{x={},y={},width={},height={}}} observed={{x={},y={},width={},height={}}} visible={}",
             expected.x,
             expected.y,
             expected.width,
             expected.height,
-            observed.left,
-            observed.top,
-            observed.right,
-            observed.bottom,
+            observed_origin.x,
+            observed_origin.y,
+            observed.right - observed.left,
+            observed.bottom - observed.top,
             unsafe { IsWindowVisible(window_pointer(self.window)) } != 0
         );
         Ok(())
@@ -246,25 +249,28 @@ fn window_pointer(window: usize) -> *mut c_void {
     window as *mut c_void
 }
 
-fn create_overlay_window(owner: *mut c_void, instance: *mut c_void) -> Result<*mut c_void, String> {
+fn create_overlay_window(
+    parent: *mut c_void,
+    instance: *mut c_void,
+) -> Result<*mut c_void, String> {
     let overlay = unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WS_EX_NOPARENTNOTIFY,
             STATIC_CLASS.as_ptr(),
             OVERLAY_TITLE.as_ptr(),
-            WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT,
+            WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT,
             0,
             0,
             1,
             1,
-            owner,
+            parent,
             ptr::null_mut(),
             instance,
             ptr::null_mut(),
         )
     };
     if overlay.is_null() {
-        return Err(last_error("CreateWindowExW(owned RDP overlay)"));
+        return Err(last_error("CreateWindowExW(child RDP overlay)"));
     }
     Ok(overlay)
 }

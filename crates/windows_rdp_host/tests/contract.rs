@@ -1368,7 +1368,20 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
 }
 
 #[test]
-fn gpui_smoke_positions_the_overlay_before_showing_the_active_x_host() {
+fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
+    assert_contains_all(
+        "tools/gpui-rdp-smoke/src/native_overlay.rs",
+        &[
+            "const WS_CHILD: u32",
+            "GetParent(overlay)",
+            "ScreenToClient(owner, &mut observed_origin)",
+            "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT",
+        ],
+    );
+    assert_excludes_all(
+        "tools/gpui-rdp-smoke/src/native_overlay.rs",
+        &["WS_POPUP", "WS_EX_TOOLWINDOW", "ClientToScreen", "GW_OWNER"],
+    );
     assert_tokens_in_scope(
         "tools/gpui-rdp-smoke/src/windows_app/session.rs",
         "fn finish_initialization(",

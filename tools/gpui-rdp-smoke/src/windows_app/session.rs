@@ -127,7 +127,7 @@ fn gpui_owner(window: &Window) -> Result<usize, String> {
 fn create_session(owner: usize) -> Result<NativeSession, String> {
     let overlay = NativeOverlay::create(owner).map_err(|error| {
         eprintln!("ERROR: stage=create_native_overlay error={error}");
-        "Failed to create the owned native RDP overlay; see console".to_owned()
+        "Failed to create the child native RDP overlay; see console".to_owned()
     })?;
     println!("create: rdp_parent_hwnd=0x{:016X}", overlay.hwnd());
     let parent = unsafe { WindowsRdpParentWindow::from_raw(overlay.hwnd()) };
