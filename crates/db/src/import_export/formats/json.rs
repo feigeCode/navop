@@ -5,9 +5,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::format_import_table_reference;
+use super::import_execution::{ImportStatement, execute_import_statements};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
-use crate::executor::{ExecOptions, SqlResult};
+use crate::executor::SqlResult;
 use crate::import_export::{
     ExportConfig, ExportProgressEvent, ExportProgressSender, ExportResult, FormatHandler,
     ImportConfig, ImportResult,
@@ -26,7 +27,6 @@ impl FormatHandler for JsonFormatHandler {
     ) -> Result<ImportResult> {
         let start = Instant::now();
         let mut errors = Vec::new();
-        let mut total_rows = 0u64;
 
         let table = config
             .table
@@ -51,27 +51,11 @@ impl FormatHandler for JsonFormatHandler {
             });
         }
 
-        // TRUNCATE表
+        let mut statements = Vec::new();
         if config.truncate_before_import {
-            let truncate_sql = format!("TRUNCATE TABLE {}", table_ref);
-            let results = connection
-                .execute(plugin, &truncate_sql, ExecOptions::default())
-                .await
-                .map_err(|e| anyhow!("Truncate failed: {}", e))?;
-
-            for result in results {
-                if let SqlResult::Error(err) = result {
-                    errors.push(format!("Truncate failed: {}", err.message));
-                    if config.stop_on_error {
-                        return Ok(ImportResult {
-                            success: false,
-                            rows_imported: 0,
-                            errors,
-                            elapsed_ms: start.elapsed().as_millis(),
-                        });
-                    }
-                }
-            }
+            statements.push(ImportStatement::truncate(format!(
+                "TRUNCATE TABLE {table_ref}"
+            )));
         }
 
         // 获取第一行的字段
@@ -109,49 +93,30 @@ impl FormatHandler for JsonFormatHandler {
                 match obj.get(col) {
                     Some(Value::Null) | None => insert_sql.push_str("NULL"),
                     Some(Value::String(s)) => {
-                        insert_sql.push('\'');
-                        insert_sql.push_str(&s.replace('\'', "''"));
-                        insert_sql.push('\'');
+                        insert_sql.push_str(&plugin.escape_sql_value(s));
                     }
                     Some(Value::Number(n)) => insert_sql.push_str(&n.to_string()),
                     Some(Value::Bool(b)) => insert_sql.push_str(if *b { "1" } else { "0" }),
                     Some(v) => {
-                        insert_sql.push('\'');
-                        insert_sql.push_str(&v.to_string().replace('\'', "''"));
-                        insert_sql.push('\'');
+                        insert_sql.push_str(&plugin.escape_sql_value(&v.to_string()));
                     }
                 }
             }
             insert_sql.push(')');
-
-            match connection
-                .execute(plugin, &insert_sql, ExecOptions::default())
-                .await
-            {
-                Ok(results) => {
-                    for result in results {
-                        match result {
-                            SqlResult::Exec(exec_result) => {
-                                total_rows += exec_result.rows_affected;
-                            }
-                            SqlResult::Error(err) => {
-                                errors.push(format!("Insert failed: {}", err.message));
-                                if config.stop_on_error {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    errors.push(format!("Insert failed: {}", e));
-                    if config.stop_on_error {
-                        break;
-                    }
-                }
-            }
+            statements.push(ImportStatement::row(insert_sql, "Insert failed"));
         }
+
+        if config.use_transaction && !errors.is_empty() {
+            return Ok(ImportResult {
+                success: false,
+                rows_imported: 0,
+                errors,
+                elapsed_ms: start.elapsed().as_millis(),
+            });
+        }
+        let (total_rows, execution_errors) =
+            execute_import_statements(plugin, connection, config, statements).await;
+        errors.extend(execution_errors);
 
         Ok(ImportResult {
             success: errors.is_empty(),

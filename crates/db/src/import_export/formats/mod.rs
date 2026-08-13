@@ -2,11 +2,13 @@ use crate::DatabasePlugin;
 use crate::import_export::ImportConfig;
 
 pub mod csv;
+mod import_execution;
 pub mod json;
 pub mod sql;
 mod sql_export;
 pub mod txt;
 pub mod xml;
+mod xml_codec;
 
 pub use csv::CsvFormatHandler;
 pub use json::JsonFormatHandler;
@@ -21,6 +23,15 @@ pub(super) fn format_import_table_reference(
 ) -> String {
     plugin.format_table_reference(&config.database, config.schema.as_deref(), table)
 }
+
+#[cfg(test)]
+mod sql_import_tests;
+
+#[cfg(test)]
+mod table_import_tests;
+
+#[cfg(test)]
+mod xml_tests;
 
 #[cfg(test)]
 mod tests {

@@ -2836,6 +2836,7 @@ dependencies = [
  "oracle",
  "proptest",
  "regex",
+ "roxmltree 0.20.0",
  "rusqlite",
  "rust-i18n",
  "rustls 0.23.41",

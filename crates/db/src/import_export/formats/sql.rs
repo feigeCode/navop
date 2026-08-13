@@ -51,81 +51,45 @@ impl FormatHandler for SqlFormatHandler {
             file: file_name.to_string(),
         });
 
-        if config.truncate_before_import {
-            if let Some(table) = &config.table {
-                let table_ref = format_import_table_reference(plugin, config, table);
-                let truncate_sql = format!("TRUNCATE TABLE {}", table_ref);
-                send_progress(ImportProgressEvent::ExecutingStatement {
-                    file: file_name.to_string(),
-                    statement_index: 0,
-                    total_statements: 1,
-                });
-
-                let results = connection
-                    .execute(plugin, &truncate_sql, ExecOptions::default())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Truncate failed: {}", e))?;
-
-                for result in results {
-                    if let SqlResult::Error(err) = result {
-                        let error_msg = format!("Truncate failed: {}", err.message);
-                        errors.push(error_msg.clone());
-                        send_progress(ImportProgressEvent::Error {
-                            file: file_name.to_string(),
-                            message: error_msg,
-                        });
-                        if config.stop_on_error {
-                            send_progress(ImportProgressEvent::Finished {
-                                total_rows: 0,
-                                elapsed_ms: start.elapsed().as_millis(),
-                            });
-                            return Ok(ImportResult {
-                                success: false,
-                                rows_imported: 0,
-                                errors,
-                                elapsed_ms: start.elapsed().as_millis(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
         let parser = plugin
             .create_parser(SqlSource::Script(data.to_string()))
             .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
-        let statements: Vec<String> = parser
-            .filter_map(|r| r.ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let mut statements = collect_sql_statements(parser)?;
+        let mut truncate_inserted = false;
+        if config.truncate_before_import {
+            if let Some(table) = &config.table {
+                let table_ref = format_import_table_reference(plugin, config, table);
+                statements.insert(0, format!("TRUNCATE TABLE {}", table_ref));
+                truncate_inserted = true;
+            }
+        }
         let total_statements = statements.len();
 
-        for (idx, stmt) in statements.iter().enumerate() {
-            let stmt = stmt.trim();
-            if stmt.is_empty() {
-                continue;
-            }
-
+        for idx in 0..total_statements {
             send_progress(ImportProgressEvent::ExecutingStatement {
                 file: file_name.to_string(),
                 statement_index: idx,
                 total_statements,
             });
+        }
 
+        if !statements.is_empty() {
+            let script = statements.join(";\n");
             let exec_options = ExecOptions {
                 stop_on_error: config.stop_on_error,
-                transactional: false,
+                transactional: config.use_transaction,
                 max_rows: None,
                 streaming: false,
             };
 
-            match connection.execute(plugin, stmt, exec_options).await {
+            match connection.execute(plugin, &script, exec_options).await {
                 Ok(results) => {
-                    for result in results {
+                    for (index, result) in results.into_iter().enumerate() {
                         match result {
                             SqlResult::Exec(exec_result) => {
-                                total_rows += exec_result.rows_affected;
+                                if !(truncate_inserted && index == 0) {
+                                    total_rows += exec_result.rows_affected;
+                                }
                                 send_progress(ImportProgressEvent::StatementExecuted {
                                     file: file_name.to_string(),
                                     rows_affected: exec_result.rows_affected,
@@ -138,18 +102,6 @@ impl FormatHandler for SqlFormatHandler {
                                     file: file_name.to_string(),
                                     message: error_msg,
                                 });
-                                if config.stop_on_error {
-                                    send_progress(ImportProgressEvent::Finished {
-                                        total_rows,
-                                        elapsed_ms: start.elapsed().as_millis(),
-                                    });
-                                    return Ok(ImportResult {
-                                        success: false,
-                                        rows_imported: total_rows,
-                                        errors,
-                                        elapsed_ms: start.elapsed().as_millis(),
-                                    });
-                                }
                             }
                             _ => {}
                         }
@@ -162,20 +114,11 @@ impl FormatHandler for SqlFormatHandler {
                         file: file_name.to_string(),
                         message: error_msg,
                     });
-                    if config.stop_on_error {
-                        send_progress(ImportProgressEvent::Finished {
-                            total_rows,
-                            elapsed_ms: start.elapsed().as_millis(),
-                        });
-                        return Ok(ImportResult {
-                            success: false,
-                            rows_imported: total_rows,
-                            errors,
-                            elapsed_ms: start.elapsed().as_millis(),
-                        });
-                    }
                 }
             }
+        }
+        if config.use_transaction && !errors.is_empty() {
+            total_rows = 0;
         }
 
         let elapsed_ms = start.elapsed().as_millis();
@@ -328,5 +271,37 @@ impl FormatHandler for SqlFormatHandler {
             rows_exported: total_rows,
             elapsed_ms,
         })
+    }
+}
+
+fn collect_sql_statements<I>(parser: I) -> Result<Vec<String>, DbError>
+where
+    I: IntoIterator<Item = std::io::Result<String>>,
+{
+    Ok(parser
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|e| DbError::query_with_source("failed to parse SQL import", e))?
+        .into_iter()
+        .map(|statement| statement.trim().to_string())
+        .filter(|statement| !statement.is_empty())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_sql_statements;
+    use std::io;
+
+    #[test]
+    fn collect_sql_statements_propagates_iterator_error() {
+        let parser = vec![
+            Ok("INSERT INTO t VALUES (1);".to_string()),
+            Err(io::Error::other("read failure")),
+        ];
+
+        let error = collect_sql_statements(parser).expect_err("parser error should be propagated");
+
+        assert!(error.to_string().contains("read failure"));
     }
 }

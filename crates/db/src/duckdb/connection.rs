@@ -313,37 +313,63 @@ impl DbConnection for DuckDbConnection {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let mut results = Vec::new();
-
-        for sql in statements {
-            let start = Instant::now();
-            let sql_owned = apply_query_max_rows(
-                plugin.name(),
-                &sql,
-                options.max_rows,
-                plugin.is_query_statement(&sql),
-            )
-            .into_owned();
-            let connection = Arc::clone(&self.connection);
-
-            let result = spawn_blocking(move || {
-                let guard = connection
-                    .lock()
-                    .map_err(|e| DbError::Internal(format!("lock poisoned: {}", e)))?;
-                let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
-                Ok(Self::execute_statement(conn, &sql_owned, start))
-            })
-            .await
-            .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
-
-            let is_error = result.is_error();
-            results.push(result.with_original_sql(sql.as_str()));
-            if is_error && options.stop_on_error {
-                break;
-            }
+        if statements.is_empty() {
+            return Ok(Vec::new());
         }
 
-        Ok(results)
+        let executable = statements
+            .into_iter()
+            .map(|sql| {
+                let executable_sql = apply_query_max_rows(
+                    plugin.name(),
+                    &sql,
+                    options.max_rows,
+                    plugin.is_query_statement(&sql),
+                )
+                .into_owned();
+                (sql, executable_sql)
+            })
+            .collect::<Vec<_>>();
+        let connection = Arc::clone(&self.connection);
+        let stop_on_error = options.stop_on_error;
+        let transactional = options.transactional;
+        spawn_blocking(move || {
+            let guard = connection
+                .lock()
+                .map_err(|e| DbError::Internal(format!("lock poisoned: {}", e)))?;
+            let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
+            if transactional {
+                conn.execute("BEGIN", []).map_err(|e| {
+                    DbError::transaction_with_source("failed to begin transaction", e)
+                })?;
+            }
+
+            let mut results = Vec::new();
+            let mut has_error = false;
+            for (sql, executable_sql) in executable {
+                let result = Self::execute_statement(conn, &executable_sql, Instant::now())
+                    .with_original_sql(&sql);
+                let is_error = result.is_error();
+                has_error |= is_error;
+                results.push(result);
+                if is_error && stop_on_error {
+                    break;
+                }
+            }
+
+            if transactional {
+                let command = if has_error { "ROLLBACK" } else { "COMMIT" };
+                conn.execute(command, []).map_err(|e| {
+                    DbError::transaction_with_source(
+                        format!("failed to {}", command.to_lowercase()),
+                        e,
+                    )
+                })?;
+            }
+            Ok::<_, DbError>(results)
+        })
+        .await
+        .map_err(|e| DbError::Internal(format!("task join error: {}", e)))?
     }
 
     async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
@@ -566,17 +592,13 @@ impl DbConnection for DuckDbConnection {
 mod tests {
     use super::DuckDbConnection;
     use crate::connection::DbConnection;
-    use crate::executor::SqlResult;
+    use crate::executor::{ExecOptions, SqlResult};
     use one_core::storage::{DatabaseType, DbConnectionConfig};
 
-    #[tokio::test]
-    async fn test_duckdb_connection_can_query_temp_database() {
-        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
-        let db_path = temp_dir.path().join("duckdb-basic-test.duckdb");
-
-        let mut connection = DuckDbConnection::new(DbConnectionConfig {
-            id: "duckdb-test".to_string(),
-            name: "duckdb-test".to_string(),
+    fn test_connection(db_path: &std::path::Path, id: &str) -> DuckDbConnection {
+        DuckDbConnection::new(DbConnectionConfig {
+            id: id.to_string(),
+            name: id.to_string(),
             database_type: DatabaseType::DuckDB,
             host: db_path.to_string_lossy().to_string(),
             port: 0,
@@ -588,7 +610,15 @@ mod tests {
             sid: None,
             proxy: None,
             extra_params: Default::default(),
-        });
+        })
+    }
+
+    #[tokio::test]
+    async fn test_duckdb_connection_can_query_temp_database() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("duckdb-basic-test.duckdb");
+
+        let mut connection = test_connection(&db_path, "duckdb-test");
 
         connection.connect().await.expect("duckdb should connect");
 
@@ -601,6 +631,56 @@ mod tests {
             SqlResult::Query(query) => {
                 assert_eq!(query.columns, vec!["answer".to_string()]);
                 assert_eq!(query.rows, vec![vec![Some("42".to_string())]]);
+            }
+            other => panic!("expected query result, got {other:?}"),
+        }
+
+        connection
+            .disconnect()
+            .await
+            .expect("duckdb should disconnect");
+    }
+
+    #[tokio::test]
+    async fn transactional_execute_rolls_back_after_error_when_continuing() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp_dir
+            .path()
+            .join("duckdb-transaction-rollback-test.duckdb");
+        let mut connection = test_connection(&db_path, "duckdb-transaction-rollback-test");
+        connection.connect().await.expect("duckdb should connect");
+        connection
+            .query("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+            .await
+            .expect("fixture table should be created");
+
+        let results = connection
+            .execute(
+                &crate::duckdb::DuckDbPlugin::new(),
+                "INSERT INTO items VALUES (1);
+                 INSERT INTO missing_table VALUES (2);
+                 INSERT INTO items VALUES (3);",
+                ExecOptions {
+                    stop_on_error: false,
+                    transactional: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("script execution should return statement results");
+
+        assert_eq!(3, results.len());
+        assert!(matches!(results[0], SqlResult::Exec(_)));
+        assert!(matches!(results[1], SqlResult::Error(_)));
+        assert!(matches!(results[2], SqlResult::Exec(_)));
+
+        match connection
+            .query("SELECT COUNT(*) AS count FROM items")
+            .await
+            .expect("row count should be queryable")
+        {
+            SqlResult::Query(result) => {
+                assert_eq!(vec![vec![Some("0".to_string())]], result.rows);
             }
             other => panic!("expected query result, got {other:?}"),
         }

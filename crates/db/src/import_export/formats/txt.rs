@@ -3,10 +3,11 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
+use super::import_execution::{ImportStatement, execute_import_statements};
 use super::{CsvFormatHandler, format_import_table_reference};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
-use crate::executor::{ExecOptions, SqlResult};
+use crate::executor::SqlResult;
 use crate::import_export::{
     CsvImportConfig, ExportConfig, ExportProgressEvent, ExportProgressSender, ExportResult,
     FormatHandler, ImportConfig, ImportResult,
@@ -66,7 +67,6 @@ impl FormatHandler for TxtFormatHandler {
     ) -> Result<ImportResult> {
         let start = Instant::now();
         let mut errors = Vec::new();
-        let mut total_rows = 0u64;
 
         let table = config
             .table
@@ -113,26 +113,11 @@ impl FormatHandler for TxtFormatHandler {
             return Err(anyhow!("TXT header contains empty column names"));
         }
 
+        let mut statements = Vec::new();
         if config.truncate_before_import {
-            let truncate_sql = format!("TRUNCATE TABLE {}", table_ref);
-            let results = connection
-                .execute(plugin, &truncate_sql, ExecOptions::default())
-                .await
-                .map_err(|e| anyhow!("Truncate failed: {}", e))?;
-
-            for result in results {
-                if let SqlResult::Error(err) = result {
-                    errors.push(format!("Truncate failed: {}", err.message));
-                    if config.stop_on_error {
-                        return Ok(ImportResult {
-                            success: false,
-                            rows_imported: 0,
-                            errors,
-                            elapsed_ms: start.elapsed().as_millis(),
-                        });
-                    }
-                }
-            }
+            statements.push(ImportStatement::truncate(format!(
+                "TRUNCATE TABLE {table_ref}"
+            )));
         }
 
         for (record_num, values) in records.iter().skip(data_start_record).enumerate() {
@@ -161,35 +146,23 @@ impl FormatHandler for TxtFormatHandler {
                 CsvFormatHandler::append_sql_value(&mut insert_sql, val);
             }
             insert_sql.push(')');
-
-            match connection
-                .execute(plugin, &insert_sql, ExecOptions::default())
-                .await
-            {
-                Ok(results) => {
-                    for result in results {
-                        match result {
-                            SqlResult::Exec(exec_result) => {
-                                total_rows += exec_result.rows_affected;
-                            }
-                            SqlResult::Error(err) => {
-                                errors.push(format!("Record {}: {}", record_number, err.message));
-                                if config.stop_on_error {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    errors.push(format!("Record {}: {}", record_number, e));
-                    if config.stop_on_error {
-                        break;
-                    }
-                }
-            }
+            statements.push(ImportStatement::row(
+                insert_sql,
+                format!("Record {record_number}"),
+            ));
         }
+
+        if config.use_transaction && !errors.is_empty() {
+            return Ok(ImportResult {
+                success: false,
+                rows_imported: 0,
+                errors,
+                elapsed_ms: start.elapsed().as_millis(),
+            });
+        }
+        let (total_rows, execution_errors) =
+            execute_import_statements(plugin, connection, config, statements).await;
+        errors.extend(execution_errors);
 
         Ok(ImportResult {
             success: errors.is_empty(),
