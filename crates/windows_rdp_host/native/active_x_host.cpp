@@ -185,6 +185,34 @@ HRESULT synchronize_control_bounds(ActiveXCleanup& resources) noexcept {
     if (SUCCEEDED(window_result) &&
         control_window != nullptr &&
         IsWindow(control_window)) {
+        const int width = client_rect.right - client_rect.left;
+        const int height = client_rect.bottom - client_rect.top;
+        UINT position_flags = SWP_NOACTIVATE;
+        if ((GetWindowLongPtrW(resources.host_window, GWL_STYLE) &
+             WS_VISIBLE) != 0) {
+            position_flags |= SWP_SHOWWINDOW;
+        }
+        trace_native_stage("presentation.position_control_window.before");
+        SetLastError(ERROR_SUCCESS);
+        if (!SetWindowPos(
+                control_window,
+                HWND_TOP,
+                0,
+                0,
+                width,
+                height,
+                position_flags)) {
+            const DWORD last_error = GetLastError();
+            const DWORD win32_code = last_error == ERROR_SUCCESS
+                ? ERROR_INVALID_WINDOW_HANDLE
+                : last_error;
+            trace_native_win32(
+                "presentation.position_control_window.failed",
+                static_cast<uint32_t>(win32_code));
+            return HRESULT_FROM_WIN32(win32_code);
+        }
+        trace_native_stage("presentation.position_control_window.after");
+
         RECT control_rect{};
         if (GetWindowRect(control_window, &control_rect)) {
             trace_native_rect(

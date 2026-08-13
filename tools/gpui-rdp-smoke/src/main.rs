@@ -163,6 +163,18 @@ fn run(_config: Config) -> ExitCode {
 
 #[cfg(target_os = "windows")]
 fn run(config: Config) -> ExitCode {
+    // GPUI normally renders Windows windows through a DirectComposition
+    // visual attached to the top-level HWND. The RDP ActiveX control is a
+    // traditional child HWND, so that composition visual can cover the child
+    // even when the RDP session is connected and painting. Force GPUI's HWND
+    // swap-chain path before the platform singleton is constructed.
+    //
+    // SAFETY: this is the first Windows-specific operation in the process,
+    // before GPUI creates worker threads or reads its renderer environment.
+    unsafe {
+        env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+    }
+    println!("presentation: GPUI DirectComposition disabled for native child HWND hosting");
     windows_app::run(config);
     ExitCode::SUCCESS
 }
