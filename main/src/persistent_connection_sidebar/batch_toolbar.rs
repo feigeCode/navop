@@ -166,7 +166,7 @@ fn delete_connections_button(
     selected_ids: Vec<i64>,
 ) -> IconButton {
     let disabled = selected_ids.is_empty();
-    IconButton::new("persistent-delete-selected-connections", IconName::Delete)
+    IconButton::new("persistent-delete-selected-connections", IconName::Remove)
         .role(IconButtonRole::Compact)
         .tooltip(t!("Common.delete"))
         .disabled(disabled)
