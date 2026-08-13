@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, ptr};
 
 use super::native_overlay_ffi::*;
 
