@@ -729,6 +729,10 @@ fn default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
     }
 }
 
+fn close_active_window_default_shortcut() -> &'static str {
+    default_shortcut("cmd-w", "ctrl-w")
+}
+
 pub(crate) fn configured_log_file_path(value: &str) -> anyhow::Result<PathBuf> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -848,9 +852,13 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             .map(|key| KeyBinding::new(&key, ToggleZoom, None)),
     );
     keybindings.extend(
-        shortcuts_for(cx, action_id::WINDOW_CLOSE_ACTIVE_WINDOW, &["ctrl-w"])
-            .into_iter()
-            .map(|key| KeyBinding::new(&key, CloseActiveWindow, None)),
+        shortcuts_for(
+            cx,
+            action_id::WINDOW_CLOSE_ACTIVE_WINDOW,
+            &[close_active_window_default_shortcut()],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, CloseActiveWindow, None)),
     );
     keybindings.extend(
         shortcuts_for(
@@ -975,7 +983,7 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::WINDOW_CLOSE_ACTIVE_WINDOW,
-        &["ctrl-w"],
+        &[close_active_window_default_shortcut()],
         None,
         CloseActiveWindow,
     ));
@@ -1667,8 +1675,9 @@ impl OnetCliApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, MainContent, MainContentPresentation, configured_log_file_path,
-        default_log_file_path, init_ssh_session_service, initial_content_layout, log_file_appender,
+        GlobalSshSessionService, MainContent, MainContentPresentation,
+        close_active_window_default_shortcut, configured_log_file_path, default_log_file_path,
+        init_ssh_session_service, initial_content_layout, log_file_appender,
         main_content_presentation,
     };
     use one_core::gpui_tokio::Tokio;
@@ -1825,13 +1834,18 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_w_closes_only_the_active_auxiliary_window() {
+    fn platform_close_shortcut_closes_only_the_active_auxiliary_window() {
         let source = include_str!("onetcli_app.rs");
         let keybindings = source
             .split("fn init_keybindings(")
             .nth(1)
             .and_then(|source| source.split("\nfn refreshable_keybindings").next())
             .expect("init_keybindings source");
+        let refreshable_keybindings = source
+            .split("fn refreshable_keybindings(")
+            .nth(1)
+            .and_then(|source| source.split("\nfn init_action_handlers").next())
+            .expect("refreshable_keybindings source");
         let close_handler = source
             .split("fn close_active_window(")
             .nth(1)
@@ -1840,6 +1854,17 @@ mod tests {
 
         assert!(keybindings.contains("action_id::WINDOW_CLOSE_ACTIVE_WINDOW"));
         assert!(keybindings.contains("CloseActiveWindow"));
+        assert!(keybindings.contains("close_active_window_default_shortcut()"));
+        assert!(refreshable_keybindings.contains("close_active_window_default_shortcut()"));
+        assert!(source.contains(r#"default_shortcut("cmd-w", "ctrl-w")"#));
+        assert_eq!(
+            close_active_window_default_shortcut(),
+            if cfg!(target_os = "macos") {
+                "cmd-w"
+            } else {
+                "ctrl-w"
+            }
+        );
         assert!(!keybindings.contains("ClosePanel"));
         assert!(close_handler.contains("resolve_active_non_main_window(cx)"));
         assert!(close_handler.contains("one_core::window_close::request_close_window"));
