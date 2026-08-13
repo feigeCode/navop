@@ -109,8 +109,7 @@ fn probe_host() -> Result<(), String> {
 }
 
 fn gpui_owner(window: &Window) -> Result<usize, String> {
-    let raw = window
-        .window_handle()
+    let raw = HasWindowHandle::window_handle(window)
         .map_err(|error| {
             eprintln!("ERROR: stage=get_gpui_window_handle error={error}");
             "Failed to get the GPUI native window handle; see console".to_owned()
