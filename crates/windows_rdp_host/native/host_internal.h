@@ -32,6 +32,13 @@ void trace_native_pointer(
     const char* stage,
     uintptr_t pointer) noexcept;
 
+void trace_native_rect(
+    const char* stage,
+    int32_t left,
+    int32_t top,
+    int32_t right,
+    int32_t bottom) noexcept;
+
 void trace_native_utf16(
     const char* stage,
     int32_t hresult,

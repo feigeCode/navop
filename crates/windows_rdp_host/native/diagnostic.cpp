@@ -182,6 +182,25 @@ void trace_native_pointer(
     flush_trace();
 }
 
+void trace_native_rect(
+    const char* stage,
+    int32_t left,
+    int32_t top,
+    int32_t right,
+    int32_t bottom) noexcept {
+    std::fprintf(
+        stderr,
+        "%s stage=%s rect={left=%" PRId32 ",top=%" PRId32
+        ",right=%" PRId32 ",bottom=%" PRId32 "}\n",
+        kTracePrefix,
+        stage == nullptr ? "<null>" : stage,
+        left,
+        top,
+        right,
+        bottom);
+    flush_trace();
+}
+
 void trace_native_utf16(
     const char* stage,
     int32_t hresult,

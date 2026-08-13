@@ -69,6 +69,7 @@ struct ActiveXCleanup {
     HWND host_window = nullptr;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
+    CComPtr<IOleInPlaceObject> in_place_object;
     CComPtr<IMsRdpClient9> client;
     CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
     NativeRdpEventSubscription* event_subscription = nullptr;
@@ -78,6 +79,7 @@ struct ActiveXCleanup {
         event_subscription = nullptr;
         non_scriptable.Release();
         client.Release();
+        in_place_object.Release();
         control.Release();
         container.Release();
         if (host_window != nullptr) {
@@ -130,6 +132,89 @@ HRESULT attach_control_with_traces(ActiveXCleanup& resources) noexcept {
         "create.ax_host_attach.after",
         static_cast<int32_t>(result));
     return result;
+}
+
+HRESULT synchronize_control_bounds(ActiveXCleanup& resources) noexcept {
+    if (resources.in_place_object == nullptr ||
+        resources.host_window == nullptr) {
+        return E_UNEXPECTED;
+    }
+
+    RECT client_rect{};
+    SetLastError(ERROR_SUCCESS);
+    trace_native_stage("presentation.get_client_rect.before");
+    if (!GetClientRect(resources.host_window, &client_rect)) {
+        const DWORD last_error = GetLastError();
+        const DWORD win32_code = last_error == ERROR_SUCCESS
+            ? ERROR_INVALID_WINDOW_HANDLE
+            : last_error;
+        trace_native_win32(
+            "presentation.get_client_rect.failed",
+            static_cast<uint32_t>(win32_code));
+        return HRESULT_FROM_WIN32(win32_code);
+    }
+    trace_native_rect(
+        "presentation.host_client_rect",
+        static_cast<int32_t>(client_rect.left),
+        static_cast<int32_t>(client_rect.top),
+        static_cast<int32_t>(client_rect.right),
+        static_cast<int32_t>(client_rect.bottom));
+
+    trace_native_stage("presentation.set_object_rects.before");
+    const HRESULT layout_result =
+        resources.in_place_object->SetObjectRects(
+            &client_rect,
+            &client_rect);
+    trace_native_hresult(
+        "presentation.set_object_rects.after",
+        static_cast<int32_t>(layout_result));
+    if (FAILED(layout_result)) {
+        return layout_result;
+    }
+
+    HWND control_window = nullptr;
+    trace_native_stage("presentation.get_control_window.before");
+    const HRESULT window_result =
+        resources.in_place_object->GetWindow(&control_window);
+    trace_native_hresult(
+        "presentation.get_control_window.after",
+        static_cast<int32_t>(window_result));
+    trace_native_pointer(
+        "presentation.control_window",
+        reinterpret_cast<uintptr_t>(control_window));
+    if (SUCCEEDED(window_result) &&
+        control_window != nullptr &&
+        IsWindow(control_window)) {
+        RECT control_rect{};
+        if (GetWindowRect(control_window, &control_rect)) {
+            trace_native_rect(
+                "presentation.control_window_rect",
+                static_cast<int32_t>(control_rect.left),
+                static_cast<int32_t>(control_rect.top),
+                static_cast<int32_t>(control_rect.right),
+                static_cast<int32_t>(control_rect.bottom));
+        }
+        trace_native_win32(
+            "presentation.control_window_style",
+            static_cast<uint32_t>(GetWindowLongPtrW(
+                control_window,
+                GWL_STYLE)));
+    }
+
+    trace_native_stage("presentation.redraw.before");
+    SetLastError(ERROR_SUCCESS);
+    if (!RedrawWindow(
+            resources.host_window,
+            nullptr,
+            nullptr,
+            RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN)) {
+        trace_native_win32(
+            "presentation.redraw.failed",
+            static_cast<uint32_t>(GetLastError()));
+    } else {
+        trace_native_stage("presentation.redraw.after");
+    }
+    return S_OK;
 }
 
 bool window_or_descendant_has_focus(HWND window) noexcept {
@@ -469,6 +554,42 @@ NavopRdpResult create_active_x_resources(
             NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL);
     }
 
+    trace_native_stage("create.query_in_place_object.before");
+    const HRESULT in_place_result =
+        resources->state.control->QueryInterface(
+            IID_PPV_ARGS(&resources->state.in_place_object));
+    trace_native_hresult(
+        "create.query_in_place_object.after",
+        static_cast<int32_t>(in_place_result));
+    if (FAILED(in_place_result) ||
+        resources->state.in_place_object == nullptr) {
+        if (FAILED(in_place_result)) {
+            return record_last_stage_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
+                static_cast<int32_t>(in_place_result));
+        }
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL);
+    }
+
+    trace_native_stage("create.synchronize_bounds.before");
+    const HRESULT initial_layout_result =
+        synchronize_control_bounds(resources->state);
+    trace_native_hresult(
+        "create.synchronize_bounds.after",
+        static_cast<int32_t>(initial_layout_result));
+    if (FAILED(initial_layout_result)) {
+        return record_last_stage_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
+            static_cast<int32_t>(initial_layout_result));
+    }
+
     trace_native_stage("create.set_ui_parent.before");
     const HRESULT ui_parent_result =
         resources->state.non_scriptable->put_UIParentWindowHandle(
@@ -515,6 +636,11 @@ NavopRdpResult set_active_x_bounds(
             SWP_NOZORDER | SWP_NOACTIVATE)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
+    const HRESULT layout_result =
+        synchronize_control_bounds(resources->state);
+    if (FAILED(layout_result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
     return NAVOP_RDP_RESULT_OK;
 }
 
@@ -533,6 +659,14 @@ NavopRdpResult set_active_x_visible(
     ShowWindow(
         resources->state.host_window,
         visible ? SW_SHOWNA : SW_HIDE);
+
+    if (visible) {
+        const HRESULT layout_result =
+            synchronize_control_bounds(resources->state);
+        if (FAILED(layout_result)) {
+            return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        }
+    }
 
     const LONG_PTR host_style = GetWindowLongPtrW(
         resources->state.host_window,
