@@ -9,25 +9,26 @@ use rust_i18n::t;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 
-pub(super) fn header_actions_menu(
-    view: Entity<PersistentConnectionSidebar>,
-    palette: SidebarPalette,
-    cx: &gpui::Context<PersistentConnectionSidebar>,
-) -> AnyElement {
-    let sidebar = view.read(cx);
-    let context = HeaderActionsContext {
-        view: view.clone(),
-        home: sidebar.home_page.clone(),
-        hide_empty_workspaces: sidebar.hide_empty_workspaces,
-    };
-    IconButton::new("persistent-header-actions-menu", IconName::Ellipsis)
-        .role(IconButtonRole::Compact)
-        .text_color(palette.foreground)
-        .tooltip(t!("Common.more"))
-        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            build_header_actions_menu(menu, &context)
-        })
-        .into_any_element()
+impl PersistentConnectionSidebar {
+    pub(super) fn header_actions_menu(
+        &self,
+        view: Entity<Self>,
+        palette: SidebarPalette,
+    ) -> AnyElement {
+        let context = HeaderActionsContext {
+            view,
+            home: self.home_page.clone(),
+            hide_empty_workspaces: self.hide_empty_workspaces,
+        };
+        IconButton::new("persistent-header-actions-menu", IconName::Ellipsis)
+            .role(IconButtonRole::Compact)
+            .text_color(palette.foreground)
+            .tooltip(t!("Common.more"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                build_header_actions_menu(menu, &context)
+            })
+            .into_any_element()
+    }
 }
 
 struct HeaderActionsContext {
@@ -100,6 +101,7 @@ mod tests {
         let source = include_str!("header_actions.rs");
         let implementation = source.split("#[cfg(test)]").next().unwrap();
         assert!(implementation.contains("persistent-header-actions-menu"));
+        assert!(!implementation.contains("view.read(cx)"));
         assert!(implementation.contains("Connection.collapse_all"));
         assert!(implementation.contains("Connection.hide_empty_workspaces"));
         assert!(implementation.contains("Workspace.new"));

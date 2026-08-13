@@ -10,7 +10,6 @@ use gpui_component::{
 use rust_i18n::t;
 
 use super::batch_toolbar::batch_mode_toggle;
-use super::header_actions::header_actions_menu;
 use super::tree_model::{
     ConnectionNodeInput, ConnectionTreeRow, WorkspaceNodeInput, build_connection_tree_rows,
     filter_connection_tree_inputs, hide_empty_workspace_inputs,
@@ -226,7 +225,7 @@ impl PersistentConnectionSidebar {
                         self.connection_selection.is_active(),
                         palette,
                     ))
-                    .child(header_actions_menu(view_for_actions, palette, cx)),
+                    .child(self.header_actions_menu(view_for_actions, palette)),
             )
             .into_any_element()
     }
