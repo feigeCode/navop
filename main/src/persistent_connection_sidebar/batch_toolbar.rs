@@ -91,7 +91,7 @@ pub(super) fn batch_mode_toggle(
     palette: SidebarPalette,
 ) -> Toggle {
     Toggle::new("persistent-batch-connections")
-        .icon(IconName::Check)
+        .icon(IconName::ListChecks)
         .checked(active)
         .xsmall()
         .text_color(palette.foreground)
@@ -195,5 +195,6 @@ mod tests {
         assert!(source.contains("persistent-move-selected-connections"));
         assert!(source.contains("persistent-delete-selected-connections"));
         assert!(source.contains("persistent-exit-batch-connections"));
+        assert!(source.contains(".icon(IconName::ListChecks)"));
     }
 }

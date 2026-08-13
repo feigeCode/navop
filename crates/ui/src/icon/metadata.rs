@@ -222,6 +222,7 @@ impl IconName {
             | Self::Info
             | Self::Inspector
             | Self::LayoutDashboard
+            | Self::ListChecks
             | Self::Loader
             | Self::LoaderCircle
             | Self::LocateActiveTab
