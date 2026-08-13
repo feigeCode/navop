@@ -473,6 +473,12 @@ private:
             get_active_x_extended_disconnect_reason(
                 host->active_x_resources,
                 &extended_code);
+        trace_active_x_disconnect_description(
+            host->active_x_resources,
+            static_cast<int32_t>(disconnect_code),
+            extended_result == NAVOP_RDP_RESULT_OK
+                ? extended_code
+                : 0);
         dispatch_disconnected(
             host,
             static_cast<int32_t>(disconnect_code),

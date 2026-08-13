@@ -1333,6 +1333,7 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "NAVOP_RDP_EVENT_FOCUS_RELEASED",
             "dispatch_disconnected_from_parameters(host, parameters);",
             "get_active_x_extended_disconnect_reason(",
+            "trace_active_x_disconnect_description(",
             "extended_result == NAVOP_RDP_RESULT_OK",
             "parameters->rgvarg[1]",
             "parameters->rgvarg[0]",
@@ -1377,6 +1378,7 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "NavopRdpResult create_event_subscription(",
             "void destroy_event_subscription(",
             "NavopRdpResult get_active_x_extended_disconnect_reason(",
+            "void trace_active_x_disconnect_description(",
         ],
     );
     assert_contains_all(
@@ -1385,6 +1387,9 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "ExtendedDisconnectReasonCode extended_reason{};",
             "resources->state.client->get_ExtendedDisconnectReason(",
             "*out_extended_code = static_cast<int32_t>(extended_reason);",
+            "resources->state.client->GetErrorDescription(",
+            "trace_native_utf16(",
+            "\"disconnect.error_description\"",
         ],
     );
     assert_excludes_all(
@@ -1535,6 +1540,12 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
             "put_Server",
             "get_AdvancedSettings2",
             "put_RDPPort",
+            "put_EncryptionEnabled",
+            "get_AdvancedSettings6",
+            "put_PublicMode",
+            "get_AdvancedSettings9",
+            "put_EnableCredSspSupport",
+            "put_AuthenticationLevel",
             "put_DesktopWidth",
             "put_DesktopHeight",
             "put_ColorDepth",
@@ -1549,6 +1560,8 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
             "static_cast<int>(options.host.len)",
             "reinterpret_cast<LPCOLESTR>(options.host.data)",
             "IMsRdpClientAdvancedSettings",
+            "IMsRdpClientAdvancedSettings5",
+            "IMsRdpClientAdvancedSettings8",
             "RequestClose",
             "Disconnect",
             "controlCloseCanProceed",

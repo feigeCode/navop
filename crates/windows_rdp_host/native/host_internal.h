@@ -32,6 +32,12 @@ void trace_native_pointer(
     const char* stage,
     uintptr_t pointer) noexcept;
 
+void trace_native_utf16(
+    const char* stage,
+    int32_t hresult,
+    const uint16_t* text,
+    uint32_t text_len) noexcept;
+
 NavopRdpResult create_active_x_resources(
     NativeRdpHost* owner,
     uintptr_t parent_hwnd,
@@ -71,6 +77,11 @@ NavopRdpResult get_active_x_connection_state(
 NavopRdpResult get_active_x_extended_disconnect_reason(
     NativeRdpActiveXResources* resources,
     int32_t* out_extended_code) noexcept;
+
+void trace_active_x_disconnect_description(
+    NativeRdpActiveXResources* resources,
+    int32_t disconnect_code,
+    int32_t extended_code) noexcept;
 
 NavopRdpResult request_close_active_x(
     NativeRdpHost* owner,

@@ -625,6 +625,89 @@ NavopRdpResult connect_active_x(
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
             static_cast<int32_t>(result));
     }
+
+    trace_native_stage("connect.set_encryption.before");
+    result = advanced_settings->put_EncryptionEnabled(1);
+    trace_native_hresult(
+        "connect.set_encryption.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+
+    CComPtr<IMsRdpClientAdvancedSettings5> advanced_settings6;
+    trace_native_stage("connect.get_advanced_settings6.before");
+    result = resources->state.client->get_AdvancedSettings6(
+        &advanced_settings6);
+    trace_native_hresult(
+        "connect.get_advanced_settings6.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result) || advanced_settings6 == nullptr) {
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    trace_native_stage("connect.set_public_mode.before");
+    result = advanced_settings6->put_PublicMode(VARIANT_FALSE);
+    trace_native_hresult(
+        "connect.set_public_mode.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+
+    CComPtr<IMsRdpClientAdvancedSettings8> advanced_settings9;
+    trace_native_stage("connect.get_advanced_settings9.before");
+    result = resources->state.client->get_AdvancedSettings9(
+        &advanced_settings9);
+    trace_native_hresult(
+        "connect.get_advanced_settings9.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result) || advanced_settings9 == nullptr) {
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    trace_native_stage("connect.set_credssp.before");
+    result = advanced_settings9->put_EnableCredSspSupport(VARIANT_TRUE);
+    trace_native_hresult(
+        "connect.set_credssp.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+
+    trace_native_stage("connect.set_authentication_level.before");
+    result = advanced_settings9->put_AuthenticationLevel(0);
+    trace_native_hresult(
+        "connect.set_authentication_level.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+
     result = resources->state.client->put_DesktopWidth(
         options.desktop_width);
     if (FAILED(result)) {
@@ -794,6 +877,34 @@ NavopRdpResult get_active_x_extended_disconnect_reason(
     }
     *out_extended_code = static_cast<int32_t>(extended_reason);
     return NAVOP_RDP_RESULT_OK;
+}
+
+void trace_active_x_disconnect_description(
+    NativeRdpActiveXResources* resources,
+    int32_t disconnect_code,
+    int32_t extended_code) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        trace_native_result(
+            "disconnect.error_description.unavailable",
+            resource_result);
+        return;
+    }
+
+    CComBSTR description;
+    const HRESULT result =
+        resources->state.client->GetErrorDescription(
+            static_cast<UINT>(disconnect_code),
+            static_cast<UINT>(extended_code),
+            &description);
+    trace_native_utf16(
+        "disconnect.error_description",
+        static_cast<int32_t>(result),
+        reinterpret_cast<const uint16_t*>(
+            static_cast<BSTR>(description)),
+        SUCCEEDED(result) && description.m_str != nullptr
+            ? static_cast<uint32_t>(description.Length())
+            : UINT32_C(0));
 }
 
 NavopRdpResult request_close_active_x(
