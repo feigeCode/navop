@@ -11,6 +11,7 @@ use crate::cli::Config;
 mod support;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+const LOGIN_PRESENTATION_REFRESH_DELAY: Duration = Duration::from_millis(300);
 
 pub(super) struct SmokeView {
     session: Option<session::NativeSession>,
@@ -23,6 +24,7 @@ pub(super) struct SmokeView {
     last_connection_state: Option<WindowsRdpConnectionState>,
     last_bounds: Option<(i32, i32)>,
     _poll_task: Task<()>,
+    login_presentation_refresh_task: Option<Task<()>>,
     _bounds_subscription: Subscription,
 }
 
@@ -44,6 +46,7 @@ impl SmokeView {
             last_connection_state: None,
             last_bounds: None,
             _poll_task: poll_task,
+            login_presentation_refresh_task: None,
             _bounds_subscription: bounds_subscription,
         }
     }
@@ -54,7 +57,7 @@ impl SmokeView {
         if !self.host_is_open() {
             return;
         }
-        self.poll_events(window);
+        self.poll_events(window, cx);
         self.poll_connection_state();
         self.check_timeout();
         if self.status != previous_status {
@@ -68,7 +71,7 @@ impl SmokeView {
             .is_some_and(|session| session.host.lifecycle() == WindowsRdpHostLifecycle::Open)
     }
 
-    fn poll_events(&mut self, window: &Window) {
+    fn poll_events(&mut self, window: &Window, cx: &mut Context<Self>) {
         let events = self
             .session
             .as_ref()
@@ -79,7 +82,7 @@ impl SmokeView {
             println!("raw event: {raw:?}");
             let event = WindowsRdpEvent::from(raw);
             println!("event: {event:?}");
-            self.handle_event(event, window);
+            self.handle_event(event, window, cx);
         }
     }
 
@@ -123,14 +126,14 @@ impl SmokeView {
         eprintln!("RESULT: TIMEOUT");
     }
 
-    fn handle_event(&mut self, event: WindowsRdpEvent, window: &Window) {
+    fn handle_event(&mut self, event: WindowsRdpEvent, window: &Window, cx: &mut Context<Self>) {
         match event {
             WindowsRdpEvent::Connecting { .. } => self.status = "RDP is connecting".to_owned(),
             WindowsRdpEvent::Connected { .. } => {
                 self.status = "RDP transport connected; waiting for login".to_owned();
                 self.refresh_connected_presentation(window, "host shown after connected");
             }
-            WindowsRdpEvent::LoginComplete { .. } => self.handle_login_complete(window),
+            WindowsRdpEvent::LoginComplete { .. } => self.handle_login_complete(window, cx),
             WindowsRdpEvent::Warning { warning, .. } => eprintln!(
                 "diagnostic: event=Warning kind={:?} code={}",
                 warning.kind(),
@@ -144,10 +147,25 @@ impl SmokeView {
         }
     }
 
-    fn handle_login_complete(&mut self, window: &Window) {
+    fn handle_login_complete(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.refresh_connected_presentation(window, "host refreshed after login complete");
         self.login_complete = true;
         self.status = "RDP login complete".to_owned();
+        if let Some(generation) = self
+            .session
+            .as_ref()
+            .map(|session| session.host.generation())
+        {
+            println!(
+                "presentation: scheduling delayed login refresh generation={generation} delay_ms={}",
+                LOGIN_PRESENTATION_REFRESH_DELAY.as_millis()
+            );
+            self.login_presentation_refresh_task = Some(support::spawn_login_presentation_refresh(
+                generation,
+                LOGIN_PRESENTATION_REFRESH_DELAY,
+                cx,
+            ));
+        }
         println!("RESULT: LOGIN_COMPLETE");
     }
 
@@ -159,7 +177,7 @@ impl SmokeView {
         if session.host.lifecycle() != WindowsRdpHostLifecycle::Open {
             return;
         }
-        if let Err(error) = session.overlay.synchronize(0, 0, bounds.0, bounds.1) {
+        if let Err(error) = session.overlay.refresh(0, 0, bounds.0, bounds.1) {
             eprintln!("ERROR: stage=refresh_connected_overlay error={error}");
             return;
         }

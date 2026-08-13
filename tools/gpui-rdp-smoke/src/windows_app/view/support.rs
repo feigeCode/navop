@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{Context, Subscription, Task, Window};
 
@@ -17,6 +17,37 @@ pub(super) fn spawn_poll_task(cx: &mut Context<SmokeView>) -> Task<()> {
                 break;
             }
         }
+    })
+}
+
+pub(super) fn spawn_login_presentation_refresh(
+    generation: u64,
+    delay: Duration,
+    cx: &mut Context<SmokeView>,
+) -> Task<()> {
+    cx.spawn(async move |view, cx| {
+        cx.background_executor().timer(delay).await;
+        let _ = view.update_in(cx, |view, window, _cx| {
+            let current_generation = view
+                .session
+                .as_ref()
+                .map(|session| session.host.generation());
+            if current_generation != Some(generation) || !view.login_complete {
+                println!(
+                    "presentation: delayed login refresh skipped scheduled_generation={generation} current_generation={current_generation:?} login_complete={}",
+                    view.login_complete
+                );
+                return;
+            }
+            println!(
+                "presentation: delayed login refresh running generation={generation} delay_ms={}",
+                delay.as_millis()
+            );
+            view.refresh_connected_presentation(
+                window,
+                "host refreshed 300ms after login complete",
+            );
+        });
     })
 }
 

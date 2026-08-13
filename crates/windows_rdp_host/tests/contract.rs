@@ -1373,9 +1373,16 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
         "tools/gpui-rdp-smoke/src/native_overlay.rs",
         &[
             "const WS_CHILD: u32",
+            "ensure_owner_clips_children(owner_window)?",
+            "SetWindowLongPtrW(owner, GWL_STYLE, style_after as isize)",
+            "style_before | WS_CLIPCHILDREN as usize",
+            "SWP_FRAMECHANGED",
             "GetParent(overlay)",
+            "GetWindow(window_pointer(self.window), GW_HWNDFIRST)",
             "ScreenToClient(owner, &mut observed_origin)",
             "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT",
+            "owner_clip_children={}",
+            "overlay_is_first={}",
         ],
     );
     assert_excludes_all(
@@ -1390,6 +1397,26 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
             "session.overlay.synchronize(0, 0, bounds.0, bounds.1)",
             "configure_presentation(&mut session, bounds)",
             "connect_session(&mut session, &credentials, &connection_options)",
+        ],
+    );
+    assert_contains_all(
+        "tools/gpui-rdp-smoke/src/windows_app/view.rs",
+        &[
+            "const LOGIN_PRESENTATION_REFRESH_DELAY: Duration = Duration::from_millis(300)",
+            "login_presentation_refresh_task: Option<Task<()>>",
+            "support::spawn_login_presentation_refresh(",
+            "session.overlay.refresh(0, 0, bounds.0, bounds.1)",
+        ],
+    );
+    assert_tokens_in_scope(
+        "tools/gpui-rdp-smoke/src/windows_app/view/support.rs",
+        "pub(super) fn spawn_login_presentation_refresh(",
+        "\n}\n\npub(super) fn defer_initialization",
+        &[
+            "cx.background_executor().timer(delay).await",
+            "view.update_in(cx, |view, window, _cx|",
+            "current_generation != Some(generation)",
+            "view.refresh_connected_presentation(",
         ],
     );
 }

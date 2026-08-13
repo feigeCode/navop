@@ -20,6 +20,7 @@ pub(crate) struct Rect {
 unsafe extern "system" {
     pub(crate) fn GetLastError() -> u32;
     pub(crate) fn GetModuleHandleW(module_name: *const u16) -> *mut c_void;
+    pub(crate) fn SetLastError(error_code: u32);
 }
 
 #[link(name = "user32")]
@@ -41,6 +42,7 @@ unsafe extern "system" {
     pub(crate) fn DestroyWindow(window: *mut c_void) -> i32;
     pub(crate) fn GetClientRect(window: *mut c_void, rect: *mut Rect) -> i32;
     pub(crate) fn GetParent(window: *mut c_void) -> *mut c_void;
+    pub(crate) fn GetWindow(window: *mut c_void, command: u32) -> *mut c_void;
     pub(crate) fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
     pub(crate) fn GetWindowRect(window: *mut c_void, rect: *mut Rect) -> i32;
     pub(crate) fn IsIconic(window: *mut c_void) -> i32;
@@ -56,5 +58,6 @@ unsafe extern "system" {
         height: i32,
         flags: u32,
     ) -> i32;
+    pub(crate) fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
     pub(crate) fn ShowWindow(window: *mut c_void, command: i32) -> i32;
 }
