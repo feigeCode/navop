@@ -157,11 +157,11 @@ fn finish_initialization(
         bounds.1,
         window.scale_factor()
     );
-    if let Err(error) = configure_presentation(&mut session, bounds) {
-        return failed_after_host_error(session, error.0, error.1);
-    }
     if let Err(error) = session.overlay.synchronize(0, 0, bounds.0, bounds.1) {
         return failed_after_overlay_error(session, "initial_overlay_bounds", error);
+    }
+    if let Err(error) = configure_presentation(&mut session, bounds) {
+        return failed_after_host_error(session, error.0, error.1);
     }
     if let Err(error) = connect_session(&mut session, &credentials, &connection_options) {
         return failed_after_host_error(session, error.0, error.1);

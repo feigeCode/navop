@@ -134,6 +134,97 @@ HRESULT attach_control_with_traces(ActiveXCleanup& resources) noexcept {
     return result;
 }
 
+HRESULT position_direct_control_window(
+    ActiveXCleanup& resources,
+    HWND control_window,
+    const RECT& client_rect) noexcept {
+    const HWND control_parent = GetParent(control_window);
+    trace_native_pointer(
+        "presentation.control_parent",
+        reinterpret_cast<uintptr_t>(control_parent));
+    if (control_parent != resources.host_window) {
+        trace_native_stage(
+            "presentation.position_control_window.skipped_non_direct_child");
+        return S_OK;
+    }
+
+    UINT position_flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    if (IsWindowVisible(resources.host_window)) {
+        position_flags |= SWP_SHOWWINDOW;
+    }
+    trace_native_stage("presentation.position_control_window.before");
+    SetLastError(ERROR_SUCCESS);
+    if (SetWindowPos(
+            control_window,
+            nullptr,
+            0,
+            0,
+            client_rect.right - client_rect.left,
+            client_rect.bottom - client_rect.top,
+            position_flags)) {
+        trace_native_stage("presentation.position_control_window.after");
+        return S_OK;
+    }
+
+    const DWORD last_error = GetLastError();
+    const DWORD win32_code = last_error == ERROR_SUCCESS
+        ? ERROR_INVALID_WINDOW_HANDLE
+        : last_error;
+    trace_native_win32(
+        "presentation.position_control_window.failed",
+        static_cast<uint32_t>(win32_code));
+    return HRESULT_FROM_WIN32(win32_code);
+}
+
+void trace_presentation_window_state(
+    const ActiveXCleanup& resources,
+    HWND control_window) noexcept {
+    trace_native_pointer(
+        "presentation.host_parent",
+        reinterpret_cast<uintptr_t>(GetParent(resources.host_window)));
+    trace_native_pointer(
+        "presentation.control_root",
+        reinterpret_cast<uintptr_t>(
+            GetAncestor(control_window, GA_ROOT)));
+    trace_native_pointer(
+        "presentation.control_root_owner",
+        reinterpret_cast<uintptr_t>(
+            GetAncestor(control_window, GA_ROOTOWNER)));
+    trace_native_win32(
+        "presentation.control_is_host_descendant",
+        IsChild(resources.host_window, control_window) ? 1U : 0U);
+    trace_native_win32(
+        "presentation.host_visible",
+        IsWindowVisible(resources.host_window) ? 1U : 0U);
+    trace_native_win32(
+        "presentation.control_visible",
+        IsWindowVisible(control_window) ? 1U : 0U);
+
+    RECT host_rect{};
+    if (GetWindowRect(resources.host_window, &host_rect)) {
+        trace_native_rect(
+            "presentation.host_window_rect",
+            static_cast<int32_t>(host_rect.left),
+            static_cast<int32_t>(host_rect.top),
+            static_cast<int32_t>(host_rect.right),
+            static_cast<int32_t>(host_rect.bottom));
+    }
+    RECT control_rect{};
+    if (GetWindowRect(control_window, &control_rect)) {
+        trace_native_rect(
+            "presentation.control_window_rect",
+            static_cast<int32_t>(control_rect.left),
+            static_cast<int32_t>(control_rect.top),
+            static_cast<int32_t>(control_rect.right),
+            static_cast<int32_t>(control_rect.bottom));
+    }
+    trace_native_win32(
+        "presentation.control_window_style",
+        static_cast<uint32_t>(GetWindowLongPtrW(
+            control_window,
+            GWL_STYLE)));
+}
+
 HRESULT synchronize_control_bounds(ActiveXCleanup& resources) noexcept {
     if (resources.in_place_object == nullptr ||
         resources.host_window == nullptr) {
@@ -185,48 +276,14 @@ HRESULT synchronize_control_bounds(ActiveXCleanup& resources) noexcept {
     if (SUCCEEDED(window_result) &&
         control_window != nullptr &&
         IsWindow(control_window)) {
-        const int width = client_rect.right - client_rect.left;
-        const int height = client_rect.bottom - client_rect.top;
-        UINT position_flags = SWP_NOACTIVATE;
-        if ((GetWindowLongPtrW(resources.host_window, GWL_STYLE) &
-             WS_VISIBLE) != 0) {
-            position_flags |= SWP_SHOWWINDOW;
+        const HRESULT position_result = position_direct_control_window(
+            resources,
+            control_window,
+            client_rect);
+        if (FAILED(position_result)) {
+            return position_result;
         }
-        trace_native_stage("presentation.position_control_window.before");
-        SetLastError(ERROR_SUCCESS);
-        if (!SetWindowPos(
-                control_window,
-                HWND_TOP,
-                0,
-                0,
-                width,
-                height,
-                position_flags)) {
-            const DWORD last_error = GetLastError();
-            const DWORD win32_code = last_error == ERROR_SUCCESS
-                ? ERROR_INVALID_WINDOW_HANDLE
-                : last_error;
-            trace_native_win32(
-                "presentation.position_control_window.failed",
-                static_cast<uint32_t>(win32_code));
-            return HRESULT_FROM_WIN32(win32_code);
-        }
-        trace_native_stage("presentation.position_control_window.after");
-
-        RECT control_rect{};
-        if (GetWindowRect(control_window, &control_rect)) {
-            trace_native_rect(
-                "presentation.control_window_rect",
-                static_cast<int32_t>(control_rect.left),
-                static_cast<int32_t>(control_rect.top),
-                static_cast<int32_t>(control_rect.right),
-                static_cast<int32_t>(control_rect.bottom));
-        }
-        trace_native_win32(
-            "presentation.control_window_style",
-            static_cast<uint32_t>(GetWindowLongPtrW(
-                control_window,
-                GWL_STYLE)));
+        trace_presentation_window_state(resources, control_window);
     }
 
     trace_native_stage("presentation.redraw.before");

@@ -1159,7 +1159,6 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "validate_resources(",
             "IsWindow(",
             "SetWindowPos(",
-            "HWND_TOP",
             "SWP_NOACTIVATE",
             "SWP_NOZORDER | SWP_NOACTIVATE",
             "synchronize_control_bounds(",
@@ -1198,6 +1197,41 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
     );
     assert_tokens_in_scope(
         source,
+        "HRESULT position_direct_control_window(",
+        "\n}\n\nvoid trace_presentation_window_state",
+        &[
+            "GetParent(control_window)",
+            "trace_native_pointer(\n        \"presentation.control_parent\"",
+            "if (control_parent != resources.host_window)",
+            "presentation.position_control_window.skipped_non_direct_child",
+            "UINT position_flags = SWP_NOZORDER | SWP_NOACTIVATE",
+            "IsWindowVisible(resources.host_window)",
+            "position_flags |= SWP_SHOWWINDOW",
+            "SetWindowPos(",
+            "control_window",
+            "nullptr",
+            "position_flags",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "void trace_presentation_window_state(",
+        "\n}\n\nHRESULT synchronize_control_bounds",
+        &[
+            "GetParent(resources.host_window)",
+            "GetAncestor(control_window, GA_ROOT)",
+            "GetAncestor(control_window, GA_ROOTOWNER)",
+            "trace_native_win32(\n        \"presentation.control_is_host_descendant\"",
+            "IsChild(resources.host_window, control_window)",
+            "IsWindowVisible(resources.host_window)",
+            "IsWindowVisible(control_window)",
+            "GetWindowRect(resources.host_window, &host_rect)",
+            "trace_native_rect(\n            \"presentation.host_window_rect\"",
+            "GetWindowRect(control_window, &control_rect)",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
         "HRESULT synchronize_control_bounds(",
         "\n}\n\nbool window_or_descendant_has_focus",
         &[
@@ -1207,14 +1241,8 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "&client_rect,\n            &client_rect",
             "resources.in_place_object->GetWindow(&control_window)",
             "trace_native_pointer(\n        \"presentation.control_window\"",
-            "UINT position_flags = SWP_NOACTIVATE",
-            "GetWindowLongPtrW(resources.host_window, GWL_STYLE)",
-            "WS_VISIBLE",
-            "position_flags |= SWP_SHOWWINDOW",
-            "SetWindowPos(",
-            "control_window",
-            "HWND_TOP",
-            "position_flags",
+            "position_direct_control_window(",
+            "trace_presentation_window_state(resources, control_window)",
             "RedrawWindow(",
             "resources.host_window",
             "RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN",
@@ -1335,6 +1363,20 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "put_UIParentWindowHandle(reinterpret_cast<LONG_PTR>",
             "put_UIParentWindowHandle((LONG)",
             "put_UIParentWindowHandle((long)",
+        ],
+    );
+}
+
+#[test]
+fn gpui_smoke_positions_the_overlay_before_showing_the_active_x_host() {
+    assert_tokens_in_scope(
+        "tools/gpui-rdp-smoke/src/windows_app/session.rs",
+        "fn finish_initialization(",
+        "\n}\n\nfn configure_presentation",
+        &[
+            "session.overlay.synchronize(0, 0, bounds.0, bounds.1)",
+            "configure_presentation(&mut session, bounds)",
+            "connect_session(&mut session, &credentials, &connection_options)",
         ],
     );
 }
