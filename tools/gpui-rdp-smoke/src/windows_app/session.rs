@@ -183,8 +183,10 @@ fn configure_presentation(
         .map_err(|error| ("set_bounds", error))?;
     session
         .host
-        .set_visible(true)
-        .map_err(|error| ("set_visible", error))
+        .set_visible(false)
+        .map_err(|error| ("set_visible_before_connect", error))?;
+    println!("presentation: host hidden before connect");
+    Ok(())
 }
 
 fn connect_session(
@@ -202,11 +204,6 @@ fn connect_session(
         .connect(options)
         .map_err(|error| ("connect", error))?;
     println!("connect: synchronous call succeeded; waiting for events");
-    if let Err(error) = session.host.focus() {
-        log_host_error("focus_best_effort", error);
-    } else {
-        println!("focus: success");
-    }
     Ok(())
 }
 

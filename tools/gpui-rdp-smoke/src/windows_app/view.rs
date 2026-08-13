@@ -54,7 +54,7 @@ impl SmokeView {
         if !self.host_is_open() {
             return;
         }
-        self.poll_events();
+        self.poll_events(window);
         self.poll_connection_state();
         self.check_timeout();
         if self.status != previous_status {
@@ -68,7 +68,7 @@ impl SmokeView {
             .is_some_and(|session| session.host.lifecycle() == WindowsRdpHostLifecycle::Open)
     }
 
-    fn poll_events(&mut self) {
+    fn poll_events(&mut self, window: &Window) {
         let events = self
             .session
             .as_ref()
@@ -79,7 +79,7 @@ impl SmokeView {
             println!("raw event: {raw:?}");
             let event = WindowsRdpEvent::from(raw);
             println!("event: {event:?}");
-            self.handle_event(event);
+            self.handle_event(event, window);
         }
     }
 
@@ -123,13 +123,14 @@ impl SmokeView {
         eprintln!("RESULT: TIMEOUT");
     }
 
-    fn handle_event(&mut self, event: WindowsRdpEvent) {
+    fn handle_event(&mut self, event: WindowsRdpEvent, window: &Window) {
         match event {
             WindowsRdpEvent::Connecting { .. } => self.status = "RDP is connecting".to_owned(),
             WindowsRdpEvent::Connected { .. } => {
-                self.status = "RDP transport connected; waiting for login".to_owned()
+                self.status = "RDP transport connected; waiting for login".to_owned();
+                self.refresh_connected_presentation(window, "host shown after connected");
             }
-            WindowsRdpEvent::LoginComplete { .. } => self.handle_login_complete(),
+            WindowsRdpEvent::LoginComplete { .. } => self.handle_login_complete(window),
             WindowsRdpEvent::Warning { warning, .. } => eprintln!(
                 "diagnostic: event=Warning kind={:?} code={}",
                 warning.kind(),
@@ -143,10 +144,40 @@ impl SmokeView {
         }
     }
 
-    fn handle_login_complete(&mut self) {
+    fn handle_login_complete(&mut self, window: &Window) {
+        self.refresh_connected_presentation(window, "host refreshed after login complete");
         self.login_complete = true;
         self.status = "RDP login complete".to_owned();
         println!("RESULT: LOGIN_COMPLETE");
+    }
+
+    fn refresh_connected_presentation(&mut self, window: &Window, stage: &'static str) {
+        let bounds = physical_viewport_size(window);
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if session.host.lifecycle() != WindowsRdpHostLifecycle::Open {
+            return;
+        }
+        if let Err(error) = session.overlay.synchronize(0, 0, bounds.0, bounds.1) {
+            eprintln!("ERROR: stage=refresh_connected_overlay error={error}");
+            return;
+        }
+        if let Err(error) = session.host.set_bounds(0, 0, bounds.0, bounds.1) {
+            log_host_error("refresh_connected_bounds", error);
+            return;
+        }
+        if let Err(error) = session.host.set_visible(true) {
+            log_host_error("refresh_connected_visible", error);
+            return;
+        }
+        self.last_bounds = Some(bounds);
+        println!("presentation: {stage}");
+        if let Err(error) = session.host.focus() {
+            log_host_error("refresh_connected_focus_best_effort", error);
+        } else {
+            println!("focus: success after native presentation refresh");
+        }
     }
 
     fn handle_fatal_error(&mut self, error: windows_rdp_host::WindowsRdpFatalError) {

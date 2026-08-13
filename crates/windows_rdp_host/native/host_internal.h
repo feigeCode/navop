@@ -39,6 +39,21 @@ void trace_native_rect(
     int32_t right,
     int32_t bottom) noexcept;
 
+void trace_native_window(
+    const char* stage,
+    uint32_t index,
+    uintptr_t window,
+    uintptr_t parent,
+    uint32_t visible,
+    uintptr_t style,
+    uintptr_t ex_style,
+    int32_t left,
+    int32_t top,
+    int32_t right,
+    int32_t bottom,
+    const uint16_t* class_name,
+    uint32_t class_name_len) noexcept;
+
 void trace_native_utf16(
     const char* stage,
     int32_t hresult,

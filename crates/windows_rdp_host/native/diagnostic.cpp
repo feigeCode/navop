@@ -201,6 +201,46 @@ void trace_native_rect(
     flush_trace();
 }
 
+void trace_native_window(
+    const char* stage,
+    uint32_t index,
+    uintptr_t window,
+    uintptr_t parent,
+    uint32_t visible,
+    uintptr_t style,
+    uintptr_t ex_style,
+    int32_t left,
+    int32_t top,
+    int32_t right,
+    int32_t bottom,
+    const uint16_t* class_name,
+    uint32_t class_name_len) noexcept {
+    std::fprintf(
+        stderr,
+        "%s stage=%s index=%" PRIu32 " pointer=0x%" PRIXPTR
+        " parent=0x%" PRIXPTR " visible=%" PRIu32
+        " style=0x%" PRIXPTR " ex_style=0x%" PRIXPTR
+        " rect={left=%" PRId32 ",top=%" PRId32
+        ",right=%" PRId32 ",bottom=%" PRId32 "} class=\"",
+        kTracePrefix,
+        stage == nullptr ? "<null>" : stage,
+        index,
+        window,
+        parent,
+        visible,
+        style,
+        ex_style,
+        left,
+        top,
+        right,
+        bottom);
+    if (class_name != nullptr && class_name_len != UINT32_C(0)) {
+        write_utf16(class_name, class_name_len);
+    }
+    static_cast<void>(std::fputs("\"\n", stderr));
+    flush_trace();
+}
+
 void trace_native_utf16(
     const char* stage,
     int32_t hresult,

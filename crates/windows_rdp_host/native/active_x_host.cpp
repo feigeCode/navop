@@ -176,6 +176,80 @@ HRESULT position_direct_control_window(
     return HRESULT_FROM_WIN32(win32_code);
 }
 
+struct DescendantTraceContext {
+    uint32_t count = 0;
+};
+
+BOOL CALLBACK trace_descendant_window(
+    HWND window,
+    LPARAM context_pointer) noexcept {
+    auto* context = reinterpret_cast<DescendantTraceContext*>(
+        context_pointer);
+    if (context == nullptr) {
+        return FALSE;
+    }
+
+    wchar_t native_class_name[256]{};
+    const int class_name_len = GetClassNameW(
+        window,
+        native_class_name,
+        static_cast<int>(
+            sizeof(native_class_name) / sizeof(native_class_name[0])));
+    uint16_t class_name[256]{};
+    for (int index = 0; index < class_name_len; ++index) {
+        class_name[index] = static_cast<uint16_t>(
+            native_class_name[index]);
+    }
+    RECT rect{};
+    SetLastError(ERROR_SUCCESS);
+    if (!GetWindowRect(window, &rect)) {
+        const DWORD last_error = GetLastError();
+        trace_native_win32(
+            "presentation.control_descendant_rect.failed",
+            static_cast<uint32_t>(
+                last_error == ERROR_SUCCESS
+                    ? ERROR_INVALID_WINDOW_HANDLE
+                    : last_error));
+    }
+    trace_native_window(
+        "presentation.control_descendant",
+        context->count,
+        reinterpret_cast<uintptr_t>(window),
+        reinterpret_cast<uintptr_t>(GetParent(window)),
+        IsWindowVisible(window) ? 1U : 0U,
+        static_cast<uintptr_t>(GetWindowLongPtrW(window, GWL_STYLE)),
+        static_cast<uintptr_t>(GetWindowLongPtrW(window, GWL_EXSTYLE)),
+        static_cast<int32_t>(rect.left),
+        static_cast<int32_t>(rect.top),
+        static_cast<int32_t>(rect.right),
+        static_cast<int32_t>(rect.bottom),
+        class_name,
+        class_name_len > 0
+            ? static_cast<uint32_t>(class_name_len)
+            : UINT32_C(0));
+    ++context->count;
+    return TRUE;
+}
+
+void trace_control_descendants(HWND control_window) noexcept {
+    DescendantTraceContext context;
+    SetLastError(ERROR_SUCCESS);
+    if (!EnumChildWindows(
+            control_window,
+            trace_descendant_window,
+            reinterpret_cast<LPARAM>(&context))) {
+        const DWORD error = GetLastError();
+        if (error != ERROR_SUCCESS) {
+            trace_native_win32(
+                "presentation.enumerate_control_descendants.failed",
+                static_cast<uint32_t>(error));
+        }
+    }
+    trace_native_win32(
+        "presentation.control_descendant_count",
+        context.count);
+}
+
 void trace_presentation_window_state(
     const ActiveXCleanup& resources,
     HWND control_window) noexcept {
@@ -223,6 +297,7 @@ void trace_presentation_window_state(
         static_cast<uint32_t>(GetWindowLongPtrW(
             control_window,
             GWL_STYLE)));
+    trace_control_descendants(control_window);
 }
 
 HRESULT synchronize_control_bounds(ActiveXCleanup& resources) noexcept {
@@ -849,6 +924,18 @@ NavopRdpResult connect_active_x(
     result = advanced_settings->put_EncryptionEnabled(1);
     trace_native_hresult(
         "connect.set_encryption.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+
+    trace_native_stage("connect.set_smart_sizing.before");
+    result = advanced_settings->put_SmartSizing(VARIANT_FALSE);
+    trace_native_hresult(
+        "connect.set_smart_sizing.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
         return record_last_hresult(

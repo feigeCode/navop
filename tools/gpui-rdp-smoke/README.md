@@ -72,6 +72,20 @@ RESULT: LOGIN_COMPLETE
 
 程序不会在登录成功后自动退出，以便直接观察和操作远端桌面。关闭 GPUI 窗口时，程序会在同一个 UI owner thread 上隐藏、断开并销毁原生 RDP host。
 
+为了贴近 1Remote 的 WinForms `AxHost` 展示时序，烟测程序会在调用
+`Connect()` 前隐藏 ActiveX host，并在 `Connected` 和
+`LoginComplete` 事件到达后强制同步尺寸、显示并刷新焦点。对应日志为：
+
+```text
+presentation: host hidden before connect
+presentation: host shown after connected
+presentation: host refreshed after login complete
+```
+
+原生日志还会输出 `presentation.control_descendant_count` 以及每个
+`presentation.control_descendant` 的窗口类名、可见性、尺寸和样式，用于判断
+RDP 控件内部的渲染子窗口是否真正创建。
+
 常见终止标记：
 
 ```text

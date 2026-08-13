@@ -7,6 +7,7 @@ const WS_POPUP: u32 = 0x8000_0000;
 const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+const SS_BLACKRECT: u32 = 0x0000_0004;
 const SW_HIDE: i32 = 0;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_SHOWWINDOW: u32 = 0x0040;
@@ -251,7 +252,7 @@ fn create_overlay_window(owner: *mut c_void, instance: *mut c_void) -> Result<*m
             WS_EX_TOOLWINDOW,
             STATIC_CLASS.as_ptr(),
             OVERLAY_TITLE.as_ptr(),
-            WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+            WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT,
             0,
             0,
             1,
