@@ -4,6 +4,54 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.7] - 2026-08-13
+
+### 中文
+
+#### 更新内容
+
+- 终端工作区新增面板分屏控制，可向左、右、上、下拆分终端，并可将面板恢复为普通标签页。
+- 连接侧边栏新增批量选择与管理模式，可选择当前可见连接、批量移动到分组或批量删除，并将相关入口整合到溢出菜单。
+- SSH 连接支持配置终端类型，改善不同远程系统和 shell 环境下的兼容性。
+- SQL 查询新增无限结果模式和执行中取消能力。
+- 统一辅助窗口的关闭行为，并使用对应平台的标准窗口关闭快捷键。
+
+#### 修复与优化
+
+- 表数据导入支持事务执行与二进制安全处理，失败时可回滚，避免留下部分导入数据；SQL 导出现在也会正确保留二进制值。
+- 改善 SSH 多因素及 keyboard-interactive 认证流程，保留终端缓冲区并支持继续完成多步认证。
+- 修复终端长行在可见视口中的换行，以及调整窗口大小后的内容重新排版问题。
+- 限制 AI Chat 会话记录、缓存会话和工具信息的内存占用，提升长时间会话的稳定性。
+- 为远程桌面帧增量、扩展驱动 worker、Public MCP 审批队列、SSH 路径补全缓存和远程文件外部编辑会话增加容量或生命周期限制，降低长期运行时的资源堆积风险。
+- 优化大型 DML 执行后的数据库缓存失效判断，避免不必要地解析完整 SQL。
+- 修复表格复制选择可能超出有效列范围的问题。
+- 将 Redis 驱动最低兼容版本更新至 `0.1.4`，以支持原生 pipeline 与连接断开后的恢复能力。
+
+---
+
+### English
+
+#### What's New
+
+- Added terminal pane controls for splitting a terminal to the left, right, top, or bottom, with an option to restore a pane to a regular tab.
+- Added batch selection and management to the connection sidebar, including selecting visible connections, moving multiple connections to a group, and deleting them in one operation, with the related actions consolidated into the overflow menu.
+- Added configurable SSH terminal types for better compatibility with different remote systems and shell environments.
+- Added an unlimited-results mode and cancellation for running SQL queries.
+- Unified auxiliary-window close behavior and aligned shortcuts with each platform's standard window-close action.
+
+#### Fixes and Improvements
+
+- Made table imports transactional and binary-safe so failures can roll back without leaving partial data, and fixed SQL exports to preserve binary values correctly.
+- Improved SSH multi-factor and keyboard-interactive authentication by preserving terminal buffers and allowing multi-step authentication to continue.
+- Fixed terminal soft-wrapping within the visible viewport and content reflow after resizing the window.
+- Bounded AI Chat transcripts, cached sessions, and tool information to improve stability during long-running conversations.
+- Added capacity or lifecycle limits for remote-desktop frame deltas, extension-driver workers, Public MCP approval queues, SSH path-completion caches, and external remote-file editing sessions to reduce resource buildup during long-running use.
+- Optimized database cache invalidation after large DML statements by avoiding unnecessary full-SQL parsing.
+- Fixed table copy selections that could extend beyond the valid column range.
+- Updated the minimum compatible Redis driver version to `0.1.4` to support native pipelines and recovery after dropped connections.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.6...v0.10.7
+
 ## [v0.10.6] - 2026-08-11
 
 ### 中文
