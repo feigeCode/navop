@@ -234,7 +234,7 @@ jobs:
           cargo install --locked cargo-zigbuild --version 0.23.0
           echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/ziglang/bin/python" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
-          cargo zigbuild --version
+          cargo-zigbuild --version
 
       - name: Install portable packaging dependencies
         if: matrix.portable_linux

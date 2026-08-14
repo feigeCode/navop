@@ -182,6 +182,8 @@ test("Linux keeps full-feature standard packages and publishes portable variants
     installZig,
     /CARGO_ZIGBUILD_PYTHON_PATH=\$RUNNER_TEMP\/ziglang\/bin\/python/,
   );
+  assert.match(installZig, /cargo-zigbuild --version/);
+  assert.doesNotMatch(installZig, /cargo zigbuild --version/);
   assert.match(installPortable, /if: matrix\.portable_linux/);
   assert.match(installPortable, /apt-get install -y binutils musl-tools/);
   assert.match(build, /if \[ "\$\{\{ matrix\.portable_linux \}\}" = "true" \]/);
