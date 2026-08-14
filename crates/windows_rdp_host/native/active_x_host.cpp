@@ -6,7 +6,10 @@
 #include <atlhost.h>
 #include <ocidl.h>
 
+#pragma warning(push)
+#pragma warning(disable : 4471)
 #include "mstscax.tlh"
+#pragma warning(pop)
 
 #include <limits>
 #include <memory>

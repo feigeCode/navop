@@ -5,7 +5,10 @@
 #include <atlbase.h>
 #include <ocidl.h>
 
+#pragma warning(push)
+#pragma warning(disable : 4471)
 #include "mstscax.tlh"
+#pragma warning(pop)
 
 #include <array>
 #include <memory>

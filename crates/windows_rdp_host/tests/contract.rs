@@ -1114,6 +1114,8 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
     assert_contains_all(
         importer,
         &[
+            "#pragma warning(disable : 4192)",
+            "#pragma warning(disable : 4471)",
             "#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\"",
             "raw_interfaces_only, named_guids, no_namespace, exclude(\"UINT_PTR\")",
         ],
@@ -1141,7 +1143,15 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
     );
     for consumer in ["native/event_sink.cpp", "native/active_x_host.cpp"] {
         let path = &format!("{HOST_CRATE}/{consumer}");
-        assert_contains_all(path, &["#include \"mstscax.tlh\""]);
+        assert_contains_all(
+            path,
+            &[
+                "#pragma warning(push)",
+                "#pragma warning(disable : 4471)",
+                "#include \"mstscax.tlh\"",
+                "#pragma warning(pop)",
+            ],
+        );
         assert_excludes_all(
             path,
             &["#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\""],
