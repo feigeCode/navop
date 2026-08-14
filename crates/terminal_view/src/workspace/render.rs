@@ -61,6 +61,8 @@ impl TerminalWorkspace {
         let active = self.active_pane_id == pane_id;
         let split = self.panes.len() > 1;
         let title = pane.read(cx).title(cx);
+        let hover_group =
+            SharedString::from(format!("terminal-workspace-pane-hover-{}", pane_id.value()));
         let border = if active {
             cx.theme().drag_border
         } else {
@@ -69,6 +71,7 @@ impl TerminalWorkspace {
 
         let content = v_flex()
             .id(("terminal-workspace-pane", pane_id.value()))
+            .group(hover_group.clone())
             .relative()
             .size_full()
             .min_w_0()
@@ -83,7 +86,7 @@ impl TerminalWorkspace {
                     .overflow_hidden()
                     .child(pane),
             )
-            .child(self.render_pane_floating_tool(pane_id, title, cx))
+            .child(self.render_pane_floating_tool(pane_id, title, hover_group, cx))
             .into_any_element();
         self.render_tab_drop_target(pane_id, content, cx)
     }

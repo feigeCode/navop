@@ -91,7 +91,7 @@ fn shared_sidebar_does_not_add_a_workspace_header() {
 }
 
 #[test]
-fn a_single_terminal_keeps_a_split_action_without_a_split_border() {
+fn a_single_terminal_reveals_split_action_on_hover_without_a_split_border() {
     let render = workspace_source("render.rs");
     let tool = workspace_source("pane_tool.rs");
 
@@ -99,10 +99,24 @@ fn a_single_terminal_keeps_a_split_action_without_a_split_border() {
     assert!(render.contains("when(split"));
     assert!(render.contains("render_pane_floating_tool"));
     assert!(render.contains("border_1().border_color(border)"));
+    assert!(render.contains(".group(hover_group.clone())"));
+    assert!(render.contains("pane_id, title, hover_group, cx"));
     assert!(tool.contains("if !split"));
+    assert!(tool.contains(".invisible()"));
+    assert!(tool.contains(".group_hover(hover_group"));
     assert!(tool.contains(".child(self.render_split_button("));
     assert!(tool.contains("render_cancel_split_button"));
     assert!(tool.contains("render_close_button"));
+}
+
+#[test]
+fn all_terminal_types_share_the_same_split_controls() {
+    let tool = workspace_source("pane_tool.rs");
+
+    assert!(!tool.contains("TerminalConnectionKind"));
+    assert!(!tool.contains("connection_kind(cx)"));
+    assert!(tool.matches(".child(self.render_split_button(").count() >= 2);
+    assert!(tool.contains(".disabled(!split_supported)"));
 }
 
 #[test]

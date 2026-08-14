@@ -22,6 +22,7 @@ impl TerminalWorkspace {
         &self,
         pane_id: TerminalPaneId,
         title: SharedString,
+        hover_group: SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let active = self.active_pane_id == pane_id;
@@ -58,6 +59,8 @@ impl TerminalWorkspace {
                 .border_color(border)
                 .text_color(cx.theme().foreground)
                 .when(cx.theme().shadow, |this| this.shadow_md())
+                .invisible()
+                .group_hover(hover_group, |this| this.visible())
                 .child(self.render_split_button(pane_id, workspace, split_supported))
                 .into_any_element();
         }
