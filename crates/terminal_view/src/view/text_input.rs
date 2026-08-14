@@ -186,7 +186,12 @@ impl TerminalView {
                 "backspace" => {
                     if self.history_prompt_enabled(cx) {
                         self.history_prompt.backspace();
-                        self.refresh_history_prompt_matches(cx);
+                        if self.history_prompt.query_input().is_empty() {
+                            self.suggestion_debounce.take();
+                            cx.notify();
+                        } else {
+                            self.schedule_debounced_refresh(cx);
+                        }
                     }
                 }
                 "enter" => {

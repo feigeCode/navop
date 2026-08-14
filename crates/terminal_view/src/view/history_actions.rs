@@ -31,6 +31,11 @@ impl TerminalView {
                 .timer(Duration::from_millis(30))
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.history_prompt.mode() != HistoryPromptMode::InlineSuggest
+                    || this.history_prompt.query_input().is_empty()
+                {
+                    return;
+                }
                 this.refresh_history_prompt_matches(cx);
                 cx.notify();
             });
