@@ -37,7 +37,7 @@ notes = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
 agent_runtime = { workspace = true }
-ai_chat_view = { workspace = true }
+ai_chat_view = { workspace = true, default-features = false }
 public_mcp = { workspace = true }
 tool_runtime = { workspace = true }
 port_forwarding = { workspace = true }
@@ -77,11 +77,12 @@ gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 
 [features]
-default = ["wasm-components"]
+default = ["wasm-components", "embedded-webview"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-redis", "builtin-mongodb"]
+embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []

@@ -13,7 +13,7 @@ extension-runtime = { workspace = true, default-features = false }
 futures-util.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
-ai_chat_view.workspace = true
+ai_chat_view = { workspace = true, default-features = false }
 mongodb-runtime.workspace = true
 bson = { version = "2.13", features = ["chrono-0_4"] }
 one-core.workspace = true

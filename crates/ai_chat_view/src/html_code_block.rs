@@ -1,20 +1,20 @@
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 use std::borrow::Cow;
 
 use gpui::{
     AnyElement, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 use gpui::{App, Entity};
 use gpui_component::{ActiveTheme, WindowExt};
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 use html_preview::resolve_extension_asset_url;
 use html_preview::{HtmlPreviewDocument, HtmlPreviewTransformOutput};
 use rust_i18n::t;
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 use wry::WebViewBuilder;
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 use wry::http::{Request, Response, StatusCode};
 
 pub struct HtmlCodeBlockView {
@@ -24,7 +24,7 @@ pub struct HtmlCodeBlockView {
 
 struct HtmlPreviewDialogView {
     document: HtmlPreviewDocument,
-    #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+    #[cfg(feature = "embedded-webview")]
     webview: Option<Entity<gpui_wry::WebView>>,
     webview_error: Option<String>,
 }
@@ -150,7 +150,7 @@ impl HtmlPreviewDialogView {
     fn new(document: HtmlPreviewDocument, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             document,
-            #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+            #[cfg(feature = "embedded-webview")]
             webview: None,
             webview_error: None,
         };
@@ -192,14 +192,14 @@ impl HtmlPreviewDialogView {
         cx.notify();
     }
 
-    #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+    #[cfg(feature = "embedded-webview")]
     fn refresh_webview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (webview, webview_error) = create_webview(&self.document, window, cx);
         self.webview = webview;
         self.webview_error = webview_error;
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[cfg(not(feature = "embedded-webview"))]
     fn refresh_webview(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.webview_error = Some(t!("HtmlPreview.webview_unavailable").to_string());
     }
@@ -212,7 +212,7 @@ impl HtmlPreviewDialogView {
             .overflow_hidden()
             .bg(cx.theme().background);
 
-        #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+        #[cfg(feature = "embedded-webview")]
         if let Some(webview) = &self.webview {
             return frame.child(webview.clone()).into_any_element();
         }
@@ -249,7 +249,7 @@ impl Render for HtmlPreviewDialogView {
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 fn create_webview(
     document: &HtmlPreviewDocument,
     window: &mut Window,
@@ -273,7 +273,7 @@ fn create_webview(
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 fn extension_asset_response(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let Some(path) = resolve_extension_asset_url(&request.uri().to_string()) else {
         return empty_response(StatusCode::NOT_FOUND);
@@ -284,12 +284,12 @@ fn extension_asset_response(request: Request<Vec<u8>>) -> Response<Cow<'static, 
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 fn empty_response(status: StatusCode) -> Response<Cow<'static, [u8]>> {
     response(status, "text/plain; charset=utf-8", Cow::Borrowed(&[]))
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 fn response(
     status: StatusCode,
     content_type: &'static str,
@@ -302,7 +302,7 @@ fn response(
         .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[])))
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+#[cfg(feature = "embedded-webview")]
 fn mime_for_path(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("css") => "text/css; charset=utf-8",

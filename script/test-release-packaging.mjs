@@ -114,23 +114,44 @@ test("renamed Linux packages replace legacy onetcli installations", () => {
   assert.match(release, /Obsoletes: onetcli/);
 });
 
-test("Linux ARM64 release targets glibc 2.28 and verifies the produced ELF", () => {
+test("Linux ARM64 keeps the standard package and publishes portable separately", () => {
   const release = read(".github/workflows/release.yml");
   const installZig = workflowStep(
     release,
-    "Install Zig toolchain (Linux ARM64)",
+    "Install Zig toolchain (Linux ARM64 portable)",
+  );
+  const installPortable = workflowStep(
+    release,
+    "Install portable packaging dependencies",
   );
   const build = workflowStep(release, "Build release binary");
   const verify = workflowStep(
     release,
     "Verify Linux ARM64 glibc baseline",
   );
+  const packageLinux = workflowStep(release, "Package (Linux)");
 
   assert.match(
     release,
-    /linux_arm64='\{"target":"aarch64-unknown-linux-gnu"[^']*"arm_linux":true\}'/,
+    /linux_arm64='\{"target":"aarch64-unknown-linux-gnu"[^']*"archive":"navop-aarch64-unknown-linux-gnu\.tar\.gz"[^']*"variant":"standard"[^']*"portable_linux":false\}'/,
   );
-  assert.match(installZig, /if: matrix\.arm_linux/);
+  assert.match(
+    release,
+    /linux_arm64_portable='\{"target":"aarch64-unknown-linux-gnu"[^']*"archive":"navop-aarch64-unknown-linux-gnu-portable\.tar\.gz"[^']*"variant":"portable"[^']*"portable_linux":true\}'/,
+  );
+  assert.match(
+    release,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
+  );
+  assert.match(
+    release,
+    /linux-arm64\) matrix="\[\$linux_arm64,\$linux_arm64_portable\]"/,
+  );
+  assert.match(
+    release,
+    /linux-arm64-portable\) matrix="\[\$linux_arm64_portable\]"/,
+  );
+  assert.match(installZig, /if: matrix\.portable_linux/);
   assert.match(installZig, /python3 -m venv "\$RUNNER_TEMP\/ziglang"/);
   assert.match(installZig, /ziglang==0\.14\.1/);
   assert.match(
@@ -141,10 +162,12 @@ test("Linux ARM64 release targets glibc 2.28 and verifies the produced ELF", () 
     installZig,
     /CARGO_ZIGBUILD_PYTHON_PATH=\$RUNNER_TEMP\/ziglang\/bin\/python/,
   );
-  assert.match(build, /if \[ "\$\{\{ matrix\.arm_linux \}\}" = "true" \]/);
+  assert.match(installPortable, /if: matrix\.portable_linux/);
+  assert.match(installPortable, /apt-get install -y binutils musl-tools/);
+  assert.match(build, /if \[ "\$\{\{ matrix\.portable_linux \}\}" = "true" \]/);
   assert.match(
     build,
-    /cargo zigbuild --release -p main --target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"[\s\S]*--no-default-features[\s\S]*--features wasm-components/,
   );
   assert.match(
     build,
@@ -154,46 +177,137 @@ test("Linux ARM64 release targets glibc 2.28 and verifies the produced ELF", () 
     build,
     /test -x "target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}"/,
   );
-  assert.match(verify, /if: matrix\.arm_linux/);
+  assert.match(verify, /if: matrix\.portable_linux/);
   assert.match(
     verify,
     /script\/check-linux-glibc-baseline\.sh[\s\S]*target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}[\s\S]*2\.28/,
   );
+  assert.match(
+    packageLinux,
+    /if \[ "\$\{\{ matrix\.portable_linux \}\}" = "true" \]; then[\s\S]*script\/package-linux-portable\.sh/,
+  );
+  assert.match(
+    packageLinux,
+    /else[\s\S]*cp "target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}" package\/usr\/bin\//,
+  );
+  assert.match(packageLinux, /--sort=name/);
+  assert.match(packageLinux, /--numeric-owner/);
 });
 
-test("Linux ARM64 excludes the embedded WebView runtime", () => {
+test("portable Linux disables WebView while standard builds keep it", () => {
+  const workspaceCargo = read("Cargo.toml");
   const cargo = read("crates/ai_chat_view/Cargo.toml");
+  const mainCargo = read("main/Cargo.toml");
   const htmlCodeBlock = read(
     "crates/ai_chat_view/src/html_code_block.rs",
   );
-  const regularDependencies = cargo.match(
-    /\[dependencies\]([\s\S]*?)(?=\n\[)/,
-  )?.[1];
-  const armCompatibleDependencies = cargo.match(
-    /\[target\.'cfg\(not\(all\(target_os = "linux", target_arch = "aarch64"\)\)\)'\.dependencies\]([\s\S]*?)(?=\n\[)/,
-  )?.[1];
+  const dependentCargoFiles = [
+    "main/Cargo.toml",
+    "crates/db_view/Cargo.toml",
+    "crates/mongodb_view/Cargo.toml",
+    "crates/redis_view/Cargo.toml",
+    "crates/terminal_view/Cargo.toml",
+  ];
 
-  assert.ok(regularDependencies, "missing regular ai_chat_view dependencies");
-  assert.doesNotMatch(regularDependencies, /^gpui-wry\s*=/m);
-  assert.doesNotMatch(regularDependencies, /^wry\s*=/m);
-  assert.ok(
-    armCompatibleDependencies,
-    "missing non-ARM64-Linux WebView dependencies",
+  assert.match(cargo, /default = \["embedded-webview"\]/);
+  assert.match(
+    cargo,
+    /embedded-webview = \["dep:gpui-wry", "dep:wry"\]/,
   );
-  assert.match(armCompatibleDependencies, /^gpui-wry\s*=/m);
-  assert.match(armCompatibleDependencies, /^wry\s*=/m);
+  assert.match(cargo, /gpui-wry = \{[^}]*optional = true[^}]*\}/);
+  assert.match(cargo, /wry = \{[^}]*optional = true[^}]*\}/);
+  assert.doesNotMatch(cargo, /target_arch = "aarch64"/);
   assert.match(
     htmlCodeBlock,
-    /cfg\(not\(all\(target_os = "linux", target_arch = "aarch64"\)\)\)/,
-  );
-  assert.match(
-    htmlCodeBlock,
-    /cfg\(all\(target_os = "linux", target_arch = "aarch64"\)\)[\s\S]*?fn refresh_webview/,
+    /cfg\(feature = "embedded-webview"\)/,
   );
   assert.match(
     htmlCodeBlock,
-    /HtmlPreview\.webview_unavailable/,
+    /cfg\(not\(feature = "embedded-webview"\)\)[\s\S]*?fn refresh_webview/,
   );
+  assert.doesNotMatch(htmlCodeBlock, /target_arch = "aarch64"/);
+  assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
+  assert.match(
+    mainCargo,
+    /default = \["wasm-components", "embedded-webview"\]/,
+  );
+  assert.match(
+    mainCargo,
+    /embedded-webview = \["ai_chat_view\/embedded-webview"\]/,
+  );
+  assert.match(
+    workspaceCargo,
+    /ai_chat_view = \{ path = "crates\/ai_chat_view", default-features = false \}/,
+  );
+  for (const manifest of dependentCargoFiles) {
+    assert.match(
+      read(manifest),
+      /ai_chat_view = \{ workspace = true, default-features = false \}/,
+      `${manifest} must not implicitly enable ai_chat_view defaults`,
+    );
+  }
+});
+
+test("Linux portable packager uses a private loader and recursive ELF closure", () => {
+  const wrapperPath = "script/package-linux-portable.sh";
+  const packagerPath = "script/package-linux-portable.py";
+  const launcherPath = "script/linux-portable-launcher.c";
+
+  for (const file of [wrapperPath, packagerPath, launcherPath]) {
+    assert.ok(fs.existsSync(file), `${file} must exist`);
+  }
+
+  const wrapper = read(wrapperPath);
+  const packager = read(packagerPath);
+  const launcher = read(launcherPath);
+  const help = spawnSync("python3", [packagerPath, "--help"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(wrapper, /set -euo pipefail/);
+  assert.match(wrapper, /package-linux-portable\.py/);
+  assert.match(packager, /readelf/);
+  assert.match(packager, /PT_INTERP/);
+  assert.match(packager, /verify_binary_glibc_baseline/);
+  assert.match(packager, /binary_glibc_baseline/);
+  assert.match(
+    packager,
+    /the bundled "[\s\S]*"private runtime itself may be newer/,
+  );
+  assert.match(packager, /\\\(NEEDED\\\)/);
+  assert.match(packager, /ldconfig/);
+  assert.match(packager, /dpkg-query/);
+  assert.match(packager, /musl-gcc/);
+  assert.match(packager, /"-static"/);
+  assert.match(packager, /runtime-manifest\.json/);
+  assert.match(packager, /runtime-packages\.txt/);
+  assert.match(packager, /runtime-licenses/);
+  assert.match(packager, /LICENSE-APACHE/);
+  assert.match(packager, /NAVOP_LICENSE/);
+  assert.match(packager, /libnss_dns\.so\.2/);
+  assert.match(packager, /libnss_files\.so\.2/);
+  assert.match(packager, /libnss_\*\.so\.2/);
+  assert.match(packager, /libvulkan_\*\.so\*/);
+  assert.match(packager, /\("LIB", "lib"\)/);
+  assert.match(packager, /\("PLATFORM", "aarch64"\)/);
+  assert.match(packager, /license_sources\[f"gconv\/\{relative\}"\]/);
+  assert.match(
+    packager,
+    /cannot publish a bundled runtime file without Debian package[\s\S]*ownership metadata/,
+  );
+  assert.match(
+    packager,
+    /cannot publish bundled runtime package without its copyright[\s\S]*file/,
+  );
+  assert.match(launcher, /\/proc\/self\/exe/);
+  assert.match(launcher, /ld-linux-aarch64\.so\.1/);
+  assert.match(launcher, /--inhibit-cache/);
+  assert.match(launcher, /--library-path/);
+  assert.match(launcher, /navop\.real/);
+  assert.match(launcher, /GCONV_PATH/);
+  assert.match(launcher, /unsetenv\("LD_PRELOAD"\)/);
+  assert.match(launcher, /unsetenv\("GLIBC_TUNABLES"\)/);
 });
 
 test("glibc baseline checker rejects binaries above the configured version", () => {
@@ -273,7 +387,7 @@ test("Windows release publishes 32-bit x86 artifacts and updater metadata", () =
   );
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
   );
   assert.match(
     release,
@@ -560,8 +674,13 @@ test("GitHub publishes installers while R2 only uploads updater archives", () =>
     /name: \$\{\{ matrix\.windows_basename \}\}\.msi[\s\S]*?path: \$\{\{ matrix\.windows_basename \}\}\.msi/,
   );
   assert.match(release, /new_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
+  assert.match(release, /navop-aarch64-unknown-linux-gnu-portable\.tar\.gz/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.zip/);
   assert.match(upload, /navop-i686-pc-windows-msvc\.zip/);
+  assert.doesNotMatch(
+    upload,
+    /navop-aarch64-unknown-linux-gnu-portable\.tar\.gz/,
+  );
   assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc-portable\.zip/);
   assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc\.exe/);
   assert.doesNotMatch(upload, /navop-i686-pc-windows-msvc-portable\.zip/);
@@ -691,6 +810,7 @@ test("release builds are cacheable and individually repairable", () => {
     "macos-x64",
     "linux-x64",
     "linux-arm64",
+    "linux-arm64-portable",
     "windows-x64",
     "windows-x86",
   ]) {
@@ -710,7 +830,7 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /-f platform=all/);
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
   );
   assert.equal(fs.existsSync(".github/workflows/build-arm-linux.yml"), false);
 });

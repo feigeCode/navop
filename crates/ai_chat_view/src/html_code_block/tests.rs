@@ -37,7 +37,7 @@ fn dialog_webview_content_uses_render_html() {
     });
     let view = HtmlPreviewDialogView {
         document,
-        #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+        #[cfg(feature = "embedded-webview")]
         webview: None,
         webview_error: None,
     };

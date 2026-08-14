@@ -17,6 +17,7 @@ on:
           - macos-x64
           - linux-x64
           - linux-arm64
+          - linux-arm64-portable
           - windows-x64
           - windows-x86
 
@@ -112,19 +113,21 @@ jobs:
           RELEASE_PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","arm_linux":false}'
-          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","arm_linux":false}'
-          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","arm_linux":false}'
-          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","arm_linux":true}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","arm_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
-          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","arm_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":true,"portable_linux":false}'
+          linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":true,"portable_linux":true}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"portable_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"portable_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
 
           case "$RELEASE_PLATFORM" in
-            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64,$windows_x86]" ;;
+            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$linux_arm64_portable,$windows_x64,$windows_x86]" ;;
             macos-arm64) matrix="[$macos_arm64]" ;;
             macos-x64) matrix="[$macos_x64]" ;;
             linux-x64) matrix="[$linux_x64]" ;;
-            linux-arm64) matrix="[$linux_arm64]" ;;
+            linux-arm64) matrix="[$linux_arm64,$linux_arm64_portable]" ;;
+            linux-arm64-portable) matrix="[$linux_arm64_portable]" ;;
             windows-x64) matrix="[$windows_x64]" ;;
             windows-x86) matrix="[$windows_x86]" ;;
             *) echo "::error::Unsupported platform: $RELEASE_PLATFORM"; exit 1 ;;
@@ -132,7 +135,7 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build (${{ matrix.target }})
+    name: Build (${{ matrix.target }} / ${{ matrix.variant }})
     needs: prepare
     strategy:
       fail-fast: false
@@ -218,8 +221,8 @@ jobs:
         run: |
           cmake --version
 
-      - name: Install Zig toolchain (Linux ARM64)
-        if: matrix.arm_linux
+      - name: Install Zig toolchain (Linux ARM64 portable)
+        if: matrix.portable_linux
         shell: bash
         run: |
           set -euo pipefail
@@ -229,6 +232,14 @@ jobs:
           echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/ziglang/bin/python" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
           cargo zigbuild --version
+
+      - name: Install portable packaging dependencies
+        if: matrix.portable_linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils musl-tools
 
       - name: Set environment variables
         shell: bash
@@ -271,15 +282,20 @@ jobs:
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
           echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
-          if [ "${{ matrix.arm_linux }}" = "true" ]; then
-            cargo zigbuild --release -p main --target "${{ matrix.target }}.2.28"
+          if [ "${{ matrix.portable_linux }}" = "true" ]; then
+            cargo zigbuild \
+              --release \
+              -p main \
+              --target "${{ matrix.target }}.2.28" \
+              --no-default-features \
+              --features wasm-components
           else
             cargo build --release -p main --target "${{ matrix.target }}"
           fi
           test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
 
       - name: Verify Linux ARM64 glibc baseline
-        if: matrix.arm_linux
+        if: matrix.portable_linux
         shell: bash
         run: |
           set -euo pipefail
@@ -324,20 +340,41 @@ jobs:
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          mkdir -p package/usr/bin
+          set -euo pipefail
+          rm -rf package
+
+          if [ "${{ matrix.portable_linux }}" = "true" ]; then
+            script/package-linux-portable.sh \
+              --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+              --output package \
+              --launcher-source script/linux-portable-launcher.c \
+              --target "${{ matrix.target }}" \
+              --glibc-baseline "2.28"
+          else
+            mkdir -p package/usr/bin
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/usr/bin/
+          fi
+
           mkdir -p package/usr/share/applications
           mkdir -p package/usr/share/mime/packages
           mkdir -p package/usr/share/icons/hicolor/128x128/apps
           mkdir -p package/usr/share/icons/hicolor/256x256/apps
           mkdir -p package/usr/share/icons/hicolor/512x515/apps
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/usr/bin/
           cp resources/linux/navop.desktop package/usr/share/applications/
           cp resources/linux/navop.xml package/usr/share/mime/packages/
           cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
           cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
           cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
-          tar czf ${{ matrix.archive }} -C package .
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -czf "${{ matrix.archive }}" \
+            -C package .
 
       - name: Install Linux packaging dependencies
         if: matrix.target == 'x86_64-unknown-linux-gnu'

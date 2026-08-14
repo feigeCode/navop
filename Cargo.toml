@@ -100,7 +100,7 @@ tracing = "0.1.41"
 
 reqwest_client = { path = "crates/reqwest_client" }
 agent_runtime = { path = "crates/agent_runtime" }
-ai_chat_view = { path = "crates/ai_chat_view" }
+ai_chat_view = { path = "crates/ai_chat_view", default-features = false }
 html-preview = { path = "crates/html-preview" }
 agent-client-protocol = "0.14.0"
 public_mcp = { path = "crates/public_mcp" }
