@@ -175,9 +175,28 @@ impl TerminalView {
             }
         };
         if let Some(source) = reconnect_source {
+            let runtime_connection =
+                match connection_form::credential::resolve_connection_for_runtime(
+                    source.connection.clone(),
+                    cx,
+                ) {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        tracing::error!(%error, "Failed to resolve latest SSH credentials for reconnect");
+                        window.push_notification(
+                            Notification::error(
+                                t!("TerminalView.reconnect_load_latest_failed", error = error)
+                                    .to_string(),
+                            )
+                            .autohide(true),
+                            cx,
+                        );
+                        return;
+                    }
+                };
             let apply_result = self.terminal.update(cx, |terminal, _cx| {
                 terminal.apply_ssh_connection_update(SshConnectionUpdate {
-                    connection: source.connection.clone(),
+                    connection: runtime_connection,
                     working_dir: source.working_dir.clone(),
                     sync_path_with_terminal: source.sync_path_with_terminal,
                 })

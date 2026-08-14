@@ -38,7 +38,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, FunctionalIcon, Icon, IconName, IconSize, ObjectIcon, Selectable, Sizable, Size,
-    button::{IconButton, IconButtonRole},
+    button::{ButtonCustomVariant, ButtonVariants, IconButton, IconButtonRole},
     h_flex,
     panel_header::{PanelHeader, PanelHeaderVariant},
     v_flex,
@@ -327,10 +327,26 @@ fn terminal_toolbar_icon_button(
     panel: SidebarPanel,
     selected: bool,
     item_size: Size,
+    colors: &TerminalColors,
+    cx: &App,
 ) -> IconButton {
+    let style = if selected {
+        ButtonCustomVariant::new(cx)
+            .color(colors.accent)
+            .foreground(colors.accent_foreground)
+            .hover(colors.accent)
+            .active(colors.accent)
+    } else {
+        ButtonCustomVariant::new(cx)
+            .foreground(colors.foreground)
+            .hover(colors.muted)
+            .active(colors.muted)
+    };
+
     IconButton::new(id, panel.icon())
         .hit_size(item_size)
         .glyph_size(IconSize::Medium)
+        .custom(style)
         .selected(selected)
         .tooltip(panel.title())
 }
@@ -1358,6 +1374,8 @@ impl TerminalSidebar {
             panel,
             is_active,
             item_size,
+            &self.colors,
+            cx,
         )
         .on_click(cx.listener(move |this, _event, _window, cx| {
             this.toggle_panel(panel, cx);
@@ -1483,6 +1501,8 @@ impl TerminalSidebarToolbar {
         &self,
         button: TerminalToolbarButtonSnapshot,
         item_size: Size,
+        colors: &TerminalColors,
+        cx: &App,
     ) -> impl IntoElement {
         let sidebar = self.sidebar.clone();
         let panel = button.panel;
@@ -1492,6 +1512,8 @@ impl TerminalSidebarToolbar {
             panel,
             button.open,
             item_size,
+            colors,
+            cx,
         )
         .on_click(move |_, _window, cx| {
             sidebar.update(cx, |sidebar, cx| {
@@ -1519,7 +1541,7 @@ impl Render for TerminalSidebarToolbar {
                         .buttons
                         .iter()
                         .copied()
-                        .map(|button| self.render_button(button, item_size)),
+                        .map(|button| self.render_button(button, item_size, &snapshot.colors, cx)),
                 ),
             )
     }

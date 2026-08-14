@@ -1,5 +1,7 @@
 //! Redis 树形视图事件处理
 
+use connection_form::credential::resolve_connection_for_runtime;
+
 use crate::RedisManager;
 use crate::create_key_dialog::CreateKeyDialog;
 use crate::key_value_view::{KeyValueView, KeyValueViewEvent};
@@ -214,9 +216,17 @@ impl RedisEventHandler {
         db_index: u8,
         stored_connection: one_core::storage::StoredConnection,
         tab_container: Entity<TabContainer>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) {
+        let stored_connection = match resolve_connection_for_runtime(stored_connection, cx) {
+            Ok(connection) => connection,
+            Err(error) => {
+                Self::show_error(window, error, cx);
+                return;
+            }
+        };
+
         // 生成唯一的标签页 ID（仍使用原连接 ID 作为稳定标识）
         let tab_id = format!("redis-cli-{}-db{}", connection_id, db_index);
         let global_state = cx.global::<GlobalRedisState>().clone();

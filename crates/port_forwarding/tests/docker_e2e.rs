@@ -202,6 +202,7 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
             port,
             username,
             auth_method: SshAuthMethod::Password { password },
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,

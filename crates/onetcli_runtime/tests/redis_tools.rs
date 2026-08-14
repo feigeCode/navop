@@ -172,6 +172,7 @@ fn mysql() -> DbConnectionConfig {
         port: 3306,
         username: "app".to_string(),
         password: String::new(),
+        credential_reference: None,
         database: None,
         service_name: None,
         sid: None,

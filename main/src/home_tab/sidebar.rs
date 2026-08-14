@@ -121,6 +121,14 @@ impl HomePage {
                         cx,
                     ))
                     .child(self.render_legacy_sidebar_button(
+                        "legacy-open-credential-vault",
+                        IconName::Key,
+                        t!("Home.credential_vault").to_string(),
+                        collapsed,
+                        |home, window, cx| home.add_credential_vault_tab(window, cx),
+                        cx,
+                    ))
+                    .child(self.render_legacy_sidebar_button(
                         "legacy-open-extensions",
                         IconName::ExtensionsColor,
                         t!("Home.extensions").to_string(),

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use connection_form::credential::resolve_connection_for_runtime;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
@@ -508,6 +509,19 @@ impl RedisTreeView {
                 t!("RedisTree.connection_config_missing", node_id = node_id).to_string()
             );
             return;
+        };
+        let connection = match resolve_connection_for_runtime(connection, cx) {
+            Ok(connection) => connection,
+            Err(error) => {
+                warn!(
+                    node_id,
+                    %error,
+                    "Failed to resolve Redis credentials before connecting"
+                );
+                self.error_nodes.insert(node_id, error);
+                cx.notify();
+                return;
+            }
         };
 
         info!(

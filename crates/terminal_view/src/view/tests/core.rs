@@ -61,6 +61,7 @@ fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
             port: 22,
             username: "user".to_string(),
             auth_method: SshAuthMethod::Agent,
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -187,6 +188,7 @@ fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
             port: 22,
             username: "user".to_string(),
             auth_method: SshAuthMethod::Agent,
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -240,6 +242,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
             auth_method: SshAuthMethod::Password {
                 password: "wrong-password".to_string(),
             },
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -269,6 +272,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
         auth_method: SshAuthMethod::Password {
             password: "correct-password".to_string(),
         },
+        credential_reference: None,
         prompt_username: None,
         prompt_password: None,
         keyboard_interactive: None,

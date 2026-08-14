@@ -72,6 +72,7 @@ pub(super) fn build_remote_desktop(
         audio_playback: protocol == RemoteDesktopProtocol::Rdp
             && optional_bool(values, "audio_playback").unwrap_or(false),
         proxy: None,
+        credential_reference: None,
     };
     Ok(with_common_fields(
         StoredConnection::new_remote_desktop(

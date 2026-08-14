@@ -1,6 +1,8 @@
 mod command_io;
 mod input;
 mod schema;
+#[cfg(test)]
+mod tests;
 
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, ConnectionType, RedisMode, RedisParams};
@@ -143,7 +145,11 @@ impl RedisToolHandler {
                 message: format!("connection is not redis: {connection}"),
             });
         }
-        stored.to_redis_params().map_err(tool_error)
+        let resolved = self
+            .repo
+            .resolve_runtime_connection(&stored)
+            .map_err(tool_error)?;
+        resolved.to_redis_params().map_err(tool_error)
     }
 }
 

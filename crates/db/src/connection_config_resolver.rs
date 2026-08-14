@@ -23,11 +23,21 @@ impl ConnectionConfigResolver {
                     "ssh_connection_id is set but ConnectionRepository is unavailable",
                 )
             })?;
-            repo.get(ssh_id).map_err(|error| {
+            let connection = repo.get(ssh_id).map_err(|error| {
                 DbError::connection(format!(
                     "failed to load referenced ssh connection {ssh_id}: {error}"
                 ))
-            })
+            })?;
+            connection
+                .map(|connection| {
+                    repo.resolve_runtime_connection(&connection)
+                        .map_err(|error| {
+                            DbError::connection(format!(
+                                "failed to resolve referenced ssh connection {ssh_id}: {error}"
+                            ))
+                        })
+                })
+                .transpose()
         })
     }
 
@@ -96,6 +106,7 @@ mod tests {
             sid: None,
             workspace_id: Some(7),
             proxy: None,
+            credential_reference: None,
             extra_params,
         }
     }
@@ -133,6 +144,7 @@ mod tests {
                 allow_legacy_algorithms: None,
                 jump_server: None,
                 proxy: None,
+                credential_reference: None,
                 os_id: None,
                 icon: None,
             },

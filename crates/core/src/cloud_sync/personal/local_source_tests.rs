@@ -190,6 +190,7 @@ impl Fixture {
             workspace_id: None,
             proxy: None,
             extra_params: Default::default(),
+            credential_reference: None,
         };
         let mut conn = StoredConnection::new_database(name.to_string(), params, None);
         conn.team_id = team_id.map(str::to_string);

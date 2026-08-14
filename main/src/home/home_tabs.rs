@@ -1,4 +1,5 @@
-use crate::home_tab::HomePage;
+use crate::credential_vault::CredentialVaultView;
+use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
 use crate::onetcli_app::{GlobalOnetCliApp, GlobalTabContainer};
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
@@ -16,6 +17,7 @@ use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
 use rust_i18n::t;
 use sftp_view::{SftpView, SftpViewEvent};
+use std::collections::HashSet;
 use terminal::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
@@ -52,12 +54,69 @@ fn redis_tab_open_context(
     }
 }
 
+fn database_tab_connection_context(
+    open_mode: DatabaseOpenMode,
+    active_connection: &StoredConnection,
+    workspace_id: Option<i64>,
+    all_connections: &[StoredConnection],
+    mut resolve: impl FnMut(&StoredConnection) -> Option<StoredConnection>,
+) -> Option<(StoredConnection, Vec<StoredConnection>)> {
+    let active_connection_id = active_connection.id;
+    let active_connection = resolve(active_connection)?;
+    let connections = match (open_mode, workspace_id) {
+        (DatabaseOpenMode::Workspace, Some(workspace_id)) => {
+            let mut connections = Vec::new();
+            let mut active_connection_included = false;
+            let mut seen_connection_ids = HashSet::new();
+
+            for candidate in all_connections
+                .iter()
+                .filter(|candidate| candidate.workspace_id == Some(workspace_id))
+                .filter(|candidate| candidate.connection_type == ConnectionType::Database)
+            {
+                // Workspace connections come from persistent storage and should have stable IDs.
+                // Treating multiple `None` IDs as equal would incorrectly duplicate the active
+                // runtime connection and could leak an unresolved candidate into the tab.
+                let Some(candidate_id) = candidate.id else {
+                    continue;
+                };
+
+                if active_connection_id == Some(candidate_id) {
+                    if !active_connection_included {
+                        seen_connection_ids.insert(candidate_id);
+                        connections.push(active_connection.clone());
+                        active_connection_included = true;
+                    }
+                    continue;
+                }
+
+                if seen_connection_ids.contains(&candidate_id) {
+                    continue;
+                }
+
+                if let Some(connection) = resolve(candidate) {
+                    seen_connection_ids.insert(candidate_id);
+                    connections.push(connection);
+                }
+            }
+
+            if !active_connection_included {
+                connections.push(active_connection.clone());
+            }
+            connections
+        }
+        _ => vec![active_connection.clone()],
+    };
+
+    Some((active_connection, connections))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use one_core::storage::{
-        ProxyConfig, ProxyType, RedisMode, RedisParams, RemoteDesktopParams,
-        RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
+        DatabaseType, DbConnectionConfig, ProxyConfig, ProxyType, RedisMode, RedisParams,
+        RemoteDesktopParams, RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
     };
 
     fn redis_connection(id: i64, name: &str, workspace_id: Option<i64>) -> StoredConnection {
@@ -66,6 +125,7 @@ mod tests {
             port: 6379,
             password: None,
             username: None,
+            credential_reference: None,
             db_index: 0,
             mode: RedisMode::Standalone,
             use_tls: false,
@@ -83,6 +143,220 @@ mod tests {
         let mut workspace = Workspace::new(name.to_string());
         workspace.id = Some(id);
         workspace
+    }
+
+    fn database_connection(
+        id: Option<i64>,
+        name: &str,
+        workspace_id: Option<i64>,
+    ) -> StoredConnection {
+        let mut connection = StoredConnection::new_database(
+            name.to_string(),
+            DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::MySQL,
+                name: name.to_string(),
+                host: "localhost".to_string(),
+                port: 3306,
+                username: "stored-user".to_string(),
+                password: "stored-password".to_string(),
+                credential_reference: None,
+                database: None,
+                service_name: None,
+                sid: None,
+                workspace_id,
+                proxy: None,
+                extra_params: Default::default(),
+            },
+            workspace_id,
+        );
+        connection.id = id;
+        connection
+    }
+
+    #[test]
+    fn database_single_mode_resolves_the_active_connection() {
+        let active = database_connection(Some(1), "active", Some(7));
+        let mut resolved_ids = Vec::new();
+
+        let (resolved_active, connections) = database_tab_connection_context(
+            DatabaseOpenMode::Single,
+            &active,
+            Some(7),
+            &[active.clone()],
+            |connection| {
+                resolved_ids.push(connection.id);
+                let mut connection = connection.clone();
+                connection.name = format!("resolved-{}", connection.name);
+                Some(connection)
+            },
+        )
+        .expect("active connection should resolve");
+
+        assert_eq!(vec![Some(1)], resolved_ids);
+        assert_eq!("resolved-active", resolved_active.name);
+        assert_eq!(vec!["resolved-active"], connection_names(&connections));
+    }
+
+    #[test]
+    fn database_workspace_mode_resolves_active_once_and_skips_failed_or_duplicate_peers() {
+        let active = database_connection(Some(1), "active", Some(7));
+        let failed_peer = database_connection(Some(2), "failed-peer", Some(7));
+        let peer = database_connection(Some(3), "peer", Some(7));
+        let duplicate_peer = database_connection(Some(3), "duplicate-peer", Some(7));
+        let all_connections = vec![
+            active.clone(),
+            active.clone(),
+            failed_peer,
+            peer,
+            duplicate_peer,
+        ];
+        let mut resolved_ids = Vec::new();
+
+        let (resolved_active, connections) = database_tab_connection_context(
+            DatabaseOpenMode::Workspace,
+            &active,
+            Some(7),
+            &all_connections,
+            |connection| {
+                resolved_ids.push(connection.id);
+                if connection.id == Some(2) {
+                    return None;
+                }
+                let mut connection = connection.clone();
+                connection.name = format!("resolved-{}", connection.name);
+                Some(connection)
+            },
+        )
+        .expect("active connection should resolve");
+
+        assert_eq!(vec![Some(1), Some(2), Some(3)], resolved_ids);
+        assert_eq!("resolved-active", resolved_active.name);
+        assert_eq!(
+            vec![Some(1), Some(3)],
+            connections
+                .iter()
+                .map(|connection| connection.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec!["resolved-active", "resolved-peer"],
+            connection_names(&connections)
+        );
+    }
+
+    #[test]
+    fn database_workspace_mode_does_not_treat_none_ids_as_the_active_connection() {
+        let active = database_connection(None, "active", Some(7));
+        let anonymous_peer = database_connection(None, "anonymous-peer", Some(7));
+        let persisted_peer = database_connection(Some(2), "persisted-peer", Some(7));
+        let all_connections = vec![anonymous_peer, persisted_peer];
+        let mut resolved_names = Vec::new();
+
+        let (resolved_active, connections) = database_tab_connection_context(
+            DatabaseOpenMode::Workspace,
+            &active,
+            Some(7),
+            &all_connections,
+            |connection| {
+                resolved_names.push(connection.name.clone());
+                let mut connection = connection.clone();
+                connection.name = format!("resolved-{}", connection.name);
+                Some(connection)
+            },
+        )
+        .expect("active connection should resolve");
+
+        assert_eq!("resolved-active", resolved_active.name);
+        assert_eq!(
+            vec![Some(2), None],
+            connections
+                .iter()
+                .map(|connection| connection.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec!["resolved-persisted-peer", "resolved-active"],
+            connection_names(&connections)
+        );
+        assert_eq!(vec!["active", "persisted-peer"], resolved_names);
+    }
+
+    #[test]
+    fn database_workspace_mode_without_workspace_id_uses_only_the_resolved_active_connection() {
+        let active = database_connection(Some(1), "active", None);
+        let peer = database_connection(Some(2), "peer", Some(7));
+        let mut resolved_ids = Vec::new();
+
+        let (resolved_active, connections) = database_tab_connection_context(
+            DatabaseOpenMode::Workspace,
+            &active,
+            None,
+            &[peer],
+            |connection| {
+                resolved_ids.push(connection.id);
+                let mut connection = connection.clone();
+                connection.name = format!("resolved-{}", connection.name);
+                Some(connection)
+            },
+        )
+        .expect("active connection should resolve");
+
+        assert_eq!(vec![Some(1)], resolved_ids);
+        assert_eq!("resolved-active", resolved_active.name);
+        assert_eq!(vec!["resolved-active"], connection_names(&connections));
+    }
+
+    #[test]
+    fn database_workspace_mode_filters_other_workspaces_and_connection_types() {
+        let active = database_connection(Some(1), "active", Some(7));
+        let peer = database_connection(Some(2), "peer", Some(7));
+        let other_workspace = database_connection(Some(3), "other-workspace", Some(8));
+        let redis = redis_connection(4, "redis", Some(7));
+        let mut resolved_ids = Vec::new();
+
+        let (_, connections) = database_tab_connection_context(
+            DatabaseOpenMode::Workspace,
+            &active,
+            Some(7),
+            &[active.clone(), peer, other_workspace, redis],
+            |connection| {
+                resolved_ids.push(connection.id);
+                Some(connection.clone())
+            },
+        )
+        .expect("active connection should resolve");
+
+        assert_eq!(vec![Some(1), Some(2)], resolved_ids);
+        assert_eq!(
+            vec![Some(1), Some(2)],
+            connections
+                .iter()
+                .map(|connection| connection.id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn database_tab_open_fails_closed_when_active_resolution_fails() {
+        let active = database_connection(Some(1), "active", Some(7));
+
+        let context = database_tab_connection_context(
+            DatabaseOpenMode::Workspace,
+            &active,
+            Some(7),
+            &[active.clone()],
+            |_| None,
+        );
+
+        assert!(context.is_none());
+    }
+
+    fn connection_names(connections: &[StoredConnection]) -> Vec<&str> {
+        connections
+            .iter()
+            .map(|connection| connection.name.as_str())
+            .collect()
     }
 
     #[test]
@@ -114,11 +388,60 @@ mod tests {
     }
 
     #[test]
-    fn notes_sidebar_entry_precedes_extensions() {
+    fn credential_vault_opens_from_both_home_styles_as_a_stable_tab() {
+        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
+        let toolbar_source = include_str!("../home_tab/toolbar.rs");
+        let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
+        let persistent_sidebar_source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let modern_home_source = include_str!("../home_tab/modern_home.rs");
+        let settings_source = include_str!("../setting_tab.rs");
+        let actions_source = include_str!("../credential_vault/actions.rs");
+
+        assert!(tabs_source.contains("fn add_credential_vault_tab"));
+        assert!(
+            tabs_source
+                .contains("activate_or_add_tab_lazy(\n                    \"credential-vault\"")
+        );
+        assert!(tabs_source.contains("TabItem::new(\"credential-vault\", \"home\", vault)"));
+        assert!(legacy_sidebar_source.contains("\"legacy-open-credential-vault\""));
+        assert!(legacy_sidebar_source.contains("home.add_credential_vault_tab(window, cx)"));
+        assert!(!persistent_sidebar_source.contains("\"persistent-open-credential-vault\""));
+        assert!(modern_home_source.contains("\"modern-home-credential-vault\""));
+        assert!(modern_home_source.contains("home.add_credential_vault_tab(window, cx)"));
+        assert!(!toolbar_source.contains("\"credential-vault-button\""));
+        assert!(!toolbar_source.contains("add_credential_vault_tab"));
+        assert!(!settings_source.contains("SettingPage::new(\"钥匙串\")"));
+        assert!(actions_source.contains("open_popup_window("));
+        assert!(!actions_source.contains("open_dialog("));
+    }
+
+    #[test]
+    fn persistent_sidebar_notes_entry_precedes_extensions() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let notes = source.find("\"persistent-open-notes\"").unwrap();
         let extensions = source.find("\"persistent-open-extensions\"").unwrap();
         assert!(notes < extensions);
+    }
+
+    #[test]
+    fn legacy_sidebar_and_modern_card_place_credential_vault_with_workspace_tools() {
+        let legacy_source = include_str!("../home_tab/sidebar.rs");
+        let legacy_notes = legacy_source.find("\"legacy-open-notes\"").unwrap();
+        let legacy_vault = legacy_source
+            .find("\"legacy-open-credential-vault\"")
+            .unwrap();
+        let legacy_extensions = legacy_source.find("\"legacy-open-extensions\"").unwrap();
+        assert!(legacy_notes < legacy_vault);
+        assert!(legacy_vault < legacy_extensions);
+
+        let modern_source = include_str!("../home_tab/modern_home.rs");
+        let modern_notes = modern_source.find("\"modern-home-notes\"").unwrap();
+        let modern_vault = modern_source
+            .find("\"modern-home-credential-vault\"")
+            .unwrap();
+        let modern_extensions = modern_source.find("\"modern-home-extensions\"").unwrap();
+        assert!(modern_notes < modern_vault);
+        assert!(modern_vault < modern_extensions);
     }
 
     #[test]
@@ -314,6 +637,7 @@ mod tests {
                 port: 3389,
                 username: None,
                 password: None,
+                credential_reference: None,
                 domain: None,
                 read_only: false,
                 audio_playback: true,
@@ -323,6 +647,7 @@ mod tests {
                     port: 8080,
                     username: Some("alice".to_string()),
                     password: Some("secret".to_string()),
+                    credential_reference: None,
                 }),
             },
             None,
@@ -347,6 +672,7 @@ mod tests {
                 port: 5900,
                 username: None,
                 password: None,
+                credential_reference: None,
                 domain: None,
                 read_only: false,
                 audio_playback: true,
@@ -905,6 +1231,23 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn add_credential_vault_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "credential-vault",
+                    |window, cx| {
+                        let vault = cx.new(|cx| CredentialVaultView::new(window, cx));
+                        TabItem::new("credential-vault", "home", vault)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     pub(crate) fn add_ai_workbench_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
         let (scope, catalog, mentions) =
@@ -1041,16 +1384,14 @@ impl HomePage {
         // 在 defer 之前准备所有需要的数据，避免在 HomePage 更新期间
         // 触发 on_deactivate 导致双重借用 panic
         let workspace_id = workspace.as_ref().and_then(|w| w.id);
-        let conn_clone = conn.clone();
-        let connections: Vec<StoredConnection> = match open_mode {
-            DatabaseOpenMode::Workspace if workspace_id.is_some() => self
-                .connections
-                .iter()
-                .filter(|c| c.workspace_id == workspace_id)
-                .filter(|c| c.connection_type == ConnectionType::Database)
-                .cloned()
-                .collect(),
-            _ => vec![conn.clone()],
+        let Some((conn_clone, connections)) = database_tab_connection_context(
+            open_mode,
+            conn,
+            workspace_id,
+            &self.connections,
+            |connection| resolve_connection_credentials(connection, window, cx),
+        ) else {
+            return;
         };
 
         let tab_container = self.active_tab_container(cx);

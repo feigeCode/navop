@@ -4530,6 +4530,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "latest-password".to_string(),
                 },
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,
@@ -4592,6 +4593,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "stored-password".to_string(),
                 },
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,
@@ -4661,6 +4663,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "password".to_string(),
                 },
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: Some(false),
@@ -4716,6 +4719,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "stored-password".to_string(),
                 },
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,

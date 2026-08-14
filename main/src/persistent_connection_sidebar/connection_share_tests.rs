@@ -15,6 +15,7 @@ fn ssh_connection() -> StoredConnection {
             auth_method: SshAuthMethod::Password {
                 password: "super-secret".to_string(),
             },
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -65,6 +66,7 @@ fn mongodb_template_never_uses_credentialed_connection_string() {
             database: Some("app".to_string()),
             username: Some("admin".to_string()),
             password: Some("secret".to_string()),
+            credential_reference: None,
             auth_source: Some("admin".to_string()),
             replica_set: Some("rs0".to_string()),
             read_preference: None,
@@ -96,6 +98,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
                 private_key: "TARGET PRIVATE KEY BODY".to_string(),
                 passphrase: Some("target-passphrase".to_string()),
             },
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -116,6 +119,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
                 auth_method: SshAuthMethod::Password {
                     password: "jump-password".to_string(),
                 },
+                credential_reference: None,
             }),
             proxy: Some(ProxyConfig {
                 proxy_type: ProxyType::Socks5,
@@ -123,6 +127,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
                 port: 1080,
                 username: Some("proxy-user".to_string()),
                 password: Some("proxy-password".to_string()),
+                credential_reference: None,
             }),
             os_id: None,
             icon: None,
@@ -153,6 +158,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
                 private_key: "TARGET PRIVATE KEY BODY".to_string(),
                 passphrase: Some("target-passphrase".to_string()),
             },
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -173,6 +179,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
                 auth_method: SshAuthMethod::Password {
                     password: "jump-password".to_string(),
                 },
+                credential_reference: None,
             }),
             proxy: Some(ProxyConfig {
                 proxy_type: ProxyType::Http,
@@ -180,6 +187,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
                 port: 8080,
                 username: Some("proxy-user".to_string()),
                 password: Some("proxy-password".to_string()),
+                credential_reference: None,
             }),
             os_id: None,
             icon: None,

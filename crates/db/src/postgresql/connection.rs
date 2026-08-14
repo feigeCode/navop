@@ -1998,6 +1998,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params: extra_params
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))

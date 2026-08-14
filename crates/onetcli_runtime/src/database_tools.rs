@@ -1,5 +1,7 @@
 mod metadata;
 mod schema;
+#[cfg(test)]
+mod tests;
 
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, ConnectionType, DbConnectionConfig};
@@ -151,7 +153,11 @@ impl DatabaseToolHandler {
                 message: format!("connection is not database: {connection}"),
             });
         }
-        stored.to_db_connection().map_err(tool_error)
+        let resolved = self
+            .repo
+            .resolve_runtime_connection(&stored)
+            .map_err(tool_error)?;
+        resolved.to_db_connection().map_err(tool_error)
     }
 
     pub(super) async fn open_database(&self, input: &Value) -> Result<OpenedDatabase, ToolError> {

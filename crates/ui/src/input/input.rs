@@ -11,6 +11,7 @@ use crate::button::{Button, ButtonVariants as _};
 use crate::highlighter::HighlightTheme;
 use crate::input::clear_button;
 use crate::menu::PopupMenu;
+use crate::scroll::ScrollbarShow;
 use crate::spinner::Spinner;
 use crate::{ActiveTheme, Colorize, v_flex};
 use crate::{IconName, Size};
@@ -96,6 +97,7 @@ pub struct Input {
     selected: bool,
     bare: bool,
     editor_scrollbar: bool,
+    editor_scrollbar_show: Option<ScrollbarShow>,
     text_layout_margin: bool,
     vertical_navigation_enabled: bool,
 
@@ -149,6 +151,7 @@ impl Input {
             selected: false,
             bare: false,
             editor_scrollbar: true,
+            editor_scrollbar_show: None,
             text_layout_margin: true,
             vertical_navigation_enabled: true,
             context_menu_builder: None,
@@ -235,6 +238,12 @@ impl Input {
         self
     }
 
+    /// Override how the scrollbar embedded in a multi-line editor is displayed.
+    pub fn editor_scrollbar_show(mut self, show: ScrollbarShow) -> Self {
+        self.editor_scrollbar_show = Some(show);
+        self
+    }
+
     /// Set whether the text layout reserves the editor's trailing safety margin.
     pub fn text_layout_margin(mut self, enabled: bool) -> Self {
         self.text_layout_margin = enabled;
@@ -313,6 +322,7 @@ impl Input {
         input_state: &Entity<InputState>,
         state: &InputState,
         editor_scrollbar: bool,
+        editor_scrollbar_show: Option<ScrollbarShow>,
         window: &Window,
     ) -> impl IntoElement {
         let base_size = window.text_style().font_size;
@@ -360,7 +370,10 @@ impl Input {
                             .child(input_state.clone()),
                     )
                     .when(editor_scrollbar, |this| {
-                        this.child(EditorScrollbar::new(input_state.clone()))
+                        this.child(EditorScrollbar::new(
+                            input_state.clone(),
+                            editor_scrollbar_show,
+                        ))
                     }),
             )
     }
@@ -550,6 +563,7 @@ impl RenderOnce for Input {
                     &self.state,
                     &state,
                     self.editor_scrollbar,
+                    self.editor_scrollbar_show,
                     window,
                 ))
             })

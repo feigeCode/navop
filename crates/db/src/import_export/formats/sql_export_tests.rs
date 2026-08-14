@@ -111,6 +111,7 @@ fn test_config() -> DbConnectionConfig {
         sid: None,
         workspace_id: None,
         proxy: None,
+        credential_reference: None,
         extra_params: Default::default(),
     }
 }
@@ -243,6 +244,7 @@ fn sqlite_config(id: &str, path: &std::path::Path) -> DbConnectionConfig {
         sid: None,
         workspace_id: None,
         proxy: None,
+        credential_reference: None,
         extra_params: Default::default(),
     }
 }

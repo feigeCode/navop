@@ -761,6 +761,7 @@ mod tests {
             service_name: None,
             sid: None,
             proxy: None,
+            credential_reference: None,
             extra_params: Default::default(),
         })
     }

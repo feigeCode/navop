@@ -997,6 +997,7 @@ mod tests {
             port: 0,
             username: String::new(),
             password: String::new(),
+            credential_reference: None,
             database: None,
             service_name: None,
             sid: None,

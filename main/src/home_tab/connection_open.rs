@@ -97,7 +97,9 @@ impl HomePage {
             return;
         }
 
-        let connection = connection.clone();
+        let Some(connection) = resolve_connection_credentials(connection, window, cx) else {
+            return;
+        };
         self.selected_connection_id = connection.id;
         self.touch_connection_last_used(connection.id, cx);
         let workspace = connection
@@ -123,7 +125,9 @@ impl HomePage {
             ConnectionType::Vnc => remote_desktop::RemoteDesktopProtocol::Vnc,
             _ => return,
         };
-        let connection = connection.clone();
+        let Some(connection) = resolve_connection_credentials(connection, window, cx) else {
+            return;
+        };
         self.selected_connection_id = connection.id;
         self.touch_connection_last_used(connection.id, cx);
         extension_runtime::remote_desktop_provider_install::run_with_remote_desktop_provider_guard(
@@ -171,5 +175,33 @@ impl HomePage {
             return;
         }
         self.load_connections(cx);
+    }
+}
+
+pub(crate) fn resolve_connection_credentials(
+    connection: &StoredConnection,
+    window: &mut Window,
+    cx: &mut Context<HomePage>,
+) -> Option<StoredConnection> {
+    let result = cx
+        .global::<GlobalStorageState>()
+        .storage
+        .get::<ConnectionRepository>()
+        .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))
+        .and_then(|repository| repository.resolve_runtime_connection(connection));
+    match result {
+        Ok(connection) => Some(connection),
+        Err(error) => {
+            tracing::warn!(
+                connection_id = ?connection.id,
+                error = %error,
+                "无法解析连接引用的凭据"
+            );
+            window.push_notification(
+                Notification::error(format!("无法解析连接凭据：{error:#}")).autohide(true),
+                cx,
+            );
+            None
+        }
     }
 }

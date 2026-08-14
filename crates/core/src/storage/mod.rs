@@ -1,4 +1,5 @@
 pub mod connection;
+pub mod credential_vault;
 pub mod demo_database;
 pub mod manager;
 pub mod migration;
@@ -21,6 +22,7 @@ mod team_key_cache_tests;
 #[path = "quick_command_defaults_tests.rs"]
 mod quick_command_defaults_tests;
 
+pub use credential_vault::*;
 use gpui::App;
 pub use manager::*;
 pub use models::*;

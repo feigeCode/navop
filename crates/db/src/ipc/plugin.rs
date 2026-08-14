@@ -2207,6 +2207,7 @@ mod tests {
                     sid: None,
                     workspace_id: None,
                     proxy: None,
+                    credential_reference: None,
                     extra_params: Default::default(),
                 },
                 supports_alter_table_builder: true,
@@ -2486,6 +2487,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params: Default::default(),
         };
 
@@ -2739,6 +2741,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params: Default::default(),
         };
 
@@ -2780,6 +2783,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params: Default::default(),
         };
 
@@ -2804,6 +2808,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params: Default::default(),
         };
         config
@@ -3048,6 +3053,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params,
         };
 

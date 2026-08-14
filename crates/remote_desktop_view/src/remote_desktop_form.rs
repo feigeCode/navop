@@ -5,11 +5,15 @@ mod proxy;
 mod selects;
 mod view;
 
+use connection_form::credential::{
+    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker,
+};
 use connection_form::team::{
     TeamSelectItem, create_team_select, refresh_team_options, resolve_team_assignment,
     selected_team_id,
 };
-use gpui::{App, Context, Entity, FocusHandle, Window};
+use gpui::{App, Context, Entity, FocusHandle, Subscription, Window};
 use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
 use one_core::cloud_sync::TeamOption;
@@ -43,11 +47,13 @@ pub struct RemoteDesktopFormWindow {
     port_input: Entity<InputState>,
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
+    credential_picker: Entity<CredentialReferencePicker>,
     domain_input: Entity<InputState>,
     proxy_host_input: Entity<InputState>,
     proxy_port_input: Entity<InputState>,
     proxy_username_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
+    proxy_credential_picker: Entity<CredentialReferencePicker>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     read_only: bool,
@@ -57,6 +63,7 @@ pub struct RemoteDesktopFormWindow {
     sync_enabled: bool,
     connection_test: ConnectionTestState,
     error: Option<String>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl RemoteDesktopFormWindow {
@@ -79,6 +86,46 @@ impl RemoteDesktopFormWindow {
         let is_editing = config.editing_connection.is_some();
         let inputs = create_inputs(config.protocol, window, cx);
         let editing_connection = config.editing_connection.clone();
+        let editing_params = config
+            .editing_connection
+            .as_ref()
+            .and_then(|connection| connection.to_remote_desktop_params().ok());
+        let credential_picker = create_credential_picker(
+            CredentialPickerConfig::new(
+                "remote-desktop-credential",
+                CredentialCapabilities::login(),
+            )
+            .reference(
+                editing_params
+                    .as_ref()
+                    .and_then(|params| params.credential_reference),
+            ),
+            window,
+            cx,
+        );
+        let proxy_credential_picker = create_credential_picker(
+            CredentialPickerConfig::new(
+                "remote-desktop-proxy-credential",
+                CredentialCapabilities::login(),
+            )
+            .reference(
+                editing_params
+                    .as_ref()
+                    .and_then(|params| params.proxy.as_ref())
+                    .and_then(|proxy| proxy.credential_reference),
+            ),
+            window,
+            cx,
+        );
+        let subscriptions = vec![
+            cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
+                cx.notify()
+            }),
+            cx.subscribe(
+                &proxy_credential_picker,
+                |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
+            ),
+        ];
         Self {
             protocol: config.protocol,
             focus_handle: cx.focus_handle(),
@@ -98,11 +145,13 @@ impl RemoteDesktopFormWindow {
             port_input: inputs.port,
             username_input: inputs.username,
             password_input: inputs.password,
+            credential_picker,
             domain_input: inputs.domain,
             proxy_host_input: inputs.proxy_host,
             proxy_port_input: inputs.proxy_port,
             proxy_username_input: inputs.proxy_username,
             proxy_password_input: inputs.proxy_password,
+            proxy_credential_picker,
             workspace_select: create_workspace_select(&config, window, cx),
             team_select: create_team_select(&config.teams, None, window, cx),
             read_only: false,
@@ -116,6 +165,7 @@ impl RemoteDesktopFormWindow {
                 .unwrap_or(true),
             connection_test: ConnectionTestState::default(),
             error: None,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -147,6 +197,9 @@ impl RemoteDesktopFormWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.credential_picker.update(cx, |picker, cx| {
+            picker.set_reference(params.credential_reference, window, cx)
+        });
         let host = params.host;
         let username = params.username.unwrap_or_default();
         let password = params.password.unwrap_or_default();
@@ -180,6 +233,7 @@ impl RemoteDesktopFormWindow {
             &input_text(&self.proxy_port_input, cx),
             &input_text(&self.proxy_username_input, cx),
             &input_text(&self.proxy_password_input, cx),
+            self.proxy_credential_picker.read(cx).selected_reference(),
         )
         .map_err(proxy::proxy_error_message)?;
         Ok(RemoteDesktopParams {
@@ -192,6 +246,7 @@ impl RemoteDesktopFormWindow {
             read_only: self.read_only,
             audio_playback: audio_playback_for_protocol(self.protocol, self.audio_playback),
             proxy,
+            credential_reference: self.credential_picker.read(cx).selected_reference(),
         })
     }
 

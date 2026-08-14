@@ -1,5 +1,6 @@
 use crate::cloud_sync::sync_type::SyncableItem;
 use crate::crypto;
+use crate::storage::credential_vault::CredentialReference;
 use crate::storage::traits::Entity;
 use connection_tunnel::SshTunnelConfig;
 use gpui::Global;
@@ -332,6 +333,9 @@ pub struct SshParams {
     pub port: u16,
     pub username: String,
     pub auth_method: SshAuthMethod,
+    /// Optional field-level reference to the local credential vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
     /// 不持久化用户名，每次建立连接前由用户输入。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_username: Option<bool>,
@@ -487,6 +491,8 @@ pub struct RemoteDesktopParams {
     pub port: u16,
     pub username: Option<String>,
     pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
     pub domain: Option<String>,
     #[serde(default)]
     pub read_only: bool,
@@ -503,6 +509,8 @@ pub struct JumpServerConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: SshAuthMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
 }
 
 /// 代理类型
@@ -522,6 +530,8 @@ pub struct ProxyConfig {
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
 }
 
 impl fmt::Debug for ProxyConfig {
@@ -533,6 +543,7 @@ impl fmt::Debug for ProxyConfig {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("credential_reference", &self.credential_reference)
             .finish()
     }
 }
@@ -575,6 +586,8 @@ pub struct RedisSentinelConfig {
     pub sentinels: Vec<String>,
     /// 哨兵密码
     pub sentinel_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
 }
 
 /// Redis 集群节点
@@ -593,6 +606,8 @@ pub struct RedisParams {
     pub port: u16,
     pub password: Option<String>,
     pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
     pub db_index: u8,
     /// 连接模式
     #[serde(default)]
@@ -728,6 +743,8 @@ pub struct MongoDBParams {
     pub username: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
     #[serde(default)]
     pub auth_source: Option<String>,
     #[serde(default)]
@@ -968,6 +985,8 @@ pub struct DbConnectionConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
     pub database: Option<String>,
     pub service_name: Option<String>,
     pub sid: Option<String>,
@@ -1654,6 +1673,7 @@ mod tests {
                 port: 2222,
                 username: "deploy".to_string(),
                 auth_method,
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,
@@ -1714,6 +1734,7 @@ mod tests {
             workspace_id: Some(7),
             proxy: None,
             extra_params,
+            credential_reference: None,
         }
     }
 
@@ -1745,6 +1766,7 @@ mod tests {
             port: 8080,
             username: Some("alice".to_string()),
             password: Some("secret".to_string()),
+            credential_reference: None,
         });
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1766,6 +1788,7 @@ mod tests {
             port: 1080,
             username: None,
             password: None,
+            credential_reference: None,
         });
 
         assert!(original.is_change(&proxied));
@@ -1781,6 +1804,7 @@ mod tests {
             port: 1080,
             username: Some("alice".to_string()),
             password: Some("secret".to_string()),
+            credential_reference: None,
         });
         ssh.params = serde_json::to_string(&ssh_params).unwrap();
         let mut database = database_config_with_ssh_ref(42);
@@ -1801,6 +1825,7 @@ mod tests {
             port: 8080,
             username: Some("alice".to_string()),
             password: Some("proxy-secret".to_string()),
+            credential_reference: None,
         };
 
         let debug = format!("{proxy:?}");
@@ -1826,6 +1851,7 @@ mod tests {
             workspace_id: None,
             proxy: None,
             extra_params: HashMap::new(),
+            credential_reference: None,
         };
         assert_eq!(
             "127.0.0.1:3306",
@@ -1837,6 +1863,7 @@ mod tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -1872,6 +1899,7 @@ mod tests {
             sentinel: None,
             cluster: None,
             ssh_tunnel: None,
+            credential_reference: None,
         };
         assert_eq!(
             "10.0.0.5:6379",
@@ -1895,6 +1923,7 @@ mod tests {
             connect_timeout_seconds: None,
             application_name: None,
             ssh_tunnel: None,
+            credential_reference: None,
         };
         assert_eq!(
             "mongo.internal:27017",
@@ -1911,6 +1940,7 @@ mod tests {
             read_only: false,
             audio_playback: false,
             proxy: None,
+            credential_reference: None,
         };
         assert_eq!(
             "winhost:3389",
@@ -2073,6 +2103,7 @@ mod tests {
                 connection_id: Some(42),
                 ..Default::default()
             }),
+            credential_reference: None,
         };
 
         redis
@@ -2137,6 +2168,7 @@ mod tests {
                 connection_id: Some(42),
                 ..Default::default()
             }),
+            credential_reference: None,
         };
 
         mongo
@@ -2492,6 +2524,7 @@ mod serial_tests {
             read_only: false,
             audio_playback: false,
             proxy: None,
+            credential_reference: None,
         };
 
         let conn = StoredConnection::new_remote_desktop("win-rdp".to_string(), params, Some(42));
@@ -2569,7 +2602,9 @@ mod serial_tests {
                 port: 1080,
                 username: Some("alice".to_string()),
                 password: Some("proxy-secret".to_string()),
+                credential_reference: None,
             }),
+            credential_reference: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();
@@ -2652,6 +2687,7 @@ mod serial_tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -2763,6 +2799,7 @@ mod serial_tests {
                 port: 22,
                 username: "stored-user".to_string(),
                 auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,

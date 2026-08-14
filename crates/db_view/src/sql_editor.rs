@@ -14,6 +14,7 @@ use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
     InputState, TabSize,
 };
+use gpui_component::scroll::ScrollbarShow;
 use gpui_component::{Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -1602,6 +1603,7 @@ impl Render for SqlEditor {
         let font = self.editor_font(cx);
         let font_size = AppSettings::global(cx).sql_editor_font_size as f32;
         Input::new(&self.editor)
+            .editor_scrollbar_show(ScrollbarShow::Always)
             .font(font)
             .text_size(gpui::px(font_size))
             .line_height(gpui::px(font_size * 1.5))

@@ -152,6 +152,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params,
         }
     }
@@ -213,6 +214,7 @@ mod tests {
             port: 8080,
             username: Some(" alice ".to_string()),
             password: Some("secret".to_string()),
+            credential_reference: None,
         });
 
         let proxy = proxy_config_from_db_config(&config).expect("proxy should be mapped");

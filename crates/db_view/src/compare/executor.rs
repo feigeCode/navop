@@ -2239,6 +2239,7 @@ mod tests {
             username: std::env::var("ONETCLI_TEST_MYSQL_USER")
                 .unwrap_or_else(|_| "root".to_string()),
             password,
+            credential_reference: None,
             database: None,
             service_name: None,
             sid: None,

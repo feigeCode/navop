@@ -288,6 +288,7 @@ fn test_connection(id: i64) -> StoredConnection {
             port: 3306,
             username: String::new(),
             password: String::new(),
+            credential_reference: None,
             database: None,
             service_name: None,
             sid: None,

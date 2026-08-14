@@ -100,20 +100,24 @@ pub(super) async fn test_connection(
             "connections.test currently supports database connections only",
         )?));
     }
-    test_database_connection(connection, workspace_repo).await
+    let resolved = repo
+        .resolve_runtime_connection(&connection)
+        .map_err(input::tool_error)?;
+    test_database_connection(&connection, resolved, workspace_repo).await
 }
 
 async fn test_database_connection(
-    connection: StoredConnection,
+    original: &StoredConnection,
+    resolved: StoredConnection,
     workspace_repo: Option<&Arc<WorkspaceRepository>>,
 ) -> Result<ToolResult, ToolError> {
-    let config = connection.to_db_connection().map_err(input::tool_error)?;
+    let config = resolved.to_db_connection().map_err(input::tool_error)?;
     let database_type = config.database_type.storage_key();
     let plugin = DbManager::new()
         .get_plugin(&config.database_type)
         .map_err(input::tool_error)?;
     let result = plugin.test_connection(config).await;
-    let connection_summary = summarize(&connection, workspace_repo, false)?;
+    let connection_summary = summarize(original, workspace_repo, false)?;
     Ok(ToolResult::structured(match result {
         Ok(()) => json!({
             "ok": true,

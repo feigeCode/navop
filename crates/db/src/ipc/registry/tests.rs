@@ -565,6 +565,7 @@ fn registry_resolves_external_driver_display_metadata() {
         sid: None,
         workspace_id: None,
         proxy: None,
+        credential_reference: None,
         extra_params: HashMap::new(),
     };
     let display = registry.display_for_config(&config).unwrap();

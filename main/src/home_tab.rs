@@ -217,6 +217,7 @@ mod connection_info;
 mod connection_list;
 mod connection_list_actions;
 mod connection_open;
+pub(crate) use connection_open::resolve_connection_credentials;
 mod content;
 mod data;
 mod encryption;

@@ -1,5 +1,9 @@
 //! MongoDB 连接表单窗口
 
+use connection_form::credential::{
+    CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
+};
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
     refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
@@ -8,7 +12,8 @@ use connection_form::team::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, IndexPath, Sizable, Size,
@@ -188,6 +193,7 @@ pub struct MongoFormWindow {
     database_input: Entity<InputState>,
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
+    credential_picker: Entity<CredentialReferencePicker>,
     authentication_source_input: Entity<InputState>,
     replica_set_input: Entity<InputState>,
     read_preference_input: Entity<InputState>,
@@ -221,6 +227,7 @@ pub struct MongoFormWindow {
     is_testing: bool,
     test_result: Option<Result<(), String>>,
     on_saved: Option<MongoFormSavedCallback>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl MongoFormWindow {
@@ -564,6 +571,22 @@ impl MongoFormWindow {
             state
         });
 
+        let credential_picker = create_credential_picker(
+            CredentialPickerConfig::new("mongo-credential", CredentialCapabilities::login())
+                .reference(
+                    existing_parameters
+                        .as_ref()
+                        .and_then(|parameters| parameters.credential_reference),
+                ),
+            window,
+            cx,
+        );
+        let subscriptions = vec![
+            cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
+                cx.notify()
+            }),
+        ];
+
         Self {
             focus_handle: cx.focus_handle(),
             is_editing,
@@ -578,6 +601,7 @@ impl MongoFormWindow {
             database_input,
             username_input,
             password_input,
+            credential_picker,
             authentication_source_input,
             replica_set_input,
             read_preference_input,
@@ -610,6 +634,7 @@ impl MongoFormWindow {
             is_testing: false,
             test_result: None,
             on_saved: config.on_saved,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -802,6 +827,7 @@ impl MongoFormWindow {
             database,
             username,
             password,
+            credential_reference: self.credential_picker.read(cx).selected_reference(),
             auth_source,
             replica_set,
             read_preference,
@@ -838,6 +864,23 @@ impl MongoFormWindow {
             t!("MongoForm.default_name").to_string()
         } else {
             name
+        };
+        let parameters = match resolve_connection_for_runtime(
+            StoredConnection::new_mongodb(test_name.clone(), parameters, None),
+            cx,
+        )
+        .and_then(|connection| {
+            connection
+                .to_mongodb_params()
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(parameters) => parameters,
+            Err(error) => {
+                self.is_testing = false;
+                self.test_result = Some(Err(error));
+                cx.notify();
+                return;
+            }
         };
 
         self.is_testing = true;
@@ -984,6 +1027,10 @@ impl MongoFormWindow {
     }
 
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let credential_picker = self.credential_picker.read(cx);
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
+
         v_flex()
             .gap_2()
             .child(self.render_form_row(
@@ -1008,12 +1055,17 @@ impl MongoFormWindow {
             ))
             .child(self.render_form_row(
                 t!("MongoForm.username_label").as_ref(),
-                Input::new(&self.username_input),
+                Input::new(&self.username_input).disabled(username_referenced),
             ))
-            .child(self.render_form_row(
-                t!("MongoForm.password_label").as_ref(),
-                Input::new(&self.password_input).mask_toggle(),
-            ))
+            .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
+            .child(
+                self.render_form_row(
+                    t!("MongoForm.password_label").as_ref(),
+                    Input::new(&self.password_input)
+                        .mask_toggle()
+                        .disabled(password_referenced),
+                ),
+            )
             .child(self.render_form_row(
                 t!("MongoForm.auth_source_label").as_ref(),
                 Input::new(&self.authentication_source_input),
@@ -1290,6 +1342,7 @@ mod tests {
                 database: Some("app".to_string()),
                 username: None,
                 password: None,
+                credential_reference: None,
                 auth_source: None,
                 replica_set: None,
                 read_preference: None,

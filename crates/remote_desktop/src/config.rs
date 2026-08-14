@@ -194,6 +194,7 @@ mod tests {
                 port: 3390,
                 username: Some("alice".to_string()),
                 password: Some("secret".to_string()),
+                credential_reference: None,
                 domain: Some("LAB".to_string()),
                 read_only: true,
                 audio_playback: true,
@@ -203,6 +204,7 @@ mod tests {
                     port: 1080,
                     username: Some(" proxy-user ".to_string()),
                     password: Some("proxy-secret".to_string()),
+                    credential_reference: None,
                 }),
             });
 
@@ -231,6 +233,7 @@ mod tests {
                 port: 5900,
                 username: None,
                 password: None,
+                credential_reference: None,
                 domain: None,
                 read_only: false,
                 audio_playback: true,

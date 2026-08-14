@@ -1,3 +1,4 @@
+use connection_form::credential::CredentialField;
 use connection_form::team::{
     connection_sync_controls_visible_in, refresh_teams_tooltip, team_label, team_management_enabled,
 };
@@ -32,6 +33,10 @@ impl RemoteDesktopFormWindow {
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let credential_picker = self.credential_picker.read(cx);
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
+
         v_flex()
             .gap_2()
             .child(self.render_form_row(
@@ -48,12 +53,17 @@ impl RemoteDesktopFormWindow {
             ))
             .child(self.render_form_row(
                 t!("RemoteDesktopForm.label_username").to_string(),
-                Input::new(&self.username_input),
+                Input::new(&self.username_input).disabled(username_referenced),
             ))
-            .child(self.render_form_row(
-                t!("RemoteDesktopForm.label_password").to_string(),
-                Input::new(&self.password_input).mask_toggle(),
-            ))
+            .child(self.render_form_row("钥匙串".to_string(), self.credential_picker.clone()))
+            .child(
+                self.render_form_row(
+                    t!("RemoteDesktopForm.label_password").to_string(),
+                    Input::new(&self.password_input)
+                        .mask_toggle()
+                        .disabled(password_referenced),
+                ),
+            )
             .child(self.render_form_row(
                 t!("RemoteDesktopForm.label_domain").to_string(),
                 Input::new(&self.domain_input),
@@ -95,6 +105,12 @@ impl RemoteDesktopFormWindow {
     }
 
     fn render_proxy_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let proxy_credential_picker = self.proxy_credential_picker.read(cx);
+        let username_referenced =
+            proxy_credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced =
+            proxy_credential_picker.field_referenced(CredentialField::Password);
+
         v_flex()
             .gap_2()
             .child(
@@ -120,12 +136,20 @@ impl RemoteDesktopFormWindow {
                     ))
                     .child(self.render_form_row(
                         t!("RemoteDesktopForm.label_proxy_username").to_string(),
-                        Input::new(&self.proxy_username_input),
+                        Input::new(&self.proxy_username_input).disabled(username_referenced),
                     ))
                     .child(self.render_form_row(
-                        t!("RemoteDesktopForm.label_proxy_password").to_string(),
-                        Input::new(&self.proxy_password_input).mask_toggle(),
+                        "钥匙串".to_string(),
+                        self.proxy_credential_picker.clone(),
                     ))
+                    .child(
+                        self.render_form_row(
+                            t!("RemoteDesktopForm.label_proxy_password").to_string(),
+                            Input::new(&self.proxy_password_input)
+                                .mask_toggle()
+                                .disabled(password_referenced),
+                        ),
+                    )
             })
     }
 

@@ -18,7 +18,7 @@ use crate::{
     ActiveTheme as _, Colorize, IconName, Root, Selectable, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
-    scroll::Scrollbar,
+    scroll::{Scrollbar, ScrollbarShow},
 };
 
 use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
@@ -104,11 +104,12 @@ impl EditorScrollbarLayout {
 
 pub(super) struct EditorScrollbar {
     state: Entity<InputState>,
+    show: Option<ScrollbarShow>,
 }
 
 impl EditorScrollbar {
-    pub(super) fn new(state: Entity<InputState>) -> Self {
-        Self { state }
+    pub(super) fn new(state: Entity<InputState>, show: Option<ScrollbarShow>) -> Self {
+        Self { state, show }
     }
 }
 
@@ -170,9 +171,13 @@ impl Element for EditorScrollbar {
             Scrollbar::new(&scroll_handle)
         } else {
             Scrollbar::vertical(&scroll_handle)
+        };
+        if let Some(show) = self.show {
+            scrollbar = scrollbar.scrollbar_show(show);
         }
-        .scroll_size(snapshot.layout.scroll_size)
-        .into_any_element();
+        let mut scrollbar = scrollbar
+            .scroll_size(snapshot.layout.scroll_size)
+            .into_any_element();
 
         scrollbar.prepaint_as_root(
             snapshot.layout.bounds.origin,

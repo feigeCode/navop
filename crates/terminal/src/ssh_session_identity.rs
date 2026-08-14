@@ -282,6 +282,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: TARGET_PASSWORD.to_string(),
                 },
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,

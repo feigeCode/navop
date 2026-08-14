@@ -75,6 +75,7 @@ fn register_demo_connection(repo: &ConnectionRepository, db_path: &std::path::Pa
         port: 0,
         username: String::new(),
         password: String::new(),
+        credential_reference: None,
         database: None,
         service_name: None,
         sid: None,

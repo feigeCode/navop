@@ -73,6 +73,7 @@ fn sync_conflict(cloud_id: &str) -> SyncConflict {
                 port: 3306,
                 username: String::new(),
                 password: String::new(),
+                credential_reference: None,
                 database: None,
                 service_name: None,
                 sid: None,

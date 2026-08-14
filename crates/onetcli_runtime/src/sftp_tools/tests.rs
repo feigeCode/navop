@@ -1,11 +1,15 @@
 use super::{
-    OverwritePolicy, file_entry_json, parse_overwrite_policy, prepare_local_target,
-    prepare_remote_upload_target, remote_upload_directory_policy, sftp_tool_registry,
+    OverwritePolicy, SftpTool, SftpToolHandler, file_entry_json, parse_overwrite_policy,
+    prepare_local_target, prepare_remote_upload_target, remote_upload_directory_policy,
+    sftp_tool_registry,
 };
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
-use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig, StoredConnection};
+use one_core::storage::{
+    ConnectionRepository, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
+    SshAuthMethod, SshParams, StoredConnection,
+};
 use serde_json::json;
 use sftp::{DirectoryConflictPolicy, FileEntry, PathMetadata};
 use std::fs;
@@ -298,6 +302,29 @@ fn sftp_tools_resolve_connections_by_id_before_type_check() {
     assert!(error.to_string().contains("connection is not ssh_sftp"));
 }
 
+#[test]
+fn sftp_config_resolves_vault_username_before_connecting() {
+    let repo = repo();
+    let credentials = repo.credential_repository();
+    let mut credential = CredentialEntry::new("shared ssh account", "username_password");
+    credential.username = Some("vault-user".to_string());
+    let credential_id = credentials
+        .insert(&mut credential)
+        .expect("credential should insert");
+    let mut params = ssh_params();
+    params.credential_reference = Some(username_reference(credential_id));
+    let mut connection = StoredConnection::new_ssh("vault ssh".to_string(), params, None);
+    repo.insert(&mut connection)
+        .expect("ssh connection should insert");
+
+    let handler = SftpToolHandler::new(repo, SftpTool::List);
+    let config = handler
+        .ssh_config(&json!({ "connection": "vault ssh" }))
+        .expect("vault reference should resolve");
+
+    assert_eq!("vault-user", config.username);
+}
+
 fn repo() -> Arc<ConnectionRepository> {
     let conn = SqliteConnection::open_with_pool_size(":memory:", 1).expect("sqlite should open");
     conn.with_connection(|db| {
@@ -306,6 +333,43 @@ fn repo() -> Arc<ConnectionRepository> {
     })
     .expect("migrations should run");
     Arc::new(ConnectionRepository::new(conn))
+}
+
+fn ssh_params() -> SshParams {
+    SshParams {
+        host: "127.0.0.1".to_string(),
+        port: 22,
+        username: "manual-user".to_string(),
+        auth_method: SshAuthMethod::AutoPublicKey,
+        credential_reference: None,
+        prompt_username: None,
+        prompt_password: None,
+        keyboard_interactive: None,
+        terminal_encoding: Default::default(),
+        terminal_type: Default::default(),
+        connect_timeout: None,
+        keepalive_interval: None,
+        keepalive_max: None,
+        default_directory: None,
+        init_script: None,
+        disable_shell_integration: None,
+        x11_forwarding: None,
+        allow_legacy_algorithms: None,
+        jump_server: None,
+        proxy: None,
+        os_id: None,
+        icon: None,
+    }
+}
+
+fn username_reference(credential_id: i64) -> CredentialReference {
+    CredentialReference {
+        credential_id,
+        username: true,
+        password: false,
+        private_key: false,
+        passphrase: false,
+    }
 }
 
 fn mysql_config() -> DbConnectionConfig {
@@ -317,6 +381,7 @@ fn mysql_config() -> DbConnectionConfig {
         port: 3306,
         username: "app".to_string(),
         password: String::new(),
+        credential_reference: None,
         database: None,
         service_name: None,
         sid: None,

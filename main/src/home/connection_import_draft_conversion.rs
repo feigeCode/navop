@@ -122,6 +122,7 @@ fn to_ssh_connection(
         port: required_port(&draft.port)?,
         username: draft.username.trim().to_string(),
         auth_method: edited_ssh_auth_method(draft, &imported.auth_method)?,
+        credential_reference: None,
         prompt_username: None,
         prompt_password: None,
         keyboard_interactive: None,

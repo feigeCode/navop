@@ -1,5 +1,5 @@
 use db::plugin_manifest::{FormValueCondition, FormVisibilityRule};
-use one_core::storage::{ProxyConfig, ProxyType};
+use one_core::storage::{CredentialReference, ProxyConfig, ProxyType};
 use rust_i18n::t;
 
 use crate::common::db_connection_form::{DbFormConfig, FormField, FormFieldType, TabGroup};
@@ -55,6 +55,7 @@ pub(crate) fn build_proxy_config(
     port: &str,
     username: &str,
     password: &str,
+    credential_reference: Option<CredentialReference>,
 ) -> Result<Option<ProxyConfig>, ProxyValidationError> {
     if !enabled {
         return Ok(None);
@@ -68,7 +69,9 @@ pub(crate) fn build_proxy_config(
         .ok_or(ProxyValidationError { field: PROXY_PORT })?;
     let username = optional_value(username);
     let password = optional_secret(password);
-    if username.is_none() && password.is_some() {
+    let username_referenced = credential_reference.is_some_and(|reference| reference.username);
+    let password_referenced = credential_reference.is_some_and(|reference| reference.password);
+    if username.is_none() && !username_referenced && (password.is_some() || password_referenced) {
         return Err(ProxyValidationError {
             field: PROXY_USERNAME,
         });
@@ -82,6 +85,7 @@ pub(crate) fn build_proxy_config(
         port,
         username,
         password,
+        credential_reference,
     }))
 }
 
@@ -166,7 +170,7 @@ fn optional_secret(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use one_core::storage::ProxyType;
+    use one_core::storage::{CredentialReference, ProxyType};
 
     use super::{build_proxy_config, with_proxy_tab};
     use crate::common::db_connection_form::DbFormConfig;
@@ -197,7 +201,7 @@ mod tests {
     #[test]
     fn disabled_proxy_builds_none() {
         assert!(
-            build_proxy_config(false, "socks5", "", "", "", "")
+            build_proxy_config(false, "socks5", "", "", "", "", None)
                 .unwrap()
                 .is_none()
         );
@@ -207,19 +211,19 @@ mod tests {
     fn enabled_proxy_requires_host_port_and_username_for_password() {
         assert_eq!(
             Some("proxy_host"),
-            build_proxy_config(true, "socks5", "", "1080", "", "")
+            build_proxy_config(true, "socks5", "", "1080", "", "", None)
                 .unwrap_err()
                 .field()
         );
         assert_eq!(
             Some("proxy_port"),
-            build_proxy_config(true, "socks5", "proxy", "0", "", "")
+            build_proxy_config(true, "socks5", "proxy", "0", "", "", None)
                 .unwrap_err()
                 .field()
         );
         assert_eq!(
             Some("proxy_username"),
-            build_proxy_config(true, "http", "proxy", "8080", "", "secret")
+            build_proxy_config(true, "http", "proxy", "8080", "", "secret", None)
                 .unwrap_err()
                 .field()
         );
@@ -234,6 +238,7 @@ mod tests {
             "8080",
             " alice ",
             " secret ",
+            None,
         )
         .unwrap()
         .unwrap();
@@ -243,5 +248,52 @@ mod tests {
         assert_eq!(8080, proxy.port);
         assert_eq!(Some("alice".to_string()), proxy.username);
         assert_eq!(Some(" secret ".to_string()), proxy.password);
+    }
+
+    #[test]
+    fn enabled_proxy_preserves_credential_reference() {
+        let credential_reference = CredentialReference {
+            credential_id: 42,
+            username: true,
+            password: true,
+            ..Default::default()
+        };
+        let proxy = build_proxy_config(
+            true,
+            "socks5",
+            "proxy.example.com",
+            "1080",
+            "",
+            "",
+            Some(credential_reference),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(Some(credential_reference), proxy.credential_reference);
+    }
+
+    #[test]
+    fn password_only_reference_still_requires_manual_username() {
+        let credential_reference = CredentialReference {
+            credential_id: 42,
+            password: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            Some("proxy_username"),
+            build_proxy_config(
+                true,
+                "socks5",
+                "proxy.example.com",
+                "1080",
+                "",
+                "",
+                Some(credential_reference),
+            )
+            .unwrap_err()
+            .field()
+        );
     }
 }

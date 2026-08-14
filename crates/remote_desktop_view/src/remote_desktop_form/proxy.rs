@@ -1,6 +1,6 @@
 use gpui::{Context, Window};
 use gpui_component::input::InputState;
-use one_core::storage::{ProxyConfig, ProxyType};
+use one_core::storage::{CredentialReference, ProxyConfig, ProxyType};
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
@@ -12,6 +12,7 @@ pub(super) fn build_proxy_config(
     port: &str,
     username: &str,
     password: &str,
+    credential_reference: Option<CredentialReference>,
 ) -> Result<Option<ProxyConfig>, &'static str> {
     if !enabled {
         return Ok(None);
@@ -25,7 +26,9 @@ pub(super) fn build_proxy_config(
         .ok_or("proxy_port")?;
     let username = optional_value(username);
     let password = optional_secret(password);
-    if username.is_none() && password.is_some() {
+    let username_referenced = credential_reference.is_some_and(|reference| reference.username);
+    let password_referenced = credential_reference.is_some_and(|reference| reference.password);
+    if username.is_none() && !username_referenced && (password.is_some() || password_referenced) {
         return Err("proxy_username");
     }
     Ok(Some(ProxyConfig {
@@ -34,6 +37,7 @@ pub(super) fn build_proxy_config(
         port,
         username,
         password,
+        credential_reference,
     }))
 }
 
@@ -53,6 +57,13 @@ impl RemoteDesktopFormWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.proxy_credential_picker.update(cx, |picker, cx| {
+            picker.set_reference(
+                proxy.as_ref().and_then(|proxy| proxy.credential_reference),
+                window,
+                cx,
+            )
+        });
         let Some(proxy) = proxy else {
             return;
         };
@@ -96,14 +107,14 @@ pub(super) fn proxy_error_message(field: &'static str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use one_core::storage::ProxyType;
+    use one_core::storage::{CredentialReference, ProxyType};
 
     use super::build_proxy_config;
 
     #[test]
     fn disabled_proxy_builds_none() {
         assert!(
-            build_proxy_config(false, ProxyType::Socks5, "", "", "", "")
+            build_proxy_config(false, ProxyType::Socks5, "", "", "", "", None)
                 .unwrap()
                 .is_none()
         );
@@ -113,15 +124,16 @@ mod tests {
     fn enabled_proxy_validates_required_fields() {
         assert_eq!(
             "proxy_host",
-            build_proxy_config(true, ProxyType::Socks5, "", "1080", "", "").unwrap_err()
+            build_proxy_config(true, ProxyType::Socks5, "", "1080", "", "", None).unwrap_err()
         );
         assert_eq!(
             "proxy_port",
-            build_proxy_config(true, ProxyType::Socks5, "proxy", "0", "", "").unwrap_err()
+            build_proxy_config(true, ProxyType::Socks5, "proxy", "0", "", "", None).unwrap_err()
         );
         assert_eq!(
             "proxy_username",
-            build_proxy_config(true, ProxyType::Http, "proxy", "8080", "", "secret").unwrap_err()
+            build_proxy_config(true, ProxyType::Http, "proxy", "8080", "", "secret", None,)
+                .unwrap_err()
         );
     }
 
@@ -134,6 +146,7 @@ mod tests {
             "8080",
             " alice ",
             " secret ",
+            None,
         )
         .unwrap()
         .unwrap();
@@ -143,5 +156,51 @@ mod tests {
         assert_eq!(8080, proxy.port);
         assert_eq!(Some("alice".to_string()), proxy.username);
         assert_eq!(Some(" secret ".to_string()), proxy.password);
+    }
+
+    #[test]
+    fn enabled_proxy_preserves_credential_reference() {
+        let credential_reference = CredentialReference {
+            credential_id: 42,
+            username: true,
+            password: true,
+            ..Default::default()
+        };
+        let proxy = build_proxy_config(
+            true,
+            ProxyType::Socks5,
+            "proxy.example.com",
+            "1080",
+            "",
+            "",
+            Some(credential_reference),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(Some(credential_reference), proxy.credential_reference);
+    }
+
+    #[test]
+    fn password_only_reference_still_requires_manual_username() {
+        let credential_reference = CredentialReference {
+            credential_id: 42,
+            password: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            "proxy_username",
+            build_proxy_config(
+                true,
+                ProxyType::Socks5,
+                "proxy.example.com",
+                "1080",
+                "",
+                "",
+                Some(credential_reference),
+            )
+            .unwrap_err()
+        );
     }
 }

@@ -153,7 +153,11 @@ impl SftpToolHandler {
                 message: format!("connection is not ssh_sftp: {connection}"),
             });
         }
-        let params = stored.to_ssh_params().map_err(tool_error)?;
+        let resolved = self
+            .repo
+            .resolve_runtime_connection(&stored)
+            .map_err(tool_error)?;
+        let params = resolved.to_ssh_params().map_err(tool_error)?;
         Ok(ssh_config_from_params(&params))
     }
 

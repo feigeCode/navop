@@ -82,6 +82,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260810000002",
         include_str!("../../migrations/20260810000002_workspace_sibling_names.sql"),
     ),
+    (
+        "20260813000001",
+        include_str!("../../migrations/20260813000001_credential_vault.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

@@ -20,6 +20,32 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 }
 
 #[test]
+fn both_home_styles_expose_credential_vault_in_their_native_navigation() {
+    let toolbar = include_str!("../toolbar.rs");
+    let legacy_sidebar = include_str!("../sidebar.rs");
+    let persistent_sidebar = include_str!("../../persistent_connection_sidebar/rail.rs");
+    let modern_home = include_str!("../modern_home.rs");
+    let workspace_tools = modern_home
+        .split("fn render_workspace_tools")
+        .nth(1)
+        .and_then(|source| source.split("fn render_status_panel").next())
+        .expect("modern workspace tools section");
+
+    assert!(!toolbar.contains("\"credential-vault-button\""));
+    assert!(!toolbar.contains("add_credential_vault_tab"));
+
+    assert!(legacy_sidebar.contains("\"legacy-open-credential-vault\""));
+    assert!(legacy_sidebar.contains("t!(\"Home.credential_vault\")"));
+    assert!(legacy_sidebar.contains("home.add_credential_vault_tab(window, cx)"));
+
+    assert!(!persistent_sidebar.contains("\"persistent-open-credential-vault\""));
+
+    assert!(workspace_tools.contains("\"modern-home-credential-vault\""));
+    assert!(workspace_tools.contains("t!(\"Home.credential_vault\")"));
+    assert!(workspace_tools.contains("home.add_credential_vault_tab(window, cx)"));
+}
+
+#[test]
 fn connection_team_badge_uses_cached_team_name() {
     let teams = vec![TeamOption {
         id: "team-1".to_string(),

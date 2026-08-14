@@ -879,6 +879,7 @@ mod tests {
             sid: None,
             workspace_id: None,
             proxy: None,
+            credential_reference: None,
             extra_params: HashMap::new(),
         }
     }

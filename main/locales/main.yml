@@ -155,6 +155,10 @@ Home:
     en: Import from other apps
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
+  credential_vault:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙串
   StartCenter:
     get_started:
       en: START CENTER
@@ -220,6 +224,10 @@ Home:
       en: Keep commands, snippets, and operational notes together
       zh-CN: 集中记录命令、片段和运维笔记
       zh-HK: 集中記錄命令、片段和維運筆記
+    credential_vault_description:
+      en: Manage reusable usernames, passwords, and private keys
+      zh-CN: 集中管理可复用的用户名、密码与私钥
+      zh-HK: 集中管理可重用的使用者名稱、密碼與私鑰
     ai_description:
       en: Work with connections and resources through AI
       zh-CN: 使用 AI 操作连接与应用资源

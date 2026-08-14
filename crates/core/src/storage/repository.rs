@@ -3,6 +3,7 @@ use gpui::{App, SharedString};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::storage::connection::SqliteConnection;
+use crate::storage::credential_vault::CredentialRepository;
 use crate::storage::manager::{GlobalStorageState, now};
 use crate::storage::models::has_decrypt_failure_in_sensitive_fields;
 use crate::storage::quick_command::QuickCommandRepository;
@@ -146,6 +147,14 @@ pub struct ConnectionRepository {
 impl ConnectionRepository {
     pub fn new(conn: SqliteConnection) -> Self {
         Self { conn }
+    }
+
+    /// Returns a credential repository backed by the same local database.
+    ///
+    /// Runtime connection consumers use this to resolve vault references into
+    /// temporary connection clones immediately before connecting.
+    pub fn credential_repository(&self) -> CredentialRepository {
+        CredentialRepository::new(self.conn.clone())
     }
 
     pub fn get_for_sensitive_export(
@@ -906,6 +915,7 @@ mod tests {
                 port: 22,
                 username: "deploy".to_string(),
                 auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
                 prompt_username: None,
                 prompt_password: None,
                 keyboard_interactive: None,
@@ -1348,6 +1358,7 @@ mod tests {
             auth_method: SshAuthMethod::Password {
                 password: "plaintext-secret".to_string(),
             },
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -1573,6 +1584,7 @@ pub fn init(cx: &mut App) {
 
     let conn = storage.connection();
     let conn_repo = ConnectionRepository::new(conn.clone());
+    let credential_repo = CredentialRepository::new(conn.clone());
     let workspace_repo = WorkspaceRepository::new(conn.clone());
     let quick_cmd_repo = QuickCommandRepository::new(conn.clone());
     let sftp_favorite_path_repo = SftpFavoritePathRepository::new(conn.clone());
@@ -1587,6 +1599,7 @@ pub fn init(cx: &mut App) {
 
     storage.register(workspace_repo);
     storage.register(conn_repo);
+    storage.register(credential_repo);
     storage.register(quick_cmd_repo);
     storage.register(sftp_favorite_path_repo);
     storage.register(terminal_command_history_repo);

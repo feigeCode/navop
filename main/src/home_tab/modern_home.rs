@@ -372,6 +372,18 @@ fn render_workspace_tools(
                     cx,
                 ))
                 .child(utility_row(
+                    "modern-home-credential-vault",
+                    IconName::Key,
+                    t!("Home.credential_vault").to_string(),
+                    t!("Home.StartCenter.credential_vault_description").to_string(),
+                    view.clone(),
+                    window,
+                    |home, window, cx| {
+                        home.add_credential_vault_tab(window, cx);
+                    },
+                    cx,
+                ))
+                .child(utility_row(
                     "modern-home-ai",
                     IconName::Bot,
                     t!("Settings.General.Startup.default_page_ai_workbench").to_string(),

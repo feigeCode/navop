@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use connection_form::credential::resolve_connection_for_runtime;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AppContext, AsyncApp, Context, IntoElement, ParentElement, Styled, WeakEntity, Window, div, px,
@@ -10,7 +11,10 @@ use gpui_component::{
     h_flex,
     scroll::ScrollableElement,
 };
-use one_core::{gpui_tokio::Tokio, storage::RemoteDesktopProtocol};
+use one_core::{
+    gpui_tokio::Tokio,
+    storage::{RemoteDesktopProtocol, StoredConnection},
+};
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
@@ -70,6 +74,22 @@ impl RemoteDesktopFormWindow {
             return;
         }
         let params = match self.build_params(cx) {
+            Ok(params) => params,
+            Err(reason) => {
+                self.connection_test.fail_validation(reason);
+                cx.notify();
+                return;
+            }
+        };
+        let params = match resolve_connection_for_runtime(
+            StoredConnection::new_remote_desktop(self.connection_name(&params, cx), params, None),
+            cx,
+        )
+        .and_then(|connection| {
+            connection
+                .to_remote_desktop_params()
+                .map_err(|error| error.to_string())
+        }) {
             Ok(params) => params,
             Err(reason) => {
                 self.connection_test.fail_validation(reason);

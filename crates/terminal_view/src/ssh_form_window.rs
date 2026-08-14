@@ -1,3 +1,7 @@
+use connection_form::credential::{
+    CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker, resolve_ssh_for_runtime,
+};
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
     refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
@@ -7,7 +11,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, div, px,
+    Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
@@ -185,6 +189,7 @@ pub struct SshFormWindow {
     key_path_input: Entity<InputState>,
     private_key_content_input: Entity<InputState>,
     passphrase_input: Entity<InputState>,
+    credential_picker: Entity<CredentialReferencePicker>,
 
     auth_method: AuthMethodSelection,
     save_username: bool,
@@ -205,6 +210,7 @@ pub struct SshFormWindow {
     jump_key_path_input: Entity<InputState>,
     jump_private_key_content_input: Entity<InputState>,
     jump_passphrase_input: Entity<InputState>,
+    jump_credential_picker: Entity<CredentialReferencePicker>,
     jump_mfa_request: Option<FormMfaRequest>,
     jump_mfa_inputs: Vec<JumpMfaInput>,
     jump_mfa_signature: Option<String>,
@@ -216,6 +222,7 @@ pub struct SshFormWindow {
     proxy_port_input: Entity<InputState>,
     proxy_username_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
+    proxy_credential_picker: Entity<CredentialReferencePicker>,
 
     // 高级设置
     connect_timeout_input: Entity<InputState>,
@@ -251,6 +258,7 @@ pub struct SshFormWindow {
     shell_integration_uninstall_result: Option<Result<(), String>>,
     on_saved: Option<SshFormSavedCallback>,
     save_action: SaveAction,
+    _subscriptions: Vec<Subscription>,
 }
 
 #[derive(Clone)]
@@ -267,6 +275,18 @@ pub enum AuthMethodSelection {
     PrivateKeyContent,
     Agent,
     AutoPublicKey,
+}
+
+fn credential_capabilities_for_auth(auth_method: AuthMethodSelection) -> CredentialCapabilities {
+    match auth_method {
+        AuthMethodSelection::Password => CredentialCapabilities::ssh_password(),
+        AuthMethodSelection::PrivateKey | AuthMethodSelection::PrivateKeyContent => {
+            CredentialCapabilities::ssh_private_key()
+        }
+        AuthMethodSelection::Agent | AuthMethodSelection::AutoPublicKey => {
+            CredentialCapabilities::username_only()
+        }
+    }
 }
 
 fn build_connection_test_signature(params: &SshParams) -> String {
@@ -659,12 +679,16 @@ impl SshFormWindow {
         let mut allow_legacy_algorithms = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
+        let mut credential_reference = None;
+        let mut jump_credential_reference = None;
+        let mut proxy_credential_reference = None;
 
         if let Some(conn) = config.connection_to_load() {
             // 加载同步状态
             sync_enabled = conn.sync_enabled;
 
             if let Ok(params) = conn.to_ssh_params() {
+                credential_reference = params.credential_reference.clone();
                 save_username = !params.prompts_for_username();
                 save_password = !params.prompts_for_password();
                 keyboard_interactive = params.keyboard_interactive_enabled();
@@ -744,6 +768,7 @@ impl SshFormWindow {
 
                 // 加载跳板机设置
                 if let Some(ref jump) = params.jump_server {
+                    jump_credential_reference = jump.credential_reference.clone();
                     enable_jump_server = true;
                     jump_host_input.update(cx, |s, cx| s.set_value(&jump.host, window, cx));
                     jump_port_input
@@ -790,6 +815,7 @@ impl SshFormWindow {
 
                 // 加载代理设置
                 if let Some(ref proxy) = params.proxy {
+                    proxy_credential_reference = proxy.credential_reference.clone();
                     enable_proxy = true;
                     proxy_type = match proxy.proxy_type {
                         StorageProxyType::Socks5 => ProxyTypeSelection::Socks5,
@@ -827,6 +853,44 @@ impl SshFormWindow {
             });
         }
 
+        let credential_picker = create_credential_picker(
+            CredentialPickerConfig::new(
+                "ssh-credential",
+                credential_capabilities_for_auth(auth_method),
+            )
+            .reference(credential_reference),
+            window,
+            cx,
+        );
+        let jump_credential_picker = create_credential_picker(
+            CredentialPickerConfig::new(
+                "ssh-jump-credential",
+                credential_capabilities_for_auth(jump_auth_method),
+            )
+            .reference(jump_credential_reference),
+            window,
+            cx,
+        );
+        let proxy_credential_picker = create_credential_picker(
+            CredentialPickerConfig::new("ssh-proxy-credential", CredentialCapabilities::login())
+                .reference(proxy_credential_reference),
+            window,
+            cx,
+        );
+        let subscriptions = vec![
+            cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
+                cx.notify()
+            }),
+            cx.subscribe(
+                &jump_credential_picker,
+                |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
+            ),
+            cx.subscribe(
+                &proxy_credential_picker,
+                |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
+            ),
+        ];
+
         Self {
             focus_handle: cx.focus_handle(),
             is_editing,
@@ -843,6 +907,7 @@ impl SshFormWindow {
             key_path_input,
             private_key_content_input,
             passphrase_input,
+            credential_picker,
             auth_method,
             save_username,
             save_password,
@@ -860,6 +925,7 @@ impl SshFormWindow {
             jump_key_path_input,
             jump_private_key_content_input,
             jump_passphrase_input,
+            jump_credential_picker,
             jump_mfa_request: None,
             jump_mfa_inputs: Vec::new(),
             jump_mfa_signature: None,
@@ -869,6 +935,7 @@ impl SshFormWindow {
             proxy_port_input,
             proxy_username_input,
             proxy_password_input,
+            proxy_credential_picker,
             connect_timeout_input,
             keepalive_interval_input,
             keepalive_max_input,
@@ -888,6 +955,7 @@ impl SshFormWindow {
             shell_integration_uninstall_result: None,
             on_saved,
             save_action: SaveAction::Close,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -907,6 +975,32 @@ impl SshFormWindow {
         refresh_team_options(&self.team_select, window, cx);
     }
 
+    fn set_auth_method(
+        &mut self,
+        auth_method: AuthMethodSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.auth_method = auth_method;
+        self.credential_picker.update(cx, |picker, cx| {
+            picker.set_capabilities(credential_capabilities_for_auth(auth_method), window, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_jump_auth_method(
+        &mut self,
+        auth_method: AuthMethodSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.jump_auth_method = auth_method;
+        self.jump_credential_picker.update(cx, |picker, cx| {
+            picker.set_capabilities(credential_capabilities_for_auth(auth_method), window, cx);
+        });
+        cx.notify();
+    }
+
     fn build_ssh_params(&self, cx: &App) -> Option<SshParams> {
         let host = self.host_input.read(cx).text().to_string();
         let port: u16 = self
@@ -917,8 +1011,12 @@ impl SshFormWindow {
             .parse()
             .unwrap_or(22);
         let username = self.username_input.read(cx).text().to_string();
+        let credential_picker = self.credential_picker.read(cx);
+        let credential_reference = credential_picker.selected_reference();
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
 
-        if host.is_empty() || (username.is_empty() && self.save_username) {
+        if host.is_empty() || (username.is_empty() && self.save_username && !username_referenced) {
             return None;
         }
 
@@ -990,7 +1088,9 @@ impl SshFormWindow {
         let jump_server = if self.enable_jump_server {
             let jump_host = self.jump_host_input.read(cx).text().to_string();
             let jump_username = self.jump_username_input.read(cx).text().to_string();
-            if !jump_host.is_empty() && !jump_username.is_empty() {
+            let jump_picker = self.jump_credential_picker.read(cx);
+            let jump_username_referenced = jump_picker.field_referenced(CredentialField::Username);
+            if !jump_host.is_empty() && (!jump_username.is_empty() || jump_username_referenced) {
                 let jump_port: u16 = self
                     .jump_port_input
                     .read(cx)
@@ -1010,6 +1110,7 @@ impl SshFormWindow {
                     host: jump_host,
                     port: jump_port,
                     username: jump_username,
+                    credential_reference: jump_picker.selected_reference(),
                     auth_method: build_jump_auth_method(
                         self.jump_auth_method,
                         jump_password,
@@ -1054,6 +1155,10 @@ impl SshFormWindow {
                     port: proxy_port,
                     username: proxy_username,
                     password: proxy_password,
+                    credential_reference: self
+                        .proxy_credential_picker
+                        .read(cx)
+                        .selected_reference(),
                 })
             } else {
                 None
@@ -1067,9 +1172,11 @@ impl SshFormWindow {
             port,
             username,
             auth_method,
-            prompt_username: (!self.save_username).then_some(true),
+            credential_reference,
+            prompt_username: (!self.save_username && !username_referenced).then_some(true),
             prompt_password: (!self.save_password
-                && self.auth_method == AuthMethodSelection::Password)
+                && self.auth_method == AuthMethodSelection::Password
+                && !password_referenced)
                 .then_some(true),
             keyboard_interactive: (!self.keyboard_interactive).then_some(false),
             terminal_encoding: self
@@ -1264,6 +1371,15 @@ impl SshFormWindow {
             self.test_result = Some(Err(t!("SSH.validation_error").to_string()));
             cx.notify();
             return;
+        };
+        let params = match resolve_ssh_for_runtime(params, cx) {
+            Ok(params) => params,
+            Err(error) => {
+                self.last_tested_signature = None;
+                self.test_result = Some(Err(error));
+                cx.notify();
+                return;
+            }
         };
 
         self.is_testing = true;
@@ -1509,6 +1625,14 @@ impl SshFormWindow {
                 Some(Err(t!("SSH.validation_error").to_string()));
             cx.notify();
             return;
+        };
+        let params = match resolve_ssh_for_runtime(params, cx) {
+            Ok(params) => params,
+            Err(error) => {
+                self.shell_integration_uninstall_result = Some(Err(error));
+                cx.notify();
+                return;
+            }
         };
 
         self.is_uninstalling_shell_integration = true;
@@ -1796,6 +1920,12 @@ impl SshFormWindow {
     /// 渲染基本信息标签页
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let auth_method = self.auth_method;
+        let credential_picker = self.credential_picker.read(cx);
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
+        let private_key_referenced =
+            credential_picker.field_referenced(CredentialField::PrivateKey);
+        let passphrase_referenced = credential_picker.field_referenced(CredentialField::Passphrase);
 
         v_flex()
             .w_full()
@@ -1804,10 +1934,14 @@ impl SshFormWindow {
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
             .child(self.render_form_row(&t!("SSH.host"), self.render_form_input(&self.host_input)))
             .child(self.render_form_row(&t!("SSH.port"), self.render_form_input(&self.port_input)))
-            .child(self.render_form_row(
-                &t!("SSH.username"),
-                self.render_form_input(&self.username_input),
-            ))
+            .child(
+                self.render_form_row(
+                    &t!("SSH.username"),
+                    self.render_form_input(&self.username_input)
+                        .disabled(username_referenced),
+                ),
+            )
+            .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
             .child(
                 self.render_form_row(
                     "",
@@ -1842,54 +1976,65 @@ impl SshFormWindow {
                             Radio::new("password")
                                 .label(t!("SSH.password").to_string())
                                 .checked(auth_method == AuthMethodSelection::Password)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.auth_method = AuthMethodSelection::Password;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_auth_method(AuthMethodSelection::Password, window, cx);
                                 })),
                         )
                         .child(
                             Radio::new("private-key")
                                 .label(t!("SSH.private_key").to_string())
                                 .checked(auth_method == AuthMethodSelection::PrivateKey)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.auth_method = AuthMethodSelection::PrivateKey;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_auth_method(
+                                        AuthMethodSelection::PrivateKey,
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         )
                         .child(
                             Radio::new("private-key-content")
                                 .label(t!("SSH.private_key_content").to_string())
                                 .checked(auth_method == AuthMethodSelection::PrivateKeyContent)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.auth_method = AuthMethodSelection::PrivateKeyContent;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_auth_method(
+                                        AuthMethodSelection::PrivateKeyContent,
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         )
                         .child(
                             Radio::new("agent")
                                 .label(t!("SSH.agent").to_string())
                                 .checked(auth_method == AuthMethodSelection::Agent)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.auth_method = AuthMethodSelection::Agent;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_auth_method(AuthMethodSelection::Agent, window, cx);
                                 })),
                         )
                         .child(
                             Radio::new("auto-publickey")
                                 .label(t!("SSH.auto_publickey").to_string())
                                 .checked(auth_method == AuthMethodSelection::AutoPublicKey)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.auth_method = AuthMethodSelection::AutoPublicKey;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_auth_method(
+                                        AuthMethodSelection::AutoPublicKey,
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         ),
                 ),
             )
             .when(auth_method == AuthMethodSelection::Password, |this| {
-                this.child(self.render_form_row(
-                    &t!("SSH.password"),
-                    self.render_form_input(&self.password_input).mask_toggle(),
-                ))
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.password"),
+                        self.render_form_input(&self.password_input)
+                            .mask_toggle()
+                            .disabled(password_referenced),
+                    ),
+                )
                 .child(
                     self.render_form_row(
                         "",
@@ -1923,26 +2068,40 @@ impl SshFormWindow {
                 )
             })
             .when(auth_method == AuthMethodSelection::PrivateKey, |this| {
-                this.child(self.render_form_row(
-                    &t!("SSH.key_path"),
-                    self.render_form_input(&self.key_path_input),
-                ))
-                .child(self.render_form_row(
-                    &t!("SSH.passphrase"),
-                    self.render_form_input(&self.passphrase_input).mask_toggle(),
-                ))
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.key_path"),
+                        self.render_form_input(&self.key_path_input)
+                            .disabled(private_key_referenced),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.passphrase"),
+                        self.render_form_input(&self.passphrase_input)
+                            .mask_toggle()
+                            .disabled(passphrase_referenced),
+                    ),
+                )
             })
             .when(
                 auth_method == AuthMethodSelection::PrivateKeyContent,
                 |this| {
-                    this.child(self.render_form_row(
-                        &t!("SSH.private_key_content"),
-                        self.render_form_input(&self.private_key_content_input),
-                    ))
-                    .child(self.render_form_row(
-                        &t!("SSH.passphrase"),
-                        self.render_form_input(&self.passphrase_input).mask_toggle(),
-                    ))
+                    this.child(
+                        self.render_form_row(
+                            &t!("SSH.private_key_content"),
+                            self.render_form_input(&self.private_key_content_input)
+                                .disabled(private_key_referenced),
+                        ),
+                    )
+                    .child(
+                        self.render_form_row(
+                            &t!("SSH.passphrase"),
+                            self.render_form_input(&self.passphrase_input)
+                                .mask_toggle()
+                                .disabled(passphrase_referenced),
+                        ),
+                    )
                     .child(
                         h_flex().justify_center().child(
                             div()
@@ -2169,6 +2328,12 @@ impl SshFormWindow {
     fn render_jump_server_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enable_jump = self.enable_jump_server;
         let jump_auth_method = self.jump_auth_method;
+        let credential_picker = self.jump_credential_picker.read(cx);
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
+        let private_key_referenced =
+            credential_picker.field_referenced(CredentialField::PrivateKey);
+        let passphrase_referenced = credential_picker.field_referenced(CredentialField::Passphrase);
 
         v_flex()
             .w_full()
@@ -2196,10 +2361,14 @@ impl SshFormWindow {
                     &t!("SSH.jump_port"),
                     self.render_form_input(&self.jump_port_input),
                 ))
-                .child(self.render_form_row(
-                    &t!("SSH.jump_username"),
-                    self.render_form_input(&self.jump_username_input),
-                ))
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.jump_username"),
+                        self.render_form_input(&self.jump_username_input)
+                            .disabled(username_referenced),
+                    ),
+                )
+                .child(self.render_form_row("钥匙串", self.jump_credential_picker.clone()))
                 .child(
                     self.render_form_row(
                         &t!("SSH.jump_auth_method"),
@@ -2210,18 +2379,24 @@ impl SshFormWindow {
                                 Radio::new("jump-password")
                                     .label(t!("SSH.password").to_string())
                                     .checked(jump_auth_method == AuthMethodSelection::Password)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.jump_auth_method = AuthMethodSelection::Password;
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::Password,
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
                                 Radio::new("jump-private-key")
                                     .label(t!("SSH.private_key").to_string())
                                     .checked(jump_auth_method == AuthMethodSelection::PrivateKey)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.jump_auth_method = AuthMethodSelection::PrivateKey;
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::PrivateKey,
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
@@ -2230,28 +2405,36 @@ impl SshFormWindow {
                                     .checked(
                                         jump_auth_method == AuthMethodSelection::PrivateKeyContent,
                                     )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.jump_auth_method =
-                                            AuthMethodSelection::PrivateKeyContent;
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::PrivateKeyContent,
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
                                 Radio::new("jump-agent")
                                     .label(t!("SSH.agent").to_string())
                                     .checked(jump_auth_method == AuthMethodSelection::Agent)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.jump_auth_method = AuthMethodSelection::Agent;
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::Agent,
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
                                 Radio::new("jump-auto-publickey")
                                     .label(t!("SSH.auto_publickey").to_string())
                                     .checked(jump_auth_method == AuthMethodSelection::AutoPublicKey)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.jump_auth_method = AuthMethodSelection::AutoPublicKey;
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::AutoPublicKey,
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             ),
                     ),
@@ -2261,22 +2444,27 @@ impl SshFormWindow {
                         self.render_form_row(
                             &t!("SSH.jump_password"),
                             self.render_form_input(&self.jump_password_input)
-                                .mask_toggle(),
+                                .mask_toggle()
+                                .disabled(password_referenced),
                         ),
                     )
                 })
                 .when(
                     jump_auth_method == AuthMethodSelection::PrivateKey,
                     |this| {
-                        this.child(self.render_form_row(
-                            &t!("SSH.jump_key_path"),
-                            self.render_form_input(&self.jump_key_path_input),
-                        ))
+                        this.child(
+                            self.render_form_row(
+                                &t!("SSH.jump_key_path"),
+                                self.render_form_input(&self.jump_key_path_input)
+                                    .disabled(private_key_referenced),
+                            ),
+                        )
                         .child(
                             self.render_form_row(
                                 &t!("SSH.jump_passphrase"),
                                 self.render_form_input(&self.jump_passphrase_input)
-                                    .mask_toggle(),
+                                    .mask_toggle()
+                                    .disabled(passphrase_referenced),
                             ),
                         )
                     },
@@ -2284,15 +2472,19 @@ impl SshFormWindow {
                 .when(
                     jump_auth_method == AuthMethodSelection::PrivateKeyContent,
                     |this| {
-                        this.child(self.render_form_row(
-                            &t!("SSH.private_key_content"),
-                            self.render_form_input(&self.jump_private_key_content_input),
-                        ))
+                        this.child(
+                            self.render_form_row(
+                                &t!("SSH.private_key_content"),
+                                self.render_form_input(&self.jump_private_key_content_input)
+                                    .disabled(private_key_referenced),
+                            ),
+                        )
                         .child(
                             self.render_form_row(
                                 &t!("SSH.jump_passphrase"),
                                 self.render_form_input(&self.jump_passphrase_input)
-                                    .mask_toggle(),
+                                    .mask_toggle()
+                                    .disabled(passphrase_referenced),
                             ),
                         )
                         .child(
@@ -2366,6 +2558,9 @@ impl SshFormWindow {
     fn render_proxy_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enable_proxy = self.enable_proxy;
         let proxy_type = self.proxy_type;
+        let credential_picker = self.proxy_credential_picker.read(cx);
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
 
         v_flex()
             .w_full()
@@ -2415,17 +2610,22 @@ impl SshFormWindow {
                     &t!("SSH.proxy_port"),
                     self.render_form_input(&self.proxy_port_input),
                 ))
-                .child(self.render_form_row(
-                    &t!("SSH.proxy_username"),
-                    self.render_form_input(&self.proxy_username_input),
-                ))
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.proxy_username"),
+                        self.render_form_input(&self.proxy_username_input)
+                            .disabled(username_referenced),
+                    ),
+                )
                 .child(
                     self.render_form_row(
                         &t!("SSH.proxy_password"),
                         self.render_form_input(&self.proxy_password_input)
-                            .mask_toggle(),
+                            .mask_toggle()
+                            .disabled(password_referenced),
                     ),
                 )
+                .child(self.render_form_row("钥匙串", self.proxy_credential_picker.clone()))
             })
     }
 
@@ -2687,10 +2887,12 @@ mod tests {
     use super::{
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
         connection_test_host_key_request, connection_test_needs_xquartz_warning,
-        format_connection_error, format_connection_error_for_platform, parse_os_release_id,
-        validate_save_state, xquartz_installation_warning_required,
+        credential_capabilities_for_auth, format_connection_error,
+        format_connection_error_for_platform, parse_os_release_id, validate_save_state,
+        xquartz_installation_warning_required,
     };
     use anyhow::Context as _;
+    use connection_form::credential::CredentialCapabilities;
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
     use one_core::storage::{
@@ -2707,6 +2909,7 @@ mod tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            credential_reference: None,
             prompt_username: None,
             prompt_password: None,
             keyboard_interactive: None,
@@ -2725,6 +2928,30 @@ mod tests {
             x11_forwarding: None,
             allow_legacy_algorithms: None,
         }
+    }
+
+    #[test]
+    fn ssh_auth_method_limits_credential_fields() {
+        assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::Password),
+            CredentialCapabilities::ssh_password()
+        );
+        assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::PrivateKey),
+            CredentialCapabilities::ssh_private_key()
+        );
+        assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::PrivateKeyContent),
+            CredentialCapabilities::ssh_private_key()
+        );
+        assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::Agent),
+            CredentialCapabilities::username_only()
+        );
+        assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::AutoPublicKey),
+            CredentialCapabilities::username_only()
+        );
     }
 
     #[test]

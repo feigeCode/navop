@@ -150,6 +150,7 @@ fn config(id: &str) -> DbConnectionConfig {
         port: 5432,
         username: "user".to_string(),
         password: "secret".to_string(),
+        credential_reference: None,
         database: Some("postgres".to_string()),
         service_name: None,
         sid: None,

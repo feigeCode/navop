@@ -1,5 +1,9 @@
 //! Redis 连接表单窗口（多标签页）
 
+use connection_form::credential::{
+    CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
+};
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
     refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
@@ -8,7 +12,8 @@ use connection_form::team::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable, Size,
@@ -32,7 +37,7 @@ use one_core::storage::{
 use rust_i18n::t;
 use tracing::error;
 
-use crate::{GlobalRedisState, RedisConnectionConfig, RedisConnectionMode};
+use crate::{GlobalRedisState, RedisManager};
 
 /// Redis 表单窗口配置
 pub struct RedisFormWindowConfig {
@@ -178,6 +183,7 @@ pub struct RedisFormWindow {
     port_input: Entity<InputState>,
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
+    credential_picker: Entity<CredentialReferencePicker>,
     db_index_input: Entity<InputState>,
 
     // 工作区选择
@@ -191,6 +197,7 @@ pub struct RedisFormWindow {
     sentinel_master_name_input: Entity<InputState>,
     sentinel_nodes_input: Entity<InputState>,
     sentinel_password_input: Entity<InputState>,
+    sentinel_credential_picker: Entity<CredentialReferencePicker>,
 
     // 集群配置
     cluster_nodes_input: Entity<InputState>,
@@ -223,6 +230,7 @@ pub struct RedisFormWindow {
     is_testing: bool,
     test_result: Option<Result<(), String>>,
     on_saved: Option<RedisFormSavedCallback>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl RedisFormWindow {
@@ -538,6 +546,40 @@ impl RedisFormWindow {
             sync_enabled = c.sync_enabled;
         }
 
+        let credential_picker = create_credential_picker(
+            CredentialPickerConfig::new("redis-credential", CredentialCapabilities::login())
+                .reference(
+                    existing_params
+                        .as_ref()
+                        .and_then(|params| params.credential_reference),
+                ),
+            window,
+            cx,
+        );
+        let sentinel_credential_picker = create_credential_picker(
+            CredentialPickerConfig::new(
+                "redis-sentinel-credential",
+                CredentialCapabilities::password_only(),
+            )
+            .reference(
+                existing_params
+                    .as_ref()
+                    .and_then(|params| params.sentinel.as_ref())
+                    .and_then(|sentinel| sentinel.credential_reference),
+            ),
+            window,
+            cx,
+        );
+        let subscriptions = vec![
+            cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
+                cx.notify()
+            }),
+            cx.subscribe(
+                &sentinel_credential_picker,
+                |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
+            ),
+        ];
+
         Self {
             focus_handle: cx.focus_handle(),
             is_editing,
@@ -551,6 +593,7 @@ impl RedisFormWindow {
             port_input,
             username_input,
             password_input,
+            credential_picker,
             db_index_input,
             workspace_select,
             team_select,
@@ -558,6 +601,7 @@ impl RedisFormWindow {
             sentinel_master_name_input,
             sentinel_nodes_input,
             sentinel_password_input,
+            sentinel_credential_picker,
             cluster_nodes_input,
             use_tls,
             connect_timeout_input,
@@ -582,6 +626,7 @@ impl RedisFormWindow {
             is_testing: false,
             test_result: None,
             on_saved: config.on_saved,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -727,6 +772,10 @@ impl RedisFormWindow {
                     master_name,
                     sentinels,
                     sentinel_password,
+                    credential_reference: self
+                        .sentinel_credential_picker
+                        .read(cx)
+                        .selected_reference(),
                 })
             } else {
                 None
@@ -765,6 +814,7 @@ impl RedisFormWindow {
             sentinel,
             cluster,
             ssh_tunnel: self.build_ssh_tunnel_config(cx),
+            credential_reference: self.credential_picker.read(cx).selected_reference(),
         };
 
         if let Some(ssh_connection) = self.selected_ssh_connection(cx) {
@@ -776,37 +826,35 @@ impl RedisFormWindow {
         params
     }
 
-    /// 获取 Redis 连接配置（用于测试连接）
-    fn get_config(&self, cx: &App) -> RedisConnectionConfig {
-        let params = self.build_redis_params(cx);
-        let name = self.name_input.read(cx).text().to_string();
-
-        RedisConnectionConfig {
-            id: self.editing_id.map(|id| id.to_string()).unwrap_or_default(),
-            name,
-            host: params.host,
-            port: params.port,
-            password: params.password,
-            username: params.username,
-            db_index: params.db_index,
-            use_tls: params.use_tls,
-            timeout: params.connect_timeout.unwrap_or(10),
-            mode: match self.mode {
-                ModeSelection::Standalone => RedisConnectionMode::Standalone,
-                ModeSelection::Sentinel => RedisConnectionMode::Sentinel,
-                ModeSelection::Cluster => RedisConnectionMode::Cluster,
-            },
-            ssh_tunnel: params.ssh_tunnel,
-        }
-    }
-
     /// 测试连接
     fn on_test(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let params = self.build_redis_params(cx);
+        let name = self.name_input.read(cx).text().to_string();
+        let name = if name.is_empty() {
+            format!("{}:{}", params.host, params.port)
+        } else {
+            name
+        };
+        let config = match resolve_connection_for_runtime(
+            StoredConnection::new_redis(name, params, None),
+            cx,
+        )
+        .and_then(|connection| {
+            RedisManager::config_from_stored(&connection).map_err(|error| error.to_string())
+        }) {
+            Ok(config) => config,
+            Err(error) => {
+                self.is_testing = false;
+                self.test_result = Some(Err(error));
+                cx.notify();
+                return;
+            }
+        };
+
         self.is_testing = true;
         self.test_result = None;
         cx.notify();
 
-        let config = self.get_config(cx);
         let global_state = cx.global::<GlobalRedisState>().clone();
 
         cx.spawn(async move |this, cx| {
@@ -948,16 +996,28 @@ impl RedisFormWindow {
 
     /// 渲染基本信息标签页
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let credential_picker = self.credential_picker.read(cx);
+        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
+        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
+
         v_flex()
             .gap_2()
             .child(self.render_form_row(&t!("Redis.name"), Input::new(&self.name_input)))
             .child(self.render_form_row(&t!("Redis.host"), Input::new(&self.host_input)))
             .child(self.render_form_row(&t!("Redis.port"), Input::new(&self.port_input)))
-            .child(self.render_form_row(&t!("Redis.username"), Input::new(&self.username_input)))
             .child(self.render_form_row(
-                &t!("Redis.password"),
-                Input::new(&self.password_input).mask_toggle(),
+                &t!("Redis.username"),
+                Input::new(&self.username_input).disabled(username_referenced),
             ))
+            .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
+            .child(
+                self.render_form_row(
+                    &t!("Redis.password"),
+                    Input::new(&self.password_input)
+                        .mask_toggle()
+                        .disabled(password_referenced),
+                ),
+            )
             .child(self.render_form_row(&t!("Redis.db_index"), Input::new(&self.db_index_input)))
             .child(self.render_form_row(
                 &t!("Redis.workspace"),
@@ -1013,6 +1073,10 @@ impl RedisFormWindow {
     /// 渲染连接模式标签页
     fn render_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode;
+        let sentinel_password_referenced = self
+            .sentinel_credential_picker
+            .read(cx)
+            .field_referenced(CredentialField::Password);
 
         v_flex()
             .gap_2()
@@ -1060,10 +1124,15 @@ impl RedisFormWindow {
                     &t!("Redis.sentinel_nodes"),
                     Input::new(&self.sentinel_nodes_input),
                 ))
-                .child(self.render_form_row(
-                    &t!("Redis.sentinel_password"),
-                    Input::new(&self.sentinel_password_input).mask_toggle(),
-                ))
+                .child(self.render_form_row("钥匙串", self.sentinel_credential_picker.clone()))
+                .child(
+                    self.render_form_row(
+                        &t!("Redis.sentinel_password"),
+                        Input::new(&self.sentinel_password_input)
+                            .mask_toggle()
+                            .disabled(sentinel_password_referenced),
+                    ),
+                )
             })
             // 集群模式配置
             .when(mode == ModeSelection::Cluster, |this| {
@@ -1356,6 +1425,7 @@ mod tests {
                 port: 6379,
                 password: None,
                 username: None,
+                credential_reference: None,
                 db_index: 0,
                 mode: RedisMode::Standalone,
                 use_tls: false,
