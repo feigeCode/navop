@@ -46,7 +46,7 @@ NavopRdpResult validate_connection_options(
         return result;
     }
 
-    if (options->flags != 0 ||
+    if ((options->flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN) != 0 ||
         options->host.len == 0 ||
         options->host.len > NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS ||
         options->host.data == nullptr ||

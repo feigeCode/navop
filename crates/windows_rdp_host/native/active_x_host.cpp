@@ -1138,6 +1138,14 @@ NavopRdpResult connect_active_x(
             static_cast<int32_t>(result));
     }
 
+    const NavopRdpResult audio_result = configure_audio_redirection(
+        owner,
+        resources->state.client,
+        options.flags);
+    if (audio_result != NAVOP_RDP_RESULT_OK) {
+        return audio_result;
+    }
+
     result = resources->state.client->put_DesktopWidth(
         options.desktop_width);
     if (FAILED(result)) {

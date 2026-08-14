@@ -1,5 +1,10 @@
 use gpui::{Bounds, Pixels, Point};
 
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+use super::windows_native_overlay::{
+    WindowsNativeOverlay, WindowsNativeOverlayBounds, WindowsNativeOverlayError,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Win32ClientPhysicalBounds {
     pub(super) x: i32,
@@ -183,6 +188,7 @@ pub(crate) enum NativeDestroyProgress {
 pub(crate) struct WindowsNativeAdapter {
     presentation: WindowsNativePresentation,
     host: windows_rdp_host::WindowsRdpHost,
+    overlay: WindowsNativeOverlay,
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -190,6 +196,7 @@ pub(crate) struct WindowsNativeAdapter {
 pub(crate) enum WindowsNativeAdapterCreateError {
     WindowHandle(raw_window_handle::HandleError),
     ParentHandleNotWin32,
+    Overlay(WindowsNativeOverlayError),
     Host(windows_rdp_host::WindowsRdpHostError),
 }
 
@@ -203,6 +210,7 @@ impl std::fmt::Display for WindowsNativeAdapterCreateError {
             Self::ParentHandleNotWin32 => {
                 formatter.write_str("GPUI window did not expose a Win32 parent handle")
             }
+            Self::Overlay(error) => error.fmt(formatter),
             Self::Host(error) => error.fmt(formatter),
         }
     }
@@ -216,8 +224,16 @@ impl std::error::Error for WindowsNativeAdapterCreateError {
             // when its optional `std` feature is enabled.
             Self::WindowHandle(_) => None,
             Self::ParentHandleNotWin32 => None,
+            Self::Overlay(error) => Some(error),
             Self::Host(error) => Some(error),
         }
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+impl From<WindowsNativeOverlayError> for WindowsNativeAdapterCreateError {
+    fn from(error: WindowsNativeOverlayError) -> Self {
+        Self::Overlay(error)
     }
 }
 
@@ -228,7 +244,7 @@ impl WindowsNativeAdapter {
         generation: u64,
     ) -> Result<Self, WindowsNativeAdapterCreateError> {
         use raw_window_handle::RawWindowHandle;
-        use windows_rdp_host::{WindowsRdpHostOptions, WindowsRdpParentWindow};
+        use windows_rdp_host::{WindowsRdpHost, WindowsRdpHostOptions, WindowsRdpParentWindow};
 
         let raw = raw_window_handle::HasWindowHandle::window_handle(window)
             .map_err(WindowsNativeAdapterCreateError::WindowHandle)?
@@ -236,17 +252,17 @@ impl WindowsNativeAdapter {
         let RawWindowHandle::Win32(handle) = raw else {
             return Err(WindowsNativeAdapterCreateError::ParentHandleNotWin32);
         };
-        let parent = unsafe { WindowsRdpParentWindow::from_raw(handle.hwnd.get() as usize) };
+        let owner = handle.hwnd.get() as usize;
+        let overlay = WindowsNativeOverlay::create(owner, generation)?;
+        let parent = unsafe { WindowsRdpParentWindow::from_raw(overlay.hwnd()) };
         let host = unsafe {
-            windows_rdp_host::WindowsRdpHost::create_with_parent(
-                parent,
-                WindowsRdpHostOptions::new(generation),
-            )
+            WindowsRdpHost::create_with_parent(parent, WindowsRdpHostOptions::new(generation))
         }
         .map_err(WindowsNativeAdapterCreateError::Host)?;
 
         Ok(Self {
             presentation: WindowsNativePresentation::default(),
+            overlay,
             host,
         })
     }
@@ -275,7 +291,8 @@ impl WindowsNativeAdapter {
     ) -> anyhow::Result<()> {
         let bounds = logical_bounds_to_physical(bounds, parent_client_origin, scale_factor)
             .ok_or_else(|| anyhow::anyhow!("invalid native child bounds or scale factor"))?;
-        let mut sink = WindowsNativeHostSink {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
             host: &mut self.host,
             focus_parent: None,
         };
@@ -298,7 +315,8 @@ impl WindowsNativeAdapter {
     }
 
     pub(crate) fn activate(&mut self, focus_child: bool) -> anyhow::Result<()> {
-        let mut sink = WindowsNativeHostSink {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
             host: &mut self.host,
             focus_parent: None,
         };
@@ -307,7 +325,8 @@ impl WindowsNativeAdapter {
     }
 
     pub(crate) fn focus(&mut self) -> anyhow::Result<()> {
-        let mut sink = WindowsNativeHostSink {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
             host: &mut self.host,
             focus_parent: None,
         };
@@ -316,7 +335,8 @@ impl WindowsNativeAdapter {
     }
 
     pub(crate) fn deactivate(&mut self, focus_parent: &mut dyn FnMut()) -> anyhow::Result<()> {
-        let mut sink = WindowsNativeHostSink {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
             host: &mut self.host,
             focus_parent: Some(focus_parent),
         };
@@ -328,7 +348,8 @@ impl WindowsNativeAdapter {
         &mut self,
         focus_parent: &mut dyn FnMut(),
     ) -> anyhow::Result<NativeCloseProgress> {
-        let mut sink = WindowsNativeHostSink {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
             host: &mut self.host,
             focus_parent: Some(focus_parent),
         };
@@ -370,26 +391,28 @@ impl WindowsNativeAdapter {
         super::native_events::drain_native_events(&self.host, state)
     }
 
-    pub(crate) fn finish_destroy(
-        &mut self,
-    ) -> Result<NativeDestroyProgress, windows_rdp_host::WindowsRdpHostError> {
+    pub(crate) fn finish_destroy(&mut self) -> anyhow::Result<NativeDestroyProgress> {
+        use windows_rdp_host::WindowsRdpHostError;
+
         match self.host.close() {
             Ok(()) => {
+                self.overlay.close()?;
                 self.presentation.finish_destroy();
                 Ok(NativeDestroyProgress::Destroyed)
             }
-            Err(windows_rdp_host::WindowsRdpHostError::CallbackInFlight) => {
+            Err(WindowsRdpHostError::CallbackInFlight) => {
                 Ok(NativeDestroyProgress::PendingCallbacks)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         }
     }
 
     pub(crate) fn force_close(
         &mut self,
         focus_parent: &mut dyn FnMut(),
-    ) -> Result<NativeDestroyProgress, windows_rdp_host::WindowsRdpHostError> {
-        let mut sink = WindowsNativeHostSink {
+    ) -> anyhow::Result<NativeDestroyProgress> {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
             host: &mut self.host,
             focus_parent: Some(focus_parent),
         };
@@ -417,26 +440,79 @@ impl WindowsNativeAdapter {
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-struct WindowsNativeHostSink<'a> {
+impl Drop for WindowsNativeAdapter {
+    fn drop(&mut self) {
+        use windows_rdp_host::WindowsRdpHostError;
+
+        match self.host.close() {
+            Ok(()) => {
+                if let Err(error) = self.overlay.close() {
+                    tracing::error!(
+                        ?error,
+                        "failed to destroy Windows native RDP overlay after host drop"
+                    );
+                }
+            }
+            Err(WindowsRdpHostError::CallbackInFlight) => {
+                self.overlay
+                    .abandon("host_callback_in_flight_during_adapter_drop");
+            }
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "failed to destroy Windows native RDP host during adapter drop"
+                );
+                self.overlay
+                    .abandon("host_destroy_failed_during_adapter_drop");
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+struct WindowsNativePresentationSink<'a> {
+    overlay: &'a mut WindowsNativeOverlay,
     host: &'a mut windows_rdp_host::WindowsRdpHost,
     focus_parent: Option<&'a mut dyn FnMut()>,
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-impl NativePresentationSink for WindowsNativeHostSink<'_> {
-    type Error = windows_rdp_host::WindowsRdpHostError;
+impl NativePresentationSink for WindowsNativePresentationSink<'_> {
+    type Error = anyhow::Error;
 
     fn set_bounds(&mut self, bounds: Win32ClientPhysicalBounds) -> Result<(), Self::Error> {
-        self.host
-            .set_bounds(bounds.x, bounds.y, bounds.width, bounds.height)
+        let clipped = self.overlay.set_bounds(WindowsNativeOverlayBounds {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+        })?;
+        let Some(clipped) = clipped else {
+            self.host.set_bounds(0, 0, 0, 0)?;
+            return Ok(());
+        };
+        self.host.set_bounds(0, 0, clipped.width, clipped.height)?;
+        Ok(())
     }
 
     fn show(&mut self) -> Result<(), Self::Error> {
-        self.host.set_visible(true)
+        self.overlay.show()?;
+        if let Err(error) = self.host.set_visible(true) {
+            if let Err(hide_error) = self.overlay.hide() {
+                tracing::warn!(
+                    ?hide_error,
+                    "failed to hide Windows native RDP overlay after host show failed"
+                );
+            }
+            return Err(error.into());
+        }
+        self.overlay.log_composition_diagnostics("show_complete");
+        Ok(())
     }
 
     fn focus_child(&mut self) -> Result<(), Self::Error> {
-        self.host.focus()
+        self.host.focus()?;
+        Ok(())
     }
 
     fn focus_parent(&mut self) -> Result<(), Self::Error> {
@@ -447,7 +523,20 @@ impl NativePresentationSink for WindowsNativeHostSink<'_> {
     }
 
     fn hide(&mut self) -> Result<(), Self::Error> {
-        self.host.set_visible(false)
+        let host_result = self.host.set_visible(false);
+        let overlay_result = self.overlay.hide();
+        match (host_result, overlay_result) {
+            (Err(host_error), Err(overlay_error)) => {
+                tracing::warn!(
+                    ?overlay_error,
+                    "failed to hide Windows native RDP overlay after host hide failed"
+                );
+                Err(host_error.into())
+            }
+            (Err(error), Ok(())) => Err(error.into()),
+            (Ok(()), Err(error)) => Err(error.into()),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 }
 

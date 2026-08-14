@@ -100,6 +100,16 @@ typedef struct NavopRdpBorrowedUtf16 {
     uint32_t len;
 } NavopRdpBorrowedUtf16;
 
+/*
+ * Connection flags are a versioned bitmask. When the audio playback disabled
+ * bit is clear, remote audio is redirected to the local computer. When it is
+ * set, remote audio playback is disabled. Any unknown connection flag causes
+ * navop_rdp_connect to return NAVOP_RDP_RESULT_INVALID_ARGUMENT.
+ */
+#define NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED UINT32_C(1)
+#define NAVOP_RDP_CONNECTION_FLAGS_KNOWN \
+    NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED
+
 typedef struct NavopRdpConnectionOptions {
     uint32_t struct_size;
     uint32_t abi_version;

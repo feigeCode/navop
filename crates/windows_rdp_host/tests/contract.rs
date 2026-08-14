@@ -1160,6 +1160,66 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
 }
 
 #[test]
+fn native_audio_playback_uses_a_versioned_flag_and_secured_settings3() {
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/windows_rdp_host.h"),
+        &[
+            "NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED UINT32_C(1)",
+            "NAVOP_RDP_CONNECTION_FLAGS_KNOWN",
+            "unknown connection flag",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/ffi.rs"),
+        &[
+            "CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED: u32 = 1",
+            "CONNECTION_FLAGS_KNOWN",
+            "flags & !CONNECTION_FLAGS_KNOWN != 0",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/configuration.cpp"),
+        &["options->flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN"],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/build.rs"),
+        &[
+            "cargo:rerun-if-changed=native/audio_redirection.cpp",
+            ".file(\"native/audio_redirection.cpp\")",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/audio_redirection.cpp"),
+        &[
+            "constexpr LONG kAudioRedirectionRedirectToLocal = 0",
+            "constexpr LONG kAudioRedirectionDisabled = 2",
+            "IMsRdpClientSecuredSettings2",
+            "get_SecuredSettings3",
+            "put_AudioRedirectionMode",
+            "flags & NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED",
+            "? kAudioRedirectionDisabled",
+            ": kAudioRedirectionRedirectToLocal",
+            "connect.get_secured_settings3.before",
+            "connect.get_secured_settings3.after",
+            "connect.set_audio_redirection_mode.before",
+            "connect.set_audio_redirection_mode.after",
+        ],
+    );
+    assert_tokens_in_scope(
+        &format!("{HOST_CRATE}/native/active_x_host.cpp"),
+        "NavopRdpResult connect_active_x(",
+        "\n}\n\nNavopRdpResult apply_active_x_credentials(",
+        &[
+            "put_AuthenticationLevel(0)",
+            "configure_audio_redirection(",
+            "options.flags",
+            "put_DesktopWidth",
+            "Connect()",
+        ],
+    );
+}
+
+#[test]
 fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resources() {
     let source = &format!("{HOST_CRATE}/native/active_x_host.cpp");
 
@@ -1488,6 +1548,116 @@ fn gpui_smoke_uses_a_true_child_overlay_before_showing_the_active_x_host() {
 }
 
 #[test]
+fn product_native_rdp_uses_a_true_child_overlay_without_implicit_show() {
+    assert_contains_all(
+        "crates/remote_desktop_view/src/view/windows_native_overlay/window.rs",
+        &[
+            "const WS_CHILD: u32",
+            "style_before | WS_CLIPCHILDREN as usize",
+            "SetWindowLongPtrW(owner, GWL_STYLE, style_after as isize)",
+            "SWP_FRAMECHANGED",
+            "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT",
+            "CreateWindowExW(",
+            "WS_EX_NOPARENTNOTIFY",
+            "GetParent(overlay)",
+            "SetWindowPos(",
+            "SWP_NOACTIVATE",
+        ],
+    );
+    assert_excludes_all(
+        "crates/remote_desktop_view/src/view/windows_native_overlay/window.rs",
+        &["WS_POPUP", "WS_EX_TOOLWINDOW", "SWP_SHOWWINDOW"],
+    );
+}
+
+#[test]
+fn product_native_rdp_hosts_active_x_below_the_overlay() {
+    assert_tokens_in_scope(
+        "crates/remote_desktop_view/src/view/windows_native.rs",
+        "pub(crate) fn create(",
+        "\n    pub(crate) fn generation",
+        &[
+            "WindowsNativeOverlay::create(owner, generation)?",
+            "WindowsRdpParentWindow::from_raw(overlay.hwnd())",
+            "WindowsRdpHost::create_with_parent(",
+            "overlay,",
+            "host,",
+        ],
+    );
+}
+
+#[test]
+fn product_native_rdp_shutdown_keeps_overlay_alive_until_host_is_destroyed() {
+    assert_tokens_in_scope(
+        "crates/remote_desktop_view/src/view/windows_native.rs",
+        "pub(crate) fn finish_destroy(",
+        "\n    pub(crate) fn force_close",
+        &[
+            "match self.host.close()",
+            "self.overlay.close()?",
+            "self.presentation.finish_destroy()",
+        ],
+    );
+    assert_tokens_in_scope(
+        "crates/remote_desktop_view/src/view/windows_native.rs",
+        "pub(crate) fn finish_destroy(",
+        "\n    pub(crate) fn force_close",
+        &[
+            "WindowsRdpHostError::CallbackInFlight",
+            "NativeDestroyProgress::PendingCallbacks",
+        ],
+    );
+}
+
+#[test]
+fn product_native_rdp_coordinates_overlay_and_host_presentation_order() {
+    assert_tokens_in_scope(
+        "crates/remote_desktop_view/src/view/windows_native.rs",
+        "impl NativePresentationSink for WindowsNativePresentationSink<'_> {",
+        "\n}\n\n#[cfg(test)]",
+        &[
+            "fn set_bounds",
+            "self.overlay.set_bounds(",
+            "self.host.set_bounds(0, 0",
+            "fn show",
+            "self.overlay.show()?",
+            "self.host.set_visible(true)",
+            "self.overlay.log_composition_diagnostics(\"show_complete\")",
+            "fn hide",
+            "self.host.set_visible(false)",
+            "self.overlay.hide()",
+        ],
+    );
+}
+
+#[test]
+fn product_native_rdp_close_attempts_destroy_even_when_hide_fails() {
+    let path = "crates/remote_desktop_view/src/view/windows_native_overlay/lifecycle.rs";
+    assert_tokens_in_scope(
+        path,
+        "pub(crate) fn close(&mut self)",
+        "\n    pub(crate) fn abandon",
+        &[
+            "let hide_error = self.hide_actual().err();",
+            "DestroyWindow(window)",
+            "if let Some(error) = hide_error",
+            "failed to hide Windows native RDP overlay before destroy",
+            "self.window = 0;",
+            "self.last_bounds = None;",
+        ],
+    );
+    let source = read(path);
+    let close = source
+        .split("pub(crate) fn close(&mut self)")
+        .nth(1)
+        .unwrap()
+        .split("\n    pub(crate) fn abandon")
+        .next()
+        .unwrap();
+    assert!(!close.contains("self.hide_actual()?;"));
+}
+
+#[test]
 fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_control() {
     let sink = &format!("{HOST_CRATE}/native/event_sink.cpp");
     let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
@@ -1683,7 +1853,7 @@ fn native_connection_entrypoints_validate_gate_outputs_and_exceptions() {
         &[
             "validate_struct_size",
             "validate_abi_version",
-            "options->flags != 0",
+            "options->flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN",
             "NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS",
             "options->host.data == nullptr",
             "options->port > UINT32_C(65535)",

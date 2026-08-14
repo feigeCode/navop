@@ -1808,7 +1808,7 @@ fn native_connection_entrypoints_validate_inputs_thread_and_open_gate() {
     );
 
     let mut flags = connection_options(&endpoint);
-    flags.flags = 1;
+    flags.flags = 2;
     assert_eq!(
         unsafe { navop_rdp_connect(host, &flags) },
         RESULT_INVALID_ARGUMENT

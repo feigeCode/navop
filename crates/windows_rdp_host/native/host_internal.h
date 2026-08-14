@@ -89,6 +89,11 @@ NavopRdpResult connect_active_x(
     NativeRdpActiveXResources* resources,
     const NavopRdpConnectionOptions& options) noexcept;
 
+NavopRdpResult configure_audio_redirection(
+    NativeRdpHost* owner,
+    IUnknown* client,
+    uint32_t flags) noexcept;
+
 NavopRdpResult apply_active_x_credentials(
     NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,

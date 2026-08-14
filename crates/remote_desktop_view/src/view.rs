@@ -59,6 +59,8 @@ mod windows_native;
 mod windows_native_display;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_display_integration;
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+mod windows_native_overlay;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
@@ -591,7 +593,8 @@ impl RemoteDesktopView {
                 ) => presentation::classify_windows_native_create_error(*error),
                 WindowsNativePresentationCreateError::Adapter(
                     windows_native::WindowsNativeAdapterCreateError::WindowHandle(_)
-                    | windows_native::WindowsNativeAdapterCreateError::ParentHandleNotWin32,
+                    | windows_native::WindowsNativeAdapterCreateError::ParentHandleNotWin32
+                    | windows_native::WindowsNativeAdapterCreateError::Overlay(_),
                 ) => None,
             },
         );
@@ -712,7 +715,7 @@ impl RemoteDesktopView {
             u32::from(size.1),
             windows_rdp_host::WindowsRdpColorDepth::Bpp32,
         ) {
-            Ok(options) => options,
+            Ok(options) => options.with_audio_playback(self.options.audio_playback),
             Err(error) => {
                 self.fail_windows_native_presentation(
                     native,

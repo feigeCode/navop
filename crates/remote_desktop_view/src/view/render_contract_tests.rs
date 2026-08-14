@@ -705,6 +705,7 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
         "native.update_bounds",
         "parse_destination",
         "WindowsRdpConnectionOptions::new",
+        ".with_audio_playback(self.options.audio_playback)",
         "native.connect",
         "attach_windows_native_presentation",
         "RemoteDesktopPresentationInitialization::Native",

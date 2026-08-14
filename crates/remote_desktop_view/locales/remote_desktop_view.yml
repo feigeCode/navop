@@ -205,10 +205,22 @@ RemoteDesktopForm:
     en: Play remote audio
     zh-CN: 播放远端音频
     zh-HK: 播放遠端音訊
-  label_windows_native_rdp:
-    en: Use Windows native RDP
-    zh-CN: 使用 Windows 原生 RDP
-    zh-HK: 使用 Windows 原生 RDP
+  label_backend_preference:
+    en: RDP backend
+    zh-CN: RDP 后端
+    zh-HK: RDP 後端
+  backend_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  backend_windows_native:
+    en: Windows native RDP
+    zh-CN: Windows 原生 RDP
+    zh-HK: Windows 原生 RDP
+  backend_canvas:
+    en: Canvas
+    zh-CN: Canvas
+    zh-HK: Canvas
   placeholder_name:
     en: Windows Server
     zh-CN: Windows 服务器

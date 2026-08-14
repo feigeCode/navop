@@ -5,6 +5,8 @@ use std::mem::{align_of, size_of};
 pub(crate) const ABI_VERSION: u32 = 1;
 pub(crate) const CREATE_WITH_PARENT_ABI_VERSION: u32 = 1;
 pub(crate) const SESSION_DISPLAY_SETTINGS_ABI_VERSION: u32 = 1;
+pub(crate) const CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED: u32 = 1;
+pub(crate) const CONNECTION_FLAGS_KNOWN: u32 = CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
 
 pub(crate) type NativeResult = i32;
 
@@ -1062,7 +1064,7 @@ unsafe fn connect(
         return RESULT_ABI_MISMATCH;
     }
     let flags = unsafe { std::ptr::addr_of!((*options).flags).read() };
-    if flags != 0 {
+    if flags & !CONNECTION_FLAGS_KNOWN != 0 {
         return RESULT_INVALID_ARGUMENT;
     }
 
@@ -1505,6 +1507,13 @@ mod tests {
         assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
 
         options.port = 3389;
+        options.flags = CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+
+        options.flags = CONNECTION_FLAGS_KNOWN << 1;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options.flags = 0;
         assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
 
         let mut state = u32::MAX;
