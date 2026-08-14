@@ -13,8 +13,6 @@ gpui-component.workspace = true
 one-core.workspace = true
 agent_runtime = { path = "../agent_runtime" }
 html-preview.workspace = true
-gpui-wry = { path = "../webview" }
-wry = { version = "0.53.3", package = "lb-wry" }
 agent-client-protocol.workspace = true
 llm-connector = { workspace = true, features = ["streaming"] }
 async-trait.workspace = true
@@ -28,6 +26,10 @@ image.workspace = true
 uuid.workspace = true
 lsp-types.workspace = true
 sum-tree.workspace = true
+
+[target.'cfg(not(all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
+gpui-wry = { path = "../webview" }
+wry = { version = "0.53.3", package = "lb-wry" }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

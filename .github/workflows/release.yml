@@ -218,6 +218,18 @@ jobs:
         run: |
           cmake --version
 
+      - name: Install Zig toolchain (Linux ARM64)
+        if: matrix.arm_linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/ziglang"
+          "$RUNNER_TEMP/ziglang/bin/python" -m pip install ziglang==0.14.1
+          cargo install --locked cargo-zigbuild --version 0.23.0
+          echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/ziglang/bin/python" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
+          cargo zigbuild --version
+
       - name: Set environment variables
         shell: bash
         run: |
@@ -259,7 +271,21 @@ jobs:
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
           echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
-          cargo build --release -p main --target ${{ matrix.target }}
+          if [ "${{ matrix.arm_linux }}" = "true" ]; then
+            cargo zigbuild --release -p main --target "${{ matrix.target }}.2.28"
+          else
+            cargo build --release -p main --target "${{ matrix.target }}"
+          fi
+          test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      - name: Verify Linux ARM64 glibc baseline
+        if: matrix.arm_linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          script/check-linux-glibc-baseline.sh \
+            "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            "2.28"
 
       - name: Save shared Cargo inputs
         if: >-

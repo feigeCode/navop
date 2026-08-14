@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 const read = (path) => fs.readFileSync(path, "utf8");
+
+const workflowStep = (workflow, name) => {
+  const marker = `      - name: ${name}`;
+  const start = workflow.indexOf(marker);
+  assert.ok(start >= 0, `missing workflow step: ${name}`);
+  const end = workflow.indexOf("\n      - name:", start + marker.length);
+  return workflow.slice(start, end >= 0 ? end : undefined);
+};
 
 test("release packaging uses the navop executable on every platform", () => {
   const release = read(".github/workflows/release.yml");
@@ -101,6 +112,132 @@ test("renamed Linux packages replace legacy onetcli installations", () => {
   assert.match(release, /Conflicts: onetcli/);
   assert.match(release, /Name: navop/);
   assert.match(release, /Obsoletes: onetcli/);
+});
+
+test("Linux ARM64 release targets glibc 2.28 and verifies the produced ELF", () => {
+  const release = read(".github/workflows/release.yml");
+  const installZig = workflowStep(
+    release,
+    "Install Zig toolchain (Linux ARM64)",
+  );
+  const build = workflowStep(release, "Build release binary");
+  const verify = workflowStep(
+    release,
+    "Verify Linux ARM64 glibc baseline",
+  );
+
+  assert.match(
+    release,
+    /linux_arm64='\{"target":"aarch64-unknown-linux-gnu"[^']*"arm_linux":true\}'/,
+  );
+  assert.match(installZig, /if: matrix\.arm_linux/);
+  assert.match(installZig, /python3 -m venv "\$RUNNER_TEMP\/ziglang"/);
+  assert.match(installZig, /ziglang==0\.14\.1/);
+  assert.match(
+    installZig,
+    /cargo install --locked cargo-zigbuild --version 0\.23\.0/,
+  );
+  assert.match(
+    installZig,
+    /CARGO_ZIGBUILD_PYTHON_PATH=\$RUNNER_TEMP\/ziglang\/bin\/python/,
+  );
+  assert.match(build, /if \[ "\$\{\{ matrix\.arm_linux \}\}" = "true" \]/);
+  assert.match(
+    build,
+    /cargo zigbuild --release -p main --target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+  );
+  assert.match(
+    build,
+    /cargo build --release -p main --target "\$\{\{ matrix\.target \}\}"/,
+  );
+  assert.match(
+    build,
+    /test -x "target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}"/,
+  );
+  assert.match(verify, /if: matrix\.arm_linux/);
+  assert.match(
+    verify,
+    /script\/check-linux-glibc-baseline\.sh[\s\S]*target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}[\s\S]*2\.28/,
+  );
+});
+
+test("Linux ARM64 excludes the embedded WebView runtime", () => {
+  const cargo = read("crates/ai_chat_view/Cargo.toml");
+  const htmlCodeBlock = read(
+    "crates/ai_chat_view/src/html_code_block.rs",
+  );
+  const regularDependencies = cargo.match(
+    /\[dependencies\]([\s\S]*?)(?=\n\[)/,
+  )?.[1];
+  const armCompatibleDependencies = cargo.match(
+    /\[target\.'cfg\(not\(all\(target_os = "linux", target_arch = "aarch64"\)\)\)'\.dependencies\]([\s\S]*?)(?=\n\[)/,
+  )?.[1];
+
+  assert.ok(regularDependencies, "missing regular ai_chat_view dependencies");
+  assert.doesNotMatch(regularDependencies, /^gpui-wry\s*=/m);
+  assert.doesNotMatch(regularDependencies, /^wry\s*=/m);
+  assert.ok(
+    armCompatibleDependencies,
+    "missing non-ARM64-Linux WebView dependencies",
+  );
+  assert.match(armCompatibleDependencies, /^gpui-wry\s*=/m);
+  assert.match(armCompatibleDependencies, /^wry\s*=/m);
+  assert.match(
+    htmlCodeBlock,
+    /cfg\(not\(all\(target_os = "linux", target_arch = "aarch64"\)\)\)/,
+  );
+  assert.match(
+    htmlCodeBlock,
+    /cfg\(all\(target_os = "linux", target_arch = "aarch64"\)\)[\s\S]*?fn refresh_webview/,
+  );
+  assert.match(
+    htmlCodeBlock,
+    /HtmlPreview\.webview_unavailable/,
+  );
+});
+
+test("glibc baseline checker rejects binaries above the configured version", () => {
+  const checker = "script/check-linux-glibc-baseline.sh";
+  assert.ok(fs.existsSync(checker), `${checker} must exist`);
+
+  const fixtureDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "navop-glibc-check-"),
+  );
+  const fakeReadelf = path.join(fixtureDir, "readelf");
+  const binary = path.join(fixtureDir, "navop");
+  fs.writeFileSync(binary, "");
+
+  const runChecker = (readelfOutput) => {
+    fs.writeFileSync(
+      fakeReadelf,
+      `#!/usr/bin/env bash\ncat <<'EOF'\n${readelfOutput}\nEOF\n`,
+      { mode: 0o755 },
+    );
+    return spawnSync("bash", [checker, binary, "2.28"], {
+      encoding: "utf8",
+      env: { ...process.env, READELF: fakeReadelf },
+    });
+  };
+
+  try {
+    const compatible = runChecker(
+      "Name: GLIBC_2.17\nName: GLIBC_2.28",
+    );
+    assert.equal(compatible.status, 0, compatible.stderr);
+    assert.match(compatible.stdout, /highest required GLIBC version: 2\.28/);
+
+    const incompatible = runChecker(
+      "Name: GLIBC_2.17\nName: GLIBC_2.29",
+    );
+    assert.notEqual(incompatible.status, 0);
+    assert.match(incompatible.stderr, /requires GLIBC_2\.29/);
+
+    const missingSymbols = runChecker("No version information found");
+    assert.notEqual(missingSymbols.status, 0);
+    assert.match(missingSymbols.stderr, /did not report any GLIBC versions/);
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
 });
 
 test("Windows release builds an installable per-user MSI", () => {

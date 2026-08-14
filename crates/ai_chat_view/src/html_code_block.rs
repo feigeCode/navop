@@ -1,13 +1,20 @@
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 use std::borrow::Cow;
 
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
+    AnyElement, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+use gpui::{App, Entity};
 use gpui_component::{ActiveTheme, WindowExt};
-use html_preview::{HtmlPreviewDocument, HtmlPreviewTransformOutput, resolve_extension_asset_url};
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+use html_preview::resolve_extension_asset_url;
+use html_preview::{HtmlPreviewDocument, HtmlPreviewTransformOutput};
 use rust_i18n::t;
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 use wry::WebViewBuilder;
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 use wry::http::{Request, Response, StatusCode};
 
 pub struct HtmlCodeBlockView {
@@ -17,6 +24,7 @@ pub struct HtmlCodeBlockView {
 
 struct HtmlPreviewDialogView {
     document: HtmlPreviewDocument,
+    #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
     webview: Option<Entity<gpui_wry::WebView>>,
     webview_error: Option<String>,
 }
@@ -140,12 +148,13 @@ impl Render for HtmlCodeBlockView {
 
 impl HtmlPreviewDialogView {
     fn new(document: HtmlPreviewDocument, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (webview, webview_error) = create_webview(&document, window, cx);
-        let view = Self {
+        let mut view = Self {
             document,
-            webview,
-            webview_error,
+            #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+            webview: None,
+            webview_error: None,
         };
+        view.refresh_webview(window, cx);
         view.spawn_transform(window, cx);
         view
     }
@@ -179,10 +188,20 @@ impl HtmlPreviewDialogView {
         cx: &mut Context<Self>,
     ) {
         self.document.apply_transform(transform);
+        self.refresh_webview(window, cx);
+        cx.notify();
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
+    fn refresh_webview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (webview, webview_error) = create_webview(&self.document, window, cx);
         self.webview = webview;
         self.webview_error = webview_error;
-        cx.notify();
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    fn refresh_webview(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.webview_error = Some(t!("HtmlPreview.webview_unavailable").to_string());
     }
 
     fn render_preview(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -192,22 +211,24 @@ impl HtmlPreviewDialogView {
             .w_full()
             .overflow_hidden()
             .bg(cx.theme().background);
+
+        #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
         if let Some(webview) = &self.webview {
-            frame.child(webview.clone()).into_any_element()
-        } else {
-            frame
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(
-                    self.webview_error
-                        .clone()
-                        .unwrap_or_else(|| t!("HtmlPreview.webview_unavailable").to_string()),
-                )
-                .into_any_element()
+            return frame.child(webview.clone()).into_any_element();
         }
+
+        frame
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(
+                self.webview_error
+                    .clone()
+                    .unwrap_or_else(|| t!("HtmlPreview.webview_unavailable").to_string()),
+            )
+            .into_any_element()
     }
 
     #[cfg(test)]
@@ -228,6 +249,7 @@ impl Render for HtmlPreviewDialogView {
     }
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 fn create_webview(
     document: &HtmlPreviewDocument,
     window: &mut Window,
@@ -251,6 +273,7 @@ fn create_webview(
     }
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 fn extension_asset_response(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let Some(path) = resolve_extension_asset_url(&request.uri().to_string()) else {
         return empty_response(StatusCode::NOT_FOUND);
@@ -261,10 +284,12 @@ fn extension_asset_response(request: Request<Vec<u8>>) -> Response<Cow<'static, 
     }
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 fn empty_response(status: StatusCode) -> Response<Cow<'static, [u8]>> {
     response(status, "text/plain; charset=utf-8", Cow::Borrowed(&[]))
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 fn response(
     status: StatusCode,
     content_type: &'static str,
@@ -277,6 +302,7 @@ fn response(
         .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[])))
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 fn mime_for_path(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("css") => "text/css; charset=utf-8",
