@@ -36,7 +36,7 @@ fn repository() -> Arc<ConnectionRepository> {
 }
 
 fn insert_username_credential(repo: &ConnectionRepository, username: &str) -> i64 {
-    let mut credential = CredentialEntry::new("shared redis account", "username_password");
+    let mut credential = CredentialEntry::new("shared redis account");
     credential.username = Some(username.to_string());
     repo.credential_repository()
         .insert(&mut credential)

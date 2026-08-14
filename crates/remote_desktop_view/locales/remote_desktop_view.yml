@@ -205,6 +205,10 @@ RemoteDesktopForm:
     en: Play remote audio
     zh-CN: 播放远端音频
     zh-HK: 播放遠端音訊
+  label_windows_native_rdp:
+    en: Use Windows native RDP
+    zh-CN: 使用 Windows 原生 RDP
+    zh-HK: 使用 Windows 原生 RDP
   placeholder_name:
     en: Windows Server
     zh-CN: Windows 服务器

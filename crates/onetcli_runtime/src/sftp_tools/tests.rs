@@ -306,7 +306,7 @@ fn sftp_tools_resolve_connections_by_id_before_type_check() {
 fn sftp_config_resolves_vault_username_before_connecting() {
     let repo = repo();
     let credentials = repo.credential_repository();
-    let mut credential = CredentialEntry::new("shared ssh account", "username_password");
+    let mut credential = CredentialEntry::new("shared ssh account");
     credential.username = Some("vault-user".to_string());
     let credential_id = credentials
         .insert(&mut credential)

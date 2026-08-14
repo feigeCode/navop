@@ -4,8 +4,9 @@ use crate::storage::traits::Repository;
 use crate::storage::{
     ConnectionType, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
     JumpServerConfig, MongoDBParams, MongoDriverVariant, ProxyConfig, ProxyType, RedisMode,
-    RedisParams, RedisSentinelConfig, RemoteDesktopParams, RemoteDesktopProtocol, SshAccountExpect,
-    SshAuthMethod, SshParams, StoredConnection, TelnetLoginStep, TelnetParams, TerminalExpectSend,
+    RedisParams, RedisSentinelConfig, RemoteDesktopBackendPreference, RemoteDesktopParams,
+    RemoteDesktopProtocol, SshAccountExpect, SshAuthMethod, SshParams, StoredConnection,
+    TelnetLoginStep, TelnetParams, TerminalExpectSend,
 };
 
 use super::with_master_key;
@@ -152,6 +153,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
                 read_only: false,
                 audio_playback: false,
                 proxy: None,
+                backend_preference: RemoteDesktopBackendPreference::Canvas,
             })
             .expect("resolve remote desktop");
         assert_eq!(Some("vault-user"), remote.username.as_deref());

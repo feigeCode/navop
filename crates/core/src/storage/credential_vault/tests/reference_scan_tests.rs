@@ -5,8 +5,8 @@ use crate::storage::{
     ConnectionRepository, CredentialEntry, CredentialReference, CredentialReferenceLocation,
     DatabaseType, DbConnectionConfig, JumpServerConfig, MongoDBParams, MongoDriverVariant,
     PortForwardingKind, PortForwardingParams, ProxyConfig, ProxyType, RedisMode, RedisParams,
-    RedisSentinelConfig, RemoteDesktopParams, RemoteDesktopProtocol, SshAuthMethod, SshParams,
-    StoredConnection,
+    RedisSentinelConfig, RemoteDesktopBackendPreference, RemoteDesktopParams,
+    RemoteDesktopProtocol, SshAuthMethod, SshParams, StoredConnection,
 };
 
 fn reference(id: i64) -> CredentialReference {
@@ -162,6 +162,7 @@ pub(super) fn remote_desktop_connection(id: i64) -> StoredConnection {
             read_only: false,
             audio_playback: false,
             proxy: Some(proxy(id)),
+            backend_preference: RemoteDesktopBackendPreference::Canvas,
         },
         None,
     )

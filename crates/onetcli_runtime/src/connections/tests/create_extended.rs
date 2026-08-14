@@ -1,7 +1,8 @@
 use super::{connection_tool_registry, create_connection, repo};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionType, PortForwardingKind, RemoteDesktopProtocol, SerialFlowControl, SerialParity,
+    ConnectionType, PortForwardingKind, RemoteDesktopBackendPreference, RemoteDesktopProtocol,
+    SerialFlowControl, SerialParity,
 };
 use serde_json::json;
 
@@ -101,6 +102,10 @@ fn create_rdp_connection_persists_remote_desktop_params() {
     assert_eq!(Some("corp"), params.domain.as_deref());
     assert!(params.read_only);
     assert!(params.audio_playback);
+    assert_eq!(
+        RemoteDesktopBackendPreference::Canvas,
+        params.backend_preference
+    );
 }
 
 #[test]

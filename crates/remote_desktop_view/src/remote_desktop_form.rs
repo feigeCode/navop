@@ -1,8 +1,11 @@
+mod backend_preference;
 mod connection_test;
 mod inputs;
 mod persistence;
 mod proxy;
 mod selects;
+#[cfg(test)]
+mod tests;
 mod view;
 
 use connection_form::credential::{
@@ -23,6 +26,7 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 
+use self::backend_preference::normalize_for_form;
 use self::connection_test::ConnectionTestState;
 use self::inputs::{create_inputs, input_text, non_empty_text, parse_u16};
 use self::persistence::{emit_saved_connection, persist_connection};
@@ -158,7 +162,7 @@ impl RemoteDesktopFormWindow {
             team_select: create_team_select(&config.teams, None, window, cx),
             read_only: false,
             audio_playback: false,
-            backend_preference: RemoteDesktopBackendPreference::Auto,
+            backend_preference: RemoteDesktopBackendPreference::default(),
             proxy_enabled: false,
             proxy_type: ProxyType::Socks5,
             sync_enabled: config
@@ -220,7 +224,7 @@ impl RemoteDesktopFormWindow {
             .update(cx, |state, cx| state.set_value(&domain, window, cx));
         self.read_only = params.read_only;
         self.audio_playback = audio_playback_for_protocol(self.protocol, params.audio_playback);
-        self.backend_preference = params.backend_preference;
+        self.backend_preference = normalize_for_form(params.backend_preference);
         self.apply_proxy(params.proxy, window, cx);
     }
 
@@ -332,27 +336,4 @@ impl RemoteDesktopFormWindow {
 
 fn audio_playback_for_protocol(protocol: RemoteDesktopProtocol, enabled: bool) -> bool {
     protocol == RemoteDesktopProtocol::Rdp && enabled
-}
-
-#[cfg(test)]
-mod tests {
-    use one_core::storage::RemoteDesktopProtocol;
-
-    use super::audio_playback_for_protocol;
-
-    #[test]
-    fn audio_playback_is_only_enabled_for_rdp() {
-        assert!(audio_playback_for_protocol(
-            RemoteDesktopProtocol::Rdp,
-            true
-        ));
-        assert!(!audio_playback_for_protocol(
-            RemoteDesktopProtocol::Vnc,
-            true
-        ));
-        assert!(!audio_playback_for_protocol(
-            RemoteDesktopProtocol::Rdp,
-            false
-        ));
-    }
 }

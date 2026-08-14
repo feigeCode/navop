@@ -19,7 +19,10 @@ use gpui_component::{
 };
 use rust_i18n::t;
 
-use super::RemoteDesktopFormWindow;
+use super::{
+    RemoteDesktopFormWindow,
+    backend_preference::{toggle_windows_native, windows_native_enabled},
+};
 use one_core::storage::RemoteDesktopProtocol;
 
 impl RemoteDesktopFormWindow {
@@ -97,6 +100,7 @@ impl RemoteDesktopFormWindow {
             .child(self.render_read_only_row(cx))
             .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
                 form.child(self.render_audio_playback_row(cx))
+                    .child(self.render_windows_native_rdp_row(cx))
             })
             .when(connection_sync_controls_visible_in(cx), |form| {
                 form.child(self.render_sync_row(cx))
@@ -200,6 +204,18 @@ impl RemoteDesktopFormWindow {
         )
     }
 
+    fn render_windows_native_rdp_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_form_row(
+            t!("RemoteDesktopForm.label_windows_native_rdp").to_string(),
+            Checkbox::new("remote-desktop-windows-native-rdp")
+                .checked(windows_native_enabled(self.backend_preference))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.backend_preference = toggle_windows_native(this.backend_preference);
+                    cx.notify();
+                })),
+        )
+    }
+
     fn render_sync_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let label = t!("ConnectionForm.cloud_sync").to_string();
         let desc = t!("ConnectionForm.cloud_sync_desc").to_string();
@@ -286,12 +302,15 @@ mod tests {
     }
 
     #[test]
-    fn audio_playback_checkbox_is_only_rendered_for_rdp() {
+    fn rdp_specific_checkboxes_are_only_rendered_for_rdp() {
         let source = include_str!("view.rs");
 
         assert!(source.contains("self.protocol == RemoteDesktopProtocol::Rdp"));
         assert!(source.contains("self.render_audio_playback_row(cx)"));
         assert!(source.contains("remote-desktop-audio-playback"));
         assert!(source.contains("RemoteDesktopForm.label_audio_playback"));
+        assert!(source.contains("self.render_windows_native_rdp_row(cx)"));
+        assert!(source.contains("remote-desktop-windows-native-rdp"));
+        assert!(source.contains("RemoteDesktopForm.label_windows_native_rdp"));
     }
 }
