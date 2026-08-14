@@ -16,6 +16,7 @@ on:
           - macos-arm64
           - macos-x64
           - linux-x64
+          - linux-x64-portable
           - linux-arm64
           - linux-arm64-portable
           - windows-x64
@@ -116,16 +117,18 @@ jobs:
           macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
           macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
           linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":false,"portable_linux":false}'
+          linux_x64_portable='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":false,"portable_linux":true}'
           linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":true,"portable_linux":false}'
           linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":true,"portable_linux":true}'
           windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"portable_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
           windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"portable_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
 
           case "$RELEASE_PLATFORM" in
-            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$linux_arm64_portable,$windows_x64,$windows_x86]" ;;
+            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_x64_portable,$linux_arm64,$linux_arm64_portable,$windows_x64,$windows_x86]" ;;
             macos-arm64) matrix="[$macos_arm64]" ;;
             macos-x64) matrix="[$macos_x64]" ;;
-            linux-x64) matrix="[$linux_x64]" ;;
+            linux-x64) matrix="[$linux_x64,$linux_x64_portable]" ;;
+            linux-x64-portable) matrix="[$linux_x64_portable]" ;;
             linux-arm64) matrix="[$linux_arm64,$linux_arm64_portable]" ;;
             linux-arm64-portable) matrix="[$linux_arm64_portable]" ;;
             windows-x64) matrix="[$windows_x64]" ;;
@@ -221,7 +224,7 @@ jobs:
         run: |
           cmake --version
 
-      - name: Install Zig toolchain (Linux ARM64 portable)
+      - name: Install Zig toolchain (portable Linux)
         if: matrix.portable_linux
         shell: bash
         run: |
@@ -294,7 +297,7 @@ jobs:
           fi
           test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
 
-      - name: Verify Linux ARM64 glibc baseline
+      - name: Verify portable Linux glibc baseline
         if: matrix.portable_linux
         shell: bash
         run: |
@@ -377,13 +380,13 @@ jobs:
             -C package .
 
       - name: Install Linux packaging dependencies
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm
 
       - name: Package Linux installers (x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
         shell: bash
         run: |
           set -euo pipefail
@@ -586,7 +589,7 @@ jobs:
           path: ${{ matrix.windows_basename }}.exe
 
       - name: Upload Linux installer artifacts
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
         uses: actions/upload-artifact@v4
         with:
           name: navop-linux-x86_64-installers

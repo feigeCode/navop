@@ -6,6 +6,14 @@
 #include <string.h>
 #include <unistd.h>
 
+#if defined(__aarch64__)
+#define NAVOP_PORTABLE_LOADER "ld-linux-aarch64.so.1"
+#elif defined(__x86_64__)
+#define NAVOP_PORTABLE_LOADER "ld-linux-x86-64.so.2"
+#else
+#error unsupported architecture for the Navop portable launcher
+#endif
+
 static void fail(const char *message) {
     fprintf(stderr, "navop portable launcher: %s\n", message);
     exit(127);
@@ -82,7 +90,7 @@ int main(int argc, char **argv) {
 
     char *runtime_root = join_path(self_path, "lib/navop");
     char *library_path = join_path(runtime_root, "lib");
-    char *loader_path = join_path(library_path, "ld-linux-aarch64.so.1");
+    char *loader_path = join_path(library_path, NAVOP_PORTABLE_LOADER);
     char *binary_path = join_path(runtime_root, "bin/navop.real");
     char *gconv_path = join_path(library_path, "gconv");
 

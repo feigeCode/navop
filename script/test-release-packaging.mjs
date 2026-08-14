@@ -114,23 +114,35 @@ test("renamed Linux packages replace legacy onetcli installations", () => {
   assert.match(release, /Obsoletes: onetcli/);
 });
 
-test("Linux ARM64 keeps the standard package and publishes portable separately", () => {
+test("Linux keeps full-feature standard packages and publishes portable variants separately", () => {
   const release = read(".github/workflows/release.yml");
   const installZig = workflowStep(
     release,
-    "Install Zig toolchain (Linux ARM64 portable)",
+    "Install Zig toolchain (portable Linux)",
   );
   const installPortable = workflowStep(
     release,
     "Install portable packaging dependencies",
   );
   const build = workflowStep(release, "Build release binary");
-  const verify = workflowStep(
+  const verifyPortable = workflowStep(
     release,
-    "Verify Linux ARM64 glibc baseline",
+    "Verify portable Linux glibc baseline",
   );
   const packageLinux = workflowStep(release, "Package (Linux)");
+  const packageInstallers = workflowStep(
+    release,
+    "Package Linux installers (x86_64)",
+  );
 
+  assert.match(
+    release,
+    /linux_x64='\{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest"[^']*"archive":"navop-x86_64-unknown-linux-gnu\.tar\.gz"[^']*"variant":"standard"[^']*"portable_linux":false\}'/,
+  );
+  assert.match(
+    release,
+    /linux_x64_portable='\{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22\.04"[^']*"archive":"navop-x86_64-unknown-linux-gnu-portable\.tar\.gz"[^']*"variant":"portable"[^']*"portable_linux":true\}'/,
+  );
   assert.match(
     release,
     /linux_arm64='\{"target":"aarch64-unknown-linux-gnu"[^']*"archive":"navop-aarch64-unknown-linux-gnu\.tar\.gz"[^']*"variant":"standard"[^']*"portable_linux":false\}'/,
@@ -141,7 +153,15 @@ test("Linux ARM64 keeps the standard package and publishes portable separately",
   );
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_x64_portable,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
+  );
+  assert.match(
+    release,
+    /linux-x64\) matrix="\[\$linux_x64,\$linux_x64_portable\]"/,
+  );
+  assert.match(
+    release,
+    /linux-x64-portable\) matrix="\[\$linux_x64_portable\]"/,
   );
   assert.match(
     release,
@@ -177,9 +197,9 @@ test("Linux ARM64 keeps the standard package and publishes portable separately",
     build,
     /test -x "target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}"/,
   );
-  assert.match(verify, /if: matrix\.portable_linux/);
+  assert.match(verifyPortable, /if: matrix\.portable_linux/);
   assert.match(
-    verify,
+    verifyPortable,
     /script\/check-linux-glibc-baseline\.sh[\s\S]*target\/\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}[\s\S]*2\.28/,
   );
   assert.match(
@@ -192,6 +212,10 @@ test("Linux ARM64 keeps the standard package and publishes portable separately",
   );
   assert.match(packageLinux, /--sort=name/);
   assert.match(packageLinux, /--numeric-owner/);
+  assert.match(
+    packageInstallers,
+    /if: matrix\.target == 'x86_64-unknown-linux-gnu' && !matrix\.portable_linux/,
+  );
 });
 
 test("portable Linux disables WebView while standard builds keep it", () => {
@@ -289,8 +313,20 @@ test("Linux portable packager uses a private loader and recursive ELF closure", 
   assert.match(packager, /libnss_files\.so\.2/);
   assert.match(packager, /libnss_\*\.so\.2/);
   assert.match(packager, /libvulkan_\*\.so\*/);
-  assert.match(packager, /\("LIB", "lib"\)/);
-  assert.match(packager, /\("PLATFORM", "aarch64"\)/);
+  assert.match(help.stdout, /aarch64-unknown-linux-gnu/);
+  assert.match(help.stdout, /x86_64-unknown-linux-gnu/);
+  assert.match(packager, /machine="AArch64"/);
+  assert.match(packager, /loader="ld-linux-aarch64\.so\.1"/);
+  assert.match(packager, /platform_token="aarch64"/);
+  assert.match(packager, /lib_token="lib"/);
+  assert.match(packager, /machine="Advanced Micro Devices X86-64"/);
+  assert.match(packager, /loader="ld-linux-x86-64\.so\.2"/);
+  assert.match(packager, /platform_token="x86_64"/);
+  assert.match(packager, /lib_token="lib64"/);
+  assert.match(packager, /launcher architecture mismatch/);
+  assert.match(packager, /launcher_machine/);
+  assert.match(packager, /gpu_policy/);
+  assert.match(packager, /nss_policy/);
   assert.match(packager, /license_sources\[f"gconv\/\{relative\}"\]/);
   assert.match(
     packager,
@@ -301,7 +337,11 @@ test("Linux portable packager uses a private loader and recursive ELF closure", 
     /cannot publish bundled runtime package without its copyright[\s\S]*file/,
   );
   assert.match(launcher, /\/proc\/self\/exe/);
+  assert.match(launcher, /defined\(__aarch64__\)/);
+  assert.match(launcher, /defined\(__x86_64__\)/);
   assert.match(launcher, /ld-linux-aarch64\.so\.1/);
+  assert.match(launcher, /ld-linux-x86-64\.so\.2/);
+  assert.match(launcher, /NAVOP_PORTABLE_LOADER/);
   assert.match(launcher, /--inhibit-cache/);
   assert.match(launcher, /--library-path/);
   assert.match(launcher, /navop\.real/);
@@ -387,7 +427,7 @@ test("Windows release publishes 32-bit x86 artifacts and updater metadata", () =
   );
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_x64_portable,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
   );
   assert.match(
     release,
@@ -675,11 +715,16 @@ test("GitHub publishes installers while R2 only uploads updater archives", () =>
   );
   assert.match(release, /new_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
   assert.match(release, /navop-aarch64-unknown-linux-gnu-portable\.tar\.gz/);
+  assert.match(release, /navop-x86_64-unknown-linux-gnu-portable\.tar\.gz/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.zip/);
   assert.match(upload, /navop-i686-pc-windows-msvc\.zip/);
   assert.doesNotMatch(
     upload,
     /navop-aarch64-unknown-linux-gnu-portable\.tar\.gz/,
+  );
+  assert.doesNotMatch(
+    upload,
+    /navop-x86_64-unknown-linux-gnu-portable\.tar\.gz/,
   );
   assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc-portable\.zip/);
   assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc\.exe/);
@@ -809,6 +854,7 @@ test("release builds are cacheable and individually repairable", () => {
     "macos-arm64",
     "macos-x64",
     "linux-x64",
+    "linux-x64-portable",
     "linux-arm64",
     "linux-arm64-portable",
     "windows-x64",
@@ -830,7 +876,7 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /-f platform=all/);
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_x64_portable,\$linux_arm64,\$linux_arm64_portable,\$windows_x64,\$windows_x86\]"/,
   );
   assert.equal(fs.existsSync(".github/workflows/build-arm-linux.yml"), false);
 });

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import fnmatch
 import hashlib
 import json
@@ -36,9 +37,8 @@ HOST_DRIVER_PATTERNS = (
     "libvulkan_*.so*",
 )
 
-STANDARD_LIBRARY_DIRECTORIES = (
-    "/lib/aarch64-linux-gnu",
-    "/usr/lib/aarch64-linux-gnu",
+
+COMMON_LIBRARY_DIRECTORIES = (
     "/lib64",
     "/lib",
     "/usr/lib64",
@@ -47,10 +47,45 @@ STANDARD_LIBRARY_DIRECTORIES = (
 )
 
 
+@dataclass(frozen=True)
+class TargetConfig:
+    machine: str
+    loader: str
+    platform_token: str
+    lib_token: str
+    library_directories: tuple[str, ...]
+
+
+TARGET_CONFIGS = {
+    "aarch64-unknown-linux-gnu": TargetConfig(
+        machine="AArch64",
+        loader="ld-linux-aarch64.so.1",
+        platform_token="aarch64",
+        lib_token="lib",
+        library_directories=(
+            "/lib/aarch64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+            *COMMON_LIBRARY_DIRECTORIES,
+        ),
+    ),
+    "x86_64-unknown-linux-gnu": TargetConfig(
+        machine="Advanced Micro Devices X86-64",
+        loader="ld-linux-x86-64.so.2",
+        platform_token="x86_64",
+        lib_token="lib64",
+        library_directories=(
+            "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+            *COMMON_LIBRARY_DIRECTORIES,
+        ),
+    ),
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Bundle an ARM64 Linux ELF with the runner's dynamic loader and "
+            "Bundle a Linux ELF with the runner's dynamic loader and "
             "recursive shared-library closure."
         )
     )
@@ -60,8 +95,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target",
         default="aarch64-unknown-linux-gnu",
-        choices=("aarch64-unknown-linux-gnu",),
-        help="portable launcher target (currently ARM64 Linux only)",
+        choices=tuple(TARGET_CONFIGS),
+        help="portable launcher target",
     )
     parser.add_argument(
         "--glibc-baseline",
@@ -149,7 +184,10 @@ def verify_binary_glibc_baseline(path: Path, maximum: str) -> None:
         )
 
 
-def dynamic_metadata(path: Path) -> tuple[list[str], list[Path]]:
+def dynamic_metadata(
+    path: Path,
+    target: TargetConfig,
+) -> tuple[list[str], list[Path]]:
     dynamic = readelf(path, "-dW")
     needed = re.findall(r"\(NEEDED\).*?Shared library:\s*\[([^\]]+)\]", dynamic)
     search_paths: list[Path] = []
@@ -163,8 +201,8 @@ def dynamic_metadata(path: Path) -> tuple[list[str], list[Path]]:
             expanded = item
             for token, value in (
                 ("ORIGIN", str(origin)),
-                ("LIB", "lib"),
-                ("PLATFORM", "aarch64"),
+                ("LIB", target.lib_token),
+                ("PLATFORM", target.platform_token),
             ):
                 expanded = expanded.replace(f"${{{token}}}", value).replace(
                     f"${token}",
@@ -214,11 +252,12 @@ def resolve_library(
     consumer_search_paths: Iterable[Path],
     cache: dict[str, list[Path]],
     machine: str,
+    library_directories: Iterable[str],
 ) -> Path | None:
     candidates: list[Path] = []
     candidates.extend(path / soname for path in consumer_search_paths)
     candidates.extend(cache.get(soname, []))
-    candidates.extend(Path(path) / soname for path in STANDARD_LIBRARY_DIRECTORIES)
+    candidates.extend(Path(path) / soname for path in library_directories)
 
     seen: set[Path] = set()
     for candidate in candidates:
@@ -329,7 +368,11 @@ def copy_package_licenses(
     return package_records
 
 
-def compile_launcher(source: Path, destination: Path) -> None:
+def compile_launcher(
+    source: Path,
+    destination: Path,
+    expected_machine: str,
+) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     run(
         [
@@ -346,6 +389,13 @@ def compile_launcher(source: Path, destination: Path) -> None:
     destination.chmod(0o755)
     if "Requesting program interpreter" in readelf(destination, "-lW"):
         fail(f"portable launcher is not static: {destination}")
+    launcher_machine = elf_machine(destination)
+    if launcher_machine != expected_machine:
+        fail(
+            "portable launcher architecture mismatch: "
+            f"expected {expected_machine}, got {launcher_machine}"
+        )
+    return launcher_machine
 
 
 def verify_private_runtime(loader: Path, library_directory: Path, binary: Path) -> None:
@@ -398,6 +448,7 @@ def manifest_files(output: Path, manifest: Path) -> list[dict[str, object]]:
 
 def main() -> None:
     args = parse_args()
+    target = TARGET_CONFIGS[args.target]
     for command in ("dpkg-query", "ldconfig", "musl-gcc", "readelf"):
         require_command(command)
 
@@ -414,12 +465,18 @@ def main() -> None:
         fail(f"refusing to replace unsafe output directory: {output}")
 
     machine = elf_machine(binary)
-    if "AArch64" not in machine:
-        fail(f"portable package expects an AArch64 binary, got {machine}")
+    if machine != target.machine:
+        fail(
+            f"portable package for {args.target} expects {target.machine}, "
+            f"got {machine}"
+        )
 
     interpreter = elf_interpreter(binary)
-    if interpreter.name != "ld-linux-aarch64.so.1":
-        fail(f"unexpected ARM64 ELF interpreter: {interpreter}")
+    if interpreter.name != target.loader:
+        fail(
+            f"unexpected ELF interpreter for {args.target}: {interpreter}; "
+            f"expected {target.loader}"
+        )
     if not interpreter.is_file():
         fail(f"ELF interpreter does not exist on the build runner: {interpreter}")
     verify_binary_glibc_baseline(binary, args.glibc_baseline)
@@ -453,7 +510,7 @@ def main() -> None:
         if elf_machine(consumer) != machine:
             fail(f"runtime architecture mismatch: {consumer}")
 
-        needed, search_paths = dynamic_metadata(consumer)
+        needed, search_paths = dynamic_metadata(consumer, target)
         for soname in needed:
             if is_host_driver(soname):
                 fail(
@@ -466,6 +523,7 @@ def main() -> None:
                 consumer_search_paths=search_paths,
                 cache=cache,
                 machine=machine,
+                library_directories=target.library_directories,
             )
             if source is None:
                 fail(f"missing required shared library {soname} for {consumer}")
@@ -488,6 +546,7 @@ def main() -> None:
             consumer_search_paths=(),
             cache=cache,
             machine=machine,
+            library_directories=target.library_directories,
         )
         if source is None:
             continue
@@ -501,7 +560,7 @@ def main() -> None:
         scanned.add(consumer)
         if elf_machine(consumer) != machine:
             fail(f"runtime architecture mismatch: {consumer}")
-        needed, search_paths = dynamic_metadata(consumer)
+        needed, search_paths = dynamic_metadata(consumer, target)
         for soname in needed:
             if is_host_driver(soname):
                 fail(
@@ -514,6 +573,7 @@ def main() -> None:
                 consumer_search_paths=search_paths,
                 cache=cache,
                 machine=machine,
+                library_directories=target.library_directories,
             )
             if source is None:
                 fail(f"missing required shared library {soname} for {consumer}")
@@ -574,7 +634,11 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    compile_launcher(launcher_source, launcher_destination)
+    launcher_machine = compile_launcher(
+        launcher_source,
+        launcher_destination,
+        machine,
+    )
     bundled_loader = library_directory / interpreter.name
     verify_private_runtime(
         bundled_loader,
@@ -587,11 +651,23 @@ def main() -> None:
         "schema_version": 1,
         "product": "navop",
         "target": args.target,
+        "elf_machine": machine,
+        "interpreter": str(interpreter),
+        "launcher_machine": launcher_machine,
+        "platform_token": target.platform_token,
+        "lib_token": target.lib_token,
         "binary_glibc_baseline": args.glibc_baseline,
         "entrypoint": "usr/bin/navop",
         "binary": "usr/lib/navop/bin/navop.real",
         "loader": f"usr/lib/navop/lib/{interpreter.name}",
         "library_path": "usr/lib/navop/lib",
+        "gpu_policy": (
+            "host vendor libraries are discovered dynamically and are not bundled"
+        ),
+        "nss_policy": (
+            "glibc NSS modules are bundled when available; host DNS, NSS, and "
+            "certificate configuration remains authoritative"
+        ),
         "packages": package_records,
         "host_interfaces": [
             "Linux kernel and procfs",
