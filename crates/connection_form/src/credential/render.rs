@@ -33,8 +33,10 @@ impl Render for CredentialReferencePicker {
 
 impl CredentialReferencePicker {
     pub(super) fn selected_summary(&self) -> Option<&CredentialSummary> {
-        let id = self.reference?.credential_id;
-        self.summaries.iter().find(|summary| summary.id == id)
+        let reference = self.reference.as_ref()?;
+        self.summaries
+            .iter()
+            .find(|summary| super::summary_matches_reference(summary, reference))
     }
 
     fn field_checkboxes(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -94,7 +96,7 @@ impl CredentialReferencePicker {
         };
         messages.extend(self.missing_field_warnings(summary, cx));
         let sync_status = if summary.sync_enabled {
-            "允许同步（跨设备同步尚未启用）"
+            "已参与个人端到端加密同步"
         } else {
             "仅本地"
         };

@@ -298,7 +298,9 @@ impl CredentialForm {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child("允许此凭据在端到端加密同步可用时参与同步。"),
+                                            .child(
+                                                "允许此凭据使用主密钥端到端加密并参与个人同步。",
+                                            ),
                                     ),
                             )
                             .child(
@@ -318,7 +320,7 @@ impl CredentialForm {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(
-                                "当前开关只记录同步策略；凭据密文的跨设备端到端同步尚未启用。私钥路径始终只保存在本机。",
+                                "启用后，密码、已导入的私钥内容和私钥密码会使用主密钥端到端加密并参与个人同步；本地私钥路径始终只保存在本机。",
                             ),
                     ),
             )

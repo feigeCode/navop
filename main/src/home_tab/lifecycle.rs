@@ -189,8 +189,12 @@ impl HomePage {
                             this.trigger_sync(cx);
                         }
                     }
-                    ConnectionDataEvent::SchemaChanged { .. } => {
-                        // SchemaChanged 由 db_tree_view 处理，此处无需操作
+                    ConnectionDataEvent::CredentialCreated { .. }
+                    | ConnectionDataEvent::CredentialUpdated { .. }
+                    | ConnectionDataEvent::CredentialDeleted { .. }
+                    | ConnectionDataEvent::SchemaChanged { .. } => {
+                        // 钥匙串增量同步由 personal_sync_runtime 处理；
+                        // SchemaChanged 由 db_tree_view 处理，此处无需操作。
                     }
                     ConnectionDataEvent::CloudSyncRequested => {
                         this.trigger_sync(cx);

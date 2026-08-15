@@ -22,6 +22,16 @@ impl CredentialRepository {
         self.get(id)
     }
 
+    pub fn get_by_cloud_id(&self, cloud_id: &str) -> Result<Option<CredentialEntry>> {
+        self.conn.with_connection(|conn| {
+            let sql = format!("{} WHERE cloud_id = ?1", Self::select_sql());
+            conn.query_row(&sql, [cloud_id], Self::read_row)
+                .optional()?
+                .map(Self::decrypt_entry)
+                .transpose()
+        })
+    }
+
     pub fn update_sync_status(
         &self,
         id: i64,
@@ -32,6 +42,25 @@ impl CredentialRepository {
             let updated = conn.execute(
                 "UPDATE credential_entries SET cloud_id = ?1, last_synced_at = ?2 WHERE id = ?3",
                 rusqlite::params![cloud_id, last_synced_at, id],
+            )?;
+            anyhow::ensure!(updated == 1, "Credential {id} not found");
+            Ok(())
+        })
+    }
+
+    pub fn update_sync_status_with_updated_at(
+        &self,
+        id: i64,
+        cloud_id: Option<&str>,
+        last_synced_at: Option<i64>,
+        updated_at: i64,
+    ) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            let updated = conn.execute(
+                "UPDATE credential_entries
+                 SET cloud_id = ?1, last_synced_at = ?2, updated_at = ?3
+                 WHERE id = ?4",
+                rusqlite::params![cloud_id, last_synced_at, updated_at, id],
             )?;
             anyhow::ensure!(updated == 1, "Credential {id} not found");
             Ok(())

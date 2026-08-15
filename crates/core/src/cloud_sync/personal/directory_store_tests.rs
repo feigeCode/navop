@@ -20,20 +20,44 @@ async fn upsert_record_writes_and_lists_by_type() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = DirectorySyncStore::new(temp.path().to_path_buf());
     store.probe().await.expect("probe succeeds");
-    let record = test_record("connection-1", data_type::CONNECTION, 1, "checksum-1");
+    let connection = test_record(
+        "shared-cloud-id",
+        data_type::CONNECTION,
+        1,
+        "connection-checksum",
+    );
+    let credential = test_record(
+        "shared-cloud-id",
+        data_type::CREDENTIAL,
+        1,
+        "credential-checksum",
+    );
 
-    let stored = store
-        .upsert_record(&record, None)
+    let stored_connection = store
+        .upsert_record(&connection, None)
         .await
-        .expect("upsert succeeds");
-    let records = store
+        .expect("connection upsert succeeds");
+    let stored_credential = store
+        .upsert_record(&credential, None)
+        .await
+        .expect("credential upsert succeeds");
+    let connections = store
         .list_records(Some(data_type::CONNECTION), None)
         .await
-        .expect("list succeeds");
+        .expect("connection list succeeds");
+    let credentials = store
+        .list_records(Some(data_type::CREDENTIAL), None)
+        .await
+        .expect("credential list succeeds");
 
-    assert_eq!(record.id, stored.id);
-    assert_eq!(1, records.len());
-    assert_eq!("connection-1", records[0].id);
+    assert_eq!(connection.id, stored_connection.id);
+    assert_eq!(credential.id, stored_credential.id);
+    assert_eq!(1, connections.len());
+    assert_eq!(data_type::CONNECTION, connections[0].data_type);
+    assert_eq!("shared-cloud-id", connections[0].id);
+    assert_eq!(1, credentials.len());
+    assert_eq!(data_type::CREDENTIAL, credentials[0].data_type);
+    assert_eq!("shared-cloud-id", credentials[0].id);
 }
 
 #[tokio::test]
@@ -81,23 +105,55 @@ async fn tombstone_marks_record_deleted() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = DirectorySyncStore::new(temp.path().to_path_buf());
     store.probe().await.expect("probe succeeds");
-    let record = test_record("connection-1", data_type::CONNECTION, 1, "checksum-1");
+    let connection = test_record(
+        "shared-cloud-id",
+        data_type::CONNECTION,
+        1,
+        "connection-checksum",
+    );
+    let credential = test_record(
+        "shared-cloud-id",
+        data_type::CREDENTIAL,
+        1,
+        "credential-checksum",
+    );
     store
-        .upsert_record(&record, None)
+        .upsert_record(&connection, None)
         .await
-        .expect("upsert succeeds");
+        .expect("connection upsert succeeds");
+    store
+        .upsert_record(&credential, None)
+        .await
+        .expect("credential upsert succeeds");
 
     store
-        .tombstone_record("connection-1", Some(1))
+        .tombstone_record(data_type::CONNECTION, "shared-cloud-id", Some(1))
         .await
         .expect("tombstone succeeds");
-    let records = store
+    let connections = store
         .list_records(Some(data_type::CONNECTION), None)
         .await
-        .expect("list succeeds");
+        .expect("connection list succeeds");
+    let credentials = store
+        .list_records(Some(data_type::CREDENTIAL), None)
+        .await
+        .expect("credential list succeeds");
 
-    assert_eq!(1, records.len());
-    assert!(records[0].deleted_at.is_some());
+    assert_eq!(1, connections.len());
+    assert!(connections[0].deleted_at.is_some());
+    assert_eq!(1, credentials.len());
+    assert!(credentials[0].deleted_at.is_none());
+    assert!(
+        temp.path()
+            .join(".onetcli-sync/tombstones/connection/shared-cloud-id.json")
+            .exists()
+    );
+    assert!(
+        !temp
+            .path()
+            .join(".onetcli-sync/tombstones/credential/shared-cloud-id.json")
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -111,7 +167,7 @@ async fn tombstone_advances_version() {
         .expect("seed succeeds");
 
     store
-        .tombstone_record("connection-1", Some(stored.version))
+        .tombstone_record(data_type::CONNECTION, "connection-1", Some(stored.version))
         .await
         .expect("tombstone succeeds");
     let records = store

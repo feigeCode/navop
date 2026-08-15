@@ -8,8 +8,8 @@ use crate::storage::{
 };
 
 use super::reference_scan_tests::{
-    database_connection, insert_credential, mongodb_connection, port_forwarding_connection,
-    redis_connection, remote_desktop_connection, repositories, ssh_connection, tunnel_connection,
+    database_connection, insert_credential, port_forwarding_connection, remote_desktop_connection,
+    repositories, ssh_connection, tunnel_connection,
 };
 
 fn insert_connection(
@@ -29,6 +29,18 @@ fn insert_plain_ssh(repository: &crate::storage::ConnectionRepository) -> i64 {
     params.proxy = None;
     connection.params = serde_json::to_string(&params).expect("serialize SSH fixture");
     insert_connection(repository, connection)
+}
+
+fn insert_cloud_credential(
+    repository: &crate::storage::ConnectionRepository,
+    cloud_id: &str,
+) -> i64 {
+    let mut credential = CredentialEntry::new("Synced", "username_password");
+    credential.cloud_id = Some(cloud_id.to_string());
+    repository
+        .credential_repository()
+        .insert(&mut credential)
+        .expect("insert synced credential")
 }
 
 fn set_tunnel_enabled(
@@ -262,4 +274,96 @@ fn scanning_summaries_does_not_require_an_unlocked_vault() {
         .referencing_connections(credential_id)
         .expect("scan while vault is locked");
     assert_eq!(3, hits.len());
+}
+
+#[test]
+fn reference_scanner_matches_stable_cloud_id_when_local_ids_differ() {
+    let (_temp, _connection, repository) = repositories();
+    let credential_id = insert_cloud_credential(&repository, "credential-cloud-stable");
+    let foreign_local_id = credential_id + 10_000;
+    let mut connection = database_connection(foreign_local_id);
+    let mut params = connection.to_db_connection().expect("parse database");
+    params
+        .credential_reference
+        .as_mut()
+        .expect("primary credential reference")
+        .credential_cloud_id = Some("credential-cloud-stable".to_string());
+    params.proxy = None;
+    connection.params = serde_json::to_string(&params).expect("serialize database");
+    insert_connection(&repository, connection);
+
+    let hits = repository
+        .credential_repository()
+        .referencing_connections(credential_id)
+        .expect("scan stable cloud ID");
+
+    assert_eq!(1, hits.len());
+    assert_eq!(CredentialReferenceLocation::Primary, hits[0].location);
+}
+
+#[test]
+fn reference_scanner_does_not_fallback_when_reference_has_wrong_cloud_id() {
+    let (_temp, _connection, repository) = repositories();
+    let credential_id = insert_cloud_credential(&repository, "credential-cloud-correct");
+    let mut connection = database_connection(credential_id);
+    let mut params = connection.to_db_connection().expect("parse database");
+    params
+        .credential_reference
+        .as_mut()
+        .expect("primary credential reference")
+        .credential_cloud_id = Some("credential-cloud-wrong".to_string());
+    params.proxy = None;
+    connection.params = serde_json::to_string(&params).expect("serialize database");
+    insert_connection(&repository, connection);
+
+    let hits = repository
+        .credential_repository()
+        .referencing_connections(credential_id)
+        .expect("scan wrong cloud ID");
+
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn delete_checked_rejects_cross_device_cloud_id_tunnel_reference() {
+    let (_temp, _connection, repository) = repositories();
+    let credential_id = insert_cloud_credential(&repository, "credential-cloud-tunnel");
+    let foreign_local_id = credential_id + 10_000;
+    let mut ssh = ssh_connection(foreign_local_id);
+    let mut params = ssh.to_ssh_params().expect("parse SSH");
+    params
+        .credential_reference
+        .as_mut()
+        .expect("primary reference")
+        .credential_cloud_id = Some("credential-cloud-tunnel".to_string());
+    params
+        .jump_server
+        .as_mut()
+        .and_then(|jump| jump.credential_reference.as_mut())
+        .expect("jump server reference")
+        .credential_cloud_id = Some("credential-cloud-tunnel".to_string());
+    params
+        .proxy
+        .as_mut()
+        .and_then(|proxy| proxy.credential_reference.as_mut())
+        .expect("proxy reference")
+        .credential_cloud_id = Some("credential-cloud-tunnel".to_string());
+    ssh.params = serde_json::to_string(&params).expect("serialize SSH");
+    let ssh_id = insert_connection(&repository, ssh);
+    insert_connection(&repository, port_forwarding_connection(ssh_id));
+
+    let outcome = repository
+        .credential_repository()
+        .delete_checked(credential_id)
+        .expect("protected cross-device delete");
+    let crate::storage::DeleteCredentialOutcome::Referenced(hits) = outcome else {
+        panic!("cloud-ID tunnel reference must protect credential deletion");
+    };
+
+    assert_eq!(
+        3,
+        hits.iter()
+            .filter(|hit| hit.connection_type == ConnectionType::PortForwarding)
+            .count()
+    );
 }

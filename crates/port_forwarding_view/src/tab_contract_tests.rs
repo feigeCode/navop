@@ -28,6 +28,12 @@ fn malformed_saved_connections_do_not_panic_the_ui() {
 }
 
 #[test]
+fn port_forwarding_resolves_referenced_ssh_credentials_before_starting() {
+    assert!(TAB_SOURCE.contains("resolve_connection_for_runtime"));
+    assert!(TAB_SOURCE.contains("&ssh_connection"));
+}
+
+#[test]
 fn activity_history_scrolls_inside_a_bounded_panel() {
     assert!(RENDER_SOURCE.contains(".max_h(px(ACTIVITY_MAX_HEIGHT))"));
     assert!(RENDER_SOURCE.contains(".overflow_y_scrollbar()"));

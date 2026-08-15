@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use crate::cloud_sync::models::CloudSyncData;
 
 use super::{
-    PersonalSyncItemSnapshot, PersonalSyncPlan, PersonalSyncPlanner, PersonalSyncRecordConflict,
-    PersonalSyncStore, SyncDeviceId, SyncStoreError,
+    PersonalConflictType, PersonalSyncCloudKey, PersonalSyncItemSnapshot, PersonalSyncPlan,
+    PersonalSyncPlanner, PersonalSyncRecordConflict, PersonalSyncStore, SyncDeviceId,
+    SyncStoreError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -61,7 +62,7 @@ pub trait PersonalSyncLocalSource: Send + Sync {
 
 #[async_trait]
 pub trait PersonalSyncConflictSink: Send + Sync {
-    async fn paused_record_ids(&self) -> Result<HashSet<String>, SyncStoreError> {
+    async fn paused_record_keys(&self) -> Result<HashSet<PersonalSyncCloudKey>, SyncStoreError> {
         Ok(HashSet::new())
     }
 
@@ -177,20 +178,33 @@ where
         let remote_records = self.store.list_records(None, None).await?;
         self.apply_local_delete_events(&events, &remote_records)
             .await?;
-        self.apply_remote_tombstones(&local_items, &remote_records)
+        let tombstone_conflicts = self
+            .apply_remote_tombstones(&local_items, &remote_records)
             .await?;
         let deleted = local_deleted_cloud_ids(&events);
         let active_remote_records = remote_records
             .into_iter()
-            .filter(|record| record.deleted_at.is_none() && !deleted.contains(&record.id))
+            .filter(|record| {
+                record.deleted_at.is_none()
+                    && !deleted.contains(&PersonalSyncCloudKey {
+                        data_type: record.data_type.clone(),
+                        cloud_id: record.id.clone(),
+                    })
+            })
             .collect::<Vec<_>>();
-        let paused = self.conflicts.paused_record_ids().await?;
+        let paused = self.conflicts.paused_record_keys().await?;
         let plan = self
             .planner
             .plan(&local_items, &active_remote_records, &paused);
 
         self.apply_plan(&plan, &local_items, &active_remote_records)
-            .await
+            .await?;
+        if tombstone_conflicts > 0 {
+            return Err(SyncStoreError::Conflict(format!(
+                "{tombstone_conflicts} remote deletion conflict(s) paused"
+            )));
+        }
+        Ok(())
     }
 
     async fn apply_local_delete_events(
@@ -198,13 +212,13 @@ where
         events: &HashSet<PersonalSyncEvent>,
         records: &[CloudSyncData],
     ) -> Result<(), SyncStoreError> {
-        for cloud_id in local_deleted_cloud_ids(events) {
-            let Some(record) = find_remote_by_id(records, &cloud_id) else {
+        for key in local_deleted_cloud_ids(events) {
+            let Some(record) = find_remote_by_cloud_key(records, &key) else {
                 continue;
             };
             if record.deleted_at.is_none() {
                 self.store
-                    .tombstone_record(&cloud_id, Some(record.version))
+                    .tombstone_record(&key.data_type, &key.cloud_id, Some(record.version))
                     .await?;
             }
         }
@@ -215,13 +229,33 @@ where
         &self,
         items: &[PersonalSyncItemSnapshot],
         records: &[CloudSyncData],
-    ) -> Result<(), SyncStoreError> {
+    ) -> Result<usize, SyncStoreError> {
+        let mut conflicts = 0;
         for record in records.iter().filter(|record| record.deleted_at.is_some()) {
-            if let Some(item) = find_local_by_cloud_id(items, &record.id) {
-                self.local.delete_item(item).await?;
+            let key = PersonalSyncCloudKey {
+                data_type: record.data_type.clone(),
+                cloud_id: record.id.clone(),
+            };
+            if let Some(item) = find_local_by_cloud_key(items, &key) {
+                match self.local.delete_item(item).await {
+                    Ok(()) => {}
+                    Err(SyncStoreError::Conflict(_)) => {
+                        let conflict = PersonalSyncRecordConflict {
+                            local_id: item.local_id.clone(),
+                            cloud_id: record.id.clone(),
+                            data_type: record.data_type.clone(),
+                            conflict_type: PersonalConflictType::LocalModifiedRemoteDeleted,
+                        };
+                        self.conflicts
+                            .pause_record(&conflict, Some(item), Some(record))
+                            .await?;
+                        conflicts += 1;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
-        Ok(())
+        Ok(conflicts)
     }
 
     async fn apply_plan(
@@ -280,10 +314,10 @@ where
         plan: &PersonalSyncPlan,
         items: &[PersonalSyncItemSnapshot],
     ) -> Result<(), SyncStoreError> {
-        for cloud_id in &plan.to_mark_synced {
-            if let Some(item) = find_local_by_cloud_id(items, cloud_id) {
+        for key in &plan.to_mark_synced {
+            if let Some(item) = find_local_by_cloud_key(items, key) {
                 self.local
-                    .mark_synced(&item.local_id, cloud_id, item.updated_at)
+                    .mark_synced(&item.local_id, &key.cloud_id, item.updated_at)
                     .await?;
             }
         }
@@ -298,7 +332,13 @@ where
     ) -> Result<(), SyncStoreError> {
         for conflict in &plan.conflicts {
             let local = find_local_by_id(items, &conflict.local_id);
-            let remote = find_remote_by_id(records, &conflict.cloud_id);
+            let remote = find_remote_by_cloud_key(
+                records,
+                &PersonalSyncCloudKey {
+                    data_type: conflict.data_type.clone(),
+                    cloud_id: conflict.cloud_id.clone(),
+                },
+            );
             self.conflicts.pause_record(conflict, local, remote).await?;
         }
         if !plan.conflicts.is_empty() {
@@ -321,13 +361,13 @@ where
     }
 }
 
-fn find_local_by_cloud_id<'a>(
+fn find_local_by_cloud_key<'a>(
     items: &'a [PersonalSyncItemSnapshot],
-    cloud_id: &str,
+    key: &PersonalSyncCloudKey,
 ) -> Option<&'a PersonalSyncItemSnapshot> {
-    items
-        .iter()
-        .find(|item| item.cloud_id.as_deref() == Some(cloud_id))
+    items.iter().find(|item| {
+        item.data_type == key.data_type && item.cloud_id.as_deref() == Some(key.cloud_id.as_str())
+    })
 }
 
 fn find_local_by_id<'a>(
@@ -337,15 +377,26 @@ fn find_local_by_id<'a>(
     items.iter().find(|item| item.local_id == local_id)
 }
 
-fn find_remote_by_id<'a>(records: &'a [CloudSyncData], id: &str) -> Option<&'a CloudSyncData> {
-    records.iter().find(|record| record.id == id)
+fn find_remote_by_cloud_key<'a>(
+    records: &'a [CloudSyncData],
+    key: &PersonalSyncCloudKey,
+) -> Option<&'a CloudSyncData> {
+    records
+        .iter()
+        .find(|record| record.data_type == key.data_type && record.id == key.cloud_id)
 }
 
-fn local_deleted_cloud_ids(events: &HashSet<PersonalSyncEvent>) -> HashSet<String> {
+fn local_deleted_cloud_ids(events: &HashSet<PersonalSyncEvent>) -> HashSet<PersonalSyncCloudKey> {
     events
         .iter()
         .filter_map(|event| match event {
-            PersonalSyncEvent::LocalDeleted { cloud_id, .. } => Some(cloud_id.clone()),
+            PersonalSyncEvent::LocalDeleted {
+                data_type,
+                cloud_id,
+            } => Some(PersonalSyncCloudKey {
+                data_type: data_type.clone(),
+                cloud_id: cloud_id.clone(),
+            }),
             _ => None,
         })
         .collect()

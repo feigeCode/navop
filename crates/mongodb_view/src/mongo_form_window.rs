@@ -576,7 +576,7 @@ impl MongoFormWindow {
                 .reference(
                     existing_parameters
                         .as_ref()
-                        .and_then(|parameters| parameters.credential_reference),
+                        .and_then(|parameters| parameters.credential_reference.clone()),
                 ),
             window,
             cx,

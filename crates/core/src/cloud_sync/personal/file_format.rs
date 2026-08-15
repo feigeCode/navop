@@ -22,8 +22,10 @@ impl SyncPackageLayout {
             .join(format!("{id}.json"))
     }
 
-    pub fn tombstone_path(&self, id: &str) -> PathBuf {
-        self.tombstones_dir().join(format!("{id}.json"))
+    pub fn tombstone_path(&self, data_type: &str, id: &str) -> PathBuf {
+        self.tombstones_dir()
+            .join(data_type)
+            .join(format!("{id}.json"))
     }
 
     pub fn records_dir(&self) -> PathBuf {
@@ -71,8 +73,8 @@ mod tests {
             layout.record_path("connection", "record-1")
         );
         assert_eq!(
-            Path::new("/sync-root/.onetcli-sync/tombstones/record-1.json"),
-            layout.tombstone_path("record-1")
+            Path::new("/sync-root/.onetcli-sync/tombstones/connection/record-1.json"),
+            layout.tombstone_path("connection", "record-1")
         );
     }
 

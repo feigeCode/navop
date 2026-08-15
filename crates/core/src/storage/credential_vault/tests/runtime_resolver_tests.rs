@@ -12,6 +12,7 @@ use super::with_master_key;
 fn password_reference(id: i64) -> CredentialReference {
     CredentialReference {
         credential_id: id,
+        credential_cloud_id: None,
         username: true,
         password: true,
         private_key: false,

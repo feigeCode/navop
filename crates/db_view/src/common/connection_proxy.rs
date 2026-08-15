@@ -69,8 +69,12 @@ pub(crate) fn build_proxy_config(
         .ok_or(ProxyValidationError { field: PROXY_PORT })?;
     let username = optional_value(username);
     let password = optional_secret(password);
-    let username_referenced = credential_reference.is_some_and(|reference| reference.username);
-    let password_referenced = credential_reference.is_some_and(|reference| reference.password);
+    let username_referenced = credential_reference
+        .as_ref()
+        .is_some_and(|reference| reference.username);
+    let password_referenced = credential_reference
+        .as_ref()
+        .is_some_and(|reference| reference.password);
     if username.is_none() && !username_referenced && (password.is_some() || password_referenced) {
         return Err(ProxyValidationError {
             field: PROXY_USERNAME,

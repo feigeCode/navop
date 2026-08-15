@@ -140,6 +140,15 @@ pub(super) fn render_navigation_rail(
                             |home, window, cx| home.add_notes_tab(window, cx),
                         ))
                         .child(rail_button(
+                            "persistent-open-credential-vault",
+                            IconName::Key,
+                            t!("Home.credential_vault").to_string(),
+                            palette,
+                            home_page,
+                            rail_item_size,
+                            |home, window, cx| home.add_credential_vault_tab(window, cx),
+                        ))
+                        .child(rail_button(
                             "persistent-open-extensions",
                             IconName::ExtensionsLine,
                             t!("Home.extensions").to_string(),

@@ -539,10 +539,22 @@ Home:
     en: Connection
     zh-CN: 连接
     zh-HK: 連線
+  personal_sync_conflict_credential:
+    en: Credential
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙串
   personal_sync_conflict_workspace:
     en: Workspace
     zh-CN: 工作区
     zh-HK: 工作區
+  personal_sync_conflict_local:
+    en: "Local: %{record}"
+    zh-CN: "本地: %{record}"
+    zh-HK: "本地: %{record}"
+  personal_sync_conflict_remote:
+    en: "Remote: %{record}"
+    zh-CN: "远端: %{record}"
+    zh-HK: "遠端: %{record}"
   personal_sync_conflict_both_modified:
     en: Local and remote both changed
     zh-CN: 本地和远端都有修改

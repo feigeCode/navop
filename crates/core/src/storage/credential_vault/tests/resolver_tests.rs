@@ -13,6 +13,7 @@ use super::with_master_key;
 fn password_reference(id: i64) -> CredentialReference {
     CredentialReference {
         credential_id: id,
+        credential_cloud_id: None,
         username: true,
         password: true,
         private_key: false,
@@ -66,7 +67,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
         let reference = Some(password_reference(credential_id));
 
         let ssh = repository
-            .resolve_ssh(ssh_params(reference))
+            .resolve_ssh(ssh_params(reference.clone()))
             .expect("resolve ssh");
         assert_eq!("vault-user", ssh.username);
         assert!(matches!(
@@ -83,7 +84,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
                 port: 3306,
                 username: "manual-user".to_string(),
                 password: "manual-password".to_string(),
-                credential_reference: reference,
+                credential_reference: reference.clone(),
                 database: None,
                 service_name: None,
                 sid: None,
@@ -101,7 +102,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
                 port: 6379,
                 password: Some("manual-password".to_string()),
                 username: Some("manual-user".to_string()),
-                credential_reference: reference,
+                credential_reference: reference.clone(),
                 db_index: 0,
                 mode: RedisMode::Standalone,
                 use_tls: false,
@@ -123,7 +124,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
                 database: None,
                 username: Some("manual-user".to_string()),
                 password: Some("manual-password".to_string()),
-                credential_reference: reference,
+                credential_reference: reference.clone(),
                 auth_source: None,
                 replica_set: None,
                 read_preference: None,
@@ -171,6 +172,7 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
         let key_id = repository.insert(&mut key).expect("insert key");
         let key_reference = Some(CredentialReference {
             credential_id: key_id,
+            credential_cloud_id: None,
             username: true,
             password: false,
             private_key: true,
@@ -184,7 +186,7 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
             port: 1080,
             username: None,
             password: None,
-            credential_reference: login_reference,
+            credential_reference: login_reference.clone(),
         });
         ssh.jump_server = Some(JumpServerConfig {
             host: "jump.example.com".to_string(),
@@ -229,6 +231,7 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
                     sentinel_password: None,
                     credential_reference: Some(CredentialReference {
                         credential_id: login_id,
+                        credential_cloud_id: None,
                         username: false,
                         password: true,
                         private_key: false,
@@ -248,6 +251,60 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
                 .sentinel_password
                 .as_deref()
         );
+    });
+}
+
+#[test]
+fn resolver_uses_stable_cloud_id_without_falling_back_to_foreign_local_id() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut login = CredentialEntry::new("Cloud login", "username_password");
+        login.username = Some("cloud-user".to_string());
+        login.password = Some("cloud-password".to_string());
+        login.cloud_id = Some("credential-cloud-login".to_string());
+        let local_id = repository.insert(&mut login).expect("insert cloud login");
+
+        let cloud_reference = Some(CredentialReference {
+            credential_id: local_id + 999,
+            credential_cloud_id: Some("credential-cloud-login".to_string()),
+            username: true,
+            password: true,
+            private_key: false,
+            passphrase: false,
+        });
+        let database = repository
+            .resolve_database(DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::PostgreSQL,
+                name: "Database".to_string(),
+                host: "db.example.com".to_string(),
+                port: 5432,
+                username: "manual-user".to_string(),
+                password: "manual-password".to_string(),
+                credential_reference: cloud_reference,
+                database: None,
+                service_name: None,
+                sid: None,
+                workspace_id: None,
+                proxy: None,
+                extra_params: HashMap::new(),
+            })
+            .expect("resolve by cloud id");
+        assert_eq!("cloud-user", database.username);
+        assert_eq!("cloud-password", database.password);
+
+        let missing_cloud_reference = Some(CredentialReference {
+            credential_id: local_id,
+            credential_cloud_id: Some("credential-cloud-missing".to_string()),
+            username: true,
+            password: true,
+            private_key: false,
+            passphrase: false,
+        });
+        let error = repository
+            .resolve_ssh(ssh_params(missing_cloud_reference))
+            .expect_err("cloud id must not fall back to a possibly foreign local id");
+        assert!(error.to_string().contains("credential"));
     });
 }
 
@@ -274,6 +331,7 @@ fn resolve_connection_returns_a_temporary_clone_and_rejects_conflicting_ssh_fiel
 
         let mut conflicting = ssh_params(Some(CredentialReference {
             credential_id,
+            credential_cloud_id: None,
             username: false,
             password: true,
             private_key: true,

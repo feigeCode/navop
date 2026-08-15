@@ -86,6 +86,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260813000001",
         include_str!("../../migrations/20260813000001_credential_vault.sql"),
     ),
+    (
+        "20260814000001",
+        include_str!("../../migrations/20260814000001_personal_sync_conflict_type_key.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -335,6 +339,67 @@ mod tests {
                 |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?)),
             )
             .expect("read preserved workspace hierarchy and collapsed state")
+        );
+
+        run_migrations(&conn).expect("rerun migrations");
+    }
+
+    #[test]
+    fn personal_sync_conflict_migration_scopes_identity_to_data_type() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE personal_sync_conflicts (
+                backend_profile_id TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                data_type TEXT NOT NULL,
+                conflict_type TEXT NOT NULL,
+                local_snapshot TEXT,
+                remote_snapshot TEXT,
+                detected_at INTEGER NOT NULL,
+                PRIMARY KEY (backend_profile_id, record_id)
+            );
+            INSERT INTO personal_sync_conflicts
+                (backend_profile_id, record_id, data_type, conflict_type, detected_at)
+            VALUES
+                ('personal', 'shared-cloud-id', 'connection', 'both_modified', 1);",
+        )
+        .expect("create pre-migration personal sync schema");
+
+        mark_all_migrations_except(&conn, "20260814000001");
+        run_migrations(&conn).expect("run personal sync conflict identity migration");
+
+        conn.execute(
+            "INSERT INTO personal_sync_conflicts
+                (backend_profile_id, record_id, data_type, conflict_type, detected_at)
+             VALUES
+                ('personal', 'shared-cloud-id', 'credential', 'both_modified', 2)",
+            [],
+        )
+        .expect("allow the same cloud id for a different data type");
+        assert_eq!(
+            2,
+            conn.query_row(
+                "SELECT COUNT(*) FROM personal_sync_conflicts
+                 WHERE backend_profile_id = 'personal' AND record_id = 'shared-cloud-id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count isolated conflicts")
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO personal_sync_conflicts
+                    (backend_profile_id, record_id, data_type, conflict_type, detected_at)
+                 VALUES
+                    ('personal', 'shared-cloud-id', 'credential', 'both_modified', 3)",
+                [],
+            )
+            .is_err(),
+            "duplicate conflicts of the same data type must remain rejected"
         );
 
         run_migrations(&conn).expect("rerun migrations");

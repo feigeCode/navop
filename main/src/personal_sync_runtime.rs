@@ -16,8 +16,8 @@ use one_core::gpui_tokio::Tokio;
 use one_core::settings::{AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState, StoredConnection,
-    Workspace, WorkspaceRepository,
+    ConnectionRepository, ConnectionType, CredentialRepository, CredentialSummary, DatabaseType,
+    GlobalStorageState, StoredConnection, Workspace, WorkspaceRepository,
 };
 
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
@@ -171,7 +171,26 @@ pub(crate) fn personal_conflict_display_info(
     }
 }
 
-pub fn resolve_personal_conflict(record_id: String, strategy: ConflictResolution, cx: &mut App) {
+pub(crate) fn personal_conflict_selection_key(data_type: &str, record_id: &str) -> String {
+    serde_json::to_string(&(data_type, record_id))
+        .expect("personal sync conflict selection key must serialize")
+}
+
+fn parse_personal_conflict_selection_key(
+    selection_key: &str,
+) -> Result<(String, String), SyncStoreError> {
+    serde_json::from_str(selection_key).map_err(|error| {
+        SyncStoreError::Parse(format!(
+            "invalid personal sync conflict selection key: {error}"
+        ))
+    })
+}
+
+pub fn resolve_personal_conflict(
+    selection_key: String,
+    strategy: ConflictResolution,
+    cx: &mut App,
+) {
     sync_master_key_and_user(cx);
     let Some(config) = active_or_current_config(cx) else {
         set_status(cx, PersonalSyncRuntimeStatus::Disabled);
@@ -194,8 +213,14 @@ pub fn resolve_personal_conflict(record_id: String, strategy: ConflictResolution
 
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
     let task = Tokio::spawn(cx, async move {
-        resolve_personal_conflict_once(config, source, (*conflicts).clone(), record_id, strategy)
-            .await
+        resolve_personal_conflict_once(
+            config,
+            source,
+            (*conflicts).clone(),
+            selection_key,
+            strategy,
+        )
+        .await
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
         let status = personal_sync_status_from_task(task.await);
@@ -209,8 +234,8 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
     if strategies.is_empty() {
         return;
     }
-    if let [(record_id, strategy)] = strategies.as_slice() {
-        resolve_personal_conflict(record_id.clone(), *strategy, cx);
+    if let [(selection_key, strategy)] = strategies.as_slice() {
+        resolve_personal_conflict(selection_key.clone(), *strategy, cx);
         return;
     }
     sync_master_key_and_user(cx);
@@ -235,12 +260,12 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
 
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
     let task = Tokio::spawn(cx, async move {
-        for (record_id, strategy) in strategies {
+        for (selection_key, strategy) in strategies {
             resolve_personal_conflict_once(
                 config.clone(),
                 source.clone(),
                 (*conflicts).clone(),
-                record_id,
+                selection_key,
                 strategy,
             )
             .await?;
@@ -280,6 +305,15 @@ fn local_conflict_display(
                 .flatten()
                 .map(|workspace| workspace_record_display(&workspace))
         }
+        data_type::CREDENTIAL => {
+            let id = parse_prefixed_id(&snapshot.local_id, "credential:")?;
+            storage
+                .get::<CredentialRepository>()?
+                .get_summary(id)
+                .ok()
+                .flatten()
+                .map(|credential| credential_summary_record_display(&credential))
+        }
         _ => None,
     }
 }
@@ -303,6 +337,19 @@ fn remote_conflict_display(
             .decrypt_sync_data_workspace(&remote)
             .ok()
             .map(|workspace| workspace_record_display(&workspace)),
+        data_type::CREDENTIAL => {
+            service
+                .decrypt_sync_data_credential(&remote)
+                .ok()
+                .map(|credential| {
+                    credential_record_display(
+                        &credential.name,
+                        &credential.kind,
+                        credential.username.as_deref(),
+                        credential.cloud_id.as_deref(),
+                    )
+                })
+        }
         _ => None,
     }
 }
@@ -325,6 +372,32 @@ fn workspace_record_display(workspace: &Workspace) -> PersonalSyncRecordDisplay 
     PersonalSyncRecordDisplay {
         name: fallback_name(&workspace.name, workspace.cloud_id.as_deref(), "workspace"),
         info: None,
+    }
+}
+
+fn credential_summary_record_display(credential: &CredentialSummary) -> PersonalSyncRecordDisplay {
+    credential_record_display(
+        &credential.name,
+        &credential.kind,
+        credential.username.as_deref(),
+        credential.cloud_id.as_deref(),
+    )
+}
+
+fn credential_record_display(
+    name: &str,
+    kind: &str,
+    username: Option<&str>,
+    cloud_id: Option<&str>,
+) -> PersonalSyncRecordDisplay {
+    PersonalSyncRecordDisplay {
+        name: fallback_name(name, cloud_id, "credential"),
+        info: record_info([
+            (!kind.is_empty()).then(|| kind.to_string()),
+            username
+                .filter(|username| !username.is_empty())
+                .map(ToString::to_string),
+        ]),
     }
 }
 
@@ -567,10 +640,17 @@ pub(crate) fn personal_sync_event_from_connection_event(
     match event {
         ConnectionDataEvent::ConnectionCreated { connection }
         | ConnectionDataEvent::ConnectionUpdated { connection } => {
-            let local_id = connection.id?.to_string();
+            let local_id = format!("connection:{}", connection.id?);
             Some(PersonalSyncEvent::LocalChanged {
                 data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
                 local_id,
+            })
+        }
+        ConnectionDataEvent::CredentialCreated { credential_id }
+        | ConnectionDataEvent::CredentialUpdated { credential_id } => {
+            Some(PersonalSyncEvent::LocalChanged {
+                data_type: data_type::CREDENTIAL.to_string(),
+                local_id: format!("credential:{credential_id}"),
             })
         }
         ConnectionDataEvent::ConnectionDeleted {
@@ -587,10 +667,18 @@ pub(crate) fn personal_sync_event_from_connection_event(
             data_type: one_core::cloud_sync::data_type::WORKSPACE.to_string(),
             cloud_id: cloud_id.clone(),
         }),
+        ConnectionDataEvent::CredentialDeleted {
+            cloud_id: Some(cloud_id),
+            ..
+        } => Some(PersonalSyncEvent::LocalDeleted {
+            data_type: data_type::CREDENTIAL.to_string(),
+            cloud_id: cloud_id.clone(),
+        }),
         ConnectionDataEvent::ConnectionDeleted { cloud_id: None, .. }
         | ConnectionDataEvent::WorkspaceCreated { .. }
         | ConnectionDataEvent::WorkspaceUpdated { .. }
-        | ConnectionDataEvent::WorkspaceDeleted { cloud_id: None, .. } => {
+        | ConnectionDataEvent::WorkspaceDeleted { cloud_id: None, .. }
+        | ConnectionDataEvent::CredentialDeleted { cloud_id: None, .. } => {
             Some(PersonalSyncEvent::FullScan)
         }
         ConnectionDataEvent::SchemaChanged { .. }
@@ -743,16 +831,19 @@ async fn resolve_personal_conflict_once(
     config: PersonalSyncRuntimeConfig,
     source: PersonalSyncLocalRepositorySource,
     conflicts: PersonalSyncConflictRepository,
-    record_id: String,
+    selection_key: String,
     strategy: ConflictResolution,
 ) -> Result<(), SyncStoreError> {
+    let (data_type, record_id) = parse_personal_conflict_selection_key(&selection_key)?;
     let conflict = conflicts
         .list("personal")
         .map_err(|error| SyncStoreError::Io(error.to_string()))?
         .into_iter()
-        .find(|conflict| conflict.record_id == record_id)
+        .find(|conflict| conflict.data_type == data_type && conflict.record_id == record_id)
         .ok_or_else(|| {
-            SyncStoreError::Parse(format!("personal sync conflict not found: {record_id}"))
+            SyncStoreError::Parse(format!(
+                "personal sync conflict not found: {data_type}/{record_id}"
+            ))
         })?;
     let store = ConfiguredPersonalSyncStore::from_runtime_config(&config);
     let resolver = PersonalSyncConflictResolver::new(store.clone(), source, conflicts);
@@ -763,6 +854,7 @@ async fn resolve_personal_conflict_once(
 fn build_local_source(cx: &App) -> Option<PersonalSyncLocalRepositorySource> {
     let storage = cx.try_global::<GlobalStorageState>()?.storage.clone();
     let connections = storage.get::<ConnectionRepository>()?;
+    let credentials = storage.get::<CredentialRepository>()?;
     let workspaces = storage.get::<WorkspaceRepository>()?;
     let service = cx
         .try_global::<GlobalPersonalSyncRuntime>()?
@@ -770,6 +862,7 @@ fn build_local_source(cx: &App) -> Option<PersonalSyncLocalRepositorySource> {
         .clone();
     Some(PersonalSyncLocalRepositorySource::new(
         (*connections).clone(),
+        (*credentials).clone(),
         (*workspaces).clone(),
         service,
     ))

@@ -2,6 +2,7 @@ use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{
     WindowExt, button::ButtonVariant, dialog::DialogButtonProps, notification::Notification,
 };
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event_from_app};
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::{
     CredentialEntry, CredentialReferenceHit, CredentialRepository, DeleteCredentialOutcome,
@@ -102,19 +103,33 @@ fn delete_credential(
     let result = storage
         .get::<CredentialRepository>()
         .ok_or_else(|| "CredentialRepository 尚未注册".to_string())
-        .and_then(|repo| repo.delete_checked(id).map_err(|e| e.to_string()));
+        .and_then(|repo| {
+            let cloud_id = repo
+                .get_summary(id)
+                .map_err(|error| error.to_string())?
+                .and_then(|summary| summary.cloud_id);
+            let outcome = repo.delete_checked(id).map_err(|error| error.to_string())?;
+            Ok((outcome, cloud_id))
+        });
     match result {
-        Ok(DeleteCredentialOutcome::Deleted) => {
+        Ok((DeleteCredentialOutcome::Deleted, cloud_id)) => {
+            emit_connection_event_from_app(
+                ConnectionDataEvent::CredentialDeleted {
+                    credential_id: id,
+                    cloud_id,
+                },
+                cx,
+            );
             _ = view.update(cx, |view, cx| view.reload(cx));
             window.push_notification(Notification::success("凭据已删除").autohide(true), cx);
             true
         }
-        Ok(DeleteCredentialOutcome::NotFound) => {
+        Ok((DeleteCredentialOutcome::NotFound, _)) => {
             _ = view.update(cx, |view, cx| view.reload(cx));
             window.push_notification(Notification::warning("凭据已不存在").autohide(true), cx);
             true
         }
-        Ok(DeleteCredentialOutcome::Referenced(hits)) => {
+        Ok((DeleteCredentialOutcome::Referenced(hits), _)) => {
             window.push_notification(
                 Notification::error(format_reference_hits(&hits)).autohide(false),
                 cx,

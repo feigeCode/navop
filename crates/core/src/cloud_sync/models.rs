@@ -237,6 +237,7 @@ fn default_version() -> u32 {
 /// 数据类型常量
 pub mod data_type {
     pub const CONNECTION: &str = "connection";
+    pub const CREDENTIAL: &str = "credential";
     pub const WORKSPACE: &str = "workspace";
 }
 
@@ -337,4 +338,26 @@ pub struct WorkspacePlainData {
     /// 工作空间排序值
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<i32>,
+}
+
+/// 钥匙串条目的个人同步明文结构。
+///
+/// 该结构只会在主密钥保护的加密 blob 内序列化。不要为它派生 `Debug`，
+/// 避免密码和私钥内容被调试日志意外输出。本机私钥路径不属于同步数据。
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CredentialPlainData {
+    /// 载荷格式版本，用于后续兼容升级。
+    pub format_version: u32,
+    pub name: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_key_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
 }

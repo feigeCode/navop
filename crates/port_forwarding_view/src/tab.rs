@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use connection_form::credential::resolve_connection_for_runtime;
 use gpui::{
     App, AsyncApp, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
     SharedString, Task, Window,
@@ -61,12 +62,15 @@ impl PortForwardingTab {
 
     fn start_forwarding(&mut self, cx: &mut Context<Self>) {
         let (activity_tx, activity_rx) = mpsc::unbounded_channel();
-        let request = match build_request(
-            &self.connection,
-            &self.ssh_connection,
-            self.kind,
-            activity_tx,
-        ) {
+        let ssh_connection = match resolve_connection_for_runtime(self.ssh_connection.clone(), cx) {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.finish_start(Err(anyhow::anyhow!(error)), cx);
+                return;
+            }
+        };
+        let request = match build_request(&self.connection, &ssh_connection, self.kind, activity_tx)
+        {
             Ok(request) => request,
             Err(error) => {
                 self.finish_start(Err(error), cx);

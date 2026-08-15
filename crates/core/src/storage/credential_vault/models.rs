@@ -64,7 +64,10 @@ impl std::fmt::Debug for CredentialEntry {
             .field("kind", &self.kind)
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
-            .field("private_key_path", &self.private_key_path)
+            .field(
+                "private_key_path",
+                &self.private_key_path.as_ref().map(|_| "<local-path>"),
+            )
             .field(
                 "private_key_content",
                 &self.private_key_content.as_ref().map(|_| "<redacted>"),
@@ -162,9 +165,12 @@ pub struct CredentialSummary {
 }
 
 /// Selects which fields should be copied from a credential entry.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialReference {
     pub credential_id: i64,
+    /// 跨设备稳定引用。新记录优先使用此字段，本地整数 ID 仅用于兼容旧记录。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_cloud_id: Option<String>,
     #[serde(default)]
     pub username: bool,
     #[serde(default)]
@@ -186,6 +192,7 @@ impl CredentialReference {
     pub fn all(credential_id: i64) -> Self {
         Self {
             credential_id,
+            credential_cloud_id: None,
             username: true,
             password: true,
             private_key: true,

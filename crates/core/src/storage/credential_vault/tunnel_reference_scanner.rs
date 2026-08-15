@@ -7,12 +7,14 @@ use crate::storage::{
 };
 
 use super::CredentialReferenceHit;
-use super::reference_scanner::{ScannedConnection, parse_params, reference_hit, ssh_locations};
+use super::reference_scanner::{
+    CredentialIdentity, ScannedConnection, parse_params, reference_hit, ssh_locations,
+};
 
 pub(super) fn append_tunnel_hits(
     hits: &mut Vec<CredentialReferenceHit>,
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
     by_id: &HashMap<i64, &ScannedConnection>,
 ) -> Result<()> {
     let Some(ssh_id) = tunnel_ssh_id(connection)? else {
@@ -24,10 +26,10 @@ pub(super) fn append_tunnel_hits(
     if ssh.connection_type != ConnectionType::SshSftp {
         bail!("Referenced connection {ssh_id} is not an SSH connection");
     }
-    for location in ssh_locations(ssh, credential_id)? {
+    for location in ssh_locations(ssh, identity)? {
         hits.push(reference_hit(
             connection,
-            credential_id,
+            identity.local_id,
             location,
             Some(ssh_id),
         ));

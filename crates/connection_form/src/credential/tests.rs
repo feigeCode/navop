@@ -42,6 +42,7 @@ fn a_new_reference_only_selects_supported_available_fields() {
     assert_eq!(
         Some(CredentialReference {
             credential_id: 42,
+            credential_cloud_id: None,
             username: true,
             password: true,
             private_key: false,
@@ -59,6 +60,7 @@ fn a_new_reference_only_selects_supported_available_fields() {
 fn password_and_private_key_are_mutually_exclusive() {
     let reference = CredentialReference {
         credential_id: 42,
+        credential_cloud_id: None,
         username: true,
         password: true,
         private_key: false,
@@ -75,6 +77,7 @@ fn password_and_private_key_are_mutually_exclusive() {
 fn normalization_preserves_a_selected_field_that_is_now_missing() {
     let reference = CredentialReference {
         credential_id: 42,
+        credential_cloud_id: None,
         username: false,
         password: true,
         private_key: false,
@@ -86,7 +89,7 @@ fn normalization_preserves_a_selected_field_that_is_now_missing() {
     assert_eq!(
         reference,
         normalize_reference(
-            reference,
+            reference.clone(),
             CredentialCapabilities::login(),
             Some(&missing_password),
         )

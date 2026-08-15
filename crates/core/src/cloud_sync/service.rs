@@ -3,7 +3,7 @@
 use crate::cloud_sync::models::*;
 use crate::cloud_sync::queue::{OperationQueue, SyncOperation};
 use crate::crypto::{self, CryptoError};
-use crate::storage::{ConnectionType, StoredConnection};
+use crate::storage::{ConnectionType, CredentialEntry, StoredConnection};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -420,6 +420,49 @@ impl CloudSyncService {
         })
     }
 
+    /// 准备上传个人钥匙串条目。
+    ///
+    /// 密码、已导入的私钥内容和私钥口令会包含在整体加密 blob 中；
+    /// 本机私钥路径永不进入同步载荷。
+    pub fn prepare_credential_sync_data_upload(
+        &self,
+        credential: &CredentialEntry,
+    ) -> Result<CloudSyncData, SyncError> {
+        if credential.team_id.is_some() {
+            return Err(SyncError::DataFormatError(
+                "personal credential sync does not support team credentials".to_string(),
+            ));
+        }
+
+        let plain_data = CredentialPlainData {
+            format_version: 1,
+            name: credential.name.clone(),
+            kind: credential.kind.clone(),
+            username: credential.username.clone(),
+            password: credential.password.clone(),
+            private_key_content: credential.private_key_content.clone(),
+            passphrase: credential.passphrase.clone(),
+            owner_id: credential.owner_id.clone(),
+        };
+        let plaintext = serde_json::to_string(&plain_data)
+            .map_err(|error| SyncError::DataFormatError(error.to_string()))?;
+        let checksum = Self::calculate_blob_checksum(&plaintext);
+        let encrypted_data = self.encrypt_blob(&plaintext, None)?;
+
+        Ok(CloudSyncData {
+            id: uuid::Uuid::new_v4().to_string(),
+            owner_id: self.user_id.clone().unwrap_or_default(),
+            team_id: None,
+            data_type: data_type::CREDENTIAL.to_string(),
+            encrypted_data,
+            key_version: self.key_version,
+            checksum,
+            version: 1,
+            updated_at: current_timestamp(),
+            deleted_at: None,
+        })
+    }
+
     /// 解密 sync_data 中的连接数据
     pub fn decrypt_sync_data_connection(
         &self,
@@ -489,6 +532,59 @@ impl CloudSyncService {
             last_synced_at: Some(cloud_data.updated_at / 1000),
             sort_order: plain_data.sort_order,
             sidebar_collapsed: false,
+        })
+    }
+
+    /// 解密个人钥匙串同步记录。
+    pub fn decrypt_sync_data_credential(
+        &self,
+        cloud_data: &CloudSyncData,
+    ) -> Result<CredentialEntry, SyncError> {
+        if cloud_data.data_type != data_type::CREDENTIAL {
+            return Err(SyncError::DataFormatError(format!(
+                "expected credential data, got {}",
+                cloud_data.data_type
+            )));
+        }
+        if cloud_data.team_id.is_some() {
+            return Err(SyncError::DataFormatError(
+                "personal credential sync data must not have a team".to_string(),
+            ));
+        }
+
+        let plaintext = self.decrypt_blob(&cloud_data.encrypted_data, None)?;
+        let checksum = Self::calculate_blob_checksum(&plaintext);
+        if checksum != cloud_data.checksum {
+            return Err(SyncError::DataFormatError(
+                "credential checksum mismatch".to_string(),
+            ));
+        }
+        let plain_data: CredentialPlainData = serde_json::from_str(&plaintext)
+            .map_err(|error| SyncError::DataFormatError(error.to_string()))?;
+        if plain_data.format_version != 1 {
+            return Err(SyncError::DataFormatError(format!(
+                "unsupported credential format version {}",
+                plain_data.format_version
+            )));
+        }
+        let synced_at = cloud_data.updated_at / 1000;
+
+        Ok(CredentialEntry {
+            id: None,
+            name: plain_data.name,
+            kind: plain_data.kind,
+            username: plain_data.username,
+            password: plain_data.password,
+            private_key_path: None,
+            private_key_content: plain_data.private_key_content,
+            passphrase: plain_data.passphrase,
+            sync_enabled: true,
+            cloud_id: Some(cloud_data.id.clone()),
+            last_synced_at: Some(synced_at),
+            team_id: None,
+            owner_id: plain_data.owner_id,
+            created_at: None,
+            updated_at: Some(synced_at),
         })
     }
 
@@ -658,5 +754,141 @@ mod tests {
 
         assert_eq!("legacy", decrypted.name);
         assert_eq!(None, decrypted.sort_order);
+    }
+
+    #[test]
+    fn credential_sync_data_roundtrips_secrets_without_local_private_key_path() {
+        let mut service = CloudSyncService::new();
+        service.set_logged_in("personal-user".to_string());
+        service.set_master_key_directly("credential-sync-test-key".to_string());
+        let mut credential = CredentialEntry::new("production", "ssh_key");
+        credential.username = Some("deploy".to_string());
+        credential.password = Some("credential-password-unique".to_string());
+        credential.private_key_path = Some("/private/local-only/id_ed25519".to_string());
+        credential.private_key_content = Some("credential-private-key-unique".to_string());
+        credential.passphrase = Some("credential-passphrase-unique".to_string());
+        credential.sync_enabled = true;
+        credential.owner_id = Some("personal-user".to_string());
+
+        let record = service
+            .prepare_credential_sync_data_upload(&credential)
+            .expect("credential prepares");
+        let serialized = serde_json::to_string(&record).expect("record serializes");
+        let plaintext = service
+            .decrypt_blob(&record.encrypted_data, None)
+            .expect("credential blob decrypts");
+        let plaintext_value: Value =
+            serde_json::from_str(&plaintext).expect("credential plaintext parses");
+        let decrypted = service
+            .decrypt_sync_data_credential(&record)
+            .expect("credential record decrypts");
+
+        assert_eq!(data_type::CREDENTIAL, record.data_type);
+        assert_eq!("personal-user", record.owner_id);
+        assert_eq!("production", decrypted.name);
+        assert_eq!(Some("deploy".to_string()), decrypted.username);
+        assert_eq!(
+            Some("credential-password-unique".to_string()),
+            decrypted.password
+        );
+        assert_eq!(
+            Some("credential-private-key-unique".to_string()),
+            decrypted.private_key_content
+        );
+        assert_eq!(
+            Some("credential-passphrase-unique".to_string()),
+            decrypted.passphrase
+        );
+        assert_eq!(None, decrypted.private_key_path);
+        assert!(plaintext_value.get("private_key_path").is_none());
+        for secret in [
+            "credential-password-unique",
+            "credential-private-key-unique",
+            "credential-passphrase-unique",
+            "/private/local-only/id_ed25519",
+        ] {
+            assert!(!serialized.contains(secret));
+        }
+    }
+
+    #[test]
+    fn credential_sync_data_rejects_wrong_type_team_and_checksum_tampering() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("credential-sync-test-key".to_string());
+        let credential = CredentialEntry::new("production", "password");
+        let record = service
+            .prepare_credential_sync_data_upload(&credential)
+            .expect("credential prepares");
+
+        let mut wrong_type = record.clone();
+        wrong_type.data_type = data_type::CONNECTION.to_string();
+        assert!(matches!(
+            service.decrypt_sync_data_credential(&wrong_type),
+            Err(SyncError::DataFormatError(message))
+                if message.contains("expected credential data")
+        ));
+
+        let mut team_record = record.clone();
+        team_record.team_id = Some("team-1".to_string());
+        assert!(matches!(
+            service.decrypt_sync_data_credential(&team_record),
+            Err(SyncError::DataFormatError(message))
+                if message.contains("must not have a team")
+        ));
+
+        let mut tampered_checksum = record;
+        tampered_checksum.checksum = "not-the-plaintext-checksum".to_string();
+        assert!(matches!(
+            service.decrypt_sync_data_credential(&tampered_checksum),
+            Err(SyncError::DataFormatError(message))
+                if message.contains("checksum mismatch")
+        ));
+    }
+
+    #[test]
+    fn credential_sync_data_rejects_unknown_format_and_team_uploads() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("credential-sync-test-key".to_string());
+        let credential = CredentialEntry::new("production", "password");
+        let mut record = service
+            .prepare_credential_sync_data_upload(&credential)
+            .expect("credential prepares");
+        let plaintext = service
+            .decrypt_blob(&record.encrypted_data, None)
+            .expect("credential blob decrypts");
+        let mut plaintext_value: Value =
+            serde_json::from_str(&plaintext).expect("credential plaintext parses");
+        plaintext_value["format_version"] = Value::from(2);
+        let unsupported_plaintext =
+            serde_json::to_string(&plaintext_value).expect("credential plaintext serializes");
+        record.checksum = CloudSyncService::calculate_blob_checksum(&unsupported_plaintext);
+        record.encrypted_data = service
+            .encrypt_blob(&unsupported_plaintext, None)
+            .expect("credential blob encrypts");
+
+        assert!(matches!(
+            service.decrypt_sync_data_credential(&record),
+            Err(SyncError::DataFormatError(message))
+                if message.contains("unsupported credential format version 2")
+        ));
+
+        let mut team_credential = CredentialEntry::new("team production", "password");
+        team_credential.team_id = Some("team-1".to_string());
+        assert!(matches!(
+            service.prepare_credential_sync_data_upload(&team_credential),
+            Err(SyncError::DataFormatError(message))
+                if message.contains("does not support team credentials")
+        ));
+    }
+
+    #[test]
+    fn credential_sync_data_requires_unlocked_personal_master_key() {
+        let service = CloudSyncService::new();
+        let credential = CredentialEntry::new("production", "password");
+
+        assert!(matches!(
+            service.prepare_credential_sync_data_upload(&credential),
+            Err(SyncError::NotUnlocked)
+        ));
     }
 }

@@ -10,6 +10,7 @@ use one_core::storage::{
 use super::{
     CredentialCapabilities, CredentialField, CredentialSelectItem, CredentialSelectValue,
     apply_field_selection, build_reference, credential_select_items, normalize_reference,
+    summary_matches_reference,
 };
 
 #[derive(Clone, Debug)]
@@ -127,8 +128,8 @@ impl CredentialReferencePicker {
         cx: &mut Context<Self>,
     ) -> Self {
         let reference = normalized_reference(config.reference, config.capabilities, &summaries);
-        let selected = selected_value(reference);
-        let items = credential_select_items(&summaries, config.capabilities, reference);
+        let selected = selected_value(reference.as_ref());
+        let items = credential_select_items(&summaries, config.capabilities, reference.as_ref());
         let selected_index = items
             .iter()
             .position(|item| item.value() == &selected)
@@ -146,15 +147,15 @@ impl CredentialReferencePicker {
     }
 
     pub fn selected_reference(&self) -> Option<CredentialReference> {
-        self.reference
+        self.reference.clone()
     }
 
     pub fn selected_value(&self) -> CredentialSelectValue {
-        selected_value(self.reference)
+        selected_value(self.reference.as_ref())
     }
 
     pub fn field_referenced(&self, field: CredentialField) -> bool {
-        let Some(reference) = self.reference else {
+        let Some(reference) = self.reference.as_ref() else {
             return false;
         };
         match field {
@@ -172,7 +173,7 @@ impl CredentialReferencePicker {
         cx: &mut Context<Self>,
     ) {
         self.capabilities = capabilities;
-        self.reference = normalized_reference(self.reference, capabilities, &self.summaries);
+        self.reference = normalized_reference(self.reference.take(), capabilities, &self.summaries);
         self.sync_select(window, cx);
         cx.emit(CredentialPickerEvent::Changed);
     }
@@ -192,7 +193,8 @@ impl CredentialReferencePicker {
         let (summaries, load_error) = load_summaries(cx);
         self.summaries = summaries;
         self.load_error = load_error;
-        self.reference = normalized_reference(self.reference, self.capabilities, &self.summaries);
+        self.reference =
+            normalized_reference(self.reference.take(), self.capabilities, &self.summaries);
         self.sync_select(window, cx);
     }
 
@@ -218,7 +220,7 @@ impl CredentialReferencePicker {
         cx: &mut Context<Self>,
     ) {
         self.capabilities = capabilities;
-        self.reference = normalized_reference(self.reference, capabilities, &self.summaries);
+        self.reference = normalized_reference(self.reference.take(), capabilities, &self.summaries);
         cx.notify();
     }
 
@@ -247,22 +249,24 @@ impl CredentialReferencePicker {
         selected: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(reference) = self.reference else {
+        let selected_has_passphrase = self
+            .selected_summary()
+            .is_some_and(|summary| summary.has_passphrase);
+        let Some(reference) = self.reference.take() else {
             return;
         };
         let mut changed = apply_field_selection(reference, field, selected);
         if field == CredentialField::PrivateKey && selected && self.capabilities.passphrase {
-            changed.passphrase = self
-                .selected_summary()
-                .is_some_and(|summary| summary.has_passphrase);
+            changed.passphrase = selected_has_passphrase;
         }
-        self.reference = has_selected_field(changed).then_some(changed);
+        self.reference = has_selected_field(&changed).then_some(changed);
         cx.notify();
     }
 
     fn sync_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = selected_value(self.reference);
-        let items = credential_select_items(&self.summaries, self.capabilities, self.reference);
+        let selected = selected_value(self.reference.as_ref());
+        let items =
+            credential_select_items(&self.summaries, self.capabilities, self.reference.as_ref());
         self.select.update(cx, |state, cx| {
             state.set_items(items, window, cx);
             state.set_selected_value(&selected, window, cx);
@@ -279,17 +283,17 @@ fn normalized_reference(
     reference.map(|reference| {
         let summary = summaries
             .iter()
-            .find(|summary| summary.id == reference.credential_id);
+            .find(|summary| summary_matches_reference(summary, &reference));
         normalize_reference(reference, capabilities, summary)
     })
 }
 
-fn selected_value(reference: Option<CredentialReference>) -> CredentialSelectValue {
+fn selected_value(reference: Option<&CredentialReference>) -> CredentialSelectValue {
     reference
         .map(|reference| CredentialSelectValue::Credential(reference.credential_id))
         .unwrap_or(CredentialSelectValue::Manual)
 }
 
-fn has_selected_field(reference: CredentialReference) -> bool {
+fn has_selected_field(reference: &CredentialReference) -> bool {
     reference.username || reference.password || reference.private_key || reference.passphrase
 }

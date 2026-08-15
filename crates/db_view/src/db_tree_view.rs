@@ -939,7 +939,11 @@ impl DbTreeView {
                     }
                 }
             }
-            ConnectionDataEvent::CloudSyncRequested | ConnectionDataEvent::TeamCacheUpdated => {}
+            ConnectionDataEvent::CredentialCreated { .. }
+            | ConnectionDataEvent::CredentialUpdated { .. }
+            | ConnectionDataEvent::CredentialDeleted { .. }
+            | ConnectionDataEvent::CloudSyncRequested
+            | ConnectionDataEvent::TeamCacheUpdated => {}
         }
     }
 

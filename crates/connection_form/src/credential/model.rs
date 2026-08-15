@@ -138,6 +138,10 @@ pub fn normalize_reference(
     capabilities: CredentialCapabilities,
     summary: Option<&CredentialSummary>,
 ) -> CredentialReference {
+    if let Some(summary) = summary {
+        reference.credential_id = summary.id;
+        reference.credential_cloud_id = summary.cloud_id.clone();
+    }
     reference.username &= capabilities.username;
     reference.password &= capabilities.password;
     reference.private_key &= capabilities.private_key;
@@ -181,13 +185,21 @@ pub fn apply_field_selection(
 pub fn credential_select_items(
     summaries: &[CredentialSummary],
     capabilities: CredentialCapabilities,
-    selected: Option<CredentialReference>,
+    selected: Option<&CredentialReference>,
 ) -> Vec<CredentialSelectItem> {
     let selected_id = selected.map(|reference| reference.credential_id);
     let mut summaries = summaries
         .iter()
         .filter(|summary| {
-            has_applicable_field(summary, capabilities) || selected_id == Some(summary.id)
+            let selected_summary =
+                selected.is_some_and(|reference| summary_matches_reference(summary, reference));
+            let collides_with_missing_cloud_reference = selected.is_some_and(|reference| {
+                reference.credential_cloud_id.is_some()
+                    && reference.credential_id == summary.id
+                    && !summary_matches_reference(summary, reference)
+            });
+            !collides_with_missing_cloud_reference
+                && (has_applicable_field(summary, capabilities) || selected_summary)
         })
         .collect::<Vec<_>>();
     summaries.sort_by_key(|summary| summary.name.to_lowercase());
@@ -221,10 +233,22 @@ fn default_reference(
         && (summary.has_private_key_path || summary.has_private_key_content);
     CredentialReference {
         credential_id,
+        credential_cloud_id: summary.cloud_id.clone(),
         username: capabilities.username && summary.username.is_some(),
         password,
         private_key,
         passphrase: private_key && capabilities.passphrase && summary.has_passphrase,
+    }
+}
+
+pub(super) fn summary_matches_reference(
+    summary: &CredentialSummary,
+    reference: &CredentialReference,
+) -> bool {
+    if let Some(cloud_id) = reference.credential_cloud_id.as_deref() {
+        summary.cloud_id.as_deref() == Some(cloud_id)
+    } else {
+        summary.id == reference.credential_id
     }
 }
 

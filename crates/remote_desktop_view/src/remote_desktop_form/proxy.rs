@@ -26,8 +26,12 @@ pub(super) fn build_proxy_config(
         .ok_or("proxy_port")?;
     let username = optional_value(username);
     let password = optional_secret(password);
-    let username_referenced = credential_reference.is_some_and(|reference| reference.username);
-    let password_referenced = credential_reference.is_some_and(|reference| reference.password);
+    let username_referenced = credential_reference
+        .as_ref()
+        .is_some_and(|reference| reference.username);
+    let password_referenced = credential_reference
+        .as_ref()
+        .is_some_and(|reference| reference.password);
     if username.is_none() && !username_referenced && (password.is_some() || password_referenced) {
         return Err("proxy_username");
     }
@@ -59,7 +63,9 @@ impl RemoteDesktopFormWindow {
     ) {
         self.proxy_credential_picker.update(cx, |picker, cx| {
             picker.set_reference(
-                proxy.as_ref().and_then(|proxy| proxy.credential_reference),
+                proxy
+                    .as_ref()
+                    .and_then(|proxy| proxy.credential_reference.clone()),
                 window,
                 cx,
             )

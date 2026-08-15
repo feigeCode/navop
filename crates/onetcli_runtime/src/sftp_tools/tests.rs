@@ -365,6 +365,7 @@ fn ssh_params() -> SshParams {
 fn username_reference(credential_id: i64) -> CredentialReference {
     CredentialReference {
         credential_id,
+        credential_cloud_id: None,
         username: true,
         password: false,
         private_key: false,

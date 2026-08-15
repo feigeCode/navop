@@ -46,25 +46,28 @@ impl DirectorySyncStore {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    fn existing_record(&self, id: &str) -> Result<Option<CloudSyncData>, SyncStoreError> {
-        for entry in record_type_dirs(&self.layout)? {
-            let path = entry.join(format!("{id}.json"));
-            if path.exists() {
-                return Ok(Some(self.read_record(&path)?));
-            }
+    fn existing_record(
+        &self,
+        data_type: &str,
+        id: &str,
+    ) -> Result<Option<CloudSyncData>, SyncStoreError> {
+        let path = self.layout.record_path(data_type, id);
+        if path.exists() {
+            return Ok(Some(self.read_record(&path)?));
         }
         Ok(None)
     }
 
     fn ensure_expected_version(
         &self,
+        data_type: &str,
         id: &str,
         expected: Option<u32>,
     ) -> Result<(), SyncStoreError> {
         let Some(expected) = expected else {
             return Ok(());
         };
-        match self.existing_record(id)? {
+        match self.existing_record(data_type, id)? {
             Some(record) if record.version == expected => Ok(()),
             _ => Err(SyncStoreError::Conflict(format!(
                 "stale version for record {id}"
@@ -104,8 +107,8 @@ impl PersonalSyncStore for DirectorySyncStore {
         expected_version: Option<u32>,
     ) -> Result<CloudSyncData, SyncStoreError> {
         self.initialize_package()?;
-        let existing = self.existing_record(&record.id)?;
-        self.ensure_expected_version(&record.id, expected_version)?;
+        let existing = self.existing_record(&record.data_type, &record.id)?;
+        self.ensure_expected_version(&record.data_type, &record.id, expected_version)?;
         let stored = next_stored_record(record.clone(), existing.as_ref());
         write_json_atomically(
             &self.layout.record_path(&stored.data_type, &stored.id),
@@ -116,20 +119,26 @@ impl PersonalSyncStore for DirectorySyncStore {
 
     async fn tombstone_record(
         &self,
+        data_type: &str,
         id: &str,
         expected_version: Option<u32>,
     ) -> Result<(), SyncStoreError> {
         self.initialize_package()?;
-        self.ensure_expected_version(id, expected_version)?;
-        let Some(mut record) = self.existing_record(id)? else {
-            return Err(SyncStoreError::Conflict(format!("missing record {id}")));
+        self.ensure_expected_version(data_type, id, expected_version)?;
+        let Some(mut record) = self.existing_record(data_type, id)? else {
+            return Err(SyncStoreError::Conflict(format!(
+                "missing {data_type} record {id}"
+            )));
         };
 
         record.deleted_at = Some(now_millis());
         record.updated_at = now_millis();
         record.version = record.version.saturating_add(1);
         write_json_atomically(&self.layout.record_path(&record.data_type, id), &record)?;
-        write_json_atomically(&self.layout.tombstone_path(id), &tombstone_from(&record))?;
+        write_json_atomically(
+            &self.layout.tombstone_path(&record.data_type, id),
+            &tombstone_from(&record),
+        )?;
         Ok(())
     }
 

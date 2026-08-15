@@ -20,7 +20,14 @@ pub struct PersonalSyncItemSnapshot {
 pub struct PersonalSyncRecordConflict {
     pub local_id: String,
     pub cloud_id: String,
+    pub data_type: String,
     pub conflict_type: PersonalConflictType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PersonalSyncCloudKey {
+    pub data_type: String,
+    pub cloud_id: String,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -29,7 +36,7 @@ pub struct PersonalSyncPlan {
     pub to_update_cloud: Vec<(PersonalSyncItemSnapshot, CloudSyncData)>,
     pub to_update_local: Vec<(CloudSyncData, PersonalSyncItemSnapshot)>,
     pub to_download: Vec<CloudSyncData>,
-    pub to_mark_synced: Vec<String>,
+    pub to_mark_synced: Vec<PersonalSyncCloudKey>,
     pub conflicts: Vec<PersonalSyncRecordConflict>,
 }
 
@@ -51,7 +58,10 @@ impl PersonalSyncPlan {
     }
 
     pub fn to_mark_synced_cloud_ids(&self) -> Vec<&str> {
-        self.to_mark_synced.iter().map(String::as_str).collect()
+        self.to_mark_synced
+            .iter()
+            .map(|key| key.cloud_id.as_str())
+            .collect()
     }
 }
 
@@ -67,25 +77,28 @@ impl PersonalSyncPlanner {
         &self,
         local_items: &[PersonalSyncItemSnapshot],
         remote_records: &[CloudSyncData],
-        paused_record_ids: &HashSet<String>,
+        paused_record_keys: &HashSet<PersonalSyncCloudKey>,
     ) -> PersonalSyncPlan {
         let remote_by_cloud_id = remote_records
             .iter()
-            .map(|record| (record.id.as_str(), record))
+            .map(|record| ((record.data_type.as_str(), record.id.as_str()), record))
             .collect::<HashMap<_, _>>();
         let mut plan = PersonalSyncPlan::default();
         let mut local_cloud_ids = HashSet::new();
 
         for item in local_items.iter().filter(|item| item.team_id.is_none()) {
-            self.plan_local_item(item, &remote_by_cloud_id, paused_record_ids, &mut plan);
+            self.plan_local_item(item, &remote_by_cloud_id, paused_record_keys, &mut plan);
             if let Some(cloud_id) = &item.cloud_id {
-                local_cloud_ids.insert(cloud_id.as_str());
+                local_cloud_ids.insert((item.data_type.as_str(), cloud_id.as_str()));
             }
         }
 
         for record in remote_records {
-            if !local_cloud_ids.contains(record.id.as_str())
-                && !paused_record_ids.contains(record.id.as_str())
+            if !local_cloud_ids.contains(&(record.data_type.as_str(), record.id.as_str()))
+                && !paused_record_keys.contains(&PersonalSyncCloudKey {
+                    data_type: record.data_type.clone(),
+                    cloud_id: record.id.clone(),
+                })
             {
                 plan.to_download.push(record.clone());
             }
@@ -97,19 +110,22 @@ impl PersonalSyncPlanner {
     fn plan_local_item(
         &self,
         item: &PersonalSyncItemSnapshot,
-        remote_by_cloud_id: &HashMap<&str, &CloudSyncData>,
-        paused_record_ids: &HashSet<String>,
+        remote_by_cloud_id: &HashMap<(&str, &str), &CloudSyncData>,
+        paused_record_keys: &HashSet<PersonalSyncCloudKey>,
         plan: &mut PersonalSyncPlan,
     ) {
         let Some(cloud_id) = &item.cloud_id else {
             plan.to_upload.push(item.clone());
             return;
         };
-        if paused_record_ids.contains(cloud_id) {
+        if paused_record_keys.contains(&PersonalSyncCloudKey {
+            data_type: item.data_type.clone(),
+            cloud_id: cloud_id.clone(),
+        }) {
             return;
         }
 
-        match remote_by_cloud_id.get(cloud_id.as_str()) {
+        match remote_by_cloud_id.get(&(item.data_type.as_str(), cloud_id.as_str())) {
             Some(remote) => plan_existing_item(item, remote, plan),
             None => plan.to_upload.push(item.clone()),
         }
@@ -122,7 +138,10 @@ fn plan_existing_item(
     plan: &mut PersonalSyncPlan,
 ) {
     if item.checksum == remote.checksum {
-        plan.to_mark_synced.push(remote.id.clone());
+        plan.to_mark_synced.push(PersonalSyncCloudKey {
+            data_type: remote.data_type.clone(),
+            cloud_id: remote.id.clone(),
+        });
         return;
     }
 
@@ -135,6 +154,7 @@ fn plan_existing_item(
         (true, true) => plan.conflicts.push(PersonalSyncRecordConflict {
             local_id: item.local_id.clone(),
             cloud_id: remote.id.clone(),
+            data_type: remote.data_type.clone(),
             conflict_type: PersonalConflictType::BothModified,
         }),
         (true, false) => plan.to_update_cloud.push((item.clone(), remote.clone())),
@@ -204,6 +224,45 @@ mod tests {
 
         assert!(plan.conflicts.is_empty());
         assert_eq!(vec!["cloud-1"], plan.to_mark_synced_cloud_ids());
+    }
+
+    #[test]
+    fn planner_isolates_same_cloud_id_by_data_type() {
+        let local = vec![local_item_with_type_and_sync(
+            "local-connection",
+            "shared-cloud-id",
+            data_type::CONNECTION,
+            100,
+            100,
+            "connection-checksum",
+        )];
+        let remote = vec![
+            test_record(
+                "shared-cloud-id",
+                data_type::CONNECTION,
+                2,
+                "connection-checksum",
+            ),
+            test_record(
+                "shared-cloud-id",
+                data_type::CREDENTIAL,
+                2,
+                "credential-checksum",
+            ),
+        ];
+
+        let plan = PersonalSyncPlanner::new().plan(&local, &remote, &HashSet::new());
+
+        assert_eq!(1, plan.to_mark_synced.len());
+        assert_eq!(data_type::CONNECTION, plan.to_mark_synced[0].data_type);
+        assert_eq!("shared-cloud-id", plan.to_mark_synced[0].cloud_id);
+        assert_eq!(1, plan.to_download.len());
+        assert_eq!(data_type::CREDENTIAL, plan.to_download[0].data_type);
+        assert_eq!("shared-cloud-id", plan.to_download[0].id);
+        assert!(plan.to_upload.is_empty());
+        assert!(plan.to_update_cloud.is_empty());
+        assert!(plan.to_update_local.is_empty());
+        assert!(plan.conflicts.is_empty());
     }
 
     #[test]

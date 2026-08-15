@@ -178,11 +178,12 @@ where
 
     async fn tombstone_record(
         &self,
+        data_type: &str,
         id: &str,
         expected_version: Option<u32>,
     ) -> Result<(), SyncStoreError> {
         self.directory
-            .tombstone_record(id, expected_version)
+            .tombstone_record(data_type, id, expected_version)
             .await?;
         self.mark_dirty()
     }

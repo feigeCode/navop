@@ -22,6 +22,15 @@ pub enum ConnectionDataEvent {
         workspace_id: i64,
         cloud_id: Option<String>,
     },
+    /// 钥匙串条目被创建。事件不得携带任何秘密字段。
+    CredentialCreated { credential_id: i64 },
+    /// 钥匙串条目被更新。事件不得携带任何秘密字段。
+    CredentialUpdated { credential_id: i64 },
+    /// 钥匙串条目被删除。
+    CredentialDeleted {
+        credential_id: i64,
+        cloud_id: Option<String>,
+    },
     /// Schema 结构变更（DDL 执行后触发）
     SchemaChanged {
         connection_id: String,
@@ -59,6 +68,15 @@ pub fn get_notifier(cx: &App) -> Option<Entity<ConnectionDataNotifier>> {
 
 /// 辅助函数：发送连接事件
 pub fn emit_connection_event<T>(event: ConnectionDataEvent, cx: &mut Context<T>) {
+    if let Some(notifier) = cx.try_global::<GlobalConnectionNotifier>().cloned() {
+        notifier.0.update(cx, |_, cx| {
+            cx.emit(event);
+        });
+    }
+}
+
+/// 从 `App` 上下文发送全局数据事件。
+pub fn emit_connection_event_from_app(event: ConnectionDataEvent, cx: &mut App) {
     if let Some(notifier) = cx.try_global::<GlobalConnectionNotifier>().cloned() {
         notifier.0.update(cx, |_, cx| {
             cx.emit(event);

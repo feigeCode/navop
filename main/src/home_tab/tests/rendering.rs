@@ -20,7 +20,7 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 }
 
 #[test]
-fn both_home_styles_expose_credential_vault_in_their_native_navigation() {
+fn both_home_styles_expose_credential_vault_in_their_sidebars() {
     let toolbar = include_str!("../toolbar.rs");
     let legacy_sidebar = include_str!("../sidebar.rs");
     let persistent_sidebar = include_str!("../../persistent_connection_sidebar/rail.rs");
@@ -38,11 +38,12 @@ fn both_home_styles_expose_credential_vault_in_their_native_navigation() {
     assert!(legacy_sidebar.contains("t!(\"Home.credential_vault\")"));
     assert!(legacy_sidebar.contains("home.add_credential_vault_tab(window, cx)"));
 
-    assert!(!persistent_sidebar.contains("\"persistent-open-credential-vault\""));
+    assert!(persistent_sidebar.contains("\"persistent-open-credential-vault\""));
+    assert!(persistent_sidebar.contains("t!(\"Home.credential_vault\")"));
+    assert!(persistent_sidebar.contains("home.add_credential_vault_tab(window, cx)"));
 
-    assert!(workspace_tools.contains("\"modern-home-credential-vault\""));
-    assert!(workspace_tools.contains("t!(\"Home.credential_vault\")"));
-    assert!(workspace_tools.contains("home.add_credential_vault_tab(window, cx)"));
+    assert!(!workspace_tools.contains("\"modern-home-credential-vault\""));
+    assert!(!workspace_tools.contains("home.add_credential_vault_tab(window, cx)"));
 }
 
 #[test]

@@ -67,6 +67,7 @@ fn private_key_content_takes_precedence_over_local_path() {
 fn strict_resolution_rejects_missing_or_empty_selected_fields() {
     let reference = CredentialReference {
         credential_id: 42,
+        credential_cloud_id: None,
         username: false,
         password: true,
         private_key: false,
@@ -90,6 +91,7 @@ fn strict_resolution_preserves_unselected_manual_fields() {
     credential.password = Some("vault-password".to_string());
     let reference = CredentialReference {
         credential_id: 1,
+        credential_cloud_id: None,
         username: false,
         password: true,
         private_key: false,

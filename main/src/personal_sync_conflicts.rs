@@ -4,7 +4,9 @@ use one_core::cloud_sync::ConflictResolution;
 use one_core::cloud_sync::personal::{PersonalConflictType, PersonalSyncConflict};
 use rust_i18n::t;
 
-use crate::personal_sync_runtime::{PersonalSyncConflictDisplayInfo, PersonalSyncRecordDisplay};
+use crate::personal_sync_runtime::{
+    PersonalSyncConflictDisplayInfo, PersonalSyncRecordDisplay, personal_conflict_selection_key,
+};
 use crate::sync_conflict_dialog::{
     SyncConflictDialogItem, SyncConflictResolutionOption, show_sync_conflict_dialog,
 };
@@ -69,7 +71,7 @@ fn personal_conflict_dialog_item(
     display: &PersonalSyncConflictDisplayInfo,
 ) -> SyncConflictDialogItem {
     SyncConflictDialogItem {
-        id: conflict.record_id.clone(),
+        id: personal_conflict_selection_key(&conflict.data_type, &conflict.record_id),
         title: personal_conflict_title(conflict, display),
         detail: personal_conflict_detail(conflict, display),
         default_strategy: default_personal_conflict_strategy(conflict.conflict_type),
@@ -96,10 +98,22 @@ fn personal_conflict_detail(
 ) -> String {
     let mut parts = Vec::new();
     if let Some(local) = &display.local {
-        parts.push(format!("本地: {}", record_display_text(local)));
+        parts.push(
+            t!(
+                "Home.personal_sync_conflict_local",
+                record = record_display_text(local)
+            )
+            .to_string(),
+        );
     }
     if let Some(remote) = &display.remote {
-        parts.push(format!("远端: {}", record_display_text(remote)));
+        parts.push(
+            t!(
+                "Home.personal_sync_conflict_remote",
+                record = record_display_text(remote)
+            )
+            .to_string(),
+        );
     }
     parts.push(
         t!(
@@ -135,6 +149,9 @@ fn data_type_label(data_type: &str) -> String {
     match data_type {
         one_core::cloud_sync::data_type::WORKSPACE => {
             t!("Home.personal_sync_conflict_workspace").to_string()
+        }
+        one_core::cloud_sync::data_type::CREDENTIAL => {
+            t!("Home.personal_sync_conflict_credential").to_string()
         }
         _ => t!("Home.personal_sync_conflict_connection").to_string(),
     }
@@ -203,10 +220,11 @@ mod tests {
 
         let item = personal_conflict_dialog_item(&conflict, &display);
 
+        assert_ne!(item.id, conflict.record_id);
         assert!(item.title.contains("Remote MySQL"));
-        assert!(item.detail.contains("本地: Local MySQL"));
+        assert!(item.detail.contains("Local MySQL"));
         assert!(item.detail.contains("127.0.0.1:3306"));
-        assert!(item.detail.contains("远端: Remote MySQL"));
+        assert!(item.detail.contains("Remote MySQL"));
         assert!(item.detail.contains("10.0.0.8:3306"));
     }
 

@@ -76,7 +76,11 @@ where
 
     fn clear_conflict(&self, conflict: &PersonalSyncConflict) -> Result<(), SyncStoreError> {
         self.conflicts
-            .delete(&conflict.backend_profile_id, &conflict.record_id)
+            .delete(
+                &conflict.backend_profile_id,
+                &conflict.data_type,
+                &conflict.record_id,
+            )
             .map_err(|error| SyncStoreError::Io(error.to_string()))
     }
 }

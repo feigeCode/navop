@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_vault_opens_from_both_home_styles_as_a_stable_tab() {
+    fn credential_vault_opens_from_both_home_sidebars_as_a_stable_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let toolbar_source = include_str!("../home_tab/toolbar.rs");
         let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
@@ -405,9 +405,9 @@ mod tests {
         assert!(tabs_source.contains("TabItem::new(\"credential-vault\", \"home\", vault)"));
         assert!(legacy_sidebar_source.contains("\"legacy-open-credential-vault\""));
         assert!(legacy_sidebar_source.contains("home.add_credential_vault_tab(window, cx)"));
-        assert!(!persistent_sidebar_source.contains("\"persistent-open-credential-vault\""));
-        assert!(modern_home_source.contains("\"modern-home-credential-vault\""));
-        assert!(modern_home_source.contains("home.add_credential_vault_tab(window, cx)"));
+        assert!(persistent_sidebar_source.contains("\"persistent-open-credential-vault\""));
+        assert!(persistent_sidebar_source.contains("home.add_credential_vault_tab(window, cx)"));
+        assert!(!modern_home_source.contains("\"modern-home-credential-vault\""));
         assert!(!toolbar_source.contains("\"credential-vault-button\""));
         assert!(!toolbar_source.contains("add_credential_vault_tab"));
         assert!(!settings_source.contains("SettingPage::new(\"钥匙串\")"));
@@ -416,15 +416,17 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_notes_entry_precedes_extensions() {
+    fn persistent_sidebar_places_credential_vault_between_notes_and_extensions() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let notes = source.find("\"persistent-open-notes\"").unwrap();
+        let vault = source.find("\"persistent-open-credential-vault\"").unwrap();
         let extensions = source.find("\"persistent-open-extensions\"").unwrap();
-        assert!(notes < extensions);
+        assert!(notes < vault);
+        assert!(vault < extensions);
     }
 
     #[test]
-    fn legacy_sidebar_and_modern_card_place_credential_vault_with_workspace_tools() {
+    fn both_home_sidebars_place_credential_vault_with_workspace_tools() {
         let legacy_source = include_str!("../home_tab/sidebar.rs");
         let legacy_notes = legacy_source.find("\"legacy-open-notes\"").unwrap();
         let legacy_vault = legacy_source
@@ -434,14 +436,16 @@ mod tests {
         assert!(legacy_notes < legacy_vault);
         assert!(legacy_vault < legacy_extensions);
 
-        let modern_source = include_str!("../home_tab/modern_home.rs");
-        let modern_notes = modern_source.find("\"modern-home-notes\"").unwrap();
-        let modern_vault = modern_source
-            .find("\"modern-home-credential-vault\"")
+        let persistent_source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let persistent_notes = persistent_source.find("\"persistent-open-notes\"").unwrap();
+        let persistent_vault = persistent_source
+            .find("\"persistent-open-credential-vault\"")
             .unwrap();
-        let modern_extensions = modern_source.find("\"modern-home-extensions\"").unwrap();
-        assert!(modern_notes < modern_vault);
-        assert!(modern_vault < modern_extensions);
+        let persistent_extensions = persistent_source
+            .find("\"persistent-open-extensions\"")
+            .unwrap();
+        assert!(persistent_notes < persistent_vault);
+        assert!(persistent_vault < persistent_extensions);
     }
 
     #[test]
@@ -684,6 +688,30 @@ mod tests {
         let options = remote_desktop_options(&connection, RemoteDesktopProtocol::Vnc).unwrap();
 
         assert!(!options.audio_playback);
+    }
+
+    #[test]
+    fn remote_desktop_tab_resolves_credentials_before_building_options() {
+        let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
+        let method_start = source
+            .find("pub(crate) fn open_remote_desktop_with_mode")
+            .expect("remote desktop open method");
+        let method_end = source[method_start..]
+            .find("pub(crate) fn open_redis_tab_with_mode")
+            .map(|offset| method_start + offset)
+            .expect("next method");
+        let method = &source[method_start..method_end];
+        let resolve = method
+            .find("resolve_connection_credentials(&conn, window, cx)")
+            .expect("credential resolution");
+        let options = method
+            .find("remote_desktop_options(&conn, protocol)")
+            .expect("remote desktop options");
+
+        assert!(
+            resolve < options,
+            "RDP/VNC credentials must be resolved before runtime options are built"
+        );
     }
 
     #[test]
@@ -996,6 +1024,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(conn) = resolve_connection_credentials(&conn, window, cx) else {
+            return;
+        };
         let Some(options) = remote_desktop_options(&conn, protocol) else {
             tracing::warn!(
                 connection_id = ?conn.id,

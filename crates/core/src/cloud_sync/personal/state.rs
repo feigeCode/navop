@@ -66,8 +66,7 @@ impl PersonalSyncConflictRepository {
                 "INSERT INTO personal_sync_conflicts
                  (backend_profile_id, record_id, data_type, conflict_type, local_snapshot, remote_snapshot, detected_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(backend_profile_id, record_id) DO UPDATE SET
-                   data_type = excluded.data_type,
+                 ON CONFLICT(backend_profile_id, data_type, record_id) DO UPDATE SET
                    conflict_type = excluded.conflict_type,
                    local_snapshot = excluded.local_snapshot,
                    remote_snapshot = excluded.remote_snapshot,
@@ -114,12 +113,17 @@ impl PersonalSyncConflictRepository {
         })
     }
 
-    pub fn delete(&self, backend_profile_id: &str, record_id: &str) -> AnyhowResult<()> {
+    pub fn delete(
+        &self,
+        backend_profile_id: &str,
+        data_type: &str,
+        record_id: &str,
+    ) -> AnyhowResult<()> {
         self.conn.with_connection(|conn| {
             conn.execute(
                 "DELETE FROM personal_sync_conflicts
-                 WHERE backend_profile_id = ?1 AND record_id = ?2",
-                params![backend_profile_id, record_id],
+                 WHERE backend_profile_id = ?1 AND data_type = ?2 AND record_id = ?3",
+                params![backend_profile_id, data_type, record_id],
             )?;
             Ok(())
         })
@@ -233,10 +237,61 @@ mod tests {
         };
 
         repo.upsert(&conflict).expect("conflict stored");
-        repo.delete("personal", "record-1")
+        repo.delete("personal", data_type::CONNECTION, "record-1")
             .expect("conflict deleted");
 
         assert!(repo.list("personal").expect("conflicts list").is_empty());
+    }
+
+    #[test]
+    fn conflict_repository_isolates_same_record_id_by_data_type() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let conn = SqliteConnection::open(temp.path().join("test.db")).expect("sqlite");
+        conn.with_connection(|conn| run_migrations(conn))
+            .expect("migrations run");
+        let repo = PersonalSyncConflictRepository::new(conn);
+        let connection = PersonalSyncConflict {
+            backend_profile_id: "personal".to_string(),
+            record_id: "shared-cloud-id".to_string(),
+            data_type: data_type::CONNECTION.to_string(),
+            conflict_type: PersonalConflictType::BothModified,
+            local_snapshot: Some("local connection".to_string()),
+            remote_snapshot: Some("remote connection".to_string()),
+            detected_at: 100,
+        };
+        let credential = PersonalSyncConflict {
+            data_type: data_type::CREDENTIAL.to_string(),
+            local_snapshot: Some("local credential".to_string()),
+            remote_snapshot: Some("remote credential".to_string()),
+            detected_at: 101,
+            ..connection.clone()
+        };
+
+        repo.upsert(&connection)
+            .expect("connection conflict stored");
+        repo.upsert(&credential)
+            .expect("credential conflict stored");
+        let loaded = repo.list("personal").expect("conflicts list");
+
+        assert_eq!(2, loaded.len());
+        assert!(
+            loaded
+                .iter()
+                .any(|conflict| conflict.data_type == data_type::CONNECTION)
+        );
+        assert!(
+            loaded
+                .iter()
+                .any(|conflict| conflict.data_type == data_type::CREDENTIAL)
+        );
+
+        repo.delete("personal", data_type::CONNECTION, "shared-cloud-id")
+            .expect("connection conflict deleted");
+        let remaining = repo.list("personal").expect("remaining conflicts list");
+
+        assert_eq!(1, remaining.len());
+        assert_eq!(data_type::CREDENTIAL, remaining[0].data_type);
+        assert_eq!("shared-cloud-id", remaining[0].record_id);
     }
 
     #[test]

@@ -104,6 +104,7 @@ fn picker_selection_and_fields_follow_the_reference_contract(cx: &mut TestAppCon
 fn capability_changes_normalize_existing_references(cx: &mut TestAppContext) {
     let reference = CredentialReference {
         credential_id: 42,
+        credential_cloud_id: None,
         username: true,
         password: true,
         private_key: false,

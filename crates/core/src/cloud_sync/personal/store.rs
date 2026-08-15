@@ -24,6 +24,7 @@ pub trait PersonalSyncStore: Send + Sync {
 
     async fn tombstone_record(
         &self,
+        data_type: &str,
         id: &str,
         expected_version: Option<u32>,
     ) -> Result<(), SyncStoreError>;

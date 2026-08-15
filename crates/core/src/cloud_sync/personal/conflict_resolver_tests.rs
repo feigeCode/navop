@@ -132,6 +132,7 @@ impl PersonalSyncStore for FakeStore {
 
     async fn tombstone_record(
         &self,
+        _data_type: &str,
         _id: &str,
         _expected_version: Option<u32>,
     ) -> Result<(), SyncStoreError> {

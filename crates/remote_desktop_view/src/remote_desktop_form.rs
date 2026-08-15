@@ -98,7 +98,7 @@ impl RemoteDesktopFormWindow {
             .reference(
                 editing_params
                     .as_ref()
-                    .and_then(|params| params.credential_reference),
+                    .and_then(|params| params.credential_reference.clone()),
             ),
             window,
             cx,
@@ -112,7 +112,7 @@ impl RemoteDesktopFormWindow {
                 editing_params
                     .as_ref()
                     .and_then(|params| params.proxy.as_ref())
-                    .and_then(|proxy| proxy.credential_reference),
+                    .and_then(|proxy| proxy.credential_reference.clone()),
             ),
             window,
             cx,

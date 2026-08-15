@@ -1628,14 +1628,14 @@ impl DbConnectionForm {
 
         if let Ok(params) = connection.to_db_connection() {
             self.credential_picker.update(cx, |picker, cx| {
-                picker.set_reference(params.credential_reference, window, cx)
+                picker.set_reference(params.credential_reference.clone(), window, cx)
             });
             self.proxy_credential_picker.update(cx, |picker, cx| {
                 picker.set_reference(
                     params
                         .proxy
                         .as_ref()
-                        .and_then(|proxy| proxy.credential_reference),
+                        .and_then(|proxy| proxy.credential_reference.clone()),
                     window,
                     cx,
                 )

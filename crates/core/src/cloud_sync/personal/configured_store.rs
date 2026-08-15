@@ -108,12 +108,21 @@ where
 
     async fn tombstone_record(
         &self,
+        data_type: &str,
         id: &str,
         expected_version: Option<u32>,
     ) -> Result<(), SyncStoreError> {
         match self {
-            Self::Folder(store) => store.tombstone_record(id, expected_version).await,
-            Self::Git(store) => store.tombstone_record(id, expected_version).await,
+            Self::Folder(store) => {
+                store
+                    .tombstone_record(data_type, id, expected_version)
+                    .await
+            }
+            Self::Git(store) => {
+                store
+                    .tombstone_record(data_type, id, expected_version)
+                    .await
+            }
         }
     }
 

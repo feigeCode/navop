@@ -46,6 +46,7 @@ fn insert_username_credential(repo: &ConnectionRepository, username: &str) -> i6
 fn username_reference(credential_id: i64) -> CredentialReference {
     CredentialReference {
         credential_id,
+        credential_cloud_id: None,
         username: true,
         password: false,
         private_key: false,

@@ -551,7 +551,7 @@ impl RedisFormWindow {
                 .reference(
                     existing_params
                         .as_ref()
-                        .and_then(|params| params.credential_reference),
+                        .and_then(|params| params.credential_reference.clone()),
                 ),
             window,
             cx,
@@ -565,7 +565,7 @@ impl RedisFormWindow {
                 existing_params
                     .as_ref()
                     .and_then(|params| params.sentinel.as_ref())
-                    .and_then(|sentinel| sentinel.credential_reference),
+                    .and_then(|sentinel| sentinel.credential_reference.clone()),
             ),
             window,
             cx,

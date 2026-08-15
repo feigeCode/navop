@@ -9,6 +9,7 @@ use gpui_component::{
     notification::Notification,
     v_flex,
 };
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{
     CredentialEntry, CredentialRepository, StorageManager, traits::Repository,
 };
@@ -49,17 +50,28 @@ impl CredentialFormWindow {
                 .get::<CredentialRepository>()
                 .ok_or_else(|| "CredentialRepository 尚未注册".to_string())?;
             if self.editing {
-                repository.update(&entry).map_err(|error| error.to_string())
+                let id = entry.id.ok_or_else(|| "编辑凭据缺少本地 ID".to_string())?;
+                repository
+                    .update(&entry)
+                    .map(|_| id)
+                    .map_err(|error| error.to_string())
             } else {
                 repository
                     .insert(&mut entry)
-                    .map(|_| ())
                     .map_err(|error| error.to_string())
             }
         });
 
         match result {
-            Ok(()) => {
+            Ok(credential_id) => {
+                emit_connection_event(
+                    if self.editing {
+                        ConnectionDataEvent::CredentialUpdated { credential_id }
+                    } else {
+                        ConnectionDataEvent::CredentialCreated { credential_id }
+                    },
+                    cx,
+                );
                 _ = self
                     .vault_view
                     .update(cx, |vault_view, cx| vault_view.reload(cx));

@@ -3,6 +3,7 @@ mod picker;
 mod render;
 mod runtime;
 
+use model::summary_matches_reference;
 pub use model::{
     CredentialCapabilities, CredentialField, CredentialSelectItem, CredentialSelectValue,
     apply_field_selection, build_reference, credential_select_items, normalize_reference,

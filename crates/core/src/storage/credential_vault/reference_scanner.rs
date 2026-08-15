@@ -22,32 +22,42 @@ pub(super) struct ScannedConnection {
     pub(super) params: String,
 }
 
+#[derive(Debug)]
+pub(super) struct CredentialIdentity {
+    pub(super) local_id: i64,
+    cloud_id: Option<String>,
+}
+
 impl CredentialRepository {
     pub fn referencing_connections(
         &self,
         credential_id: i64,
     ) -> Result<Vec<CredentialReferenceHit>> {
-        self.conn
-            .with_connection(|connection| scan_references(connection, credential_id))
+        self.conn.with_connection(|connection| {
+            let identity = load_credential_identity(connection, credential_id)?;
+            scan_references(connection, &identity)
+        })
     }
 
     pub fn delete_checked(&self, credential_id: i64) -> Result<DeleteCredentialOutcome> {
         self.conn.with_connection(|connection| {
             let transaction =
                 rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
-            let exists = transaction
-                .query_row(
-                    "SELECT 1 FROM credential_entries WHERE id = ?1",
-                    [credential_id],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            if !exists {
+            let identity = load_credential_identity(&transaction, credential_id)?;
+            if identity.cloud_id.is_none()
+                && !transaction
+                    .query_row(
+                        "SELECT 1 FROM credential_entries WHERE id = ?1",
+                        [credential_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some()
+            {
                 transaction.commit()?;
                 return Ok(DeleteCredentialOutcome::NotFound);
             }
-            let references = scan_references(&transaction, credential_id)?;
+            let references = scan_references(&transaction, &identity)?;
             if !references.is_empty() {
                 transaction.commit()?;
                 return Ok(DeleteCredentialOutcome::Referenced(references));
@@ -62,9 +72,28 @@ impl CredentialRepository {
     }
 }
 
-fn scan_references(
+fn load_credential_identity(
     connection: &rusqlite::Connection,
     credential_id: i64,
+) -> Result<CredentialIdentity> {
+    let cloud_id = connection
+        .query_row(
+            "SELECT cloud_id FROM credential_entries WHERE id = ?1",
+            [credential_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+        .filter(|cloud_id| !cloud_id.is_empty());
+    Ok(CredentialIdentity {
+        local_id: credential_id,
+        cloud_id,
+    })
+}
+
+fn scan_references(
+    connection: &rusqlite::Connection,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceHit>> {
     let connections = load_connections(connection)?;
     let by_id = connections
@@ -73,8 +102,8 @@ fn scan_references(
         .collect::<HashMap<_, _>>();
     let mut hits = Vec::new();
     for connection in &connections {
-        append_direct_hits(&mut hits, connection, credential_id)?;
-        append_tunnel_hits(&mut hits, connection, credential_id, &by_id)?;
+        append_direct_hits(&mut hits, connection, identity)?;
+        append_tunnel_hits(&mut hits, connection, identity, &by_id)?;
     }
     Ok(hits)
 }
@@ -119,10 +148,10 @@ fn parse_connection_type(value: &str) -> Result<ConnectionType> {
 fn append_direct_hits(
     hits: &mut Vec<CredentialReferenceHit>,
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<()> {
-    for location in direct_locations(connection, credential_id)? {
-        hits.push(reference_hit(connection, credential_id, location, None));
+    for location in direct_locations(connection, identity)? {
+        hits.push(reference_hit(connection, identity.local_id, location, None));
     }
     Ok(())
 }
@@ -145,15 +174,15 @@ pub(super) fn reference_hit(
 
 fn direct_locations(
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let locations = match connection.connection_type {
-        ConnectionType::SshSftp => ssh_locations(connection, credential_id)?,
-        ConnectionType::Database => database_locations(connection, credential_id)?,
-        ConnectionType::Redis => redis_locations(connection, credential_id)?,
-        ConnectionType::MongoDB => mongodb_locations(connection, credential_id)?,
+        ConnectionType::SshSftp => ssh_locations(connection, identity)?,
+        ConnectionType::Database => database_locations(connection, identity)?,
+        ConnectionType::Redis => redis_locations(connection, identity)?,
+        ConnectionType::MongoDB => mongodb_locations(connection, identity)?,
         ConnectionType::Rdp | ConnectionType::Vnc => {
-            remote_desktop_locations(connection, credential_id)?
+            remote_desktop_locations(connection, identity)?
         }
         _ => Vec::new(),
     };
@@ -162,7 +191,7 @@ fn direct_locations(
 
 pub(super) fn ssh_locations(
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let params: SshParams = parse_params(connection)?;
     let references = [
@@ -185,12 +214,12 @@ pub(super) fn ssh_locations(
                 .and_then(|proxy| proxy.credential_reference.as_ref()),
         ),
     ];
-    Ok(matching_locations(references, credential_id))
+    Ok(matching_locations(references, identity))
 }
 
 fn database_locations(
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let params: DbConnectionConfig = parse_params(connection)?;
     Ok(primary_and_proxy_locations(
@@ -199,13 +228,13 @@ fn database_locations(
             .proxy
             .as_ref()
             .and_then(|proxy| proxy.credential_reference.as_ref()),
-        credential_id,
+        identity,
     ))
 }
 
 fn redis_locations(
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let params: RedisParams = parse_params(connection)?;
     let references = [
@@ -221,12 +250,12 @@ fn redis_locations(
                 .and_then(|sentinel| sentinel.credential_reference.as_ref()),
         ),
     ];
-    Ok(matching_locations(references, credential_id))
+    Ok(matching_locations(references, identity))
 }
 
 fn mongodb_locations(
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let params: MongoDBParams = parse_params(connection)?;
     Ok(matching_locations(
@@ -234,13 +263,13 @@ fn mongodb_locations(
             CredentialReferenceLocation::Primary,
             params.credential_reference.as_ref(),
         )],
-        credential_id,
+        identity,
     ))
 }
 
 fn remote_desktop_locations(
     connection: &ScannedConnection,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let params: RemoteDesktopParams = parse_params(connection)?;
     Ok(primary_and_proxy_locations(
@@ -249,34 +278,45 @@ fn remote_desktop_locations(
             .proxy
             .as_ref()
             .and_then(|proxy| proxy.credential_reference.as_ref()),
-        credential_id,
+        identity,
     ))
 }
 
 fn primary_and_proxy_locations(
     primary: Option<&CredentialReference>,
     proxy: Option<&CredentialReference>,
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Vec<CredentialReferenceLocation> {
     matching_locations(
         [
             (CredentialReferenceLocation::Primary, primary),
             (CredentialReferenceLocation::Proxy, proxy),
         ],
-        credential_id,
+        identity,
     )
 }
 
 fn matching_locations<const N: usize>(
     references: [(CredentialReferenceLocation, Option<&CredentialReference>); N],
-    credential_id: i64,
+    identity: &CredentialIdentity,
 ) -> Vec<CredentialReferenceLocation> {
     references
         .into_iter()
         .filter_map(|(location, reference)| {
-            (reference?.credential_id == credential_id).then_some(location)
+            reference_matches(reference?, identity).then_some(location)
         })
         .collect()
+}
+
+fn reference_matches(reference: &CredentialReference, identity: &CredentialIdentity) -> bool {
+    match reference
+        .credential_cloud_id
+        .as_deref()
+        .filter(|cloud_id| !cloud_id.is_empty())
+    {
+        Some(cloud_id) => identity.cloud_id.as_deref() == Some(cloud_id),
+        None => reference.credential_id == identity.local_id,
+    }
 }
 
 pub(super) fn parse_params<T>(connection: &ScannedConnection) -> Result<T>
