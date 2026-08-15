@@ -130,8 +130,14 @@ jobs:
           PORTABLE: ${{ matrix.portable }}
         run: |
           set -euo pipefail
+          export CARGO_BUILD_JOBS=2
+          export CARGO_PROFILE_RELEASE_LTO=thin
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
           cargo --version
           rustc --version
+          echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+          echo "CARGO_PROFILE_RELEASE_LTO=$CARGO_PROFILE_RELEASE_LTO"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=$CARGO_PROFILE_RELEASE_CODEGEN_UNITS"
           if [ "$PORTABLE" = "true" ]; then
             cargo zigbuild \
               --release \
