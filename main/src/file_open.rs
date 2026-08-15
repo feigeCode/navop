@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 mod recording;
+pub(crate) use recording::open_session_log_file;
 
 #[derive(Debug)]
 pub(crate) enum FileOpenInput {

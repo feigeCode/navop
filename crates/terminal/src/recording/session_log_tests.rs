@@ -1,7 +1,7 @@
 use super::{
-    RecordingBackend, RecordingCompleteness, RecordingEvent, RecordingEventKind,
-    RecordingFileConfig, RecordingFileLimits, RecordingFileWriter, RecordingMetadata,
-    SessionLogFavorites, load_session_log_favorites, partial_recording_path,
+    RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingEvent,
+    RecordingEventKind, RecordingFileConfig, RecordingFileLimits, RecordingFileWriter,
+    RecordingMetadata, SessionLogFavorites, load_session_log_favorites, partial_recording_path,
     save_session_log_favorites, scan_session_logs, session_log_path, session_logs_directory,
 };
 use crate::TerminalSize;
@@ -15,6 +15,7 @@ fn metadata(recording_id: &str, started_at_unix_ms: u64) -> RecordingMetadata {
         recording_id: recording_id.to_string(),
         session_id: format!("session-{recording_id}"),
         backend: RecordingBackend::Ssh,
+        artifact_kind: RecordingArtifactKind::SessionLog,
         application_version: "0.1.0-test".to_string(),
         started_at_unix_ms,
         capture_input: false,
@@ -158,6 +159,86 @@ fn scan_reads_nested_complete_and_partial_logs_in_reverse_start_order() {
         catalog.entries[1].completeness
     );
     assert_eq!(before, fs::read(&partial).unwrap());
+}
+
+#[test]
+fn scan_reads_header_only_partial_log_immediately() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("session-logs");
+    let final_path = recording_path(&root, "header-only", 1_710_000_000_000);
+    let writer = RecordingFileWriter::create(
+        &final_path,
+        metadata("header-only", 1_710_000_000_000),
+        TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        RecordingFileConfig::default(),
+    )
+    .unwrap();
+    let partial = writer.partial_path().to_path_buf();
+    drop(writer);
+    let before = fs::read(&partial).unwrap();
+
+    let catalog = scan_session_logs(
+        &root,
+        RecordingFileLimits::default(),
+        &SessionLogFavorites::default(),
+    )
+    .unwrap();
+
+    assert!(catalog.skipped.is_empty());
+    assert_eq!(1, catalog.entries.len());
+    assert_eq!("header-only", catalog.entries[0].header.navop.recording_id);
+    assert_eq!(Duration::ZERO, catalog.entries[0].duration);
+    assert_eq!(
+        RecordingCompleteness::Partial { discarded_bytes: 0 },
+        catalog.entries[0].completeness
+    );
+    assert_eq!(before, fs::read(&partial).unwrap());
+}
+
+#[test]
+fn active_session_log_events_are_visible_without_durable_flush() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("session-logs");
+    let final_path = recording_path(&root, "active", 1_710_000_000_000);
+    let mut writer = RecordingFileWriter::create(
+        &final_path,
+        metadata("active", 1_710_000_000_000),
+        TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        RecordingFileConfig::default(),
+    )
+    .unwrap();
+    writer
+        .append(&RecordingEvent {
+            elapsed: Duration::from_millis(750),
+            kind: RecordingEventKind::Output(b"prompt output".to_vec()),
+        })
+        .unwrap();
+
+    let catalog = scan_session_logs(
+        &root,
+        RecordingFileLimits::default(),
+        &SessionLogFavorites::default(),
+    )
+    .unwrap();
+
+    assert!(catalog.skipped.is_empty());
+    assert_eq!(1, catalog.entries.len());
+    assert_eq!("active", catalog.entries[0].header.navop.recording_id);
+    assert_eq!(Duration::from_millis(750), catalog.entries[0].duration);
+    assert!(matches!(
+        catalog.entries[0].completeness,
+        RecordingCompleteness::Partial { .. }
+    ));
 }
 
 #[test]

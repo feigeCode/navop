@@ -3,8 +3,10 @@ use anyhow::{Context as _, Result, bail};
 use gpui::{App, AppContext as _, AsyncApp, Window};
 use one_core::tab_container::TabItem;
 use std::path::{Path, PathBuf};
-use terminal::recording::{RecordingFileLimits, RecordingPlayback, RecordingPlaybackLimits};
-use terminal_view::{RecordingPlaybackViewConfig, TerminalWorkspace};
+use terminal::recording::{
+    RecordingArtifactKind, RecordingFileLimits, RecordingPlayback, RecordingPlaybackLimits,
+};
+use terminal_view::{RecordingPlaybackViewConfig, SessionLogViewConfig, TerminalWorkspace};
 
 use super::{show_file_open_error, stable_file_key};
 
@@ -14,7 +16,26 @@ struct PreparedRecordingPlayback {
     display_name: String,
 }
 
+#[derive(Clone, Copy)]
+enum RecordingOpenMode {
+    InferFromArtifact,
+    SessionLog,
+}
+
 pub(super) fn open_recording_file(path: PathBuf, window: &mut Window, cx: &mut App) {
+    open_recording_file_with_mode(path, RecordingOpenMode::InferFromArtifact, window, cx);
+}
+
+pub(crate) fn open_session_log_file(path: PathBuf, window: &mut Window, cx: &mut App) {
+    open_recording_file_with_mode(path, RecordingOpenMode::SessionLog, window, cx);
+}
+
+fn open_recording_file_with_mode(
+    path: PathBuf,
+    mode: RecordingOpenMode,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let window_handle = window.window_handle();
     let load_task = cx.background_spawn(async move { load_recording_playback(path) });
 
@@ -22,7 +43,21 @@ pub(super) fn open_recording_file(path: PathBuf, window: &mut Window, cx: &mut A
         let result = load_task.await;
         let _ = cx.update_window(window_handle, move |_, window, cx| match result {
             Ok(prepared) => {
-                if let Err(error) = open_prepared_recording(prepared, window, cx) {
+                let result = match mode {
+                    RecordingOpenMode::SessionLog => {
+                        open_prepared_session_log(prepared, window, cx)
+                    }
+                    RecordingOpenMode::InferFromArtifact
+                        if prepared.playback.recording().header.navop.artifact_kind
+                            == RecordingArtifactKind::SessionLog =>
+                    {
+                        open_prepared_session_log(prepared, window, cx)
+                    }
+                    RecordingOpenMode::InferFromArtifact => {
+                        open_prepared_recording(prepared, window, cx)
+                    }
+                };
+                if let Err(error) = result {
                     show_file_open_error(&error, window, cx);
                 }
             }
@@ -103,6 +138,36 @@ fn open_prepared_recording(
     Ok(())
 }
 
+fn open_prepared_session_log(
+    prepared: PreparedRecordingPlayback,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<()> {
+    let tab_container = cx
+        .try_global::<GlobalTabContainer>()
+        .map(|global| global.primary_pane())
+        .context("home page is not ready")?;
+    let tab_id = format!("session-log-{}", stable_file_key(&prepared.path));
+    let tab_id_for_create = tab_id.clone();
+    let config = SessionLogViewConfig::new(prepared.playback, prepared.display_name);
+
+    window.defer(cx, move |window, cx| {
+        tab_container.update(cx, |tabs, cx| {
+            tabs.activate_or_add_tab_lazy(
+                tab_id,
+                move |window, cx| {
+                    let workspace =
+                        cx.new(|cx| TerminalWorkspace::new_session_log(config, window, cx));
+                    TabItem::new(tab_id_for_create, "terminal-session-log", workspace)
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,8 +177,8 @@ mod tests {
     use std::time::Duration;
     use terminal::TerminalSize;
     use terminal::recording::{
-        RecordingBackend, RecordingCompleteness, RecordingEvent, RecordingEventKind,
-        RecordingFileConfig, RecordingFileWriter, RecordingMetadata,
+        RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingEvent,
+        RecordingEventKind, RecordingFileConfig, RecordingFileWriter, RecordingMetadata,
     };
 
     #[test]
@@ -191,7 +256,7 @@ mod tests {
         let source = include_str!("recording.rs");
         let production = source.split_once("#[cfg(test)]").unwrap().0;
         let scheduler = production
-            .split_once("pub(super) fn open_recording_file")
+            .split_once("fn open_recording_file_with_mode")
             .unwrap()
             .1
             .split_once("fn load_recording_playback")
@@ -214,6 +279,8 @@ mod tests {
         assert!(!scheduler.contains("RecordingPlayback::open"));
         assert_eq!(1, loader.matches("RecordingPlayback::open(").count());
         assert!(entity_creation.contains("TerminalWorkspace::new_recording_playback"));
+        assert!(production.contains("TerminalWorkspace::new_session_log"));
+        assert!(production.contains("\"terminal-session-log\""));
         assert!(entity_creation.contains("activate_or_add_tab_lazy"));
         assert!(!production.contains("TerminalWorkspace::new("));
         assert!(!production.contains("TerminalWorkspace::new_ssh"));
@@ -246,6 +313,7 @@ mod tests {
                 application_version: "test".to_string(),
                 started_at_unix_ms: 1_700_000_000_000,
                 capture_input: false,
+                artifact_kind: RecordingArtifactKind::Recording,
                 session: None,
             },
             TerminalSize::default(),

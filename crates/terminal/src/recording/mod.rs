@@ -13,9 +13,9 @@ mod text_export;
 pub use asciicast::{
     ASCIICAST_VERSION, DEFAULT_MAX_DECODED_RECORDING_BYTES, DEFAULT_MAX_RECORDING_FILE_BYTES,
     DEFAULT_MAX_RECORDING_HEADER_BYTES, DEFAULT_MAX_SERIALIZED_RECORDING_EVENT_BYTES,
-    NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, RecordingBackend, RecordingFileError,
-    RecordingFileLimit, RecordingFileLimits, RecordingHeader, RecordingHeaderMetadata,
-    RecordingMetadata, RecordingSessionMetadata,
+    NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, RecordingArtifactKind, RecordingBackend,
+    RecordingFileError, RecordingFileLimit, RecordingFileLimits, RecordingHeader,
+    RecordingHeaderMetadata, RecordingMetadata, RecordingSessionMetadata,
 };
 pub use controller::RecordingController;
 pub use model::{

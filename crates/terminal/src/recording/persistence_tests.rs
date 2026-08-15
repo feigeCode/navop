@@ -1,9 +1,9 @@
 use super::{
-    ASCIICAST_VERSION, NAVOP_RECORDING_FORMAT_VERSION, RecordingBackend, RecordingCompleteness,
-    RecordingEvent, RecordingEventKind, RecordingFileConfig, RecordingFileError,
-    RecordingFileLimit, RecordingFileLimits, RecordingFileState, RecordingFileTransition,
-    RecordingFileWriter, RecordingMetadata, RecordingSessionMetadata, partial_recording_path,
-    read_recording, recover_partial_recording,
+    ASCIICAST_VERSION, NAVOP_RECORDING_FORMAT_VERSION, RecordingArtifactKind, RecordingBackend,
+    RecordingCompleteness, RecordingEvent, RecordingEventKind, RecordingFileConfig,
+    RecordingFileError, RecordingFileLimit, RecordingFileLimits, RecordingFileState,
+    RecordingFileTransition, RecordingFileWriter, RecordingMetadata, RecordingSessionMetadata,
+    partial_recording_path, read_recording, recover_partial_recording,
 };
 use crate::TerminalSize;
 use std::fs::{self, OpenOptions};
@@ -16,6 +16,7 @@ fn metadata(capture_input: bool) -> RecordingMetadata {
         recording_id: "recording-1".to_string(),
         session_id: "session-1".to_string(),
         backend: RecordingBackend::Local,
+        artifact_kind: RecordingArtifactKind::Recording,
         application_version: "0.1.0-test".to_string(),
         started_at_unix_ms: 1_700_000_000_123,
         capture_input,
@@ -96,6 +97,10 @@ fn durable_writer_publishes_a_versioned_recording_only_after_stop() {
     assert_eq!("recording-1", recording.header.navop.recording_id);
     assert_eq!("session-1", recording.header.navop.session_id);
     assert_eq!(RecordingBackend::Local, recording.header.navop.backend);
+    assert_eq!(
+        RecordingArtifactKind::Recording,
+        recording.header.navop.artifact_kind
+    );
     assert_eq!(RecordingCompleteness::Complete, recording.completeness);
     assert_eq!(
         vec![
@@ -173,6 +178,10 @@ fn legacy_navop_header_without_session_metadata_remains_readable() {
     .unwrap();
 
     let recording = read_recording(&path, RecordingFileLimits::default()).unwrap();
+    assert_eq!(
+        RecordingArtifactKind::Recording,
+        recording.header.navop.artifact_kind
+    );
     assert_eq!(None, recording.header.navop.session);
 }
 

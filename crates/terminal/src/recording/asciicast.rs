@@ -32,6 +32,19 @@ pub enum RecordingBackend {
     Serial,
 }
 
+/// Product-level semantics for an artifact stored in the asciicast container.
+///
+/// Recordings expose a playback timeline. Session logs reuse the same
+/// terminal-parser event stream as durable storage, but are presented as a
+/// static, read-only terminal history.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingArtifactKind {
+    #[default]
+    Recording,
+    SessionLog,
+}
+
 /// Metadata accepted from the active session when a recording starts.
 ///
 /// Authentication material, environment values, connection strings, and
@@ -41,6 +54,7 @@ pub struct RecordingMetadata {
     pub recording_id: String,
     pub session_id: String,
     pub backend: RecordingBackend,
+    pub artifact_kind: RecordingArtifactKind,
     pub application_version: String,
     pub started_at_unix_ms: u64,
     pub capture_input: bool,
@@ -77,6 +91,8 @@ pub struct RecordingHeaderMetadata {
     pub recording_id: String,
     pub session_id: String,
     pub backend: RecordingBackend,
+    #[serde(default)]
+    pub artifact_kind: RecordingArtifactKind,
     pub application_version: String,
     pub started_at_unix_ms: u64,
     pub capture_input: bool,
@@ -106,6 +122,7 @@ impl RecordingHeader {
                 recording_id: metadata.recording_id,
                 session_id: metadata.session_id,
                 backend: metadata.backend,
+                artifact_kind: metadata.artifact_kind,
                 application_version: metadata.application_version,
                 started_at_unix_ms: metadata.started_at_unix_ms,
                 capture_input: metadata.capture_input,

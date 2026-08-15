@@ -1,8 +1,8 @@
 use super::{
-    RecordingBackend, RecordingCompleteness, RecordingEvent, RecordingEventKind,
-    RecordingFileConfig, RecordingFileError, RecordingFileLimit, RecordingFileLimits,
-    RecordingFileWriter, RecordingMetadata, RecordingPlayback, RecordingPlaybackLimits,
-    partial_recording_path, read_recording_for_playback,
+    RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingEvent,
+    RecordingEventKind, RecordingFileConfig, RecordingFileError, RecordingFileLimit,
+    RecordingFileLimits, RecordingFileWriter, RecordingMetadata, RecordingPlayback,
+    RecordingPlaybackLimits, partial_recording_path, read_recording_for_playback,
 };
 use crate::TerminalSize;
 use std::fs::{self, OpenOptions};
@@ -16,6 +16,7 @@ fn metadata() -> RecordingMetadata {
         recording_id: "playback-recording".to_string(),
         session_id: "playback-session".to_string(),
         backend: RecordingBackend::Ssh,
+        artifact_kind: RecordingArtifactKind::Recording,
         application_version: "0.1.0-test".to_string(),
         started_at_unix_ms: 1_700_000_000_123,
         capture_input: false,

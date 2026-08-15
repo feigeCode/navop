@@ -1,16 +1,17 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    FontWeight, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    FontWeight, IntoElement, ListSizingBehavior, ParentElement, Render, Styled, Window, div, px,
+    uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
-    scroll::ScrollableElement,
     v_flex,
 };
 use rust_i18n::t;
+use std::ops::Range;
 use terminal::recording::SessionLogEntry;
 
 use super::SessionLogsPage;
@@ -138,10 +139,10 @@ impl SessionLogsPage {
     }
 
     fn render_content(
-        &self,
+        &mut self,
         entries: Vec<SessionLogEntry>,
         has_query: bool,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
         if let Some(error) = self.load_error.clone() {
             return error_state(error, cx).into_any_element();
@@ -149,22 +150,31 @@ impl SessionLogsPage {
         if entries.is_empty() {
             return empty_state(has_query, self.loading, cx).into_any_element();
         }
-        div()
-            .id("session-logs-list")
-            .w_full()
-            .min_h_0()
-            .flex_1()
-            .overflow_y_scrollbar()
-            .px_4()
-            .pb_4()
-            .child(
-                v_flex().gap_2().children(
-                    entries
-                        .into_iter()
-                        .map(|entry| self.render_entry(entry, cx)),
-                ),
+        let item_count = entries.len();
+        uniform_list("session-logs-list", item_count, {
+            cx.processor(
+                move |this: &mut SessionLogsPage, range: Range<usize>, _window, cx| {
+                    range
+                        .filter_map(|index| {
+                            let entry = entries.get(index).cloned()?;
+                            Some(
+                                div()
+                                    .w_full()
+                                    .px_4()
+                                    .pb_2()
+                                    .when(index == 0, |this| this.pt_1())
+                                    .child(this.render_entry(entry, cx))
+                                    .into_any_element(),
+                            )
+                        })
+                        .collect()
+                },
             )
-            .into_any_element()
+        })
+        .size_full()
+        .track_scroll(&self.scroll_handle)
+        .with_sizing_behavior(ListSizingBehavior::Auto)
+        .into_any_element()
     }
 }
 

@@ -15,6 +15,7 @@ impl TerminalView {
             tab_index,
             duplicate_source,
             recording_playback_name,
+            session_log_name,
         } = init;
         let blink_manager = cx.new(|_| BlinkCursor::new());
         let recording_playback_slider = cx.new(|_| {
@@ -191,6 +192,7 @@ impl TerminalView {
             terminal,
             duplicate_source,
             recording_playback_name,
+            session_log_name,
             local_working_dir: if is_local_terminal {
                 local_working_dir
             } else {

@@ -80,7 +80,11 @@ impl SessionLogsPage {
             .items_center()
             .gap_1()
             .child(self.favorite_button(actions.recording_id.clone(), actions.favorite, cx))
-            .child(replay_button(actions.recording_id.clone(), replay_path, cx))
+            .child(view_log_button(
+                actions.recording_id.clone(),
+                replay_path,
+                cx,
+            ))
             .child(export_button(actions.recording_id, export_path, cx))
     }
 
@@ -154,18 +158,18 @@ fn entry_summary(entry: &SessionLogEntry, cx: &gpui::Context<SessionLogsPage>) -
         )
 }
 
-fn replay_button(
+fn view_log_button(
     recording_id: String,
     path: PathBuf,
     cx: &gpui::Context<SessionLogsPage>,
 ) -> Button {
-    Button::new(button_id("session-log-replay", &recording_id))
-        .icon(IconName::Play)
+    Button::new(button_id("session-log-view", &recording_id))
+        .icon(IconName::Eye)
         .small()
         .ghost()
-        .tooltip(t!("SessionLogs.replay").to_string())
+        .tooltip(t!("SessionLogs.view_log").to_string())
         .on_click(cx.listener(move |page, _, window, cx| {
-            page.replay(path.clone(), window, cx);
+            page.view_log(path.clone(), window, cx);
         }))
 }
 

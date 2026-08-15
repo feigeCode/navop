@@ -1,6 +1,7 @@
 use super::{
-    ParsedRecording, RecordingBackend, RecordingConfig, RecordingFileLimits, RecordingMetadata,
-    RecordingRuntime, RecordingRuntimeConfig, RecordingStartRequest, RecordingTap, read_recording,
+    ParsedRecording, RecordingArtifactKind, RecordingBackend, RecordingConfig, RecordingFileLimits,
+    RecordingMetadata, RecordingRuntime, RecordingRuntimeConfig, RecordingStartRequest,
+    RecordingTap, read_recording,
 };
 use crate::TerminalSize;
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ impl TestRecording {
                     recording_id: "test-recording".to_string(),
                     session_id: "test-session".to_string(),
                     backend,
+                    artifact_kind: RecordingArtifactKind::Recording,
                     application_version: "0.1.0-test".to_string(),
                     started_at_unix_ms: 1_700_000_000_123,
                     capture_input,

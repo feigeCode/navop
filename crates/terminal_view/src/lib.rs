@@ -37,5 +37,7 @@ pub use theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors, TerminalTheme,
     available_monospace_fonts, default_font_fallbacks,
 };
-pub use view::{RecordingPlaybackViewConfig, TerminalView, init, refresh_keybindings};
+pub use view::{
+    RecordingPlaybackViewConfig, SessionLogViewConfig, TerminalView, init, refresh_keybindings,
+};
 pub use workspace::TerminalWorkspace;

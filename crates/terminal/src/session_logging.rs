@@ -1,7 +1,8 @@
 use crate::TerminalSize;
 use crate::recording::{
-    RecordingBackend, RecordingConfig, RecordingMetadata, RecordingRuntimeError,
-    RecordingSessionMetadata, RecordingStartRequest, session_log_path, session_logs_directory,
+    RecordingArtifactKind, RecordingBackend, RecordingConfig, RecordingMetadata,
+    RecordingRuntimeError, RecordingSessionMetadata, RecordingStartRequest, session_log_path,
+    session_logs_directory,
 };
 use std::env;
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ pub(crate) fn build_automatic_session_log_request(
             recording_id: input.recording_id,
             session_id: input.session_id,
             backend: input.backend,
+            artifact_kind: RecordingArtifactKind::SessionLog,
             application_version: application_version(),
             started_at_unix_ms: input.started_at_unix_ms,
             capture_input: false,

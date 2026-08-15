@@ -1,6 +1,6 @@
 use super::{
-    MAX_PLAYBACK_SPEED, MIN_PLAYBACK_SPEED, ParsedRecording, RecordingBackend,
-    RecordingCompleteness, RecordingEvent, RecordingEventKind, RecordingHeader,
+    MAX_PLAYBACK_SPEED, MIN_PLAYBACK_SPEED, ParsedRecording, RecordingArtifactKind,
+    RecordingBackend, RecordingCompleteness, RecordingEvent, RecordingEventKind, RecordingHeader,
     RecordingHeaderMetadata, RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
     RecordingPlaybackSearchKind, RecordingPlaybackState, RecordingPlaybackTransition,
 };
@@ -34,6 +34,7 @@ fn parsed_recording(
                 recording_id: "recording-id".to_string(),
                 session_id: "session-id".to_string(),
                 backend: RecordingBackend::Ssh,
+                artifact_kind: RecordingArtifactKind::Recording,
                 application_version: "0.1.0-test".to_string(),
                 started_at_unix_ms: 1_700_000_000_123,
                 capture_input,

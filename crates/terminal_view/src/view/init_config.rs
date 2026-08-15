@@ -9,4 +9,5 @@ pub(super) struct TerminalViewInit {
     pub(super) tab_index: Option<usize>,
     pub(super) duplicate_source: Option<TerminalDuplicateSource>,
     pub(super) recording_playback_name: Option<SharedString>,
+    pub(super) session_log_name: Option<SharedString>,
 }

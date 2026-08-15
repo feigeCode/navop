@@ -154,6 +154,7 @@ mod render_surface;
 mod resize_event_handler;
 mod scroll;
 mod selection_search;
+mod session_log_config;
 mod sidebar_events;
 mod state;
 mod tab_content;
@@ -177,6 +178,7 @@ use keybindings::{
 pub use keybindings::{init, refresh_keybindings};
 pub use recording_playback_config::RecordingPlaybackViewConfig;
 use resize_event_handler::ResizeEventHandler;
+pub use session_log_config::SessionLogViewConfig;
 pub(crate) use state::TerminalDuplicateSource;
 use state::*;
 use tab_content::recording_playback_display_name;
@@ -189,6 +191,7 @@ pub struct TerminalView {
     terminal: Entity<Terminal>,
     duplicate_source: Option<TerminalDuplicateSource>,
     recording_playback_name: Option<SharedString>,
+    session_log_name: Option<SharedString>,
     /// 本地终端工作目录
     local_working_dir: Option<PathBuf>,
     /// 光标闪烁管理器

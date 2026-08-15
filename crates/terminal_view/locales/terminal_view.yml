@@ -634,9 +634,9 @@ Settings:
     zh-CN: 自动保存新建会话
     zh-HK: 自動儲存新建會話
   automatic_session_logging_help:
-    en: Saves new local terminal, SSH, and serial sessions as replayable .cast files. Only output is recorded by default; keyboard input is not recorded. The file header keeps connection names, users, hosts, ports, or serial device paths when available. Logs can be exported as TXT. Existing sessions are not affected.
-    zh-CN: 将之后新建的本地终端、SSH 和串口会话保存为可回放的 .cast 文件。默认只记录输出，不记录键盘输入；文件头会在可用时保留连接名称、用户、主机、端口或串口设备路径。支持导出 TXT；已打开的会话不受影响。
-    zh-HK: 將之後新建的本地終端、SSH 和串口會話儲存為可回放的 .cast 檔案。預設只記錄輸出，不記錄鍵盤輸入；檔案標頭會在可用時保留連線名稱、使用者、主機、連接埠或序列埠裝置路徑。支援匯出 TXT；已開啟的會話不受影響。
+    en: Enabled by default for new local terminal, SSH, and serial sessions. Saves terminal output history for static, read-only terminal browsing with scrolling, selection, copying, searching, and TXT export. Keyboard input is never recorded. Session logs have no playback timeline or replay controls. Existing sessions are not affected.
+    zh-CN: 默认自动保存之后新建的本地终端、SSH 和串口会话输出历史，并以静态只读终端方式查看，支持滚动、选中、复制、搜索和导出 TXT。绝不记录键盘输入；会话日志没有播放时间轴或回放控制。已打开的会话不受影响。
+    zh-HK: 預設自動儲存之後新建的本地終端、SSH 和序列埠會話輸出歷史，並以靜態唯讀終端方式查看，支援捲動、選取、複製、搜尋和匯出 TXT。絕不記錄鍵盤輸入；工作階段日誌沒有播放時間軸或回放控制。已開啟的會話不受影響。
   auto_copy:
     en: Auto copy on select
     zh-CN: 选中自动复制
@@ -2259,6 +2259,12 @@ TerminalRecording:
     en: Failed to select recording folder
     zh-CN: 选择录制目录失败
     zh-HK: 選擇錄製目錄失敗
+
+TerminalSessionLog:
+  tab_title:
+    en: "Log · %{name}"
+    zh-CN: "日志 · %{name}"
+    zh-HK: "日誌 · %{name}"
 
 TerminalRecordingPlayback:
   title:

@@ -152,7 +152,8 @@ mod tests {
     use std::path::PathBuf;
     use terminal::recording::{
         ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION,
-        RecordingCompleteness, RecordingHeader, RecordingHeaderMetadata, RecordingSessionMetadata,
+        RecordingArtifactKind, RecordingCompleteness, RecordingHeader, RecordingHeaderMetadata,
+        RecordingSessionMetadata,
     };
 
     fn entry(backend: RecordingBackend) -> SessionLogEntry {
@@ -168,6 +169,7 @@ mod tests {
                     recording_id: "recording-1".to_string(),
                     session_id: "session-1".to_string(),
                     backend,
+                    artifact_kind: RecordingArtifactKind::SessionLog,
                     application_version: "0.10.7".to_string(),
                     started_at_unix_ms: 1_765_000_000_000,
                     capture_input: false,

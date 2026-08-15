@@ -666,13 +666,13 @@ SessionLogs:
     zh-CN: 没有匹配的会话日志
     zh-HK: 沒有相符的工作階段日誌
   source_help:
-    en: ".cast is the replayable source file. TXT is a readable copy derived from the final terminal screen and scrollback buffer."
-    zh-CN: ".cast 是可回放原件，TXT 是根据最终终端屏幕与回滚缓冲区生成的可读副本。"
-    zh-HK: ".cast 是可回放原件，TXT 是根據最終終端畫面與回捲緩衝區產生的可讀副本。"
+    en: ".cast is the source container for a static, read-only terminal history. Open it to scroll, select, copy, and search just like a terminal; TXT is a readable exported copy."
+    zh-CN: ".cast 是静态只读终端历史的源文件。打开后可像终端一样滚动、选中、复制和搜索；TXT 是导出的可读副本。"
+    zh-HK: ".cast 是靜態唯讀終端歷史的來源檔案。開啟後可像終端一樣捲動、選取、複製和搜尋；TXT 是匯出的可讀副本。"
   output_only_help:
-    en: Automatic session logging records output only by default and does not record keyboard input, reducing exposure of passwords, tokens, and one-time codes. The .cast header keeps connection details used by this list, such as names, user and host names, ports, or serial device paths.
-    zh-CN: 自动会话日志默认只记录输出，不记录键盘输入，以减少密码、令牌和一次性验证码泄露风险。.cast 文件头会保留此列表使用的连接信息，例如连接名称、用户名、主机名、端口或串口设备路径。
-    zh-HK: 自動工作階段日誌預設只記錄輸出，不記錄鍵盤輸入，以減少密碼、權杖和一次性驗證碼外洩風險。.cast 檔案標頭會保留此列表使用的連線資訊，例如連線名稱、使用者名稱、主機名稱、連接埠或序列埠裝置路徑。
+    en: Automatic session logging records output only and never records keyboard input, reducing exposure of passwords, tokens, and one-time codes. Session logs have no playback timeline or replay controls.
+    zh-CN: 自动会话日志只记录输出，绝不记录键盘输入，以减少密码、令牌和一次性验证码泄露风险。会话日志没有播放时间轴或回放控制。
+    zh-HK: 自動工作階段日誌只記錄輸出，絕不記錄鍵盤輸入，以減少密碼、權杖和一次性驗證碼外洩風險。工作階段日誌沒有播放時間軸或回放控制。
   favorite:
     en: Favorite
     zh-CN: 收藏
@@ -681,10 +681,10 @@ SessionLogs:
     en: Remove favorite
     zh-CN: 取消收藏
     zh-HK: 取消收藏
-  replay:
-    en: Replay
-    zh-CN: 回放
-    zh-HK: 回放
+  view_log:
+    en: View log
+    zh-CN: 查看日志
+    zh-HK: 查看日誌
   export_text:
     en: Export TXT
     zh-CN: 导出 TXT

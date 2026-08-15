@@ -1,6 +1,6 @@
 use super::{
-    RecordingBackend, RecordingCompleteness, RecordingFileLimits, RecordingHeader,
-    SessionLogFavorites, read_recording_for_playback,
+    RecordingBackend, RecordingCompleteness, RecordingFileError, RecordingFileLimits,
+    RecordingHeader, SessionLogFavorites, read_recording_for_playback,
 };
 use chrono::{TimeZone, Utc};
 use std::fs;
@@ -123,7 +123,13 @@ fn append_recording(
     favorites: &SessionLogFavorites,
     catalog: &mut SessionLogCatalog,
 ) {
-    match read_recording_for_playback(&path, limits.clone()) {
+    let recording = match read_recording_for_playback(&path, limits.clone()) {
+        Err(RecordingFileError::FileChangedDuringRecovery) if is_partial_recording_path(&path) => {
+            read_recording_for_playback(&path, limits.clone())
+        }
+        result => result,
+    };
+    match recording {
         Ok(recording) => {
             let duration = recording
                 .events
@@ -150,6 +156,12 @@ fn is_recording_path(path: &Path) -> bool {
         return false;
     };
     name.ends_with(".cast") || name.ends_with(".cast.partial")
+}
+
+fn is_partial_recording_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".cast.partial"))
 }
 
 fn is_safe_recording_id(recording_id: &str) -> bool {

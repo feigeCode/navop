@@ -1,7 +1,8 @@
 use super::{
     ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, ParsedRecording,
-    RecordingBackend, RecordingCompleteness, RecordingEvent, RecordingEventKind, RecordingHeader,
-    RecordingHeaderMetadata, RecordingPlayback, RecordingPlaybackLimits, TerminalPlaybackRuntime,
+    RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingEvent,
+    RecordingEventKind, RecordingHeader, RecordingHeaderMetadata, RecordingPlayback,
+    RecordingPlaybackLimits, TerminalPlaybackRuntime,
 };
 use crate::{GpuiEventProxy, TerminalEvent, TerminalPerformanceMetrics, TerminalSize};
 use alacritty_terminal::grid::Dimensions;
@@ -36,6 +37,7 @@ fn parsed_recording(capture_input: bool, events: Vec<RecordingEvent>) -> ParsedR
                 recording_id: "playback-surface-recording".to_string(),
                 session_id: "playback-surface-session".to_string(),
                 backend: RecordingBackend::Ssh,
+                artifact_kind: RecordingArtifactKind::Recording,
                 application_version: "0.1.0-test".to_string(),
                 started_at_unix_ms: 1_700_000_000_123,
                 capture_input,
@@ -220,6 +222,60 @@ fn resize_events_only_resize_the_playback_grid() {
     assert_eq!(1, summary.resize_events);
     assert_eq!(100, term.columns());
     assert_eq!(40, term.screen_lines());
+}
+
+#[test]
+fn materialize_all_builds_static_history_without_parsing_input_or_markers() {
+    let (mut runtime, _event_rx, _metrics) = runtime(
+        true,
+        vec![
+            event(0, RecordingEventKind::Output(b"first\r\n".to_vec())),
+            event(
+                1,
+                RecordingEventKind::Resize(TerminalSize {
+                    cols: 100,
+                    rows: 40,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+            ),
+            event(2, RecordingEventKind::Output(b"second".to_vec())),
+            event(3, RecordingEventKind::Input(b"INJECTED".to_vec())),
+            event(4, RecordingEventKind::Marker("MARKER".to_string())),
+        ],
+    );
+
+    let summary = runtime.materialize_all();
+    let term = runtime.term().lock();
+
+    assert_eq!(2, summary.output_events);
+    assert_eq!(1, summary.resize_events);
+    assert_eq!(1, summary.display_only_input_events);
+    assert_eq!(1, summary.display_only_marker_events);
+    assert_eq!(100, term.columns());
+    assert_eq!(40, term.screen_lines());
+    let logical_lines = (-(term.history_size() as i32)..term.screen_lines() as i32)
+        .map(|line| {
+            term.grid()[Line(line)][..]
+                .iter()
+                .map(|cell| cell.c)
+                .collect::<String>()
+                .trim_end_matches(|character: char| character == ' ' || character == '\0')
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    let materialized_text = logical_lines.join("\n");
+
+    assert!(
+        materialized_text.contains("first"),
+        "first output missing from materialized history: {logical_lines:?}"
+    );
+    assert!(
+        materialized_text.contains("second"),
+        "second output missing from materialized history: {logical_lines:?}"
+    );
+    assert!(!materialized_text.contains("INJECTED"));
+    assert!(!materialized_text.contains("MARKER"));
 }
 
 #[test]

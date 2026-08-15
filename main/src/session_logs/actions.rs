@@ -93,8 +93,8 @@ impl SessionLogsPage {
         cx.notify();
     }
 
-    pub(super) fn replay(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        crate::file_open::open_input(crate::file_open::FileOpenInput::Path(path), window, cx);
+    pub(super) fn view_log(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        crate::file_open::open_session_log_file(path, window, cx);
     }
 
     pub(super) fn request_text_export(

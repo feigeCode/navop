@@ -1,6 +1,6 @@
 use super::{
-    RecordingBackend, RecordingCompleteness, RecordingFileConfig, RecordingFileLimits,
-    RecordingLimit, RecordingMetadata, RecordingQueueLimits, RecordingRuntime,
+    RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingFileConfig,
+    RecordingFileLimits, RecordingLimit, RecordingMetadata, RecordingQueueLimits, RecordingRuntime,
     RecordingRuntimeConfig, RecordingRuntimeError, RecordingStartRequest, RecordingState,
     RecordingTap, RecordingTapOutcome, RecordingTransition, RecordingWorkerTestGate,
     partial_recording_path, read_recording,
@@ -15,6 +15,7 @@ fn metadata(capture_input: bool) -> RecordingMetadata {
         recording_id: "runtime-recording".to_string(),
         session_id: "runtime-session".to_string(),
         backend: RecordingBackend::Local,
+        artifact_kind: RecordingArtifactKind::Recording,
         application_version: "0.1.0-test".to_string(),
         started_at_unix_ms: 1_700_000_000_123,
         capture_input,

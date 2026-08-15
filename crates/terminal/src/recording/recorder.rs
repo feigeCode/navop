@@ -1,6 +1,6 @@
 use super::asciicast::{
-    RecordingFileError, RecordingFileLimit, RecordingFileLimits, RecordingHeader,
-    RecordingMetadata, encode_event, encode_header,
+    RecordingArtifactKind, RecordingFileError, RecordingFileLimit, RecordingFileLimits,
+    RecordingHeader, RecordingMetadata, encode_event, encode_header,
 };
 use super::{RecordingEvent, RecordingEventKind};
 use crate::TerminalSize;
@@ -220,6 +220,11 @@ impl RecordingFileWriter {
         self.last_elapsed = Some(event.elapsed);
         if self.events_since_flush >= self.config.flush_every_events {
             self.flush()?;
+        } else if self.metadata.artifact_kind == RecordingArtifactKind::SessionLog {
+            let result = self.flush_buffer_open_file();
+            if let Err(error) = result {
+                return self.fail(error);
+            }
         }
         Ok(())
     }
@@ -277,14 +282,20 @@ impl RecordingFileWriter {
     }
 
     fn flush_open_file(&mut self) -> Result<(), RecordingFileError> {
-        let writer = self.writer.as_mut().ok_or(RecordingFileError::NotOpen)?;
-        writer
-            .flush()
-            .map_err(|error| RecordingFileError::io("flush recording", error))?;
-        writer
+        self.flush_buffer_open_file()?;
+        self.writer
+            .as_ref()
+            .ok_or(RecordingFileError::NotOpen)?
             .get_ref()
             .sync_data()
             .map_err(|error| RecordingFileError::io("sync recording data", error))
+    }
+
+    fn flush_buffer_open_file(&mut self) -> Result<(), RecordingFileError> {
+        let writer = self.writer.as_mut().ok_or(RecordingFileError::NotOpen)?;
+        writer
+            .flush()
+            .map_err(|error| RecordingFileError::io("flush recording", error))
     }
 
     fn fail<T>(&mut self, error: RecordingFileError) -> Result<T, RecordingFileError> {

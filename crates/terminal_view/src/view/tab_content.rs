@@ -23,6 +23,12 @@ pub(super) fn recording_playback_tab_title(name: &str) -> SharedString {
         .into()
 }
 
+pub(super) fn session_log_tab_title(name: &str) -> SharedString {
+    t!("TerminalSessionLog.tab_title", name = name)
+        .to_string()
+        .into()
+}
+
 impl Focusable for TerminalView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -39,6 +45,9 @@ impl TabContent for TerminalView {
     fn title(&self, cx: &App) -> SharedString {
         if let Some(name) = &self.recording_playback_name {
             return recording_playback_tab_title(name.as_ref());
+        }
+        if let Some(name) = &self.session_log_name {
+            return session_log_tab_title(name.as_ref());
         }
 
         let terminal = self.terminal.read(cx);

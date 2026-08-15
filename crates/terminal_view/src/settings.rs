@@ -496,7 +496,7 @@ mod tests {
     fn automatic_session_logging_is_an_app_settings_field() {
         let left = TerminalSettings::default();
         let mut right = left.clone();
-        right.auto_session_logging = true;
+        right.auto_session_logging = !left.auto_session_logging;
 
         assert!(!terminal_app_fields_equal(&left, &right));
     }

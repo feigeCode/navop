@@ -178,6 +178,15 @@ impl TerminalPlaybackRuntime {
         summary
     }
 
+    /// Materializes the complete event stream into the terminal grid.
+    ///
+    /// Session logs call this once during construction to obtain a static
+    /// terminal history. Input and marker events remain display-only metadata
+    /// and are never fed to the terminal parser.
+    pub(crate) fn materialize_all(&mut self) -> RecordingPlaybackApplySummary {
+        self.seek(self.timeline.duration())
+    }
+
     fn queue_wakeup_for_transition(&self, transition: RecordingPlaybackTransition) {
         if transition == RecordingPlaybackTransition::Changed {
             self.event_proxy.queue_wakeup();

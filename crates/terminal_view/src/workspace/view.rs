@@ -9,7 +9,8 @@ use super::pane_tab_transfer::TerminalPaneTabMetadata;
 use super::resize::WorkspaceSidebarResize;
 use super::{TerminalPaneId, TerminalSplitTree};
 use crate::view::{
-    RecordingPlaybackViewConfig, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalView,
+    RecordingPlaybackViewConfig, SessionLogViewConfig, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH,
+    TerminalView,
 };
 
 pub struct TerminalWorkspace {
@@ -92,6 +93,16 @@ impl TerminalWorkspace {
         let main = cx.new(|cx| {
             TerminalView::new_recording_playback(config, window, cx).with_workspace_pane()
         });
+        Self::from_pane(main, window, cx)
+    }
+
+    pub fn new_session_log(
+        config: SessionLogViewConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let main =
+            cx.new(|cx| TerminalView::new_session_log(config, window, cx).with_workspace_pane());
         Self::from_pane(main, window, cx)
     }
 

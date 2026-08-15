@@ -52,11 +52,12 @@ use crate::history::{
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
-    RecordingBackend, RecordingCompleteness, RecordingMetadata, RecordingPlayback,
-    RecordingPlaybackError, RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchResults,
-    RecordingPlaybackState, RecordingPlaybackTransition, RecordingRuntime, RecordingRuntimeConfig,
-    RecordingRuntimeError, RecordingSessionMetadata, RecordingSnapshot, RecordingStartRequest,
-    RecordingTap, RecordingTransition, TerminalPlaybackRuntime,
+    RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingMetadata,
+    RecordingPlayback, RecordingPlaybackError, RecordingPlaybackSearchIndexStatus,
+    RecordingPlaybackSearchResults, RecordingPlaybackState, RecordingPlaybackTransition,
+    RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingSessionMetadata,
+    RecordingSnapshot, RecordingStartRequest, RecordingTap, RecordingTransition,
+    TerminalPlaybackRuntime,
 };
 use crate::session_logging::{
     AutomaticSessionLogRequestInput, application_version, build_automatic_session_log_request,
@@ -157,12 +158,13 @@ pub enum TerminalConnectionKind {
 
 /// Capability mode for a terminal surface.
 ///
-/// A recording may describe output originally produced by SSH, but replaying
-/// that output must never recreate the source session's live capabilities.
+/// A stored artifact may describe output originally produced by SSH, but
+/// rendering it must never recreate the source session's live capabilities.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TerminalSessionMode {
     Live,
     RecordingPlayback,
+    SessionLog,
 }
 
 const SSH_CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
@@ -1070,7 +1072,7 @@ pub struct Terminal {
     /// alacritty 终端状态
     term: Arc<FairMutex<Term<GpuiEventProxy>>>,
     /// Whether this surface owns a live connection or renders an untrusted,
-    /// read-only recording.
+    /// read-only artifact.
     session_mode: TerminalSessionMode,
     /// 当前终端实例的共享性能指标。
     performance_metrics: Arc<TerminalPerformanceMetrics>,
@@ -1080,8 +1082,9 @@ pub struct Terminal {
     recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
     /// 自动会话日志使用独立运行时，与手工录制互不影响并跨重连保留时间线。
     session_log_runtime: Option<RecordingRuntime>,
-    /// Playback owns a separate fail-closed parser and grid. Live terminals
-    /// never populate this field.
+    /// Read-only artifacts own a separate fail-closed parser and grid. Live
+    /// terminals never populate this field. Playback controls remain gated by
+    /// `TerminalSessionMode::RecordingPlayback`.
     playback_runtime: Option<TerminalPlaybackRuntime>,
     /// 只用于录制文件关联的随机逻辑会话 ID；不包含连接名称、地址或凭据。
     recording_session_id: String,
@@ -2026,6 +2029,16 @@ impl Terminal {
         terminal
     }
 
+    /// Creates a static, read-only terminal history from a session-log
+    /// artifact. The complete output stream is materialized once and no
+    /// playback timeline or live terminal capability is exposed.
+    pub fn new_session_log(playback: RecordingPlayback, cx: &mut Context<Self>) -> Self {
+        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let (terminal, event_loop) = Self::build_session_log(playback, scrollback_lines);
+        Self::spawn_event_loop(event_loop.event_rx, event_loop.wakeup_pending, cx);
+        terminal
+    }
+
     /// Builds the capability-free playback model independently from its GPUI
     /// event-loop attachment. Keeping this step synchronous makes the security
     /// boundary unit-testable without starting a real Tokio worker inside
@@ -2034,6 +2047,33 @@ impl Terminal {
         playback: RecordingPlayback,
         scrollback_lines: usize,
     ) -> (Self, PendingPlaybackEventLoop) {
+        Self::build_read_only_recording_surface(
+            playback,
+            scrollback_lines,
+            TerminalSessionMode::RecordingPlayback,
+            false,
+        )
+    }
+
+    fn build_session_log(
+        playback: RecordingPlayback,
+        scrollback_lines: usize,
+    ) -> (Self, PendingPlaybackEventLoop) {
+        Self::build_read_only_recording_surface(
+            playback,
+            scrollback_lines,
+            TerminalSessionMode::SessionLog,
+            true,
+        )
+    }
+
+    fn build_read_only_recording_surface(
+        playback: RecordingPlayback,
+        scrollback_lines: usize,
+        session_mode: TerminalSessionMode,
+        materialize_all: bool,
+    ) -> (Self, PendingPlaybackEventLoop) {
+        debug_assert!(session_mode != TerminalSessionMode::Live);
         let source_backend = playback.recording().header.navop.backend;
         let connection_kind = match source_backend {
             RecordingBackend::Local => TerminalConnectionKind::Local,
@@ -2043,20 +2083,32 @@ impl Terminal {
         let scrollback_lines = AppSettings::normalize_terminal_scrollback_lines(scrollback_lines);
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let performance_metrics = Arc::new(TerminalPerformanceMetrics::default());
-        let playback_runtime = TerminalPlaybackRuntime::new(
+        let mut playback_runtime = TerminalPlaybackRuntime::new(
             playback,
             scrollback_lines,
             event_tx.clone(),
             performance_metrics.clone(),
         );
         let initial_size = playback_runtime.initial_size();
+        if materialize_all {
+            playback_runtime.materialize_all();
+        }
         let term = playback_runtime.term().clone();
+        let (cols, rows) = if materialize_all {
+            let term = term.lock();
+            (term.columns(), term.screen_lines())
+        } else {
+            (
+                usize::from(initial_size.cols),
+                usize::from(initial_size.rows),
+            )
+        };
         let wakeup_pending = playback_runtime.wakeup_pending_handle();
 
         (
             Self {
                 term,
-                session_mode: TerminalSessionMode::RecordingPlayback,
+                session_mode,
                 performance_metrics,
                 backend: None,
                 recording_runtime: Err(RecordingRuntimeError::ReadOnlyPlayback),
@@ -2070,8 +2122,8 @@ impl Terminal {
                 // Connected suppresses the live reconnect overlay. Capability
                 // checks still fail closed through `session_mode`.
                 connection_state: ConnectionState::Connected,
-                cols: usize::from(initial_size.cols),
-                rows: usize::from(initial_size.rows),
+                cols,
+                rows,
                 pixel_width: 0,
                 pixel_height: 0,
                 ssh_config: None,
@@ -2998,8 +3050,15 @@ impl Terminal {
         self.session_mode == TerminalSessionMode::RecordingPlayback
     }
 
+    pub fn is_session_log(&self) -> bool {
+        self.session_mode == TerminalSessionMode::SessionLog
+    }
+
     pub fn is_read_only(&self) -> bool {
-        self.is_recording_playback()
+        matches!(
+            self.session_mode,
+            TerminalSessionMode::RecordingPlayback | TerminalSessionMode::SessionLog
+        )
     }
 
     /// Returns a connection kind only when the surface owns live connection
@@ -3200,6 +3259,7 @@ impl Terminal {
                 recording_id: Uuid::new_v4().to_string(),
                 session_id: self.recording_session_id.clone(),
                 backend,
+                artifact_kind: RecordingArtifactKind::Recording,
                 application_version: application_version(),
                 started_at_unix_ms,
                 capture_input: false,
@@ -3304,9 +3364,9 @@ impl Terminal {
 
     /// 调整终端大小
     pub fn resize(&mut self, cols: usize, rows: usize, pixel_width: u16, pixel_height: u16) {
-        if self.is_recording_playback() {
-            // The recording header and Resize events are authoritative for the
-            // playback grid. Canvas layout may update only cached pixel size.
+        if self.is_read_only() {
+            // The artifact header and Resize events are authoritative for the
+            // read-only grid. Canvas layout may update only cached pixel size.
             self.pixel_width = pixel_width;
             self.pixel_height = pixel_height;
             return;
@@ -3826,13 +3886,13 @@ mod tests {
     };
     use crate::recording::{
         ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, ParsedRecording,
-        RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingEvent,
-        RecordingEventKind, RecordingFileLimits, RecordingHeader, RecordingHeaderMetadata,
-        RecordingMetadata, RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
-        RecordingPlaybackSearchKind, RecordingPlaybackState, RecordingPlaybackTransition,
-        RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingSessionMetadata,
-        RecordingStartRequest, RecordingState, RecordingTapOutcome, RecordingTransition,
-        read_recording,
+        RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingConfig,
+        RecordingEvent, RecordingEventKind, RecordingFileLimits, RecordingHeader,
+        RecordingHeaderMetadata, RecordingMetadata, RecordingPlayback, RecordingPlaybackError,
+        RecordingPlaybackLimits, RecordingPlaybackSearchKind, RecordingPlaybackState,
+        RecordingPlaybackTransition, RecordingRuntime, RecordingRuntimeConfig,
+        RecordingRuntimeError, RecordingSessionMetadata, RecordingStartRequest, RecordingState,
+        RecordingTapOutcome, RecordingTransition, read_recording,
     };
     use crate::{
         TerminalBackend, TerminalControlHandle, TerminalEvent, TerminalExecHandle,
@@ -3985,6 +4045,7 @@ mod tests {
                 recording_id: "terminal-runtime-test-recording".to_string(),
                 session_id: "terminal-runtime-test-session".to_string(),
                 backend: RecordingBackend::Ssh,
+                artifact_kind: RecordingArtifactKind::Recording,
                 application_version: "0.1.0-test".to_string(),
                 started_at_unix_ms: 1_700_000_000_123,
                 capture_input: false,
@@ -4015,6 +4076,7 @@ mod tests {
                     recording_id: "terminal-playback-test-recording".to_string(),
                     session_id: "terminal-playback-test-session".to_string(),
                     backend,
+                    artifact_kind: RecordingArtifactKind::Recording,
                     application_version: "0.1.0-test".to_string(),
                     started_at_unix_ms: 1_700_000_000_123,
                     capture_input: true,
@@ -4645,6 +4707,69 @@ mod tests {
             RecordingPlaybackSearchKind::MarkerDisplayOnly,
             marker_results.matches[0].kind
         );
+    }
+
+    #[test]
+    fn session_log_constructor_materializes_static_read_only_terminal_history() {
+        let mut parsed =
+            test_parsed_playback_recording(RecordingBackend::Ssh, RecordingCompleteness::Complete);
+        parsed.header.navop.artifact_kind = RecordingArtifactKind::SessionLog;
+        let playback = RecordingPlayback::from_parsed(parsed, RecordingPlaybackLimits::default())
+            .expect("validate session log");
+        let (mut terminal, _event_loop) = Terminal::build_session_log(playback, 100_000);
+
+        assert_eq!(TerminalSessionMode::SessionLog, terminal.session_mode());
+        assert!(terminal.is_session_log());
+        assert!(terminal.is_read_only());
+        assert!(!terminal.is_recording_playback());
+        assert_eq!(TerminalConnectionKind::Ssh, terminal.connection_kind());
+        assert_eq!(None, terminal.live_connection_kind());
+        assert!(terminal.backend.is_none());
+        assert!(terminal.external_input_handle().is_none());
+        assert!(terminal.external_exec_handle().is_none());
+        assert!(terminal.external_control_handle().is_none());
+        assert!(!terminal.can_reconnect());
+
+        assert_eq!(100, terminal.cols());
+        assert_eq!(40, terminal.rows());
+        let text = terminal.visible_text();
+        assert!(text.contains("one"));
+        assert!(text.contains("two"));
+        assert!(!text.contains("typed-command"));
+        assert!(!text.contains("checkpoint"));
+
+        assert_eq!(None, terminal.recording_playback_state());
+        assert_eq!(None, terminal.recording_playback_elapsed());
+        assert_eq!(None, terminal.recording_playback_duration());
+        assert_eq!(None, terminal.recording_playback_speed());
+        assert!(matches!(
+            terminal.resume_recording_playback(),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.pause_recording_playback(),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.set_recording_playback_speed(2.0),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.advance_recording_playback(Duration::from_millis(1)),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.seek_recording_playback(Duration::ZERO),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.search_recording_playback("one", 10),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+
+        terminal.resize(200, 60, 1_600, 900);
+        assert_eq!(100, terminal.cols());
+        assert_eq!(40, terminal.rows());
     }
 
     #[test]

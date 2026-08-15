@@ -5,7 +5,7 @@ mod row;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
-    Subscription, Window,
+    Subscription, UniformListScrollHandle, Window,
 };
 use gpui_component::{
     Icon, IconName,
@@ -13,11 +13,14 @@ use gpui_component::{
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
-use std::path::PathBuf;
+use smol::Timer;
+use std::{path::PathBuf, time::Duration};
 use terminal::recording::{
     RecordingFileLimits, SessionLogCatalog, SessionLogEntry, SessionLogFavorites,
     load_session_log_favorites, scan_session_logs, session_logs_directory,
 };
+
+const SESSION_LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(crate) struct SessionLogsPage {
     focus_handle: FocusHandle,
@@ -29,6 +32,7 @@ pub(crate) struct SessionLogsPage {
     load_error: Option<String>,
     load_generation: u64,
     favorite_saving: bool,
+    scroll_handle: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -55,14 +59,33 @@ impl SessionLogsPage {
             load_error: None,
             load_generation: 0,
             favorite_saving: false,
+            scroll_handle: UniformListScrollHandle::default(),
             _subscriptions: vec![subscription],
         };
         page.refresh(cx);
+        Self::start_auto_refresh(cx);
         page
     }
 
+    fn start_auto_refresh(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(SESSION_LOG_REFRESH_INTERVAL).await;
+                if this
+                    .update(cx, |this, cx| {
+                        this.refresh(cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.favorite_saving {
+        if self.loading || self.favorite_saving {
             return;
         }
         self.load_generation = self.load_generation.wrapping_add(1);

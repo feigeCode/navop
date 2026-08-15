@@ -1,8 +1,8 @@
 use super::text_export::retained_line_bounds;
 use super::{
-    RecordingBackend, RecordingCompleteness, RecordingEvent, RecordingEventKind,
-    RecordingFileConfig, RecordingFileLimits, RecordingFileWriter, RecordingMetadata,
-    RecordingTextExport, export_recording_text, partial_recording_path,
+    RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingEvent,
+    RecordingEventKind, RecordingFileConfig, RecordingFileLimits, RecordingFileWriter,
+    RecordingMetadata, RecordingTextExport, export_recording_text, partial_recording_path,
 };
 use crate::TerminalSize;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,7 @@ fn metadata(capture_input: bool) -> RecordingMetadata {
         recording_id: "text-export-recording".to_string(),
         session_id: "text-export-session".to_string(),
         backend: RecordingBackend::Ssh,
+        artifact_kind: RecordingArtifactKind::Recording,
         application_version: "0.1.0-test".to_string(),
         started_at_unix_ms: 1_700_000_000_123,
         capture_input,
