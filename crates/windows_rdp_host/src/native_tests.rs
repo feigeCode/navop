@@ -268,6 +268,8 @@ fn credential_bundle(
         flags: 0,
         username: borrowed_utf16(username),
         domain: borrowed_utf16(domain),
+        gateway_username: borrowed_utf16(None),
+        gateway_domain: borrowed_utf16(None),
     }
 }
 

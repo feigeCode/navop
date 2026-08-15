@@ -6,11 +6,13 @@ pub(crate) const ABI_VERSION: u32 = 1;
 pub(crate) const CREATE_WITH_PARENT_ABI_VERSION: u32 = 1;
 pub(crate) const SESSION_DISPLAY_SETTINGS_ABI_VERSION: u32 = 1;
 pub(crate) const CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED: u32 = 1 << 0;
+#[allow(dead_code)]
 pub(crate) const CONNECTION_FLAGS_KNOWN: u32 = CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
 
 pub(crate) const DISPLAY_FLAG_SMART_SIZING: u32 = 1 << 0;
 pub(crate) const DISPLAY_FLAG_USE_MULTIMON: u32 = 1 << 1;
 pub(crate) const DISPLAY_FLAG_SPAN_MONITORS: u32 = 1 << 2;
+#[allow(dead_code)]
 pub(crate) const DISPLAY_FLAGS_KNOWN: u32 =
     DISPLAY_FLAG_SMART_SIZING | DISPLAY_FLAG_USE_MULTIMON | DISPLAY_FLAG_SPAN_MONITORS;
 
@@ -24,6 +26,7 @@ pub(crate) const RESOURCE_FLAG_SMART_CARDS: u32 = 1 << 6;
 pub(crate) const RESOURCE_FLAG_CAMERAS: u32 = 1 << 7;
 pub(crate) const RESOURCE_FLAG_MICROPHONES: u32 = 1 << 8;
 pub(crate) const RESOURCE_FLAG_POS_DEVICES: u32 = 1 << 9;
+#[allow(dead_code)]
 pub(crate) const RESOURCE_FLAGS_KNOWN: u32 = RESOURCE_FLAG_CLIPBOARD
     | RESOURCE_FLAG_DRIVES
     | RESOURCE_FLAG_DYNAMIC_DRIVES
@@ -36,6 +39,7 @@ pub(crate) const RESOURCE_FLAGS_KNOWN: u32 = RESOURCE_FLAG_CLIPBOARD
     | RESOURCE_FLAG_POS_DEVICES;
 
 pub(crate) const AUDIO_FLAG_CAPTURE: u32 = 1 << 0;
+#[allow(dead_code)]
 pub(crate) const AUDIO_FLAGS_KNOWN: u32 = AUDIO_FLAG_CAPTURE;
 
 pub(crate) const INPUT_FLAG_ENABLE_WINDOWS_KEY: u32 = 1 << 0;
@@ -65,14 +69,17 @@ pub(crate) const PERFORMANCE_FLAGS_KNOWN: u32 = PERFORMANCE_FLAG_WALLPAPER
 pub(crate) const SECURITY_FLAG_ENABLE_CREDSSP: u32 = 1 << 0;
 pub(crate) const SECURITY_FLAG_PUBLIC_MODE: u32 = 1 << 1;
 pub(crate) const SECURITY_FLAG_ENCRYPTION_ENABLED: u32 = 1 << 2;
+#[allow(dead_code)]
 pub(crate) const SECURITY_FLAGS_KNOWN: u32 =
     SECURITY_FLAG_ENABLE_CREDSSP | SECURITY_FLAG_PUBLIC_MODE | SECURITY_FLAG_ENCRYPTION_ENABLED;
 
 pub(crate) const GATEWAY_FLAG_BYPASS_LOCAL: u32 = 1 << 0;
+#[allow(dead_code)]
 pub(crate) const GATEWAY_FLAGS_KNOWN: u32 = GATEWAY_FLAG_BYPASS_LOCAL;
 
 pub(crate) const CONNECTION_FLAG_ADMIN_SESSION: u32 = 1 << 0;
 pub(crate) const CONNECTION_FLAG_AUTO_RECONNECT: u32 = 1 << 1;
+#[allow(dead_code)]
 pub(crate) const CONNECTION_POLICY_FLAGS_KNOWN: u32 =
     CONNECTION_FLAG_ADMIN_SESSION | CONNECTION_FLAG_AUTO_RECONNECT;
 
@@ -88,11 +95,13 @@ pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
 pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
 pub(crate) const RESULT_INVALID_STATE: NativeResult = 8;
 pub(crate) const RESULT_PRESENTATION_INCOMPLETE: NativeResult = 9;
+#[allow(dead_code)]
 pub(crate) const CREDENTIAL_LEGACY_SIZE: u32 = if cfg!(target_pointer_width = "64") {
     48
 } else {
     28
 };
+#[allow(dead_code)]
 pub(crate) const CONNECTION_LEGACY_SIZE: u32 = if cfg!(target_pointer_width = "64") {
     48
 } else {
@@ -522,12 +531,14 @@ impl NavopRdpConnectionOptions {
     }
 }
 
+#[allow(dead_code)]
 fn abi_field_available<T>(struct_size: u32, offset: usize) -> bool {
     offset
         .checked_add(size_of::<T>())
         .is_some_and(|end| end <= struct_size as usize)
 }
 
+#[allow(dead_code)]
 unsafe fn read_abi_field<T: Copy>(
     base: *const c_void,
     struct_size: u32,
@@ -537,10 +548,12 @@ unsafe fn read_abi_field<T: Copy>(
         .then(|| unsafe { std::ptr::read_unaligned(base.cast::<u8>().add(offset).cast::<T>()) })
 }
 
+#[allow(dead_code)]
 fn valid_borrowed_utf16(value: NavopRdpBorrowedUtf16) -> bool {
     value.len == 0 || !value.data.is_null()
 }
 
+#[allow(dead_code)]
 fn valid_borrowed_secret(value: NavopRdpBorrowedSecret) -> bool {
     value.len == 0 || !value.data.is_null()
 }
