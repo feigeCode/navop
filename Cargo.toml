@@ -38,6 +38,7 @@ members = [
     "crates/remote_desktop",
     "crates/remote_desktop_view",
     "crates/notes",
+    "crates/api_tools",
     "crates/declarative_ui_demo",
     "tools/icon-audit",
     "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
@@ -133,6 +134,7 @@ onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }
+api_tools = { path = "crates/api_tools" }
 markdown-source = { path = "crates/markdown-source" }
 markdown-editor = { path = "crates/markdown-editor" }
 er_flow = { path = "crates/er_flow" }

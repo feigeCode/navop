@@ -734,17 +734,30 @@ fn close_active_window_default_shortcut() -> &'static str {
     default_shortcut("cmd-w", "ctrl-w")
 }
 
+const LOG_FILE_NAME: &str = "onetcli.log";
+
 pub(crate) fn configured_log_file_path(value: &str) -> anyhow::Result<PathBuf> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         Ok(default_log_file_path()?)
     } else {
-        Ok(PathBuf::from(trimmed))
+        let path = PathBuf::from(trimmed);
+        // 旧配置允许填写完整文件路径；无扩展名的新值则按日志目录处理。
+        let is_directory = path.is_dir()
+            || trimmed.ends_with('/')
+            || trimmed.ends_with('\\')
+            || (!path.is_file() && path.extension().is_none());
+
+        if is_directory {
+            Ok(path.join(LOG_FILE_NAME))
+        } else {
+            Ok(path)
+        }
     }
 }
 
 fn default_log_file_path() -> anyhow::Result<PathBuf> {
-    Ok(get_config_dir()?.join("logs").join("onetcli.log"))
+    Ok(get_config_dir()?.join("logs").join(LOG_FILE_NAME))
 }
 
 pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
@@ -1676,7 +1689,7 @@ impl OnetCliApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, MainContent, MainContentPresentation,
+        GlobalSshSessionService, LOG_FILE_NAME, MainContent, MainContentPresentation,
         close_active_window_default_shortcut, configured_log_file_path, default_log_file_path,
         init_ssh_session_service, initial_content_layout, log_file_appender,
         main_content_presentation,
@@ -2198,6 +2211,54 @@ mod tests {
     fn configured_log_file_path_trims_value() {
         let path = configured_log_file_path("  /tmp/onetcli.log  ").expect("应返回日志路径");
         assert_eq!(path, std::path::PathBuf::from("/tmp/onetcli.log"));
+    }
+
+    #[test]
+    fn configured_log_file_path_treats_extensionless_path_as_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("onetcli-log-directory-test-{}", std::process::id()));
+
+        let path = configured_log_file_path(&directory.to_string_lossy()).expect("应返回日志路径");
+
+        assert_eq!(path, directory.join(LOG_FILE_NAME));
+    }
+
+    #[test]
+    fn configured_log_file_path_uses_existing_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "onetcli-existing-log-directory-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("应创建测试日志目录");
+
+        let path = configured_log_file_path(&directory.to_string_lossy()).expect("应返回日志路径");
+
+        assert_eq!(path, directory.join(LOG_FILE_NAME));
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn configured_log_file_path_preserves_existing_extensionless_file() {
+        let file_path = std::env::temp_dir().join(format!(
+            "onetcli-extensionless-log-file-test-{}",
+            std::process::id()
+        ));
+        std::fs::write(&file_path, "").expect("应创建无扩展名测试文件");
+
+        let path = configured_log_file_path(&file_path.to_string_lossy()).expect("应返回日志路径");
+
+        assert_eq!(path, file_path);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_log_file_path_accepts_windows_directory() {
+        let path = configured_log_file_path(r"D:\Navop\logs").expect("应返回 Windows 日志文件路径");
+
+        assert_eq!(path, std::path::PathBuf::from(r"D:\Navop\logs\onetcli.log"));
     }
 
     #[test]
