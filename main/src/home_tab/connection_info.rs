@@ -14,6 +14,10 @@ pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
         ConnectionType::Redis => conn.to_redis_params().ok().map(redis_connection_info),
         ConnectionType::MongoDB => conn.to_mongodb_params().ok().map(mongodb_connection_info),
         ConnectionType::Serial => conn.to_serial_params().ok().map(serial_connection_info),
+        ConnectionType::Telnet => conn
+            .to_telnet_params()
+            .ok()
+            .map(|params| format!("{}:{}", params.host, params.port)),
         ConnectionType::Rdp | ConnectionType::Vnc => conn
             .to_remote_desktop_params()
             .ok()
@@ -35,6 +39,7 @@ pub(super) fn screenshot_safe_connection_info(
         ConnectionType::Redis => Some("localhost:6379/0"),
         ConnectionType::MongoDB => Some("localhost:27017"),
         ConnectionType::Serial => Some("COM1 (115200, 8N1)"),
+        ConnectionType::Telnet => Some("localhost:23"),
         ConnectionType::PortForwarding => Some("localhost:8080 -> localhost:80"),
         ConnectionType::Rdp => Some("user@localhost:3389"),
         ConnectionType::Vnc => Some("user@localhost:5900"),
@@ -53,6 +58,7 @@ pub(super) fn connection_display_name(conn: &StoredConnection) -> String {
         ConnectionType::Redis => "Local Redis",
         ConnectionType::MongoDB => "Local MongoDB",
         ConnectionType::Serial => "Local Serial",
+        ConnectionType::Telnet => "Local Telnet",
         ConnectionType::PortForwarding => "Local Port Forwarding",
         ConnectionType::Rdp => "Local RDP",
         ConnectionType::Vnc => "Local VNC",

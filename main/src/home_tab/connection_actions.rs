@@ -52,6 +52,10 @@ impl HomePage {
                 self.editing_connection_id = Some(connection_id);
                 self.show_serial_form(window, cx);
             }
+            ConnectionType::Telnet => {
+                self.editing_connection_id = Some(connection_id);
+                self.show_telnet_form(window, cx);
+            }
             ConnectionType::PortForwarding => {
                 self.editing_connection_id = Some(connection_id);
                 self.show_port_forwarding_form(window, cx);

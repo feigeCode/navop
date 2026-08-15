@@ -271,4 +271,40 @@ impl HomePage {
             cx,
         );
     }
+
+    pub(crate) fn show_telnet_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
+            return;
+        }
+
+        let editing_conn = self.editing_connection_id.and_then(|id| {
+            self.connections
+                .iter()
+                .find(|c| c.id == Some(id) && c.connection_type == ConnectionType::Telnet)
+                .cloned()
+        });
+
+        let config = TelnetFormWindowConfig {
+            editing_connection: editing_conn,
+            workspaces: self.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+        };
+
+        self.editing_connection_id = None;
+
+        let title = Self::editing_title_or_default(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.as_ref(),
+            if config.editing_connection.is_some() {
+                t!("Telnet.edit").to_string()
+            } else {
+                t!("Telnet.new").to_string()
+            },
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 600.0),
+            move |window, cx| cx.new(|cx| TelnetFormWindow::new(config, window, cx)),
+            cx,
+        );
+    }
 }

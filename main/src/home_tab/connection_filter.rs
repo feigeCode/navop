@@ -55,6 +55,20 @@ pub(crate) fn connection_matches_query(conn: &StoredConnection, query: &str) -> 
                 }
             }
         }
+        ConnectionType::Telnet => {
+            if let Ok(params) = conn.to_telnet_params() {
+                if params.host.to_lowercase().contains(&query) {
+                    return true;
+                }
+                if params.port.to_string().contains(&query) {
+                    return true;
+                }
+                let conn_str = format!("{}:{}", params.host, params.port);
+                if conn_str.to_lowercase().contains(&query) {
+                    return true;
+                }
+            }
+        }
         ConnectionType::Rdp | ConnectionType::Vnc => {
             if let Ok(params) = conn.to_remote_desktop_params() {
                 if params.host.to_lowercase().contains(&query) {
@@ -159,5 +173,37 @@ impl HomePage {
 
     pub(crate) fn match_connection(&self, conn: &StoredConnection, query: &str) -> bool {
         connection_matches_query(conn, query)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_core::storage::models::TelnetParams;
+
+    fn telnet_connection() -> StoredConnection {
+        StoredConnection::new_telnet(
+            "Lab Console".to_string(),
+            TelnetParams {
+                host: "Switch.EXAMPLE.com".to_string(),
+                port: 2323,
+                login_script: Vec::new(),
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn telnet_connection_matches_host_port_and_endpoint() {
+        let connection = telnet_connection();
+
+        assert!(connection_matches_query(&connection, "switch.example"));
+        assert!(connection_matches_query(&connection, "SWITCH.EXAMPLE.COM"));
+        assert!(connection_matches_query(&connection, "2323"));
+        assert!(connection_matches_query(
+            &connection,
+            "switch.example.com:2323"
+        ));
+        assert!(!connection_matches_query(&connection, "router.example.com"));
     }
 }

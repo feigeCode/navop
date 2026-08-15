@@ -71,6 +71,10 @@ impl HomePage {
                     )
                 })
                 .unwrap_or_default(),
+            ConnectionType::Telnet => conn
+                .to_telnet_params()
+                .map(|params| format!("{}:{}", params.host, params.port))
+                .unwrap_or_default(),
             ConnectionType::Rdp | ConnectionType::Vnc => conn
                 .to_remote_desktop_params()
                 .map(|params| match params.username.as_deref() {
