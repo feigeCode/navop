@@ -1,8 +1,8 @@
 //! 连接选择器（简化版 v2 - 支持选择和切换）
 
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Window, div,
+    AnyElement, App, ColorExt, Context, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,

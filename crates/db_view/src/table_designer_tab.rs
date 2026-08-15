@@ -2,10 +2,10 @@ use crate::search_shortcut::{DB_SEARCH_CONTEXT, FocusSearchInput, focus_search_i
 use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, AsyncApp, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    UniformListScrollHandle, Window, div, px, uniform_list,
+    AnyElement, App, AsyncApp, ColorExt, Context, DragMoveEvent, Entity, EntityId, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    Task, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, IconSize, IndexPath, Sizable, Size, WindowExt,
@@ -2888,7 +2888,7 @@ impl Render for ColumnsEditor {
                                     .collect::<Vec<_>>()
                             })
                         })
-                        .flex_grow()
+                        .flex_grow_1()
                         .size_full()
                         .track_scroll(&scroll_handle)
                         .with_sizing_behavior(ListSizingBehavior::Auto)

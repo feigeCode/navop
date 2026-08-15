@@ -38,6 +38,7 @@ fn parsed_recording(
                 started_at_unix_ms: 1_700_000_000_123,
                 capture_input,
                 event_stream: "terminal_parser_input_v1".to_string(),
+                session: None,
             },
         },
         events,

@@ -13,6 +13,7 @@ use gpui_component::{
     spinner::Spinner,
     text::{MarkdownPalette, TextView, TextViewStyle},
 };
+use palette::IntoColor;
 
 mod host_artifact;
 
@@ -71,7 +72,7 @@ fn column_axis_gutter_visible(
 /// stronger version of the body-row handles in whatever colors the theme uses.
 fn header_axis_emphasis(color: Hsla) -> Hsla {
     Hsla {
-        a: color.a + (1.0 - color.a) * 0.5,
+        alpha: color.alpha + (1.0 - color.alpha) * 0.5,
         ..color
     }
 }
@@ -423,12 +424,13 @@ impl HtmlComputedStyle {
 fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     match color {
         HtmlCssColor::CurrentColor => current_color,
-        HtmlCssColor::Rgba(color) => Hsla::from(Rgba {
-            r: color.red as f32 / 255.0,
-            g: color.green as f32 / 255.0,
-            b: color.blue as f32 / 255.0,
-            a: color.alpha.clamp(0.0, 1.0),
-        }),
+        HtmlCssColor::Rgba(color) => Rgba::new(
+            color.red as f32 / 255.0,
+            color.green as f32 / 255.0,
+            color.blue as f32 / 255.0,
+            color.alpha.clamp(0.0, 1.0),
+        )
+        .into_color(),
     }
 }
 
@@ -485,7 +487,7 @@ fn html_text_view_style(theme: &Theme) -> TextViewStyle {
     let mut style = TextViewStyle::default()
         .paragraph_gap(rems(theme.dimensions.block_gap / t.text_size.max(1.0)))
         .markdown_palette(MarkdownPalette {
-            is_dark: c.editor_background.l < 0.5,
+            is_dark: c.editor_background.lightness < 0.5,
             foreground: c.text_default,
             muted_foreground: c.text_placeholder,
             border: c.table_border,
@@ -843,7 +845,7 @@ impl Block {
                 "{} ",
                 "#".repeat(level as usize)
             ))))
-            .child(div().min_w(px(0.0)).flex_grow().child(text))
+            .child(div().min_w(px(0.0)).flex_grow_1().child(text))
             .into_any_element()
     }
 
@@ -1491,7 +1493,7 @@ impl Block {
                 let mut element =
                     div()
                         .min_w(px(0.0))
-                        .flex_grow()
+                        .flex_grow_1()
                         .border(px(1.0))
                         .border_color(c.table_border)
                         .px(px(d.table_cell_padding_x))
@@ -2219,7 +2221,7 @@ impl Render for Block {
                         let max_width =
                             px(effective_list_item_image_width(self, viewport_width, d));
                         if let Some(runtime) = self.image_runtime() {
-                            div().flex_grow().child(self.render_image_content(
+                            div().flex_grow_1().child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
                                 px(d.image_root_max_height),
@@ -2228,7 +2230,7 @@ impl Render for Block {
                                 &strings,
                             ))
                         } else {
-                            div().min_w(px(0.0)).flex_grow().child(
+                            div().min_w(px(0.0)).flex_grow_1().child(
                                 self.render_text_or_mixed_inline_visuals(
                                     &theme,
                                     focused,
@@ -2243,7 +2245,7 @@ impl Render for Block {
                             )
                         }
                     } else {
-                        div().min_w(px(0.0)).flex_grow().child(
+                        div().min_w(px(0.0)).flex_grow_1().child(
                             self.render_text_or_mixed_inline_visuals(
                                 &theme,
                                 focused,
@@ -2314,7 +2316,7 @@ impl Render for Block {
                             let max_width =
                                 px(effective_list_item_image_width(self, viewport_width, d));
                             if let Some(runtime) = self.image_runtime() {
-                                div().flex_grow().child(self.render_image_content(
+                                div().flex_grow_1().child(self.render_image_content(
                                     runtime,
                                     max_width.into(),
                                     px(d.image_root_max_height),
@@ -2323,7 +2325,7 @@ impl Render for Block {
                                     &strings,
                                 ))
                             } else {
-                                div().min_w(px(0.0)).flex_grow().child(
+                                div().min_w(px(0.0)).flex_grow_1().child(
                                     self.render_text_or_mixed_inline_visuals(
                                         &theme,
                                         focused,
@@ -2338,7 +2340,7 @@ impl Render for Block {
                                 )
                             }
                         } else {
-                            div().min_w(px(0.0)).flex_grow().child(
+                            div().min_w(px(0.0)).flex_grow_1().child(
                                 self.render_text_or_mixed_inline_visuals(
                                     &theme,
                                     focused,
@@ -2376,7 +2378,7 @@ impl Render for Block {
                         let max_width =
                             px(effective_list_item_image_width(self, viewport_width, d));
                         if let Some(runtime) = self.image_runtime() {
-                            div().flex_grow().child(self.render_image_content(
+                            div().flex_grow_1().child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
                                 px(d.image_root_max_height),
@@ -2385,7 +2387,7 @@ impl Render for Block {
                                 &strings,
                             ))
                         } else {
-                            div().min_w(px(0.0)).flex_grow().child(
+                            div().min_w(px(0.0)).flex_grow_1().child(
                                 self.render_text_or_mixed_inline_visuals(
                                     &theme,
                                     focused,
@@ -2400,7 +2402,7 @@ impl Render for Block {
                             )
                         }
                     } else {
-                        div().min_w(px(0.0)).flex_grow().child(
+                        div().min_w(px(0.0)).flex_grow_1().child(
                             self.render_text_or_mixed_inline_visuals(
                                 &theme,
                                 focused,
@@ -2447,7 +2449,7 @@ impl Render for Block {
                 } else {
                     div()
                         .min_w(px(0.0))
-                        .flex_grow()
+                        .flex_grow_1()
                         .text_size(px(t.text_size))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(accent)
@@ -2509,7 +2511,7 @@ impl Render for Block {
                     .child(
                         div()
                             .min_w(px(0.0))
-                            .flex_grow()
+                            .flex_grow_1()
                             .text_color(c.text_quote)
                             .child(self.render_text_or_mixed_inline_visuals(
                                 &theme,
@@ -3301,14 +3303,15 @@ mod tests {
     use crate::components::parse_html_document;
     use crate::theme::Theme;
     use gpui::{Hsla, Rgba};
+    use palette::IntoColor;
 
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
-        let color = Rgba::from(color);
+        let color: Rgba = color.into_color();
         let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as i16;
-        assert!((channel(color.r) - red as i16).abs() <= 1);
-        assert!((channel(color.g) - green as i16).abs() <= 1);
-        assert!((channel(color.b) - blue as i16).abs() <= 1);
-        assert!((channel(color.a) - alpha as i16).abs() <= 1);
+        assert!((channel(color.red) - red as i16).abs() <= 1);
+        assert!((channel(color.green) - green as i16).abs() <= 1);
+        assert!((channel(color.blue) - blue as i16).abs() <= 1);
+        assert!((channel(color.alpha) - alpha as i16).abs() <= 1);
     }
 
     #[test]

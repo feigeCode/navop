@@ -11,6 +11,7 @@ gpui.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
 gpui_platform.workspace = true
+palette.workspace = true
 html5ever = "0.27"
 markup5ever_rcdom = "0.3.0"
 # Feature-unification shim for `gpui-component-assets`' `#[include = ...]` derive.

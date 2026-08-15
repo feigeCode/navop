@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use crate::{ColorName, Sizable, Size, StyledExt, theme::ActiveTheme as _};
 use gpui::{
     AbsoluteLength, AnyElement, App, Hsla, InteractiveElement as _, IntoElement, ParentElement,
@@ -6,7 +7,7 @@ use gpui::{
 };
 
 /// The variant of the Tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TagVariant {
     Primary,
     #[default]

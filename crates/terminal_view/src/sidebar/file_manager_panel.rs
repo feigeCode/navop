@@ -7,10 +7,10 @@
 use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
-    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
-    Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent,
-    ParentElement, PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle,
-    Window, actions, div, prelude::*, px, uniform_list,
+    Anchor, App, ClipboardItem, ColorExt as _, Context, Entity, EventEmitter, ExternalPaths,
+    FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
+    MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
+    UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
 };
 use gpui_component::menu::LocalMenuStyle;
 use gpui_component::{
@@ -759,7 +759,7 @@ fn breadcrumb_item(label: impl Into<SharedString>) -> BreadcrumbItem {
     const BREADCRUMB_ITEM_MAX_WIDTH: f32 = 180.;
 
     BreadcrumbItem::new(label)
-        .flex_shrink()
+        .flex_shrink_1()
         .min_w(px(0.))
         .max_w(px(BREADCRUMB_ITEM_MAX_WIDTH))
         .overflow_hidden()

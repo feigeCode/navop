@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use std::{cell::Cell, ops::Deref, panic::Location, rc::Rc};
 
 use instant::{Duration, Instant};

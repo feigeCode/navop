@@ -16,6 +16,7 @@
 
 use gpui::{Hsla, Pixels, SharedString, rgb};
 use gpui_component::Theme;
+use palette::IntoColor;
 use one_core::settings::{
     DEFAULT_TERMINAL_THEME, default_grid_font_fallback_families,
     default_grid_monospace_font_family, is_supported_grid_monospace_font,
@@ -225,26 +226,30 @@ impl TerminalTheme {
     /// 应用主题的对应语义色。亮色模式会轻微压低纯白背景、提亮过深的
     /// 默认文字，降低大面积等宽文本的黑白反差；暗色模式保持原色。
     pub fn from_application_theme(theme: &Theme) -> Self {
-        let is_light = theme.background.l >= 0.5;
+        let is_light = theme.background.lightness >= 0.5;
         let background = if is_light {
-            Hsla {
-                l: theme
+            Hsla::new(
+                theme.background.hue.into_degrees(),
+                theme.background.saturation,
+                theme
                     .background
-                    .l
+                    .lightness
                     .min(LIGHT_TERMINAL_BACKGROUND_MAX_LIGHTNESS),
-                ..theme.background
-            }
+                theme.background.alpha,
+            )
         } else {
             theme.background
         };
         let foreground = if is_light {
-            Hsla {
-                l: theme
+            Hsla::new(
+                theme.foreground.hue.into_degrees(),
+                theme.foreground.saturation,
+                theme
                     .foreground
-                    .l
+                    .lightness
                     .max(LIGHT_TERMINAL_FOREGROUND_MIN_LIGHTNESS),
-                ..theme.foreground
-            }
+                theme.foreground.alpha,
+            )
         } else {
             theme.foreground
         };
@@ -262,10 +267,10 @@ impl TerminalTheme {
     pub fn midnight() -> Self {
         Self::new(
             "midnight",
-            rgb(0xE4E4E4).into(),
-            rgb(0x1E1E1E).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x3D3D3D).into(),
+            rgb(0xE4E4E4).into_color(),
+            rgb(0x1E1E1E).into_color(),
+            rgb(0xFFFFFF).into_color(),
+            rgb(0x3D3D3D).into_color(),
         )
     }
 
@@ -273,10 +278,10 @@ impl TerminalTheme {
     pub fn daylight() -> Self {
         Self::new(
             "daylight",
-            rgb(0x2E3436).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x000000).into(),
-            rgb(0xD3D7CF).into(),
+            rgb(0x2E3436).into_color(),
+            rgb(0xFFFFFF).into_color(),
+            rgb(0x000000).into_color(),
+            rgb(0xD3D7CF).into_color(),
         )
     }
 
@@ -284,10 +289,10 @@ impl TerminalTheme {
     pub fn ink() -> Self {
         Self::new(
             "ink",
-            rgb(0xCECDC3).into(),
-            rgb(0x100F0F).into(),
-            rgb(0xDA702C).into(),
-            rgb(0x282726).into(),
+            rgb(0xCECDC3).into_color(),
+            rgb(0x100F0F).into_color(),
+            rgb(0xDA702C).into_color(),
+            rgb(0x282726).into_color(),
         )
     }
 
@@ -295,10 +300,10 @@ impl TerminalTheme {
     pub fn paper() -> Self {
         Self::new(
             "paper",
-            rgb(0x100F0F).into(),
-            rgb(0xFFFCF0).into(),
-            rgb(0xDA702C).into(),
-            rgb(0xE6E4D9).into(),
+            rgb(0x100F0F).into_color(),
+            rgb(0xFFFCF0).into_color(),
+            rgb(0xDA702C).into_color(),
+            rgb(0xE6E4D9).into_color(),
         )
     }
 
@@ -306,10 +311,10 @@ impl TerminalTheme {
     pub fn ocean() -> Self {
         Self::new(
             "ocean",
-            rgb(0xDCD7BA).into(),
-            rgb(0x1F1F28).into(),
-            rgb(0xC8C093).into(),
-            rgb(0x2D4F67).into(),
+            rgb(0xDCD7BA).into_color(),
+            rgb(0x1F1F28).into_color(),
+            rgb(0xC8C093).into_color(),
+            rgb(0x2D4F67).into_color(),
         )
     }
 
@@ -317,10 +322,10 @@ impl TerminalTheme {
     pub fn obsidian() -> Self {
         Self::new(
             "obsidian",
-            rgb(0xC5C9C5).into(),
-            rgb(0x181616).into(),
-            rgb(0xC8C093).into(),
-            rgb(0x2D4F67).into(),
+            rgb(0xC5C9C5).into_color(),
+            rgb(0x181616).into_color(),
+            rgb(0xC8C093).into_color(),
+            rgb(0x2D4F67).into_color(),
         )
     }
 
@@ -328,10 +333,10 @@ impl TerminalTheme {
     pub fn lotus() -> Self {
         Self::new(
             "lotus",
-            rgb(0x545464).into(),
-            rgb(0xF2ECBC).into(),
-            rgb(0x43436C).into(),
-            rgb(0xB6D7A8).into(),
+            rgb(0x545464).into_color(),
+            rgb(0xF2ECBC).into_color(),
+            rgb(0x43436C).into_color(),
+            rgb(0xB6D7A8).into_color(),
         )
     }
 
@@ -339,10 +344,10 @@ impl TerminalTheme {
     pub fn neon_blue() -> Self {
         Self::new(
             "neon_blue",
-            rgb(0x00D9FF).into(),
-            rgb(0x0A0E14).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x1A3A52).into(),
+            rgb(0x00D9FF).into_color(),
+            rgb(0x0A0E14).into_color(),
+            rgb(0xFFFFFF).into_color(),
+            rgb(0x1A3A52).into_color(),
         )
     }
 
@@ -350,10 +355,10 @@ impl TerminalTheme {
     pub fn matrix() -> Self {
         Self::new(
             "matrix",
-            rgb(0x00FF41).into(),
-            rgb(0x0D0D0D).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x1A3A1A).into(),
+            rgb(0x00FF41).into_color(),
+            rgb(0x0D0D0D).into_color(),
+            rgb(0xFFFFFF).into_color(),
+            rgb(0x1A3A1A).into_color(),
         )
     }
 
@@ -361,10 +366,10 @@ impl TerminalTheme {
     pub fn crimson() -> Self {
         Self::new(
             "crimson",
-            rgb(0xFF5555).into(),
-            rgb(0x1A0A0A).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x4A1A1A).into(),
+            rgb(0xFF5555).into_color(),
+            rgb(0x1A0A0A).into_color(),
+            rgb(0xFFFFFF).into_color(),
+            rgb(0x4A1A1A).into_color(),
         )
     }
 
@@ -372,10 +377,10 @@ impl TerminalTheme {
     pub fn slate() -> Self {
         Self::new(
             "slate",
-            rgb(0xE2E8F0).into(),
-            rgb(0x0F172A).into(),
-            rgb(0x38BDF8).into(),
-            rgb(0x1E3A5F).into(),
+            rgb(0xE2E8F0).into_color(),
+            rgb(0x0F172A).into_color(),
+            rgb(0x38BDF8).into_color(),
+            rgb(0x1E3A5F).into_color(),
         )
     }
 
@@ -383,10 +388,10 @@ impl TerminalTheme {
     pub fn aurora() -> Self {
         Self::new(
             "aurora",
-            rgb(0xD6F5FF).into(),
-            rgb(0x071A1E).into(),
-            rgb(0x5EEAD4).into(),
-            rgb(0x164E63).into(),
+            rgb(0xD6F5FF).into_color(),
+            rgb(0x071A1E).into_color(),
+            rgb(0x5EEAD4).into_color(),
+            rgb(0x164E63).into_color(),
         )
     }
 
@@ -394,10 +399,10 @@ impl TerminalTheme {
     pub fn orchid() -> Self {
         Self::new(
             "orchid",
-            rgb(0xF4E8FF).into(),
-            rgb(0x1D1526).into(),
-            rgb(0xF0ABFC).into(),
-            rgb(0x563264).into(),
+            rgb(0xF4E8FF).into_color(),
+            rgb(0x1D1526).into_color(),
+            rgb(0xF0ABFC).into_color(),
+            rgb(0x563264).into_color(),
         )
     }
 
@@ -405,10 +410,10 @@ impl TerminalTheme {
     pub fn ember() -> Self {
         Self::new(
             "ember",
-            rgb(0xFFE6C7).into(),
-            rgb(0x1B120B).into(),
-            rgb(0xFF9F43).into(),
-            rgb(0x57351A).into(),
+            rgb(0xFFE6C7).into_color(),
+            rgb(0x1B120B).into_color(),
+            rgb(0xFF9F43).into_color(),
+            rgb(0x57351A).into_color(),
         )
     }
 
@@ -416,10 +421,10 @@ impl TerminalTheme {
     pub fn sandstone() -> Self {
         Self::new(
             "sandstone",
-            rgb(0x3B3028).into(),
-            rgb(0xF7F1E3).into(),
-            rgb(0x9A5B00).into(),
-            rgb(0xE8DCC8).into(),
+            rgb(0x3B3028).into_color(),
+            rgb(0xF7F1E3).into_color(),
+            rgb(0x9A5B00).into_color(),
+            rgb(0xE8DCC8).into_color(),
         )
     }
 
@@ -427,16 +432,16 @@ impl TerminalTheme {
     pub fn frost() -> Self {
         Self::new(
             "frost",
-            rgb(0x243044).into(),
-            rgb(0xF4F8FC).into(),
-            rgb(0x1D4ED8).into(),
-            rgb(0xD8E7F7).into(),
+            rgb(0x243044).into_color(),
+            rgb(0xF4F8FC).into_color(),
+            rgb(0x1D4ED8).into_color(),
+            rgb(0xD8E7F7).into_color(),
         )
     }
 
     /// 判断当前宿主主题是否为深色。
     pub fn is_dark(&self) -> bool {
-        self.background.l < 0.5
+        self.background.lightness < 0.5
     }
 
     /// 获取用于终端侧边栏和终端工具面板的语义配色。
@@ -450,20 +455,20 @@ impl TerminalTheme {
         // 计算 muted 背景色（卡片、列表项等）
         let muted = if is_dark {
             // 深色主题：muted 比背景稍亮
-            Hsla {
-                h: self.background.h,
-                s: self.background.s,
-                l: (self.background.l + 0.06).min(0.25),
-                a: 1.0,
-            }
+            Hsla::new(
+                self.background.hue.into_degrees(),
+                self.background.saturation,
+                (self.background.lightness + 0.06).min(0.25),
+                1.0,
+            )
         } else {
             // 浅色主题：muted 比背景稍暗
-            Hsla {
-                h: self.background.h,
-                s: self.background.s.min(0.1),
-                l: (self.background.l - 0.06).max(0.85),
-                a: 1.0,
-            }
+            Hsla::new(
+                self.background.hue.into_degrees(),
+                self.background.saturation.min(0.1),
+                (self.background.lightness - 0.06).max(0.85),
+                1.0,
+            )
         };
 
         // 计算 muted_foreground（次要文字）
@@ -471,58 +476,58 @@ impl TerminalTheme {
         let muted_foreground = if is_dark {
             // 深色主题：使用中等亮度的灰色
             // 确保在深色背景上可读
-            Hsla {
-                h: self.foreground.h,
-                s: self.foreground.s * 0.3,
-                l: 0.55, // 固定中等亮度，确保在深色背景上可读
-                a: 1.0,
-            }
+            Hsla::new(
+                self.foreground.hue.into_degrees(),
+                self.foreground.saturation * 0.3,
+                0.55, // 固定中等亮度，确保在深色背景上可读
+                1.0,
+            )
         } else {
             // 浅色主题：使用较深的灰色
             // 确保在浅色背景上可读
-            Hsla {
-                h: self.foreground.h,
-                s: self.foreground.s * 0.3,
-                l: 0.45, // 固定中等亮度，确保在浅色背景上可读
-                a: 1.0,
-            }
+            Hsla::new(
+                self.foreground.hue.into_degrees(),
+                self.foreground.saturation * 0.3,
+                0.45, // 固定中等亮度，确保在浅色背景上可读
+                1.0,
+            )
         };
 
         // 计算边框色
         let border = if is_dark {
-            Hsla {
-                h: self.background.h,
-                s: self.background.s,
-                l: (self.background.l + 0.12).min(0.35),
-                a: 1.0,
-            }
+            Hsla::new(
+                self.background.hue.into_degrees(),
+                self.background.saturation,
+                (self.background.lightness + 0.12).min(0.35),
+                1.0,
+            )
         } else {
-            Hsla {
-                h: self.background.h,
-                s: self.background.s.min(0.1),
-                l: (self.background.l - 0.15).max(0.75),
-                a: 1.0,
-            }
+            Hsla::new(
+                self.background.hue.into_degrees(),
+                self.background.saturation.min(0.1),
+                (self.background.lightness - 0.15).max(0.75),
+                1.0,
+            )
         };
 
         // 计算强调色前景（在 accent 背景上使用的文字颜色）
         // 根据 accent 的亮度决定使用深色还是浅色文字
-        let accent_foreground = if self.cursor.l > 0.5 {
+        let accent_foreground = if self.cursor.lightness > 0.5 {
             // accent 是亮色，使用深色文字
-            Hsla {
-                h: self.cursor.h,
-                s: self.cursor.s * 0.2,
-                l: 0.1, // 深色文字
-                a: 1.0,
-            }
+            Hsla::new(
+                self.cursor.hue.into_degrees(),
+                self.cursor.saturation * 0.2,
+                0.1, // 深色文字
+                1.0,
+            )
         } else {
             // accent 是暗色，使用亮色文字
-            Hsla {
-                h: self.cursor.h,
-                s: self.cursor.s * 0.1,
-                l: 0.95, // 亮色文字
-                a: 1.0,
-            }
+            Hsla::new(
+                self.cursor.hue.into_degrees(),
+                self.cursor.saturation * 0.1,
+                0.95, // 亮色文字
+                1.0,
+            )
         };
 
         TerminalColors {

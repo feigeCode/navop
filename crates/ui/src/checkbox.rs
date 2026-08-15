@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use std::{rc::Rc, time::Duration};
 
 use crate::{

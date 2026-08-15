@@ -3768,7 +3768,7 @@ impl Render for AgentChatView {
             .w_full()
             .min_w_0()
             .when(self.sidebar_mode, |this| {
-                this.min_h_0().flex_shrink().overflow_y_scroll()
+                this.min_h_0().flex_shrink_1().overflow_y_scroll()
             })
             .when(!self.sidebar_mode, |this| {
                 this.flex_shrink_0().overflow_hidden()
@@ -4743,6 +4743,7 @@ mod tests {
         point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
+    use palette::IntoColor as _;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -8420,14 +8421,14 @@ mod tests {
 
     #[test]
     fn background_running_session_uses_readable_foreground_color() {
-        let foreground = gpui::rgb(0xf8fafc).into();
-        let selected_foreground = gpui::rgb(0xe2e8f0).into();
+        let foreground = gpui::rgb(0xf8fafc).into_color();
+        let selected_foreground = gpui::rgb(0xe2e8f0).into_color();
         let style = SessionRowStyle {
             foreground,
-            muted_foreground: gpui::rgb(0x64748b).into(),
-            selected_background: gpui::rgb(0x1e293b).into(),
+            muted_foreground: gpui::rgb(0x64748b).into_color(),
+            selected_background: gpui::rgb(0x1e293b).into_color(),
             selected_foreground,
-            hover_background: gpui::rgb(0x0f172a).into(),
+            hover_background: gpui::rgb(0x0f172a).into_color(),
         };
 
         assert_eq!(

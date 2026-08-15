@@ -4,6 +4,7 @@ use gpui::{
     Radians, Render, RenderOnce, SharedString, StyleRefinement, Styled, Svg, Transformation,
     Window, div, img, prelude::FluentBuilder as _, svg,
 };
+use palette::IntoColor;
 // use gpui_component_macros::icon_named;
 use std::path::PathBuf;
 
@@ -862,8 +863,8 @@ impl Styled for Icon {
         &mut self.style
     }
 
-    fn text_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.text_color = Some(color.into());
+    fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
+        self.text_color = Some(color.into_color());
         self
     }
 }

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use bson::{Bson, Document, doc};
 use gpui::{
-    App, AppContext, Context, IntoElement, ParentElement, SharedString, Styled, Subscription,
-    Window, div, prelude::FluentBuilder, px,
+    App, AppContext, ColorExt, Context, IntoElement, ParentElement, SharedString, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme,

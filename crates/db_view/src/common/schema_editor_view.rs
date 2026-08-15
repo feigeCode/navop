@@ -1,8 +1,8 @@
 use super::{SchemaFormEvent, SchemaOperationRequest};
 use db::GlobalDbState;
 use gpui::{
-    AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Subscription, Window, div,
+    AnyView, App, AppContext, ColorExt, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
 use gpui_component::{
     ActiveTheme,

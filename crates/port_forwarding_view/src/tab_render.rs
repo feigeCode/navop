@@ -1,5 +1,5 @@
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
+    ColorExt, Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::button::{Button, ButtonVariants};

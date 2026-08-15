@@ -1,4 +1,4 @@
-use gpui::{App, Hsla};
+use gpui::{App, ColorExt as _, Hsla};
 use gpui_component::menu::LocalMenuStyle;
 use gpui_component::{
     button::ButtonCustomVariant, highlighter::HighlightTheme, tab::LocalTabStyle,
@@ -33,7 +33,7 @@ impl WorkspaceTheme {
     }
 
     pub(crate) fn highlight_theme(&self) -> Arc<HighlightTheme> {
-        if self.background.l < 0.5 {
+        if self.background.lightness < 0.5 {
             HighlightTheme::default_dark()
         } else {
             HighlightTheme::default_light()
@@ -95,23 +95,24 @@ impl WorkspaceTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use palette::IntoColor;
 
     #[test]
     fn highlight_theme_follows_workspace_background() {
         let dark = WorkspaceTheme {
-            background: gpui::rgb(0x111111).into(),
-            foreground: gpui::rgb(0xeeeeee).into(),
-            muted: gpui::rgb(0x222222).into(),
-            muted_foreground: gpui::rgb(0x888888).into(),
-            border: gpui::rgb(0x333333).into(),
-            accent: gpui::rgb(0x444444).into(),
-            accent_foreground: gpui::rgb(0xffffff).into(),
-            danger: gpui::rgb(0xff0000).into(),
-            warning: gpui::rgb(0xffaa00).into(),
-            success: gpui::rgb(0x00aa00).into(),
+            background: gpui::rgb(0x111111).into_color(),
+            foreground: gpui::rgb(0xeeeeee).into_color(),
+            muted: gpui::rgb(0x222222).into_color(),
+            muted_foreground: gpui::rgb(0x888888).into_color(),
+            border: gpui::rgb(0x333333).into_color(),
+            accent: gpui::rgb(0x444444).into_color(),
+            accent_foreground: gpui::rgb(0xffffff).into_color(),
+            danger: gpui::rgb(0xff0000).into_color(),
+            warning: gpui::rgb(0xffaa00).into_color(),
+            success: gpui::rgb(0x00aa00).into_color(),
         };
         let mut light = dark;
-        light.background = gpui::rgb(0xf5f5f5).into();
+        light.background = gpui::rgb(0xf5f5f5).into_color();
 
         assert!(dark.highlight_theme().appearance.is_dark());
         assert!(!light.highlight_theme().appearance.is_dark());

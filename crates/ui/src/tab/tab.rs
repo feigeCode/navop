@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use std::rc::Rc;
 
 use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
@@ -7,6 +8,7 @@ use gpui::{
     ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
     div, px, relative,
 };
+use palette::WithAlpha as _;
 
 /// Tab variants.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
@@ -36,10 +38,7 @@ pub struct LocalTabStyle {
 
 impl LocalTabStyle {
     fn apply(self, mut style: TabStyle, selected: bool, hovered: bool, disabled: bool) -> TabStyle {
-        let transparent_border = Hsla {
-            a: 0.0,
-            ..self.border
-        };
+        let transparent_border = self.border.with_alpha(0.0);
         style.fg = if disabled {
             self.disabled_foreground
         } else if selected {
@@ -61,7 +60,7 @@ impl LocalTabStyle {
         } else {
             transparent_border
         };
-        if style.inner_bg.a > 0.0 {
+        if style.inner_bg.alpha > 0.0 {
             style.inner_bg = style.bg;
         }
         style
@@ -757,9 +756,10 @@ impl RenderOnce for Tab {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use palette::IntoColor as _;
 
     fn color(value: u32) -> Hsla {
-        gpui::rgb(value).into()
+        gpui::rgb(value).into_color()
     }
 
     fn local_style() -> LocalTabStyle {

@@ -18,6 +18,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::StreamExt;
 use gpui::*;
+use one_core::app_dirs;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{
@@ -39,8 +40,6 @@ use tokio::time::interval;
 use uuid::Uuid;
 
 #[cfg(any(test, target_os = "windows"))]
-use std::env;
-#[cfg(any(test, target_os = "windows"))]
 use std::ffi::OsStr;
 #[cfg(any(test, target_os = "windows"))]
 use std::path::Path;
@@ -53,11 +52,16 @@ use crate::history::{
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
-    RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingMetadata, RecordingPlayback,
+    RecordingBackend, RecordingCompleteness, RecordingMetadata, RecordingPlayback,
     RecordingPlaybackError, RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchResults,
     RecordingPlaybackState, RecordingPlaybackTransition, RecordingRuntime, RecordingRuntimeConfig,
-    RecordingRuntimeError, RecordingSnapshot, RecordingStartRequest, RecordingTap,
-    RecordingTransition, TerminalPlaybackRuntime,
+    RecordingRuntimeError, RecordingSessionMetadata, RecordingSnapshot, RecordingStartRequest,
+    RecordingTap, RecordingTransition, TerminalPlaybackRuntime,
+};
+use crate::session_logging::{
+    AutomaticSessionLogRequestInput, application_version, build_automatic_session_log_request,
+    local_recording_session_metadata, output_only_recording_config,
+    serial_recording_session_metadata, ssh_recording_session_metadata,
 };
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
@@ -745,7 +749,7 @@ fn path_if_file(path: impl Into<PathBuf>) -> Option<String> {
 #[cfg(any(test, target_os = "windows"))]
 fn find_executable_in_path(path_env: Option<&OsStr>, program: &str) -> Option<String> {
     let path_env = path_env?;
-    env::split_paths(path_env)
+    std::env::split_paths(path_env)
         .map(|dir| dir.join(program))
         .find_map(path_if_file)
 }
@@ -1074,11 +1078,15 @@ pub struct Terminal {
     backend: Option<Box<dyn TerminalBackend>>,
     /// 与终端实例同生命周期的录制运行时；重连只会克隆新的 tap，不会替换时间线。
     recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
+    /// 自动会话日志使用独立运行时，与手工录制互不影响并跨重连保留时间线。
+    session_log_runtime: Option<RecordingRuntime>,
     /// Playback owns a separate fail-closed parser and grid. Live terminals
     /// never populate this field.
     playback_runtime: Option<TerminalPlaybackRuntime>,
     /// 只用于录制文件关联的随机逻辑会话 ID；不包含连接名称、地址或凭据。
     recording_session_id: String,
+    /// 允许持久化到录制 header 的安全会话字段快照。
+    recording_session_metadata: RecordingSessionMetadata,
 
     /// 终端标题
     title: String,
@@ -1396,6 +1404,16 @@ struct PendingPlaybackEventLoop {
     wakeup_pending: Arc<AtomicBool>,
 }
 
+struct AutomaticSessionLogRuntimeInput {
+    enabled: bool,
+    event_tx: UnboundedSender<TerminalEvent>,
+    wakeup_pending: Arc<AtomicBool>,
+    backend: RecordingBackend,
+    session_id: String,
+    initial_size: TerminalSize,
+    session: RecordingSessionMetadata,
+}
+
 fn send_coalesced_wakeup(event_tx: &UnboundedSender<TerminalEvent>, wakeup_pending: &AtomicBool) {
     if wakeup_pending.swap(true, Ordering::AcqRel) {
         return;
@@ -1427,10 +1445,80 @@ impl Terminal {
         if self.is_read_only() {
             return None;
         }
-        self.recording_runtime
-            .as_ref()
-            .ok()
-            .map(RecordingRuntime::tap)
+        Self::recording_tap_for_runtimes(&self.recording_runtime, &self.session_log_runtime)
+    }
+
+    fn recording_tap_for_runtimes(
+        recording_runtime: &std::result::Result<RecordingRuntime, RecordingRuntimeError>,
+        session_log_runtime: &Option<RecordingRuntime>,
+    ) -> Option<RecordingTap> {
+        RecordingTap::fan_out(
+            [
+                recording_runtime.as_ref().ok().map(RecordingRuntime::tap),
+                session_log_runtime.as_ref().map(RecordingRuntime::tap),
+            ]
+            .into_iter()
+            .flatten(),
+        )
+    }
+
+    fn start_automatic_session_log(
+        input: AutomaticSessionLogRuntimeInput,
+    ) -> Option<RecordingRuntime> {
+        if !input.enabled {
+            return None;
+        }
+        let Some(data_directory) = app_dirs::data_dir() else {
+            tracing::warn!(
+                "automatic session logging disabled: application data directory missing"
+            );
+            return None;
+        };
+        let started_at_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => u64::try_from(duration.as_millis()).ok(),
+            Err(_) => None,
+        };
+        let Some(started_at_unix_ms) = started_at_unix_ms else {
+            tracing::warn!("automatic session logging disabled: invalid system clock");
+            return None;
+        };
+        let request = build_automatic_session_log_request(AutomaticSessionLogRequestInput {
+            data_directory,
+            backend: input.backend,
+            session_id: input.session_id,
+            initial_size: input.initial_size,
+            session: input.session,
+            started_at_unix_ms,
+            recording_id: Uuid::new_v4().to_string(),
+        });
+        Self::start_automatic_session_log_request(input.event_tx, input.wakeup_pending, request)
+    }
+
+    fn start_automatic_session_log_request(
+        event_tx: UnboundedSender<TerminalEvent>,
+        wakeup_pending: Arc<AtomicBool>,
+        request: std::result::Result<RecordingStartRequest, RecordingRuntimeError>,
+    ) -> Option<RecordingRuntime> {
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::warn!(%error, "failed to build automatic terminal session log request");
+                return None;
+            }
+        };
+        let runtime = match Self::create_recording_runtime(event_tx, wakeup_pending) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                tracing::warn!(%error, "failed to create automatic terminal session log runtime");
+                return None;
+            }
+        };
+        if let Err(error) = runtime.start(request) {
+            tracing::warn!(%error, "failed to start automatic terminal session log");
+            let _ = runtime.shutdown();
+            return None;
+        }
+        Some(runtime)
     }
 
     fn record_connection_generation_marker(&self, generation: u64) {
@@ -1470,8 +1558,10 @@ impl Terminal {
             performance_metrics,
             backend: None,
             recording_runtime,
+            session_log_runtime: None,
             playback_runtime: None,
             recording_session_id,
+            recording_session_metadata: local_recording_session_metadata(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1526,7 +1616,9 @@ impl Terminal {
     /// 创建本地终端
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let app_settings = AppSettings::current(cx);
+        let scrollback_lines = app_settings.terminal_scrollback_lines;
+        let automatic_logging = app_settings.terminal_auto_session_logging;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
@@ -1536,7 +1628,25 @@ impl Terminal {
         let wakeup_pending = event_proxy.wakeup_pending_handle();
         let recording_runtime =
             Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
-        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
+        let recording_session_id = Self::new_recording_session_id();
+        let recording_session_metadata = local_recording_session_metadata();
+        let session_log_runtime =
+            Self::start_automatic_session_log(AutomaticSessionLogRuntimeInput {
+                enabled: automatic_logging,
+                event_tx: event_tx.clone(),
+                wakeup_pending: wakeup_pending.clone(),
+                backend: RecordingBackend::Local,
+                session_id: recording_session_id.clone(),
+                initial_size: TerminalSize {
+                    rows: DEFAULT_ROWS as u16,
+                    cols: DEFAULT_COLS as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                session: recording_session_metadata.clone(),
+            });
+        let recording_tap =
+            Self::recording_tap_for_runtimes(&recording_runtime, &session_log_runtime);
         let LocalConfig {
             shell,
             args,
@@ -1590,7 +1700,6 @@ impl Terminal {
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_local_history_loader(history_shell.as_deref(), cx);
         let history_repository = Self::history_repository(cx);
-        let recording_session_id = Self::new_recording_session_id();
 
         Ok(Self {
             term,
@@ -1598,8 +1707,10 @@ impl Terminal {
             performance_metrics,
             backend: Some(Box::new(local_backend)),
             recording_runtime,
+            session_log_runtime,
             playback_runtime: None,
             recording_session_id,
+            recording_session_metadata,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1688,12 +1799,21 @@ impl Terminal {
             event_tx.clone(),
         )
         .expect("StoredConnection should contain valid SSH params");
+        let recording_session_metadata = ssh_recording_session_metadata(
+            resolved.connection_id,
+            resolved.connection_name.clone(),
+            resolved.config.ssh_config.username.clone(),
+            resolved.config.ssh_config.host.clone(),
+            resolved.config.ssh_config.port,
+        );
         let base_config = resolved.config;
 
         let cols = base_config.pty_config.width as usize;
         let rows = base_config.pty_config.height as usize;
 
-        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let app_settings = AppSettings::current(cx);
+        let scrollback_lines = app_settings.terminal_scrollback_lines;
+        let automatic_logging = app_settings.terminal_auto_session_logging;
         let (term, event_proxy, _colors, performance_metrics) =
             Self::create_term(cols, rows, scrollback_lines, event_tx.clone());
         let wakeup_pending = event_proxy.wakeup_pending_handle();
@@ -1706,6 +1826,21 @@ impl Terminal {
         let history_repository = Self::history_repository(cx);
         let history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
         let recording_session_id = Self::new_recording_session_id();
+        let session_log_runtime =
+            Self::start_automatic_session_log(AutomaticSessionLogRuntimeInput {
+                enabled: automatic_logging,
+                event_tx: event_tx.clone(),
+                wakeup_pending: wakeup_pending.clone(),
+                backend: RecordingBackend::Ssh,
+                session_id: recording_session_id.clone(),
+                initial_size: TerminalSize {
+                    rows: u16::try_from(base_config.pty_config.height).unwrap_or(u16::MAX),
+                    cols: u16::try_from(base_config.pty_config.width).unwrap_or(u16::MAX),
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                session: recording_session_metadata.clone(),
+            });
 
         let mut terminal = Self {
             term,
@@ -1713,8 +1848,10 @@ impl Terminal {
             performance_metrics,
             backend: None,
             recording_runtime,
+            session_log_runtime,
             playback_runtime: None,
             recording_session_id,
+            recording_session_metadata,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1782,9 +1919,16 @@ impl Terminal {
         let serial_params = conn
             .to_serial_params()
             .expect("StoredConnection 应包含有效的 SerialParams");
+        let recording_session_metadata = serial_recording_session_metadata(
+            conn.id,
+            conn.name.clone(),
+            serial_params.port_name.clone(),
+        );
 
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let app_settings = AppSettings::current(cx);
+        let scrollback_lines = app_settings.terminal_scrollback_lines;
+        let automatic_logging = app_settings.terminal_auto_session_logging;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
@@ -1794,7 +1938,24 @@ impl Terminal {
         let wakeup_pending = event_proxy.wakeup_pending_handle();
         let recording_runtime =
             Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
-        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
+        let recording_session_id = Self::new_recording_session_id();
+        let session_log_runtime =
+            Self::start_automatic_session_log(AutomaticSessionLogRuntimeInput {
+                enabled: automatic_logging,
+                event_tx: event_tx.clone(),
+                wakeup_pending: wakeup_pending.clone(),
+                backend: RecordingBackend::Serial,
+                session_id: recording_session_id.clone(),
+                initial_size: TerminalSize {
+                    rows: DEFAULT_ROWS as u16,
+                    cols: DEFAULT_COLS as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                session: recording_session_metadata.clone(),
+            });
+        let recording_tap =
+            Self::recording_tap_for_runtimes(&recording_runtime, &session_log_runtime);
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
         let connection_generation = 1;
 
@@ -1810,7 +1971,6 @@ impl Terminal {
             connection_generation,
             cx,
         );
-        let recording_session_id = Self::new_recording_session_id();
 
         Self {
             term,
@@ -1818,8 +1978,10 @@ impl Terminal {
             performance_metrics,
             backend: None,
             recording_runtime,
+            session_log_runtime,
             playback_runtime: None,
             recording_session_id,
+            recording_session_metadata,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1898,8 +2060,10 @@ impl Terminal {
                 performance_metrics,
                 backend: None,
                 recording_runtime: Err(RecordingRuntimeError::ReadOnlyPlayback),
+                session_log_runtime: None,
                 playback_runtime: Some(playback_runtime),
                 recording_session_id: Self::new_recording_session_id(),
+                recording_session_metadata: RecordingSessionMetadata::default(),
                 title: String::new(),
                 current_working_dir: None,
                 child_exited: None,
@@ -3036,11 +3200,10 @@ impl Terminal {
                 recording_id: Uuid::new_v4().to_string(),
                 session_id: self.recording_session_id.clone(),
                 backend,
-                application_version: option_env!("NAVOP_APPLICATION_VERSION")
-                    .unwrap_or(env!("CARGO_PKG_VERSION"))
-                    .to_string(),
+                application_version: application_version(),
                 started_at_unix_ms,
                 capture_input: false,
+                session: Some(self.recording_session_metadata.clone()),
             },
             initial_size: TerminalSize {
                 rows,
@@ -3048,7 +3211,7 @@ impl Terminal {
                 pixel_width: self.pixel_width,
                 pixel_height: self.pixel_height,
             },
-            recording: RecordingConfig::default(),
+            recording: output_only_recording_config(),
         })
     }
 
@@ -3427,6 +3590,14 @@ impl Terminal {
                 tracing::warn!(%error, "failed to shut down terminal recording runtime");
             }
         }
+        if let Some(session_log_runtime) = &self.session_log_runtime {
+            if let Err(error) = session_log_runtime.shutdown() {
+                tracing::warn!(
+                    %error,
+                    "failed to shut down automatic terminal session log runtime"
+                );
+            }
+        }
     }
 
     // ========== 选择操作 ==========
@@ -3635,14 +3806,15 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::with_local_terminal_default_env;
     use super::{
-        CommandRecordGate, ConnectionState, HostKeyVerificationReason, HostKeyVerificationRequest,
-        SshConnectionUpdate, SshCredentialPromptPolicy, TermDimensions, Terminal,
-        TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
-        TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials, build_cd_command,
-        build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
-        compose_ssh_init_commands, flush_pending_terminal_events, format_connection_error,
-        host_key_verification_request, is_reconnect_generation, is_ssh_password_prompt,
-        keyboard_interactive_answers_for_terminal, merge_history_matches,
+        AutomaticSessionLogRequestInput, CommandRecordGate, ConnectionState,
+        HostKeyVerificationReason, HostKeyVerificationRequest, SshConnectionUpdate,
+        SshCredentialPromptPolicy, TermDimensions, Terminal, TerminalConnectionKind,
+        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalScrollProxy,
+        TerminalSessionMode, TerminalSshCredentials, build_automatic_session_log_request,
+        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
+        clear_screen_remote_redraw_bytes, compose_ssh_init_commands, flush_pending_terminal_events,
+        format_connection_error, host_key_verification_request, is_reconnect_generation,
+        is_ssh_password_prompt, keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
         resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
         send_coalesced_wakeup, shell_escape_arg, ssh_config_with_confirmed_host_key,
@@ -3658,8 +3830,9 @@ mod tests {
         RecordingEventKind, RecordingFileLimits, RecordingHeader, RecordingHeaderMetadata,
         RecordingMetadata, RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
         RecordingPlaybackSearchKind, RecordingPlaybackState, RecordingPlaybackTransition,
-        RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingStartRequest,
-        RecordingState, RecordingTapOutcome, RecordingTransition, read_recording,
+        RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingSessionMetadata,
+        RecordingStartRequest, RecordingState, RecordingTapOutcome, RecordingTransition,
+        read_recording,
     };
     use crate::{
         TerminalBackend, TerminalControlHandle, TerminalEvent, TerminalExecHandle,
@@ -3759,8 +3932,17 @@ mod tests {
             performance_metrics,
             backend: None,
             recording_runtime,
+            session_log_runtime: None,
             playback_runtime: None,
             recording_session_id: "terminal-runtime-test-session".to_string(),
+            recording_session_metadata: RecordingSessionMetadata {
+                connection_id: Some(1),
+                connection_name: Some("test SSH".to_string()),
+                remote_user: Some("tester".to_string()),
+                remote_host: Some("example.test".to_string()),
+                remote_port: Some(22),
+                ..RecordingSessionMetadata::default()
+            },
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -3806,6 +3988,7 @@ mod tests {
                 application_version: "0.1.0-test".to_string(),
                 started_at_unix_ms: 1_700_000_000_123,
                 capture_input: false,
+                session: None,
             },
             initial_size: TerminalSize {
                 rows: 24,
@@ -3836,6 +4019,7 @@ mod tests {
                     started_at_unix_ms: 1_700_000_000_123,
                     capture_input: true,
                     event_stream: NAVOP_EVENT_STREAM.to_string(),
+                    session: None,
                 },
             },
             events: vec![
@@ -3994,6 +4178,17 @@ mod tests {
         assert!(!first.metadata.capture_input);
         assert!(!first.recording.capture_input);
         assert_eq!(
+            Some(&RecordingSessionMetadata {
+                connection_id: Some(1),
+                connection_name: Some("test SSH".to_string()),
+                remote_user: Some("tester".to_string()),
+                remote_host: Some("example.test".to_string()),
+                remote_port: Some(22),
+                ..RecordingSessionMetadata::default()
+            }),
+            first.metadata.session.as_ref()
+        );
+        assert_eq!(
             TerminalSize {
                 rows: 24,
                 cols: 80,
@@ -4007,6 +4202,48 @@ mod tests {
 
         terminal.shutdown();
         terminal.shutdown();
+    }
+
+    #[test]
+    fn automatic_session_log_request_is_output_only_and_uses_dated_catalog_path() {
+        let request = build_automatic_session_log_request(AutomaticSessionLogRequestInput {
+            data_directory: PathBuf::from("/data"),
+            backend: RecordingBackend::Serial,
+            session_id: "logical-session".to_string(),
+            initial_size: TerminalSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            session: RecordingSessionMetadata {
+                connection_id: Some(7),
+                connection_name: Some("console".to_string()),
+                serial_port: Some("/dev/ttyUSB0".to_string()),
+                ..RecordingSessionMetadata::default()
+            },
+            started_at_unix_ms: 1_723_651_441_123,
+            recording_id: "recording-id".to_string(),
+        })
+        .expect("build automatic session log request");
+
+        assert_eq!(
+            PathBuf::from(
+                "/data/session-logs/2024/08/20240814-160401-123-serial-recording-id.cast"
+            ),
+            request.final_path
+        );
+        assert!(!request.metadata.capture_input);
+        assert!(!request.recording.capture_input);
+        assert_eq!("logical-session", request.metadata.session_id);
+        assert_eq!(
+            Some("/dev/ttyUSB0"),
+            request
+                .metadata
+                .session
+                .as_ref()
+                .and_then(|session| session.serial_port.as_deref())
+        );
     }
 
     #[test]
@@ -5577,8 +5814,10 @@ mod tests {
                 event_tx.clone(),
                 wakeup_pending.clone(),
             ),
+            session_log_runtime: None,
             playback_runtime: None,
             recording_session_id: "surface-reset-test-session".to_string(),
+            recording_session_metadata: RecordingSessionMetadata::default(),
             title: "old title".to_string(),
             current_working_dir: Some("/tmp/project".to_string()),
             child_exited: Some(255),
@@ -5849,8 +6088,10 @@ mod tests {
                 event_tx.clone(),
                 wakeup_pending.clone(),
             ),
+            session_log_runtime: None,
             playback_runtime: None,
             recording_session_id: "scrollback-test-session".to_string(),
+            recording_session_metadata: RecordingSessionMetadata::default(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,

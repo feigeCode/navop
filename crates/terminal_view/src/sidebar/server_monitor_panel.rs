@@ -4,9 +4,9 @@ use anyhow::{Context as _, Result, anyhow};
 use chrono::Utc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
-    Window, div, linear_color_stop, linear_gradient, px,
+    AnyElement, App, ColorExt as _, Context, EventEmitter, FocusHandle, Focusable, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Task, Window, div, linear_color_stop, linear_gradient, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, FunctionalIcon, IconName, Sizable, StyledExt,

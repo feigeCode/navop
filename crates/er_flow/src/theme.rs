@@ -1,6 +1,7 @@
 use ferrum_flow::FlowTheme;
-use gpui::Hsla;
+use gpui::{Hsla, Rgba};
 use gpui_component::{Colorize as _, Theme};
+use palette::IntoColor;
 
 pub fn er_flow_theme() -> FlowTheme {
     let mut theme = FlowTheme::light();
@@ -36,7 +37,7 @@ pub fn er_flow_theme_from_ui(ui: &Theme) -> FlowTheme {
     theme.edge_stroke_selected = hsla_to_u32(ui.primary);
     theme.selection_rect_border = hsla_to_u32(ui.primary);
     theme.selection_rect_fill_rgba = hsla_to_u32_rgba(Hsla {
-        a: 0.3,
+        alpha: 0.3,
         ..ui.primary
     });
     theme.snap_guide_stroke = hsla_to_u32(ui.primary);
@@ -69,20 +70,20 @@ fn blend_to_u32(background: Hsla, foreground: Hsla, background_weight: f32) -> u
 
 /// 将 GPUI Hsla 颜色转换为 FlowTheme 使用的 `0x00RRGGBB` 格式。
 fn hsla_to_u32(color: Hsla) -> u32 {
-    let rgb = color.to_rgb();
-    let r = (rgb.r * 255.0) as u32;
-    let g = (rgb.g * 255.0) as u32;
-    let b = (rgb.b * 255.0) as u32;
+    let rgb: Rgba = color.into_color();
+    let r = (rgb.red * 255.0) as u32;
+    let g = (rgb.green * 255.0) as u32;
+    let b = (rgb.blue * 255.0) as u32;
     (r << 16) | (g << 8) | b
 }
 
 /// 将 GPUI Hsla 颜色转换为 FlowTheme 使用的 `0xRRGGBBAA` 格式（含 alpha）。
 fn hsla_to_u32_rgba(color: Hsla) -> u32 {
-    let rgb = color.to_rgb();
-    let r = (rgb.r * 255.0) as u32;
-    let g = (rgb.g * 255.0) as u32;
-    let b = (rgb.b * 255.0) as u32;
-    let a = (rgb.a * 255.0) as u32;
+    let rgb: Rgba = color.into_color();
+    let r = (rgb.red * 255.0) as u32;
+    let g = (rgb.green * 255.0) as u32;
+    let b = (rgb.blue * 255.0) as u32;
+    let a = (rgb.alpha * 255.0) as u32;
     (r << 24) | (g << 16) | (b << 8) | a
 }
 

@@ -6,9 +6,9 @@ use super::data_grid::DataGrid;
 use base64::Engine as _;
 use db::{BinaryCell, ColumnInfo, FieldType};
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Font, ImageFormat, InteractiveElement, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
-    Window, div, prelude::FluentBuilder, px,
+    App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
+    IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::{DatePickerEvent, DatePickerState};

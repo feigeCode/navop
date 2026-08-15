@@ -6,7 +6,7 @@ use gpui::{
     AppContext, AsyncApp, Context, IntoElement, ParentElement, Styled, WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable,
+    ActiveTheme, Colorize as _, Disableable, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::ScrollableElement,

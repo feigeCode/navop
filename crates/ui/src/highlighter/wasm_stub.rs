@@ -115,8 +115,12 @@ pub enum FontWeightContent {
     Black = 900,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+type HslaSchema = String;
+
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ThemeStyle {
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub color: Option<gpui::Hsla>,
     pub font_style: Option<FontStyle>,
     pub font_weight: Option<FontWeightContent>,
@@ -147,7 +151,7 @@ impl From<ThemeStyle> for HighlightStyle {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct SyntaxColors {
     // Minimal stub - actual fields are in native registry.rs
     // Adding commonly accessed fields to avoid compilation errors
@@ -165,7 +169,7 @@ impl SyntaxColors {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct StatusColors {
     // Minimal stub
 }
@@ -232,13 +236,25 @@ impl StatusColors {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct HighlightThemeStyle {
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_background: Option<gpui::Hsla>,
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_foreground: Option<gpui::Hsla>,
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_active_line: Option<gpui::Hsla>,
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_line_number: Option<gpui::Hsla>,
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_active_line_number: Option<gpui::Hsla>,
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_invisible: Option<gpui::Hsla>,
     #[serde(flatten)]
     pub status: StatusColors,
@@ -246,7 +262,7 @@ pub struct HighlightThemeStyle {
     pub syntax: SyntaxColors,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct HighlightTheme {
     pub name: String,
     #[serde(default)]

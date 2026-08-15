@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use gpui::{
     AnyElement, App, Div, Half as _, Hsla, IntoElement, ParentElement, Pixels, Point, RenderOnce,
     StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,

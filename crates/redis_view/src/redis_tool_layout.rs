@@ -9,8 +9,8 @@ use crate::redis_tool_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    AnyElement, App, ColorExt, Context, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
     ActiveTheme, BrandIcon, Icon, IconName, IconSize, ObjectIcon, Sizable, Size,

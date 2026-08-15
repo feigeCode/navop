@@ -1,7 +1,7 @@
 use crate::markdown_session::MarkdownSyncState;
 use crate::{MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
+    AnyElement, ColorExt, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder,
 };
 use gpui_component::{

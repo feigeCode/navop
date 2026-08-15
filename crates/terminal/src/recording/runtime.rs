@@ -122,70 +122,99 @@ pub enum RecordingTapOutcome {
 }
 
 #[derive(Clone)]
-pub struct RecordingTap {
+struct RecordingTapEndpoint {
     queue: Arc<RuntimeQueue>,
     shared: Arc<RuntimeShared>,
 }
 
+#[derive(Clone)]
+pub struct RecordingTap {
+    endpoints: Arc<[RecordingTapEndpoint]>,
+}
+
 impl RecordingTap {
+    pub fn fan_out(taps: impl IntoIterator<Item = RecordingTap>) -> Option<Self> {
+        let mut endpoints = Vec::new();
+        for tap in taps {
+            endpoints.extend(tap.endpoints.iter().cloned());
+        }
+        (!endpoints.is_empty()).then(|| Self {
+            endpoints: endpoints.into(),
+        })
+    }
+
     /// Captures the exact bytes accepted at the terminal parser boundary.
     ///
     /// The payload is copied only while recording is active. This method never
     /// waits for the recording worker or filesystem.
     pub fn record_output(&self, data: &[u8]) -> RecordingTapOutcome {
-        self.enqueue(data.len(), false, || {
-            RecordingEventKind::Output(data.to_vec())
-        })
+        self.enqueue(data.len(), false, RecordingEventKind::Output(data.to_vec()))
     }
 
     /// Returns a lock-free snapshot used to avoid cloning input solely for
     /// post-send recording while recording is inactive or input capture is
     /// disabled. The subsequent enqueue still rechecks all gates.
     pub(crate) fn is_input_capture_active(&self) -> bool {
-        !self.queue.closed.load(Ordering::Acquire)
-            && self.queue.accepting.load(Ordering::Acquire)
-            && self.queue.capture_input.load(Ordering::Acquire)
+        self.endpoints.iter().any(|endpoint| {
+            !endpoint.queue.closed.load(Ordering::Acquire)
+                && endpoint.queue.accepting.load(Ordering::Acquire)
+                && endpoint.queue.capture_input.load(Ordering::Acquire)
+        })
     }
 
     /// Captures disclosed user input. Input is not copied or queued unless the
     /// active recording explicitly enabled input capture.
     pub fn record_input(&self, data: &[u8]) -> RecordingTapOutcome {
-        self.enqueue(data.len(), true, || {
-            RecordingEventKind::Input(data.to_vec())
-        })
+        self.enqueue(data.len(), true, RecordingEventKind::Input(data.to_vec()))
     }
 
     pub fn record_resize(&self, size: TerminalSize) -> RecordingTapOutcome {
-        self.enqueue(std::mem::size_of::<TerminalSize>(), false, || {
-            RecordingEventKind::Resize(size)
-        })
+        self.enqueue(
+            std::mem::size_of::<TerminalSize>(),
+            false,
+            RecordingEventKind::Resize(size),
+        )
     }
 
     pub fn record_marker(&self, marker: &str) -> RecordingTapOutcome {
-        self.enqueue(marker.len(), false, || {
-            RecordingEventKind::Marker(marker.to_string())
-        })
+        self.enqueue(
+            marker.len(),
+            false,
+            RecordingEventKind::Marker(marker.to_string()),
+        )
     }
 
     fn enqueue(
         &self,
         payload_bytes: usize,
         requires_input: bool,
-        build: impl FnOnce() -> RecordingEventKind,
+        event: RecordingEventKind,
     ) -> RecordingTapOutcome {
-        if self.queue.closed.load(Ordering::Acquire) {
+        let outcomes = self.endpoints.iter().map(|endpoint| {
+            Self::enqueue_endpoint(endpoint, payload_bytes, requires_input, event.clone())
+        });
+        Self::aggregate_outcomes(outcomes)
+    }
+
+    fn enqueue_endpoint(
+        endpoint: &RecordingTapEndpoint,
+        payload_bytes: usize,
+        requires_input: bool,
+        event: RecordingEventKind,
+    ) -> RecordingTapOutcome {
+        if endpoint.queue.closed.load(Ordering::Acquire) {
             return RecordingTapOutcome::Closed;
         }
-        if !self.queue.accepting.load(Ordering::Acquire) {
+        if !endpoint.queue.accepting.load(Ordering::Acquire) {
             return RecordingTapOutcome::Inactive;
         }
-        if requires_input && !self.queue.capture_input.load(Ordering::Acquire) {
+        if requires_input && !endpoint.queue.capture_input.load(Ordering::Acquire) {
             return RecordingTapOutcome::InputDisabled;
         }
 
-        match self
+        match endpoint
             .queue
-            .enqueue_data(payload_bytes, requires_input, Instant::now(), build)
+            .enqueue_data(payload_bytes, requires_input, Instant::now(), || event)
         {
             Ok(()) => RecordingTapOutcome::Accepted,
             Err(DataEnqueueError::Inactive) => RecordingTapOutcome::Inactive,
@@ -193,10 +222,30 @@ impl RecordingTap {
             Err(DataEnqueueError::Closed) => RecordingTapOutcome::Closed,
             Err(DataEnqueueError::Limit(limit)) => {
                 let failure = RecordingFailure::LimitReached(limit);
-                self.shared
+                endpoint
+                    .shared
                     .mark_failed_without_notification(failure.clone(), Instant::now());
                 RecordingTapOutcome::QueueFull(limit)
             }
+        }
+    }
+
+    fn aggregate_outcomes(
+        outcomes: impl IntoIterator<Item = RecordingTapOutcome>,
+    ) -> RecordingTapOutcome {
+        outcomes
+            .into_iter()
+            .max_by_key(Self::outcome_priority)
+            .unwrap_or(RecordingTapOutcome::Closed)
+    }
+
+    fn outcome_priority(outcome: &RecordingTapOutcome) -> u8 {
+        match outcome {
+            RecordingTapOutcome::Accepted => 4,
+            RecordingTapOutcome::QueueFull(_) => 3,
+            RecordingTapOutcome::InputDisabled => 2,
+            RecordingTapOutcome::Inactive => 1,
+            RecordingTapOutcome::Closed => 0,
         }
     }
 }
@@ -255,8 +304,11 @@ impl RecordingRuntime {
 
     pub fn tap(&self) -> RecordingTap {
         RecordingTap {
-            queue: self.core.queue.clone(),
-            shared: self.core.shared.clone(),
+            endpoints: vec![RecordingTapEndpoint {
+                queue: self.core.queue.clone(),
+                shared: self.core.shared.clone(),
+            }]
+            .into(),
         }
     }
 
@@ -448,6 +500,11 @@ struct DataEnvelope {
     kind: RecordingEventKind,
 }
 
+struct FailureEnvelope {
+    sequence: u64,
+    failure: RecordingFailure,
+}
+
 enum WorkItem {
     Control(ControlEnvelope),
     Data(DataEnvelope),
@@ -485,7 +542,7 @@ struct QueueState {
     pending_bytes: usize,
     peak_pending_events: usize,
     peak_pending_bytes: usize,
-    pending_failure: Option<RecordingFailure>,
+    pending_failure: Option<FailureEnvelope>,
     accepting: bool,
     capture_input: bool,
     shutting_down: bool,
@@ -615,36 +672,32 @@ impl RuntimeQueue {
             if state.aborted {
                 return WorkItem::Abort;
             }
-            if let Some(failure) = state.pending_failure.take() {
-                return WorkItem::Failure(failure);
-            }
             let control_sequence = state.controls.front().map(|item| item.sequence);
             let data_sequence = state.data.front().map(|item| item.sequence);
-            match (control_sequence, data_sequence) {
-                (Some(control), Some(data)) if control <= data => {
-                    return WorkItem::Control(
-                        state.controls.pop_front().expect("control front exists"),
-                    );
-                }
-                (Some(_), Some(_)) => {
-                    return WorkItem::Data(state.data.pop_front().expect("data front exists"));
-                }
-                (Some(_), None) => {
-                    return WorkItem::Control(
-                        state.controls.pop_front().expect("control front exists"),
-                    );
-                }
-                (None, Some(_)) => {
-                    return WorkItem::Data(state.data.pop_front().expect("data front exists"));
-                }
-                (None, None) if state.closed => return WorkItem::Abort,
-                (None, None) => {
-                    state = self
-                        .wake
-                        .wait(state)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                }
+            let failure_sequence = state.pending_failure.as_ref().map(|item| item.sequence);
+            let next_sequence = [control_sequence, data_sequence, failure_sequence]
+                .into_iter()
+                .flatten()
+                .min();
+            if next_sequence == control_sequence && control_sequence.is_some() {
+                return WorkItem::Control(
+                    state.controls.pop_front().expect("control front exists"),
+                );
             }
+            if next_sequence == data_sequence && data_sequence.is_some() {
+                return WorkItem::Data(state.data.pop_front().expect("data front exists"));
+            }
+            if next_sequence == failure_sequence && failure_sequence.is_some() {
+                let failure = state.pending_failure.take().expect("failure exists");
+                return WorkItem::Failure(failure.failure);
+            }
+            if state.closed {
+                return WorkItem::Abort;
+            }
+            state = self
+                .wake
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
     }
 
@@ -652,10 +705,6 @@ impl RuntimeQueue {
         let mut state = lock_unpoisoned(&self.state);
         state.pending_events = state.pending_events.saturating_sub(1);
         state.pending_bytes = state.pending_bytes.saturating_sub(payload_bytes);
-    }
-
-    fn has_pending_failure(&self) -> bool {
-        lock_unpoisoned(&self.state).pending_failure.is_some()
     }
 
     fn enable_recording(&self, capture_input: bool) {
@@ -673,10 +722,10 @@ impl RuntimeQueue {
 
     fn fail_locked(&self, state: &mut QueueState, failure: RecordingFailure) {
         if state.pending_failure.is_none() {
-            state.pending_failure = Some(failure);
+            let sequence = take_sequence(state);
+            state.pending_failure = Some(FailureEnvelope { sequence, failure });
         }
         self.set_accepting_locked(state, false, false);
-        discard_queued_data(state);
         self.wake.notify_one();
     }
 
@@ -959,6 +1008,42 @@ impl WorkerSession {
     }
 }
 
+struct WorkerContext<'a> {
+    queue: &'a RuntimeQueue,
+    shared: &'a RuntimeShared,
+    file_config: &'a RecordingFileConfig,
+    test_gate: &'a TestGateOption,
+}
+
+struct StartContext<'a> {
+    queue: &'a RuntimeQueue,
+    shared: &'a RuntimeShared,
+    observed_at: Instant,
+    file_config: &'a RecordingFileConfig,
+}
+
+struct StartFailure {
+    error: String,
+    capture_input: bool,
+    final_path: PathBuf,
+    partial_path: Option<PathBuf>,
+}
+
+struct StartedSession {
+    controller: RecordingController,
+    writer: RecordingFileWriter,
+    capture_input: bool,
+    final_path: PathBuf,
+    partial_path: PathBuf,
+}
+
+struct PreparedStart {
+    writer: RecordingFileWriter,
+    recording: RecordingConfig,
+    final_path: PathBuf,
+    partial_path: PathBuf,
+}
+
 fn recording_worker(
     queue: Arc<RuntimeQueue>,
     shared: Arc<RuntimeShared>,
@@ -966,59 +1051,22 @@ fn recording_worker(
     test_gate: TestGateOption,
 ) {
     let mut session: Option<WorkerSession> = None;
+    let context = WorkerContext {
+        queue: &queue,
+        shared: &shared,
+        file_config: &file_config,
+        test_gate: &test_gate,
+    };
 
     loop {
         match queue.next_work() {
             WorkItem::Abort => break,
             WorkItem::Failure(failure) => {
-                queue.disable_recording();
-                if let Some(session) = session.as_mut() {
-                    session.controller.fail(failure.clone());
-                    shared.publish(session.snapshot(), ClockUpdate::Frozen, true);
-                } else {
-                    shared.publish(failed_snapshot(failure), ClockUpdate::Frozen, true);
-                }
+                process_failure(&queue, &shared, session.as_mut(), failure);
             }
-            WorkItem::Data(data) => {
-                wait_on_test_gate(&test_gate);
-                if queue.has_pending_failure() {
-                    queue.finish_data(data.payload_bytes);
-                    continue;
-                }
-                process_data(&queue, &shared, session.as_mut(), &data);
-                queue.finish_data(data.payload_bytes);
-            }
+            WorkItem::Data(data) => process_data_item(&context, session.as_mut(), data),
             WorkItem::Control(control) => {
-                let is_shutdown = matches!(&control.action, ControlAction::Shutdown);
-                let result = match control.action {
-                    ControlAction::Start(request) => process_start(
-                        &queue,
-                        &shared,
-                        &mut session,
-                        request,
-                        control.observed_at,
-                        file_config.clone(),
-                    ),
-                    ControlAction::Pause => {
-                        process_pause(&queue, &shared, session.as_mut(), control.observed_at)
-                    }
-                    ControlAction::Resume => {
-                        process_resume(&queue, &shared, session.as_mut(), control.observed_at)
-                    }
-                    ControlAction::Stop => {
-                        process_stop(&queue, &shared, session.as_mut(), control.observed_at)
-                    }
-                    ControlAction::Shutdown => {
-                        process_shutdown(&queue, &shared, session.as_mut(), control.observed_at)
-                    }
-                };
-
-                if is_shutdown {
-                    queue.finish_shutdown();
-                    shared.complete_shutdown(result.clone());
-                }
-                let _ = control.response.send(result);
-                if is_shutdown {
+                if process_control(&context, &mut session, control) {
                     break;
                 }
             }
@@ -1026,13 +1074,85 @@ fn recording_worker(
     }
 }
 
-fn process_start(
+fn process_failure(
     queue: &RuntimeQueue,
     shared: &RuntimeShared,
+    session: Option<&mut WorkerSession>,
+    failure: RecordingFailure,
+) {
+    queue.disable_recording();
+    let Some(session) = session else {
+        shared.publish(failed_snapshot(failure), ClockUpdate::Frozen, true);
+        return;
+    };
+    let failure = session.writer.flush().err().map_or(failure, |error| {
+        RecordingFailure::Storage(error.to_string())
+    });
+    session.controller.fail(failure);
+    shared.publish(session.snapshot(), ClockUpdate::Frozen, true);
+}
+
+fn process_data_item(
+    context: &WorkerContext<'_>,
+    session: Option<&mut WorkerSession>,
+    data: DataEnvelope,
+) {
+    wait_on_test_gate(context.test_gate);
+    process_data(context.queue, context.shared, session, &data);
+    context.queue.finish_data(data.payload_bytes);
+}
+
+fn process_control(
+    context: &WorkerContext<'_>,
+    session: &mut Option<WorkerSession>,
+    control: ControlEnvelope,
+) -> bool {
+    let is_shutdown = matches!(&control.action, ControlAction::Shutdown);
+    let start_context = StartContext {
+        queue: context.queue,
+        shared: context.shared,
+        observed_at: control.observed_at,
+        file_config: context.file_config,
+    };
+    let result = match control.action {
+        ControlAction::Start(request) => process_start(start_context, session, request),
+        ControlAction::Pause => process_pause(
+            context.queue,
+            context.shared,
+            session.as_mut(),
+            control.observed_at,
+        ),
+        ControlAction::Resume => process_resume(
+            context.queue,
+            context.shared,
+            session.as_mut(),
+            control.observed_at,
+        ),
+        ControlAction::Stop => process_stop(
+            context.queue,
+            context.shared,
+            session.as_mut(),
+            control.observed_at,
+        ),
+        ControlAction::Shutdown => process_shutdown(
+            context.queue,
+            context.shared,
+            session.as_mut(),
+            control.observed_at,
+        ),
+    };
+    if is_shutdown {
+        context.queue.finish_shutdown();
+        context.shared.complete_shutdown(result.clone());
+    }
+    let _ = control.response.send(result);
+    is_shutdown
+}
+
+fn process_start(
+    context: StartContext<'_>,
     session: &mut Option<WorkerSession>,
     request: RecordingStartRequest,
-    observed_at: Instant,
-    file_config: RecordingFileConfig,
 ) -> ControlResult {
     if session.as_ref().is_some_and(|session| {
         matches!(
@@ -1043,54 +1163,108 @@ fn process_start(
         return Ok(RecordingTransition::Unchanged);
     }
 
-    let final_path = request.final_path;
-    let partial_path = partial_recording_path(&final_path).ok();
-    let writer = match RecordingFileWriter::create(
-        &final_path,
-        request.metadata,
-        request.initial_size,
-        file_config,
-    ) {
-        Ok(writer) => writer,
-        Err(error) => {
-            let failure = RecordingFailure::Storage(error.to_string());
-            *session = None;
-            shared.publish(
-                RecordingSnapshot {
-                    state: RecordingState::Failed(failure.clone()),
-                    elapsed: Duration::ZERO,
-                    event_count: 0,
-                    payload_bytes: 0,
-                    capture_input: request.recording.capture_input,
-                    final_path: Some(final_path),
-                    partial_path,
-                    failure: Some(failure.clone()),
-                },
-                ClockUpdate::Frozen,
-                true,
-            );
-            return Err(RecordingRuntimeError::Recording(failure));
-        }
+    let prepared = match prepare_start(&context, request) {
+        Ok(prepared) => prepared,
+        Err(failure) => return publish_start_failure(context.shared, session, failure),
     };
 
-    let partial_path = writer.partial_path().to_path_buf();
-    let mut controller = RecordingController::new(request.recording.clone());
+    let mut controller = RecordingController::new(prepared.recording.clone());
     if let Err(failure) = controller.start(Duration::ZERO) {
-        shared.publish(failed_snapshot(failure.clone()), ClockUpdate::Frozen, true);
+        context
+            .shared
+            .publish(failed_snapshot(failure.clone()), ClockUpdate::Frozen, true);
         return Err(RecordingRuntimeError::Recording(failure));
     }
-    *session = Some(WorkerSession {
-        controller,
+    install_started_session(
+        context,
+        session,
+        StartedSession {
+            controller,
+            writer: prepared.writer,
+            capture_input: prepared.recording.capture_input,
+            final_path: prepared.final_path,
+            partial_path: prepared.partial_path,
+        },
+    )
+}
+
+fn prepare_start(
+    context: &StartContext<'_>,
+    request: RecordingStartRequest,
+) -> Result<PreparedStart, StartFailure> {
+    let RecordingStartRequest {
+        final_path,
+        metadata,
+        initial_size,
+        recording,
+    } = request;
+    let fallback_partial_path = partial_recording_path(&final_path).ok();
+    let writer = RecordingFileWriter::create(
+        &final_path,
+        metadata,
+        initial_size,
+        context.file_config.clone(),
+    )
+    .map_err(|error| StartFailure {
+        error: error.to_string(),
+        capture_input: recording.capture_input,
+        final_path: final_path.clone(),
+        partial_path: fallback_partial_path,
+    })?;
+    let partial_path = writer.partial_path().to_path_buf();
+    Ok(PreparedStart {
         writer,
-        epoch: observed_at,
-        last_logical_time: Duration::ZERO,
-        capture_input: request.recording.capture_input,
+        recording,
         final_path,
         partial_path,
+    })
+}
+
+fn publish_start_failure(
+    shared: &RuntimeShared,
+    session: &mut Option<WorkerSession>,
+    details: StartFailure,
+) -> ControlResult {
+    let failure = RecordingFailure::Storage(details.error);
+    *session = None;
+    shared.publish(
+        RecordingSnapshot {
+            state: RecordingState::Failed(failure.clone()),
+            elapsed: Duration::ZERO,
+            event_count: 0,
+            payload_bytes: 0,
+            capture_input: details.capture_input,
+            final_path: Some(details.final_path),
+            partial_path: details.partial_path,
+            failure: Some(failure.clone()),
+        },
+        ClockUpdate::Frozen,
+        true,
+    );
+    Err(RecordingRuntimeError::Recording(failure))
+}
+
+fn install_started_session(
+    context: StartContext<'_>,
+    session: &mut Option<WorkerSession>,
+    started: StartedSession,
+) -> ControlResult {
+    *session = Some(WorkerSession {
+        controller: started.controller,
+        writer: started.writer,
+        epoch: context.observed_at,
+        last_logical_time: Duration::ZERO,
+        capture_input: started.capture_input,
+        final_path: started.final_path,
+        partial_path: started.partial_path,
     });
     let session = session.as_ref().expect("recording session was installed");
-    queue.enable_recording(session.capture_input);
-    shared.publish(session.snapshot(), ClockUpdate::Started(observed_at), true);
+    context.queue.enable_recording(session.capture_input);
+    context.shared.publish(
+        session.snapshot(),
+        ClockUpdate::Started(context.observed_at),
+        true,
+    );
     Ok(RecordingTransition::Changed)
 }
 

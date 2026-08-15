@@ -22,10 +22,10 @@ fn light_terminal_theme_softens_the_canvas_and_default_text() {
     let app_theme = Theme::from(ThemeColor::light().as_ref());
     let terminal_theme = TerminalTheme::from_application_theme(&app_theme);
 
-    assert!(terminal_theme.background.l < app_theme.background.l);
-    assert!(terminal_theme.background.l >= 0.97);
-    assert!(terminal_theme.foreground.l > app_theme.foreground.l);
-    assert!(terminal_theme.foreground.l <= 0.32);
+    assert!(terminal_theme.background.lightness < app_theme.background.lightness);
+    assert!(terminal_theme.background.lightness >= 0.97);
+    assert!(terminal_theme.foreground.lightness > app_theme.foreground.lightness);
+    assert!(terminal_theme.foreground.lightness <= 0.32);
     assert_eq!(app_theme.primary, terminal_theme.cursor);
     assert_eq!(app_theme.selection, terminal_theme.selection);
 }

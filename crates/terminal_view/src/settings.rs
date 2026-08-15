@@ -50,6 +50,7 @@ pub struct TerminalSettings {
     pub cursor_blink: bool,
     pub confirm_multiline_paste: bool,
     pub confirm_high_risk_command: bool,
+    pub auto_session_logging: bool,
     /// 在 alt-screen TUI(vim/less/man 等)中把鼠标滚轮事件转为方向键发送给 PTY,
     /// 让 vim 等程序不开启鼠标报告也能滚动,同时保留终端原生选区/复制能力。
     #[serde(default = "default_vim_scroll_to_arrow_keys")]
@@ -98,6 +99,7 @@ impl TerminalSettings {
             cursor_blink: app_settings.terminal_cursor_blink,
             confirm_multiline_paste: app_settings.terminal_confirm_multiline_paste,
             confirm_high_risk_command: app_settings.terminal_confirm_high_risk_command,
+            auto_session_logging: app_settings.terminal_auto_session_logging,
             vim_scroll_to_arrow_keys: local_settings.vim_scroll_to_arrow_keys,
             builtin_highlights_initialized: local_settings.builtin_highlights_initialized,
             custom_highlights: local_settings.custom_highlights.clone(),
@@ -302,6 +304,7 @@ fn update_app_settings<T>(
         settings.terminal_cursor_blink = next.cursor_blink;
         settings.terminal_confirm_multiline_paste = next.confirm_multiline_paste;
         settings.terminal_confirm_high_risk_command = next.confirm_high_risk_command;
+        settings.terminal_auto_session_logging = next.auto_session_logging;
     });
 }
 
@@ -319,6 +322,7 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.cursor_blink == right.cursor_blink
         && left.confirm_multiline_paste == right.confirm_multiline_paste
         && left.confirm_high_risk_command == right.confirm_high_risk_command
+        && left.auto_session_logging == right.auto_session_logging
 }
 
 #[cfg(test)]
@@ -473,6 +477,28 @@ mod tests {
             TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
 
         assert_eq!(250_000, settings.scrollback_lines);
+    }
+
+    #[test]
+    fn terminal_settings_reads_automatic_session_logging_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_auto_session_logging: true,
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert!(settings.auto_session_logging);
+    }
+
+    #[test]
+    fn automatic_session_logging_is_an_app_settings_field() {
+        let left = TerminalSettings::default();
+        let mut right = left.clone();
+        right.auto_session_logging = true;
+
+        assert!(!terminal_app_fields_equal(&left, &right));
     }
 
     #[test]

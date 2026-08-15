@@ -30,7 +30,7 @@ impl From<Pixels> for ButtonRounded {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ButtonCustomVariant {
     color: Hsla,
     foreground: Hsla,
@@ -136,7 +136,7 @@ impl ButtonCustomVariant {
 }
 
 /// The variant of the Button.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub enum ButtonVariant {
     #[default]
     Default,
@@ -992,6 +992,7 @@ impl ButtonVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use palette::IntoColor as _;
 
     gpui::actions!(button_tests, [CreateQuery]);
 
@@ -1119,10 +1120,10 @@ mod tests {
     fn test_custom_variant_uses_configured_colors(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             cx.set_global(crate::theme::Theme::default());
-            let background: Hsla = gpui::rgb(0x111111).into();
-            let foreground: Hsla = gpui::rgb(0xeeeeee).into();
-            let hover: Hsla = gpui::rgb(0x333333).into();
-            let active: Hsla = gpui::rgb(0x555555).into();
+            let background: Hsla = gpui::rgb(0x111111).into_color();
+            let foreground: Hsla = gpui::rgb(0xeeeeee).into_color();
+            let hover: Hsla = gpui::rgb(0x333333).into_color();
+            let active: Hsla = gpui::rgb(0x555555).into_color();
             let variant = ButtonVariant::Custom(
                 ButtonCustomVariant::new(cx)
                     .color(background)

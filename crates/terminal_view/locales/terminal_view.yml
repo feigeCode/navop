@@ -625,6 +625,18 @@ Settings:
     en: Confirm high-risk command paste
     zh-CN: 高危命令粘贴需确认
     zh-HK: 高危命令貼上需確認
+  session_logging:
+    en: Session Logging
+    zh-CN: 会话日志
+    zh-HK: 會話日誌
+  automatic_session_logging:
+    en: Automatically save new sessions
+    zh-CN: 自动保存新建会话
+    zh-HK: 自動儲存新建會話
+  automatic_session_logging_help:
+    en: Saves new local terminal, SSH, and serial sessions as replayable .cast files. Only output is recorded by default; keyboard input is not recorded. The file header keeps connection names, users, hosts, ports, or serial device paths when available. Logs can be exported as TXT. Existing sessions are not affected.
+    zh-CN: 将之后新建的本地终端、SSH 和串口会话保存为可回放的 .cast 文件。默认只记录输出，不记录键盘输入；文件头会在可用时保留连接名称、用户、主机、端口或串口设备路径。支持导出 TXT；已打开的会话不受影响。
+    zh-HK: 將之後新建的本地終端、SSH 和串口會話儲存為可回放的 .cast 檔案。預設只記錄輸出，不記錄鍵盤輸入；檔案標頭會在可用時保留連線名稱、使用者、主機、連接埠或序列埠裝置路徑。支援匯出 TXT；已開啟的會話不受影響。
   auto_copy:
     en: Auto copy on select
     zh-CN: 选中自动复制

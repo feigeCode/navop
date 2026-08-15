@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use gpui::{
     AnyElement, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, div,

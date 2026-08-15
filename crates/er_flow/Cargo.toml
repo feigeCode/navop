@@ -8,5 +8,6 @@ anyhow.workspace = true
 ferrum-flow.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+palette.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

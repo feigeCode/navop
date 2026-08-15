@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
-    Window, div, px,
+    App, ColorExt, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable,

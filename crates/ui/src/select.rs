@@ -1312,14 +1312,15 @@ mod tests {
     use super::{SelectMenuItemStyle, SelectOptions};
     use crate::input::LocalInputStyle;
     use gpui::rgb;
+    use palette::IntoColor as _;
 
     #[test]
     fn local_style_derives_dropdown_item_colors() {
         let local = LocalInputStyle {
-            background: rgb(0x111111).into(),
-            foreground: rgb(0xeeeeee).into(),
-            muted_foreground: rgb(0x999999).into(),
-            border: rgb(0x333333).into(),
+            background: rgb(0x111111).into_color(),
+            foreground: rgb(0xeeeeee).into_color(),
+            muted_foreground: rgb(0x999999).into_color(),
+            border: rgb(0x333333).into_color(),
         };
         let options = SelectOptions {
             local_style: Some(local),
@@ -1339,16 +1340,16 @@ mod tests {
     #[test]
     fn explicit_dropdown_item_style_overrides_derived_local_style() {
         let local = LocalInputStyle {
-            background: rgb(0x111111).into(),
-            foreground: rgb(0xeeeeee).into(),
-            muted_foreground: rgb(0x999999).into(),
-            border: rgb(0x333333).into(),
+            background: rgb(0x111111).into_color(),
+            foreground: rgb(0xeeeeee).into_color(),
+            muted_foreground: rgb(0x999999).into_color(),
+            border: rgb(0x333333).into_color(),
         };
         let explicit = SelectMenuItemStyle {
-            foreground: rgb(0xfafafa).into(),
-            hover_background: rgb(0x222222).into(),
-            selected_background: rgb(0x005fcc).into(),
-            selected_foreground: rgb(0xffffff).into(),
+            foreground: rgb(0xfafafa).into_color(),
+            hover_background: rgb(0x222222).into_color(),
+            selected_background: rgb(0x005fcc).into_color(),
+            selected_foreground: rgb(0xffffff).into_color(),
             selected_border: None,
         };
         let options = SelectOptions {

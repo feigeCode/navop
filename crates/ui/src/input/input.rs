@@ -602,9 +602,10 @@ impl RenderOnce for Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use palette::IntoColor as _;
 
     fn color(value: u32) -> Hsla {
-        gpui::rgb(value).into()
+        gpui::rgb(value).into_color()
     }
 
     fn local_style() -> LocalInputStyle {

@@ -147,6 +147,12 @@ impl TerminalView {
                     settings.confirm_high_risk_command = enabled;
                 });
             }
+            TerminalSidebarEvent::AutoSessionLoggingChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.auto_session_logging = enabled;
+                });
+            }
             TerminalSidebarEvent::AutoCopyChanged(enabled) => {
                 self.set_auto_copy(*enabled, cx);
             }

@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use std::rc::Rc;
 
 use gpui::{App, Background, Bounds, Hsla, Pixels, SharedString, Window, px};

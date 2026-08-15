@@ -2,6 +2,7 @@ use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
 use crate::onetcli_app::{GlobalOnetCliApp, GlobalTabContainer};
+use crate::session_logs::SessionLogsPage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Focusable, Window};
@@ -388,6 +389,24 @@ mod tests {
     }
 
     #[test]
+    fn session_logs_open_from_both_home_sidebars_as_a_stable_tab() {
+        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
+        let legacy_source = include_str!("../home_tab/sidebar.rs");
+        let persistent_source = include_str!("../persistent_connection_sidebar/rail.rs");
+
+        assert!(tabs_source.contains("fn add_session_logs_tab"));
+        assert!(
+            tabs_source.contains("activate_or_add_tab_lazy(\n                    \"session-logs\"")
+        );
+        assert!(tabs_source.contains("TabItem::new(\"session-logs\", \"home\", page)"));
+        assert!(tabs_source.contains("window.defer(cx, move |window, cx|"));
+        assert!(legacy_source.contains("\"legacy-open-session-logs\""));
+        assert!(legacy_source.contains("home.add_session_logs_tab(window, cx)"));
+        assert!(persistent_source.contains("\"persistent-open-session-logs\""));
+        assert!(persistent_source.contains("home.add_session_logs_tab(window, cx)"));
+    }
+
+    #[test]
     fn credential_vault_opens_from_both_home_sidebars_as_a_stable_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let toolbar_source = include_str!("../home_tab/toolbar.rs");
@@ -419,9 +438,11 @@ mod tests {
     fn persistent_sidebar_places_credential_vault_between_notes_and_extensions() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let notes = source.find("\"persistent-open-notes\"").unwrap();
+        let session_logs = source.find("\"persistent-open-session-logs\"").unwrap();
         let vault = source.find("\"persistent-open-credential-vault\"").unwrap();
         let extensions = source.find("\"persistent-open-extensions\"").unwrap();
-        assert!(notes < vault);
+        assert!(notes < session_logs);
+        assert!(session_logs < vault);
         assert!(vault < extensions);
     }
 
@@ -429,22 +450,28 @@ mod tests {
     fn both_home_sidebars_place_credential_vault_with_workspace_tools() {
         let legacy_source = include_str!("../home_tab/sidebar.rs");
         let legacy_notes = legacy_source.find("\"legacy-open-notes\"").unwrap();
+        let legacy_session_logs = legacy_source.find("\"legacy-open-session-logs\"").unwrap();
         let legacy_vault = legacy_source
             .find("\"legacy-open-credential-vault\"")
             .unwrap();
         let legacy_extensions = legacy_source.find("\"legacy-open-extensions\"").unwrap();
-        assert!(legacy_notes < legacy_vault);
+        assert!(legacy_notes < legacy_session_logs);
+        assert!(legacy_session_logs < legacy_vault);
         assert!(legacy_vault < legacy_extensions);
 
         let persistent_source = include_str!("../persistent_connection_sidebar/rail.rs");
         let persistent_notes = persistent_source.find("\"persistent-open-notes\"").unwrap();
+        let persistent_session_logs = persistent_source
+            .find("\"persistent-open-session-logs\"")
+            .unwrap();
         let persistent_vault = persistent_source
             .find("\"persistent-open-credential-vault\"")
             .unwrap();
         let persistent_extensions = persistent_source
             .find("\"persistent-open-extensions\"")
             .unwrap();
-        assert!(persistent_notes < persistent_vault);
+        assert!(persistent_notes < persistent_session_logs);
+        assert!(persistent_session_logs < persistent_vault);
         assert!(persistent_vault < persistent_extensions);
     }
 
@@ -1254,6 +1281,23 @@ impl HomePage {
                     |window, cx| {
                         let notes = cx.new(|cx| NotesView::new(window, cx));
                         TabItem::new("notes", "home", notes)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    pub(crate) fn add_session_logs_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "session-logs",
+                    |window, cx| {
+                        let page = cx.new(|cx| SessionLogsPage::new(window, cx));
+                        TabItem::new("session-logs", "home", page)
                     },
                     window,
                     cx,

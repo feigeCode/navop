@@ -4,9 +4,9 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
-    SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
+    App, AppContext, ClipboardItem, ColorExt as _, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
+    Render, SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size, WindowExt,
@@ -23,6 +23,7 @@ use gpui_component::{
 use one_core::storage::{
     GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,
 };
+use palette::IntoColor;
 use rust_i18n::t;
 use std::{ops::Range, sync::Arc};
 
@@ -116,15 +117,15 @@ fn quick_command_group_chip_label(filter: &QuickCommandGroupFilter) -> String {
 
 fn quick_command_group_color(color: Option<&str>, fallback: gpui::Hsla) -> gpui::Hsla {
     match color.unwrap_or_default() {
-        "blue" => gpui::rgb(0x3b82f6).into(),
-        "cyan" => gpui::rgb(0x06b6d4).into(),
-        "green" => gpui::rgb(0x22c55e).into(),
-        "yellow" => gpui::rgb(0xeab308).into(),
-        "orange" => gpui::rgb(0xf97316).into(),
-        "red" => gpui::rgb(0xef4444).into(),
-        "pink" => gpui::rgb(0xec4899).into(),
-        "purple" => gpui::rgb(0xa855f7).into(),
-        "gray" => gpui::rgb(0x64748b).into(),
+        "blue" => gpui::rgb(0x3b82f6).into_color(),
+        "cyan" => gpui::rgb(0x06b6d4).into_color(),
+        "green" => gpui::rgb(0x22c55e).into_color(),
+        "yellow" => gpui::rgb(0xeab308).into_color(),
+        "orange" => gpui::rgb(0xf97316).into_color(),
+        "red" => gpui::rgb(0xef4444).into_color(),
+        "pink" => gpui::rgb(0xec4899).into_color(),
+        "purple" => gpui::rgb(0xa855f7).into_color(),
+        "gray" => gpui::rgb(0x64748b).into_color(),
         _ => fallback,
     }
 }
@@ -1467,6 +1468,7 @@ mod tests {
     use crate::theme::TerminalColors;
     use gpui::rgb;
     use one_core::storage::QuickCommand;
+    use palette::IntoColor as _;
 
     fn command_in_group(group_name: Option<&str>) -> QuickCommand {
         let mut command = QuickCommand::new("echo test".to_string());
@@ -1652,13 +1654,13 @@ mod tests {
     #[test]
     fn quick_command_dialog_input_style_uses_terminal_palette() {
         let colors = TerminalColors {
-            background: rgb(0x101010).into(),
-            foreground: rgb(0xf0f0f0).into(),
-            muted: rgb(0x202020).into(),
-            muted_foreground: rgb(0x909090).into(),
-            border: rgb(0x303030).into(),
-            accent: rgb(0x3366ff).into(),
-            accent_foreground: rgb(0xffffff).into(),
+            background: rgb(0x101010).into_color(),
+            foreground: rgb(0xf0f0f0).into_color(),
+            muted: rgb(0x202020).into_color(),
+            muted_foreground: rgb(0x909090).into_color(),
+            border: rgb(0x303030).into_color(),
+            accent: rgb(0x3366ff).into_color(),
+            accent_foreground: rgb(0xffffff).into_color(),
         };
 
         let style = quick_command_dialog_input_style(&colors);

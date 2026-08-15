@@ -181,7 +181,7 @@ pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     let Ok(accent) = try_parse_color(&settings.custom_accent_color) else {
         return;
     };
-    let foreground = if accent.l > ACCENT_LIGHTNESS_THRESHOLD {
+    let foreground = if accent.lightness > ACCENT_LIGHTNESS_THRESHOLD {
         hsla(0., 0., 0.08, 1.0)
     } else {
         hsla(0., 0., 1.0, 1.0)
@@ -203,7 +203,8 @@ pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     theme.drag_border = accent;
     theme.sidebar_primary = accent;
     theme.sidebar_primary_foreground = foreground;
-    theme.selection = accent.alpha(CUSTOM_SELECTION_ALPHA);
+    theme.selection = accent;
+    theme.selection.alpha = CUSTOM_SELECTION_ALPHA;
 }
 
 #[derive(Action, Clone, PartialEq)]

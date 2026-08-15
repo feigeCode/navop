@@ -5,7 +5,8 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled, div,
+    App, ColorExt, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled,
+    div,
 };
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

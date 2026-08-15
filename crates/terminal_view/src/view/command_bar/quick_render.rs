@@ -2,6 +2,7 @@ use super::*;
 use crate::view::command_bar_model::{QuickCommandGroup, group_quick_commands};
 use gpui::{AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, px, rgb};
 use gpui_component::{ActiveTheme, h_flex, v_flex};
+use palette::IntoColor;
 use rust_i18n::t;
 
 const QUICK_POPOVER_WIDTH: f32 = 720.0;
@@ -98,15 +99,15 @@ impl TerminalCommandBar {
 
 pub(super) fn group_color(value: Option<&str>, fallback: gpui::Hsla) -> gpui::Hsla {
     match value.unwrap_or_default() {
-        "blue" => rgb(0x3b82f6).into(),
-        "cyan" => rgb(0x06b6d4).into(),
-        "green" => rgb(0x22c55e).into(),
-        "yellow" => rgb(0xeab308).into(),
-        "orange" => rgb(0xf97316).into(),
-        "red" => rgb(0xef4444).into(),
-        "pink" => rgb(0xec4899).into(),
-        "purple" => rgb(0xa855f7).into(),
-        "gray" => rgb(0x64748b).into(),
+        "blue" => rgb(0x3b82f6).into_color(),
+        "cyan" => rgb(0x06b6d4).into_color(),
+        "green" => rgb(0x22c55e).into_color(),
+        "yellow" => rgb(0xeab308).into_color(),
+        "orange" => rgb(0xf97316).into_color(),
+        "red" => rgb(0xef4444).into_color(),
+        "pink" => rgb(0xec4899).into_color(),
+        "purple" => rgb(0xa855f7).into_color(),
+        "gray" => rgb(0x64748b).into_color(),
         _ => fallback,
     }
 }

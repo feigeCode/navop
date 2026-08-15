@@ -1,4 +1,5 @@
 use gpui::{App, Hsla, IntoElement, RenderOnce, StyleRefinement, Styled, Transformation, Window};
+use palette::IntoColor;
 
 use crate::{Sizable, Size};
 
@@ -19,7 +20,7 @@ impl FunctionalIcon {
     }
 
     /// Applies an explicit monochrome tint.
-    pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
+    pub fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         self.icon = self.icon.text_color(color);
         self
     }
@@ -47,7 +48,7 @@ impl Styled for FunctionalIcon {
         self.icon.style()
     }
 
-    fn text_color(self, color: impl Into<Hsla>) -> Self {
+    fn text_color(self, color: impl IntoColor<Hsla>) -> Self {
         FunctionalIcon::text_color(self, color)
     }
 }
@@ -125,7 +126,7 @@ impl ObjectIcon {
     }
 
     /// Applies an explicit monochrome tint.
-    pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
+    pub fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         self.icon = self.icon.text_color(color);
         self
     }
@@ -141,7 +142,7 @@ impl Styled for ObjectIcon {
         self.icon.style()
     }
 
-    fn text_color(self, color: impl Into<Hsla>) -> Self {
+    fn text_color(self, color: impl IntoColor<Hsla>) -> Self {
         ObjectIcon::text_color(self, color)
     }
 }

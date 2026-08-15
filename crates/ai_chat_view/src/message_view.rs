@@ -13,7 +13,7 @@ use crate::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    AnyElement, App, ColorExt, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{

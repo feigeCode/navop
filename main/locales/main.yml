@@ -615,6 +615,10 @@ Home:
     en: Notes
     zh-CN: 笔记
     zh-HK: 筆記
+  session_logs:
+    en: Session Logs
+    zh-CN: 会话日志
+    zh-HK: 工作階段日誌
   edit_connection:
     en: Edit Connection
     zh-CN: 编辑连接
@@ -635,6 +639,116 @@ Home:
     en: "%{name} (Copy %{index})"
     zh-CN: "%{name} (副本 %{index})"
     zh-HK: "%{name} (副本 %{index})"
+
+SessionLogs:
+  title:
+    en: Session Logs
+    zh-CN: 会话日志
+    zh-HK: 工作階段日誌
+  search_placeholder:
+    en: Search sessions, hosts, users, or ports...
+    zh-CN: 搜索会话、主机、用户或端口...
+    zh-HK: 搜尋工作階段、主機、使用者或連接埠...
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  refreshing:
+    en: Refreshing...
+    zh-CN: 正在刷新...
+    zh-HK: 正在重新整理...
+  empty:
+    en: No session logs yet
+    zh-CN: 暂无会话日志
+    zh-HK: 尚無工作階段日誌
+  empty_search:
+    en: No matching session logs
+    zh-CN: 没有匹配的会话日志
+    zh-HK: 沒有相符的工作階段日誌
+  source_help:
+    en: ".cast is the replayable source file. TXT is a readable copy derived from the final terminal screen and scrollback buffer."
+    zh-CN: ".cast 是可回放原件，TXT 是根据最终终端屏幕与回滚缓冲区生成的可读副本。"
+    zh-HK: ".cast 是可回放原件，TXT 是根據最終終端畫面與回捲緩衝區產生的可讀副本。"
+  output_only_help:
+    en: Automatic session logging records output only by default and does not record keyboard input, reducing exposure of passwords, tokens, and one-time codes. The .cast header keeps connection details used by this list, such as names, user and host names, ports, or serial device paths.
+    zh-CN: 自动会话日志默认只记录输出，不记录键盘输入，以减少密码、令牌和一次性验证码泄露风险。.cast 文件头会保留此列表使用的连接信息，例如连接名称、用户名、主机名、端口或串口设备路径。
+    zh-HK: 自動工作階段日誌預設只記錄輸出，不記錄鍵盤輸入，以減少密碼、權杖和一次性驗證碼外洩風險。.cast 檔案標頭會保留此列表使用的連線資訊，例如連線名稱、使用者名稱、主機名稱、連接埠或序列埠裝置路徑。
+  favorite:
+    en: Favorite
+    zh-CN: 收藏
+    zh-HK: 收藏
+  unfavorite:
+    en: Remove favorite
+    zh-CN: 取消收藏
+    zh-HK: 取消收藏
+  replay:
+    en: Replay
+    zh-CN: 回放
+    zh-HK: 回放
+  export_text:
+    en: Export TXT
+    zh-CN: 导出 TXT
+    zh-HK: 匯出 TXT
+  export_select_directory:
+    en: Select a directory for the exported TXT file
+    zh-CN: 选择 TXT 导出目录
+    zh-HK: 選擇 TXT 匯出目錄
+  export_success:
+    en: "TXT exported to %{path}"
+    zh-CN: "TXT 已导出到 %{path}"
+    zh-HK: "TXT 已匯出到 %{path}"
+  export_failed:
+    en: "Failed to export TXT: %{error}"
+    zh-CN: "导出 TXT 失败：%{error}"
+    zh-HK: "匯出 TXT 失敗：%{error}"
+  load_failed:
+    en: "Failed to load session logs: %{error}"
+    zh-CN: "加载会话日志失败：%{error}"
+    zh-HK: "載入工作階段日誌失敗：%{error}"
+  data_directory_unavailable:
+    en: Application data directory is unavailable
+    zh-CN: 无法获取应用数据目录
+    zh-HK: 無法取得應用程式資料目錄
+  favorite_failed:
+    en: "Failed to save favorite: %{error}"
+    zh-CN: "保存收藏失败：%{error}"
+    zh-HK: "儲存收藏失敗：%{error}"
+  complete:
+    en: Complete
+    zh-CN: 完整
+    zh-HK: 完整
+  partial:
+    en: Partial
+    zh-CN: 未完整
+    zh-HK: 未完整
+  local:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本機
+  ssh:
+    en: SSH
+    zh-CN: SSH
+    zh-HK: SSH
+  serial:
+    en: Serial
+    zh-CN: 串口
+    zh-HK: 串列
+  skipped:
+    en: "%{count} files skipped"
+    zh-CN: "跳过 %{count} 个文件"
+    zh-HK: "已略過 %{count} 個檔案"
+  local_identity:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本機
+  remote_identity:
+    en: Remote
+    zh-CN: 远端
+    zh-HK: 遠端
+  serial_port:
+    en: Port
+    zh-CN: 串口
+    zh-HK: 連接埠
 
 TeamManagement:
   title:

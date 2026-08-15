@@ -246,6 +246,7 @@ mod tests {
                 application_version: "test".to_string(),
                 started_at_unix_ms: 1_700_000_000_000,
                 capture_input: false,
+                session: None,
             },
             TerminalSize::default(),
             RecordingFileConfig::default(),

@@ -17,6 +17,7 @@ use alacritty_terminal::term::{RenderableContent, Term, TermDamage};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::*;
 use one_core::settings::default_grid_font_fallback_families;
+use palette::IntoColor;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -135,7 +136,7 @@ impl FontVariants {
 
 #[inline]
 fn terminal_bold_weight(background: Hsla) -> FontWeight {
-    if background.l >= 0.5 {
+    if background.lightness >= 0.5 {
         FontWeight::SEMIBOLD
     } else {
         FontWeight::BOLD
@@ -976,7 +977,7 @@ impl RenderCache {
 
             // DIM 标志：降低前景色透明度
             if cell.flags.contains(Flags::DIM) {
-                fg.a *= 0.7;
+                fg.alpha *= 0.7;
             }
 
             if !cell.is_selected && cell.flags.contains(Flags::INVERSE) {
@@ -1592,10 +1593,10 @@ impl Element for TerminalElementImpl {
 /// 快速颜色比较 - 使用位比较代替浮点比较
 #[inline]
 fn hsla_eq(a: Hsla, b: Hsla) -> bool {
-    a.h.to_bits() == b.h.to_bits()
-        && a.s.to_bits() == b.s.to_bits()
-        && a.l.to_bits() == b.l.to_bits()
-        && a.a.to_bits() == b.a.to_bits()
+    a.hue.into_degrees().to_bits() == b.hue.into_degrees().to_bits()
+        && a.saturation.to_bits() == b.saturation.to_bits()
+        && a.lightness.to_bits() == b.lightness.to_bits()
+        && a.alpha.to_bits() == b.alpha.to_bits()
 }
 
 fn colors_equal(a: &Colors, b: &Colors) -> bool {
@@ -1620,13 +1621,13 @@ fn terminal_underline_flags(flags: Flags) -> bool {
 
 #[inline]
 fn rgb_to_hsla(rgb: Rgb) -> Hsla {
-    Rgba {
-        r: rgb.r as f32 / 255.0,
-        g: rgb.g as f32 / 255.0,
-        b: rgb.b as f32 / 255.0,
-        a: 1.0,
-    }
-    .into()
+    Rgba::new(
+        rgb.r as f32 / 255.0,
+        rgb.g as f32 / 255.0,
+        rgb.b as f32 / 255.0,
+        1.0,
+    )
+    .into_color()
 }
 
 fn convert_color(color: Color, colors: &Colors) -> Hsla {
@@ -1660,10 +1661,10 @@ fn linearize(value: f32) -> f32 {
 
 /// 计算相对亮度 (WCAG 定义)
 fn relative_luminance(color: Hsla) -> f32 {
-    let rgba: Rgba = color.into();
-    let r = linearize(rgba.r);
-    let g = linearize(rgba.g);
-    let b = linearize(rgba.b);
+    let rgba: Rgba = color.into_color();
+    let r = linearize(rgba.red);
+    let g = linearize(rgba.green);
+    let b = linearize(rgba.blue);
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
@@ -1694,18 +1695,18 @@ fn ensure_minimum_contrast(fg: Hsla, bg: Hsla) -> Hsla {
     // 尝试调整亮度以达到最小对比度
     if bg_lum > 0.5 {
         // 亮背景 -> 降低前景亮度
-        adjusted.l = (adjusted.l - 0.2).max(0.0);
+        adjusted.lightness = (adjusted.lightness - 0.2).max(0.0);
     } else {
         // 暗背景 -> 提高前景亮度
-        adjusted.l = (adjusted.l + 0.2).min(1.0);
+        adjusted.lightness = (adjusted.lightness + 0.2).min(1.0);
     }
 
     // 如果仍然不够，进一步调整
     if contrast_ratio(adjusted, bg) < MIN_CONTRAST_RATIO {
         if bg_lum > 0.5 {
-            adjusted.l = 0.0; // 纯黑
+            adjusted.lightness = 0.0; // 纯黑
         } else {
-            adjusted.l = 1.0; // 纯白
+            adjusted.lightness = 1.0; // 纯白
         }
     }
 
@@ -1735,7 +1736,7 @@ fn named_color_to_hsla(color: NamedColor) -> Hsla {
         NamedColor::Cursor => return hsla(0.0, 0.0, 1.0, 0.8),
         _ => (0.83, 0.83, 0.83),
     };
-    Rgba { r, g, b, a: 1.0 }.into()
+    Rgba::new(r, g, b, 1.0).into_color()
 }
 
 fn indexed_color_to_hsla(idx: u8) -> Hsla {
@@ -1774,23 +1775,11 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
                     (55.0 + v as f32 * 40.0) / 255.0
                 }
             };
-            Rgba {
-                r: to_component(r),
-                g: to_component(g),
-                b: to_component(b),
-                a: 1.0,
-            }
-            .into()
+            Rgba::new(to_component(r), to_component(g), to_component(b), 1.0).into_color()
         }
         232..=255 => {
             let shade = (8.0 + (idx - 232) as f32 * 10.0) / 255.0;
-            Rgba {
-                r: shade,
-                g: shade,
-                b: shade,
-                a: 1.0,
-            }
-            .into()
+            Rgba::new(shade, shade, shade, 1.0).into_color()
         }
     }
 }
@@ -1809,6 +1798,7 @@ mod tests {
     use alacritty_terminal::term::{Config as TermConfig, Term};
     use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, StdSyncHandler};
     use gpui::{FontWeight, rgb};
+    use palette::IntoColor as _;
     use terminal::pty_backend::GpuiEventProxy;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -2019,8 +2009,8 @@ mod tests {
     #[test]
     fn selected_cells_use_terminal_theme_selection_colors() {
         let mut cache = RenderCache::new(1, 8, Colors::default());
-        cache.custom_foreground = rgb(0x100F0F).into();
-        cache.custom_selection = rgb(0xE6E4D9).into();
+        cache.custom_foreground = rgb(0x100F0F).into_color();
+        cache.custom_selection = rgb(0xE6E4D9).into_color();
         let mut cell = plain_cell(0, 'Q', Flags::empty());
         cell.is_selected = true;
 
@@ -2048,9 +2038,12 @@ mod tests {
     fn light_terminal_uses_semibold_for_ansi_bold_text() {
         assert_eq!(
             FontWeight::SEMIBOLD,
-            terminal_bold_weight(rgb(0xFAFAFA).into())
+            terminal_bold_weight(rgb(0xFAFAFA).into_color())
         );
-        assert_eq!(FontWeight::BOLD, terminal_bold_weight(rgb(0x171717).into()));
+        assert_eq!(
+            FontWeight::BOLD,
+            terminal_bold_weight(rgb(0x171717).into_color())
+        );
     }
 
     #[test]

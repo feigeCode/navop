@@ -11,7 +11,7 @@ use gpui_component::date_picker::{DatePicker, DatePickerState};
 use gpui_component::datetime_picker::{DateTimePicker, DateTimePickerState};
 use gpui_component::time_picker::{TimePicker, TimePickerState};
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Size, h_flex,
+    ActiveTheme as _, Colorize as _, Icon, IconName, Size, h_flex,
     input::{Input, InputState},
     menu::PopupMenu,
 };

@@ -6,8 +6,9 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, ExternalPaths, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    AnyElement, App, AppContext, ColorExt as _, Context, Entity, ExternalPaths, Focusable,
+    InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task,
+    Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};

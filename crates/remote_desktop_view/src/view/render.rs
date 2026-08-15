@@ -119,7 +119,9 @@ fn paint_remote_cursor(
     let Some(bounds) = remote_cursor_bounds(bounds, cursor.geometry) else {
         return;
     };
-    if let Err(error) = window.paint_image(bounds, Corners::default(), cursor.image, 0, false) {
+    if let Err(error) =
+        window.paint_image(bounds, bounds, Corners::default(), cursor.image, 0, false)
+    {
         tracing::warn!(?error, "failed to paint remote desktop cursor");
     }
 }

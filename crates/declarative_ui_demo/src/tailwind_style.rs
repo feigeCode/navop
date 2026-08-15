@@ -1,4 +1,5 @@
 use gpui::{FontWeight, Hsla, Overflow, Styled, px, rgb};
+use palette::IntoColor;
 
 use crate::{ColorToken, TailwindModifier};
 
@@ -117,5 +118,5 @@ fn color_value(color: ColorToken) -> Hsla {
         ColorToken::Emerald400 => 0x34_d3_99,
         ColorToken::White => 0xff_ff_ff,
     };
-    rgb(value).into()
+    rgb(value).into_color()
 }

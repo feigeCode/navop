@@ -35,6 +35,7 @@ wry = { version = "0.53.3", package = "lb-wry", optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+palette.workspace = true
 
 [[bin]]
 name = "fake_acp_agent"

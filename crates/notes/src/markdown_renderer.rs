@@ -1,3 +1,5 @@
+use palette::IntoColor;
+
 pub(crate) fn block_render_provider(
     cx: &gpui::App,
 ) -> Option<markdown_editor::MarkdownBlockRenderProvider> {
@@ -40,7 +42,7 @@ fn extension_request(
         renderer: renderer.to_owned(),
         source: request.source,
         theme: extension_runtime::DocumentRenderTheme {
-            dark: request.background.l < 0.5,
+            dark: request.background.lightness < 0.5,
             background: color_u32(request.background),
             foreground: color_u32(request.foreground),
             border: color_u32(request.border),
@@ -66,6 +68,8 @@ fn map_artifact(
 }
 
 fn color_u32(color: gpui::Hsla) -> u32 {
-    let rgb = color.to_rgb();
-    ((rgb.r * 255.) as u32) << 16 | ((rgb.g * 255.) as u32) << 8 | (rgb.b * 255.) as u32
+    let rgb: gpui::Rgba = color.into_color();
+    ((rgb.red * 255.) as u32) << 16
+        | ((rgb.green * 255.) as u32) << 8
+        | (rgb.blue * 255.) as u32
 }

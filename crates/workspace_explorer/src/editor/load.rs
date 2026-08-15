@@ -8,7 +8,7 @@ use crate::editor::markdown::create_markdown_editor;
 use crate::file_system::load_file;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
-use gpui::{AppContext as _, AsyncApp, Context, Task, WeakEntity, Window};
+use gpui::{AppContext as _, AsyncApp, ColorExt as _, Context, Task, WeakEntity, Window};
 use gpui_component::{
     WindowExt as _,
     input::{InputEvent, InputState},

@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    ActiveTheme, DEFAULT_THEME_COLORS, ThemeMode,
+    ActiveTheme, Colorize as _, DEFAULT_THEME_COLORS, ThemeMode,
     highlighter::{InstalledExtension, Language, LanguageManifest, languages, wasm_store},
 };
 
@@ -133,7 +133,7 @@ impl LanguageConfig {
 /// Theme for Tree-sitter Highlight
 ///
 /// https://docs.rs/tree-sitter-highlight/0.26.8/tree_sitter_highlight/
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct SyntaxColors {
     pub attribute: Option<ThemeStyle>,
     pub boolean: Option<ThemeStyle>,
@@ -241,8 +241,12 @@ impl From<FontWeightContent> for FontWeight {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+type HslaSchema = String;
+
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ThemeStyle {
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     color: Option<Hsla>,
     font_style: Option<FontStyle>,
     font_weight: Option<FontWeightContent>,
@@ -332,37 +336,67 @@ impl SyntaxColors {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct StatusColors {
     #[serde(rename = "error")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     error: Option<Hsla>,
     #[serde(rename = "error.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     error_background: Option<Hsla>,
     #[serde(rename = "error.border")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     error_border: Option<Hsla>,
     #[serde(rename = "warning")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     warning: Option<Hsla>,
     #[serde(rename = "warning.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     warning_background: Option<Hsla>,
     #[serde(rename = "warning.border")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     warning_border: Option<Hsla>,
     #[serde(rename = "info")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     info: Option<Hsla>,
     #[serde(rename = "info.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     info_background: Option<Hsla>,
     #[serde(rename = "info.border")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     info_border: Option<Hsla>,
     #[serde(rename = "success")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     success: Option<Hsla>,
     #[serde(rename = "success.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     success_background: Option<Hsla>,
     #[serde(rename = "success.border")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     success_border: Option<Hsla>,
     #[serde(rename = "hint")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     hint: Option<Hsla>,
     #[serde(rename = "hint.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     hint_background: Option<Hsla>,
     #[serde(rename = "hint.border")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     hint_border: Option<Hsla>,
 }
 
@@ -376,7 +410,7 @@ impl StatusColors {
     pub fn error_background(&self, cx: &App) -> Hsla {
         let bg = cx.theme().background;
         self.error_background
-            .unwrap_or(bg.blend(self.error(cx).alpha(0.2)))
+            .unwrap_or(bg.blend(self.error(cx).opacity(0.2)))
     }
 
     #[inline]
@@ -393,7 +427,7 @@ impl StatusColors {
     pub fn warning_background(&self, cx: &App) -> Hsla {
         let bg = cx.theme().background;
         self.warning_background
-            .unwrap_or(bg.blend(self.warning(cx).alpha(0.2)))
+            .unwrap_or(bg.blend(self.warning(cx).opacity(0.2)))
     }
 
     #[inline]
@@ -410,7 +444,7 @@ impl StatusColors {
     pub fn info_background(&self, cx: &App) -> Hsla {
         let bg = cx.theme().background;
         self.info_background
-            .unwrap_or(bg.blend(self.info(cx).alpha(0.2)))
+            .unwrap_or(bg.blend(self.info(cx).opacity(0.2)))
     }
 
     #[inline]
@@ -427,7 +461,7 @@ impl StatusColors {
     pub fn success_background(&self, cx: &App) -> Hsla {
         let bg = cx.theme().background;
         self.success_background
-            .unwrap_or(bg.blend(self.success(cx).alpha(0.2)))
+            .unwrap_or(bg.blend(self.success(cx).opacity(0.2)))
     }
 
     #[inline]
@@ -444,7 +478,7 @@ impl StatusColors {
     pub fn hint_background(&self, cx: &App) -> Hsla {
         let bg = cx.theme().background;
         self.hint_background
-            .unwrap_or(bg.blend(self.hint(cx).alpha(0.2)))
+            .unwrap_or(bg.blend(self.hint(cx).opacity(0.2)))
     }
 
     #[inline]
@@ -453,19 +487,31 @@ impl StatusColors {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct HighlightThemeStyle {
     #[serde(rename = "editor.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_background: Option<Hsla>,
     #[serde(rename = "editor.foreground")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_foreground: Option<Hsla>,
     #[serde(rename = "editor.active_line.background")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_active_line: Option<Hsla>,
     #[serde(rename = "editor.line_number")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_line_number: Option<Hsla>,
     #[serde(rename = "editor.active_line_number")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_active_line_number: Option<Hsla>,
     #[serde(rename = "editor.invisible")]
+    #[serde(default, with = "crate::theme::hsla_serde::option")]
+    #[schemars(with = "Option<HslaSchema>")]
     pub editor_invisible: Option<Hsla>,
     #[serde(flatten)]
     pub status: StatusColors,
@@ -478,7 +524,7 @@ pub struct HighlightThemeStyle {
 /// This json is compatible with the Zed theme format.
 ///
 /// https://zed.dev/docs/extensions/languages#syntax-highlighting
-#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct HighlightTheme {
     pub name: String,
     #[serde(default)]

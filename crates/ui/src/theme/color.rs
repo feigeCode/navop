@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt::Display};
 
-use gpui::{Hsla, SharedString, hsla};
+use gpui::{Hsla, SharedString};
+use palette::IntoColor;
 use serde::{Deserialize, Deserializer, de::Error as _};
 
 use anyhow::{Error, Result, anyhow};
@@ -12,7 +13,7 @@ use anyhow::{Error, Result, anyhow};
 /// - l: 0.0..100.0
 #[inline]
 pub fn hsl(h: f32, s: f32, l: f32) -> Hsla {
-    hsla(h / 360., s / 100.0, l / 100.0, 1.0)
+    Hsla::new(h, s / 100.0, l / 100.0, 1.0)
 }
 
 pub trait Colorize: Sized {
@@ -38,6 +39,8 @@ pub trait Colorize: Sized {
     fn darken(&self, amount: f32) -> Self;
     /// Return a new color with the same lightness and alpha but different hue and saturation.
     fn apply(&self, base_color: Self) -> Self;
+    /// Blend another color over this color.
+    fn blend(&self, other: Self) -> Self;
 
     /// Mix two colors together, the `factor` is a value between 0.0 and 1.0 for first color.
     fn mix(&self, other: Self, factor: f32) -> Self;
@@ -56,6 +59,57 @@ pub trait Colorize: Sized {
     fn to_hex(&self) -> String;
     /// Parse a hex string to a color.
     fn parse_hex(hex: &str) -> Result<Self>;
+}
+
+/// Serde compatibility for theme colors.
+///
+/// GPUI historically serialized `Hsla` as a hex string. Newer GPUI versions
+/// re-export `palette::Hsla`, whose derived serde representation is a
+/// structured object. Theme files keep using the stable, human-readable hex
+/// representation while still accepting the newer structured representation.
+pub(crate) mod hsla_serde {
+    use super::{Colorize as _, Hsla};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum HslaValue {
+        Hex(String),
+        Structured(Hsla),
+    }
+
+    fn into_hsla<E>(value: HslaValue) -> Result<Hsla, E>
+    where
+        E: serde::de::Error,
+    {
+        match value {
+            HslaValue::Hex(value) => Hsla::parse_hex(&value).map_err(E::custom),
+            HslaValue::Structured(color) => Ok(color),
+        }
+    }
+
+    pub(crate) mod option {
+        use super::*;
+
+        pub fn serialize<S>(color: &Option<Hsla>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match color {
+                Some(color) => serializer.serialize_some(&color.to_hex()),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Hsla>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            Option::<HslaValue>::deserialize(deserializer)?
+                .map(into_hsla)
+                .transpose()
+        }
+    }
 }
 
 /// Helper functions for Oklab color space conversions
@@ -86,9 +140,9 @@ mod oklab {
     #[allow(non_snake_case)]
     pub fn rgb_to_oklab(rgb: Rgba) -> (f32, f32, f32) {
         // sRGB to linear RGB
-        let lr = to_linear(rgb.r);
-        let lg = to_linear(rgb.g);
-        let lb = to_linear(rgb.b);
+        let lr = to_linear(rgb.red);
+        let lg = to_linear(rgb.green);
+        let lb = to_linear(rgb.blue);
 
         // Linear RGB to LMS
         let l = 0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb;
@@ -125,65 +179,66 @@ mod oklab {
         let lb = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
 
         // Linear RGB to sRGB
-        Rgba {
-            r: from_linear(lr).clamp(0.0, 1.0),
-            g: from_linear(lg).clamp(0.0, 1.0),
-            b: from_linear(lb).clamp(0.0, 1.0),
-            a: 1.0,
-        }
+        Rgba::new(
+            from_linear(lr).clamp(0.0, 1.0),
+            from_linear(lg).clamp(0.0, 1.0),
+            from_linear(lb).clamp(0.0, 1.0),
+            1.0,
+        )
     }
 }
 
 impl Colorize for Hsla {
     fn opacity(&self, factor: f32) -> Self {
-        Self {
-            a: self.a * factor.clamp(0.0, 1.0),
-            ..*self
-        }
+        let mut color = *self;
+        color.alpha *= factor.clamp(0.0, 1.0);
+        color
     }
 
     fn divide(&self, divisor: f32) -> Self {
-        Self {
-            a: divisor,
-            ..*self
-        }
+        let mut color = *self;
+        color.alpha = divisor;
+        color
     }
 
     fn invert(&self) -> Self {
-        Self {
-            h: 1.0 - self.h,
-            s: 1.0 - self.s,
-            l: 1.0 - self.l,
-            a: self.a,
-        }
+        Hsla::new(
+            360.0 - self.hue.into_positive_degrees(),
+            1.0 - self.saturation,
+            1.0 - self.lightness,
+            self.alpha,
+        )
     }
 
     fn invert_l(&self) -> Self {
-        Self {
-            l: 1.0 - self.l,
-            ..*self
-        }
+        let mut color = *self;
+        color.lightness = 1.0 - self.lightness;
+        color
     }
 
     fn lighten(&self, factor: f32) -> Self {
-        let l = self.l * (1.0 + factor.clamp(0.0, 1.0));
-
-        Hsla { l, ..*self }
+        let mut color = *self;
+        color.lightness *= 1.0 + factor.clamp(0.0, 1.0);
+        color
     }
 
     fn darken(&self, factor: f32) -> Self {
-        let l = self.l * (1.0 - factor.clamp(0.0, 1.0));
-
-        Self { l, ..*self }
+        let mut color = *self;
+        color.lightness *= 1.0 - factor.clamp(0.0, 1.0);
+        color
     }
 
     fn apply(&self, new_color: Self) -> Self {
-        Hsla {
-            h: new_color.h,
-            s: new_color.s,
-            l: self.l,
-            a: self.a,
-        }
+        Hsla::new(
+            new_color.hue,
+            new_color.saturation,
+            self.lightness,
+            self.alpha,
+        )
+    }
+
+    fn blend(&self, other: Self) -> Self {
+        gpui::ColorExt::blend(self, &other)
     }
 
     /// Reference:
@@ -198,12 +253,16 @@ impl Colorize for Hsla {
             (a + diff * t).rem_euclid(360.0)
         }
 
-        Hsla {
-            h: lerp_hue(self.h * 360., other.h * 360., factor) / 360.,
-            s: self.s * factor + other.s * inv,
-            l: self.l * factor + other.l * inv,
-            a: self.a * factor + other.a * inv,
-        }
+        Hsla::new(
+            lerp_hue(
+                self.hue.into_positive_degrees(),
+                other.hue.into_positive_degrees(),
+                factor,
+            ),
+            self.saturation * factor + other.saturation * inv,
+            self.lightness * factor + other.lightness * inv,
+            self.alpha * factor + other.alpha * inv,
+        )
     }
 
     #[allow(non_snake_case)]
@@ -212,21 +271,16 @@ impl Colorize for Hsla {
         let inv = 1.0 - factor;
 
         // Interpolate alpha first
-        let result_alpha = self.a * factor + other.a * inv;
+        let result_alpha = self.alpha * factor + other.alpha * inv;
 
         // Handle the case where result alpha is zero
         if result_alpha == 0.0 {
-            return Self {
-                h: 0.0,
-                s: 0.0,
-                l: 0.0,
-                a: 0.0,
-            };
+            return Hsla::new(0.0, 0.0, 0.0, 0.0);
         }
 
         // Convert both colors to RGB
-        let rgb1 = self.to_rgb();
-        let rgb2 = other.to_rgb();
+        let rgb1: gpui::Rgba = (*self).into_color();
+        let rgb2: gpui::Rgba = other.into_color();
 
         // Convert to Oklab color space
         let (l1, a1, b1) = oklab::rgb_to_oklab(rgb1);
@@ -234,8 +288,8 @@ impl Colorize for Hsla {
 
         // Premultiply alpha in Oklab space (using alpha-premultiplied interpolation)
         // This matches CSS color-mix behavior
-        let alpha1 = self.a;
-        let alpha2 = other.a;
+        let alpha1 = self.alpha;
+        let alpha2 = other.alpha;
 
         // Premultiply
         let l1_pm = l1 * alpha1;
@@ -258,69 +312,86 @@ impl Colorize for Hsla {
 
         // Convert back to RGB
         let mut rgb = oklab::oklab_to_rgb(L, a, b);
-        rgb.a = result_alpha;
+        rgb.alpha = result_alpha;
 
         // Convert RGB to HSLA
-        rgb.into()
+        rgb.into_color()
     }
 
     fn to_hex(&self) -> String {
-        let rgb = self.to_rgb();
+        fn channel_to_u8(channel: f32) -> u32 {
+            let scaled = channel * 255.;
+            let rounded = scaled.round();
 
-        if rgb.a < 1. {
+            if (scaled - rounded).abs() < 0.0001 {
+                rounded as u32
+            } else {
+                scaled as u32
+            }
+        }
+
+        let rgb: gpui::Rgba = (*self).into_color();
+
+        if rgb.alpha < 1. {
             return format!(
                 "#{:02X}{:02X}{:02X}{:02X}",
-                ((rgb.r * 255.) as u32),
-                ((rgb.g * 255.) as u32),
-                ((rgb.b * 255.) as u32),
-                ((self.a * 255.) as u32)
+                channel_to_u8(rgb.red),
+                channel_to_u8(rgb.green),
+                channel_to_u8(rgb.blue),
+                channel_to_u8(self.alpha)
             );
         }
 
         format!(
             "#{:02X}{:02X}{:02X}",
-            ((rgb.r * 255.) as u32),
-            ((rgb.g * 255.) as u32),
-            ((rgb.b * 255.) as u32)
+            channel_to_u8(rgb.red),
+            channel_to_u8(rgb.green),
+            channel_to_u8(rgb.blue)
         )
     }
 
     fn parse_hex(hex: &str) -> Result<Self> {
-        let hex = hex.trim_start_matches('#');
-        let len = hex.len();
-        if len != 6 && len != 8 {
-            return Err(anyhow::anyhow!("invalid hex color"));
-        }
+        let hex = hex.strip_prefix('#').unwrap_or(hex);
+        let expanded;
+        let hex = match hex.len() {
+            3 | 4 => {
+                expanded = hex
+                    .chars()
+                    .flat_map(|channel| [channel, channel])
+                    .collect::<String>();
+                expanded.as_str()
+            }
+            6 | 8 => hex,
+            _ => return Err(anyhow::anyhow!("invalid hex color")),
+        };
 
         let r = u8::from_str_radix(&hex[0..2], 16)? as f32 / 255.;
         let g = u8::from_str_radix(&hex[2..4], 16)? as f32 / 255.;
         let b = u8::from_str_radix(&hex[4..6], 16)? as f32 / 255.;
-        let a = if len == 8 {
+        let a = if hex.len() == 8 {
             u8::from_str_radix(&hex[6..8], 16)? as f32 / 255.
         } else {
             1.
         };
 
-        let v = gpui::Rgba { r, g, b, a };
-        let color: Hsla = v.into();
-        Ok(color)
+        Ok(gpui::Rgba::new(r, g, b, a).into_color())
     }
 
     fn hue(&self, hue: f32) -> Self {
         let mut color = *self;
-        color.h = hue.clamp(0., 1.);
+        color.hue = palette::RgbHue::from_degrees(hue.clamp(0., 1.) * 360.0);
         color
     }
 
     fn saturation(&self, saturation: f32) -> Self {
         let mut color = *self;
-        color.s = saturation.clamp(0., 1.);
+        color.saturation = saturation.clamp(0., 1.);
         color
     }
 
     fn lightness(&self, lightness: f32) -> Self {
         let mut color = *self;
-        color.l = lightness.clamp(0., 1.);
+        color.lightness = lightness.clamp(0., 1.);
         color
     }
 }
@@ -491,7 +562,7 @@ impl ColorName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub(crate) struct ShadcnColors {
     pub(crate) black: ShadcnColor,
     pub(crate) white: ShadcnColor,
@@ -541,7 +612,7 @@ pub(crate) struct ShadcnColors {
     pub(crate) rose: ColorScales,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 pub(crate) struct ShadcnColor {
     #[serde(default)]
     pub(crate) scale: usize,
@@ -674,8 +745,7 @@ color_methods!(rose);
 ///
 pub fn try_parse_color(color: &str) -> Result<Hsla> {
     if color.starts_with("#") {
-        let rgba = gpui::Rgba::try_from(color)?;
-        return Ok(rgba.into());
+        return Hsla::parse_hex(color);
     }
 
     let mut name = String::new();
@@ -744,6 +814,26 @@ mod tests {
 
     use super::*;
 
+    fn assert_hsla_approx_eq(actual: Hsla, expected: Hsla) {
+        assert!(
+            (actual.hue.into_positive_degrees() - expected.hue.into_positive_degrees()).abs()
+                < 0.0001,
+            "hue differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.saturation - expected.saturation).abs() < 0.0001,
+            "saturation differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.lightness - expected.lightness).abs() < 0.0001,
+            "lightness differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.alpha - expected.alpha).abs() < 0.0001,
+            "alpha differs: actual={actual:?}, expected={expected:?}"
+        );
+    }
+
     #[test]
     fn test_default_colors() {
         assert_eq!(white(), hsl(0.0, 0.0, 100.0));
@@ -763,46 +853,91 @@ mod tests {
 
     #[test]
     fn test_to_hex_string() {
-        let color: Hsla = rgb(0xf8fafc).into();
+        let color: Hsla = rgb(0xf8fafc).into_color();
         assert_eq!(color.to_hex(), "#F8FAFC");
 
-        let color: Hsla = rgb(0xfef2f2).into();
+        let color: Hsla = rgb(0xfef2f2).into_color();
         assert_eq!(color.to_hex(), "#FEF2F2");
 
-        let color: Hsla = rgba(0x0413fcaa).into();
+        let color: Hsla = rgba(0x0413fcaa).into_color();
         assert_eq!(color.to_hex(), "#0413FCAA");
     }
 
     #[test]
     fn test_from_hex_string() {
         let color: Hsla = Hsla::parse_hex("#F8FAFC").unwrap();
-        assert_eq!(color, rgb(0xf8fafc).into());
+        assert_eq!(color, rgb(0xf8fafc).into_color());
 
         let color: Hsla = Hsla::parse_hex("#FEF2F2").unwrap();
-        assert_eq!(color, rgb(0xfef2f2).into());
+        assert_eq!(color, rgb(0xfef2f2).into_color());
 
         let color: Hsla = Hsla::parse_hex("#0413FCAA").unwrap();
-        assert_eq!(color, rgba(0x0413fcaa).into());
+        assert_eq!(color, rgba(0x0413fcaa).into_color());
+    }
+
+    #[test]
+    fn test_from_short_hex_string() {
+        assert_eq!(
+            Hsla::parse_hex("#fff").unwrap(),
+            Hsla::parse_hex("#ffffff").unwrap()
+        );
+        assert_eq!(
+            Hsla::parse_hex("#1234").unwrap(),
+            Hsla::parse_hex("#11223344").unwrap()
+        );
+        assert!(Hsla::parse_hex("##fff").is_err());
+    }
+
+    #[test]
+    fn hsla_serde_uses_hex_and_accepts_palette_structures() {
+        #[derive(Debug, serde::Serialize, Deserialize)]
+        struct OptionalColor {
+            #[serde(default, with = "super::hsla_serde::option")]
+            color: Option<Hsla>,
+        }
+
+        let color = OptionalColor {
+            color: Some(Hsla::parse_hex("#000000").unwrap()),
+        };
+        assert_eq!(
+            serde_json::to_value(&color).unwrap(),
+            serde_json::json!({ "color": "#000000" })
+        );
+
+        let from_hex: OptionalColor =
+            serde_json::from_value(serde_json::json!({ "color": "#1234" })).unwrap();
+        assert_eq!(
+            from_hex.color.unwrap(),
+            Hsla::parse_hex("#11223344").unwrap()
+        );
+
+        let structured = serde_json::to_value(Hsla::parse_hex("#33669980").unwrap()).unwrap();
+        let from_structured: OptionalColor =
+            serde_json::from_value(serde_json::json!({ "color": structured })).unwrap();
+        assert_eq!(
+            from_structured.color.unwrap(),
+            Hsla::parse_hex("#33669980").unwrap()
+        );
     }
 
     #[test]
     fn test_lighten() {
         let color = super::hsl(240.0, 5.0, 30.0);
         let color = color.lighten(0.5);
-        assert_eq!(color.l, 0.45000002);
+        assert_eq!(color.lightness, 0.45000002);
         let color = color.lighten(0.5);
-        assert_eq!(color.l, 0.675);
+        assert_eq!(color.lightness, 0.675);
         let color = color.lighten(0.1);
-        assert_eq!(color.l, 0.7425);
+        assert_eq!(color.lightness, 0.7425);
     }
 
     #[test]
     fn test_darken() {
         let color = super::hsl(240.0, 5.0, 96.0);
         let color = color.darken(0.5);
-        assert_eq!(color.l, 0.48);
+        assert_eq!(color.lightness, 0.48);
         let color = color.darken(0.5);
-        assert_eq!(color.l, 0.24);
+        assert_eq!(color.lightness, 0.24);
     }
 
     #[test]
@@ -814,35 +949,30 @@ mod tests {
 
         assert_eq!(red.mix(blue, 0.5).to_hex(), "#FF00FF");
         assert_eq!(green.mix(red, 0.5).to_hex(), "#FFFF00");
-        assert_eq!(blue.mix(yellow, 0.2).to_hex(), "#0098FF");
+        assert_eq!(blue.mix(yellow, 0.2).to_hex(), "#0099FF");
     }
 
     #[test]
     fn test_mix_oklab() {
         let red = Hsla::parse_hex("#FF0000").unwrap();
         let blue = Hsla::parse_hex("#0000FF").unwrap();
-        let transparent = gpui::Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.0,
-            a: 0.0,
-        };
+        let transparent = gpui::transparent_black();
 
         // Test mixing red with transparent (similar to CSS color-mix example)
         // color-mix(in oklab, red 20%, transparent) should give red with 20% opacity
         let result = red.mix_oklab(transparent, 0.2);
-        assert!((result.a - 0.2).abs() < 0.01); // Alpha should be 20%
+        assert!((result.alpha - 0.2).abs() < 0.01); // Alpha should be 20%
 
         // The color should remain red (hue should be preserved)
-        let rgb_result = result.to_rgb();
-        let rgb_red = red.to_rgb();
+        let rgb_result: gpui::Rgba = result.into_color();
+        let rgb_red: gpui::Rgba = red.into_color();
         // Allow some tolerance due to color space conversions
         assert!(
-            (rgb_result.r - rgb_red.r).abs() < 0.05,
+            (rgb_result.red - rgb_red.red).abs() < 0.05,
             "Red channel should be preserved"
         );
-        assert!(rgb_result.g < 0.05, "Green channel should be near 0");
-        assert!(rgb_result.b < 0.05, "Blue channel should be near 0");
+        assert!(rgb_result.green < 0.05, "Green channel should be near 0");
+        assert!(rgb_result.blue < 0.05, "Blue channel should be near 0");
 
         // Test basic color mixing in Oklab space
         let purple = red.mix_oklab(blue, 0.5);
@@ -855,17 +985,17 @@ mod tests {
         let result_1 = red.mix_oklab(blue, 1.0);
 
         // Check that result is close to expected (within 1 color unit per channel)
-        let rgb_0 = result_0.to_rgb();
-        let rgb_blue = blue.to_rgb();
-        assert!((rgb_0.r - rgb_blue.r).abs() < 0.01);
-        assert!((rgb_0.g - rgb_blue.g).abs() < 0.01);
-        assert!((rgb_0.b - rgb_blue.b).abs() < 0.01);
+        let rgb_0: gpui::Rgba = result_0.into_color();
+        let rgb_blue: gpui::Rgba = blue.into_color();
+        assert!((rgb_0.red - rgb_blue.red).abs() < 0.01);
+        assert!((rgb_0.green - rgb_blue.green).abs() < 0.01);
+        assert!((rgb_0.blue - rgb_blue.blue).abs() < 0.01);
 
-        let rgb_1 = result_1.to_rgb();
-        let rgb_red = red.to_rgb();
-        assert!((rgb_1.r - rgb_red.r).abs() < 0.01);
-        assert!((rgb_1.g - rgb_red.g).abs() < 0.01);
-        assert!((rgb_1.b - rgb_red.b).abs() < 0.01);
+        let rgb_1: gpui::Rgba = result_1.into_color();
+        let rgb_red: gpui::Rgba = red.into_color();
+        assert!((rgb_1.red - rgb_red.red).abs() < 0.01);
+        assert!((rgb_1.green - rgb_red.green).abs() < 0.01);
+        assert!((rgb_1.blue - rgb_red.blue).abs() < 0.01);
     }
 
     #[test]
@@ -887,20 +1017,20 @@ mod tests {
     #[test]
     fn test_h_s_l() {
         let color = hsl(260., 94., 80.);
-        assert_eq!(color.hue(200. / 360.), hsl(200., 94., 80.));
-        assert_eq!(color.saturation(74. / 100.), hsl(260., 74., 80.));
-        assert_eq!(color.lightness(74. / 100.), hsl(260., 94., 74.));
+        assert_hsla_approx_eq(color.hue(200. / 360.), hsl(200., 94., 80.));
+        assert_hsla_approx_eq(color.saturation(74. / 100.), hsl(260., 74., 80.));
+        assert_hsla_approx_eq(color.lightness(74. / 100.), hsl(260., 94., 74.));
     }
 
     #[test]
     fn test_try_parse_color() {
-        assert_eq!(
-            try_parse_color("#F2F200").ok(),
-            Some(hsla(0.16666667, 1., 0.4745098, 1.0))
+        assert_hsla_approx_eq(
+            try_parse_color("#F2F200").unwrap(),
+            Hsla::new(60.0, 1.0, 0.4745098, 1.0),
         );
-        assert_eq!(
-            try_parse_color("#00f21888").ok(),
-            Some(hsla(0.34986225, 1.0, 0.4745098, 0.53333336))
+        assert_hsla_approx_eq(
+            try_parse_color("#00f21888").unwrap(),
+            Hsla::new(125.95041, 1.0, 0.4745098, 0.53333336),
         );
         assert_eq!(try_parse_color("black").ok(), Some(crate::black()));
         assert_eq!(try_parse_color("white-800").ok(), Some(crate::white()));

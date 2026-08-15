@@ -25,7 +25,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme, Disableable, ElementExt as _, Icon, IconName, IconSize,
+    ActiveTheme, Colorize as _, Disableable, ElementExt as _, Icon, IconName, IconSize,
     InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -3409,7 +3409,7 @@ impl TabContainer {
                 h_flex()
                     .id("tabs")
                     .debug_selector(|| "tabs".to_owned())
-                    .flex_shrink()
+                    .flex_shrink_1()
                     .min_w_0()
                     .h_full()
                     .items_center()

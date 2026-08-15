@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use crate::{ActiveTheme, Sizable, Size, StyledExt};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{

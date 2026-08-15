@@ -24,7 +24,7 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, Context, Entity, EventEmitter,
+    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, ColorExt, Context, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement,
     Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
@@ -917,7 +917,7 @@ fn is_valid_entry_name(name: &str) -> bool {
 
 fn breadcrumb_item(label: impl Into<SharedString>) -> BreadcrumbItem {
     BreadcrumbItem::new(label)
-        .flex_shrink()
+        .flex_shrink_1()
         .min_w(px(35.))
         .max_w(px(BREADCRUMB_ITEM_MAX_WIDTH))
         .overflow_hidden()
@@ -5336,7 +5336,7 @@ impl SftpView {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::black().alpha(cx.theme().geometry.opacity.scrim))
+            .bg(gpui::black().opacity(cx.theme().geometry.opacity.scrim))
             .child(
                 v_flex()
                     .gap_4()
@@ -6194,7 +6194,7 @@ impl SftpView {
                                             .absolute()
                                             .inset_0()
                                             .bg(gpui::black()
-                                                .alpha(cx.theme().geometry.opacity.loading_scrim))
+                                                .opacity(cx.theme().geometry.opacity.loading_scrim))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -6499,7 +6499,7 @@ impl SftpView {
                                         .absolute()
                                         .inset_0()
                                         .bg(gpui::black()
-                                            .alpha(cx.theme().geometry.opacity.loading_scrim))
+                                            .opacity(cx.theme().geometry.opacity.loading_scrim))
                                         .flex()
                                         .items_center()
                                         .justify_center()

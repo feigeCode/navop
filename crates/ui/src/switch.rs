@@ -7,6 +7,7 @@ use gpui::{
     ParentElement as _, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
+use palette::WithAlpha as _;
 use std::{rc::Rc, time::Duration};
 
 /// A Switch element that can be toggled on or off.
@@ -111,8 +112,8 @@ impl RenderOnce for Switch {
 
         let (bg, toggle_bg) = if self.disabled {
             (
-                if checked { bg.alpha(0.5) } else { bg },
-                toggle_bg.alpha(0.35),
+                if checked { bg.with_alpha(0.5) } else { bg },
+                toggle_bg.with_alpha(0.35),
             )
         } else {
             (bg, toggle_bg)

@@ -9,6 +9,7 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{RegexIter, RegexSearch};
 use gpui::*;
 use gpui_component::try_parse_color;
+use palette::IntoColor;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Range, RangeInclusive};
@@ -567,7 +568,7 @@ impl TerminalAddon for WebLinksAddon {
             action_hint: "⌘ + Click",
             action_text: "to open the link",
             display_text: link.url.clone(),
-            display_color: rgb(0x66ccff).into(),
+            display_color: rgb(0x66ccff).into_color(),
         })
     }
 
@@ -1302,7 +1303,7 @@ impl TerminalAddon for FilePathAddon {
             action_hint: "⌘ + Click",
             action_text: "to open the path",
             display_text: path.display.clone(),
-            display_color: rgb(0x9be58e).into(),
+            display_color: rgb(0x9be58e).into_color(),
         })
     }
 

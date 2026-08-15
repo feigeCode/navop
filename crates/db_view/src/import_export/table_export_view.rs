@@ -4,9 +4,9 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, PathPromptOptions, Render, Styled, Task, Window, div, prelude::FluentBuilder,
-    px,
+    App, AppContext, ColorExt, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, PathPromptOptions, Render, Styled, Task, Window, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, IndexPath, Sizable, VirtualListScrollHandle,

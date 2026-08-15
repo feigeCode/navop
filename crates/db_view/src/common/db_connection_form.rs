@@ -2670,7 +2670,7 @@ impl DbConnectionForm {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .flex_shrink()
+                                            .flex_shrink_1()
                                             .min_w_0()
                                             .when(is_checking, |div| {
                                                 div.text_color(cx.theme().muted_foreground).child(

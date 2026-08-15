@@ -1,3 +1,4 @@
+use crate::Colorize as _;
 use std::{borrow::Cow, rc::Rc};
 
 use chrono::{Datelike, Local, NaiveDate};

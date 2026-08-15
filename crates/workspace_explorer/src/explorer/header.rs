@@ -1,7 +1,7 @@
 use super::WorkspaceExplorer;
 use super::frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 use gpui::{
-    Anchor, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    Anchor, ColorExt as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px,
 };

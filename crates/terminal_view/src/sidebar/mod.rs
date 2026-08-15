@@ -33,8 +33,9 @@ use ai_chat_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription, Window, div,
+    AnyElement, AnyView, App, AppContext, ColorExt as _, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
+    Subscription, Window, div,
 };
 use gpui_component::{
     ActiveTheme, FunctionalIcon, Icon, IconName, IconSize, ObjectIcon, Selectable, Sizable, Size,
@@ -558,6 +559,8 @@ pub enum TerminalSidebarEvent {
     ConfirmMultilinePasteChanged(bool),
     /// 高危命令确认开关
     ConfirmHighRiskCommandChanged(bool),
+    /// 自动会话日志开关
+    AutoSessionLoggingChanged(bool),
     /// 选中自动复制开关
     AutoCopyChanged(bool),
     /// 自动补全开关
@@ -796,6 +799,9 @@ impl TerminalSidebar {
                     cx.emit(TerminalSidebarEvent::ConfirmHighRiskCommandChanged(
                         *enabled,
                     ));
+                }
+                settings_panel::SettingsPanelEvent::AutoSessionLoggingChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::AutoSessionLoggingChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::AutoCopyChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::AutoCopyChanged(*enabled));
@@ -1616,6 +1622,7 @@ mod tests {
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
+    use palette::IntoColor as _;
     use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
@@ -1782,13 +1789,13 @@ mod tests {
     #[test]
     fn workspace_theme_maps_terminal_palette_and_application_semantic_colors() {
         let colors = TerminalColors {
-            background: rgb(0x101010).into(),
-            foreground: rgb(0xf0f0f0).into(),
-            muted: rgb(0x202020).into(),
-            muted_foreground: rgb(0x909090).into(),
-            border: rgb(0x303030).into(),
-            accent: rgb(0x3366ff).into(),
-            accent_foreground: rgb(0xffffff).into(),
+            background: rgb(0x101010).into_color(),
+            foreground: rgb(0xf0f0f0).into_color(),
+            muted: rgb(0x202020).into_color(),
+            muted_foreground: rgb(0x909090).into_color(),
+            border: rgb(0x303030).into_color(),
+            accent: rgb(0x3366ff).into_color(),
+            accent_foreground: rgb(0xffffff).into_color(),
         };
         let application_theme = Theme::from(ThemeColor::dark().as_ref());
 

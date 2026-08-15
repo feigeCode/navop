@@ -1,7 +1,7 @@
 use super::{DiffEditors, DocumentPolicy, WorkspaceEditor, format_size};
 use gpui::{
-    AnyElement, Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, ColorExt as _, Context, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     Disableable as _, IconName, IconSize, Selectable as _, Sizable as _, Size,

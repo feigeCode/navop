@@ -1,5 +1,5 @@
 use alacritty_terminal::term::TermMode;
-use gpui::{Bounds, Hsla, Keystroke, MouseButton, Pixels, Point, px};
+use gpui::{Bounds, ColorExt as _, Hsla, Keystroke, MouseButton, Pixels, Point, px};
 use one_core::storage::TerminalHistoryScope;
 use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 
@@ -194,28 +194,29 @@ pub(super) fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> 
 mod tests {
     use super::{history_prompt_active_background, history_prompt_dropdown_background};
     use gpui::{Hsla, rgb};
+    use palette::IntoColor;
 
     #[test]
     fn history_prompt_dropdown_applies_translucent_background() {
-        let background: Hsla = rgb(0x1E1E1E).into();
+        let background: Hsla = rgb(0x1E1E1E).into_color();
 
         let dropdown = history_prompt_dropdown_background(background);
 
-        assert_eq!(background.h, dropdown.h);
-        assert_eq!(background.s, dropdown.s);
-        assert_eq!(background.l, dropdown.l);
-        assert!((dropdown.a - 0.72).abs() < f32::EPSILON);
+        assert_eq!(background.hue, dropdown.hue);
+        assert_eq!(background.saturation, dropdown.saturation);
+        assert_eq!(background.lightness, dropdown.lightness);
+        assert!((dropdown.alpha - 0.72).abs() < f32::EPSILON);
     }
 
     #[test]
     fn history_prompt_active_row_remains_distinct_over_translucent_content() {
-        let foreground: Hsla = rgb(0xE4E4E4).into();
+        let foreground: Hsla = rgb(0xE4E4E4).into_color();
 
         let active = history_prompt_active_background(foreground);
 
-        assert_eq!(foreground.h, active.h);
-        assert_eq!(foreground.s, active.s);
-        assert_eq!(foreground.l, active.l);
-        assert!((active.a - 0.32).abs() < f32::EPSILON);
+        assert_eq!(foreground.hue, active.hue);
+        assert_eq!(foreground.saturation, active.saturation);
+        assert_eq!(foreground.lightness, active.lightness);
+        assert!((active.alpha - 0.32).abs() < f32::EPSILON);
     }
 }

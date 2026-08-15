@@ -10,6 +10,7 @@ pub mod pty_backend;
 pub mod recording;
 pub mod serial_backend;
 mod serial_ingress;
+mod session_logging;
 pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_ingress;

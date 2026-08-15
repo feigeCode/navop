@@ -1,4 +1,6 @@
-use gpui::{InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui::{
+    ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+};
 use gpui_component::{
     ActiveTheme, Sizable, Size,
     button::{Button, ButtonVariants as _},

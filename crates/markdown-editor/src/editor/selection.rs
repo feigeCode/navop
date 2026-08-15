@@ -886,7 +886,7 @@ mod tests {
     }
 
     fn redraw(cx: &mut gpui::VisualTestContext) {
-        cx.update(|window, cx| window.draw(cx).clear());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
     }
 

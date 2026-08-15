@@ -269,7 +269,7 @@ mod tests {
             "1080",
             "",
             "",
-            Some(credential_reference),
+            Some(credential_reference.clone()),
         )
         .unwrap()
         .unwrap();

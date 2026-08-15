@@ -13,6 +13,7 @@ directories = "6"
 futures.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
+palette.workspace = true
 ratex-layout = "0.1.9"
 ratex-parser = "0.1.9"
 ratex-svg = { version = "0.1.9", features = ["embed-fonts", "standalone"] }

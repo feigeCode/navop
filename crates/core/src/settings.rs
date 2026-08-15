@@ -790,6 +790,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub terminal_confirm_high_risk_command: bool,
     #[serde(default)]
+    pub terminal_auto_session_logging: bool,
+    #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
     pub log_file_path: String,
@@ -1142,6 +1144,7 @@ impl Default for AppSettings {
             terminal_cursor_blink: false,
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
+            terminal_auto_session_logging: false,
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,
@@ -2255,6 +2258,28 @@ mod tests {
             .expect("旧版设置应能反序列化");
 
         assert_eq!(100_000, settings.terminal_scrollback_lines);
+    }
+
+    #[test]
+    fn legacy_app_settings_disable_automatic_session_logging() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert!(!settings.terminal_auto_session_logging);
+    }
+
+    #[test]
+    fn automatic_session_logging_round_trip_preserves_selection() {
+        let settings = AppSettings {
+            terminal_auto_session_logging: true,
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("应序列化自动会话日志设置");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("应反序列化自动会话日志设置");
+
+        assert!(restored.terminal_auto_session_logging);
     }
 
     #[test]

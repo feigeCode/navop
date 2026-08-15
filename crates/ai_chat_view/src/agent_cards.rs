@@ -13,7 +13,7 @@ use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement,
+    Action, Anchor, AnyElement, App, AppContext, ColorExt, Entity, InteractiveElement, IntoElement,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{

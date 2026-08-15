@@ -28,6 +28,7 @@ impl TestRecording {
                     application_version: "0.1.0-test".to_string(),
                     started_at_unix_ms: 1_700_000_000_123,
                     capture_input,
+                    session: None,
                 },
                 initial_size: TerminalSize {
                     rows: 24,

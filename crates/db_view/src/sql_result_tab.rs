@@ -1249,7 +1249,7 @@ impl SqlResultTabContainer {
     fn render_sql_column(
         item: &StatementListItem,
         sql_display: String,
-        status_color: impl Into<gpui::Hsla>,
+        status_color: gpui::Hsla,
         idx: usize,
         _cx: &Context<Self>,
     ) -> impl IntoElement {
@@ -1319,7 +1319,7 @@ impl SqlResultTabContainer {
     fn render_message_column(
         &self,
         item: &StatementListItem,
-        status_color: impl Into<gpui::Hsla>,
+        status_color: gpui::Hsla,
         idx: usize,
         _cx: &Context<Self>,
     ) -> impl IntoElement {

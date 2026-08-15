@@ -11,6 +11,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, StyledText, TextLayout, Window,
     point, px, quad,
 };
+use palette::WithAlpha as _;
 
 use crate::{ActiveTheme, global_state::GlobalState, input::Selection, text::node::LinkMark};
 
@@ -82,7 +83,7 @@ impl Inline {
     fn paint_selected_bounds(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         window.paint_quad(gpui::PaintQuad {
             bounds,
-            background: cx.theme().blue.alpha(0.01).into(),
+            background: cx.theme().blue.with_alpha(0.01).into(),
             corner_radii: Corners::default(),
             border_color: gpui::transparent_black(),
             border_style: BorderStyle::default(),

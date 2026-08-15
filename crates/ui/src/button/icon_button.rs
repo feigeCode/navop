@@ -7,6 +7,7 @@ use gpui::{
     App, ClickEvent, ElementId, Hsla, InteractiveElement, Interactivity, IntoElement, RenderOnce,
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
 };
+use palette::IntoColor;
 
 /// Semantic sizing presets for icon-only actions.
 ///
@@ -106,7 +107,7 @@ impl IconButton {
     }
 
     /// Applies a semantic tint to the glyph and button text state.
-    pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
+    pub fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         self.button = self.button.text_color(color);
         self
     }

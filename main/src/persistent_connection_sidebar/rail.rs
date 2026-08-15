@@ -140,6 +140,15 @@ pub(super) fn render_navigation_rail(
                             |home, window, cx| home.add_notes_tab(window, cx),
                         ))
                         .child(rail_button(
+                            "persistent-open-session-logs",
+                            IconName::Terminal,
+                            t!("Home.session_logs").to_string(),
+                            palette,
+                            home_page,
+                            rail_item_size,
+                            |home, window, cx| home.add_session_logs_tab(window, cx),
+                        ))
+                        .child(rail_button(
                             "persistent-open-credential-vault",
                             IconName::Key,
                             t!("Home.credential_vault").to_string(),

@@ -20,7 +20,8 @@ use gpui::{
 use gpui_component::list::{List, ListState};
 use gpui_component::scroll::ScrollbarHandle;
 use gpui_component::{
-    ActiveTheme, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle, h_flex,
+    ActiveTheme, Colorize as _, Icon, IconName, StyleSized as _, StyledExt,
+    VirtualListScrollHandle, h_flex,
     input::{IndentInline, OutdentInline},
     menu::{ContextMenuExt, PopupMenu},
     scroll::{ScrollableMask, Scrollbar},
@@ -3228,7 +3229,7 @@ where
                     this.child(
                         h_flex()
                             .id("table-body")
-                            .flex_grow()
+                            .flex_grow_1()
                             .size_full()
                             .when(self.options.scrollbar_visible.bottom, |this| {
                                 this.pb(SCROLLBAR_WIDTH)
@@ -3294,7 +3295,7 @@ where
                                         },
                                     ),
                                 )
-                                .flex_grow()
+                                .flex_grow_1()
                                 .size_full()
                                 .with_sizing_behavior(ListSizingBehavior::Auto)
                                 .track_scroll(&self.vertical_scroll_handle)

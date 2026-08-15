@@ -19,9 +19,9 @@ use db::{
     ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
 };
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, IntoElement, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString,
+    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, ColorExt, Context, Element, Entity,
+    EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString,
     StatefulInteractiveElement as _, Style, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::WindowExt;
@@ -754,7 +754,7 @@ impl DatabaseTabView {
                                     .child("⟳")
                             })
                             .when(is_error, |this| {
-                                this.bg(Hsla::red())
+                                this.bg(gpui::red())
                                     .text_color(gpui::white())
                                     .text_2xl()
                                     .child("✕")
@@ -820,7 +820,7 @@ impl DatabaseTabView {
                 div()
                     .text_lg()
                     .when(!is_error, |this| this.text_color(cx.theme().accent))
-                    .when(is_error, |this| this.text_color(Hsla::red()))
+                    .when(is_error, |this| this.text_color(gpui::red()))
                     .child(status_text),
             )
             .into_any_element()

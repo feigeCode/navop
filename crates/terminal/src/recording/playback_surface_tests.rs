@@ -40,6 +40,7 @@ fn parsed_recording(capture_input: bool, events: Vec<RecordingEvent>) -> ParsedR
                 started_at_unix_ms: 1_700_000_000_123,
                 capture_input,
                 event_stream: NAVOP_EVENT_STREAM.to_string(),
+                session: None,
             },
         },
         events,

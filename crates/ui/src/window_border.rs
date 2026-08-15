@@ -192,12 +192,7 @@ impl RenderOnce for WindowBorder {
                             .when(!tiling.right, |div| div.border_r(BORDER_SIZE))
                             .when(!tiling.is_tiled(), |div| {
                                 div.shadow(vec![gpui::BoxShadow {
-                                    color: Hsla {
-                                        h: 0.,
-                                        s: 0.,
-                                        l: 0.,
-                                        a: 0.3,
-                                    },
+                                    color: Hsla::new(0., 0., 0., 0.3),
                                     blur_radius: shadow_size / 2.,
                                     spread_radius: px(0.),
                                     offset: point(px(0.0), px(0.0)),

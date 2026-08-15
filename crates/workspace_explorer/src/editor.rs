@@ -8,7 +8,7 @@ use crate::diff::{AlignedDiffSide, SideBySideDiff, aligned_side_by_side};
 use crate::file_system::LoadedFile;
 use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
-use gpui::{App, Context, Entity, EventEmitter, ScrollHandle, Subscription};
+use gpui::{App, ColorExt as _, Context, Entity, EventEmitter, ScrollHandle, Subscription};
 use gpui_component::{
     input::{InputLineDecoration, InputState},
     status_bar::StatusPresentation,

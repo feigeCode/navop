@@ -77,10 +77,12 @@ impl From<&TerminalColors> for SidebarPalette {
             foreground: colors.foreground,
             muted: colors.muted,
             hover: colors.muted,
-            selected: Hsla {
-                a: 0.18,
-                ..colors.accent
-            },
+            selected: Hsla::new(
+                colors.accent.hue.into_degrees(),
+                colors.accent.saturation,
+                colors.accent.lightness,
+                0.18,
+            ),
             selected_border: colors.accent,
             muted_foreground: colors.muted_foreground,
             border: colors.border,
@@ -94,10 +96,12 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    Hsla {
-        l: (color.l + amount).clamp(0.0, 1.0),
-        ..color
-    }
+    Hsla::new(
+        color.hue.into_degrees(),
+        color.saturation,
+        (color.lightness + amount).clamp(0.0, 1.0),
+        color.alpha,
+    )
 }
 
 pub(crate) struct PersistentConnectionSidebar {

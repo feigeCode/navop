@@ -23,7 +23,7 @@ pub enum PanelStyle {
     TabBar,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TitleStyle {
     pub background: Hsla,
     pub foreground: Hsla,

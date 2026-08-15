@@ -3,8 +3,8 @@ use db::GlobalDbState;
 use db::plugin::DatabaseUserOperationRequest;
 use db::plugin_manifest::DatabaseFormKind;
 use gpui::{
-    AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Subscription, Window, div,
+    AnyView, App, AppContext, ColorExt, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
 use gpui_component::{
     ActiveTheme,

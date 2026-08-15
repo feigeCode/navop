@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Context as _, anyhow};
 use directories::ProjectDirs;
 use gpui::{Hsla, Rgba};
+use palette::IntoColor;
 
 const DISPLAY_MATH_SCALE: f32 = 1.25;
 const INLINE_MATH_SCALE: f32 = 1.12;
@@ -150,13 +151,13 @@ fn latex_cache_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn svg_color(color: Hsla) -> String {
-    let color = Rgba::from(color);
+    let color: Rgba = color.into_color();
     format!(
         "rgba({},{},{},{})",
-        color_channel(color.r),
-        color_channel(color.g),
-        color_channel(color.b),
-        trim_float(f64::from(color.a.clamp(0.0, 1.0)))
+        color_channel(color.red),
+        color_channel(color.green),
+        color_channel(color.blue),
+        trim_float(f64::from(color.alpha.clamp(0.0, 1.0)))
     )
 }
 
@@ -202,8 +203,8 @@ mod tests {
 
     #[test]
     fn cache_key_changes_with_theme_inputs() {
-        let first = latex_cache_key("\\frac{1}{2}", Hsla::from(rgba(0xffffffff)), 18.0);
-        let second = latex_cache_key("\\frac{1}{2}", Hsla::from(rgba(0x000000ff)), 18.0);
+        let first = latex_cache_key("\\frac{1}{2}", rgba(0xffffffff).into_color(), 18.0);
+        let second = latex_cache_key("\\frac{1}{2}", rgba(0x000000ff).into_color(), 18.0);
         assert_ne!(first, second);
     }
 
@@ -220,13 +221,13 @@ mod tests {
     #[test]
     fn renders_basic_formula_svg() {
         let svg =
-            render_latex_to_svg("\\frac{1}{2}", Hsla::from(rgba(0xffffffff)), 18.0).expect("svg");
+            render_latex_to_svg("\\frac{1}{2}", rgba(0xffffffff).into_color(), 18.0).expect("svg");
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
     }
 
     #[test]
     fn invalid_latex_returns_error() {
-        assert!(render_latex_to_svg("\\frac{a}", Hsla::from(rgba(0xffffffff)), 18.0).is_err());
+        assert!(render_latex_to_svg("\\frac{a}", rgba(0xffffffff).into_color(), 18.0).is_err());
     }
 }

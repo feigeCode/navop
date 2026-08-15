@@ -285,3 +285,38 @@ impl ThemeRegistry {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Colorize as _;
+
+    #[test]
+    fn default_theme_accepts_legacy_hex_highlight_colors() {
+        let theme_set =
+            serde_json::from_str::<ThemeSet>(DEFAULT_THEME).expect("default theme must parse");
+        let light_theme = theme_set.themes.first().expect("light theme must exist");
+        let highlight = light_theme
+            .highlight
+            .as_ref()
+            .expect("default theme must include highlight colors");
+
+        assert_eq!(
+            highlight
+                .editor_foreground
+                .expect("editor foreground must exist")
+                .to_hex(),
+            "#000000"
+        );
+        assert_eq!(
+            highlight
+                .syntax
+                .style("comment")
+                .expect("comment style must exist")
+                .color
+                .expect("comment color must exist")
+                .to_hex(),
+            "#007FFF"
+        );
+    }
+}

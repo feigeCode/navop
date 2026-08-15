@@ -135,11 +135,12 @@ impl TextViewStyle {
 #[cfg(test)]
 mod tests {
     use gpui::rgb;
+    use palette::IntoColor as _;
 
     use super::*;
 
     fn color(hex: u32) -> Hsla {
-        rgb(hex).into()
+        rgb(hex).into_color()
     }
 
     #[test]

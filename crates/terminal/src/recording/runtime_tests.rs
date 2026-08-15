@@ -2,8 +2,8 @@ use super::{
     RecordingBackend, RecordingCompleteness, RecordingFileConfig, RecordingFileLimits,
     RecordingLimit, RecordingMetadata, RecordingQueueLimits, RecordingRuntime,
     RecordingRuntimeConfig, RecordingRuntimeError, RecordingStartRequest, RecordingState,
-    RecordingTapOutcome, RecordingTransition, RecordingWorkerTestGate, partial_recording_path,
-    read_recording,
+    RecordingTap, RecordingTapOutcome, RecordingTransition, RecordingWorkerTestGate,
+    partial_recording_path, read_recording,
 };
 use crate::TerminalSize;
 use std::sync::mpsc;
@@ -18,6 +18,7 @@ fn metadata(capture_input: bool) -> RecordingMetadata {
         application_version: "0.1.0-test".to_string(),
         started_at_unix_ms: 1_700_000_000_123,
         capture_input,
+        session: None,
     }
 }
 
@@ -177,6 +178,196 @@ fn input_capture_is_never_queued_without_explicit_opt_in() {
 }
 
 #[test]
+fn fan_out_tap_records_same_events_into_each_runtime() {
+    let temp = tempdir().unwrap();
+    let left_path = temp.path().join("left.cast");
+    let right_path = temp.path().join("right.cast");
+    let left = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    let right = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    left.start(start_request(&left_path, false)).unwrap();
+    right.start(start_request(&right_path, false)).unwrap();
+
+    let tap = RecordingTap::fan_out([left.tap(), right.tap()]).unwrap();
+    assert_eq!(RecordingTapOutcome::Accepted, tap.record_output(b"shared"));
+    assert_eq!(
+        RecordingTapOutcome::Accepted,
+        tap.record_resize(TerminalSize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    );
+    assert_eq!(
+        RecordingTapOutcome::Accepted,
+        tap.record_marker("shared-marker")
+    );
+
+    left.stop().unwrap();
+    right.stop().unwrap();
+    let left_recording = read_recording(&left_path, RecordingFileLimits::default()).unwrap();
+    let right_recording = read_recording(&right_path, RecordingFileLimits::default()).unwrap();
+    let left_kinds = left_recording
+        .events
+        .iter()
+        .map(|event| &event.kind)
+        .collect::<Vec<_>>();
+    let right_kinds = right_recording
+        .events
+        .iter()
+        .map(|event| &event.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(left_kinds, right_kinds);
+    assert_eq!(3, left_recording.events.len());
+
+    left.shutdown().unwrap();
+    right.shutdown().unwrap();
+}
+
+#[test]
+fn fan_out_of_empty_taps_is_none() {
+    assert!(RecordingTap::fan_out(std::iter::empty()).is_none());
+}
+
+#[test]
+fn fan_out_of_one_tap_preserves_behavior() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("single.cast");
+    let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    runtime.start(start_request(&path, false)).unwrap();
+
+    let tap = RecordingTap::fan_out([runtime.tap()]).unwrap();
+    assert_eq!(RecordingTapOutcome::Accepted, tap.record_output(b"single"));
+
+    runtime.stop().unwrap();
+    let recording = read_recording(&path, RecordingFileLimits::default()).unwrap();
+    assert_eq!(1, recording.events.len());
+    assert!(matches!(
+        &recording.events[0].kind,
+        super::RecordingEventKind::Output(data) if data == b"single"
+    ));
+    runtime.shutdown().unwrap();
+}
+
+#[test]
+fn fan_out_tap_keeps_input_capture_and_failures_independent() {
+    let temp = tempdir().unwrap();
+    let private_path = temp.path().join("private.cast");
+    let disclosed_path = temp.path().join("disclosed.cast");
+    let private = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    let disclosed = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    private.start(start_request(&private_path, false)).unwrap();
+    disclosed
+        .start(start_request(&disclosed_path, true))
+        .unwrap();
+
+    let tap = RecordingTap::fan_out([private.tap(), disclosed.tap()]).unwrap();
+    assert!(tap.is_input_capture_active());
+    assert_eq!(
+        RecordingTapOutcome::Accepted,
+        tap.record_input(b"explicit-input")
+    );
+
+    private.shutdown().unwrap();
+    assert_eq!(
+        RecordingTapOutcome::Accepted,
+        tap.record_output(b"healthy-runtime")
+    );
+    disclosed.stop().unwrap();
+
+    let private_recording = read_recording(&private_path, RecordingFileLimits::default()).unwrap();
+    assert!(private_recording.events.is_empty());
+    let disclosed_recording =
+        read_recording(&disclosed_path, RecordingFileLimits::default()).unwrap();
+    assert!(matches!(
+        &disclosed_recording.events[0].kind,
+        super::RecordingEventKind::Input(data) if data == b"explicit-input"
+    ));
+    assert!(matches!(
+        &disclosed_recording.events[1].kind,
+        super::RecordingEventKind::Output(data) if data == b"healthy-runtime"
+    ));
+
+    disclosed.shutdown().unwrap();
+}
+
+#[test]
+fn fan_out_accepts_when_one_endpoint_is_healthy_and_another_queue_is_full() {
+    let temp = tempdir().unwrap();
+    let limited_path = temp.path().join("limited.cast");
+    let healthy_path = temp.path().join("healthy.cast");
+    let gate = RecordingWorkerTestGate::blocked();
+    let limited = RecordingRuntime::new_with_test_gate(
+        RecordingRuntimeConfig {
+            queue: RecordingQueueLimits {
+                max_pending_events: 1,
+                max_pending_bytes: 1024,
+                max_pending_controls: 8,
+            },
+            ..RecordingRuntimeConfig::default()
+        },
+        gate.clone(),
+    )
+    .unwrap();
+    let healthy = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    limited.start(start_request(&limited_path, false)).unwrap();
+    healthy.start(start_request(&healthy_path, false)).unwrap();
+
+    let tap = RecordingTap::fan_out([limited.tap(), healthy.tap()]).unwrap();
+    assert_eq!(RecordingTapOutcome::Accepted, tap.record_output(b"first"));
+    gate.wait_until_worker_is_blocked();
+    assert_eq!(RecordingTapOutcome::Accepted, tap.record_output(b"second"));
+
+    gate.release();
+    assert!(matches!(
+        limited.stop(),
+        Err(RecordingRuntimeError::Recording(
+            super::RecordingFailure::LimitReached(RecordingLimit::PendingEvents)
+        ))
+    ));
+    healthy.stop().unwrap();
+
+    let healthy_recording = read_recording(&healthy_path, RecordingFileLimits::default()).unwrap();
+    assert_eq!(2, healthy_recording.events.len());
+    limited.shutdown().unwrap();
+    healthy.shutdown().unwrap();
+}
+
+#[test]
+fn fan_out_reports_queue_full_when_no_endpoint_accepts() {
+    let temp = tempdir().unwrap();
+    let limited_path = temp.path().join("limited-only.cast");
+    let gate = RecordingWorkerTestGate::blocked();
+    let limited = RecordingRuntime::new_with_test_gate(
+        RecordingRuntimeConfig {
+            queue: RecordingQueueLimits {
+                max_pending_events: 1,
+                max_pending_bytes: 1024,
+                max_pending_controls: 8,
+            },
+            ..RecordingRuntimeConfig::default()
+        },
+        gate.clone(),
+    )
+    .unwrap();
+    let inactive = RecordingRuntime::new(RecordingRuntimeConfig::default()).unwrap();
+    limited.start(start_request(&limited_path, false)).unwrap();
+
+    let tap = RecordingTap::fan_out([limited.tap(), inactive.tap()]).unwrap();
+    assert_eq!(RecordingTapOutcome::Accepted, tap.record_output(b"first"));
+    gate.wait_until_worker_is_blocked();
+    assert_eq!(
+        RecordingTapOutcome::QueueFull(RecordingLimit::PendingEvents),
+        tap.record_output(b"second")
+    );
+
+    gate.release();
+    assert!(limited.stop().is_err());
+    limited.shutdown().unwrap();
+    inactive.shutdown().unwrap();
+}
+
+#[test]
 fn pending_byte_overflow_fails_closed_without_blocking_the_producer() {
     let temp = tempdir().unwrap();
     let final_path = temp.path().join("overflow.cast");
@@ -252,7 +443,14 @@ fn pending_event_overflow_counts_in_flight_writer_work() {
         ))
     ));
     assert!(!final_path.exists());
-    assert!(partial_recording_path(&final_path).unwrap().exists());
+    let partial_path = partial_recording_path(&final_path).unwrap();
+    assert!(partial_path.exists());
+    let recording = read_recording(&partial_path, RecordingFileLimits::default()).unwrap();
+    assert_eq!(1, recording.events.len());
+    assert!(matches!(
+        &recording.events[0].kind,
+        super::RecordingEventKind::Output(data) if data == b"first"
+    ));
     runtime.shutdown().unwrap();
 }
 
@@ -318,6 +516,40 @@ fn stop_and_shutdown_are_idempotent_and_publish_once() {
     assert_eq!(RecordingTransition::Unchanged, runtime.shutdown().unwrap());
     assert_eq!(RecordingTransition::Unchanged, runtime.shutdown().unwrap());
     assert!(final_path.exists());
+}
+
+#[test]
+fn shutdown_flushes_queued_output_tail() {
+    let temp = tempdir().unwrap();
+    let final_path = temp.path().join("shutdown-tail.cast");
+    let gate = RecordingWorkerTestGate::blocked();
+    let runtime =
+        RecordingRuntime::new_with_test_gate(RecordingRuntimeConfig::default(), gate.clone())
+            .unwrap();
+
+    runtime.start(start_request(&final_path, false)).unwrap();
+    assert_eq!(
+        RecordingTapOutcome::Accepted,
+        runtime.tap().record_output(b"shutdown-tail")
+    );
+    gate.wait_until_worker_is_blocked();
+
+    let shutdown_runtime = runtime.clone();
+    let shutdown_thread = std::thread::spawn(move || shutdown_runtime.shutdown());
+
+    gate.release();
+    assert_eq!(
+        Ok(RecordingTransition::Changed),
+        shutdown_thread.join().unwrap()
+    );
+
+    let recording = read_recording(&final_path, RecordingFileLimits::default()).unwrap();
+    assert_eq!(1, recording.events.len());
+    assert!(matches!(
+        &recording.events[0].kind,
+        super::RecordingEventKind::Output(data)
+            if data == b"shutdown-tail"
+    ));
 }
 
 #[test]

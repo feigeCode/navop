@@ -25,6 +25,7 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod public_mcp_approval;
 mod public_mcp_runtime;
+mod session_logs;
 mod setting_tab;
 mod settings;
 mod sync_conflict_dialog;

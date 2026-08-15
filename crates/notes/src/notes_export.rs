@@ -11,6 +11,7 @@ use markdown_source::{
     SourceBlock, SourceBlockKind, SourceInlineKind, SourceInlineNode, SourceMarkdownDocument,
 };
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
+use palette::IntoColor;
 use rust_i18n::t;
 use std::collections::HashSet;
 use std::fs;
@@ -518,9 +519,9 @@ fn export_theme(
 }
 
 fn rgb24(color: Hsla) -> u32 {
-    let color = Rgba::from(color);
+    let color: Rgba = color.into_color();
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
-    (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
+    (channel(color.red) << 16) | (channel(color.green) << 8) | channel(color.blue)
 }
 
 fn collect_export_assets(
