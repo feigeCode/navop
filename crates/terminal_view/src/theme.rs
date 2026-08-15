@@ -16,12 +16,12 @@
 
 use gpui::{Hsla, Pixels, SharedString, rgb};
 use gpui_component::Theme;
-use palette::IntoColor;
 use one_core::settings::{
     DEFAULT_TERMINAL_THEME, default_grid_font_fallback_families,
     default_grid_monospace_font_family, is_supported_grid_monospace_font,
     normalize_grid_monospace_font_family,
 };
+use palette::IntoColor;
 use rust_i18n::t;
 
 /// 使用当前应用主题生成终端配色。
