@@ -602,12 +602,24 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let artifact = rendered.clone();
+        // A click must reach this image, so swallow the mouse-down instead of
+        // letting it focus the block: Math/Mermaid blocks swap their rendered
+        // image for editable source text on focus, which would destroy this
+        // element before the click fires and leave the enlarged view unopened.
+        // The id keeps on_click's pending-mouse-down state alive across the
+        // redraw scheduled by the mousedown.
         img(rendered.image.clone())
+            .id(ElementId::Name(
+                format!("enlargable-host-svg-{}", self.record.id).into(),
+            ))
             .debug_selector(|| "enlargable-host-svg".to_string())
             .w(px(size.width))
             .h(px(size.height))
             .object_fit(ObjectFit::Contain)
             .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation();
+            })
             .on_click(cx.listener(move |_block, _event, _window, cx| {
                 cx.emit(BlockEvent::RequestEnlargeRenderedBlock {
                     kind,

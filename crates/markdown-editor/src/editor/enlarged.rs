@@ -268,11 +268,36 @@ impl Editor {
 mod tests {
     use std::sync::Arc;
 
-    use gpui::{AppContext, Entity, Image, ImageFormat, TestAppContext};
+    use gpui::{AppContext, Entity, Image, ImageFormat, Modifiers, TestAppContext, rgba};
+    use palette::IntoColor as _;
 
     use super::{Editor, EnlargedPreviewLimit, enlarged_artifact_size};
-    use crate::BlockRenderArtifact;
-    use crate::components::{BlockEvent, EnlargedBlockKind, HostRenderedArtifact};
+    use crate::components::{BlockEvent, BlockKind, EnlargedBlockKind, HostRenderedArtifact};
+    use crate::{BlockRenderArtifact, EditorHostServices, EditorHostTheme};
+
+    fn init_editor_test_app(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::i18n::I18nManager::init(cx);
+            crate::theme::ThemeManager::init(cx);
+            crate::components::init(cx);
+        });
+    }
+
+    fn redraw(cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.background_executor.run_until_parked();
+        cx.run_until_parked();
+    }
+
+    fn host_theme() -> EditorHostTheme {
+        EditorHostTheme {
+            background: rgba(0x112233ff).into_color(),
+            foreground: rgba(0x223344ff).into_color(),
+            border: rgba(0x334455ff).into_color(),
+            muted: rgba(0x445566ff).into_color(),
+            accent: rgba(0x556677ff).into_color(),
+        }
+    }
 
     fn svg_artifact() -> HostRenderedArtifact {
         HostRenderedArtifact {
@@ -372,5 +397,74 @@ mod tests {
                 "dismiss closes the enlarged view"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn clicking_rendered_math_image_opens_preview_without_focusing_block(
+        cx: &mut TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "$$x^2$$".into(), None));
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        // The editor's first render focuses its first block. Blur the window
+        // before installing the host renderer so the math block is drawn in
+        // rendered (image) mode rather than focused source-editing mode.
+        let math_block = editor.read_with(cx, |editor, cx| {
+            editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::MathBlock)
+                .expect("a math block exists")
+                .entity
+                .clone()
+        });
+        cx.update(|window, _| window.blur());
+        redraw(cx);
+
+        math_block.update(cx, |block, cx| {
+            block.set_host_services(Arc::new(
+                EditorHostServices::new(host_theme()).with_block_renderer(Arc::new(|_request| {
+                    Box::pin(async move {
+                        Ok(Some(BlockRenderArtifact {
+                            media_type: "image/svg+xml".into(),
+                            bytes: b"<svg/>".to_vec(),
+                            intrinsic_width: Some(120.0),
+                            intrinsic_height: Some(40.0),
+                        }))
+                    })
+                })),
+            ));
+            block.set_host_render_environment(480.0, 2.0);
+            cx.notify();
+        });
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        let image_bounds = cx
+            .debug_bounds("enlargable-host-svg")
+            .expect("the rendered math image is displayed");
+        cx.simulate_click(image_bounds.center(), Modifiers::default());
+
+        editor.read_with(cx, |editor, _cx| {
+            let state = editor
+                .enlarged_block
+                .as_ref()
+                .expect("clicking the rendered image opens the enlarged view");
+            assert!(
+                !state.show_source,
+                "the enlarged view opens in preview mode, not source mode"
+            );
+        });
+        let focused = cx.update(|window, cx| math_block.read(cx).focus_handle.is_focused(window));
+        assert!(
+            !focused,
+            "clicking the rendered image must not focus the block into source editing"
+        );
     }
 }
