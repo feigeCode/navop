@@ -127,6 +127,7 @@ fn connection_type_icon(conn_type: &ConnectionType) -> Icon {
         ConnectionType::MongoDB => IconName::Database.mono(),
         ConnectionType::SshSftp => IconName::Terminal.mono(),
         ConnectionType::Serial => IconName::SquareTerminal.mono(),
+        ConnectionType::Telnet => IconName::SquareTerminal.mono(),
         ConnectionType::PortForwarding => IconName::Network.mono(),
         ConnectionType::All => IconName::GalleryVerticalEnd.mono(),
     }
