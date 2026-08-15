@@ -314,6 +314,10 @@ test("Linux portable packager uses a private loader and recursive ELF closure", 
   assert.match(packager, /libnss_dns\.so\.2/);
   assert.match(packager, /libnss_files\.so\.2/);
   assert.match(packager, /libnss_\*\.so\.2/);
+  assert.match(packager, /libwayland-client\.so\.0/);
+  assert.match(packager, /libwayland-cursor\.so\.0/);
+  assert.match(packager, /libwayland-egl\.so\.1/);
+  assert.match(packager, /missing required dlopen runtime library/);
   assert.match(packager, /libvulkan_\*\.so\*/);
   assert.match(help.stdout, /aarch64-unknown-linux-gnu/);
   assert.match(help.stdout, /x86_64-unknown-linux-gnu/);

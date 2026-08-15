@@ -24,6 +24,12 @@ OPTIONAL_RUNTIME_LIBRARIES = (
     "libresolv.so.2",
 )
 
+REQUIRED_DLOPEN_RUNTIME_LIBRARIES = (
+    "libwayland-client.so.0",
+    "libwayland-cursor.so.0",
+    "libwayland-egl.so.1",
+)
+
 OPTIONAL_RUNTIME_PATTERNS = ("libnss_*.so.2",)
 
 HOST_DRIVER_PATTERNS = (
@@ -576,6 +582,30 @@ def main() -> None:
             else:
                 runtime_sources[soname] = source
             queue.append(source)
+
+    for soname in REQUIRED_DLOPEN_RUNTIME_LIBRARIES:
+        source = resolve_library(
+            soname,
+            consumer=binary,
+            consumer_search_paths=(),
+            cache=cache,
+            machine=machine,
+            library_directories=target.library_directories,
+        )
+        if source is None:
+            fail(
+                f"missing required dlopen runtime library {soname} "
+                f"for portable Wayland support"
+            )
+        previous = runtime_sources.get(soname)
+        if previous is not None and previous != source:
+            if sha256(previous) != sha256(source):
+                fail(
+                    f"{soname} resolves to conflicting files: {previous} and {source}"
+                )
+        else:
+            runtime_sources[soname] = source
+        queue.append(source)
 
     for soname in optional_runtime_sonames(cache):
         if soname in runtime_sources:
