@@ -2716,14 +2716,16 @@ impl Render for Block {
                 let append_extent = px(d.table_append_button_extent);
                 let append_inset = px(d.table_append_button_inset);
                 let activation_band = px(d.table_append_activation_band);
-                let top_gutter = if column_axis_gutter_visible(preview_marker, selected_marker) {
-                    activation_band
-                } else {
-                    px(0.0)
-                };
-                let column_append_top = top_gutter + activation_band;
+                // The column-axis strip overlays the header's top edge instead of
+                // taking a layout row, so hovering a column never shifts the table.
+                let column_axis_visible =
+                    column_axis_gutter_visible(preview_marker, selected_marker);
+                let column_append_top = activation_band;
                 let column_control_visible = self.table_append_column_hovered;
                 let row_control_visible = self.table_append_row_hovered;
+                // Append zones and buttons overlay the table's right/bottom edges;
+                // they never consume layout space, so hovering shows them without
+                // resizing the table (Typora-style).
                 let right_gutter = if column_control_visible {
                     append_extent + append_inset
                 } else {
@@ -2737,9 +2739,20 @@ impl Render for Block {
                 let weak_table_block = cx.entity().downgrade();
 
                 let header_cells = runtime.header;
-                let column_axis_row = (top_gutter > px(0.0)).then(|| {
-                    div().w_full().h(top_gutter).flex().gap(px(0.0)).children(
-                        header_cells.iter().enumerate().map(|(column, _cell)| {
+                let column_axis_overlay = column_axis_visible.then(|| {
+                    div()
+                        .id(ElementId::Name(
+                            format!("table-column-axis-overlay-{}", self.record.id).into(),
+                        ))
+                        .debug_selector(|| "table-column-axis-overlay".to_string())
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(activation_band)
+                        .flex()
+                        .gap(px(0.0))
+                        .children(header_cells.iter().enumerate().map(|(column, _cell)| {
                             let hover_block = weak_table_block.clone();
                             let select_block = weak_table_block.clone();
                             let menu_block = weak_table_block.clone();
@@ -2811,8 +2824,7 @@ impl Render for Block {
                                         )
                                         .block_mouse_except_scroll(),
                                 )
-                        }),
-                    )
+                        }))
                 });
 
                 let header_hover_block = weak_table_block.clone();
@@ -3034,10 +3046,7 @@ impl Render for Block {
                         });
 
                 {
-                    let mut rows = Vec::with_capacity(2 + body_row_count);
-                    if let Some(column_axis_row) = column_axis_row {
-                        rows.push(column_axis_row.into_any_element());
-                    }
+                    let mut rows = Vec::with_capacity(1 + body_row_count);
                     rows.push(header_row.into_any_element());
                     rows.extend(body_rows.map(|row| row.into_any_element()));
 
@@ -3153,14 +3162,14 @@ impl Render for Block {
 
                     div()
                         .id(block_id)
+                        .debug_selector(|| "table-root".to_string())
                         .w_full()
                         .relative()
                         .flex()
                         .flex_col()
-                        .pr(right_gutter)
-                        .pb(bottom_gutter)
                         .gap(px(0.0))
                         .children(rows)
+                        .children(column_axis_overlay)
                         .child(column_edge_band)
                         .child(row_edge_band)
                         .child(column_control)

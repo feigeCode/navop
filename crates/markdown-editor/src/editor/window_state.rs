@@ -369,6 +369,7 @@ mod tests {
     use gpui::TestAppContext;
 
     use super::Editor;
+    use crate::components::{BlockKind, TableAxisKind, TableAxisMarker};
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
 
@@ -386,6 +387,7 @@ mod tests {
 
     fn redraw(cx: &mut gpui::VisualTestContext) {
         cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.background_executor.run_until_parked();
         cx.run_until_parked();
     }
 
@@ -558,5 +560,93 @@ mod tests {
                 run_end - run_start
             );
         });
+    }
+
+    #[gpui::test]
+    async fn table_hover_controls_overlay_without_resizing_table(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |".to_string();
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        let table_block = editor.read_with(cx, |editor, cx| {
+            editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
+                .expect("the markdown table becomes a table block")
+                .entity
+                .clone()
+        });
+
+        let baseline = cx.debug_bounds("table-root").expect("table root lays out");
+
+        // Hovering a column shows the axis strip overlaid on the header: the
+        // strip starts at the table's top edge and the table does not grow.
+        table_block.update(cx, |block, cx| {
+            block.table_axis_preview = Some(TableAxisMarker {
+                kind: TableAxisKind::Column,
+                index: 0,
+            });
+            cx.notify();
+        });
+        redraw(cx);
+        let strip = cx
+            .debug_bounds("table-column-axis-overlay")
+            .expect("column axis strip renders on column hover");
+        let after_axis = cx.debug_bounds("table-root").expect("table root lays out");
+        assert!(
+            (f32::from(strip.origin.y) - f32::from(after_axis.origin.y)).abs() < 0.5,
+            "the axis strip must overlay the header, not sit above it"
+        );
+        assert_eq!(
+            after_axis.size.height, baseline.size.height,
+            "column hover must not grow the table"
+        );
+
+        // Hovering the right edge shows the column append button overlaid on
+        // the edge: the table width stays the same.
+        table_block.update(cx, |block, cx| {
+            block.table_append_column_hovered = true;
+            cx.notify();
+        });
+        redraw(cx);
+        let after_column_append = cx.debug_bounds("table-root").expect("table root lays out");
+        assert_eq!(
+            after_column_append.size.width, baseline.size.width,
+            "column append control must not widen the table"
+        );
+
+        // Hovering the bottom edge shows the row append button overlaid on the
+        // edge: the table height stays the same.
+        table_block.update(cx, |block, cx| {
+            block.table_append_row_hovered = true;
+            cx.notify();
+        });
+        redraw(cx);
+        let after_row_append = cx.debug_bounds("table-root").expect("table root lays out");
+        assert_eq!(
+            after_row_append.size.height, baseline.size.height,
+            "row append control must not grow the table"
+        );
+
+        // Leaving everything restores the exact baseline bounds.
+        table_block.update(cx, |block, cx| {
+            block.table_axis_preview = None;
+            block.table_axis_selection = None;
+            block.table_append_column_hovered = false;
+            block.table_append_row_hovered = false;
+            cx.notify();
+        });
+        redraw(cx);
+        assert_eq!(
+            cx.debug_bounds("table-root").expect("table root lays out"),
+            baseline,
+            "clearing hover states must restore the original table bounds"
+        );
     }
 }
