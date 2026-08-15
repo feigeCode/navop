@@ -128,6 +128,10 @@ pub enum ConnectionState {
     Disconnected { error: Option<String> },
 }
 
+fn should_install_connected_backend(state: &ConnectionState) -> bool {
+    !matches!(state, ConnectionState::Disconnected { .. })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostKeyVerificationRequest {
     pub identity: HostKeyIdentity,
@@ -2513,6 +2517,11 @@ impl Terminal {
 
         match result {
             Ok(Ok(backend)) => {
+                if !should_install_connected_backend(&self.connection_state) {
+                    // worker 已在 backend 安装前上报断开：不得把状态覆盖回 Connected。
+                    backend.shutdown();
+                    return;
+                }
                 self.pending_host_key_verification = None;
                 self.connection_state = ConnectionState::Connected;
                 self.performance_metrics
@@ -3877,8 +3886,8 @@ mod tests {
         is_ssh_password_prompt, keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
         resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
-        send_coalesced_wakeup, shell_escape_arg, ssh_config_with_confirmed_host_key,
-        ssh_config_with_runtime_credentials,
+        send_coalesced_wakeup, shell_escape_arg, should_install_connected_backend,
+        ssh_config_with_confirmed_host_key, ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -3920,6 +3929,19 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn connected_backend_installation_rejects_a_prior_disconnect() {
+        assert!(should_install_connected_backend(
+            &ConnectionState::Connecting
+        ));
+        assert!(should_install_connected_backend(
+            &ConnectionState::Connected
+        ));
+        assert!(!should_install_connected_backend(
+            &ConnectionState::Disconnected { error: None }
+        ));
+    }
 
     struct ResizeProbe {
         sizes: Arc<Mutex<Vec<TerminalSize>>>,
