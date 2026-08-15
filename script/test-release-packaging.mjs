@@ -352,6 +352,52 @@ test("Linux portable packager uses a private loader and recursive ELF closure", 
   assert.match(launcher, /unsetenv\("GLIBC_TUNABLES"\)/);
 });
 
+test("Linux portable packager resolves Debian ownership across usrmerge aliases", () => {
+  const packagerPath = path.resolve("script/package-linux-portable.py");
+  const python = String.raw`
+import importlib.util
+from pathlib import Path
+import subprocess
+import sys
+
+spec = importlib.util.spec_from_file_location("navop_portable_packager", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+loader_in_usr = Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+loader_in_lib = Path("/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+
+usr_candidates = module.package_owner_query_paths(loader_in_usr)
+lib_candidates = module.package_owner_query_paths(loader_in_lib)
+assert loader_in_usr in usr_candidates
+assert loader_in_lib in usr_candidates
+assert loader_in_lib in lib_candidates
+assert loader_in_usr in lib_candidates
+
+queries = []
+def fake_run(command, *, check=True, env=None):
+    queries.append(command)
+    if command == ["dpkg-query", "-S", str(loader_in_lib)]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=f"libc6:amd64: {loader_in_lib}\n",
+            stderr="",
+        )
+    return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+module.run = fake_run
+assert module.package_owner(loader_in_usr) == "libc6:amd64"
+assert ["dpkg-query", "-S", str(loader_in_lib)] in queries
+`;
+  const result = spawnSync("python3", ["-c", python, packagerPath], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test("glibc baseline checker rejects binaries above the configured version", () => {
   const checker = "script/check-linux-glibc-baseline.sh";
   assert.ok(fs.existsSync(checker), `${checker} must exist`);

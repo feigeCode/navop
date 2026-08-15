@@ -38,6 +38,14 @@ HOST_DRIVER_PATTERNS = (
 )
 
 
+USR_MERGE_PATH_ALIASES = (
+    ("/bin", "/usr/bin"),
+    ("/sbin", "/usr/sbin"),
+    ("/lib", "/usr/lib"),
+    ("/lib64", "/usr/lib64"),
+)
+
+
 COMMON_LIBRARY_DIRECTORIES = (
     "/lib64",
     "/lib",
@@ -303,9 +311,41 @@ def copy_runtime_file(source: Path, destination: Path) -> None:
     destination.chmod(destination.stat().st_mode | 0o444)
 
 
+def package_owner_query_paths(path: Path) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+
+    def append(candidate: Path) -> None:
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    append(path)
+    try:
+        append(path.resolve())
+    except OSError:
+        pass
+
+    for candidate in tuple(candidates):
+        candidate_text = str(candidate)
+        for legacy_prefix, merged_prefix in USR_MERGE_PATH_ALIASES:
+            for source_prefix, destination_prefix in (
+                (legacy_prefix, merged_prefix),
+                (merged_prefix, legacy_prefix),
+            ):
+                if candidate_text == source_prefix or candidate_text.startswith(
+                    f"{source_prefix}/"
+                ):
+                    append(
+                        Path(
+                            f"{destination_prefix}"
+                            f"{candidate_text[len(source_prefix):]}"
+                        )
+                    )
+
+    return tuple(candidates)
+
+
 def package_owner(path: Path) -> str | None:
-    candidates = [path, path.resolve()]
-    for candidate in candidates:
+    for candidate in package_owner_query_paths(path):
         result = run(["dpkg-query", "-S", str(candidate)], check=False)
         if result.returncode != 0:
             continue
