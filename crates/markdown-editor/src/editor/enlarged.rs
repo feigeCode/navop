@@ -114,46 +114,58 @@ impl Editor {
         let viewport = window.viewport_size();
         let panel_width = (f32::from(viewport.width) * 0.9).min(960.0);
         let panel_max_height = (f32::from(viewport.height) * 0.85).max(240.0);
-        let body_max_height = panel_max_height - 64.0;
+        let controls_height = d.dialog_button_height;
+        let body_max_height = (panel_max_height - controls_height - d.dialog_gap).max(1.0);
         let title = match state.kind {
             EnlargedBlockKind::Mermaid => "Mermaid".into(),
             EnlargedBlockKind::Math => strings.enlarged_view_math_title.clone(),
         };
 
-        let toggle_button =
-            |id: &'static str,
-             label: String,
-             active: bool,
-             handler: fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>)| {
-                let base = div()
-                    .id(id)
-                    .h(px(d.dialog_button_height))
-                    .px(px(d.dialog_button_padding_x))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px((d.dialog_radius - 4.0).max(0.0)))
-                    .border(px(d.dialog_border_width))
-                    .cursor_pointer()
-                    .text_size(px(t.dialog_button_size))
-                    .font_weight(t.dialog_button_weight.to_font_weight());
-                let base = if active {
-                    base.border_color(c.dialog_border)
-                        .bg(c.dialog_primary_button_bg)
-                        .text_color(c.dialog_primary_button_text)
-                } else {
-                    base.border_color(c.dialog_border)
-                        .bg(c.dialog_secondary_button_bg)
-                        .hover(|this| this.bg(c.dialog_secondary_button_hover))
-                        .text_color(c.dialog_secondary_button_text)
-                        .on_click(cx.listener(handler))
-                };
-                base.child(label)
-            };
+        // The toggle is a single, mutually exclusive button in the top-right
+        // corner. Its label always names the other mode: "Source" while the
+        // rendered preview is shown, "Preview" while the source is shown.
+        let (toggle_id, toggle_label, toggle_handler): (
+            &'static str,
+            String,
+            fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>),
+        ) = if state.show_source {
+            (
+                "enlarged-view-preview",
+                strings.enlarged_view_preview.clone(),
+                Self::on_enlarged_view_preview,
+            )
+        } else {
+            (
+                "enlarged-view-source",
+                strings.enlarged_view_source.clone(),
+                Self::on_enlarged_view_source,
+            )
+        };
+
+        let toggle_button = div()
+            .id(toggle_id)
+            .debug_selector(move || toggle_id.to_string())
+            .h(px(d.dialog_button_height))
+            .px(px(d.dialog_button_padding_x))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px((d.dialog_radius - 4.0).max(0.0)))
+            .border(px(d.dialog_border_width))
+            .border_color(c.dialog_border)
+            .bg(c.dialog_secondary_button_bg)
+            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+            .cursor_pointer()
+            .text_size(px(t.dialog_button_size))
+            .font_weight(t.dialog_button_weight.to_font_weight())
+            .text_color(c.dialog_secondary_button_text)
+            .on_click(cx.listener(toggle_handler))
+            .child(toggle_label);
 
         let body = if state.show_source {
             div()
                 .id("enlarged-block-source")
+                .debug_selector(|| "enlarged-block-source".to_string())
                 .w_full()
                 .max_h(px(body_max_height))
                 .overflow_y_scroll()
@@ -171,14 +183,15 @@ impl Editor {
             let (width, height) = enlarged_artifact_size(
                 &state.artifact,
                 EnlargedPreviewLimit {
-                    width: panel_width - d.dialog_padding * 2.0,
+                    width: panel_width,
                     height: body_max_height,
                 },
             );
             div()
                 .id("enlarged-block-preview")
+                .debug_selector(|| "enlarged-block-preview".to_string())
                 .w_full()
-                .max_h(px(body_max_height))
+                .h(px(body_max_height))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -209,25 +222,23 @@ impl Editor {
                     cx.listener(Self::on_dismiss_context_menu_overlay),
                 )
                 .child(
+                    // No card/background around the enlarged content. Preview
+                    // mode is just the rendered image; only source mode gets a
+                    // code-block background.
                     div()
-                        .id("enlarged-block-dialog")
+                        .id("enlarged-block-content")
                         .w(px(panel_width))
                         .max_w(relative(1.0))
-                        .p(px(d.dialog_padding))
                         .flex()
                         .flex_col()
                         .gap(px(d.dialog_gap))
-                        .bg(c.dialog_surface)
-                        .border(px(d.dialog_border_width))
-                        .border_color(c.dialog_border)
-                        .rounded(px(d.dialog_radius))
-                        .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
                             cx.stop_propagation()
                         })
                         .child(
                             div()
                                 .w_full()
+                                .h(px(controls_height))
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -238,24 +249,7 @@ impl Editor {
                                         .text_color(c.dialog_title)
                                         .child(title),
                                 )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(d.dialog_button_gap))
-                                        .child(toggle_button(
-                                            "enlarged-view-preview",
-                                            strings.enlarged_view_preview.clone(),
-                                            !state.show_source,
-                                            Self::on_enlarged_view_preview,
-                                        ))
-                                        .child(toggle_button(
-                                            "enlarged-view-source",
-                                            strings.enlarged_view_source.clone(),
-                                            state.show_source,
-                                            Self::on_enlarged_view_source,
-                                        )),
-                                ),
+                                .child(toggle_button),
                         )
                         .child(body),
                 )
@@ -450,6 +444,7 @@ mod tests {
             .debug_bounds("enlargable-host-svg")
             .expect("the rendered math image is displayed");
         cx.simulate_click(image_bounds.center(), Modifiers::default());
+        redraw(cx);
 
         editor.read_with(cx, |editor, _cx| {
             let state = editor
@@ -461,6 +456,62 @@ mod tests {
                 "the enlarged view opens in preview mode, not source mode"
             );
         });
+
+        // Preview mode shows the image directly. The single top-right toggle
+        // is labelled "Source" and no "Preview" toggle is rendered alongside.
+        assert!(
+            cx.debug_bounds("enlarged-block-preview").is_some(),
+            "opening the enlarged view renders the image preview"
+        );
+        assert!(
+            cx.debug_bounds("enlarged-block-source").is_none(),
+            "preview mode does not render the source block"
+        );
+        let source_toggle = cx
+            .debug_bounds("enlarged-view-source")
+            .expect("the toggle offers source mode while previewing");
+        assert!(
+            cx.debug_bounds("enlarged-view-preview").is_none(),
+            "source and preview toggles must be mutually exclusive"
+        );
+
+        cx.simulate_click(source_toggle.center(), Modifiers::default());
+        redraw(cx);
+        editor.read_with(cx, |editor, _cx| {
+            assert!(
+                editor.enlarged_block.as_ref().unwrap().show_source,
+                "clicking Source switches to the source block"
+            );
+        });
+        assert!(
+            cx.debug_bounds("enlarged-block-source").is_some(),
+            "source mode renders the source block"
+        );
+        assert!(
+            cx.debug_bounds("enlarged-block-preview").is_none(),
+            "source mode does not render the image preview"
+        );
+        let preview_toggle = cx
+            .debug_bounds("enlarged-view-preview")
+            .expect("the same toggle now offers preview mode");
+        assert!(
+            cx.debug_bounds("enlarged-view-source").is_none(),
+            "the Source label must be replaced by the Preview label"
+        );
+
+        cx.simulate_click(preview_toggle.center(), Modifiers::default());
+        redraw(cx);
+        editor.read_with(cx, |editor, _cx| {
+            assert!(
+                !editor.enlarged_block.as_ref().unwrap().show_source,
+                "clicking Preview returns to the image preview"
+            );
+        });
+        assert!(
+            cx.debug_bounds("enlarged-view-source").is_some(),
+            "returning to preview mode restores the Source label"
+        );
+
         let focused = cx.update(|window, cx| math_block.read(cx).focus_handle.is_focused(window));
         assert!(
             !focused,
