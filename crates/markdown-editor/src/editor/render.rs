@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 use gpui_component::ElementExt as _;
 
-use super::Editor;
+use super::{Editor, MountedRun};
 use crate::components::Block;
 use crate::components::CalloutVariant;
 use crate::i18n::I18nManager;
@@ -597,20 +597,10 @@ impl Render for Editor {
                     .saturating_sub(1)
             });
 
-        // A row's first block keys its cached height; its painted top (from last
-        // frame) feeds the footprints below.
+        // A row's first block keys its cached footprint.
         let row_first_ids: Vec<EntityId> = row_starts
             .iter()
             .map(|&start| visible_blocks[start].entity.entity_id())
-            .collect();
-        let row_tops: Vec<Option<f32>> = row_starts
-            .iter()
-            .map(|&start| {
-                visible_blocks[start]
-                    .entity
-                    .read_with(cx, |block, _cx| block.last_bounds)
-                    .map(|bounds| f32::from(bounds.top()))
-            })
             .collect();
 
         // On a structural edit the row indices no longer match last frame, so the
@@ -637,15 +627,33 @@ impl Render for Editor {
             .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimate))
             .collect();
 
-        // Rows mounted together last frame shared one scroll offset, so their
-        // adjacent painted-top differences are scroll-free heights. Caching those,
-        // not raw positions, is what keeps the window stable while scrolling.
-        if !structural_change {
-            if let Some((prev_start, prev_end)) = self.prev_render_window {
-                let prev_end = prev_end.min(row_first_ids.len());
-                for row in prev_start..prev_end.saturating_sub(1) {
-                    if let (Some(top), Some(next_top)) = (row_tops[row], row_tops[row + 1]) {
-                        let stride = next_top - top;
+        // A footprint only holds for the column it was measured at. The first
+        // frame has no scroll bounds yet, so the column collapses to its 1px
+        // floor and every block wraps a character per line; keeping those
+        // measurements would leave the document permanently mis-sized.
+        let width_changed = self.row_stride_width != Some(centered_width);
+        if width_changed {
+            self.row_stride_cache.clear();
+            self.row_stride_width = Some(centered_width);
+        }
+
+        // The scroll container records every mounted child's layout bounds, so
+        // adjacent tops differ by exactly one row's footprint whatever the row
+        // holds. Caching those differences, not raw positions, keeps the window
+        // stable while scrolling.
+        if !structural_change && !width_changed {
+            if let Some(prev) = self
+                .prev_mounted_run
+                .filter(|prev| self.mounted_run_is_addressable(*prev))
+            {
+                let prev_end = prev.row_end.min(row_first_ids.len());
+                for row in prev.row_start..prev_end.saturating_sub(1) {
+                    let child = prev.child_base + row - prev.row_start;
+                    if let (Some(bounds), Some(next_bounds)) = (
+                        self.scroll_handle.bounds_for_item(child),
+                        self.scroll_handle.bounds_for_item(child + 1),
+                    ) {
+                        let stride = f32::from(next_bounds.top() - bounds.top());
                         if stride > 0.0 && stride.is_finite() {
                             self.row_stride_cache.insert(row_first_ids[row], stride);
                         }
@@ -685,39 +693,63 @@ impl Render for Editor {
             RENDER_OVERDRAW_PX,
             focus_row,
         );
-        self.prev_render_window = Some((render_window.run_start, render_window.run_end));
-
-        // The first mounted row re-applies its `mt`, so drop it from the top
-        // spacer to avoid shifting content down by a gap.
-        let top_h = match row_top_gaps.get(render_window.run_start) {
-            Some(gap) => (render_window.top_h - gap).max(0.0),
-            None => render_window.top_h,
+        let island = render_window.focus_island;
+        let island_before_run = island.is_some_and(|island| island.row < render_window.run_start);
+        // A mounted row re-applies its own `mt`, which the preceding stride
+        // already covered, so every spacer sheds the gap of the row it precedes.
+        let spacer_before = |row: usize, height: f32| -> f32 {
+            match row_top_gaps.get(row) {
+                Some(gap) => (height - gap).max(0.0),
+                None => height,
+            }
         };
         let mut block_rows: Vec<AnyElement> =
-            Vec::with_capacity(render_window.run_end - render_window.run_start + 2);
-        if top_h > 0.5 {
-            block_rows.push(
-                div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .h(px(top_h))
-                    .into_any_element(),
-            );
-        }
-        for (row_index, element) in row_elements.into_iter().enumerate() {
-            if row_index >= render_window.run_start && row_index < render_window.run_end {
-                block_rows.push(element);
+            Vec::with_capacity(render_window.run_end - render_window.run_start + 4);
+        let push_spacer = |rows: &mut Vec<AnyElement>, height: f32| {
+            if height > 0.5 {
+                rows.push(
+                    div()
+                        .w_full()
+                        .flex_shrink_0()
+                        .h(px(height))
+                        .into_any_element(),
+                );
             }
+        };
+
+        let mut row_elements: Vec<Option<AnyElement>> =
+            row_elements.into_iter().map(Some).collect();
+        let mut take_row = |rows: &mut Vec<AnyElement>, row: usize| {
+            if let Some(element) = row_elements.get_mut(row).and_then(Option::take) {
+                rows.push(element);
+            }
+        };
+
+        if let Some(island) = island.filter(|_| island_before_run) {
+            push_spacer(&mut block_rows, spacer_before(island.row, island.lead_h));
+            take_row(&mut block_rows, island.row);
         }
-        if render_window.bottom_h > 0.5 {
-            block_rows.push(
-                div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .h(px(render_window.bottom_h))
-                    .into_any_element(),
-            );
+        push_spacer(
+            &mut block_rows,
+            spacer_before(render_window.run_start, render_window.top_h),
+        );
+        let run_child_base = block_rows.len();
+        for row in render_window.run_start..render_window.run_end {
+            take_row(&mut block_rows, row);
         }
+        if let Some(island) = island.filter(|_| !island_before_run) {
+            push_spacer(&mut block_rows, spacer_before(island.row, island.lead_h));
+            take_row(&mut block_rows, island.row);
+        }
+        push_spacer(&mut block_rows, render_window.bottom_h);
+        // Next frame reads the run's footprints back at these child indices, and
+        // re-checks `child_count` before trusting them.
+        self.prev_mounted_run = Some(MountedRun {
+            row_start: render_window.run_start,
+            row_end: render_window.run_end,
+            child_base: run_child_base,
+            child_count: block_rows.len(),
+        });
 
         let scroll_content = div()
             .id("editor-scroll-inner")
