@@ -1176,31 +1176,37 @@ impl RemoteDesktopView {
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     fn refresh_windows_native_readiness(&mut self) {
-        let Some(native) = self.windows_native.as_mut() else {
-            return;
-        };
-        let was_ready = native.presentation_ready();
-        let now_presentable = native.refresh_native_readiness();
-        let now_ready = native.presentation_ready();
-        if now_ready && !was_ready {
-            tracing::info!(
-                generation = native.generation(),
-                "Windows native RDP presentation ready"
-            );
-            self.log_windows_native_readiness("readiness_transition");
-        }
-        if now_presentable && self.tab_active && !native.requested_visible() {
-            // The native child is structurally ready (login reached, the
-            // control drawing window has non-zero rects). Retry activation
-            // quietly every maintenance tick while it is still blocked (e.g.
-            // the owner is hidden/minimized or the bounds are clipped away);
-            // it succeeds as soon as the layout or owner allows.
-            if let Err(error) = native.activate(false) {
-                tracing::trace!(
-                    ?error,
-                    "deferred Windows native RDP activation is still blocked"
+        let tab_active = self.tab_active;
+        let transitioned = if let Some(native) = self.windows_native.as_mut() {
+            let was_ready = native.presentation_ready();
+            let now_presentable = native.refresh_native_readiness();
+            let now_ready = native.presentation_ready();
+            let transitioned = now_ready && !was_ready;
+            if transitioned {
+                tracing::info!(
+                    generation = native.generation(),
+                    "Windows native RDP presentation ready"
                 );
             }
+            if now_presentable && tab_active && !native.requested_visible() {
+                // The native child is structurally ready (login reached, the
+                // control drawing window has non-zero rects). Retry activation
+                // quietly every maintenance tick while it is still blocked (e.g.
+                // the owner is hidden/minimized or the bounds are clipped away);
+                // it succeeds as soon as the layout or owner allows.
+                if let Err(error) = native.activate(false) {
+                    tracing::trace!(
+                        ?error,
+                        "deferred Windows native RDP activation is still blocked"
+                    );
+                }
+            }
+            transitioned
+        } else {
+            false
+        };
+        if transitioned {
+            self.log_windows_native_readiness("readiness_transition");
         }
     }
 

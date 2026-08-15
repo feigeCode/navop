@@ -1,7 +1,6 @@
 use std::ffi::c_void;
 
 use super::super::ffi::*;
-use super::super::window_pointer;
 use super::DiagnosticContext;
 
 const GW_HWNDNEXT: u32 = 2;
