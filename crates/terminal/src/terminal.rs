@@ -22,7 +22,8 @@ use one_core::app_dirs;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{
-    ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAuthMethod, StoredConnection,
+    ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAuthMethod,
+    StoredConnection, TelnetParams,
 };
 use one_core::storage::{
     GlobalStorageState, TerminalCommandHistoryRepository, TerminalCommandHistorySort,
@@ -63,6 +64,7 @@ use crate::session_logging::{
     AutomaticSessionLogRequestInput, application_version, build_automatic_session_log_request,
     local_recording_session_metadata, output_only_recording_config,
     serial_recording_session_metadata, ssh_recording_session_metadata,
+    telnet_recording_session_metadata,
 };
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
@@ -74,8 +76,8 @@ use crate::windows_environment::{
 use crate::zmodem::{ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder};
 
 use crate::{
-    LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalControlHandle, TerminalEvent,
-    TerminalExecHandle, TerminalInputHandle, TerminalPerformanceMetrics,
+    LocalConfig, SerialBackend, SshBackend, TelnetBackend, TerminalBackend, TerminalControlHandle,
+    TerminalEvent, TerminalExecHandle, TerminalInputHandle, TerminalPerformanceMetrics,
     TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
 };
 use ssh::{
@@ -158,6 +160,7 @@ pub enum TerminalConnectionKind {
     Local,
     Ssh,
     Serial,
+    Telnet,
 }
 
 /// Capability mode for a terminal surface.
@@ -176,7 +179,9 @@ const SSH_CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
 fn clear_screen_remote_redraw_bytes(kind: TerminalConnectionKind) -> Option<&'static [u8]> {
     match kind {
         TerminalConnectionKind::Ssh => Some(SSH_CLEAR_SCREEN_REDRAW_BYTES),
-        TerminalConnectionKind::Local | TerminalConnectionKind::Serial => None,
+        TerminalConnectionKind::Local
+        | TerminalConnectionKind::Serial
+        | TerminalConnectionKind::Telnet => None,
     }
 }
 
@@ -1131,6 +1136,8 @@ pub struct Terminal {
     pending_host_key_verification: Option<HostKeyVerificationRequest>,
     /// 串口参数（用于重连）
     serial_params: Option<SerialParams>,
+    /// Telnet 参数（用于重连）
+    telnet_params: Option<TelnetParams>,
     /// 完整事件链路中是否已有尚未被 GPUI 消费的 Wakeup。
     wakeup_pending: Arc<AtomicBool>,
     /// 事件发送器（用于 SSH 重连）
@@ -1587,6 +1594,7 @@ impl Terminal {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx.clone()),
             event_proxy: None,
@@ -1736,6 +1744,7 @@ impl Terminal {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
@@ -1877,6 +1886,7 @@ impl Terminal {
             zmodem_responder: Some(zmodem_responder),
             pending_host_key_verification: None,
             serial_params: None,
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx.clone()),
             event_proxy: Some(event_proxy),
@@ -2007,6 +2017,7 @@ impl Terminal {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: Some(serial_params),
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -2020,6 +2031,118 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Serial,
+            scrollback_lines,
+        }
+    }
+
+    pub fn new_telnet(conn: StoredConnection, cx: &mut Context<Self>) -> Self {
+        let telnet_params = match parse_stored_telnet_params(&conn) {
+            Ok(params) => params,
+            Err(message) => {
+                let mut terminal = Self::new_local_disconnected(message, cx);
+                terminal.connection_kind = TerminalConnectionKind::Telnet;
+                terminal.connection_id = conn.id;
+                terminal.connection_name = Some(conn.name.clone());
+                terminal.title = conn.name;
+                return terminal;
+            }
+        };
+        let recording_session_metadata = telnet_recording_session_metadata(
+            conn.id,
+            conn.name.clone(),
+            telnet_params.host.clone(),
+            telnet_params.port,
+        );
+
+        let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let app_settings = AppSettings::current(cx);
+        let scrollback_lines = app_settings.terminal_scrollback_lines;
+        let automatic_logging = app_settings.terminal_auto_session_logging;
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            scrollback_lines,
+            event_tx.clone(),
+        );
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let recording_runtime =
+            Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
+        let recording_session_id = Self::new_recording_session_id();
+        let session_log_runtime =
+            Self::start_automatic_session_log(AutomaticSessionLogRuntimeInput {
+                enabled: automatic_logging,
+                event_tx: event_tx.clone(),
+                wakeup_pending: wakeup_pending.clone(),
+                backend: RecordingBackend::Telnet,
+                session_id: recording_session_id.clone(),
+                initial_size: TerminalSize {
+                    rows: DEFAULT_ROWS as u16,
+                    cols: DEFAULT_COLS as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                session: recording_session_metadata.clone(),
+            });
+        let recording_tap =
+            Self::recording_tap_for_runtimes(&recording_runtime, &session_log_runtime);
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+        let connection_generation = 1;
+
+        Self::spawn_telnet_disconnect_handler(disconnect_rx, connection_generation, cx);
+        Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
+        Self::spawn_telnet_connect(
+            telnet_params.clone(),
+            term.clone(),
+            event_proxy.clone(),
+            performance_metrics.clone(),
+            Some(disconnect_tx),
+            recording_tap,
+            connection_generation,
+            cx,
+        );
+
+        Self {
+            term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
+            backend: None,
+            recording_runtime,
+            session_log_runtime,
+            playback_runtime: None,
+            recording_session_id,
+            recording_session_metadata,
+            title: String::new(),
+            current_working_dir: None,
+            child_exited: None,
+            connection_state: ConnectionState::Connecting,
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+            pixel_width: 0,
+            pixel_height: 0,
+            ssh_config: None,
+            ssh_base_config: None,
+            ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
+            ssh_mfa_responder: None,
+            zmodem_responder: None,
+            pending_host_key_verification: None,
+            serial_params: None,
+            telnet_params: Some(telnet_params),
+            wakeup_pending,
+            event_tx: Some(event_tx),
+            event_proxy: Some(event_proxy),
+            connection_id: conn.id,
+            connection_name: Some(conn.name),
+            init_commands: None,
+            session_history: VecDeque::new(),
+            persisted_history: Vec::new(),
+            history_repository: None,
+            history_scope: None,
+            command_record_gate: CommandRecordGate::default(),
+            connection_generation,
+            connection_kind: TerminalConnectionKind::Telnet,
             scrollback_lines,
         }
     }
@@ -2083,6 +2206,7 @@ impl Terminal {
             RecordingBackend::Local => TerminalConnectionKind::Local,
             RecordingBackend::Ssh => TerminalConnectionKind::Ssh,
             RecordingBackend::Serial => TerminalConnectionKind::Serial,
+            RecordingBackend::Telnet => TerminalConnectionKind::Telnet,
         };
         let scrollback_lines = AppSettings::normalize_terminal_scrollback_lines(scrollback_lines);
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
@@ -2140,6 +2264,7 @@ impl Terminal {
                 zmodem_responder: None,
                 pending_host_key_verification: None,
                 serial_params: None,
+                telnet_params: None,
                 wakeup_pending: wakeup_pending.clone(),
                 event_tx: Some(event_tx),
                 event_proxy: None,
@@ -2356,6 +2481,31 @@ impl Terminal {
                     return;
                 }
                 this.connection_state = ConnectionState::Disconnected { error: None };
+                this.backend = None;
+                this.set_connection_active(false, cx);
+                cx.emit(TerminalModelEvent::Wakeup);
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_telnet_disconnect_handler(
+        disconnect_rx: tokio::sync::oneshot::Receiver<Option<String>>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let Ok(error) = disconnect_rx.await else {
+                // Backend creation failed before the worker was installed.
+                // handle_telnet_result owns that error and must not be overwritten.
+                return;
+            };
+            let _ = entity.update(cx, |this, cx| {
+                if !this.is_current_connection_generation(generation) {
+                    return;
+                }
+                this.connection_state = ConnectionState::Disconnected { error };
                 this.backend = None;
                 this.set_connection_active(false, cx);
                 cx.emit(TerminalModelEvent::Wakeup);
@@ -2660,6 +2810,113 @@ impl Terminal {
         cx.emit(TerminalModelEvent::Wakeup);
     }
 
+    fn spawn_telnet_connect(
+        params: TelnetParams,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
+        on_disconnect: Option<tokio::sync::oneshot::Sender<Option<String>>>,
+        recording_tap: Option<RecordingTap>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let disconnect_tx = on_disconnect.map(|tx| {
+            let (sender, mut receiver) = unbounded_channel::<Option<String>>();
+            Tokio::spawn(cx, async move {
+                if let Some(error) = receiver.recv().await {
+                    let _ = tx.send(error);
+                }
+            })
+            .detach();
+            sender
+        });
+
+        // 与 SSH 一致：TCP 连接在后台完成，成功后 Terminal 才进入
+        // Connected 状态，避免“先显示已连接、随后又变成断开”。
+        let task = Tokio::spawn(cx, async move {
+            TelnetBackend::connect_with_metrics_and_recording(
+                params,
+                term,
+                event_proxy,
+                disconnect_tx,
+                performance_metrics,
+                recording_tap,
+            )
+            .await
+        });
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.handle_telnet_result(result, generation, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn handle_telnet_result(
+        &mut self,
+        result: Result<Result<TelnetBackend, anyhow::Error>, tokio::task::JoinError>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_current_connection_generation(generation) {
+            if let Ok(Ok(backend)) = result {
+                backend.shutdown();
+            }
+            return;
+        }
+
+        match result {
+            Ok(Ok(backend)) => {
+                if !should_install_connected_backend(&self.connection_state) {
+                    // worker 已在 backend 安装前上报断开：不得把状态覆盖回 Connected。
+                    backend.shutdown();
+                    return;
+                }
+                self.connection_state = ConnectionState::Connected;
+                self.set_connection_active(true, cx);
+                // 连接过程是异步的，连接完成时终端尺寸可能已经变化；
+                // 与 SSH 一样把当前尺寸同步到新后端。
+                self.term.lock().resize(TermDimensions {
+                    cols: self.cols,
+                    rows: self.rows,
+                });
+                backend.resize(TerminalSize {
+                    rows: self.rows as u16,
+                    cols: self.cols as u16,
+                    pixel_width: self.pixel_width,
+                    pixel_height: self.pixel_height,
+                });
+                self.backend = Some(Box::new(backend));
+                tracing::info!("Telnet 连接成功");
+            }
+            Ok(Err(error)) => {
+                tracing::error!(
+                    target: "terminal.telnet.connect",
+                    error = %error,
+                    "Telnet connection failed"
+                );
+                self.connection_state = ConnectionState::Disconnected {
+                    error: Some(error.to_string()),
+                };
+                self.set_connection_active(false, cx);
+            }
+            Err(error) => {
+                tracing::error!(
+                    target: "terminal.telnet.connect",
+                    error = %error,
+                    "Telnet connect task failed"
+                );
+                self.connection_state = ConnectionState::Disconnected {
+                    error: Some(error.to_string()),
+                };
+                self.set_connection_active(false, cx);
+            }
+        }
+        cx.emit(TerminalModelEvent::Wakeup);
+    }
+
     fn set_connection_active(&self, active: bool, cx: &mut Context<Self>) {
         let Some(connection_id) = self.connection_id else {
             return;
@@ -2714,7 +2971,7 @@ impl Terminal {
                 .as_ref()
                 .map(|config| config.ssh_config.username.clone()),
             TerminalConnectionKind::Local => std::env::var("USER").ok(),
-            TerminalConnectionKind::Serial => None,
+            TerminalConnectionKind::Serial | TerminalConnectionKind::Telnet => None,
         }
     }
 
@@ -3260,6 +3517,7 @@ impl Terminal {
             TerminalConnectionKind::Local => RecordingBackend::Local,
             TerminalConnectionKind::Ssh => RecordingBackend::Ssh,
             TerminalConnectionKind::Serial => RecordingBackend::Serial,
+            TerminalConnectionKind::Telnet => RecordingBackend::Telnet,
         };
 
         Ok(RecordingStartRequest {
@@ -3324,7 +3582,10 @@ impl Terminal {
 
     /// 是否可以重连
     pub fn can_reconnect(&self) -> bool {
-        !self.is_read_only() && (self.ssh_config.is_some() || self.serial_params.is_some())
+        !self.is_read_only()
+            && (self.ssh_config.is_some()
+                || self.serial_params.is_some()
+                || self.telnet_params.is_some())
     }
 
     /// 写入数据到终端
@@ -3525,6 +3786,33 @@ impl Terminal {
             let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
             Self::spawn_disconnect_handler(disconnect_rx, generation, cx);
             Self::spawn_serial_connect(
+                params,
+                self.term.clone(),
+                event_proxy,
+                self.performance_metrics.clone(),
+                Some(disconnect_tx),
+                recording_tap,
+                generation,
+                cx,
+            );
+        } else if let Some(params) = self.telnet_params.clone() {
+            let Some(event_proxy) = self.event_proxy.clone() else {
+                return false;
+            };
+
+            self.connection_state = ConnectionState::Connecting;
+            self.set_connection_active(false, cx);
+            if let Some(backend) = self.backend.take() {
+                backend.shutdown();
+            }
+            self.prepare_surface_for_reconnect();
+            let generation = self.next_connection_generation();
+            self.record_connection_generation_marker(generation);
+            let recording_tap = self.recording_tap();
+
+            let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+            Self::spawn_telnet_disconnect_handler(disconnect_rx, generation, cx);
+            Self::spawn_telnet_connect(
                 params,
                 self.term.clone(),
                 event_proxy,
@@ -3798,6 +4086,15 @@ impl Terminal {
     }
 }
 
+/// 解析持久化边界上的 Telnet 参数。
+///
+/// `StoredConnection.params` 可能来自旧版本迁移、云同步、导入或数据库损坏，
+/// 调用方必须处理解析失败，不能直接 expect/panic。
+fn parse_stored_telnet_params(conn: &StoredConnection) -> Result<TelnetParams, String> {
+    conn.to_telnet_params()
+        .map_err(|error| format!("Telnet 连接参数损坏或不兼容: {error}"))
+}
+
 fn format_connection_error(err: &anyhow::Error) -> String {
     format!("{err:#}")
 }
@@ -3884,10 +4181,11 @@ mod tests {
         clear_screen_remote_redraw_bytes, compose_ssh_init_commands, flush_pending_terminal_events,
         format_connection_error, host_key_verification_request, is_reconnect_generation,
         is_ssh_password_prompt, keyboard_interactive_answers_for_terminal, merge_history_matches,
-        normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
-        resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
-        send_coalesced_wakeup, shell_escape_arg, should_install_connected_backend,
-        ssh_config_with_confirmed_host_key, ssh_config_with_runtime_credentials,
+        normalize_history_matches, parse_stored_telnet_params, receive_terminal_event_for_gpui,
+        recent_text_from_term, resolve_default_windows_shell_from_env, resolve_local_working_dir,
+        resolve_ssh_connection, send_coalesced_wakeup, shell_escape_arg,
+        should_install_connected_backend, ssh_config_with_confirmed_host_key,
+        ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -4043,6 +4341,7 @@ mod tests {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -5983,6 +6282,7 @@ mod tests {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -6257,6 +6557,7 @@ mod tests {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            telnet_params: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -6275,6 +6576,19 @@ mod tests {
 
         terminal.set_scrollback_lines(250_000);
         assert_eq!(250_000, terminal.scrollback_lines());
+    }
+
+    #[test]
+    fn telnet_params_parse_error_is_reported_without_panicking() {
+        let mut conn = StoredConnection::new_telnet(
+            "Broken Telnet".to_string(),
+            one_core::storage::models::TelnetParams::default(),
+            None,
+        );
+        conn.params = r#"[]"#.to_string();
+
+        let error = parse_stored_telnet_params(&conn).expect_err("非法 JSON 应解析失败");
+        assert!(error.contains("Telnet 连接参数损坏或不兼容"));
     }
 }
 

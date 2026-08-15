@@ -76,6 +76,35 @@ async fn rejects_empty_and_oversized_data_without_waiting() {
 }
 
 #[tokio::test]
+async fn try_send_data_returns_full_and_can_retry_after_capacity_is_released() {
+    let (sender, mut receiver) = bounded_terminal_queue::<u8>(budget(3, 1, 1));
+
+    sender
+        .send_data(vec![1])
+        .await
+        .expect("initial data should be accepted");
+    let full = sender
+        .try_send_data(vec![2; 3])
+        .expect_err("no byte capacity should be available");
+    assert!(matches!(full, TerminalDataSendError::Full(ref data) if data == &vec![2; 3]));
+    assert_eq!(sender.pending_bytes(), 1);
+
+    let item = receiver
+        .recv()
+        .await
+        .expect("initial item should be available");
+    assert_eq!(item, TerminalIngressItem::Data(vec![1]));
+
+    sender
+        .try_send_data(vec![2; 3])
+        .expect("capacity should be available after the first item was consumed");
+    assert_eq!(
+        receiver.recv().await,
+        Some(TerminalIngressItem::Data(vec![2; 3]))
+    );
+}
+
+#[tokio::test]
 async fn errors_and_items_redact_terminal_payloads() {
     let (sender, mut receiver) = bounded_terminal_queue::<String>(budget(4, 1, 1));
 

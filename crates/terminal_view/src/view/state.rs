@@ -60,6 +60,7 @@ pub(crate) enum TerminalDuplicateSource {
         sync_path_with_terminal: bool,
     },
     Serial(StoredConnection),
+    Telnet(StoredConnection),
 }
 
 #[derive(Clone)]
@@ -121,6 +122,9 @@ pub(super) fn terminal_tab_duplicate_supported(
         ) | (
             Some(TerminalDuplicateSource::Serial(_)),
             Some(TerminalConnectionKind::Serial),
+        ) | (
+            Some(TerminalDuplicateSource::Telnet(_)),
+            Some(TerminalConnectionKind::Telnet),
         )
     )
 }
@@ -170,6 +174,7 @@ pub(super) fn terminal_duplicate_source_with_cwd(
             sync_path_with_terminal,
         },
         TerminalDuplicateSource::Serial(connection) => TerminalDuplicateSource::Serial(connection),
+        TerminalDuplicateSource::Telnet(connection) => TerminalDuplicateSource::Telnet(connection),
     }
 }
 

@@ -77,7 +77,13 @@ impl std::error::Error for TerminalIngressBudgetError {}
 #[derive(PartialEq, Eq)]
 pub enum TerminalDataSendError {
     Empty(Vec<u8>),
-    Oversized { data: Vec<u8>, max_bytes: usize },
+    Oversized {
+        data: Vec<u8>,
+        max_bytes: usize,
+    },
+    /// The queue currently has no capacity. The payload is returned so the
+    /// caller can keep it and retry later without losing terminal output.
+    Full(Vec<u8>),
     Closed(Vec<u8>),
 }
 
@@ -89,6 +95,10 @@ impl fmt::Debug for TerminalDataSendError {
                 .debug_struct("Oversized")
                 .field("bytes", &data.len())
                 .field("max_bytes", max_bytes)
+                .finish(),
+            Self::Full(data) => formatter
+                .debug_tuple("Full")
+                .field(&format_args!("<redacted:{} bytes>", data.len()))
                 .finish(),
             Self::Closed(data) => formatter
                 .debug_tuple("Closed")
@@ -105,6 +115,11 @@ impl fmt::Display for TerminalDataSendError {
             Self::Oversized { data, max_bytes } => write!(
                 formatter,
                 "terminal ingress chunk of {} bytes exceeds budget {max_bytes}",
+                data.len()
+            ),
+            Self::Full(data) => write!(
+                formatter,
+                "terminal ingress queue is full ({} byte payload retained)",
                 data.len()
             ),
             Self::Closed(_) => formatter.write_str("terminal ingress receiver is closed"),

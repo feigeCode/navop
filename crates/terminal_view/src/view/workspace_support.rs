@@ -72,6 +72,9 @@ impl TerminalView {
             TerminalDuplicateSource::Serial(connection) => {
                 Self::new_serial_with_index(connection, None, window, cx)
             }
+            TerminalDuplicateSource::Telnet(connection) => {
+                Self::new_telnet_with_index(connection, None, window, cx)
+            }
             TerminalDuplicateSource::Ssh {
                 connection,
                 working_dir,

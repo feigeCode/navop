@@ -50,6 +50,7 @@ pub fn session_log_path(
         RecordingBackend::Local => "local",
         RecordingBackend::Ssh => "ssh",
         RecordingBackend::Serial => "serial",
+        RecordingBackend::Telnet => "telnet",
     };
     let directory = session_logs_directory
         .as_ref()

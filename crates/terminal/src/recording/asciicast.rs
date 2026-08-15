@@ -30,6 +30,7 @@ pub enum RecordingBackend {
     Local,
     Ssh,
     Serial,
+    Telnet,
 }
 
 /// Product-level semantics for an artifact stored in the asciicast container.

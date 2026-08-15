@@ -85,6 +85,22 @@ impl TerminalWorkspace {
         Self::from_pane(main, window, cx)
     }
 
+    pub fn new_telnet(conn: StoredConnection, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_telnet_with_index(conn, None, window, cx)
+    }
+
+    pub fn new_telnet_with_index(
+        conn: StoredConnection,
+        tab_index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let main = cx.new(|cx| {
+            TerminalView::new_telnet_with_index(conn, tab_index, window, cx).with_workspace_pane()
+        });
+        Self::from_pane(main, window, cx)
+    }
+
     pub fn new_recording_playback(
         config: RecordingPlaybackViewConfig,
         window: &mut Window,

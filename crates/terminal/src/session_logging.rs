@@ -100,6 +100,21 @@ pub(crate) fn serial_recording_session_metadata(
     }
 }
 
+pub(crate) fn telnet_recording_session_metadata(
+    connection_id: Option<i64>,
+    connection_name: String,
+    remote_host: String,
+    remote_port: u16,
+) -> RecordingSessionMetadata {
+    RecordingSessionMetadata {
+        connection_id,
+        connection_name: non_empty(connection_name),
+        remote_host: non_empty(remote_host),
+        remote_port: Some(remote_port),
+        ..RecordingSessionMetadata::default()
+    }
+}
+
 fn environment_identity(names: &[&str]) -> Option<String> {
     names
         .iter()

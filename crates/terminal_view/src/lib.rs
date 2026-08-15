@@ -15,6 +15,7 @@ pub mod settings;
 pub mod sidebar;
 mod ssh_form_mfa;
 pub mod ssh_form_window;
+pub mod telnet_form_window;
 pub mod terminal_element;
 mod theme;
 pub mod view;
@@ -30,6 +31,7 @@ pub use settings::{
 };
 pub use sidebar::{SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 pub use ssh_form_window::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
+pub use telnet_form_window::{TelnetFormWindow, TelnetFormWindowConfig};
 pub use terminal::terminal::{
     ConnectionState, SshTerminalConfig, Terminal, TerminalConnectionKind, TerminalModelEvent,
 };

@@ -1525,6 +1525,113 @@ Sidebar:
     zh-CN: 从侧边栏移除
     zh-HK: 從側邊欄移除
 
+# Telnet 连接
+Telnet:
+  new:
+    en: New Telnet Connection
+    zh-CN: 新建 Telnet 连接
+    zh-HK: 新建 Telnet 連接
+  edit:
+    en: Edit Telnet Connection
+    zh-CN: 编辑 Telnet 连接
+    zh-HK: 編輯 Telnet 連接
+  name:
+    en: Connection Name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  name_placeholder:
+    en: Enter connection name
+    zh-CN: 请输入连接名称
+    zh-HK: 請輸入連線名稱
+  host:
+    en: Host
+    zh-CN: 主机
+    zh-HK: 主機
+  host_placeholder:
+    en: "e.g. 192.168.1.1 or switch.example.com"
+    zh-CN: "如 192.168.1.1 或 switch.example.com"
+    zh-HK: "如 192.168.1.1 或 switch.example.com"
+  port:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 端口
+  port_placeholder:
+    en: "23"
+    zh-CN: "23"
+    zh-HK: "23"
+  workspace:
+    en: Workspace
+    zh-CN: 工作区
+    zh-HK: 工作區
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Enter remark
+    zh-CN: 请输入备注
+    zh-HK: 請輸入備註
+  validation_error:
+    en: Please enter a valid host and port
+    zh-CN: 请输入有效的主机和端口
+    zh-HK: 請輸入有效的主機和端口
+  login_script:
+    en: Login Script
+    zh-CN: 登录脚本
+    zh-HK: 登入腳本
+  login_script_hint:
+    en: "Sequentially match server output with regular expressions and send the configured content. Expect supports regex escapes such as \\r, \\n, \\t and \\xNN; a carriage return is appended automatically when send does not end with \\r or \\n."
+    zh-CN: "按顺序使用正则表达式匹配服务端输出并自动发送配置内容。expect 支持 \\r、\\n、\\t、\\xNN 等正则转义；发送内容不以 \\r 或 \\n 结尾时自动补回车。"
+    zh-HK: "按順序使用正規表示式匹配伺服器輸出並自動傳送設定內容。expect 支援 \\r、\\n、\\t、\\xNN 等正規表示式跳脫；傳送內容不以 \\r 或 \\n 結尾時自動補回車。"
+  login_script_credential_hint:
+    en: "Send values often contain passwords, enable passwords or tokens. They are encrypted in the local connection database and automated login sends are excluded from input recording, but Telnet still transmits them in plaintext on the network."
+    zh-CN: "发送内容通常包含密码、enable 密码或 token：它们会在本地连接数据库中加密保存，自动登录发送内容不会写入输入录制，但 Telnet 仍会在网络上明文传输。"
+    zh-HK: "傳送內容通常包含密碼、enable 密碼或 token：它們會在本地連線資料庫中加密儲存，自動登入傳送內容不會寫入輸入錄製，但 Telnet 仍會在網路上明文傳輸。"
+  login_script_expect:
+    en: Expect Regex
+    zh-CN: Expect 正则
+    zh-HK: Expect 正規表示式
+  login_script_expect_placeholder:
+    en: "e.g. (?i)(?:login|username)\\s*:"
+    zh-CN: "如 (?i)(?:login|username)\\s*:"
+    zh-HK: "如 (?i)(?:login|username)\\s*:"
+  login_script_send:
+    en: Send
+    zh-CN: 发送内容
+    zh-HK: 傳送內容
+  login_script_send_placeholder:
+    en: "e.g. admin"
+    zh-CN: "如 admin"
+    zh-HK: "如 admin"
+  login_script_add:
+    en: Add Step
+    zh-CN: 添加步骤
+    zh-HK: 新增步驟
+  login_script_remove:
+    en: Remove Step
+    zh-CN: 移除步骤
+    zh-HK: 移除步驟
+  login_script_validation_error:
+    en: Please complete all expect fields and use valid regular expressions that do not match empty input
+    zh-CN: 请完整填写登录脚本的 expect 字段，并使用不会匹配空内容的有效正则表达式
+    zh-HK: 請完整填寫登入腳本的 expect 欄位，並使用不會匹配空內容的有效正規表示式
+  save_failed:
+    en: "Failed to save Telnet connection: %{error}"
+    zh-CN: "保存 Telnet 连接失败：%{error}"
+    zh-HK: "儲存 Telnet 連線失敗：%{error}"
+  test_tcp:
+    en: Test TCP Port
+    zh-CN: 测试 TCP 端口
+    zh-HK: 測試 TCP 端口
+  test_tcp_success:
+    en: TCP port is reachable (this does not validate the Telnet protocol or login script)
+    zh-CN: TCP 端口可达（此测试不验证 Telnet 协议或登录脚本）
+    zh-HK: TCP 端口可達（此測試不驗證 Telnet 協定或登入腳本）
+  test_timeout:
+    en: TCP connection timed out
+    zh-CN: TCP 连接超时
+    zh-HK: TCP 連接超時
+
 # 串口连接
 Serial:
   new:

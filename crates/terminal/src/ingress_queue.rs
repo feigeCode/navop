@@ -161,6 +161,59 @@ impl<C> BoundedTerminalSender<C> {
         Ok(())
     }
 
+    /// Non-blocking variant of [`Self::send_data`].
+    ///
+    /// When the queue is full the payload is returned as
+    /// [`TerminalDataSendError::Full`], allowing callers to retain the data and
+    /// keep servicing control commands while transport reads are paused.
+    pub fn try_send_data(&self, data: Vec<u8>) -> Result<(), TerminalDataSendError> {
+        let byte_count = data.len();
+        if byte_count == 0 {
+            return Err(TerminalDataSendError::Empty(data));
+        }
+        if byte_count > self.state.max_pending_bytes {
+            return Err(TerminalDataSendError::Oversized {
+                data,
+                max_bytes: self.state.max_pending_bytes,
+            });
+        }
+        if self.state.abort.is_cancelled() {
+            return Err(TerminalDataSendError::Closed(data));
+        }
+
+        let permits = u32::try_from(byte_count).expect("validated byte count fits in u32");
+        let permit = match self
+            .state
+            .byte_permits
+            .clone()
+            .try_acquire_many_owned(permits)
+        {
+            Ok(permit) => permit,
+            Err(tokio::sync::TryAcquireError::Closed) => {
+                return Err(TerminalDataSendError::Closed(data));
+            }
+            Err(tokio::sync::TryAcquireError::NoPermits) => {
+                return Err(TerminalDataSendError::Full(data));
+            }
+        };
+        let reservation = self.state.reserve_bytes(byte_count, permit);
+
+        match self.data_tx.try_reserve() {
+            Ok(slot) => {
+                slot.send(QueuedData::new(data, reservation));
+                Ok(())
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                drop(reservation);
+                Err(TerminalDataSendError::Full(data))
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                drop(reservation);
+                Err(TerminalDataSendError::Closed(data))
+            }
+        }
+    }
+
     async fn acquire_bytes(
         &self,
         byte_count: usize,

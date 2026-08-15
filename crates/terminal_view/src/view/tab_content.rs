@@ -68,10 +68,10 @@ impl TabContent for TerminalView {
     }
 
     fn icon(&self, cx: &App) -> Option<Icon> {
-        if self.connection_kind(cx) == TerminalConnectionKind::Serial {
-            Some(IconName::SerialPort.color())
-        } else {
-            Some(IconName::TerminalColor.color())
+        match self.connection_kind(cx) {
+            TerminalConnectionKind::Serial => Some(IconName::SerialPort.color()),
+            TerminalConnectionKind::Telnet => Some(IconName::SquareTerminalColor.color()),
+            _ => Some(IconName::TerminalColor.color()),
         }
     }
 

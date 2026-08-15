@@ -115,6 +115,7 @@ fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> St
         ),
         TerminalConnectionKind::Ssh => ("远程 Linux shell 环境".to_string(), "bash"),
         TerminalConnectionKind::Serial => ("串口终端环境".to_string(), "text"),
+        TerminalConnectionKind::Telnet => ("Telnet 网络设备终端环境".to_string(), "text"),
     };
     format!(
         r#"你是终端侧边栏中的命令助手，当前目标是{environment}。

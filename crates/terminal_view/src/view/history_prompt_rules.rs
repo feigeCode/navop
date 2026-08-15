@@ -84,7 +84,7 @@ pub(super) fn terminal_history_scope(
     match live_connection_kind {
         Some(TerminalConnectionKind::Local) => Some(TerminalHistoryScope::local()),
         Some(TerminalConnectionKind::Ssh) => connection_id.map(TerminalHistoryScope::ssh),
-        Some(TerminalConnectionKind::Serial) | None => None,
+        Some(TerminalConnectionKind::Serial) | Some(TerminalConnectionKind::Telnet) | None => None,
     }
 }
 
