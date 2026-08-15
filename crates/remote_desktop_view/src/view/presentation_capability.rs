@@ -142,6 +142,9 @@ fn map_probe_failure(error: windows_rdp_host::WindowsRdpHostError) -> WindowsNat
         WindowsRdpHostError::WrongThread => WindowsNativeRdpProbeFailure::WrongThread,
         WindowsRdpHostError::CallbackInFlight => WindowsNativeRdpProbeFailure::CallbackInFlight,
         WindowsRdpHostError::InvalidState => WindowsNativeRdpProbeFailure::InvalidState,
+        // Bounds-synchronization results are not probe outcomes; fold them into
+        // the generic pre-connect failure classification if they ever escape.
+        WindowsRdpHostError::PresentationIncomplete => WindowsNativeRdpProbeFailure::Internal,
         WindowsRdpHostError::NativeReturnedNullHandle => {
             WindowsNativeRdpProbeFailure::NativeReturnedNullHandle
         }

@@ -19,8 +19,6 @@ namespace {
 
 constexpr wchar_t kNativeHostWindowClassName[] =
     L"Navop.WindowsRdpHost.Container";
-constexpr ULONG kDefaultDesktopScaleFactor = static_cast<ULONG>(100);
-constexpr ULONG kDefaultDeviceScaleFactor = static_cast<ULONG>(100);
 
 // 1Remote deliberately hosts the broadly deployed
 // MsRdpClient9NotSafeForScripting control instead of the newest RDP control.
@@ -42,6 +40,13 @@ class WindowsRdpAtlModule final :
     public CAtlModuleT<WindowsRdpAtlModule> {};
 
 WindowsRdpAtlModule windows_rdp_atl_module;
+
+// Distinguishable failure for "the ActiveX drawing window is not inside the
+// host subtree yet". The connection may still complete; callers re-synchronize
+// bounds after the next LoginComplete/Reconnected instead of treating this as a
+// terminal error. 'NA' is the Navop facility tag.
+constexpr HRESULT kPresentationIncompleteHresult =
+    MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0x4E41);
 
 LRESULT CALLBACK native_host_window_procedure(
     HWND window,
@@ -148,8 +153,52 @@ HRESULT position_direct_control_window(
         "presentation.control_parent",
         reinterpret_cast<uintptr_t>(control_parent));
     if (control_parent != resources.host_window) {
+        // The control window is not a direct child of the native host. The
+        // real drawing surface may live deeper in the subtree; never report
+        // silent success when it cannot be positioned.
+        if (!IsChild(resources.host_window, control_window)) {
+            trace_native_stage(
+                "presentation.position_control_window.control_not_descendant");
+            return kPresentationIncompleteHresult;
+        }
         trace_native_stage(
-            "presentation.position_control_window.skipped_non_direct_child");
+            "presentation.position_control_window.non_direct_descendant");
+
+        RECT mapped_rect = client_rect;
+        if (MapWindowPoints(
+                resources.host_window,
+                control_parent,
+                reinterpret_cast<POINT*>(&mapped_rect),
+                2) == 0) {
+            trace_native_win32(
+                "presentation.position_control_window.map_failed",
+                static_cast<uint32_t>(GetLastError()));
+            return kPresentationIncompleteHresult;
+        }
+        UINT descendant_flags = SWP_NOZORDER | SWP_NOACTIVATE;
+        if (IsWindowVisible(resources.host_window)) {
+            descendant_flags |= SWP_SHOWWINDOW;
+        }
+        SetLastError(ERROR_SUCCESS);
+        if (!SetWindowPos(
+                control_window,
+                nullptr,
+                mapped_rect.left,
+                mapped_rect.top,
+                mapped_rect.right - mapped_rect.left,
+                mapped_rect.bottom - mapped_rect.top,
+                descendant_flags)) {
+            trace_native_win32(
+                "presentation.position_control_window.descendant_failed",
+                static_cast<uint32_t>(GetLastError()));
+            return kPresentationIncompleteHresult;
+        }
+        trace_native_rect(
+            "presentation.position_control_window.descendant_mapped",
+            static_cast<int32_t>(mapped_rect.left),
+            static_cast<int32_t>(mapped_rect.top),
+            static_cast<int32_t>(mapped_rect.right),
+            static_cast<int32_t>(mapped_rect.bottom));
         return S_OK;
     }
 
@@ -278,6 +327,24 @@ void trace_presentation_window_state(
     trace_native_win32(
         "presentation.control_visible",
         IsWindowVisible(control_window) ? 1U : 0U);
+    const HWND owner = GetParent(resources.host_window);
+    if (owner != nullptr) {
+        trace_native_win32(
+            "presentation.owner_visible",
+            IsWindowVisible(owner) ? 1U : 0U);
+        trace_native_win32(
+            "presentation.owner_iconic",
+            IsIconic(owner) ? 1U : 0U);
+        trace_native_win32(
+            "presentation.owner_dpi",
+            static_cast<uint32_t>(GetDpiForWindow(owner)));
+    }
+    trace_native_win32(
+        "presentation.host_dpi",
+        static_cast<uint32_t>(GetDpiForWindow(resources.host_window)));
+    trace_native_win32(
+        "presentation.control_dpi",
+        static_cast<uint32_t>(GetDpiForWindow(control_window)));
 
     RECT host_rect{};
     if (GetWindowRect(resources.host_window, &host_rect)) {
@@ -748,11 +815,12 @@ NavopRdpResult create_active_x_resources(
         "create.synchronize_bounds.after",
         static_cast<int32_t>(initial_layout_result));
     if (FAILED(initial_layout_result)) {
-        return record_last_stage_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
-            static_cast<int32_t>(initial_layout_result));
+        // The ActiveX control creates its drawing window during in-place
+        // activation, so a 1x1 create-time bounds sync is expected to be
+        // incomplete. Never fail the create here: the Rust presentation
+        // re-synchronizes bounds after LoginComplete/Reconnected and every
+        // set_bounds call re-runs synchronize_control_bounds.
+        trace_native_stage("create.synchronize_bounds.deferred");
     }
 
     trace_native_stage("create.set_ui_parent.before");
@@ -804,6 +872,9 @@ NavopRdpResult set_active_x_bounds(
     const HRESULT layout_result =
         synchronize_control_bounds(resources->state);
     if (FAILED(layout_result)) {
+        if (layout_result == kPresentationIncompleteHresult) {
+            return NAVOP_RDP_RESULT_PRESENTATION_INCOMPLETE;
+        }
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
@@ -901,6 +972,9 @@ NavopRdpResult set_active_x_visible(
         const HRESULT layout_result =
             synchronize_control_bounds(resources->state);
         if (FAILED(layout_result)) {
+            if (layout_result == kPresentationIncompleteHresult) {
+                return NAVOP_RDP_RESULT_PRESENTATION_INCOMPLETE;
+            }
             return NAVOP_RDP_RESULT_INTERNAL_ERROR;
         }
     }
@@ -933,38 +1007,6 @@ NavopRdpResult focus_active_x(
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
-}
-
-void configure_extended_display_settings(IUnknown* control) noexcept {
-    CComPtr<IMsRdpExtendedSettings> extended_settings;
-    trace_native_stage("connect.query_extended_settings.before");
-    HRESULT result = control == nullptr
-        ? E_POINTER
-        : control->QueryInterface(IID_PPV_ARGS(&extended_settings));
-    trace_native_hresult(
-        "connect.query_extended_settings.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result) || extended_settings == nullptr) {
-        return;
-    }
-
-    CComVariant desktop_scale_factor(kDefaultDesktopScaleFactor);
-    trace_native_stage("connect.set_desktop_scale_factor.before");
-    result = extended_settings->put_Property(
-        CComBSTR(L"DesktopScaleFactor"),
-        &desktop_scale_factor);
-    trace_native_hresult(
-        "connect.set_desktop_scale_factor.after",
-        static_cast<int32_t>(result));
-
-    CComVariant device_scale_factor(kDefaultDeviceScaleFactor);
-    trace_native_stage("connect.set_device_scale_factor.before");
-    result = extended_settings->put_Property(
-        CComBSTR(L"DeviceScaleFactor"),
-        &device_scale_factor);
-    trace_native_hresult(
-        "connect.set_device_scale_factor.after",
-        static_cast<int32_t>(result));
 }
 
 NavopRdpResult connect_active_x(
@@ -1029,121 +1071,18 @@ NavopRdpResult connect_active_x(
             static_cast<int32_t>(result));
     }
 
-    trace_native_stage("connect.set_encryption.before");
-    result = advanced_settings->put_EncryptionEnabled(1);
-    trace_native_hresult(
-        "connect.set_encryption.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result)) {
-        return record_last_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            static_cast<int32_t>(result));
-    }
-
-    configure_extended_display_settings(resources->state.control);
-
-    trace_native_stage("connect.set_smart_sizing.before");
-    result = advanced_settings->put_SmartSizing(VARIANT_FALSE);
-    trace_native_hresult(
-        "connect.set_smart_sizing.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result)) {
-        return record_last_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            static_cast<int32_t>(result));
-    }
-
-    CComPtr<IMsRdpClientAdvancedSettings5> advanced_settings6;
-    trace_native_stage("connect.get_advanced_settings6.before");
-    result = resources->state.client->get_AdvancedSettings6(
-        &advanced_settings6);
-    trace_native_hresult(
-        "connect.get_advanced_settings6.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result) || advanced_settings6 == nullptr) {
-        if (FAILED(result)) {
-            return record_last_hresult(
-                owner,
-                NAVOP_RDP_RESULT_INTERNAL_ERROR,
-                static_cast<int32_t>(result));
-        }
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
-    }
-
-    trace_native_stage(
-        "connect.set_container_handled_full_screen.before");
-    result = advanced_settings6->put_ContainerHandledFullScreen(VARIANT_TRUE);
-    trace_native_hresult(
-        "connect.set_container_handled_full_screen.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result)) {
-        return record_last_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            static_cast<int32_t>(result));
-    }
-
-    trace_native_stage("connect.set_public_mode.before");
-    result = advanced_settings6->put_PublicMode(VARIANT_FALSE);
-    trace_native_hresult(
-        "connect.set_public_mode.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result)) {
-        return record_last_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            static_cast<int32_t>(result));
-    }
-
-    CComPtr<IMsRdpClientAdvancedSettings8> advanced_settings9;
-    trace_native_stage("connect.get_advanced_settings9.before");
-    result = resources->state.client->get_AdvancedSettings9(
-        &advanced_settings9);
-    trace_native_hresult(
-        "connect.get_advanced_settings9.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result) || advanced_settings9 == nullptr) {
-        if (FAILED(result)) {
-            return record_last_hresult(
-                owner,
-                NAVOP_RDP_RESULT_INTERNAL_ERROR,
-                static_cast<int32_t>(result));
-        }
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
-    }
-
-    trace_native_stage("connect.set_credssp.before");
-    result = advanced_settings9->put_EnableCredSspSupport(VARIANT_TRUE);
-    trace_native_hresult(
-        "connect.set_credssp.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result)) {
-        return record_last_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            static_cast<int32_t>(result));
-    }
-
-    trace_native_stage("connect.set_authentication_level.before");
-    result = advanced_settings9->put_AuthenticationLevel(0);
-    trace_native_hresult(
-        "connect.set_authentication_level.after",
-        static_cast<int32_t>(result));
-    if (FAILED(result)) {
-        return record_last_hresult(
-            owner,
-            NAVOP_RDP_RESULT_INTERNAL_ERROR,
-            static_cast<int32_t>(result));
-    }
-
-    const NavopRdpResult audio_result = configure_audio_redirection(
+    // All connection policy sections run before Connect with fail-fast
+    // semantics: security, reconnect, input, resource, audio, display,
+    // performance, gateway (connection_policy.cpp).
+    const NativeRdpConnectionPolicyContext policy_context{
         owner,
+        resources->state.control,
         resources->state.client,
-        options.flags);
-    if (audio_result != NAVOP_RDP_RESULT_OK) {
-        return audio_result;
+    };
+    const NavopRdpResult policy_result =
+        configure_active_x_connection_policy(policy_context, options);
+    if (policy_result != NAVOP_RDP_RESULT_OK) {
+        return policy_result;
     }
 
     result = resources->state.client->put_DesktopWidth(
@@ -1292,6 +1231,90 @@ NavopRdpResult get_active_x_connection_state(
         return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
     *out_state = static_cast<uint32_t>(connected);
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult get_active_x_presentation_state(
+    NativeRdpActiveXResources* resources,
+    NavopRdpPresentationState* out_state) noexcept {
+    if (out_state == nullptr) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+    if (out_state->struct_size <
+        static_cast<uint32_t>(sizeof(NavopRdpPresentationState))) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+    const uint32_t caller_size = out_state->struct_size;
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        // A live host always produces a snapshot: unavailable resources simply
+        // report every flag as zero so the caller can treat the presentation
+        // as not ready without failing the session.
+        *out_state = NavopRdpPresentationState{
+            caller_size,
+            NAVOP_RDP_PRESENTATION_STATE_ABI_VERSION,
+            UINT32_C(0),
+            UINT32_C(0),
+            UINT32_C(0),
+            UINT32_C(0),
+            UINT32_C(0),
+            UINT32_C(0)};
+        return NAVOP_RDP_RESULT_OK;
+    }
+
+    HWND control_window = nullptr;
+    const HRESULT window_result =
+        resources->state.in_place_object->GetWindow(&control_window);
+    const bool control_valid =
+        SUCCEEDED(window_result) &&
+        control_window != nullptr &&
+        IsWindow(control_window);
+
+    RECT host_rect{};
+    const bool host_rect_nonzero =
+        GetWindowRect(resources->state.host_window, &host_rect) &&
+        host_rect.right > host_rect.left &&
+        host_rect.bottom > host_rect.top;
+
+    RECT control_rect{};
+    const bool control_rect_nonzero =
+        control_valid &&
+        GetWindowRect(control_window, &control_rect) &&
+        control_rect.right > control_rect.left &&
+        control_rect.bottom > control_rect.top;
+
+    *out_state = NavopRdpPresentationState{
+        caller_size,
+        NAVOP_RDP_PRESENTATION_STATE_ABI_VERSION,
+        control_valid ? UINT32_C(1) : UINT32_C(0),
+        host_rect_nonzero ? UINT32_C(1) : UINT32_C(0),
+        control_rect_nonzero ? UINT32_C(1) : UINT32_C(0),
+        control_valid && IsWindowVisible(control_window) ? UINT32_C(1)
+                                                         : UINT32_C(0),
+        control_valid &&
+                IsChild(resources->state.host_window, control_window)
+            ? UINT32_C(1)
+            : UINT32_C(0),
+        IsWindowVisible(resources->state.host_window) ? UINT32_C(1)
+                                                      : UINT32_C(0)};
+    trace_native_win32(
+        "presentation.state.control_hwnd_valid",
+        out_state->control_hwnd_valid);
+    trace_native_win32(
+        "presentation.state.host_rect_nonzero",
+        out_state->host_rect_nonzero);
+    trace_native_win32(
+        "presentation.state.control_rect_nonzero",
+        out_state->control_rect_nonzero);
+    trace_native_win32(
+        "presentation.state.control_visible",
+        out_state->control_visible);
+    trace_native_win32(
+        "presentation.state.control_is_host_descendant",
+        out_state->control_is_host_descendant);
+    trace_native_win32(
+        "presentation.state.host_visible",
+        out_state->host_visible);
     return NAVOP_RDP_RESULT_OK;
 }
 

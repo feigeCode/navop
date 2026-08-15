@@ -551,6 +551,47 @@ extern "C" NavopRdpResult navop_rdp_update_session_display_settings(
     }
 }
 
+extern "C" NavopRdpResult navop_rdp_get_presentation_state(
+    NativeRdpHost* host,
+    NavopRdpPresentationState* out_state) noexcept {
+    try {
+        if (host == nullptr) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+        const NavopRdpResult owner_result = ensure_owner_thread(host);
+        if (owner_result != NAVOP_RDP_RESULT_OK) {
+            return owner_result;
+        }
+        clear_last_error(host);
+        if (out_state == nullptr) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_INVALID_ARGUMENT);
+        }
+        NavopRdpResult result = validate_struct_size(
+            out_state->struct_size,
+            static_cast<uint32_t>(sizeof(NavopRdpPresentationState)));
+        if (result != NAVOP_RDP_RESULT_OK) {
+            return record_last_error(host, result);
+        }
+        if (out_state->abi_version != NAVOP_RDP_PRESENTATION_STATE_ABI_VERSION) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_ABI_MISMATCH);
+        }
+        if (host->callback_state != CallbackState::Open) {
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_INVALID_STATE);
+        }
+        return get_active_x_presentation_state(
+            host->active_x_resources,
+            out_state);
+    } catch (...) {
+        return record_last_error(host, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+}
+
 extern "C" NavopRdpResult navop_rdp_set_visible(
     NativeRdpHost* host,
     uint32_t visible) noexcept {

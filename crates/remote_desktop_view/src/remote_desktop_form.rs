@@ -21,7 +21,7 @@ use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
 use one_core::cloud_sync::TeamOption;
 use one_core::storage::{
-    ProxyType, RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace,
+    ProxyType, RdpSettings, RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace,
 };
 use rust_i18n::t;
 
@@ -65,6 +65,10 @@ pub struct RemoteDesktopFormWindow {
     backend_preference_select: Entity<SelectState<Vec<BackendPreferenceSelectItem>>>,
     read_only: bool,
     audio_playback: bool,
+    // Persisted RDP settings from the edited connection. Kept verbatim (never
+    // materialized from effective defaults) so editing an existing RDP
+    // connection does not wipe its native RDP configuration.
+    rdp_settings: Option<RdpSettings>,
     proxy_enabled: bool,
     proxy_type: ProxyType,
     sync_enabled: bool,
@@ -164,6 +168,7 @@ impl RemoteDesktopFormWindow {
             backend_preference_select: create_backend_preference_select(window, cx),
             read_only: false,
             audio_playback: false,
+            rdp_settings: None,
             proxy_enabled: false,
             proxy_type: ProxyType::Socks5,
             sync_enabled: config
@@ -225,6 +230,7 @@ impl RemoteDesktopFormWindow {
             .update(cx, |state, cx| state.set_value(&domain, window, cx));
         self.read_only = params.read_only;
         self.audio_playback = audio_playback_for_protocol(self.protocol, params.audio_playback);
+        self.rdp_settings = params.rdp;
         self.backend_preference_select.update(cx, |state, cx| {
             state.set_selected_value(&params.backend_preference, window, cx)
         });
@@ -264,7 +270,9 @@ impl RemoteDesktopFormWindow {
                 .selected_value()
                 .copied()
                 .unwrap_or_default(),
-            rdp: None,
+            // Preserve the loaded RDP settings verbatim; never write back
+            // effective defaults. Switching to VNC clears them.
+            rdp: rdp_settings_for_protocol(self.protocol, self.rdp_settings.clone()),
         })
     }
 
@@ -345,4 +353,14 @@ impl RemoteDesktopFormWindow {
 
 fn audio_playback_for_protocol(protocol: RemoteDesktopProtocol, enabled: bool) -> bool {
     protocol == RemoteDesktopProtocol::Rdp && enabled
+}
+
+fn rdp_settings_for_protocol(
+    protocol: RemoteDesktopProtocol,
+    settings: Option<RdpSettings>,
+) -> Option<RdpSettings> {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => settings,
+        _ => None,
+    }
 }

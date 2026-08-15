@@ -6,6 +6,7 @@
 #define NAVOP_RDP_ABI_VERSION UINT32_C(1)
 #define NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)
 #define NAVOP_RDP_SESSION_DISPLAY_SETTINGS_ABI_VERSION UINT32_C(1)
+#define NAVOP_RDP_PRESENTATION_STATE_ABI_VERSION UINT32_C(1)
 
 typedef struct NativeRdpHost NativeRdpHost;
 
@@ -20,6 +21,13 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_RESULT_WRONG_THREAD INT32_C(6)
 #define NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT INT32_C(7)
 #define NAVOP_RDP_RESULT_INVALID_STATE INT32_C(8)
+/*
+ * The native child window is live but the ActiveX drawing window has not been
+ * positioned inside the host subtree yet. The connection may still complete;
+ * callers should re-synchronize bounds after the next LoginComplete/Reconnected
+ * event instead of treating this as a terminal failure.
+ */
+#define NAVOP_RDP_RESULT_PRESENTATION_INCOMPLETE INT32_C(9)
 #define NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS UINT32_C(255)
 #define NAVOP_RDP_LAST_ERROR_LEGACY_SIZE UINT32_C(24)
 #if INTPTR_MAX == INT64_MAX
@@ -225,6 +233,15 @@ typedef struct NavopRdpBorrowedUtf16 {
 #define NAVOP_RDP_CONNECTION_POLICY_FLAGS_KNOWN \
     (NAVOP_RDP_CONNECTION_POLICY_FLAG_ADMIN_SESSION | \
      NAVOP_RDP_CONNECTION_POLICY_FLAG_AUTO_RECONNECT)
+/*
+ * Append-only reconnect policy bounds shared by the Rust facade and the native
+ * validation. max_reconnect_attempts is capped at 200 so the retry dialog and
+ * the MSTSC property stay within LONG range; keep_alive_seconds and
+ * timeout_seconds are validated by each side against the LONG conversion they
+ * feed (milliseconds for the keep-alive interval, seconds for the overall
+ * connection timeout).
+ */
+#define NAVOP_RDP_MAX_RECONNECT_ATTEMPTS UINT32_C(200)
 
 /*
  * The first NAVOP_RDP_CONNECTION_LEGACY_SIZE bytes are the stable legacy
@@ -314,6 +331,25 @@ typedef struct NavopRdpSessionDisplaySettings {
     uint32_t desktop_scale_factor;
     uint32_t device_scale_factor;
 } NavopRdpSessionDisplaySettings;
+
+/*
+ * Synchronous presentation-readiness snapshot for the native child window.
+ * Every flag is exactly 0 or 1. The query never fails for a live host: when the
+ * ActiveX resources are unavailable every flag is reported as 0. Callers
+ * combine this snapshot with their own connection phase (LoginComplete /
+ * Reconnected), non-zero logical bounds, and owner-window visibility before
+ * deciding that the native presentation is ready.
+ */
+typedef struct NavopRdpPresentationState {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t control_hwnd_valid;
+    uint32_t host_rect_nonzero;
+    uint32_t control_rect_nonzero;
+    uint32_t control_visible;
+    uint32_t control_is_host_descendant;
+    uint32_t host_visible;
+} NavopRdpPresentationState;
 
 #define NAVOP_RDP_EVENT_CONNECTING UINT32_C(1)
 #define NAVOP_RDP_EVENT_CONNECTED UINT32_C(2)
@@ -606,6 +642,17 @@ static_assert(
     offsetof(NavopRdpSessionDisplaySettings, desktop_scale_factor) == 28);
 static_assert(
     offsetof(NavopRdpSessionDisplaySettings, device_scale_factor) == 32);
+static_assert(sizeof(NavopRdpPresentationState) == 32);
+static_assert(alignof(NavopRdpPresentationState) == 4);
+static_assert(offsetof(NavopRdpPresentationState, struct_size) == 0);
+static_assert(offsetof(NavopRdpPresentationState, abi_version) == 4);
+static_assert(offsetof(NavopRdpPresentationState, control_hwnd_valid) == 8);
+static_assert(offsetof(NavopRdpPresentationState, host_rect_nonzero) == 12);
+static_assert(offsetof(NavopRdpPresentationState, control_rect_nonzero) == 16);
+static_assert(offsetof(NavopRdpPresentationState, control_visible) == 20);
+static_assert(
+    offsetof(NavopRdpPresentationState, control_is_host_descendant) == 24);
+static_assert(offsetof(NavopRdpPresentationState, host_visible) == 28);
 static_assert(sizeof(NavopRdpEvent) == 32);
 static_assert(alignof(NavopRdpEvent) == 4);
 static_assert(offsetof(NavopRdpEvent, struct_size) == 0);
@@ -705,6 +752,15 @@ NavopRdpResult navop_rdp_set_bounds(
 NavopRdpResult navop_rdp_update_session_display_settings(
     NativeRdpHost* host,
     const NavopRdpSessionDisplaySettings* settings) NAVOP_RDP_NOEXCEPT;
+
+/*
+ * Returns a presentation-readiness snapshot for the native ActiveX child.
+ * out_state is initialized on every call whose output layout is valid,
+ * including when the native resources are unavailable (all flags are zero).
+ */
+NavopRdpResult navop_rdp_get_presentation_state(
+    NativeRdpHost* host,
+    NavopRdpPresentationState* out_state) NAVOP_RDP_NOEXCEPT;
 
 /*
  * visible must be exactly 0 or 1. Showing uses non-activating Win32 semantics.

@@ -138,3 +138,71 @@ fn gateway_debug_output_redacts_credentials() {
     assert!(!debug.contains("gateway-secret"));
     assert!(!debug.contains("PRIVATE"));
 }
+
+#[test]
+fn stored_connection_round_trips_complete_rdp_settings() {
+    use super::{RemoteDesktopProtocol, StoredConnection};
+
+    let mut settings = RdpSettings::default();
+    settings.display.smart_sizing = true;
+    settings.display.use_multimon = true;
+    settings.resources.clipboard = false;
+    settings.resources.drives = true;
+    settings.security.authentication_level = 2;
+    settings.gateway.mode = RdpGatewayMode::Explicit;
+    settings.gateway.hostname = Some("gateway.example".to_string());
+    settings.connection.max_reconnect_attempts = 200;
+    settings.connection.keep_alive_seconds = 30;
+
+    let params = RemoteDesktopParams {
+        protocol: RemoteDesktopProtocol::Rdp,
+        host: "rdp.example".to_string(),
+        port: 3389,
+        username: Some("alice".to_string()),
+        password: Some("secret".to_string()),
+        domain: Some("CORP".to_string()),
+        read_only: false,
+        audio_playback: true,
+        proxy: None,
+        backend_preference: Default::default(),
+        rdp: Some(settings.clone()),
+    };
+    let connection = StoredConnection::new_remote_desktop("RDP".to_string(), params, None);
+    let restored = connection
+        .to_remote_desktop_params()
+        .expect("stored params must round trip");
+
+    assert_eq!(Some(settings), restored.rdp);
+    assert_eq!("rdp.example", restored.host);
+    assert_eq!(Some("alice".to_string()), restored.username);
+    assert_eq!(Some("CORP".to_string()), restored.domain);
+}
+
+#[test]
+fn stored_connection_round_trip_keeps_legacy_rdp_settings_none() {
+    use super::{RemoteDesktopProtocol, StoredConnection};
+
+    let params = RemoteDesktopParams {
+        protocol: RemoteDesktopProtocol::Rdp,
+        host: "legacy.example".to_string(),
+        port: 3389,
+        username: None,
+        password: None,
+        domain: None,
+        read_only: false,
+        audio_playback: true,
+        proxy: None,
+        backend_preference: Default::default(),
+        rdp: None,
+    };
+    let connection = StoredConnection::new_remote_desktop("Legacy".to_string(), params, None);
+    let restored = connection
+        .to_remote_desktop_params()
+        .expect("stored params must round trip");
+
+    assert!(restored.rdp.is_none());
+    assert_eq!(
+        RdpAudioMode::Local,
+        restored.effective_rdp_settings().audio.mode
+    );
+}

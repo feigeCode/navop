@@ -319,3 +319,54 @@ fn connection_options_debug_redacts_the_complete_endpoint() {
     assert!(!debug.contains("2001:db8"));
     assert!(!debug.contains("gateway-debug-sentinel"));
 }
+
+#[test]
+fn reconnect_defaults_and_boundaries_are_frozen() {
+    let options = valid_options("rdp.example")
+        .expect("valid connection options")
+        .with_policy(WindowsRdpConnectionPolicy::default());
+    let native = options
+        .as_native()
+        .expect("default reconnect policy is valid");
+    assert_eq!(
+        native.native.max_reconnect_attempts,
+        crate::ffi::MAX_RECONNECT_ATTEMPTS
+    );
+    assert_eq!(native.native.max_reconnect_attempts, 200);
+
+    let max_keep_alive = crate::ffi::MAX_KEEP_ALIVE_SECONDS;
+    assert_eq!(max_keep_alive, (i32::MAX / 1_000) as u32);
+
+    let accepted: [fn(&mut WindowsRdpReconnectPolicy); 2] = [
+        |policy| policy.max_reconnect_attempts = 200,
+        |policy| policy.keep_alive_seconds = (i32::MAX / 1_000) as u32,
+    ];
+    for mutate in accepted {
+        let mut policy = WindowsRdpConnectionPolicy::default();
+        mutate(&mut policy.reconnect);
+        assert!(
+            valid_options("rdp.example")
+                .expect("valid options")
+                .with_policy(policy)
+                .as_native()
+                .is_ok(),
+            "boundary value must be accepted"
+        );
+    }
+
+    let rejected: [fn(&mut WindowsRdpReconnectPolicy); 2] = [
+        |policy| policy.max_reconnect_attempts = 201,
+        |policy| policy.keep_alive_seconds = (i32::MAX / 1_000) as u32 + 1,
+    ];
+    for mutate in rejected {
+        let mut policy = WindowsRdpConnectionPolicy::default();
+        mutate(&mut policy.reconnect);
+        assert!(matches!(
+            valid_options("rdp.example")
+                .expect("valid options")
+                .with_policy(policy)
+                .as_native(),
+            Err(WindowsRdpHostError::InvalidArgument)
+        ));
+    }
+}

@@ -13,6 +13,13 @@ fn main() {
     println!("cargo:rerun-if-changed=native/active_x_host.cpp");
     println!("cargo:rerun-if-changed=native/audio_redirection.cpp");
     println!("cargo:rerun-if-changed=native/configuration.cpp");
+    println!("cargo:rerun-if-changed=native/connection_policy.cpp");
+    println!("cargo:rerun-if-changed=native/connection_policy_display.cpp");
+    println!("cargo:rerun-if-changed=native/connection_policy_gateway.cpp");
+    println!("cargo:rerun-if-changed=native/connection_policy_internal.h");
+    println!("cargo:rerun-if-changed=native/connection_policy_runtime.cpp");
+    println!("cargo:rerun-if-changed=native/connection_policy_session.cpp");
+    println!("cargo:rerun-if-changed=native/dispatch_property.cpp");
     println!("cargo:rerun-if-changed=native/lifecycle.cpp");
     println!("cargo:rerun-if-changed=native/host_internal.h");
     println!("cargo:rerun-if-changed=native/windows_rdp_host.h");
@@ -70,6 +77,12 @@ fn build_native_host() {
         .file("native/active_x_host.cpp")
         .file("native/audio_redirection.cpp")
         .file("native/configuration.cpp")
+        .file("native/connection_policy.cpp")
+        .file("native/connection_policy_display.cpp")
+        .file("native/connection_policy_gateway.cpp")
+        .file("native/connection_policy_runtime.cpp")
+        .file("native/connection_policy_session.cpp")
+        .file("native/dispatch_property.cpp")
         .file("native/lifecycle.cpp")
         .compile("windows_rdp_host");
 

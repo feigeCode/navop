@@ -13,6 +13,23 @@ NavopRdpResult get_required_dispatch_object(
     const NativeRdpDispatchTarget& target,
     IUnknown** out_object) noexcept;
 
+// connection_policy_internal.h is included before the generated mstscax.tlh in
+// every policy translation unit. Keep only a forward declaration here; the
+// full type is available where get_advanced_settings8 is defined/used.
+struct IMsRdpClientAdvancedSettings8;
+
+NavopRdpResult get_advanced_settings8(
+    NativeRdpHost* owner,
+    IUnknown* client,
+    IMsRdpClientAdvancedSettings8** out_settings) noexcept;
+
+NavopRdpResult configure_redirect_bool(
+    NativeRdpHost* owner,
+    IUnknown* advanced,
+    const wchar_t* property_name,
+    const char* trace_stage,
+    bool enabled) noexcept;
+
 NavopRdpResult set_required_dispatch_bool(
     NativeRdpHost* owner,
     const NativeRdpDispatchTarget& target,

@@ -58,6 +58,20 @@ pub(super) fn log_bounds(
     let window = window_pointer(overlay.window);
     let first = unsafe { GetWindow(window, GW_HWNDFIRST) } as usize;
     let last = unsafe { GetWindow(window, GW_HWNDLAST) } as usize;
+    let owner_window = window_pointer(overlay.owner);
+    let owner_client = {
+        let mut client = Rect::default();
+        if unsafe { GetClientRect(owner_window, &mut client) } != 0 {
+            Some(WindowsNativeOverlayBounds {
+                x: client.left,
+                y: client.top,
+                width: client.right - client.left,
+                height: client.bottom - client.top,
+            })
+        } else {
+            None
+        }
+    };
     tracing::info!(
         stage = "overlay_bounds",
         generation = overlay.generation,
@@ -66,7 +80,12 @@ pub(super) fn log_bounds(
         requested = ?requested,
         clipped = ?clipped,
         observed = ?observed,
+        owner_client = ?owner_client,
         visible = unsafe { IsWindowVisible(window) } != 0,
+        owner_visible = unsafe { IsWindowVisible(owner_window) } != 0,
+        owner_iconic = unsafe { IsIconic(owner_window) } != 0,
+        owner_dpi = unsafe { GetDpiForWindow(owner_window) },
+        overlay_dpi = unsafe { GetDpiForWindow(window) },
         first_sibling = first,
         last_sibling = last,
         overlay_is_first = first == overlay.window,
@@ -76,13 +95,19 @@ pub(super) fn log_bounds(
 }
 
 pub(super) fn log_visibility(overlay: &WindowsNativeOverlay, stage: &'static str) {
+    let owner_window = window_pointer(overlay.owner);
+    let window = window_pointer(overlay.window);
     tracing::info!(
         stage,
         generation = overlay.generation,
         owner_hwnd = overlay.owner,
         overlay_hwnd = overlay.window,
         requested_visible = overlay.requested_visible,
-        actual_visible = unsafe { IsWindowVisible(window_pointer(overlay.window)) } != 0,
+        actual_visible = unsafe { IsWindowVisible(window) } != 0,
+        owner_visible = unsafe { IsWindowVisible(owner_window) } != 0,
+        owner_iconic = unsafe { IsIconic(owner_window) } != 0,
+        owner_dpi = unsafe { GetDpiForWindow(owner_window) },
+        overlay_dpi = unsafe { GetDpiForWindow(window) },
         "updated Windows native RDP overlay visibility"
     );
 }

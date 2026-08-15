@@ -57,12 +57,12 @@ mod surface;
 mod windows_native;
 #[allow(dead_code)]
 mod windows_native_display;
-#[cfg(feature = "windows-native-rdp")]
-mod windows_native_policy;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_display_integration;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_overlay;
+#[cfg(feature = "windows-native-rdp")]
+mod windows_native_policy;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
@@ -279,6 +279,10 @@ pub struct RemoteDesktopView {
     status: SharedString,
     failure_detail: Option<SharedString>,
     connected: bool,
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    native_login_complete: bool,
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    windows_native_scale_factor: Option<f32>,
     tab_index: Option<usize>,
     startup_started_at: Instant,
     runtime_started_at: Option<Instant>,
@@ -322,6 +326,7 @@ impl RemoteDesktopView {
             loop {
                 let focus_handle = match this.update(cx, |this, cx| {
                     let focus_handle = this.poll_windows_native_events();
+                    this.refresh_windows_native_readiness();
                     this.flush_windows_native_display_settings(Instant::now());
                     cx.notify();
                     focus_handle
@@ -464,6 +469,10 @@ impl RemoteDesktopView {
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             failure_detail: None,
             connected: false,
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            native_login_complete: false,
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            windows_native_scale_factor: None,
             tab_index: config.tab_index,
             startup_started_at: Instant::now(),
             runtime_started_at: None,
@@ -697,8 +706,7 @@ impl RemoteDesktopView {
             );
             return;
         };
-        let desktop_size =
-            windows_native_policy::initial_desktop_size(&self.options.rdp, size);
+        let desktop_size = windows_native_policy::initial_desktop_size(&self.options.rdp, size);
         if let Err(error) =
             native.update_bounds(bounds, point(px(0.0), px(0.0)), window.scale_factor())
         {
@@ -919,7 +927,10 @@ impl RemoteDesktopView {
         if let Some(bounds) = self.content_bounds {
             self.observe_windows_native_viewport(bounds, window.scale_factor());
         }
-        if self.tab_active && self.activate_windows_native(false) {
+        // Never show the overlay before the session reaches LoginComplete /
+        // Reconnected: the native child is still 1x1 and has no drawable
+        // framebuffer. The login/reconnect sync re-activates below.
+        if self.tab_active && self.native_login_complete && self.activate_windows_native(false) {
             cx.defer_in(window, |this, _, _| {
                 if this.tab_active {
                     this.focus_windows_native();
@@ -935,11 +946,26 @@ impl RemoteDesktopView {
     ) -> bool {
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
         if let Some(presentation) = self.windows_native.as_mut() {
+            let parent_client_origin = point(px(0.0), px(0.0));
             if let Err(error) =
-                presentation.update_bounds(bounds, point(px(0.0), px(0.0)), display_scale_factor)
+                presentation.update_bounds(bounds, parent_client_origin, display_scale_factor)
             {
-                tracing::warn!(?error, "failed to update Windows native RDP bounds");
+                tracing::warn!(
+                    ?error,
+                    ?bounds,
+                    ?parent_client_origin,
+                    display_scale_factor,
+                    "failed to update Windows native RDP bounds"
+                );
+                return false;
             }
+            self.windows_native_scale_factor = Some(display_scale_factor);
+            tracing::trace!(
+                ?bounds,
+                ?parent_client_origin,
+                display_scale_factor,
+                "updated Windows native RDP bounds"
+            );
             return true;
         }
 
@@ -950,10 +976,13 @@ impl RemoteDesktopView {
     pub(super) fn activate_windows_native(&mut self, focus_child: bool) -> bool {
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
         if let Some(presentation) = self.windows_native.as_mut() {
-            if let Err(error) = presentation.activate(focus_child) {
-                tracing::warn!(?error, "failed to activate Windows native RDP presentation");
-            }
-            return true;
+            return match presentation.activate(focus_child) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(?error, "failed to activate Windows native RDP presentation");
+                    false
+                }
+            };
         }
 
         let _ = focus_child;
@@ -972,13 +1001,16 @@ impl RemoteDesktopView {
     pub(super) fn deactivate_windows_native(&mut self, mut focus_parent: impl FnMut()) -> bool {
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
         if let Some(presentation) = self.windows_native.as_mut() {
-            if let Err(error) = presentation.deactivate(&mut focus_parent) {
-                tracing::warn!(
-                    ?error,
-                    "failed to deactivate Windows native RDP presentation"
-                );
-            }
-            return true;
+            return match presentation.deactivate(&mut focus_parent) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "failed to deactivate Windows native RDP presentation"
+                    );
+                    false
+                }
+            };
         }
 
         let _ = &mut focus_parent;
@@ -1026,7 +1058,7 @@ impl RemoteDesktopView {
             }
             NativeRdpUiEffect::LoginComplete { generation } => {
                 tracing::info!(generation, "Windows native RDP login completed");
-                self.mark_windows_native_connected();
+                self.present_windows_native_after_login();
                 self.windows_native_display
                     .login_complete(generation, Instant::now());
             }
@@ -1048,7 +1080,7 @@ impl RemoteDesktopView {
             }
             NativeRdpUiEffect::Reconnected { generation } => {
                 tracing::info!(generation, "Windows native RDP reconnected");
-                self.mark_windows_native_connected();
+                self.present_windows_native_after_login();
                 self.windows_native_display
                     .reconnected(generation, Instant::now());
             }
@@ -1113,9 +1145,80 @@ impl RemoteDesktopView {
         self.connected = true;
         self.failure_detail = None;
         self.status = SharedString::from(t!("RemoteDesktop.status_connected").to_string());
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn present_windows_native_after_login(&mut self) {
+        self.mark_windows_native_connected();
+        self.native_login_complete = true;
+        if let Some(native) = self.windows_native.as_mut() {
+            native.mark_login_complete();
+        }
+        // 首次可呈现：强制重新同步 overlay、host 和 control bounds，并显示。
+        self.synchronize_windows_native_presentation();
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn synchronize_windows_native_presentation(&mut self) {
+        let Some(bounds) = self.content_bounds else {
+            return;
+        };
+        let Some(scale_factor) = self.windows_native_scale_factor else {
+            return;
+        };
+        self.update_windows_native_bounds(bounds, scale_factor);
+        self.refresh_windows_native_readiness();
         if self.tab_active {
             self.activate_windows_native(false);
         }
+        self.log_windows_native_readiness("login_sync");
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn refresh_windows_native_readiness(&mut self) {
+        let Some(native) = self.windows_native.as_mut() else {
+            return;
+        };
+        let was_ready = native.presentation_ready();
+        let now_presentable = native.refresh_native_readiness();
+        let now_ready = native.presentation_ready();
+        if now_ready && !was_ready {
+            tracing::info!(
+                generation = native.generation(),
+                "Windows native RDP presentation ready"
+            );
+            self.log_windows_native_readiness("readiness_transition");
+        }
+        if now_presentable && self.tab_active && !native.requested_visible() {
+            // The native child is structurally ready (login reached, the
+            // control drawing window has non-zero rects). Retry activation
+            // quietly every maintenance tick while it is still blocked (e.g.
+            // the owner is hidden/minimized or the bounds are clipped away);
+            // it succeeds as soon as the layout or owner allows.
+            if let Err(error) = native.activate(false) {
+                tracing::trace!(
+                    ?error,
+                    "deferred Windows native RDP activation is still blocked"
+                );
+            }
+        }
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn log_windows_native_readiness(&self, stage: &'static str) {
+        let Some(native) = self.windows_native.as_ref() else {
+            return;
+        };
+        tracing::info!(
+            stage,
+            generation = native.generation(),
+            requested_visible = native.requested_visible(),
+            can_present = native.can_present(),
+            presentation_ready = native.presentation_ready(),
+            native_login_complete = self.native_login_complete,
+            tab_active = self.tab_active,
+            "Windows native RDP presentation readiness"
+        );
     }
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]

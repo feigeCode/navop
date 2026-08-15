@@ -330,6 +330,11 @@ pub enum WindowsRdpHostError {
     WrongThread,
     CallbackInFlight,
     InvalidState,
+    /// The native child is live but the ActiveX drawing window has not been
+    /// positioned inside the host subtree yet. The connection may still
+    /// complete; re-synchronize bounds after the next LoginComplete/Reconnected
+    /// event instead of treating this as a terminal failure.
+    PresentationIncomplete,
     NativeReturnedNullHandle,
     NativeDidNotClearHandle,
     InvalidNativeResponse,
@@ -416,6 +421,9 @@ impl fmt::Display for WindowsRdpHostError {
             Self::InvalidState => {
                 formatter.write_str("Windows RDP host operation is invalid in the current state")
             }
+            Self::PresentationIncomplete => formatter.write_str(
+                "Windows native RDP presentation is incomplete (drawing window not positioned)",
+            ),
             Self::NativeReturnedNullHandle => {
                 formatter.write_str("Windows RDP host returned a null handle")
             }
@@ -473,6 +481,7 @@ pub(crate) fn check_native_result(result: ffi::NativeResult) -> Result<(), Windo
         ffi::RESULT_WRONG_THREAD => Err(WindowsRdpHostError::WrongThread),
         ffi::RESULT_CALLBACK_IN_FLIGHT => Err(WindowsRdpHostError::CallbackInFlight),
         ffi::RESULT_INVALID_STATE => Err(WindowsRdpHostError::InvalidState),
+        ffi::RESULT_PRESENTATION_INCOMPLETE => Err(WindowsRdpHostError::PresentationIncomplete),
         other => Err(WindowsRdpHostError::UnexpectedNativeResult(other)),
     }
 }

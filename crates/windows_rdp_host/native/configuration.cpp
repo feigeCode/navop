@@ -99,7 +99,7 @@ NavopRdpConnectionOptions current_connection_defaults(
     normalized.timeout_seconds = UINT32_C(600);
     normalized.connection_flags =
         NAVOP_RDP_CONNECTION_POLICY_FLAG_AUTO_RECONNECT;
-    normalized.max_reconnect_attempts = UINT32_C(20);
+    normalized.max_reconnect_attempts = NAVOP_RDP_MAX_RECONNECT_ATTEMPTS;
     return normalized;
 }
 
@@ -240,11 +240,11 @@ NavopRdpResult validate_connection_options(
          options.device_scale_factor != UINT32_C(140) &&
          options.device_scale_factor != UINT32_C(180)) ||
         options.keep_alive_seconds >
-            (std::numeric_limits<uint32_t>::max)() / UINT32_C(1000) ||
+            static_cast<uint32_t>(
+                (std::numeric_limits<int32_t>::max)() / INT32_C(1000)) ||
         options.timeout_seconds >
             static_cast<uint32_t>((std::numeric_limits<int32_t>::max)()) ||
-        options.max_reconnect_attempts >
-            static_cast<uint32_t>((std::numeric_limits<int32_t>::max)())) {
+        options.max_reconnect_attempts > NAVOP_RDP_MAX_RECONNECT_ATTEMPTS) {
         return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
     }
 

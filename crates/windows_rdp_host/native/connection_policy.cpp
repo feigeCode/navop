@@ -2,6 +2,11 @@
 
 #include <atlbase.h>
 
+#pragma warning(push)
+#pragma warning(disable : 4471)
+#include "mstscax.tlh"
+#pragma warning(pop)
+
 namespace {
 
 void trace_normalized_policy(
@@ -46,6 +51,51 @@ NavopRdpResult required_dispatch_result(
 }
 
 }  // namespace
+
+NavopRdpResult get_advanced_settings8(
+    NativeRdpHost* owner,
+    IUnknown* client,
+    IMsRdpClientAdvancedSettings8** out_settings) noexcept {
+    if (out_settings == nullptr) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+    CComQIPtr<IMsRdpClient9> client9(client);
+    if (client9 == nullptr) {
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    CComPtr<IMsRdpClientAdvancedSettings8> advanced;
+    trace_native_stage("connect.policy.get_advanced_settings9.before");
+    const HRESULT result = client9->get_AdvancedSettings9(&advanced);
+    trace_native_hresult(
+        "connect.policy.get_advanced_settings9.after",
+        static_cast<int32_t>(result));
+    if (FAILED(result) || advanced == nullptr) {
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+    *out_settings = advanced.Detach();
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult configure_redirect_bool(
+    NativeRdpHost* owner,
+    IUnknown* advanced,
+    const wchar_t* property_name,
+    const char* trace_stage,
+    bool enabled) noexcept {
+    const NativeRdpDispatchTarget target{
+        advanced,
+        property_name,
+        trace_stage,
+    };
+    return set_required_dispatch_bool(owner, target, enabled);
+}
 
 NavopRdpResult get_required_dispatch_object(
     NativeRdpHost* owner,
@@ -110,23 +160,27 @@ NavopRdpResult configure_active_x_connection_policy(
     const NativeRdpConnectionPolicyContext& context,
     const NavopRdpConnectionOptions& options) noexcept {
     trace_normalized_policy(options);
-    using ConfigureSection = NavopRdpResult (*)(
-        const NativeRdpConnectionPolicyContext&,
-        const NavopRdpConnectionOptions&);
-    const ConfigureSection sections[] = {
-        configure_security_policy,
-        configure_reconnect_policy,
-        configure_input_policy,
-        configure_resource_policy,
-    };
-    for (const ConfigureSection section : sections) {
-        const NavopRdpResult result = section(context, options);
-        if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
-        }
+    // Sections are invoked explicitly in a fixed order so a failing section
+    // short-circuits the whole connect with fail-fast semantics. The order is
+    // contract-frozen: security, reconnect, input, resource, audio, display,
+    // performance, gateway.
+    NavopRdpResult result = configure_security_policy(context, options);
+    if (result != NAVOP_RDP_RESULT_OK) {
+        return result;
     }
-
-    NavopRdpResult result = configure_audio_redirection(
+    result = configure_reconnect_policy(context, options);
+    if (result != NAVOP_RDP_RESULT_OK) {
+        return result;
+    }
+    result = configure_input_policy(context, options);
+    if (result != NAVOP_RDP_RESULT_OK) {
+        return result;
+    }
+    result = configure_resource_policy(context, options);
+    if (result != NAVOP_RDP_RESULT_OK) {
+        return result;
+    }
+    result = configure_audio_redirection(
         context.owner,
         context.client,
         options);

@@ -87,6 +87,7 @@ pub(crate) const RESULT_UNAVAILABLE: NativeResult = 5;
 pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
 pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
 pub(crate) const RESULT_INVALID_STATE: NativeResult = 8;
+pub(crate) const RESULT_PRESENTATION_INCOMPLETE: NativeResult = 9;
 pub(crate) const CREDENTIAL_LEGACY_SIZE: u32 = if cfg!(target_pointer_width = "64") {
     48
 } else {
@@ -126,6 +127,13 @@ pub(crate) const CONNECTION_STATE_CONNECTED: u32 = 1;
 pub(crate) const CONNECTION_STATE_CONNECTING: u32 = 2;
 pub(crate) const REQUEST_CLOSE_CAN_PROCEED: u32 = 0;
 pub(crate) const REQUEST_CLOSE_WAIT_FOR_EVENTS: u32 = 1;
+
+// Shared reconnect bounds. MAX_RECONNECT_ATTEMPTS mirrors
+// NAVOP_RDP_MAX_RECONNECT_ATTEMPTS; MAX_KEEP_ALIVE_SECONDS keeps the
+// seconds→milliseconds LONG conversion in range.
+pub(crate) const MAX_RECONNECT_ATTEMPTS: u32 = 200;
+pub(crate) const MAX_KEEP_ALIVE_SECONDS: u32 = (i32::MAX / 1_000) as u32;
+pub(crate) const PRESENTATION_STATE_ABI_VERSION: u32 = 1;
 
 pub(crate) const EVENT_CONNECTING: u32 = 1;
 pub(crate) const EVENT_CONNECTED: u32 = 2;
@@ -329,6 +337,45 @@ impl NavopRdpSessionDisplaySettings {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NavopRdpPresentationState {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) control_hwnd_valid: u32,
+    pub(crate) host_rect_nonzero: u32,
+    pub(crate) control_rect_nonzero: u32,
+    pub(crate) control_visible: u32,
+    pub(crate) control_is_host_descendant: u32,
+    pub(crate) host_visible: u32,
+}
+
+impl NavopRdpPresentationState {
+    pub(crate) const fn current() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: PRESENTATION_STATE_ABI_VERSION,
+            control_hwnd_valid: 0,
+            host_rect_nonzero: 0,
+            control_rect_nonzero: 0,
+            control_visible: 0,
+            control_is_host_descendant: 0,
+            host_visible: 0,
+        }
+    }
+
+    pub(crate) fn has_current_layout(&self) -> bool {
+        self.struct_size == size_of::<Self>() as u32
+            && self.abi_version == PRESENTATION_STATE_ABI_VERSION
+            && self.control_hwnd_valid <= 1
+            && self.host_rect_nonzero <= 1
+            && self.control_rect_nonzero <= 1
+            && self.control_visible <= 1
+            && self.control_is_host_descendant <= 1
+            && self.host_visible <= 1
+    }
+}
+
+#[repr(C)]
 pub(crate) struct NavopRdpEvent {
     pub(crate) struct_size: u32,
     pub(crate) abi_version: u32,
@@ -470,7 +517,7 @@ impl NavopRdpConnectionOptions {
             keep_alive_seconds: 60,
             timeout_seconds: 600,
             connection_flags: CONNECTION_FLAG_AUTO_RECONNECT,
-            max_reconnect_attempts: 20,
+            max_reconnect_attempts: MAX_RECONNECT_ATTEMPTS,
         }
     }
 }
@@ -631,9 +678,9 @@ fn validate_connection_options(options: &NavopRdpConnectionOptions) -> NativeRes
         || !matches!(options.gateway_credential_source, 0 | 1 | 4)
         || !(100..=500).contains(&options.desktop_scale_factor)
         || !matches!(options.device_scale_factor, 100 | 140 | 180)
-        || options.keep_alive_seconds.checked_mul(1_000).is_none()
+        || options.keep_alive_seconds > MAX_KEEP_ALIVE_SECONDS
         || options.timeout_seconds > i32::MAX as u32
-        || options.max_reconnect_attempts > i32::MAX as u32
+        || options.max_reconnect_attempts > MAX_RECONNECT_ATTEMPTS
     {
         return RESULT_INVALID_ARGUMENT;
     }
@@ -913,6 +960,8 @@ pub(crate) type UpdateSessionDisplaySettingsFn = unsafe fn(
     host: *mut NativeRdpHost,
     settings: *const NavopRdpSessionDisplaySettings,
 ) -> NativeResult;
+pub(crate) type GetPresentationStateFn =
+    unsafe fn(host: *mut NativeRdpHost, out_state: *mut NavopRdpPresentationState) -> NativeResult;
 pub(crate) type SetVisibleFn = unsafe fn(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
 pub(crate) type FocusFn = unsafe fn(host: *mut NativeRdpHost) -> NativeResult;
 pub(crate) type DestroyFn = unsafe fn(host: *mut *mut NativeRdpHost) -> NativeResult;
@@ -943,6 +992,7 @@ pub(crate) struct NativeBindings {
     pub(crate) get_last_error: GetLastErrorFn,
     pub(crate) set_bounds: SetBoundsFn,
     pub(crate) update_session_display_settings: UpdateSessionDisplaySettingsFn,
+    pub(crate) get_presentation_state: GetPresentationStateFn,
     pub(crate) set_visible: SetVisibleFn,
     pub(crate) focus: FocusFn,
     pub(crate) destroy: DestroyFn,
@@ -962,6 +1012,7 @@ pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     get_last_error,
     set_bounds,
     update_session_display_settings,
+    get_presentation_state,
     set_visible,
     focus,
     destroy,
@@ -1000,6 +1051,10 @@ unsafe extern "C" {
     fn navop_rdp_update_session_display_settings(
         host: *mut NativeRdpHost,
         settings: *const NavopRdpSessionDisplaySettings,
+    ) -> NativeResult;
+    fn navop_rdp_get_presentation_state(
+        host: *mut NativeRdpHost,
+        out_state: *mut NavopRdpPresentationState,
     ) -> NativeResult;
     fn navop_rdp_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
     fn navop_rdp_focus(host: *mut NativeRdpHost) -> NativeResult;
@@ -1071,6 +1126,14 @@ unsafe fn update_session_display_settings(
     settings: *const NavopRdpSessionDisplaySettings,
 ) -> NativeResult {
     unsafe { navop_rdp_update_session_display_settings(host, settings) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn get_presentation_state(
+    host: *mut NativeRdpHost,
+    out_state: *mut NavopRdpPresentationState,
+) -> NativeResult {
+    unsafe { navop_rdp_get_presentation_state(host, out_state) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -1336,6 +1399,25 @@ unsafe fn update_session_display_settings(
 unsafe fn set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult {
     if host.is_null() || visible > 1 {
         return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn get_presentation_state(
+    host: *mut NativeRdpHost,
+    out_state: *mut NavopRdpPresentationState,
+) -> NativeResult {
+    if host.is_null() || out_state.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let struct_size = unsafe { std::ptr::addr_of!((*out_state).struct_size).read() };
+    if struct_size < size_of::<NavopRdpPresentationState>() as u32 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let abi_version = unsafe { std::ptr::addr_of!((*out_state).abi_version).read() };
+    if abi_version != PRESENTATION_STATE_ABI_VERSION {
+        return RESULT_ABI_MISMATCH;
     }
     RESULT_UNAVAILABLE
 }

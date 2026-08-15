@@ -1,6 +1,5 @@
 use crate::error::WindowsRdpHostError;
-
-const MILLISECONDS_PER_SECOND: u32 = 1_000;
+use crate::ffi::{MAX_KEEP_ALIVE_SECONDS, MAX_RECONNECT_ATTEMPTS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsRdpReconnectPolicy {
@@ -16,19 +15,18 @@ impl Default for WindowsRdpReconnectPolicy {
             keep_alive_seconds: 60,
             timeout_seconds: 600,
             auto_reconnect: true,
-            max_reconnect_attempts: 20,
+            max_reconnect_attempts: MAX_RECONNECT_ATTEMPTS,
         }
     }
 }
 
 impl WindowsRdpReconnectPolicy {
     pub(crate) fn validate(&self) -> Result<(), WindowsRdpHostError> {
-        let keep_alive_valid = self
-            .keep_alive_seconds
-            .checked_mul(MILLISECONDS_PER_SECOND)
-            .is_some();
+        // keep_alive_seconds feeds KeepAliveInterval (milliseconds), so the
+        // value must survive a LONG conversion after the ×1000 scale.
+        let keep_alive_valid = self.keep_alive_seconds <= MAX_KEEP_ALIVE_SECONDS;
         let timeout_valid = i32::try_from(self.timeout_seconds).is_ok();
-        let reconnect_valid = i32::try_from(self.max_reconnect_attempts).is_ok();
+        let reconnect_valid = self.max_reconnect_attempts <= MAX_RECONNECT_ATTEMPTS;
         if keep_alive_valid && timeout_valid && reconnect_valid {
             Ok(())
         } else {

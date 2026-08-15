@@ -18,6 +18,7 @@ mod lifecycle;
 mod native_tests;
 mod options;
 mod policy;
+mod presentation;
 mod shutdown_registry;
 
 pub use capabilities::WindowsRdpHostCapabilities;
@@ -43,6 +44,7 @@ pub use options::{
     WindowsRdpHostOptions, WindowsRdpParentWindow,
 };
 pub use policy::*;
+pub use presentation::WindowsRdpPresentationState;
 pub use shutdown_registry::{
     WindowsRdpDrainSnapshot, WindowsRdpRegistration, WindowsRdpRegistrationError,
     WindowsRdpShutdownCompletion, WindowsRdpShutdownLifecycle, WindowsRdpShutdownRegistry,

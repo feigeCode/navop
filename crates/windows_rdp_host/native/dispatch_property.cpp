@@ -85,7 +85,7 @@ HRESULT invoke_property_get(
 
     DISPPARAMS parameters{};
     VariantInit(out_value);
-    return dispatch->Invoke(
+    result = dispatch->Invoke(
         property_id,
         IID_NULL,
         LOCALE_USER_DEFAULT,
@@ -94,6 +94,12 @@ HRESULT invoke_property_get(
         out_value,
         nullptr,
         nullptr);
+    if (FAILED(result)) {
+        // A failed property-get may still have written a partial VARIANT;
+        // release it so callers never observe leaked object/string contents.
+        VariantClear(out_value);
+    }
+    return result;
 }
 
 }  // namespace
@@ -113,9 +119,13 @@ HRESULT get_dispatch_object(
         property_name,
         &value);
     if (FAILED(result)) {
+        VariantClear(&value);
         return result;
     }
 
+    // The resolved interface pointer is AddRef'd once on behalf of the caller:
+    // CComPtr callers must use Attach, never assignment, or the object leaks an
+    // extra reference.
     IUnknown* resolved = nullptr;
     if (value.vt == VT_DISPATCH) {
         resolved = value.pdispVal;
@@ -141,12 +151,18 @@ HRESULT get_dispatch_bool(
     VARIANT value{};
     HRESULT result = invoke_property_get(object, property_name, &value);
     if (FAILED(result)) {
+        VariantClear(&value);
         return result;
     }
-    result = VariantChangeType(&value, &value, 0, VT_BOOL);
+
+    // Convert into an independent VARIANT: VariantChangeType must never mutate
+    // the value in place, or the original BSTR/IUnknown contents are leaked.
+    VARIANT converted{};
+    result = VariantChangeType(&converted, &value, 0, VT_BOOL);
     if (SUCCEEDED(result)) {
-        *out_value = value.boolVal != VARIANT_FALSE;
+        *out_value = converted.boolVal != VARIANT_FALSE;
     }
+    VariantClear(&converted);
     VariantClear(&value);
     return result;
 }
@@ -175,6 +191,9 @@ HRESULT set_dispatch_utf16(
     IUnknown* object,
     const wchar_t* property_name,
     NavopRdpBorrowedUtf16 value) noexcept {
+    // An empty string is a valid, allocatable empty BSTR: len == 0 with a null
+    // data pointer must succeed, while a non-zero length requires a non-null
+    // pointer.
     if (value.len != UINT32_C(0) && value.data == nullptr) {
         return E_POINTER;
     }

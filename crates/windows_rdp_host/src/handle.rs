@@ -12,12 +12,13 @@ use crate::ffi::{
     CONNECTION_STATE_CONNECTED, CONNECTION_STATE_CONNECTING, CONNECTION_STATE_DISCONNECTED,
     CREATE_STAGE_NONE, NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NativeResult,
     NavopRdpBounds, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
-    NavopRdpEventCallbackOptions, NavopRdpLastError, NavopRdpProbeOptions, NavopRdpProbeResult,
-    NavopRdpSessionDisplaySettings, REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS,
-    RESULT_OK,
+    NavopRdpEventCallbackOptions, NavopRdpLastError, NavopRdpPresentationState,
+    NavopRdpProbeOptions, NavopRdpProbeResult, NavopRdpSessionDisplaySettings,
+    REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS, RESULT_OK,
 };
 use crate::lifecycle::WindowsRdpHostLifecycle;
 use crate::options::{WindowsRdpConnectionOptions, WindowsRdpHostOptions, WindowsRdpParentWindow};
+use crate::presentation::WindowsRdpPresentationState;
 
 /// Connection state reported synchronously by the native RDP control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +281,32 @@ impl WindowsRdpHost {
         // - the C ABI uses an explicit 0/1 integer rather than C++ bool.
         let result = unsafe { (self.bindings.set_visible)(self.raw, u32::from(visible)) };
         check_host_result(self.bindings, self.raw, result)
+    }
+
+    /// Reads a presentation-readiness snapshot for the native ActiveX child.
+    ///
+    /// The query is synchronous, owner-thread serialized, and never fails for a
+    /// live host: unavailable resources are reported as all-zero flags.
+    pub fn presentation_state(
+        &mut self,
+    ) -> Result<WindowsRdpPresentationState, WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) {
+            return Err(WindowsRdpHostError::InvalidState);
+        }
+        if self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let mut native_state = NavopRdpPresentationState::current();
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - native_state is live for the synchronous call and initialized before.
+        let result = unsafe { (self.bindings.get_presentation_state)(self.raw, &mut native_state) };
+        check_host_result(self.bindings, self.raw, result)?;
+        if !native_state.has_current_layout() {
+            return Err(WindowsRdpHostError::InvalidNativeResponse);
+        }
+        Ok(WindowsRdpPresentationState::from_native(native_state))
     }
 
     /// Gives keyboard focus to the visible ActiveX child.
@@ -547,8 +574,8 @@ mod tests {
     use super::*;
     use crate::ffi::{
         NativeEventCallback, NavopRdpConnectionOptions, NavopRdpCredentialBundle, NavopRdpEvent,
-        ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR,
-        RESULT_INVALID_ARGUMENT, RESULT_INVALID_STATE,
+        NavopRdpPresentationState, ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_CALLBACK_IN_FLIGHT,
+        RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT, RESULT_INVALID_STATE,
     };
     use crate::options::WindowsRdpColorDepth;
 
@@ -595,6 +622,9 @@ mod tests {
         display_settings_calls: usize,
         captured_display_settings: Vec<NavopRdpSessionDisplaySettings>,
         display_settings_results: std::collections::VecDeque<NativeResult>,
+        presentation_state_calls: usize,
+        presentation_states: std::collections::VecDeque<NavopRdpPresentationState>,
+        presentation_state_results: std::collections::VecDeque<NativeResult>,
         visible_calls: usize,
         captured_visibility: Vec<bool>,
         visible_results: std::collections::VecDeque<NativeResult>,
@@ -642,6 +672,9 @@ mod tests {
                 display_settings_calls: 0,
                 captured_display_settings: Vec::new(),
                 display_settings_results: std::collections::VecDeque::new(),
+                presentation_state_calls: 0,
+                presentation_states: std::collections::VecDeque::new(),
+                presentation_state_results: std::collections::VecDeque::new(),
                 visible_calls: 0,
                 captured_visibility: Vec::new(),
                 visible_results: std::collections::VecDeque::new(),
@@ -793,6 +826,10 @@ mod tests {
 
     fn captured_display_settings() -> Vec<NavopRdpSessionDisplaySettings> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_display_settings.clone())
+    }
+
+    fn presentation_state_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().presentation_state_calls)
     }
 
     fn visible_calls() -> usize {
@@ -1359,6 +1396,29 @@ mod tests {
         })
     }
 
+    unsafe fn fake_get_presentation_state(
+        host: *mut NativeRdpHost,
+        out_state: *mut NavopRdpPresentationState,
+    ) -> NativeResult {
+        if host.is_null() || out_state.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.presentation_state_calls += 1;
+            let result = state
+                .presentation_state_results
+                .pop_front()
+                .unwrap_or(RESULT_OK);
+            if result == RESULT_OK
+                && let Some(snapshot) = state.presentation_states.pop_front()
+            {
+                unsafe { *out_state = snapshot };
+            }
+            result
+        })
+    }
+
     unsafe fn fake_focus(host: *mut NativeRdpHost) -> NativeResult {
         if host.is_null() {
             return RESULT_INVALID_ARGUMENT;
@@ -1378,6 +1438,7 @@ mod tests {
             get_last_error: fake_get_last_error,
             set_bounds: fake_set_bounds,
             update_session_display_settings: fake_update_session_display_settings,
+            get_presentation_state: fake_get_presentation_state,
             set_visible: fake_set_visible,
             focus: fake_focus,
             destroy: fake_destroy,
@@ -2127,6 +2188,56 @@ mod tests {
             Err(WindowsRdpHostError::InvalidState)
         );
         assert_eq!(display_settings_calls(), 1);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn presentation_state_queries_the_native_child_without_changing_lifecycle() {
+        reset_fake_state();
+        let mut expected = NavopRdpPresentationState::current();
+        expected.control_hwnd_valid = 1;
+        expected.control_is_host_descendant = 1;
+        expected.control_rect_nonzero = 1;
+        expected.host_rect_nonzero = 1;
+        expected.host_visible = 1;
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().presentation_states.push_back(expected);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        let state = host
+            .presentation_state()
+            .expect("presentation state should be readable");
+        assert!(state.control_hwnd_valid);
+        assert!(state.control_is_host_descendant);
+        assert!(state.control_rect_nonzero);
+        assert!(state.host_rect_nonzero);
+        assert!(state.host_visible);
+        assert!(!state.control_visible);
+        assert_eq!(presentation_state_calls(), 1);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn presentation_state_failures_map_without_changing_lifecycle() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .presentation_state_results
+                .push_back(RESULT_INVALID_STATE);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.presentation_state(),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+        assert_eq!(presentation_state_calls(), 1);
         assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
     }
 

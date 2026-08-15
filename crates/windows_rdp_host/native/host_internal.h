@@ -141,6 +141,10 @@ NavopRdpResult get_active_x_connection_state(
     NativeRdpActiveXResources* resources,
     uint32_t* out_state) noexcept;
 
+NavopRdpResult get_active_x_presentation_state(
+    NativeRdpActiveXResources* resources,
+    NavopRdpPresentationState* out_state) noexcept;
+
 NavopRdpResult get_active_x_extended_disconnect_reason(
     NativeRdpActiveXResources* resources,
     int32_t* out_extended_code) noexcept;

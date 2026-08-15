@@ -1197,7 +1197,15 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
             ".compile(\"windows_rdp_host\");",
         ],
     );
-    for consumer in ["native/event_sink.cpp", "native/active_x_host.cpp"] {
+    for consumer in [
+        "native/event_sink.cpp",
+        "native/active_x_host.cpp",
+        "native/audio_redirection.cpp",
+        "native/connection_policy_display.cpp",
+        "native/connection_policy_gateway.cpp",
+        "native/connection_policy_runtime.cpp",
+        "native/connection_policy_session.cpp",
+    ] {
         let path = &format!("{HOST_CRATE}/{consumer}");
         assert_contains_all(
             path,
@@ -1339,10 +1347,7 @@ fn active_x_connection_policy_consumes_the_complete_normalized_options() {
         active_x_source,
         "NavopRdpResult connect_active_x(",
         "\n}\n\nNavopRdpResult apply_active_x_credentials(",
-        &[
-            "configure_active_x_connection_policy(",
-            "Connect()",
-        ],
+        &["configure_active_x_connection_policy(", "Connect()"],
     );
     assert_excludes_all(
         active_x_source,
@@ -1444,7 +1449,11 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "GetParent(control_window)",
             "trace_native_pointer(\n        \"presentation.control_parent\"",
             "if (control_parent != resources.host_window)",
-            "presentation.position_control_window.skipped_non_direct_child",
+            "IsChild(resources.host_window, control_window)",
+            "presentation.position_control_window.control_not_descendant",
+            "kPresentationIncompleteHresult",
+            "presentation.position_control_window.non_direct_descendant",
+            "MapWindowPoints(",
             "UINT position_flags = SWP_NOZORDER | SWP_NOACTIVATE",
             "IsWindowVisible(resources.host_window)",
             "position_flags |= SWP_SHOWWINDOW",
@@ -1453,6 +1462,10 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "nullptr",
             "position_flags",
         ],
+    );
+    assert_excludes_all(
+        source,
+        &["presentation.position_control_window.skipped_non_direct_child"],
     );
     assert_tokens_in_scope(
         source,
@@ -1837,7 +1850,22 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "NAVOP_RDP_EVENT_DISCONNECTED",
             "NAVOP_RDP_EVENT_CLOSE_CONFIRMED",
             "NAVOP_RDP_EVENT_FOCUS_RELEASED",
-            "dispatch_disconnected_from_parameters(host, parameters);",
+            "dispatch_disconnected_from_parameters(host, parameters)",
+            "event_sink.detached_callback",
+            "event_sink.dispatch_failure",
+            "event_sink.exception",
+            "event_sink.unknown_dispatch_id",
+            "event_sink.size_change.invalid_parameter_count",
+            "event_sink.size_change.invalid_parameter_types",
+            "event_sink.focus_released.direction",
+            "event_sink.network_status.bandwidth",
+            "event_sink.network_status.round_trip_time",
+            "event_sink.auto_reconnecting2.disconnect_reason",
+            "event_subscription.destroy.unadvise.before",
+            "event_subscription.destroy.unadvise.after",
+            "event_subscription.destroy.release_connection_point.before",
+            "event_subscription.destroy.release_sink.before",
+            "event_subscription.destroy.complete",
             "get_active_x_extended_disconnect_reason(",
             "trace_active_x_disconnect_description(",
             "extended_result == NAVOP_RDP_RESULT_OK",
@@ -2108,42 +2136,31 @@ fn active_x_session_display_requires_connected_and_preserves_hresult() {
 
 #[test]
 fn active_x_connect_aligns_initial_display_properties_with_axhost() {
+    let display_policy = &format!("{HOST_CRATE}/native/connection_policy_display.cpp");
     let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
 
     assert_contains_all(
-        active_x,
+        display_policy,
         &[
-            "constexpr ULONG kDefaultDesktopScaleFactor = static_cast<ULONG>(100);",
-            "constexpr ULONG kDefaultDeviceScaleFactor = static_cast<ULONG>(100);",
+            "configure_display_policy(",
+            "L\"SmartSizing\"",
+            "L\"UseMultimon\"",
+            "L\"ContainerHandledFullScreen\"",
             "CComPtr<IMsRdpExtendedSettings> extended_settings;",
-            "CComVariant desktop_scale_factor(",
-            "CComVariant device_scale_factor(",
-            "CComBSTR(L\"DesktopScaleFactor\")",
-            "CComBSTR(L\"DeviceScaleFactor\")",
-            "put_ContainerHandledFullScreen(VARIANT_TRUE)",
-            "connect.query_extended_settings.before",
-            "connect.query_extended_settings.after",
-            "connect.set_desktop_scale_factor.before",
-            "connect.set_desktop_scale_factor.after",
-            "connect.set_device_scale_factor.before",
-            "connect.set_device_scale_factor.after",
-            "connect.set_container_handled_full_screen.before",
-            "connect.set_container_handled_full_screen.after",
+            "L\"DesktopScaleFactor\"",
+            "L\"DeviceScaleFactor\"",
+            "extended_settings->put_Property(",
+            "connect.display.smart_sizing",
+            "connect.display.use_multimon",
+            "connect.display.container_handled_full_screen",
+            "connect.display.desktop_scale_factor",
+            "connect.display.device_scale_factor",
+            "connect.display.span_monitors.best_effort_unsupported",
         ],
     );
-    assert_tokens_in_scope(
-        active_x,
-        "void configure_extended_display_settings(",
-        "\n}\n\nNavopRdpResult connect_active_x(",
-        &[
-            "control->QueryInterface(IID_PPV_ARGS(&extended_settings))",
-            "extended_settings->put_Property(",
-            "CComBSTR(L\"DesktopScaleFactor\")",
-            "&desktop_scale_factor",
-            "extended_settings->put_Property(",
-            "CComBSTR(L\"DeviceScaleFactor\")",
-            "&device_scale_factor",
-        ],
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/connection_policy.cpp"),
+        &["get_advanced_settings8(", "get_AdvancedSettings9"],
     );
     assert_tokens_in_scope(
         active_x,
@@ -2151,14 +2168,25 @@ fn active_x_connect_aligns_initial_display_properties_with_axhost() {
         "NavopRdpResult apply_active_x_credentials(",
         &[
             "get_AdvancedSettings2",
-            "configure_extended_display_settings(resources->state.control);",
-            "put_SmartSizing",
-            "get_AdvancedSettings6",
-            "put_ContainerHandledFullScreen(VARIANT_TRUE)",
-            "put_PublicMode",
+            "put_RDPPort",
+            "configure_active_x_connection_policy(",
             "put_DesktopWidth",
             "put_DesktopHeight",
             "Connect",
+        ],
+    );
+    assert_excludes_all(
+        active_x,
+        &[
+            "configure_extended_display_settings",
+            "kDefaultDesktopScaleFactor",
+            "kDefaultDeviceScaleFactor",
+            "put_SmartSizing",
+            "put_ContainerHandledFullScreen",
+            "put_EncryptionEnabled",
+            "put_PublicMode",
+            "put_EnableCredSspSupport",
+            "put_AuthenticationLevel(0)",
         ],
     );
 }
@@ -2175,12 +2203,7 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
             "put_Server",
             "get_AdvancedSettings2",
             "put_RDPPort",
-            "put_EncryptionEnabled",
-            "get_AdvancedSettings6",
-            "put_PublicMode",
-            "get_AdvancedSettings9",
-            "put_EnableCredSspSupport",
-            "put_AuthenticationLevel",
+            "configure_active_x_connection_policy(",
             "put_DesktopWidth",
             "put_DesktopHeight",
             "put_ColorDepth",
@@ -2195,13 +2218,25 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
             "static_cast<int>(options.host.len)",
             "reinterpret_cast<LPCOLESTR>(options.host.data)",
             "IMsRdpClientAdvancedSettings",
-            "IMsRdpClientAdvancedSettings5",
-            "IMsRdpClientAdvancedSettings8",
             "RequestClose",
             "Disconnect",
             "controlCloseCanProceed",
             "controlCloseWaitForEvents",
         ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/connection_policy_session.cpp"),
+        &[
+            "IMsRdpClientAdvancedSettings8",
+            "L\"EnableCredSspSupport\"",
+            "L\"PublicMode\"",
+            "L\"AuthenticationLevel\"",
+            "L\"EncryptionEnabled\"",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/connection_policy_runtime.cpp"),
+        &["L\"PerformanceFlags\"", "L\"NetworkConnectionType\""],
     );
     assert_excludes_all(active_x, &["wcslen", "lstrlenW", "printf", "std::cout"]);
     assert_excludes_all(
@@ -2501,6 +2536,269 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "vcvarsall.bat",
             "\"call `\"$vcvarsall`\" x64\"",
             "\"cargo test --all\"",
+        ],
+    );
+}
+
+#[test]
+fn active_x_policy_sections_run_explicitly_in_frozen_order() {
+    let policy_source = &format!("{HOST_CRATE}/native/connection_policy.cpp");
+    let contents = read(policy_source);
+    let (_, body) = contents
+        .split_once("NavopRdpResult configure_active_x_connection_policy(")
+        .unwrap_or_else(|| panic!("{policy_source} must contain the unified policy entrypoint"));
+
+    // Every section is an explicit fail-fast call in the frozen order:
+    // security, reconnect, input, resource, audio, display, performance,
+    // gateway. A section failure short-circuits before the next section runs.
+    let mut remaining = body;
+    for token in [
+        "configure_security_policy(context, options)",
+        "configure_reconnect_policy(context, options)",
+        "configure_input_policy(context, options)",
+        "configure_resource_policy(context, options)",
+        "configure_audio_redirection(",
+        "configure_display_policy(context, options)",
+        "configure_performance_policy(context, options)",
+        "configure_gateway_policy(context, options)",
+    ] {
+        let position = remaining
+            .find(token)
+            .unwrap_or_else(|| panic!("{policy_source} must call `{token}` in the frozen order"));
+        remaining = &remaining[position + token.len()..];
+    }
+    // The old noexcept function-pointer array must be gone.
+    assert_excludes_all(
+        policy_source,
+        &["ConfigureSection sections[]", "using ConfigureSection"],
+    );
+    // Shared helpers are called from other policy translation units, so their
+    // definitions must have external linkage (outside the anonymous namespace)
+    // or MSVC leaves an unresolved external symbol.
+    let namespace_close = contents
+        .find("}  // namespace")
+        .unwrap_or_else(|| panic!("{policy_source} must close its anonymous namespace"));
+    for helper in [
+        "NavopRdpResult get_advanced_settings8(",
+        "NavopRdpResult configure_redirect_bool(",
+    ] {
+        let position = contents
+            .find(helper)
+            .unwrap_or_else(|| panic!("{policy_source} must define `{helper}`"));
+        assert!(
+            position > namespace_close,
+            "`{helper}` must be defined outside the anonymous namespace"
+        );
+    }
+    // The policy header is included before the generated mstscax.tlh in every
+    // policy TU; it must forward declare the generated COM interface so the
+    // declaration of get_advanced_settings8 remains valid.
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/connection_policy_internal.h"),
+        &["struct IMsRdpClientAdvancedSettings8;"],
+    );
+
+    // The unified call must run before Connect and replace every inline
+    // hardcoded ActiveX property.
+    let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+    assert_tokens_in_scope(
+        active_x,
+        "NavopRdpResult connect_active_x(",
+        "NavopRdpResult apply_active_x_credentials(",
+        &["configure_active_x_connection_policy(", "Connect"],
+    );
+    assert_excludes_all(
+        active_x,
+        &[
+            "configure_audio_redirection(\n        owner,\n        resources->state.client,\n        options.flags)",
+            "put_AuthenticationLevel(0)",
+            "put_EncryptionEnabled(1)",
+        ],
+    );
+}
+
+#[test]
+fn native_dispatch_helpers_own_variant_and_bstr_lifecycles() {
+    let dispatch_source = &format!("{HOST_CRATE}/native/dispatch_property.cpp");
+    let internal_header = &format!("{HOST_CRATE}/native/host_internal.h");
+
+    // bool conversion must use an independent converted VARIANT, never an
+    // in-place VariantChangeType on the source value.
+    assert_contains_all(
+        dispatch_source,
+        &[
+            "VariantChangeType(&converted, &value, 0, VT_BOOL)",
+            "VariantClear(&converted)",
+        ],
+    );
+    assert_excludes_all(dispatch_source, &["VariantChangeType(&value, &value"]);
+    // Every property-get failure path clears the VARIANT it initialized.
+    assert_contains_all(
+        dispatch_source,
+        &[
+            "if (FAILED(result)) {\n        VariantClear(&value);\n        return result;\n    }",
+            "if (FAILED(result)) {\n        // A failed property-get may still have written a partial VARIANT;",
+            "VariantClear(out_value);",
+        ],
+    );
+    // get_dispatch_object returns an AddRef'd pointer; CComPtr callers must
+    // Attach it, and both VT_DISPATCH and VT_UNKNOWN results are resolved.
+    assert_contains_all(
+        dispatch_source,
+        &[
+            "value.vt == VT_DISPATCH",
+            "value.vt == VT_UNKNOWN",
+            "resolved->AddRef();",
+            "must use Attach, never assignment",
+        ],
+    );
+    // An empty string is a valid empty BSTR; only a non-zero length with a
+    // null pointer is E_POINTER.
+    assert_contains_all(
+        dispatch_source,
+        &[
+            "len == 0 with a null\n    // data pointer must succeed",
+            "if (value.len != UINT32_C(0) && value.data == nullptr)",
+            "return E_POINTER;",
+            "SysAllocStringLen(",
+        ],
+    );
+    assert_contains_all(
+        internal_header,
+        &[
+            "HRESULT get_dispatch_object(",
+            "HRESULT get_dispatch_bool(",
+            "HRESULT set_dispatch_bool(",
+            "HRESULT set_dispatch_long(",
+            "HRESULT set_dispatch_utf16(",
+        ],
+    );
+}
+
+#[test]
+fn reconnect_defaults_and_bounds_are_shared_across_the_abi() {
+    let header = &format!("{HOST_CRATE}/native/windows_rdp_host.h");
+    let ffi = &format!("{HOST_CRATE}/src/ffi.rs");
+    let policy = &format!("{HOST_CRATE}/src/policy/reconnect.rs");
+    let native_config = &format!("{HOST_CRATE}/native/configuration.cpp");
+    let core_security = "crates/core/src/storage/rdp_settings/security.rs";
+
+    assert_contains_all(header, &["NAVOP_RDP_MAX_RECONNECT_ATTEMPTS UINT32_C(200)"]);
+    assert_contains_all(
+        ffi,
+        &[
+            "MAX_RECONNECT_ATTEMPTS: u32 = 200",
+            "MAX_KEEP_ALIVE_SECONDS: u32 = (i32::MAX / 1_000) as u32",
+            "options.keep_alive_seconds > MAX_KEEP_ALIVE_SECONDS",
+            "options.max_reconnect_attempts > MAX_RECONNECT_ATTEMPTS",
+        ],
+    );
+    assert_contains_all(
+        policy,
+        &[
+            "max_reconnect_attempts: MAX_RECONNECT_ATTEMPTS",
+            "keep_alive_valid = self.keep_alive_seconds <= MAX_KEEP_ALIVE_SECONDS",
+            "reconnect_valid = self.max_reconnect_attempts <= MAX_RECONNECT_ATTEMPTS",
+        ],
+    );
+    assert_contains_all(
+        native_config,
+        &[
+            "normalized.max_reconnect_attempts = NAVOP_RDP_MAX_RECONNECT_ATTEMPTS;",
+            "options.max_reconnect_attempts > NAVOP_RDP_MAX_RECONNECT_ATTEMPTS",
+            "(std::numeric_limits<int32_t>::max)() / INT32_C(1000)",
+        ],
+    );
+    assert_contains_all(
+        core_security,
+        &["DEFAULT_RDP_MAX_RECONNECT_ATTEMPTS: u32 = 200"],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/options_tests.rs"),
+        &["max_reconnect_attempts: 20"],
+    );
+}
+
+#[test]
+fn presentation_state_query_abi_is_frozen() {
+    let header = &format!("{HOST_CRATE}/native/windows_rdp_host.h");
+    let host_source = &format!("{HOST_CRATE}/native/host.cpp");
+    let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+    let ffi = &format!("{HOST_CRATE}/src/ffi.rs");
+    let handle = &format!("{HOST_CRATE}/src/handle.rs");
+
+    assert_contains_all(
+        header,
+        &[
+            "NAVOP_RDP_PRESENTATION_STATE_ABI_VERSION UINT32_C(1)",
+            "typedef struct NavopRdpPresentationState",
+            "uint32_t control_hwnd_valid;",
+            "uint32_t host_rect_nonzero;",
+            "uint32_t control_rect_nonzero;",
+            "uint32_t control_visible;",
+            "uint32_t control_is_host_descendant;",
+            "uint32_t host_visible;",
+            "navop_rdp_get_presentation_state(",
+            "static_assert(sizeof(NavopRdpPresentationState) == 32)",
+            "static_assert(alignof(NavopRdpPresentationState) == 4)",
+        ],
+    );
+    assert_contains_all(
+        ffi,
+        &[
+            "RESULT_PRESENTATION_INCOMPLETE: NativeResult = 9",
+            "struct NavopRdpPresentationState",
+            "PRESENTATION_STATE_ABI_VERSION",
+            "type GetPresentationStateFn",
+            "get_presentation_state: GetPresentationStateFn",
+            "fn navop_rdp_get_presentation_state(",
+            "size_of::<NavopRdpPresentationState>()",
+        ],
+    );
+    assert_contains_all(
+        handle,
+        &[
+            "pub fn presentation_state(",
+            "WindowsRdpPresentationState::from_native",
+        ],
+    );
+    assert_contains_all(
+        host_source,
+        &["extern \"C\" NavopRdpResult navop_rdp_get_presentation_state("],
+    );
+    assert_contains_all(
+        active_x,
+        &[
+            "NavopRdpResult get_active_x_presentation_state(",
+            "control_is_host_descendant",
+            "presentation.state.control_hwnd_valid",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/error.rs"),
+        &["RESULT_PRESENTATION_INCOMPLETE", "PresentationIncomplete"],
+    );
+}
+
+#[test]
+fn policy_section_sources_are_registered_in_the_windows_build() {
+    let build_script = &format!("{HOST_CRATE}/build.rs");
+    assert_contains_all(
+        build_script,
+        &[
+            "cargo:rerun-if-changed=native/connection_policy.cpp",
+            "cargo:rerun-if-changed=native/connection_policy_internal.h",
+            "cargo:rerun-if-changed=native/connection_policy_display.cpp",
+            "cargo:rerun-if-changed=native/connection_policy_runtime.cpp",
+            "cargo:rerun-if-changed=native/connection_policy_gateway.cpp",
+            "cargo:rerun-if-changed=native/connection_policy_session.cpp",
+            "cargo:rerun-if-changed=native/dispatch_property.cpp",
+            ".file(\"native/connection_policy.cpp\")",
+            ".file(\"native/connection_policy_display.cpp\")",
+            ".file(\"native/connection_policy_runtime.cpp\")",
+            ".file(\"native/connection_policy_session.cpp\")",
+            ".file(\"native/connection_policy_gateway.cpp\")",
+            ".file(\"native/dispatch_property.cpp\")",
         ],
     );
 }

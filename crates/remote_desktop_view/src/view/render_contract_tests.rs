@@ -937,7 +937,10 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
     assert!(inactive_assignment < native_deactivation);
     assert!(native_deactivation < released_focus_drain);
 
-    assert!(attach.contains("if self.tab_active && self.activate_windows_native(false)"));
+    // The attach-time activation is gated on the login phase so the overlay is
+    // never shown before LoginComplete/Reconnected.
+    assert!(attach.contains("self.native_login_complete"));
+    assert!(attach.contains("self.activate_windows_native(false)"));
     assert!(attach.contains("cx.defer_in(window"));
     assert!(attach.contains("if this.tab_active"));
     assert!(attach.contains("this.focus_windows_native();"));
@@ -1138,4 +1141,70 @@ fn remote_output_wakes_render_without_fixed_interval_polling() {
         output.contains("this.update(cx, |_, cx| cx.notify())"),
         "mailbox output-ready events must request a GPUI render"
     );
+}
+
+#[test]
+fn windows_native_presentation_readiness_is_independent_of_canvas_frames() {
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let maintenance = function_body(
+        &view,
+        "let output_poll_task = cx.spawn",
+        "cx.on_release(move |this, cx|",
+    );
+    let overlay = include_str!("windows_native_overlay/lifecycle.rs").replace("\r\n", "\n");
+    let capability = include_str!("presentation_capability.rs").replace("\r\n", "\n");
+
+    for token in [
+        "fn mark_login_complete",
+        "fn set_native_child_ready",
+        "fn set_effective_visible",
+        "fn can_present",
+        "fn presentation_ready",
+        "effective_visible",
+        "native_child_ready",
+        "login_complete",
+        "fn is_effectively_visible",
+    ] {
+        assert!(native.contains(token), "windows_native.rs missing {token}");
+    }
+    // The readiness gate must sit inside activate() so a deferred activate
+    // emits no sink commands.
+    let activate = function_body(
+        &native,
+        "fn activate<S: NativePresentationSink>",
+        "fn focus<S: NativePresentationSink>",
+    );
+    assert!(activate.contains("if !self.can_present()"));
+    assert!(activate.contains("return Ok(());"));
+
+    for token in [
+        "fn present_windows_native_after_login",
+        "fn synchronize_windows_native_presentation",
+        "fn refresh_windows_native_readiness",
+        "fn log_windows_native_readiness",
+        "native_login_complete",
+        "presentation ready",
+    ] {
+        assert!(view.contains(token), "view.rs missing {token}");
+    }
+    // LoginComplete/Reconnected must force a re-synchronization of bounds.
+    let login_complete = function_body(
+        &view,
+        "fn present_windows_native_after_login",
+        "fn synchronize_windows_native_presentation",
+    );
+    assert!(login_complete.contains("synchronize_windows_native_presentation()"));
+    // The view must propagate the login phase into the adapter; keeping only
+    // the view-local bool would leave the activate() readiness gate closed.
+    assert!(login_complete.contains("native.mark_login_complete()"));
+    // The maintenance task re-reads readiness every tick.
+    assert!(maintenance.contains("refresh_windows_native_readiness()"));
+    // The overlay exposes actual HWND visibility, never canvas frame readiness.
+    assert!(overlay.contains("fn is_actually_visible"));
+    assert!(overlay.contains("IsWindowVisible"));
+    // The Windows-only probe mapping must stay exhaustive as the host error
+    // enum grows; this source check runs on every platform.
+    assert!(capability.contains("WindowsRdpHostError::PresentationIncomplete =>"));
+    assert!(!view.contains("rendered_frames.promote()\n            && self.rendered_frames"));
 }

@@ -59,6 +59,9 @@ trait NativePresentationSink {
     fn focus_child(&mut self) -> Result<(), Self::Error>;
     fn focus_parent(&mut self) -> Result<(), Self::Error>;
     fn hide(&mut self) -> Result<(), Self::Error>;
+    /// Whether the native overlay is actually visible right now, independent
+    /// of any requested visibility.
+    fn is_effectively_visible(&self) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,9 +75,19 @@ enum NativePresentationState {
 #[derive(Debug, Default)]
 struct WindowsNativePresentation {
     state: NativePresentationState,
+    /// Requested activation (tab active).
     active: bool,
+    /// Requested visibility; only set to true after a successful show.
     visible: bool,
     latest_bounds: Option<Win32ClientPhysicalBounds>,
+    /// Set by LoginComplete / Reconnected; the overlay must never present
+    /// before the session has a drawable framebuffer.
+    login_complete: bool,
+    /// Last native presentation-state query: the ActiveX drawing window is
+    /// inside the host subtree with non-zero rects.
+    native_child_ready: bool,
+    /// Actual overlay visibility verified against the HWND, not just requested.
+    effective_visible: bool,
 }
 
 impl WindowsNativePresentation {
@@ -89,6 +102,7 @@ impl WindowsNativePresentation {
         self.latest_bounds = Some(bounds);
         if self.active {
             sink.set_bounds(bounds)?;
+            self.effective_visible = sink.is_effectively_visible();
         }
         Ok(())
     }
@@ -104,6 +118,12 @@ impl WindowsNativePresentation {
         if self.active {
             return Ok(());
         }
+        // Readiness gate: never show the overlay before the session has
+        // completed login/reconnect AND the native child is structurally
+        // ready. The view re-synchronizes after LoginComplete/Reconnected.
+        if !self.can_present() {
+            return Ok(());
+        }
 
         if let Some(bounds) = self.latest_bounds {
             sink.set_bounds(bounds)?;
@@ -112,6 +132,7 @@ impl WindowsNativePresentation {
             sink.show()?;
             self.visible = true;
         }
+        self.effective_visible = sink.is_effectively_visible();
         if focus_child {
             sink.focus_child()?;
         }
@@ -143,6 +164,7 @@ impl WindowsNativePresentation {
         }
         self.active = false;
         self.visible = false;
+        self.effective_visible = false;
         Ok(())
     }
 
@@ -159,6 +181,7 @@ impl WindowsNativePresentation {
         let hide_result = if self.visible { sink.hide() } else { Ok(()) };
         self.active = false;
         self.visible = false;
+        self.effective_visible = false;
         focus_result.and(hide_result)?;
         Ok(true)
     }
@@ -167,6 +190,38 @@ impl WindowsNativePresentation {
         if self.state == NativePresentationState::Closing {
             self.state = NativePresentationState::Destroyed;
         }
+    }
+
+    /// Marks the session login/reconnect phase so the overlay may present.
+    fn mark_login_complete(&mut self) {
+        self.login_complete = true;
+    }
+
+    /// Updates the native child structural readiness snapshot.
+    fn set_native_child_ready(&mut self, ready: bool) {
+        self.native_child_ready = ready;
+    }
+
+    /// Updates the actual overlay visibility observed on the HWND.
+    fn set_effective_visible(&mut self, visible: bool) {
+        self.effective_visible = visible;
+    }
+
+    /// Whether the presentation may attempt to show: login phase reached,
+    /// native child structurally ready, and non-zero bounds.
+    fn can_present(&self) -> bool {
+        self.state == NativePresentationState::Open
+            && self.login_complete
+            && self.native_child_ready
+            && self
+                .latest_bounds
+                .is_some_and(|bounds| bounds.width > 0 && bounds.height > 0)
+    }
+
+    /// Whether the presentation is fully presented: can_present and the
+    /// overlay is actually visible (not just requested).
+    fn presentation_ready(&self) -> bool {
+        self.can_present() && self.effective_visible
     }
 }
 
@@ -283,6 +338,12 @@ impl WindowsNativeAdapter {
         self.host.update_session_display_settings(settings)
     }
 
+    /// Marks the LoginComplete / Reconnected phase. The native overlay remains
+    /// hidden until this gate and the native child readiness gate both pass.
+    pub(crate) fn mark_login_complete(&mut self) {
+        self.presentation.mark_login_complete();
+    }
+
     pub(crate) fn update_bounds(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -342,6 +403,41 @@ impl WindowsNativeAdapter {
         };
         self.presentation.deactivate(&mut sink)?;
         Ok(())
+    }
+
+    /// Re-reads the native child structural readiness and the actual overlay
+    /// visibility. Returns whether the presentation may now attempt to show.
+    pub(crate) fn refresh_native_readiness(&mut self) -> bool {
+        let native_ready = match self.host.presentation_state() {
+            Ok(state) => state.child_ready(),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "failed to read Windows native RDP presentation state"
+                );
+                false
+            }
+        };
+        self.presentation.set_native_child_ready(native_ready);
+        self.presentation
+            .set_effective_visible(self.overlay.is_actually_visible());
+        self.presentation.can_present()
+    }
+
+    /// Whether the presentation may attempt to show (login phase reached,
+    /// native child structurally ready, non-zero bounds).
+    pub(crate) fn can_present(&self) -> bool {
+        self.presentation.can_present()
+    }
+
+    /// Whether the presentation is fully presented (requested + effective).
+    pub(crate) fn presentation_ready(&self) -> bool {
+        self.presentation.presentation_ready()
+    }
+
+    /// Whether a show has been requested (and succeeded) since the last hide.
+    pub(crate) fn requested_visible(&self) -> bool {
+        self.presentation.visible
     }
 
     pub(crate) fn begin_close(
@@ -506,6 +602,14 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
             }
             return Err(error.into());
         }
+        if !self.overlay.is_actually_visible() {
+            // The request succeeded but the owner cannot present right now
+            // (hidden/minimized) or the bounds were clipped away; never report
+            // a silent show.
+            return Err(anyhow::anyhow!(
+                "Windows native RDP overlay show did not become effective"
+            ));
+        }
         self.overlay.log_composition_diagnostics("show_complete");
         Ok(())
     }
@@ -537,6 +641,10 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
             (Ok(()), Err(error)) => Err(error.into()),
             (Ok(()), Ok(())) => Ok(()),
         }
+    }
+
+    fn is_effectively_visible(&self) -> bool {
+        self.overlay.is_actually_visible()
     }
 }
 
@@ -592,6 +700,10 @@ mod tests {
             self.commands.push(Command::Hide);
             Ok(())
         }
+
+        fn is_effectively_visible(&self) -> bool {
+            matches!(self.commands.last(), Some(Command::Show))
+        }
     }
 
     fn bounds() -> Win32ClientPhysicalBounds {
@@ -603,9 +715,81 @@ mod tests {
         }
     }
 
+    /// A presentation that passed the login phase and native child readiness
+    /// gate, so activate() may actually show the overlay.
+    fn ready_presentation() -> WindowsNativePresentation {
+        let mut presentation = WindowsNativePresentation::default();
+        presentation.mark_login_complete();
+        presentation.set_native_child_ready(true);
+        presentation
+    }
+
+    #[test]
+    fn activate_before_login_complete_defers_the_show() {
+        let mut presentation = WindowsNativePresentation::default();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(true, &mut recorder).unwrap();
+
+        assert!(recorder.commands.is_empty());
+        assert!(!presentation.can_present());
+        assert!(!presentation.presentation_ready());
+
+        // The LoginComplete/Reconnected transition unlocks activation.
+        presentation.mark_login_complete();
+        presentation.set_native_child_ready(true);
+        presentation.activate(true, &mut recorder).unwrap();
+        assert_eq!(
+            vec![
+                Command::SetBounds(bounds()),
+                Command::Show,
+                Command::FocusChild,
+            ],
+            recorder.commands
+        );
+        assert!(presentation.can_present());
+        assert!(presentation.presentation_ready());
+    }
+
+    #[test]
+    fn activate_requires_the_native_child_to_be_structurally_ready() {
+        let mut presentation = WindowsNativePresentation::default();
+        presentation.mark_login_complete();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        assert!(recorder.commands.is_empty());
+
+        presentation.set_native_child_ready(true);
+        presentation.activate(false, &mut recorder).unwrap();
+        assert_eq!(
+            vec![Command::SetBounds(bounds()), Command::Show],
+            recorder.commands
+        );
+    }
+
+    #[test]
+    fn zero_sized_bounds_never_become_presentable() {
+        let mut presentation = ready_presentation();
+        let mut recorder = Recorder::default();
+        let zero = Win32ClientPhysicalBounds {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+
+        presentation.update_bounds(zero, &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        assert!(recorder.commands.is_empty());
+        assert!(!presentation.presentation_ready());
+    }
+
     #[test]
     fn activate_applies_bounds_then_shows_and_focuses() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
 
         presentation.update_bounds(bounds(), &mut recorder).unwrap();
@@ -624,7 +808,7 @@ mod tests {
 
     #[test]
     fn deactivate_focuses_parent_before_hiding() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
 
         presentation.update_bounds(bounds(), &mut recorder).unwrap();
@@ -633,11 +817,12 @@ mod tests {
         presentation.deactivate(&mut recorder).unwrap();
 
         assert_eq!(vec![Command::FocusParent, Command::Hide], recorder.commands);
+        assert!(!presentation.presentation_ready());
     }
 
     #[test]
     fn activate_and_deactivate_are_idempotent() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
 
         presentation.update_bounds(bounds(), &mut recorder).unwrap();
@@ -652,7 +837,7 @@ mod tests {
 
     #[test]
     fn inactive_resize_only_updates_the_cached_bounds() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
         let latest = Win32ClientPhysicalBounds {
             x: 30,
@@ -674,7 +859,7 @@ mod tests {
 
     #[test]
     fn active_resize_updates_bounds_without_changing_visibility() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
         let latest = Win32ClientPhysicalBounds {
             x: 30,
@@ -693,7 +878,7 @@ mod tests {
 
     #[test]
     fn begin_close_focuses_parent_then_hides_and_is_idempotent() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
 
         presentation.update_bounds(bounds(), &mut recorder).unwrap();
@@ -704,11 +889,12 @@ mod tests {
         assert!(!presentation.begin_close(&mut recorder).unwrap());
         assert_eq!(vec![Command::FocusParent, Command::Hide], recorder.commands);
         assert_eq!(NativePresentationState::Closing, presentation.state);
+        assert!(!presentation.presentation_ready());
     }
 
     #[test]
     fn closing_gate_ignores_late_resize_activate_focus_and_deactivate() {
-        let mut presentation = WindowsNativePresentation::default();
+        let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
 
         presentation.update_bounds(bounds(), &mut recorder).unwrap();
@@ -777,6 +963,10 @@ mod tests {
         fn hide(&mut self) -> Result<(), Self::Error> {
             self.commands.push(Command::Hide);
             Err(PresentationError)
+        }
+
+        fn is_effectively_visible(&self) -> bool {
+            matches!(self.commands.last(), Some(Command::Show))
         }
     }
 

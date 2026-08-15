@@ -3,12 +3,12 @@ use one_core::storage::{
     RdpKeyboardHookMode, RdpNetworkConnectionType, RdpPerformancePreset, RdpSettings,
 };
 use windows_rdp_host::{
-    WindowsRdpAudioMode, WindowsRdpAudioPolicy, WindowsRdpAudioQuality,
-    WindowsRdpConnectionPolicy, WindowsRdpCredentialBundle, WindowsRdpDisplayMode,
-    WindowsRdpDisplayPolicy, WindowsRdpGatewayCredentialSource, WindowsRdpGatewayMode,
-    WindowsRdpGatewayPolicy, WindowsRdpInputPolicy, WindowsRdpKeyboardHookMode,
-    WindowsRdpNetworkConnectionType, WindowsRdpPerformancePolicy, WindowsRdpPerformancePreset,
-    WindowsRdpReconnectPolicy, WindowsRdpResourcePolicy, WindowsRdpSecurityPolicy,
+    WindowsRdpAudioMode, WindowsRdpAudioPolicy, WindowsRdpAudioQuality, WindowsRdpConnectionPolicy,
+    WindowsRdpCredentialBundle, WindowsRdpDisplayMode, WindowsRdpDisplayPolicy,
+    WindowsRdpGatewayCredentialSource, WindowsRdpGatewayMode, WindowsRdpGatewayPolicy,
+    WindowsRdpInputPolicy, WindowsRdpKeyboardHookMode, WindowsRdpNetworkConnectionType,
+    WindowsRdpPerformancePolicy, WindowsRdpPerformancePreset, WindowsRdpReconnectPolicy,
+    WindowsRdpResourcePolicy, WindowsRdpSecurityPolicy,
 };
 
 pub(super) fn connection_policy(settings: &RdpSettings) -> WindowsRdpConnectionPolicy {
@@ -25,10 +25,7 @@ pub(super) fn connection_policy(settings: &RdpSettings) -> WindowsRdpConnectionP
     }
 }
 
-pub(super) fn initial_desktop_size(
-    settings: &RdpSettings,
-    viewport: (u16, u16),
-) -> (u32, u32) {
+pub(super) fn initial_desktop_size(settings: &RdpSettings, viewport: (u16, u16)) -> (u32, u32) {
     match settings.display.mode {
         RdpDisplayMode::Dynamic => (u32::from(viewport.0), u32::from(viewport.1)),
         RdpDisplayMode::Fixed => (settings.display.width, settings.display.height),

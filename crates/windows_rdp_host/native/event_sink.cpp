@@ -109,7 +109,10 @@ void dispatch(
         static_cast<uint32_t>(generation >> 32U),
         code,
         payload_length};
-    static_cast<void>(dispatch_event(host, &event, payload));
+    const NavopRdpResult result = dispatch_event(host, &event, payload);
+    if (result != NAVOP_RDP_RESULT_OK) {
+        trace_native_result("event_sink.dispatch_failure", result);
+    }
 }
 
 void dispatch_disconnected(
@@ -214,55 +217,76 @@ public:
         try {
             NativeRdpHost* host = host_;
             if (host == nullptr) {
+                trace_native_stage("event_sink.detached_callback");
                 return S_OK;
             }
 
             std::array<uint8_t, 8> payload{};
             switch (dispatch_id) {
             case kOnConnecting:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_CONNECTING);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_CONNECTING)) {
+                    trace_native_stage("event_sink.connecting.malformed_arguments");
+                }
                 break;
             case kOnConnected:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_CONNECTED);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_CONNECTED)) {
+                    trace_native_stage("event_sink.connected.malformed_arguments");
+                }
                 break;
             case kOnLoginComplete:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_LOGIN_COMPLETE);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_LOGIN_COMPLETE)) {
+                    trace_native_stage(
+                        "event_sink.login_complete.malformed_arguments");
+                }
                 break;
             case kOnDisconnected:
-                dispatch_disconnected_from_parameters(host, parameters);
+                if (!dispatch_disconnected_from_parameters(host, parameters)) {
+                    trace_native_stage(
+                        "event_sink.disconnected.malformed_arguments");
+                }
                 break;
             case kOnEnterFullScreenMode:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_ENTER_FULLSCREEN);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_ENTER_FULLSCREEN)) {
+                    trace_native_stage(
+                        "event_sink.enter_fullscreen.malformed_arguments");
+                }
                 break;
             case kOnLeaveFullScreenMode:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_LEAVE_FULLSCREEN);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_LEAVE_FULLSCREEN)) {
+                    trace_native_stage(
+                        "event_sink.leave_fullscreen.malformed_arguments");
+                }
                 break;
             case kOnFatalError:
-                dispatch_code(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_FATAL_ERROR);
+                if (!dispatch_code(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_FATAL_ERROR)) {
+                    trace_native_stage("event_sink.fatal_error.malformed_arguments");
+                }
                 break;
             case kOnWarning:
-                dispatch_code(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_WARNING);
+                if (!dispatch_code(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_WARNING)) {
+                    trace_native_stage("event_sink.warning.malformed_arguments");
+                }
                 break;
             case kOnRemoteDesktopSizeChange:
                 if (has_exact_arguments(parameters, 2)) {
@@ -282,7 +306,13 @@ public:
                             0,
                             payload.data(),
                             8);
+                    } else {
+                        trace_native_stage(
+                            "event_sink.size_change.invalid_parameter_types");
                     }
+                } else {
+                    trace_native_stage(
+                        "event_sink.size_change.invalid_parameter_count");
                 }
                 break;
             case kOnConfirmClose:
@@ -296,6 +326,9 @@ public:
                         0,
                         nullptr,
                         0);
+                } else {
+                    trace_native_stage(
+                        "event_sink.confirm_close.malformed_arguments");
                 }
                 break;
             case kOnAutoReconnecting:
@@ -311,7 +344,9 @@ public:
                         read_i32(
                             parameters->rgvarg[2],
                             &disconnect_reason)) {
-                        static_cast<void>(disconnect_reason);
+                        trace_native_win32(
+                            "event_sink.auto_reconnecting.disconnect_reason",
+                            static_cast<uint32_t>(disconnect_reason));
                         encode_u32_le(
                             static_cast<uint32_t>(attempt_count),
                             payload.data());
@@ -321,26 +356,40 @@ public:
                             0,
                             payload.data(),
                             4);
+                    } else {
+                        trace_native_stage(
+                            "event_sink.auto_reconnecting.malformed_arguments");
                     }
+                } else {
+                    trace_native_stage(
+                        "event_sink.auto_reconnecting.invalid_parameter_count");
                 }
                 break;
             case kOnAuthenticationWarningDisplayed:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISPLAYED);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISPLAYED)) {
+                    trace_native_stage(
+                        "event_sink.authentication_displayed.malformed_arguments");
+                }
                 break;
             case kOnAuthenticationWarningDismissed:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISMISSED);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISMISSED)) {
+                    trace_native_stage(
+                        "event_sink.authentication_dismissed.malformed_arguments");
+                }
                 break;
             case kOnLogonError:
-                dispatch_code(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_LOGON_ERROR);
+                if (!dispatch_code(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_LOGON_ERROR)) {
+                    trace_native_stage("event_sink.logon_error.malformed_arguments");
+                }
                 break;
             case kOnFocusReleased:
                 if (has_exact_arguments(parameters, 1)) {
@@ -348,14 +397,22 @@ public:
                     if (read_i32(
                             parameters->rgvarg[0],
                             &direction)) {
-                        static_cast<void>(direction);
+                        trace_native_win32(
+                            "event_sink.focus_released.direction",
+                            static_cast<uint32_t>(direction));
                         dispatch(
                             host,
                             NAVOP_RDP_EVENT_FOCUS_RELEASED,
                             0,
                             nullptr,
                             0);
+                    } else {
+                        trace_native_stage(
+                            "event_sink.focus_released.invalid_parameter_types");
                     }
+                } else {
+                    trace_native_stage(
+                        "event_sink.focus_released.invalid_parameter_count");
                 }
                 break;
             case kOnNetworkStatusChanged:
@@ -372,8 +429,12 @@ public:
                         read_u32(
                             parameters->rgvarg[2],
                             &quality_level)) {
-                        static_cast<void>(bandwidth);
-                        static_cast<void>(round_trip_time);
+                        trace_native_win32(
+                            "event_sink.network_status.bandwidth",
+                            static_cast<uint32_t>(bandwidth));
+                        trace_native_win32(
+                            "event_sink.network_status.round_trip_time",
+                            static_cast<uint32_t>(round_trip_time));
                         encode_u32_le(
                             static_cast<uint32_t>(quality_level),
                             payload.data());
@@ -383,14 +444,23 @@ public:
                             0,
                             payload.data(),
                             4);
+                    } else {
+                        trace_native_stage(
+                            "event_sink.network_status.invalid_parameter_types");
                     }
+                } else {
+                    trace_native_stage(
+                        "event_sink.network_status.invalid_parameter_count");
                 }
                 break;
             case kOnAutoReconnected:
-                dispatch_no_arguments(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_RECONNECTED);
+                if (!dispatch_no_arguments(
+                        host,
+                        parameters,
+                        NAVOP_RDP_EVENT_RECONNECTED)) {
+                    trace_native_stage(
+                        "event_sink.auto_reconnected.malformed_arguments");
+                }
                 break;
             case kOnAutoReconnecting2:
                 if (has_exact_arguments(parameters, 4)) {
@@ -407,7 +477,9 @@ public:
                         read_i32(
                             parameters->rgvarg[3],
                             &disconnect_reason)) {
-                        static_cast<void>(disconnect_reason);
+                        trace_native_win32(
+                            "event_sink.auto_reconnecting2.disconnect_reason",
+                            static_cast<uint32_t>(disconnect_reason));
                         encode_u32_le(
                             static_cast<uint32_t>(attempt_count),
                             payload.data());
@@ -420,16 +492,26 @@ public:
                             0,
                             payload.data(),
                             8);
+                    } else {
+                        trace_native_stage(
+                            "event_sink.auto_reconnecting2.malformed_arguments");
                     }
+                } else {
+                    trace_native_stage(
+                        "event_sink.auto_reconnecting2.invalid_parameter_count");
                 }
                 break;
             default:
                 // Future type-library events are intentionally ignored until
                 // Navop assigns them an immutable Rust event kind/schema.
+                trace_native_win32(
+                    "event_sink.unknown_dispatch_id",
+                    static_cast<uint32_t>(dispatch_id));
                 break;
             }
             return S_OK;
         } catch (...) {
+            trace_native_stage("event_sink.exception");
             return S_OK;
         }
     }
@@ -437,38 +519,42 @@ public:
 private:
     ~RdpEventSink() noexcept = default;
 
-    static void dispatch_no_arguments(
+    static bool dispatch_no_arguments(
         NativeRdpHost* host,
         const DISPPARAMS* parameters,
         uint32_t kind) noexcept {
-        if (has_exact_arguments(parameters, 0)) {
-            dispatch(host, kind, 0, nullptr, 0);
+        if (!has_exact_arguments(parameters, 0)) {
+            return false;
         }
+        dispatch(host, kind, 0, nullptr, 0);
+        return true;
     }
 
-    static void dispatch_code(
+    static bool dispatch_code(
         NativeRdpHost* host,
         const DISPPARAMS* parameters,
         uint32_t kind) noexcept {
         if (!has_exact_arguments(parameters, 1)) {
-            return;
+            return false;
         }
         LONG code = 0;
-        if (read_i32(parameters->rgvarg[0], &code)) {
-            dispatch(host, kind, static_cast<int32_t>(code), nullptr, 0);
+        if (!read_i32(parameters->rgvarg[0], &code)) {
+            return false;
         }
+        dispatch(host, kind, static_cast<int32_t>(code), nullptr, 0);
+        return true;
     }
 
-    static void dispatch_disconnected_from_parameters(
+    static bool dispatch_disconnected_from_parameters(
         NativeRdpHost* host,
         const DISPPARAMS* parameters) noexcept {
         if (!has_exact_arguments(parameters, 1)) {
-            return;
+            return false;
         }
 
         LONG disconnect_code = 0;
         if (!read_i32(parameters->rgvarg[0], &disconnect_code)) {
-            return;
+            return false;
         }
 
         int32_t extended_code = 0;
@@ -488,6 +574,7 @@ private:
             extended_result == NAVOP_RDP_RESULT_OK
                 ? &extended_code
                 : nullptr);
+        return true;
     }
 
     volatile LONG ref_count_;
@@ -606,23 +693,36 @@ void destroy_event_subscription(
     if (subscription == nullptr) {
         return;
     }
+    trace_native_stage("event_subscription.destroy.begin");
 
     RdpEventSink* sink = subscription->sink;
     if (sink != nullptr) {
+        trace_native_stage("event_subscription.destroy.detach.before");
         sink->detach();
+        trace_native_stage("event_subscription.destroy.detach.after");
     }
     if (subscription->connection_point != nullptr &&
         subscription->advise_cookie != 0) {
-        static_cast<void>(subscription->connection_point->Unadvise(
-            subscription->advise_cookie));
+        trace_native_stage("event_subscription.destroy.unadvise.before");
+        const HRESULT unadvise_result =
+            subscription->connection_point->Unadvise(
+                subscription->advise_cookie);
+        trace_native_hresult(
+            "event_subscription.destroy.unadvise.after",
+            static_cast<int32_t>(unadvise_result));
     }
     subscription->advise_cookie = 0;
+    trace_native_stage("event_subscription.destroy.release_connection_point.before");
     subscription->connection_point.Release();
+    trace_native_stage("event_subscription.destroy.release_connection_point.after");
     if (sink != nullptr) {
+        trace_native_stage("event_subscription.destroy.release_sink.before");
         sink->Release();
+        trace_native_stage("event_subscription.destroy.release_sink.after");
     }
     subscription->sink = nullptr;
     delete subscription;
+    trace_native_stage("event_subscription.destroy.complete");
 }
 
 extern "C" NavopRdpResult navop_rdp_test_invoke_active_x_event(

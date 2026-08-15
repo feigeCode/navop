@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RDP_KEEP_ALIVE_SECONDS: u32 = 60;
 pub const DEFAULT_RDP_CONNECTION_TIMEOUT_SECONDS: u32 = 600;
-pub const DEFAULT_RDP_MAX_RECONNECT_ATTEMPTS: u32 = 20;
+// Matches NAVOP_RDP_MAX_RECONNECT_ATTEMPTS in the Windows RDP host ABI; the
+// native MSTSC MaxReconnectAttempts property and the retry dialog share the
+// same 200-attempt ceiling.
+pub const DEFAULT_RDP_MAX_RECONNECT_ATTEMPTS: u32 = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

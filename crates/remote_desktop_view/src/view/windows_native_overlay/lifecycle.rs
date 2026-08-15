@@ -47,6 +47,12 @@ impl WindowsNativeOverlay {
         self.window
     }
 
+    /// Whether the overlay HWND is actually visible right now, independent of
+    /// any requested visibility. A destroyed overlay reports false.
+    pub(crate) fn is_actually_visible(&self) -> bool {
+        self.window != 0 && unsafe { IsWindowVisible(window_pointer(self.window)) } != 0
+    }
+
     pub(crate) fn set_bounds(
         &mut self,
         requested: WindowsNativeOverlayBounds,
