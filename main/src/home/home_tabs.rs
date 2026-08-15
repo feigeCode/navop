@@ -391,8 +391,10 @@ mod tests {
     #[test]
     fn session_logs_open_from_both_home_sidebars_as_a_stable_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let legacy_source = include_str!("../home_tab/sidebar.rs");
-        let persistent_source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let legacy_source = include_str!("../home_tab/sidebar_navigation.rs");
+        let persistent_source =
+            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let navigation_source = include_str!("../home_tab/navigation.rs");
 
         assert!(tabs_source.contains("fn add_session_logs_tab"));
         assert!(
@@ -401,17 +403,27 @@ mod tests {
         assert!(tabs_source.contains("TabItem::new(\"session-logs\", \"home\", page)"));
         assert!(tabs_source.contains("window.defer(cx, move |window, cx|"));
         assert!(legacy_source.contains("\"legacy-open-session-logs\""));
-        assert!(legacy_source.contains("home.add_session_logs_tab(window, cx)"));
+        assert!(
+            legacy_source.contains("home.activate_navigation_application(application, window, cx)")
+        );
         assert!(persistent_source.contains("\"persistent-open-session-logs\""));
-        assert!(persistent_source.contains("home.add_session_logs_tab(window, cx)"));
+        assert!(
+            persistent_source
+                .contains("home.activate_navigation_application(application, window, cx)")
+        );
+        assert!(navigation_source.contains(
+            "NavigationApplication::SessionLogs => self.add_session_logs_tab(window, cx)"
+        ));
     }
 
     #[test]
     fn credential_vault_opens_from_both_home_sidebars_as_a_stable_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let toolbar_source = include_str!("../home_tab/toolbar.rs");
-        let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
-        let persistent_sidebar_source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let legacy_sidebar_source = include_str!("../home_tab/sidebar_navigation.rs");
+        let persistent_sidebar_source =
+            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let navigation_source = include_str!("../home_tab/navigation.rs");
         let modern_home_source = include_str!("../home_tab/modern_home.rs");
         let settings_source = include_str!("../setting_tab.rs");
         let actions_source = include_str!("../credential_vault/actions.rs");
@@ -423,9 +435,17 @@ mod tests {
         );
         assert!(tabs_source.contains("TabItem::new(\"credential-vault\", \"home\", vault)"));
         assert!(legacy_sidebar_source.contains("\"legacy-open-credential-vault\""));
-        assert!(legacy_sidebar_source.contains("home.add_credential_vault_tab(window, cx)"));
+        assert!(
+            legacy_sidebar_source
+                .contains("home.activate_navigation_application(application, window, cx)")
+        );
         assert!(persistent_sidebar_source.contains("\"persistent-open-credential-vault\""));
-        assert!(persistent_sidebar_source.contains("home.add_credential_vault_tab(window, cx)"));
+        assert!(
+            persistent_sidebar_source
+                .contains("home.activate_navigation_application(application, window, cx)")
+        );
+        assert!(navigation_source.contains("NavigationApplication::CredentialVault =>"));
+        assert!(navigation_source.contains("self.add_credential_vault_tab(window, cx)"));
         assert!(!modern_home_source.contains("\"modern-home-credential-vault\""));
         assert!(!toolbar_source.contains("\"credential-vault-button\""));
         assert!(!toolbar_source.contains("add_credential_vault_tab"));
@@ -436,43 +456,44 @@ mod tests {
 
     #[test]
     fn persistent_sidebar_places_credential_vault_between_notes_and_extensions() {
-        let source = include_str!("../persistent_connection_sidebar/rail.rs");
-        let notes = source.find("\"persistent-open-notes\"").unwrap();
-        let session_logs = source.find("\"persistent-open-session-logs\"").unwrap();
-        let vault = source.find("\"persistent-open-credential-vault\"").unwrap();
-        let extensions = source.find("\"persistent-open-extensions\"").unwrap();
-        assert!(notes < session_logs);
-        assert!(session_logs < vault);
-        assert!(vault < extensions);
+        use crate::navigation_quick_open::{
+            NavigationApplication, overflow_navigation_applications,
+        };
+
+        assert_eq!(
+            overflow_navigation_applications(),
+            vec![
+                NavigationApplication::SessionLogs,
+                NavigationApplication::CredentialVault,
+                NavigationApplication::Extensions,
+            ]
+        );
     }
 
     #[test]
     fn both_home_sidebars_place_credential_vault_with_workspace_tools() {
-        let legacy_source = include_str!("../home_tab/sidebar.rs");
-        let legacy_notes = legacy_source.find("\"legacy-open-notes\"").unwrap();
-        let legacy_session_logs = legacy_source.find("\"legacy-open-session-logs\"").unwrap();
-        let legacy_vault = legacy_source
-            .find("\"legacy-open-credential-vault\"")
-            .unwrap();
-        let legacy_extensions = legacy_source.find("\"legacy-open-extensions\"").unwrap();
-        assert!(legacy_notes < legacy_session_logs);
-        assert!(legacy_session_logs < legacy_vault);
-        assert!(legacy_vault < legacy_extensions);
+        let legacy_source = include_str!("../home_tab/sidebar_navigation.rs");
+        let persistent_source =
+            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
 
-        let persistent_source = include_str!("../persistent_connection_sidebar/rail.rs");
-        let persistent_notes = persistent_source.find("\"persistent-open-notes\"").unwrap();
-        let persistent_session_logs = persistent_source
-            .find("\"persistent-open-session-logs\"")
-            .unwrap();
-        let persistent_vault = persistent_source
-            .find("\"persistent-open-credential-vault\"")
-            .unwrap();
-        let persistent_extensions = persistent_source
-            .find("\"persistent-open-extensions\"")
-            .unwrap();
-        assert!(persistent_notes < persistent_session_logs);
-        assert!(persistent_session_logs < persistent_vault);
-        assert!(persistent_vault < persistent_extensions);
+        for id in [
+            "\"legacy-open-notes\"",
+            "\"legacy-open-session-logs\"",
+            "\"legacy-open-credential-vault\"",
+            "\"legacy-open-extensions\"",
+        ] {
+            assert!(legacy_source.contains(id));
+        }
+        for id in [
+            "\"persistent-open-notes\"",
+            "\"persistent-open-session-logs\"",
+            "\"persistent-open-credential-vault\"",
+            "\"persistent-open-extensions\"",
+        ] {
+            assert!(persistent_source.contains(id));
+        }
+        assert!(legacy_source.contains("show_application_navigation_quick_open"));
+        assert!(persistent_source.contains("show_application_navigation_quick_open"));
     }
 
     #[test]
@@ -565,23 +586,27 @@ mod tests {
     #[test]
     fn persistent_sidebar_uses_shared_rail_geometry_and_icon_scale() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs").replace("\r\n", "\n");
+        let sections = include_str!("../persistent_connection_sidebar/navigation_sections.rs")
+            .replace("\r\n", "\n");
         let geometry = include_str!("../../../crates/ui/src/theme/geometry.rs");
         let visuals = include_str!("../connection_visuals.rs");
 
-        assert!(source.contains("items_center().gap_1().p_1()"));
+        assert!(sections.contains("items_center().gap_1().p_1()"));
         assert!(source.contains("let rail_width = layout.global_rail"));
         assert!(source.contains("let rail_item_size = Size::Size(layout.global_rail_item)"));
-        assert!(source.contains("connection_type_rail_icon(filter)"));
+        assert!(sections.contains("connection_type_rail_icon(filter)"));
         assert!(visuals.contains("Self::Inline | Self::Rail => IconSize::Medium"));
         assert!(geometry.contains("global_rail: px(52.)"));
         assert!(geometry.contains("global_rail_item: px(40.)"));
-        assert!(source.matches(".hit_size(rail_item_size)").count() >= 2);
+        assert!(source.contains(".hit_size(rail_item_size)"));
+        assert!(sections.matches(".hit_size(visuals.item_size)").count() >= 2);
         assert!(source.contains(".with_size(IconSize::Medium)"));
+        assert!(sections.contains(".glyph_size(IconSize::Medium)"));
     }
 
     #[test]
     fn persistent_sidebar_uses_line_style_rail_icons() {
-        let source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let sections = include_str!("../persistent_connection_sidebar/navigation_sections.rs");
         let icons = include_str!("../../../crates/ui/src/icon.rs");
         let visuals = include_str!("../connection_visuals.rs");
         let remote_render = include_str!("../../../crates/remote_desktop_view/src/view/render.rs");
@@ -590,8 +615,8 @@ mod tests {
         let rdp = include_str!("../../../crates/assets/assets/icons/rdp.svg");
         let vnc = include_str!("../../../crates/assets/assets/icons/vnc.svg");
 
-        assert!(source.contains("IconName::User"));
-        assert!(source.contains("connection_type_rail_icon"));
+        assert!(sections.contains("IconName::User"));
+        assert!(sections.contains("connection_type_rail_icon"));
         assert!(visuals.contains("ConnectionType::All => IconName::ServerLine"));
         assert!(visuals.contains("ConnectionType::SshSftp => IconName::TerminalLine"));
         assert!(visuals.contains("ConnectionType::Rdp => IconName::RdpLine"));
@@ -622,13 +647,27 @@ mod tests {
     fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let rail_source = include_str!("../persistent_connection_sidebar/rail.rs");
-        let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
+        let persistent_navigation_source =
+            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let legacy_sidebar_source = include_str!("../home_tab/sidebar_navigation.rs");
+        let legacy_sidebar_layout_source = include_str!("../home_tab/sidebar.rs");
+        let navigation_source = include_str!("../home_tab/navigation.rs");
 
-        assert!(rail_source.contains("persistent-open-ai-workbench"));
+        assert!(persistent_navigation_source.contains("persistent-open-ai-workbench"));
         assert!(rail_source.contains("StartupDefaultPage::Home"));
         assert!(legacy_sidebar_source.contains("legacy-open-ai-workbench"));
-        assert!(legacy_sidebar_source.contains("StartupDefaultPage::Home"));
-        assert!(legacy_sidebar_source.contains("home.add_ai_workbench_tab(window, cx)"));
+        assert!(legacy_sidebar_layout_source.contains("StartupDefaultPage::Home"));
+        assert!(
+            legacy_sidebar_source
+                .contains("home.activate_navigation_application(application, window, cx)")
+        );
+        assert!(
+            persistent_navigation_source
+                .contains("home.activate_navigation_application(application, window, cx)")
+        );
+        assert!(navigation_source.contains(
+            "NavigationApplication::AiWorkbench => self.add_ai_workbench_tab(window, cx)"
+        ));
         assert!(tabs_source.contains("fn add_ai_workbench_tab"));
         assert!(tabs_source.contains("with_tab_closeable(true)"));
         assert!(

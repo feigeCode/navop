@@ -1,4 +1,6 @@
+use super::sidebar_navigation::LegacyApplicationNavigationConfig;
 use super::*;
+use crate::navigation_quick_open::NavigationAvailability;
 use one_core::settings::StartupDefaultPage;
 
 impl HomePage {
@@ -18,62 +20,11 @@ impl HomePage {
         let show_ai_workbench =
             AppSettings::current(cx).startup_default_page == StartupDefaultPage::Home;
         let rail_item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
-        let mut navigation = v_flex()
-            .flex_1()
-            .w_full()
-            .p_2()
-            .gap_2()
-            .when(collapsed, |sidebar| sidebar.items_center());
-
-        for filter in ConnectionType::all() {
-            let selected = self.selected_filter == filter;
-            let icon = if collapsed {
-                connection_type_rail_icon(filter)
-            } else {
-                connection_type_navigation_icon(filter, ConnectionVisualSize::List)
-            };
-            navigation = navigation.child(
-                div()
-                    .id(filter.label())
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .w_full()
-                    .py_2()
-                    .when(collapsed, |row| {
-                        row.justify_center().px_0().py_0().h(cx
-                            .theme()
-                            .geometry
-                            .layout
-                            .global_rail_item)
-                    })
-                    .when(!collapsed, |row| row.px_3())
-                    .cursor_pointer()
-                    .rounded_lg()
-                    .overflow_hidden()
-                    .when(selected, |row| {
-                        row.bg(cx.theme().list_active)
-                            .border_l_3()
-                            .border_color(cx.theme().list_active_border)
-                    })
-                    .when(!selected, |row| {
-                        row.hover(|style| style.bg(cx.theme().sidebar_accent))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_selected_filter(filter, cx);
-                    }))
-                    .child(icon)
-                    .when(!collapsed, |row| {
-                        row.child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .when(selected, |label| label.font_weight(FontWeight::MEDIUM))
-                                .child(filter.label()),
-                        )
-                    }),
-            );
-        }
+        let navigation = self.render_legacy_connection_navigation(collapsed, cx);
+        let availability = NavigationAvailability {
+            show_ai_workbench,
+            show_team,
+        };
 
         v_flex()
             .relative()
@@ -84,119 +35,14 @@ impl HomePage {
             .border_r_1()
             .border_color(cx.theme().border)
             .child(navigation)
-            .child(
-                v_flex()
-                    .w_full()
-                    .when(collapsed, |footer| footer.items_center().p_2())
-                    .when(!collapsed, |footer| footer.p_4())
-                    .gap_3()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .when(show_ai_workbench, |footer| {
-                        footer.child(self.render_legacy_sidebar_button(
-                            "legacy-open-ai-workbench",
-                            IconName::AI,
-                            t!("Settings.General.Startup.default_page_ai_workbench").to_string(),
-                            collapsed,
-                            |home, window, cx| home.add_ai_workbench_tab(window, cx),
-                            cx,
-                        ))
-                    })
-                    .when(show_team, |footer| {
-                        footer.child(self.render_legacy_sidebar_button(
-                            "legacy-open-team",
-                            IconName::TeamColor,
-                            t!("TeamManagement.title").to_string(),
-                            collapsed,
-                            |home, window, cx| home.open_team_management(window, cx),
-                            cx,
-                        ))
-                    })
-                    .child(self.render_legacy_sidebar_button(
-                        "legacy-open-notes",
-                        IconName::NotesColor,
-                        t!("Home.notes").to_string(),
-                        collapsed,
-                        |home, window, cx| home.add_notes_tab(window, cx),
-                        cx,
-                    ))
-                    .child(self.render_legacy_sidebar_button(
-                        "legacy-open-session-logs",
-                        IconName::Terminal,
-                        t!("Home.session_logs").to_string(),
-                        collapsed,
-                        |home, window, cx| home.add_session_logs_tab(window, cx),
-                        cx,
-                    ))
-                    .child(self.render_legacy_sidebar_button(
-                        "legacy-open-credential-vault",
-                        IconName::Key,
-                        t!("Home.credential_vault").to_string(),
-                        collapsed,
-                        |home, window, cx| home.add_credential_vault_tab(window, cx),
-                        cx,
-                    ))
-                    .child(self.render_legacy_sidebar_button(
-                        "legacy-open-extensions",
-                        IconName::ExtensionsColor,
-                        t!("Home.extensions").to_string(),
-                        collapsed,
-                        |home, window, cx| home.add_extensions_tab(window, cx),
-                        cx,
-                    ))
-                    .child(self.render_legacy_sidebar_button(
-                        "legacy-open-settings",
-                        IconName::SettingColor,
-                        t!("Common.settings").to_string(),
-                        collapsed,
-                        |home, window, cx| home.add_settings_tab(window, cx),
-                        cx,
-                    ))
-                    .child({
-                        let user = self.current_user.as_ref();
-                        let view = cx.entity();
-                        v_flex()
-                            .relative()
-                            .w_full()
-                            .mt_2()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(cx.theme().border)
-                            .when(collapsed, |footer| {
-                                footer.items_center().child(
-                                    IconButton::new(
-                                        "legacy-home-user",
-                                        FunctionalIcon::new(IconName::User),
-                                    )
-                                    .hit_size(rail_item_size)
-                                    .glyph_size(IconSize::Medium)
-                                    .tooltip(
-                                        user.map(UserInfo::resolved_display_name)
-                                            .unwrap_or_else(|| t!("Auth.login").to_string()),
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            if this.current_user.is_none() {
-                                                this.show_login_dialog(window, cx);
-                                            }
-                                        },
-                                    )),
-                                )
-                            })
-                            .when(!collapsed, |footer| {
-                                footer.child(render_user_avatar(
-                                    user,
-                                    view,
-                                    |this: &mut HomePage, window, cx| {
-                                        if this.current_user.is_none() {
-                                            this.show_login_dialog(window, cx);
-                                        }
-                                    },
-                                    cx,
-                                ))
-                            })
-                    }),
-            )
+            .child(self.render_legacy_application_navigation(
+                LegacyApplicationNavigationConfig {
+                    collapsed,
+                    availability,
+                    rail_item_size,
+                },
+                cx,
+            ))
             .child(
                 div()
                     .absolute()
@@ -242,34 +88,5 @@ impl HomePage {
                             ),
                     ),
             )
-    }
-
-    fn render_legacy_sidebar_button(
-        &self,
-        id: &'static str,
-        icon: IconName,
-        label: String,
-        collapsed: bool,
-        on_click: impl Fn(&mut HomePage, &mut Window, &mut Context<HomePage>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let listener = cx.listener(move |home, _, window, cx| on_click(home, window, cx));
-
-        if collapsed {
-            IconButton::new(id, Icon::new(icon).color())
-                .hit_size(Size::Size(cx.theme().geometry.layout.global_rail_item))
-                .glyph_size(IconSize::Medium)
-                .tooltip(label)
-                .on_click(listener)
-                .into_any_element()
-        } else {
-            Button::new(id)
-                .icon(Icon::new(icon).color())
-                .label(label)
-                .w_full()
-                .justify_start()
-                .on_click(listener)
-                .into_any_element()
-        }
     }
 }

@@ -155,6 +155,22 @@ Home:
     en: Import from other apps
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
+  more_connection_types:
+    en: More Connection Types
+    zh-CN: 更多连接类型
+    zh-HK: 更多連線類型
+  search_connection_types:
+    en: Search connection types...
+    zh-CN: 搜索连接类型...
+    zh-HK: 搜尋連線類型...
+  more_applications:
+    en: More Applications
+    zh-CN: 更多应用
+    zh-HK: 更多應用
+  search_applications:
+    en: Search applications...
+    zh-CN: 搜索应用...
+    zh-HK: 搜尋應用...
   credential_vault:
     en: Keychain
     zh-CN: 钥匙串

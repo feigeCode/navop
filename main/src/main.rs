@@ -15,6 +15,7 @@ mod home;
 mod home_tab;
 mod license;
 mod local_terminal_profiles;
+mod navigation_quick_open;
 pub mod new_connection;
 mod onetcli_app;
 mod persistent_connection_sidebar;

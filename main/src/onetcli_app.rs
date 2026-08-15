@@ -1894,7 +1894,10 @@ mod tests {
         let home = include_str!("home_tab/render.rs");
         let legacy_home = include_str!("home_tab/legacy_home.rs");
         let sidebar = include_str!("home_tab/sidebar.rs");
+        let sidebar_navigation = include_str!("home_tab/sidebar_navigation.rs");
         let persistent_sidebar = include_str!("persistent_connection_sidebar/mod.rs");
+        let persistent_navigation =
+            include_str!("persistent_connection_sidebar/navigation_sections.rs");
         let settings = include_str!("setting_tab.rs");
 
         assert!(app.contains("home_page_style.uses_persistent_sidebar()"));
@@ -1903,8 +1906,12 @@ mod tests {
         assert!(home.contains("self.render_legacy_home(window, cx)"));
         assert!(home.contains("self.render_modern_home(window, cx)"));
         assert!(legacy_home.contains("self.render_sidebar(window, cx)"));
-        assert!(sidebar.contains("for filter in ConnectionType::all()"));
+        assert!(sidebar_navigation.contains("for filter in visible_connection_types()"));
         assert!(!sidebar.contains("\"legacy-open-home\""));
+        assert!(sidebar_navigation.contains("\"legacy-more-connection-types\""));
+        assert!(sidebar_navigation.contains("\"legacy-more-applications\""));
+        assert!(persistent_navigation.contains("\"persistent-more-connection-types\""));
+        assert!(persistent_navigation.contains("\"persistent-more-applications\""));
         assert!(!persistent_sidebar.contains("HomePageStyle"));
         assert!(!persistent_sidebar.contains("render_legacy_sidebar"));
         assert!(settings.contains("HomePageStyle::Legacy"));

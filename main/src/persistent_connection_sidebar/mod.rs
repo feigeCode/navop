@@ -21,6 +21,7 @@ mod connection_share;
 mod context_menu;
 mod drag;
 mod header_actions;
+mod navigation_sections;
 mod rail;
 mod resize;
 #[cfg(test)]

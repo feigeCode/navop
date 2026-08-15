@@ -22,8 +22,11 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 #[test]
 fn both_home_styles_expose_credential_vault_in_their_sidebars() {
     let toolbar = include_str!("../toolbar.rs");
-    let legacy_sidebar = include_str!("../sidebar.rs");
-    let persistent_sidebar = include_str!("../../persistent_connection_sidebar/rail.rs");
+    let legacy_sidebar = include_str!("../sidebar_navigation.rs");
+    let persistent_sidebar =
+        include_str!("../../persistent_connection_sidebar/navigation_sections.rs");
+    let navigation = include_str!("../navigation.rs");
+    let quick_open = include_str!("../../navigation_quick_open.rs");
     let modern_home = include_str!("../modern_home.rs");
     let workspace_tools = modern_home
         .split("fn render_workspace_tools")
@@ -35,12 +38,20 @@ fn both_home_styles_expose_credential_vault_in_their_sidebars() {
     assert!(!toolbar.contains("add_credential_vault_tab"));
 
     assert!(legacy_sidebar.contains("\"legacy-open-credential-vault\""));
-    assert!(legacy_sidebar.contains("t!(\"Home.credential_vault\")"));
-    assert!(legacy_sidebar.contains("home.add_credential_vault_tab(window, cx)"));
+    assert!(legacy_sidebar.contains("NavigationApplication::CredentialVault"));
+    assert!(
+        legacy_sidebar.contains("home.activate_navigation_application(application, window, cx)")
+    );
 
     assert!(persistent_sidebar.contains("\"persistent-open-credential-vault\""));
-    assert!(persistent_sidebar.contains("t!(\"Home.credential_vault\")"));
-    assert!(persistent_sidebar.contains("home.add_credential_vault_tab(window, cx)"));
+    assert!(persistent_sidebar.contains("NavigationApplication::CredentialVault"));
+    assert!(
+        persistent_sidebar
+            .contains("home.activate_navigation_application(application, window, cx)")
+    );
+    assert!(navigation.contains("NavigationApplication::CredentialVault =>"));
+    assert!(navigation.contains("self.add_credential_vault_tab(window, cx)"));
+    assert!(quick_open.contains("t!(\"Home.credential_vault\")"));
 
     assert!(!workspace_tools.contains("\"modern-home-credential-vault\""));
     assert!(!workspace_tools.contains("home.add_credential_vault_tab(window, cx)"));
@@ -267,6 +278,10 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     let content = include_str!("../content.rs");
     let card = include_str!("../connection_card.rs");
     let sidebar = include_str!("../sidebar.rs");
+    let sidebar_navigation = include_str!("../sidebar_navigation.rs");
+    let persistent_navigation =
+        include_str!("../../persistent_connection_sidebar/navigation_sections.rs");
+    let quick_open = include_str!("../../navigation_quick_open.rs");
 
     assert!(render.contains("self.render_legacy_home(window, cx)"));
     assert!(render.contains("self.render_modern_home(window, cx)"));
@@ -275,25 +290,30 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
     assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
     assert!(!sidebar.contains("\"legacy-open-home\""));
-    assert!(sidebar.contains("ConnectionType::all()"));
-    assert!(sidebar.contains("this.set_selected_filter(filter, cx);"));
+    assert!(sidebar_navigation.contains("visible_connection_types()"));
+    assert!(sidebar_navigation.contains("this.set_selected_filter(filter, cx);"));
+    assert!(persistent_navigation.contains("visible_connection_types()"));
+    assert!(quick_open.contains("fn overflow_connection_types()"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
-    assert!(sidebar.contains("FunctionalIcon::new(IconName::User)"));
-    assert!(!sidebar.contains("ObjectIcon::new(IconName::User)"));
+    assert!(sidebar_navigation.contains("FunctionalIcon::new(IconName::User)"));
+    assert!(!sidebar_navigation.contains("ObjectIcon::new(IconName::User)"));
+    assert!(sidebar_navigation.contains("\"legacy-more-connection-types\""));
+    assert!(sidebar_navigation.contains("\"legacy-more-applications\""));
+    assert!(persistent_navigation.contains("\"persistent-more-connection-types\""));
+    assert!(persistent_navigation.contains("\"persistent-more-applications\""));
+    assert!(sidebar_navigation.contains("show_legacy_connection_navigation_quick_open"));
+    assert!(sidebar_navigation.contains("show_application_navigation_quick_open"));
+    assert!(persistent_navigation.contains("NavigationQuickOpenRequest::connections"));
+    assert!(persistent_navigation.contains("show_application_navigation_quick_open"));
 }
 
 #[test]
 fn legacy_ai_workbench_uses_the_original_color_icon() {
-    let sidebar = include_str!("../sidebar.rs");
-    let ai_entry = sidebar
-        .split(".when(show_ai_workbench")
-        .nth(1)
-        .and_then(|source| source.split(".when(show_team").next())
-        .expect("legacy AI workbench sidebar entry");
+    let sidebar = include_str!("../sidebar_navigation.rs");
 
-    assert!(ai_entry.contains("\"legacy-open-ai-workbench\""));
-    assert!(ai_entry.contains("IconName::AI,"));
-    assert!(!ai_entry.contains("IconName::AILine"));
+    assert!(sidebar.contains("\"legacy-open-ai-workbench\""));
+    assert!(sidebar.contains("NavigationApplication::AiWorkbench => IconName::AI,"));
+    assert!(!sidebar.contains("NavigationApplication::AiWorkbench => IconName::AILine"));
 }
 
 #[test]

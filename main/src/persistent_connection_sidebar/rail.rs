@@ -8,13 +8,16 @@ use gpui_component::{
 };
 use one_core::license::Feature;
 use one_core::settings::{AppSettings, GlobalCurrentUser, StartupDefaultPage};
-use one_core::storage::ConnectionType;
 use rust_i18n::t;
 
-use super::{PersistentConnectionSidebar, PersistentConnectionSidebarEvent, SidebarPalette};
-use crate::connection_visuals::connection_type_rail_icon;
+use super::navigation_sections::{
+    ApplicationSectionConfig, FilterSectionVisuals, render_application_buttons,
+    render_filter_buttons,
+};
+use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
+use crate::navigation_quick_open::NavigationAvailability;
 
 pub(super) fn render_navigation_rail(
     home_page: &Entity<HomePage>,
@@ -95,155 +98,29 @@ pub(super) fn render_navigation_rail(
                 .child(render_filter_buttons(
                     home_page,
                     sidebar,
-                    selected_filter,
-                    palette,
-                    rail_item_size,
+                    FilterSectionVisuals {
+                        selected_filter,
+                        palette,
+                        item_size: rail_item_size,
+                    },
                 ))
-                .child(
-                    v_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_1()
-                        .p_1()
-                        .border_t_1()
-                        .border_color(palette.border)
-                        .when(show_ai_workbench_entry, |this| {
-                            this.child(rail_button(
-                                "persistent-open-ai-workbench",
-                                IconName::AILine,
-                                t!("Settings.General.Startup.default_page_ai_workbench")
-                                    .to_string(),
-                                palette,
-                                home_page,
-                                rail_item_size,
-                                |home, window, cx| home.add_ai_workbench_tab(window, cx),
-                            ))
-                        })
-                        .when(show_team, |this| {
-                            this.child(rail_button(
-                                "persistent-open-team",
-                                IconName::TeamLine,
-                                t!("TeamManagement.title").to_string(),
-                                palette,
-                                home_page,
-                                rail_item_size,
-                                |home, window, cx| home.open_team_management(window, cx),
-                            ))
-                        })
-                        .child(rail_button(
-                            "persistent-open-notes",
-                            IconName::NotesLine,
-                            t!("Home.notes").to_string(),
-                            palette,
-                            home_page,
-                            rail_item_size,
-                            |home, window, cx| home.add_notes_tab(window, cx),
-                        ))
-                        .child(rail_button(
-                            "persistent-open-session-logs",
-                            IconName::Terminal,
-                            t!("Home.session_logs").to_string(),
-                            palette,
-                            home_page,
-                            rail_item_size,
-                            |home, window, cx| home.add_session_logs_tab(window, cx),
-                        ))
-                        .child(rail_button(
-                            "persistent-open-credential-vault",
-                            IconName::Key,
-                            t!("Home.credential_vault").to_string(),
-                            palette,
-                            home_page,
-                            rail_item_size,
-                            |home, window, cx| home.add_credential_vault_tab(window, cx),
-                        ))
-                        .child(rail_button(
-                            "persistent-open-extensions",
-                            IconName::ExtensionsLine,
-                            t!("Home.extensions").to_string(),
-                            palette,
-                            home_page,
-                            rail_item_size,
-                            |home, window, cx| home.add_extensions_tab(window, cx),
-                        ))
-                        .child(rail_button(
-                            "persistent-open-settings",
-                            IconName::Settings,
-                            t!("Common.settings").to_string(),
-                            palette,
-                            home_page,
-                            rail_item_size,
-                            |home, window, cx| home.add_settings_tab(window, cx),
-                        ))
-                        .child(rail_button(
-                            "persistent-user",
-                            IconName::User,
-                            user_tooltip,
-                            palette,
-                            home_page,
-                            rail_item_size,
-                            |home, window, cx| {
-                                if GlobalCurrentUser::get_user(cx).is_none() {
-                                    home.current_user = None;
-                                    home.show_login_dialog(window, cx);
-                                }
-                            },
-                        )),
-                ),
+                .child(render_application_buttons(
+                    home_page,
+                    ApplicationSectionConfig {
+                        availability: NavigationAvailability {
+                            show_ai_workbench: show_ai_workbench_entry,
+                            show_team,
+                        },
+                        user_tooltip,
+                        palette,
+                        item_size: rail_item_size,
+                    },
+                )),
         )
         .into_any_element()
 }
 
-fn render_filter_buttons(
-    home_page: &Entity<HomePage>,
-    sidebar: Entity<PersistentConnectionSidebar>,
-    selected_filter: ConnectionType,
-    palette: SidebarPalette,
-    rail_item_size: Size,
-) -> AnyElement {
-    let mut filters = v_flex().flex_1().w_full().items_center().gap_1().p_1();
-    for filter in ConnectionType::all() {
-        let home = home_page.clone();
-        let sidebar = sidebar.clone();
-        let selected = selected_filter == filter;
-        filters = filters.child(
-            IconButton::new(
-                format!("persistent-filter-{}", filter.label()),
-                connection_type_rail_icon(filter).text_color(if selected {
-                    palette.foreground
-                } else {
-                    palette.muted_foreground
-                }),
-            )
-            .hit_size(rail_item_size)
-            .glyph_size(IconSize::Medium)
-            .selected(selected)
-            .text_color(palette.foreground)
-            // Selection is expressed by the container and foreground
-            // hierarchy; protocol colors are reserved for content identity.
-            .when(selected, |button| button.bg(palette.selected))
-            .tooltip(filter.label())
-            .on_click(move |_, _, cx| {
-                if !selected {
-                    home.update(cx, |home, cx| home.set_selected_filter(filter, cx));
-                }
-                sidebar.update(cx, |sidebar, cx| {
-                    let expanded =
-                        next_tree_expanded_after_filter_click(selected, sidebar.tree_expanded);
-                    sidebar.set_tree_expanded(expanded, cx);
-                    cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded });
-                });
-            }),
-        );
-    }
-    filters.into_any_element()
-}
-
-fn next_tree_expanded_after_filter_click(selected: bool, tree_expanded: bool) -> bool {
-    if selected { !tree_expanded } else { true }
-}
-
-fn rail_button(
+pub(super) fn rail_button(
     id: &'static str,
     icon: IconName,
     tooltip: String,
@@ -265,18 +142,18 @@ fn rail_button(
     )
 }
 
-struct RailButtonVisuals {
+pub(super) struct RailButtonVisuals {
     palette: SidebarPalette,
     selected: bool,
 }
 
 impl RailButtonVisuals {
-    fn new(palette: SidebarPalette, selected: bool) -> Self {
+    pub(super) fn new(palette: SidebarPalette, selected: bool) -> Self {
         Self { palette, selected }
     }
 }
 
-fn selectable_rail_button(
+pub(super) fn selectable_rail_button(
     id: &'static str,
     icon: IconName,
     tooltip: String,
@@ -305,21 +182,4 @@ fn selectable_rail_button(
     .on_click(move |_, window, cx| {
         on_click(&home, window, cx);
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::next_tree_expanded_after_filter_click;
-
-    #[test]
-    fn selected_filter_button_toggles_the_connection_tree() {
-        assert!(!next_tree_expanded_after_filter_click(true, true));
-        assert!(next_tree_expanded_after_filter_click(true, false));
-    }
-
-    #[test]
-    fn switching_filters_always_reveals_the_connection_tree() {
-        assert!(next_tree_expanded_after_filter_click(false, true));
-        assert!(next_tree_expanded_after_filter_click(false, false));
-    }
 }
