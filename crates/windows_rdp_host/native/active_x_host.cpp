@@ -82,11 +82,15 @@ struct ActiveXCleanup {
     CComPtr<IOleInPlaceObject> in_place_object;
     CComPtr<IMsRdpClient9> client;
     CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
+    CComPtr<IMsRdpClientNonScriptable3> non_scriptable3;
+    CComPtr<IMsRdpClientNonScriptable5> non_scriptable5;
     NativeRdpEventSubscription* event_subscription = nullptr;
 
     ~ActiveXCleanup() noexcept {
         destroy_event_subscription(event_subscription);
         event_subscription = nullptr;
+        non_scriptable5.Release();
+        non_scriptable3.Release();
         non_scriptable.Release();
         client.Release();
         in_place_object.Release();
@@ -144,6 +148,23 @@ HRESULT attach_control_with_traces(ActiveXCleanup& resources) noexcept {
     return result;
 }
 
+struct PresentationWindowError {
+    DWORD code;
+    HRESULT result;
+};
+
+PresentationWindowError presentation_window_error(DWORD error) noexcept {
+    const DWORD code = error == ERROR_SUCCESS
+        ? ERROR_INVALID_WINDOW_HANDLE
+        : error;
+    return PresentationWindowError{
+        code,
+        code == ERROR_INVALID_WINDOW_HANDLE
+            ? kPresentationIncompleteHresult
+            : HRESULT_FROM_WIN32(code),
+    };
+}
+
 HRESULT position_direct_control_window(
     ActiveXCleanup& resources,
     HWND control_window,
@@ -165,15 +186,23 @@ HRESULT position_direct_control_window(
             "presentation.position_control_window.non_direct_descendant");
 
         RECT mapped_rect = client_rect;
-        if (MapWindowPoints(
-                resources.host_window,
-                control_parent,
-                reinterpret_cast<POINT*>(&mapped_rect),
-                2) == 0) {
+        SetLastError(ERROR_SUCCESS);
+        const int mapped_points = MapWindowPoints(
+            resources.host_window,
+            control_parent,
+            reinterpret_cast<POINT*>(&mapped_rect),
+            2);
+        const DWORD map_error = GetLastError();
+        trace_native_win32(
+            "presentation.position_control_window.map_points",
+            static_cast<uint32_t>(mapped_points));
+        if (mapped_points == 0 && map_error != ERROR_SUCCESS) {
+            const PresentationWindowError error =
+                presentation_window_error(map_error);
             trace_native_win32(
                 "presentation.position_control_window.map_failed",
-                static_cast<uint32_t>(GetLastError()));
-            return kPresentationIncompleteHresult;
+                static_cast<uint32_t>(error.code));
+            return error.result;
         }
         UINT descendant_flags = SWP_NOZORDER | SWP_NOACTIVATE;
         if (IsWindowVisible(resources.host_window)) {
@@ -188,10 +217,12 @@ HRESULT position_direct_control_window(
                 mapped_rect.right - mapped_rect.left,
                 mapped_rect.bottom - mapped_rect.top,
                 descendant_flags)) {
+            const PresentationWindowError error =
+                presentation_window_error(GetLastError());
             trace_native_win32(
                 "presentation.position_control_window.descendant_failed",
-                static_cast<uint32_t>(GetLastError()));
-            return kPresentationIncompleteHresult;
+                static_cast<uint32_t>(error.code));
+            return error.result;
         }
         trace_native_rect(
             "presentation.position_control_window.descendant_mapped",
@@ -220,14 +251,12 @@ HRESULT position_direct_control_window(
         return S_OK;
     }
 
-    const DWORD last_error = GetLastError();
-    const DWORD win32_code = last_error == ERROR_SUCCESS
-        ? ERROR_INVALID_WINDOW_HANDLE
-        : last_error;
+    const PresentationWindowError error =
+        presentation_window_error(GetLastError());
     trace_native_win32(
         "presentation.position_control_window.failed",
-        static_cast<uint32_t>(win32_code));
-    return HRESULT_FROM_WIN32(win32_code);
+        static_cast<uint32_t>(error.code));
+    return error.result;
 }
 
 struct DescendantTraceContext {
@@ -708,6 +737,50 @@ NavopRdpResult create_active_x_resources(
             NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE);
     }
 
+    trace_native_stage("create.query_non_scriptable3.before");
+    const HRESULT non_scriptable3_result =
+        resources->state.control->QueryInterface(
+            IID_PPV_ARGS(&resources->state.non_scriptable3));
+    trace_native_hresult(
+        "create.query_non_scriptable3.after",
+        static_cast<int32_t>(non_scriptable3_result));
+    if (FAILED(non_scriptable3_result) ||
+        resources->state.non_scriptable3 == nullptr) {
+        if (FAILED(non_scriptable3_result)) {
+            return record_last_stage_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE,
+                static_cast<int32_t>(non_scriptable3_result));
+        }
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE);
+    }
+
+    trace_native_stage("create.query_non_scriptable5.before");
+    const HRESULT non_scriptable5_result =
+        resources->state.control->QueryInterface(
+            IID_PPV_ARGS(&resources->state.non_scriptable5));
+    trace_native_hresult(
+        "create.query_non_scriptable5.after",
+        static_cast<int32_t>(non_scriptable5_result));
+    if (FAILED(non_scriptable5_result) ||
+        resources->state.non_scriptable5 == nullptr) {
+        if (FAILED(non_scriptable5_result)) {
+            return record_last_stage_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE,
+                static_cast<int32_t>(non_scriptable5_result));
+        }
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE);
+    }
+
     // AtlAxAttachControl treats the supplied object as already initialized and
     // deliberately skips IPersistStreamInit::InitNew. WinForms AxHost, which
     // 1Remote uses, initializes a newly created control before it starts the
@@ -814,7 +887,15 @@ NavopRdpResult create_active_x_resources(
     trace_native_hresult(
         "create.synchronize_bounds.after",
         static_cast<int32_t>(initial_layout_result));
-    if (FAILED(initial_layout_result)) {
+    if (FAILED(initial_layout_result) &&
+        initial_layout_result != kPresentationIncompleteHresult) {
+        return record_last_stage_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
+            static_cast<int32_t>(initial_layout_result));
+    }
+    if (initial_layout_result == kPresentationIncompleteHresult) {
         // The ActiveX control creates its drawing window during in-place
         // activation, so a 1x1 create-time bounds sync is expected to be
         // incomplete. Never fail the create here: the Rust presentation
@@ -1078,6 +1159,8 @@ NavopRdpResult connect_active_x(
         owner,
         resources->state.control,
         resources->state.client,
+        resources->state.non_scriptable3,
+        resources->state.non_scriptable5,
     };
     const NavopRdpResult policy_result =
         configure_active_x_connection_policy(policy_context, options);

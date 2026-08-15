@@ -20,7 +20,7 @@ use gpui_component::{
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
-use one_core::storage::RemoteDesktopProtocol;
+use one_core::storage::{RdpAudioMode, RemoteDesktopProtocol};
 
 impl RemoteDesktopFormWindow {
     fn render_form_row(&self, label: String, child: impl IntoElement) -> impl IntoElement {
@@ -195,7 +195,17 @@ impl RemoteDesktopFormWindow {
             Checkbox::new("remote-desktop-audio-playback")
                 .checked(self.audio_playback)
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.audio_playback = !this.audio_playback;
+                    let enabled = !this.audio_playback;
+                    this.audio_playback = enabled;
+                    if this.protocol == RemoteDesktopProtocol::Rdp
+                        && let Some(settings) = this.rdp_settings.as_mut()
+                    {
+                        settings.audio.mode = if enabled {
+                            RdpAudioMode::Local
+                        } else {
+                            RdpAudioMode::Disabled
+                        };
+                    }
                     cx.notify();
                 })),
         )

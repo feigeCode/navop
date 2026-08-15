@@ -49,8 +49,9 @@ fn switching_to_vnc_clears_rdp_settings() {
 }
 
 #[test]
-fn form_apply_and_build_keep_rdp_settings_verbatim() {
+fn form_audio_checkbox_and_full_rdp_settings_stay_synchronized() {
     let source = include_str!("../remote_desktop_form.rs").replace("\r\n", "\n");
+    let view = include_str!("view.rs").replace("\r\n", "\n");
     let apply = source
         .split("fn apply_params(")
         .nth(1)
@@ -65,15 +66,40 @@ fn form_apply_and_build_keep_rdp_settings_verbatim() {
         .split("\n    fn on_save(")
         .next()
         .expect("build_params end");
+    let audio_click = view
+        .split("fn render_audio_playback_row(")
+        .nth(1)
+        .expect("audio row body")
+        .split("\n    fn render_backend_preference_row(")
+        .next()
+        .expect("audio row end");
 
-    // The loaded RDP settings must enter form state…
+    // Loaded full settings are the source of truth for the binary checkbox.
     assert!(apply.contains("self.rdp_settings = params.rdp;"));
-    // …and be written back verbatim (never effective defaults)…
+    assert!(apply.contains("settings.audio.mode == RdpAudioMode::Local"));
+    assert!(
+        apply.contains("audio_playback_for_protocol(self.protocol, params.audio_playback)"),
+        "legacy connections without full RDP settings must keep using the legacy bool"
+    );
+
+    // Clicking the binary control is the only point where the full audio mode
+    // is intentionally collapsed to Local/Disabled. An untouched Remote mode
+    // therefore remains verbatim in self.rdp_settings.
+    assert!(audio_click.contains("this.rdp_settings.as_mut()"));
+    assert!(audio_click.contains("RdpAudioMode::Local"));
+    assert!(audio_click.contains("RdpAudioMode::Disabled"));
+    assert!(!audio_click.contains("RdpAudioMode::Remote"));
+
+    // The legacy bool written alongside full settings must describe the same
+    // effective local-playback state.
+    assert!(build.contains("settings.audio.mode == RdpAudioMode::Local"));
+    assert!(build.contains(".unwrap_or(self.audio_playback)"));
     assert!(
         build.contains("rdp: rdp_settings_for_protocol(self.protocol, self.rdp_settings.clone())")
     );
-    // …while the field starts empty for new connections.
+
+    // New/legacy connections remain None rather than materializing defaults,
+    // and switching protocols still clears all RDP-only settings.
     assert!(source.contains("rdp_settings: None,"));
-    // No code may write `rdp: None` unconditionally any more.
     assert!(!source.contains("rdp: None,"));
 }

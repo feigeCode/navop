@@ -99,17 +99,27 @@ NavopRdpResult configure_display_policy(
         return result;
     }
 
-    const NativeRdpDispatchTarget use_multimon{
-        advanced,
-        L"UseMultimon",
-        "connect.display.use_multimon",
-    };
-    result = set_required_dispatch_bool(
-        context.owner,
-        use_multimon,
-        (options.display_flags & NAVOP_RDP_DISPLAY_FLAG_USE_MULTIMON) != 0);
-    if (result != NAVOP_RDP_RESULT_OK) {
-        return result;
+    CComQIPtr<IMsRdpClientNonScriptable5> non_scriptable5(
+        context.non_scriptable5);
+    if (non_scriptable5 == nullptr) {
+        return record_last_error(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    trace_native_stage("connect.display.use_multimon.before");
+    const HRESULT use_multimon_result = non_scriptable5->put_UseMultimon(
+        (options.display_flags & NAVOP_RDP_DISPLAY_FLAG_USE_MULTIMON) != 0
+            ? VARIANT_TRUE
+            : VARIANT_FALSE);
+    trace_native_hresult(
+        "connect.display.use_multimon.after",
+        static_cast<int32_t>(use_multimon_result));
+    if (FAILED(use_multimon_result)) {
+        return record_last_hresult(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(use_multimon_result));
     }
 
     const NativeRdpDispatchTarget container_full_screen{

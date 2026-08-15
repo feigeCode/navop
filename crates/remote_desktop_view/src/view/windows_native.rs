@@ -86,6 +86,9 @@ struct WindowsNativePresentation {
     /// Last native presentation-state query: the ActiveX drawing window is
     /// inside the host subtree with non-zero rects.
     native_child_ready: bool,
+    /// Native focus requested while the replacement ActiveX drawing child was
+    /// not ready. The next successful activation delivers it.
+    focus_on_activate: bool,
     /// Actual overlay visibility verified against the HWND, not just requested.
     effective_visible: bool,
 }
@@ -116,8 +119,9 @@ impl WindowsNativePresentation {
             return Ok(());
         }
         if self.active {
-            return Ok(());
+            return self.deliver_pending_focus(sink);
         }
+        self.focus_on_activate |= focus_child;
         // Readiness gate: never show the overlay before the session has
         // completed login/reconnect AND the native child is structurally
         // ready. The view re-synchronizes after LoginComplete/Reconnected.
@@ -133,11 +137,8 @@ impl WindowsNativePresentation {
             self.visible = true;
         }
         self.effective_visible = sink.is_effectively_visible();
-        if focus_child {
-            sink.focus_child()?;
-        }
         self.active = true;
-        Ok(())
+        self.deliver_pending_focus(sink)
     }
 
     fn focus<S: NativePresentationSink>(&mut self, sink: &mut S) -> Result<(), S::Error> {
@@ -145,7 +146,21 @@ impl WindowsNativePresentation {
             return Ok(());
         }
         if self.active && self.visible {
+            self.focus_on_activate = true;
+            self.deliver_pending_focus(sink)?;
+        } else {
+            self.focus_on_activate = true;
+        }
+        Ok(())
+    }
+
+    fn deliver_pending_focus<S: NativePresentationSink>(
+        &mut self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        if self.focus_on_activate {
             sink.focus_child()?;
+            self.focus_on_activate = false;
         }
         Ok(())
     }
@@ -154,6 +169,7 @@ impl WindowsNativePresentation {
         if self.state != NativePresentationState::Open {
             return Ok(());
         }
+        self.focus_on_activate = false;
         if !self.active && !self.visible {
             return Ok(());
         }
@@ -168,6 +184,32 @@ impl WindowsNativePresentation {
         Ok(())
     }
 
+    fn begin_reconnect<S: NativePresentationSink>(&mut self, sink: &mut S) -> Result<(), S::Error> {
+        if self.state != NativePresentationState::Open {
+            return Ok(());
+        }
+
+        self.focus_on_activate = false;
+        let focus_result = if self.active || self.visible {
+            sink.focus_parent()
+        } else {
+            Ok(())
+        };
+        let hide_result = if self.visible { sink.hide() } else { Ok(()) };
+
+        // A reconnect invalidates the ActiveX drawing subtree. Keep the
+        // cached bounds and the open lifecycle state, but close every
+        // presentation gate before reporting a sink error so Reconnected
+        // must perform a fresh SetBounds -> Show sequence.
+        self.active = false;
+        self.visible = false;
+        self.effective_visible = false;
+        self.login_complete = false;
+        self.native_child_ready = false;
+
+        focus_result.and(hide_result)
+    }
+
     fn begin_close<S: NativePresentationSink>(&mut self, sink: &mut S) -> Result<bool, S::Error> {
         if self.state != NativePresentationState::Open {
             return Ok(false);
@@ -177,6 +219,7 @@ impl WindowsNativePresentation {
         // when either operation fails, late resize/focus/activate calls must
         // never reopen the native child.
         self.state = NativePresentationState::Closing;
+        self.focus_on_activate = false;
         let focus_result = sink.focus_parent();
         let hide_result = if self.visible { sink.hide() } else { Ok(()) };
         self.active = false;
@@ -189,6 +232,7 @@ impl WindowsNativePresentation {
     fn finish_destroy(&mut self) {
         if self.state == NativePresentationState::Closing {
             self.state = NativePresentationState::Destroyed;
+            self.focus_on_activate = false;
         }
     }
 
@@ -222,6 +266,12 @@ impl WindowsNativePresentation {
     /// overlay is actually visible (not just requested).
     fn presentation_ready(&self) -> bool {
         self.can_present() && self.effective_visible
+    }
+
+    /// Whether activation work remains after a readiness transition or a
+    /// transient native-focus failure.
+    fn activation_pending(&self) -> bool {
+        self.state == NativePresentationState::Open && (!self.active || self.focus_on_activate)
     }
 }
 
@@ -405,6 +455,16 @@ impl WindowsNativeAdapter {
         Ok(())
     }
 
+    pub(crate) fn begin_reconnect(&mut self, focus_parent: &mut dyn FnMut()) -> anyhow::Result<()> {
+        let mut sink = WindowsNativePresentationSink {
+            overlay: &mut self.overlay,
+            host: &mut self.host,
+            focus_parent: Some(focus_parent),
+        };
+        self.presentation.begin_reconnect(&mut sink)?;
+        Ok(())
+    }
+
     /// Re-reads the native child structural readiness and the actual overlay
     /// visibility. Returns whether the presentation may now attempt to show.
     pub(crate) fn refresh_native_readiness(&mut self) -> bool {
@@ -438,6 +498,10 @@ impl WindowsNativeAdapter {
     /// Whether a show has been requested (and succeeded) since the last hide.
     pub(crate) fn requested_visible(&self) -> bool {
         self.presentation.visible
+    }
+
+    pub(crate) fn activation_pending(&self) -> bool {
+        self.presentation.activation_pending()
     }
 
     pub(crate) fn begin_close(
@@ -821,6 +885,166 @@ mod tests {
     }
 
     #[test]
+    fn begin_reconnect_focuses_parent_hides_and_resets_presentation_gates() {
+        let mut presentation = ready_presentation();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        presentation.set_effective_visible(true);
+        recorder.commands.clear();
+
+        presentation.begin_reconnect(&mut recorder).unwrap();
+
+        assert_eq!(vec![Command::FocusParent, Command::Hide], recorder.commands);
+        assert_eq!(NativePresentationState::Open, presentation.state);
+        assert_eq!(Some(bounds()), presentation.latest_bounds);
+        assert!(!presentation.active);
+        assert!(!presentation.visible);
+        assert!(!presentation.effective_visible);
+        assert!(!presentation.login_complete);
+        assert!(!presentation.native_child_ready);
+        assert!(!presentation.can_present());
+    }
+
+    #[test]
+    fn reconnected_presentation_reapplies_bounds_and_shows_again() {
+        let mut presentation = ready_presentation();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        presentation.begin_reconnect(&mut recorder).unwrap();
+        recorder.commands.clear();
+
+        presentation.mark_login_complete();
+        presentation.set_native_child_ready(true);
+        presentation.activate(false, &mut recorder).unwrap();
+
+        assert_eq!(
+            vec![Command::SetBounds(bounds()), Command::Show],
+            recorder.commands
+        );
+        assert!(presentation.active);
+        assert!(presentation.visible);
+    }
+
+    #[test]
+    fn focus_requested_before_reconnected_child_is_ready_is_delivered_on_deferred_activation() {
+        let mut presentation = WindowsNativePresentation::default();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.mark_login_complete();
+
+        // Reconnected first tries to synchronize the presentation, but the
+        // replacement ActiveX drawing child may not exist yet.
+        presentation.activate(false, &mut recorder).unwrap();
+
+        // The UI event then requests native focus. This request must survive
+        // until the readiness maintenance tick can actually present.
+        presentation.focus(&mut recorder).unwrap();
+        assert!(recorder.commands.is_empty());
+
+        presentation.set_native_child_ready(true);
+        presentation.activate(false, &mut recorder).unwrap();
+
+        assert_eq!(
+            vec![
+                Command::SetBounds(bounds()),
+                Command::Show,
+                Command::FocusChild,
+            ],
+            recorder.commands
+        );
+    }
+
+    #[test]
+    fn deactivation_cancels_focus_waiting_for_native_child_readiness() {
+        let mut presentation = WindowsNativePresentation::default();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.mark_login_complete();
+        presentation.focus(&mut recorder).unwrap();
+
+        // The tab became inactive before the replacement child was ready.
+        presentation.deactivate(&mut recorder).unwrap();
+        presentation.set_native_child_ready(true);
+        presentation.activate(false, &mut recorder).unwrap();
+
+        assert_eq!(
+            vec![Command::SetBounds(bounds()), Command::Show],
+            recorder.commands
+        );
+    }
+
+    #[test]
+    fn transient_focus_failure_keeps_activation_committed_and_retries_without_reshowing() {
+        let mut presentation = ready_presentation();
+        let mut recorder = FailingFocusOnceRecorder {
+            fail_next_focus: true,
+            ..FailingFocusOnceRecorder::default()
+        };
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.focus(&mut recorder).unwrap();
+
+        assert_eq!(
+            Err(PresentationError),
+            presentation.activate(false, &mut recorder)
+        );
+        assert!(presentation.active);
+        assert!(presentation.visible);
+        assert!(presentation.activation_pending());
+        assert_eq!(
+            vec![
+                Command::SetBounds(bounds()),
+                Command::Show,
+                Command::FocusChild,
+            ],
+            recorder.commands
+        );
+
+        presentation.activate(false, &mut recorder).unwrap();
+
+        assert!(!presentation.activation_pending());
+        assert_eq!(
+            vec![
+                Command::SetBounds(bounds()),
+                Command::Show,
+                Command::FocusChild,
+                Command::FocusChild,
+            ],
+            recorder.commands
+        );
+    }
+
+    #[test]
+    fn transient_focus_failure_on_active_presentation_is_retried_by_activation_tick() {
+        let mut presentation = ready_presentation();
+        let mut recorder = FailingFocusOnceRecorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        recorder.commands.clear();
+        recorder.fail_next_focus = true;
+
+        assert_eq!(Err(PresentationError), presentation.focus(&mut recorder));
+        assert!(presentation.active);
+        assert!(presentation.visible);
+        assert!(presentation.activation_pending());
+
+        presentation.activate(false, &mut recorder).unwrap();
+
+        assert!(!presentation.activation_pending());
+        assert_eq!(
+            vec![Command::FocusChild, Command::FocusChild],
+            recorder.commands
+        );
+    }
+
+    #[test]
     fn activate_and_deactivate_are_idempotent() {
         let mut presentation = ready_presentation();
         let mut recorder = Recorder::default();
@@ -933,6 +1157,50 @@ mod tests {
     struct PresentationError;
 
     #[derive(Default)]
+    struct FailingFocusOnceRecorder {
+        commands: Vec<Command>,
+        fail_next_focus: bool,
+    }
+
+    impl NativePresentationSink for FailingFocusOnceRecorder {
+        type Error = PresentationError;
+
+        fn set_bounds(&mut self, bounds: Win32ClientPhysicalBounds) -> Result<(), Self::Error> {
+            self.commands.push(Command::SetBounds(bounds));
+            Ok(())
+        }
+
+        fn show(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::Show);
+            Ok(())
+        }
+
+        fn focus_child(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::FocusChild);
+            if self.fail_next_focus {
+                self.fail_next_focus = false;
+                return Err(PresentationError);
+            }
+            Ok(())
+        }
+
+        fn focus_parent(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::FocusParent);
+            Ok(())
+        }
+
+        fn hide(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::Hide);
+            Ok(())
+        }
+
+        fn is_effectively_visible(&self) -> bool {
+            self.commands.contains(&Command::Show)
+                && !matches!(self.commands.last(), Some(Command::Hide))
+        }
+    }
+
+    #[derive(Default)]
     struct FailingCloseRecorder {
         commands: Vec<Command>,
     }
@@ -987,6 +1255,33 @@ mod tests {
         assert_eq!(NativePresentationState::Closing, presentation.state);
         assert!(!presentation.active);
         assert!(!presentation.visible);
+    }
+
+    #[test]
+    fn failed_begin_reconnect_still_resets_all_presentation_gates() {
+        let mut presentation = WindowsNativePresentation {
+            active: true,
+            visible: true,
+            effective_visible: true,
+            login_complete: true,
+            native_child_ready: true,
+            latest_bounds: Some(bounds()),
+            ..WindowsNativePresentation::default()
+        };
+        let mut recorder = FailingCloseRecorder::default();
+
+        assert_eq!(
+            Err(PresentationError),
+            presentation.begin_reconnect(&mut recorder)
+        );
+        assert_eq!(vec![Command::FocusParent, Command::Hide], recorder.commands);
+        assert_eq!(NativePresentationState::Open, presentation.state);
+        assert_eq!(Some(bounds()), presentation.latest_bounds);
+        assert!(!presentation.active);
+        assert!(!presentation.visible);
+        assert!(!presentation.effective_visible);
+        assert!(!presentation.login_complete);
+        assert!(!presentation.native_child_ready);
     }
 
     #[test]

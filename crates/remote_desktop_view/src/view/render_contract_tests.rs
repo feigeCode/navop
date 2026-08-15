@@ -638,6 +638,70 @@ fn windows_native_events_are_drained_on_the_gpui_owner_thread() {
 }
 
 #[test]
+fn windows_native_reconnect_resets_and_reopens_the_native_presentation() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+
+    let presentation_reconnect = function_body(
+        &native,
+        "fn begin_reconnect<S: NativePresentationSink>",
+        "fn begin_close<S: NativePresentationSink>",
+    );
+    for token in [
+        "sink.focus_parent()",
+        "sink.hide()",
+        "self.active = false",
+        "self.visible = false",
+        "self.effective_visible = false",
+        "self.login_complete = false",
+        "self.native_child_ready = false",
+        "focus_result.and(hide_result)",
+    ] {
+        assert!(
+            presentation_reconnect.contains(token),
+            "reconnect presentation reset missing {token}"
+        );
+    }
+    assert!(
+        !presentation_reconnect.contains("self.latest_bounds = None"),
+        "reconnect must retain the last bounds for the next SetBounds -> Show"
+    );
+    assert!(
+        !presentation_reconnect.contains("self.state = NativePresentationState::Closing"),
+        "reconnect must keep the presentation lifecycle open"
+    );
+
+    let adapter_reconnect = function_body(
+        &native,
+        "pub(crate) fn begin_reconnect(",
+        "pub(crate) fn refresh_native_readiness",
+    );
+    assert!(adapter_reconnect.contains("self.presentation.begin_reconnect(&mut sink)?"));
+    assert!(adapter_reconnect.contains("focus_parent: Some(focus_parent)"));
+
+    let effects = function_body(
+        &view,
+        "fn apply_windows_native_ui_effect(",
+        "fn mark_windows_native_connected",
+    );
+    assert!(effects.contains("native.begin_reconnect"));
+    assert!(effects.contains("self.native_login_complete = false"));
+    assert!(effects.contains("self.windows_native_display.reconnecting(generation)"));
+    assert!(effects.contains("self.present_windows_native_after_login()"));
+    assert!(effects.contains("WindowsNativeFocusTarget::NativeChild"));
+
+    let poll = function_body(
+        &view,
+        "fn poll_windows_native_events",
+        "fn apply_windows_native_ui_effect",
+    );
+    assert!(poll.contains("requested_focus = Some(target)"));
+    assert!(poll.contains("NativeRdpEventState::take_focus_release_pending"));
+    assert!(poll.contains("Some(WindowsNativeFocusTarget::NativeChild)"));
+    assert!(poll.contains("self.focus_windows_native()"));
+}
+
+#[test]
 fn presentation_initialization_precedes_and_gates_canvas_runtime_start() {
     let render = include_str!("render.rs").replace("\r\n", "\n");
     let output = include_str!("output.rs").replace("\r\n", "\n");
@@ -1161,6 +1225,7 @@ fn windows_native_presentation_readiness_is_independent_of_canvas_frames() {
         "fn set_effective_visible",
         "fn can_present",
         "fn presentation_ready",
+        "fn activation_pending",
         "effective_visible",
         "native_child_ready",
         "login_complete",
@@ -1200,6 +1265,12 @@ fn windows_native_presentation_readiness_is_independent_of_canvas_frames() {
     assert!(login_complete.contains("native.mark_login_complete()"));
     // The maintenance task re-reads readiness every tick.
     assert!(maintenance.contains("refresh_windows_native_readiness()"));
+    let readiness = function_body(
+        &view,
+        "fn refresh_windows_native_readiness",
+        "fn log_windows_native_readiness",
+    );
+    assert!(readiness.contains("native.activation_pending()"));
     // The overlay exposes actual HWND visibility, never canvas frame readiness.
     assert!(overlay.contains("fn is_actually_visible"));
     assert!(overlay.contains("IsWindowVisible"));

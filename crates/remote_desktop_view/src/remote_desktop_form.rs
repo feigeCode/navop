@@ -21,7 +21,8 @@ use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
 use one_core::cloud_sync::TeamOption;
 use one_core::storage::{
-    ProxyType, RdpSettings, RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace,
+    ProxyType, RdpAudioMode, RdpSettings, RemoteDesktopParams, RemoteDesktopProtocol,
+    StoredConnection, Workspace,
 };
 use rust_i18n::t;
 
@@ -65,9 +66,10 @@ pub struct RemoteDesktopFormWindow {
     backend_preference_select: Entity<SelectState<Vec<BackendPreferenceSelectItem>>>,
     read_only: bool,
     audio_playback: bool,
-    // Persisted RDP settings from the edited connection. Kept verbatim (never
-    // materialized from effective defaults) so editing an existing RDP
-    // connection does not wipe its native RDP configuration.
+    // Persisted RDP settings from the edited connection. Kept verbatim unless
+    // the user explicitly changes a control backed by these settings, so
+    // editing an existing connection does not wipe its native RDP
+    // configuration.
     rdp_settings: Option<RdpSettings>,
     proxy_enabled: bool,
     proxy_type: ProxyType,
@@ -229,8 +231,13 @@ impl RemoteDesktopFormWindow {
         self.domain_input
             .update(cx, |state, cx| state.set_value(&domain, window, cx));
         self.read_only = params.read_only;
-        self.audio_playback = audio_playback_for_protocol(self.protocol, params.audio_playback);
         self.rdp_settings = params.rdp;
+        self.audio_playback = match self.rdp_settings.as_ref() {
+            Some(settings) if self.protocol == RemoteDesktopProtocol::Rdp => {
+                settings.audio.mode == RdpAudioMode::Local
+            }
+            _ => audio_playback_for_protocol(self.protocol, params.audio_playback),
+        };
         self.backend_preference_select.update(cx, |state, cx| {
             state.set_selected_value(&params.backend_preference, window, cx)
         });
@@ -253,6 +260,14 @@ impl RemoteDesktopFormWindow {
             self.proxy_credential_picker.read(cx).selected_reference(),
         )
         .map_err(proxy::proxy_error_message)?;
+        let audio_playback = if self.protocol == RemoteDesktopProtocol::Rdp {
+            self.rdp_settings
+                .as_ref()
+                .map(|settings| settings.audio.mode == RdpAudioMode::Local)
+                .unwrap_or(self.audio_playback)
+        } else {
+            false
+        };
         Ok(RemoteDesktopParams {
             protocol: self.protocol,
             host,
@@ -261,7 +276,7 @@ impl RemoteDesktopFormWindow {
             password: non_empty_text(&self.password_input, cx),
             domain: non_empty_text(&self.domain_input, cx),
             read_only: self.read_only,
-            audio_playback: audio_playback_for_protocol(self.protocol, self.audio_playback),
+            audio_playback,
             proxy,
             credential_reference: self.credential_picker.read(cx).selected_reference(),
             backend_preference: self
@@ -270,8 +285,9 @@ impl RemoteDesktopFormWindow {
                 .selected_value()
                 .copied()
                 .unwrap_or_default(),
-            // Preserve the loaded RDP settings verbatim; never write back
-            // effective defaults. Switching to VNC clears them.
+            // Preserve loaded RDP settings (including non-binary audio modes)
+            // unless the corresponding form control changed them. Switching
+            // to VNC clears them.
             rdp: rdp_settings_for_protocol(self.protocol, self.rdp_settings.clone()),
         })
     }

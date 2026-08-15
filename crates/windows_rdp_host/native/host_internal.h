@@ -18,6 +18,8 @@ struct NativeRdpConnectionPolicyContext {
     NativeRdpHost* owner;
     IUnknown* control;
     IUnknown* client;
+    IUnknown* non_scriptable3;
+    IUnknown* non_scriptable5;
 };
 
 void trace_native_stage(const char* stage) noexcept;

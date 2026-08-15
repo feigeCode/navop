@@ -78,6 +78,14 @@ NavopRdpResult configure_resource_policy(
         return result;
     }
 
+    CComQIPtr<IMsRdpClientNonScriptable3> non_scriptable3(
+        context.non_scriptable3);
+    if (non_scriptable3 == nullptr) {
+        return record_last_error(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
     const struct {
         const wchar_t* property;
         const char* stage;
@@ -87,15 +95,8 @@ NavopRdpResult configure_resource_policy(
          NAVOP_RDP_RESOURCE_FLAG_CLIPBOARD},
         {L"RedirectDrives", "connect.resource.redirect_drives",
          NAVOP_RDP_RESOURCE_FLAG_DRIVES},
-        {L"RedirectDynamicDrives", "connect.resource.redirect_dynamic_drives",
-         NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DRIVES},
-        {L"RedirectDynamicDevices",
-         "connect.resource.redirect_dynamic_devices",
-         NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DEVICES},
         {L"RedirectPrinters", "connect.resource.redirect_printers",
          NAVOP_RDP_RESOURCE_FLAG_PRINTERS},
-        {L"RedirectSerialPorts", "connect.resource.redirect_serial_ports",
-         NAVOP_RDP_RESOURCE_FLAG_SERIAL_PORTS},
         {L"RedirectSmartCards", "connect.resource.redirect_smart_cards",
          NAVOP_RDP_RESOURCE_FLAG_SMART_CARDS},
         {L"RedirectPOSDevices", "connect.resource.redirect_pos_devices",
@@ -111,6 +112,51 @@ NavopRdpResult configure_resource_policy(
         if (result != NAVOP_RDP_RESULT_OK) {
             return result;
         }
+    }
+
+    trace_native_stage("connect.resource.redirect_dynamic_drives.before");
+    HRESULT hresult = non_scriptable3->put_RedirectDynamicDrives(
+        (options.resource_flags & NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DRIVES) != 0
+            ? VARIANT_TRUE
+            : VARIANT_FALSE);
+    trace_native_hresult(
+        "connect.resource.redirect_dynamic_drives.after",
+        static_cast<int32_t>(hresult));
+    if (FAILED(hresult)) {
+        return record_last_hresult(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(hresult));
+    }
+
+    trace_native_stage("connect.resource.redirect_dynamic_devices.before");
+    hresult = non_scriptable3->put_RedirectDynamicDevices(
+        (options.resource_flags & NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DEVICES) != 0
+            ? VARIANT_TRUE
+            : VARIANT_FALSE);
+    trace_native_hresult(
+        "connect.resource.redirect_dynamic_devices.after",
+        static_cast<int32_t>(hresult));
+    if (FAILED(hresult)) {
+        return record_last_hresult(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(hresult));
+    }
+
+    trace_native_stage("connect.resource.redirect_serial_ports.before");
+    hresult = advanced->put_RedirectPorts(
+        (options.resource_flags & NAVOP_RDP_RESOURCE_FLAG_SERIAL_PORTS) != 0
+            ? VARIANT_TRUE
+            : VARIANT_FALSE);
+    trace_native_hresult(
+        "connect.resource.redirect_serial_ports.after",
+        static_cast<int32_t>(hresult));
+    if (FAILED(hresult)) {
+        return record_last_hresult(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(hresult));
     }
 
     // Cameras need the IMsRdpClientNonScriptable camera collection, which the

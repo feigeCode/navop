@@ -79,6 +79,13 @@ const WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 static NEXT_WINDOWS_NATIVE_RDP_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowsNativeFocusTarget {
+    Parent,
+    NativeChild,
+}
+
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
 #[cfg(not(target_os = "macos"))]
@@ -976,13 +983,14 @@ impl RemoteDesktopView {
     pub(super) fn activate_windows_native(&mut self, focus_child: bool) -> bool {
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
         if let Some(presentation) = self.windows_native.as_mut() {
-            return match presentation.activate(focus_child) {
-                Ok(()) => true,
-                Err(error) => {
-                    tracing::warn!(?error, "failed to activate Windows native RDP presentation");
-                    false
-                }
-            };
+            if let Err(error) = presentation.activate(focus_child) {
+                tracing::warn!(?error, "failed to activate Windows native RDP presentation");
+            }
+            // `true` means a native presentation handled the request. A
+            // transient activation error must not suppress the deferred focus
+            // request; the presentation state machine keeps it pending for the
+            // maintenance retry.
+            return true;
         }
 
         let _ = focus_child;
@@ -1024,28 +1032,47 @@ impl RemoteDesktopView {
             let event_state = self.native_event_state.as_mut()?;
             native.drain_events(event_state)
         };
+        let mut requested_focus = None;
         for effect in effects {
-            self.apply_windows_native_ui_effect(effect);
+            if let Some(target) = self.apply_windows_native_ui_effect(effect) {
+                requested_focus = Some(target);
+            }
         }
         let focus_release_pending = self
             .native_event_state
             .as_mut()
             .map(native_events::NativeRdpEventState::take_focus_release_pending)
             .unwrap_or(false);
-        if focus_release_pending && self.tab_active {
-            Some(self.focus_handle.clone())
-        } else {
-            None
+        if focus_release_pending && requested_focus.is_none() {
+            requested_focus = Some(WindowsNativeFocusTarget::Parent);
+        }
+
+        if !self.tab_active {
+            return None;
+        }
+        match requested_focus {
+            Some(WindowsNativeFocusTarget::Parent) => Some(self.focus_handle.clone()),
+            Some(WindowsNativeFocusTarget::NativeChild) => {
+                self.focus_windows_native();
+                None
+            }
+            None => None,
         }
     }
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-    fn apply_windows_native_ui_effect(&mut self, effect: native_events::NativeRdpUiEffect) {
+    fn apply_windows_native_ui_effect(
+        &mut self,
+        effect: native_events::NativeRdpUiEffect,
+    ) -> Option<WindowsNativeFocusTarget> {
         use native_events::NativeRdpUiEffect;
 
         let diagnostic = native_events::diagnostic_text(&effect).map(SharedString::from);
         match effect {
-            NativeRdpUiEffect::CloseConfirmed | NativeRdpUiEffect::FocusReleased => {}
+            NativeRdpUiEffect::CloseConfirmed => {}
+            NativeRdpUiEffect::FocusReleased => {
+                return Some(WindowsNativeFocusTarget::Parent);
+            }
             NativeRdpUiEffect::Connecting { generation } => {
                 tracing::info!(generation, "Windows native RDP is connecting");
                 self.connected = false;
@@ -1076,13 +1103,31 @@ impl RemoteDesktopView {
                 self.connected = false;
                 self.failure_detail = None;
                 self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
+                let mut focus_parent = false;
+                if let Some(native) = self.windows_native.as_mut()
+                    && let Err(error) = native.begin_reconnect(&mut || {
+                        focus_parent = true;
+                    })
+                {
+                    tracing::warn!(
+                        ?error,
+                        "failed to reset Windows native RDP presentation for reconnect"
+                    );
+                }
+                self.native_login_complete = false;
                 self.windows_native_display.reconnecting(generation);
+                if focus_parent {
+                    return Some(WindowsNativeFocusTarget::Parent);
+                }
             }
             NativeRdpUiEffect::Reconnected { generation } => {
                 tracing::info!(generation, "Windows native RDP reconnected");
                 self.present_windows_native_after_login();
                 self.windows_native_display
                     .reconnected(generation, Instant::now());
+                if self.tab_active {
+                    return Some(WindowsNativeFocusTarget::NativeChild);
+                }
             }
             NativeRdpUiEffect::Warning {
                 generation,
@@ -1138,6 +1183,7 @@ impl RemoteDesktopView {
                 );
             }
         }
+        None
     }
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -1188,12 +1234,13 @@ impl RemoteDesktopView {
                     "Windows native RDP presentation ready"
                 );
             }
-            if now_presentable && tab_active && !native.requested_visible() {
+            if now_presentable && tab_active && native.activation_pending() {
                 // The native child is structurally ready (login reached, the
                 // control drawing window has non-zero rects). Retry activation
-                // quietly every maintenance tick while it is still blocked (e.g.
-                // the owner is hidden/minimized or the bounds are clipped away);
-                // it succeeds as soon as the layout or owner allows.
+                // quietly every maintenance tick while presentation or native
+                // focus is still blocked (e.g. the owner is hidden/minimized,
+                // bounds are clipped away, or SetFocus races a replacement
+                // ActiveX child); it succeeds as soon as the native state allows.
                 if let Err(error) = native.activate(false) {
                     tracing::trace!(
                         ?error,
@@ -1219,6 +1266,7 @@ impl RemoteDesktopView {
             stage,
             generation = native.generation(),
             requested_visible = native.requested_visible(),
+            activation_pending = native.activation_pending(),
             can_present = native.can_present(),
             presentation_ready = native.presentation_ready(),
             native_login_complete = self.native_login_complete,
