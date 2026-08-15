@@ -3,9 +3,9 @@ use std::mem::size_of;
 use std::ptr;
 
 use crate::ffi::{
-    ABI_VERSION, CREATE_STAGE_CREATE_CONTROL, CREATE_STAGE_NONE, CREATE_WITH_PARENT_ABI_VERSION,
-    EVENT_CLOSE_CONFIRMED, EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_FATAL_ERROR,
-    EVENT_LOGON_ERROR, EVENT_NETWORK_STATUS_CHANGED, EVENT_RECONNECTING,
+    ABI_VERSION, CONNECTION_LEGACY_SIZE, CREATE_STAGE_CREATE_CONTROL, CREATE_STAGE_NONE,
+    CREATE_WITH_PARENT_ABI_VERSION, EVENT_CLOSE_CONFIRMED, EVENT_CONNECTED, EVENT_DISCONNECTED,
+    EVENT_FATAL_ERROR, EVENT_LOGON_ERROR, EVENT_NETWORK_STATUS_CHANGED, EVENT_RECONNECTING,
     EVENT_REMOTE_DESKTOP_SIZE_CHANGED, EVENT_WARNING, LAST_ERROR_LEGACY_SIZE,
     MAX_EVENT_PAYLOAD_BYTES, NativeEventCallback, NativeRdpHost, NativeResult,
     NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds, NavopRdpConnectionOptions,
@@ -1796,10 +1796,20 @@ fn native_connection_entrypoints_validate_inputs_thread_and_open_gate() {
     );
 
     let mut short = connection_options(&endpoint);
-    short.struct_size -= 1;
+    short.struct_size = CONNECTION_LEGACY_SIZE - 1;
     assert_eq!(
         unsafe { navop_rdp_connect(host, &short) },
         RESULT_INVALID_ARGUMENT
+    );
+
+    // A shorter-than-current but still legacy-compatible struct is legal and
+    // uses defaults for the missing trailing policy fields; the test host has
+    // no ActiveX resources, so a fully validated connection is UNAVAILABLE.
+    let mut trailing_missing = connection_options(&endpoint);
+    trailing_missing.struct_size -= 1;
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &trailing_missing) },
+        RESULT_UNAVAILABLE
     );
 
     let mut wrong_abi = connection_options(&endpoint);
