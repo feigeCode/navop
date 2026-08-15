@@ -43,6 +43,9 @@ pub struct I18nStrings {
     pub image_placeholder: String,
     pub image_loading_without_alt: String,
     pub image_loading_with_alt_template: String,
+    pub enlarged_view_preview: String,
+    pub enlarged_view_source: String,
+    pub enlarged_view_math_title: String,
 }
 
 /// Partial language-pack strings. Missing values inherit from the built-in
@@ -75,6 +78,9 @@ struct I18nStringsDe {
     image_placeholder: Option<String>,
     image_loading_without_alt: Option<String>,
     image_loading_with_alt_template: Option<String>,
+    enlarged_view_preview: Option<String>,
+    enlarged_view_source: Option<String>,
+    enlarged_view_math_title: Option<String>,
 }
 
 const I18N_STRING_KEYS: &[&str] = &[
@@ -104,6 +110,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "image_placeholder",
     "image_loading_without_alt",
     "image_loading_with_alt_template",
+    "enlarged_view_preview",
+    "enlarged_view_source",
+    "enlarged_view_math_title",
 ];
 
 impl I18nStringsDe {
@@ -175,6 +184,15 @@ impl I18nStringsDe {
             image_loading_with_alt_template: self
                 .image_loading_with_alt_template
                 .unwrap_or(defaults.image_loading_with_alt_template),
+            enlarged_view_preview: self
+                .enlarged_view_preview
+                .unwrap_or(defaults.enlarged_view_preview),
+            enlarged_view_source: self
+                .enlarged_view_source
+                .unwrap_or(defaults.enlarged_view_source),
+            enlarged_view_math_title: self
+                .enlarged_view_math_title
+                .unwrap_or(defaults.enlarged_view_math_title),
         }
     }
 }
@@ -219,6 +237,9 @@ impl I18nStrings {
             image_placeholder: "图片".into(),
             image_loading_without_alt: "正在加载图片...".into(),
             image_loading_with_alt_template: "正在加载 {alt}".into(),
+            enlarged_view_preview: "预览".into(),
+            enlarged_view_source: "源码".into(),
+            enlarged_view_math_title: "公式".into(),
         }
     }
 
@@ -252,6 +273,9 @@ impl I18nStrings {
             image_placeholder: "Image".into(),
             image_loading_without_alt: "Loading image...".into(),
             image_loading_with_alt_template: "Loading {alt}".into(),
+            enlarged_view_preview: "Preview".into(),
+            enlarged_view_source: "Source".into(),
+            enlarged_view_math_title: "Math".into(),
         }
     }
 

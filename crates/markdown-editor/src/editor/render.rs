@@ -908,15 +908,17 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_jump_to_bottom))
             .on_action(cx.listener(Self::on_dismiss_transient_ui));
         let base = base.child(content_area);
-        let base = if let Some(context_menu) = self.render_context_menu_overlay(&theme, cx) {
+        let mut base = if let Some(context_menu) = self.render_context_menu_overlay(&theme, cx) {
             base.child(context_menu)
         } else {
             base
         };
         if let Some(table_dialog) = self.render_table_insert_dialog_overlay(&theme, cx) {
-            base.child(table_dialog)
-        } else {
-            base
+            base = base.child(table_dialog);
         }
+        if let Some(enlarged) = self.render_enlarged_block_overlay(&theme, window, cx) {
+            base = base.child(enlarged);
+        }
+        base
     }
 }

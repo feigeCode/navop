@@ -60,9 +60,10 @@ fn color_key(color: Hsla) -> [u32; 4] {
     ]
 }
 
-pub(crate) struct HostRenderedArtifact {
-    pub(crate) artifact: Arc<BlockRenderArtifact>,
-    pub(crate) image: Arc<Image>,
+#[derive(Clone, Debug)]
+pub struct HostRenderedArtifact {
+    pub artifact: Arc<BlockRenderArtifact>,
+    pub image: Arc<Image>,
 }
 
 enum HostRenderState {

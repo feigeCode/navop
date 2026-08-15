@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use self::context_menu::{ContextMenuState, TableInsertDialogState};
+use self::enlarged::EnlargedBlockState;
 use self::tree::DocumentTree;
 use crate::EditorHostServices;
 use crate::components::{
@@ -27,6 +28,7 @@ use crate::components::{
 use crate::theme::{Theme, ThemeManager};
 mod context_menu;
 mod document;
+mod enlarged;
 mod events;
 mod history;
 mod host;
@@ -90,6 +92,7 @@ pub struct Editor {
     prev_mounted_run: Option<MountedRun>,
     context_menu: Option<ContextMenuState>,
     table_insert_dialog: Option<TableInsertDialogState>,
+    enlarged_block: Option<EnlargedBlockState>,
     context_menu_submenu_close_task: Option<Task<()>>,
     table_axis_preview: Option<TableAxisSelection>,
     table_axis_selection: Option<TableAxisSelection>,
@@ -330,6 +333,7 @@ impl Editor {
             prev_mounted_run: None,
             context_menu: None,
             table_insert_dialog: None,
+            enlarged_block: None,
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,

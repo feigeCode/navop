@@ -20,10 +20,13 @@ mod host_artifact;
 const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 
 use self::host_artifact::{
-    contained_block_size, inline_size, render_host_svg, scrollable_block_size,
+    HostArtifactSize, contained_block_size, inline_size, render_host_svg, scrollable_block_size,
 };
 use super::element::BlockTextElement;
-use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
+use super::{
+    Block, BlockEvent, BlockKind, EnlargedBlockKind, HostRenderedArtifact, ImageResolvedSource,
+    ImageRuntime,
+};
 use crate::BlockRenderKind;
 use crate::components::{
     Editor, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, TableAxisHighlight,
@@ -588,6 +591,33 @@ impl Block {
         container.into_any_element()
     }
 
+    /// Renders a host-rendered Mermaid/Math SVG with a click-to-enlarge handler.
+    /// The click asks the editor to open the enlarged source/preview overlay.
+    fn render_clickable_host_svg(
+        &self,
+        rendered: &HostRenderedArtifact,
+        size: HostArtifactSize,
+        kind: EnlargedBlockKind,
+        source: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let artifact = rendered.clone();
+        img(rendered.image.clone())
+            .debug_selector(|| "enlargable-host-svg".to_string())
+            .w(px(size.width))
+            .h(px(size.height))
+            .object_fit(ObjectFit::Contain)
+            .cursor_pointer()
+            .on_click(cx.listener(move |_block, _event, _window, cx| {
+                cx.emit(BlockEvent::RequestEnlargeRenderedBlock {
+                    kind,
+                    source: source.clone(),
+                    artifact: artifact.clone(),
+                });
+            }))
+            .into_any_element()
+    }
+
     fn render_math_content(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -621,7 +651,13 @@ impl Block {
                 .flex()
                 .justify_center()
                 .py(px(d.block_padding_y.max(6.0)))
-                .child(render_host_svg(&rendered, size))
+                .child(self.render_clickable_host_svg(
+                    &rendered,
+                    size,
+                    EnlargedBlockKind::Math,
+                    source.body.clone(),
+                    cx,
+                ))
                 .into_any_element();
         }
 
@@ -722,7 +758,13 @@ impl Block {
         if let Some(rendered) = self.resolve_host_render(request.clone(), cx) {
             let size =
                 scrollable_block_size(&rendered, available_width, d.image_root_max_height, 260.0);
-            let image = render_host_svg(&rendered, size);
+            let image = self.render_clickable_host_svg(
+                &rendered,
+                size,
+                EnlargedBlockKind::Mermaid,
+                source.body.clone(),
+                cx,
+            );
             let content = if size.width <= available_width + 0.5 {
                 div()
                     .w_full()

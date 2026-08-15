@@ -121,8 +121,9 @@ impl Editor {
     pub(super) fn dismiss_contextual_overlays(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
+        let had_enlarged = self.enlarged_block.take().is_some();
         let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
-        if had_menu || had_dialog || had_submenu_close {
+        if had_menu || had_dialog || had_enlarged || had_submenu_close {
             cx.notify();
         }
     }

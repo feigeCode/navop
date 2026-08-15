@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use gpui::{Image, Pixels, Point, SharedString};
 use uuid::Uuid;
 
+use super::runtime::HostRenderedArtifact;
 use crate::components::markdown::html::{HtmlDocument, parse_html_document};
 use crate::components::markdown::image::parse_standalone_image;
 use crate::components::markdown::inline::InlineTextTree;
@@ -848,6 +849,23 @@ pub enum BlockEvent {
     /// The user clicked this block; notify siblings so they re-render
     /// in display mode.
     RequestFocus,
+    /// The user clicked a rendered Mermaid or math block to enlarge it. The
+    /// editor opens an overlay showing the source and the rendered preview,
+    /// with a source/preview toggle in its top-right corner.
+    RequestEnlargeRenderedBlock {
+        kind: EnlargedBlockKind,
+        source: String,
+        artifact: HostRenderedArtifact,
+    },
+}
+
+/// Which block kind the enlarged rendered view was opened for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnlargedBlockKind {
+    /// A fenced Mermaid diagram.
+    Mermaid,
+    /// A display-math `$$...$$` block.
+    Math,
 }
 
 /// Undo coalescing category captured before a mutation.

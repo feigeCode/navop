@@ -2509,6 +2509,13 @@ impl Editor {
                 }
                 cx.notify();
             }
+            BlockEvent::RequestEnlargeRenderedBlock {
+                kind,
+                source,
+                artifact,
+            } => {
+                self.open_enlarged_block(*kind, source.clone(), artifact.clone(), cx);
+            }
             BlockEvent::RequestRenderedSelectAll => {}
             BlockEvent::PrepareUndo { .. } => {}
         }
