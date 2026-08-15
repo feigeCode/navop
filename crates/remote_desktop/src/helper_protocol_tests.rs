@@ -3,6 +3,10 @@ use crate::{
     RemoteDesktopBackendPreference, RemoteDesktopConnectionOptions, RemoteDesktopProtocol,
     RemoteDesktopSize,
 };
+use one_core::storage::{
+    RdpAudioMode, RdpAudioQuality, RdpDisplayMode, RdpGatewayCredentialSource, RdpGatewayMode,
+    RdpSettings,
+};
 
 fn rdp_options() -> RemoteDesktopConnectionOptions {
     RemoteDesktopConnectionOptions {
@@ -20,8 +24,33 @@ fn rdp_options() -> RemoteDesktopConnectionOptions {
             path: std::path::PathBuf::from("/Users/rachel/private-project"),
             read_only: true,
         }],
+        rdp: complete_rdp_settings(),
         proxy: None,
     }
+}
+
+fn complete_rdp_settings() -> RdpSettings {
+    let mut settings = RdpSettings {
+        admin_session: true,
+        ..Default::default()
+    };
+    settings.display.mode = RdpDisplayMode::Fixed;
+    settings.display.width = 1600;
+    settings.display.height = 900;
+    settings.display.smart_sizing = true;
+    settings.audio.mode = RdpAudioMode::Remote;
+    settings.audio.quality = RdpAudioQuality::High;
+    settings.audio.capture = true;
+    settings.gateway.mode = RdpGatewayMode::Explicit;
+    settings.gateway.hostname = Some("gateway.private.example".to_string());
+    settings.gateway.username = Some("gateway-user".to_string());
+    settings.gateway.password = Some("gateway-secret".to_string());
+    settings.gateway.domain = Some("gateway-domain".to_string());
+    settings.gateway.credential_source = RdpGatewayCredentialSource::Password;
+    settings.connection.keep_alive_seconds = 45;
+    settings.connection.timeout_seconds = 120;
+    settings.connection.max_reconnect_attempts = 7;
+    settings
 }
 
 #[test]
@@ -164,6 +193,38 @@ fn connect_request_round_trips_audio_playback() {
 }
 
 #[test]
+fn connect_request_preserves_complete_rdp_settings() {
+    let options = rdp_options();
+    let request = HelperRequest::connect_from_options(
+        &options,
+        RemoteDesktopSize {
+            width: 1280,
+            height: 720,
+            scale_factor: 100,
+        },
+    );
+    let line = encode_request_line(&request).expect("connect request encodes");
+    let decoded = decode_request_line(&line).expect("connect request decodes");
+
+    let HelperRequest::Connect { rdp, .. } = decoded else {
+        panic!("decoded request is not Connect");
+    };
+    assert_eq!(options.rdp, rdp);
+
+    let debug = format!("{request:?}");
+    assert!(debug.contains("rdp_admin_session: true"));
+    assert!(debug.contains("rdp_gateway_mode: Explicit"));
+    for secret in [
+        "gateway.private.example",
+        "gateway-user",
+        "gateway-secret",
+        "gateway-domain",
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[test]
 fn legacy_connect_request_defaults_optional_features() {
     let request: HelperRequest = serde_json::from_str(
         r#"{
@@ -191,6 +252,13 @@ fn legacy_connect_request_defaults_optional_features() {
     assert_eq!(
         Some(&serde_json::Value::Array(Vec::new())),
         encoded.get("shared_folders")
+    );
+    assert_eq!(
+        serde_json::to_value(RdpSettings::default()).expect("default RDP settings encode"),
+        encoded
+            .get("rdp")
+            .cloned()
+            .expect("legacy request receives default RDP settings")
     );
 }
 

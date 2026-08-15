@@ -74,6 +74,7 @@ pub(super) fn build_remote_desktop(
         proxy: None,
         credential_reference: None,
         backend_preference: RemoteDesktopBackendPreference::Canvas,
+        rdp: None,
     };
     Ok(with_common_fields(
         StoredConnection::new_remote_desktop(

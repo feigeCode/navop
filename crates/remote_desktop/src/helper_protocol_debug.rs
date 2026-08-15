@@ -36,6 +36,7 @@ fn debug_connect_request(
         audio_playback,
         audio_capture,
         shared_folders,
+        rdp,
     } = request
     else {
         unreachable!("connect debug called for another request");
@@ -54,6 +55,12 @@ fn debug_connect_request(
         .field("audio_playback", audio_playback)
         .field("audio_capture", audio_capture)
         .field("shared_folder_count", &shared_folders.len())
+        .field("rdp_admin_session", &rdp.admin_session)
+        .field("rdp_gateway_mode", &rdp.gateway.mode)
+        .field(
+            "rdp_shared_folder_count",
+            &rdp.resources.shared_folders.len(),
+        )
         .finish()
 }
 

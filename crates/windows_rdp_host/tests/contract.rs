@@ -243,9 +243,9 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "static_assert(sizeof(NavopRdpBorrowedUtf16) == 8)",
             "static_assert(alignof(NavopRdpBorrowedUtf16) == 4)",
             "static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 4)",
-            "static_assert(sizeof(NavopRdpConnectionOptions) == 48)",
+            "static_assert(sizeof(NavopRdpConnectionOptions) == 152)",
             "static_assert(alignof(NavopRdpConnectionOptions) == 8)",
-            "static_assert(sizeof(NavopRdpConnectionOptions) == 36)",
+            "static_assert(sizeof(NavopRdpConnectionOptions) == 136)",
             "static_assert(alignof(NavopRdpConnectionOptions) == 4)",
             "static_assert(offsetof(NavopRdpConnectionOptions, host) == 8)",
             "static_assert(offsetof(NavopRdpConnectionOptions, port) == 24)",
@@ -253,11 +253,59 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 32)",
             "static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 36)",
             "static_assert(offsetof(NavopRdpConnectionOptions, flags) == 40)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, legacy_reserved) == 44)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, display_mode) == 48)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, display_flags) == 52)",
+            "offsetof(NavopRdpConnectionOptions, desktop_scale_factor) == 56",
+            "offsetof(NavopRdpConnectionOptions, device_scale_factor) == 60",
+            "static_assert(offsetof(NavopRdpConnectionOptions, resource_flags) == 64)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, audio_mode) == 68)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, audio_quality) == 72)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, audio_flags) == 76)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, keyboard_hook_mode) == 80)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, input_flags) == 84)",
+            "offsetof(NavopRdpConnectionOptions, performance_preset) == 88",
+            "offsetof(NavopRdpConnectionOptions, performance_flags) == 92",
+            "offsetof(NavopRdpConnectionOptions, network_connection_type) == 96",
+            "static_assert(offsetof(NavopRdpConnectionOptions, security_flags) == 100)",
+            "offsetof(NavopRdpConnectionOptions, authentication_level) == 104",
+            "static_assert(offsetof(NavopRdpConnectionOptions, gateway_mode) == 108)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, gateway_flags) == 112)",
+            "offsetof(NavopRdpConnectionOptions, gateway_credential_source) == 116",
+            "offsetof(NavopRdpConnectionOptions, gateway_hostname) == 120",
+            "offsetof(NavopRdpConnectionOptions, keep_alive_seconds) == 136",
+            "static_assert(offsetof(NavopRdpConnectionOptions, timeout_seconds) == 140)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, connection_flags) == 144)",
+            "offsetof(NavopRdpConnectionOptions, max_reconnect_attempts) == 148",
             "static_assert(offsetof(NavopRdpConnectionOptions, port) == 16)",
             "static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 20)",
             "static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 24)",
             "static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 28)",
             "static_assert(offsetof(NavopRdpConnectionOptions, flags) == 32)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, legacy_reserved) == 36)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, display_mode) == 40)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, display_flags) == 44)",
+            "offsetof(NavopRdpConnectionOptions, desktop_scale_factor) == 48",
+            "offsetof(NavopRdpConnectionOptions, device_scale_factor) == 52",
+            "static_assert(offsetof(NavopRdpConnectionOptions, resource_flags) == 56)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, audio_mode) == 60)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, audio_quality) == 64)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, audio_flags) == 68)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, keyboard_hook_mode) == 72)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, input_flags) == 76)",
+            "offsetof(NavopRdpConnectionOptions, performance_preset) == 80",
+            "offsetof(NavopRdpConnectionOptions, performance_flags) == 84",
+            "offsetof(NavopRdpConnectionOptions, network_connection_type) == 88",
+            "static_assert(offsetof(NavopRdpConnectionOptions, security_flags) == 92)",
+            "offsetof(NavopRdpConnectionOptions, authentication_level) == 96",
+            "static_assert(offsetof(NavopRdpConnectionOptions, gateway_mode) == 100)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, gateway_flags) == 104)",
+            "offsetof(NavopRdpConnectionOptions, gateway_credential_source) == 108",
+            "offsetof(NavopRdpConnectionOptions, gateway_hostname) == 112",
+            "offsetof(NavopRdpConnectionOptions, keep_alive_seconds) == 120",
+            "static_assert(offsetof(NavopRdpConnectionOptions, timeout_seconds) == 124)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, connection_flags) == 128)",
+            "offsetof(NavopRdpConnectionOptions, max_reconnect_attempts) == 132",
             "static_assert(sizeof(NavopRdpCreateWithParentOptions) >= 20)",
             "static_assert(alignof(NavopRdpCreateWithParentOptions) == alignof(uintptr_t))",
             "static_assert(offsetof(NavopRdpCreateWithParentOptions, struct_size) == 0)",
@@ -352,14 +400,14 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "size_of::<NavopRdpBorrowedUtf16>() == 16",
             "align_of::<NavopRdpBorrowedUtf16>() == 8",
             "offset_of!(NavopRdpBorrowedUtf16, len) == 8",
-            "size_of::<NavopRdpConnectionOptions>() == 48",
+            "size_of::<NavopRdpConnectionOptions>() == 152",
             "align_of::<NavopRdpConnectionOptions>() == 8",
             "offset_of!(NavopRdpConnectionOptions, port) == 24",
             "offset_of!(NavopRdpConnectionOptions, flags) == 40",
             "size_of::<NavopRdpBorrowedUtf16>() == 8",
             "align_of::<NavopRdpBorrowedUtf16>() == 4",
             "offset_of!(NavopRdpBorrowedUtf16, len) == 4",
-            "size_of::<NavopRdpConnectionOptions>() == 36",
+            "size_of::<NavopRdpConnectionOptions>() == 136",
             "align_of::<NavopRdpConnectionOptions>() == 4",
             "offset_of!(NavopRdpConnectionOptions, port) == 16",
             "offset_of!(NavopRdpConnectionOptions, flags) == 32",
@@ -694,6 +742,8 @@ fn credential_transport_is_versioned_borrowed_and_architecture_specific() {
             "uint32_t flags;",
             "NavopRdpBorrowedUtf16 username;",
             "NavopRdpBorrowedUtf16 domain;",
+            "NavopRdpBorrowedUtf16 gateway_username;",
+            "NavopRdpBorrowedUtf16 gateway_domain;",
             "NAVOP_RDP_CREDENTIAL_LEGACY_SIZE",
             "append-only fields",
             "borrowed only for the synchronous call",
@@ -705,7 +755,7 @@ fn credential_transport_is_versioned_borrowed_and_architecture_specific() {
             "alignof(NavopRdpBorrowedSecret) == 8",
             "offsetof(NavopRdpBorrowedSecret, data) == 0",
             "offsetof(NavopRdpBorrowedSecret, len) == 8",
-            "sizeof(NavopRdpCredentialBundle) == 80",
+            "sizeof(NavopRdpCredentialBundle) == 112",
             "alignof(NavopRdpCredentialBundle) == 8",
             "offsetof(NavopRdpCredentialBundle, struct_size) == 0",
             "offsetof(NavopRdpCredentialBundle, abi_version) == 4",
@@ -714,17 +764,21 @@ fn credential_transport_is_versioned_borrowed_and_architecture_specific() {
             "offsetof(NavopRdpCredentialBundle, flags) == 40",
             "offsetof(NavopRdpCredentialBundle, username) == 48",
             "offsetof(NavopRdpCredentialBundle, domain) == 64",
+            "offsetof(NavopRdpCredentialBundle, gateway_username) == 80",
+            "offsetof(NavopRdpCredentialBundle, gateway_domain) == 96",
             "INTPTR_MAX == INT32_MAX",
             "sizeof(NavopRdpBorrowedSecret) == 8",
             "alignof(NavopRdpBorrowedSecret) == 4",
             "offsetof(NavopRdpBorrowedSecret, len) == 4",
-            "sizeof(NavopRdpCredentialBundle) == 44",
+            "sizeof(NavopRdpCredentialBundle) == 60",
             "alignof(NavopRdpCredentialBundle) == 4",
             "offsetof(NavopRdpCredentialBundle, server_password) == 8",
             "offsetof(NavopRdpCredentialBundle, gateway_password) == 16",
             "offsetof(NavopRdpCredentialBundle, flags) == 24",
             "offsetof(NavopRdpCredentialBundle, username) == 28",
             "offsetof(NavopRdpCredentialBundle, domain) == 36",
+            "offsetof(NavopRdpCredentialBundle, gateway_username) == 44",
+            "offsetof(NavopRdpCredentialBundle, gateway_domain) == 52",
         ],
     );
     assert_contains_all(
@@ -738,15 +792,17 @@ fn credential_transport_is_versioned_borrowed_and_architecture_specific() {
             "gateway_password: NavopRdpBorrowedSecret",
             "username: NavopRdpBorrowedUtf16",
             "domain: NavopRdpBorrowedUtf16",
+            "gateway_username: NavopRdpBorrowedUtf16",
+            "gateway_domain: NavopRdpBorrowedUtf16",
             "type ApplyCredentialsFn",
             "apply_credentials: ApplyCredentialsFn",
             "navop_rdp_apply_credentials(",
             "target_pointer_width = \"64\"",
             "size_of::<NavopRdpBorrowedSecret>() == 16",
-            "size_of::<NavopRdpCredentialBundle>() == 80",
+            "size_of::<NavopRdpCredentialBundle>() == 112",
             "target_pointer_width = \"32\"",
             "size_of::<NavopRdpBorrowedSecret>() == 8",
-            "size_of::<NavopRdpCredentialBundle>() == 44",
+            "size_of::<NavopRdpCredentialBundle>() == 60",
         ],
     );
 }
@@ -1160,7 +1216,7 @@ fn native_type_library_bindings_are_generated_before_parallel_host_compilation()
 }
 
 #[test]
-fn native_audio_playback_uses_a_versioned_flag_and_secured_settings3() {
+fn native_audio_policy_uses_complete_options_and_secured_settings3() {
     assert_contains_all(
         &format!("{HOST_CRATE}/native/windows_rdp_host.h"),
         &[
@@ -1179,7 +1235,7 @@ fn native_audio_playback_uses_a_versioned_flag_and_secured_settings3() {
     );
     assert_contains_all(
         &format!("{HOST_CRATE}/native/configuration.cpp"),
-        &["options->flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN"],
+        &["(options.flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN) != 0"],
     );
     assert_contains_all(
         &format!("{HOST_CRATE}/build.rs"),
@@ -1192,29 +1248,108 @@ fn native_audio_playback_uses_a_versioned_flag_and_secured_settings3() {
         &format!("{HOST_CRATE}/native/audio_redirection.cpp"),
         &[
             "constexpr LONG kAudioRedirectionRedirectToLocal = 0",
+            "constexpr LONG kAudioRedirectionPlayOnRemote = 1",
             "constexpr LONG kAudioRedirectionDisabled = 2",
             "IMsRdpClientSecuredSettings2",
             "get_SecuredSettings3",
             "put_AudioRedirectionMode",
-            "flags & NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED",
-            "? kAudioRedirectionDisabled",
-            ": kAudioRedirectionRedirectToLocal",
+            "options.audio_mode",
+            "options.audio_quality",
+            "options.audio_flags",
+            "AudioQualityMode",
+            "AudioCaptureRedirectionMode",
             "connect.get_secured_settings3.before",
             "connect.get_secured_settings3.after",
             "connect.set_audio_redirection_mode.before",
             "connect.set_audio_redirection_mode.after",
         ],
     );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/native/audio_redirection.cpp"),
+        &["NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED"],
+    );
+}
+
+#[test]
+fn active_x_connection_policy_consumes_the_complete_normalized_options() {
+    let build_script = &format!("{HOST_CRATE}/build.rs");
+    let internal_header = &format!("{HOST_CRATE}/native/host_internal.h");
+    let policy_source = &format!("{HOST_CRATE}/native/connection_policy.cpp");
+    let dispatch_source = &format!("{HOST_CRATE}/native/dispatch_property.cpp");
+    let active_x_source = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+
+    assert_contains_all(
+        build_script,
+        &[
+            "cargo:rerun-if-changed=native/connection_policy.cpp",
+            "cargo:rerun-if-changed=native/dispatch_property.cpp",
+            ".file(\"native/connection_policy.cpp\")",
+            ".file(\"native/dispatch_property.cpp\")",
+        ],
+    );
+    assert_contains_all(
+        internal_header,
+        &[
+            "struct NativeRdpConnectionPolicyContext",
+            "configure_active_x_connection_policy(",
+            "set_dispatch_bool(",
+            "set_dispatch_long(",
+            "set_dispatch_utf16(",
+        ],
+    );
+    assert_contains_all(
+        policy_source,
+        &[
+            "options.display_mode",
+            "options.display_flags",
+            "options.desktop_scale_factor",
+            "options.device_scale_factor",
+            "options.resource_flags",
+            "options.audio_mode",
+            "options.audio_quality",
+            "options.audio_flags",
+            "options.keyboard_hook_mode",
+            "options.input_flags",
+            "options.performance_preset",
+            "options.performance_flags",
+            "options.network_connection_type",
+            "options.security_flags",
+            "options.authentication_level",
+            "options.gateway_mode",
+            "options.gateway_flags",
+            "options.gateway_credential_source",
+            "options.gateway_hostname",
+            "options.keep_alive_seconds",
+            "options.timeout_seconds",
+            "options.connection_flags",
+            "options.max_reconnect_attempts",
+        ],
+    );
+    assert_contains_all(
+        dispatch_source,
+        &[
+            "QueryInterface(IID_PPV_ARGS(&dispatch))",
+            "GetIDsOfNames",
+            "DISPID_PROPERTYPUT",
+            "DISPATCH_PROPERTYPUT",
+            "Invoke(",
+        ],
+    );
     assert_tokens_in_scope(
-        &format!("{HOST_CRATE}/native/active_x_host.cpp"),
+        active_x_source,
         "NavopRdpResult connect_active_x(",
         "\n}\n\nNavopRdpResult apply_active_x_credentials(",
         &[
-            "put_AuthenticationLevel(0)",
-            "configure_audio_redirection(",
-            "options.flags",
-            "put_DesktopWidth",
+            "configure_active_x_connection_policy(",
             "Connect()",
+        ],
+    );
+    assert_excludes_all(
+        active_x_source,
+        &[
+            "configure_audio_redirection(\n        owner,\n        resources->state.client,\n        options.flags)",
+            "put_AuthenticationLevel(0)",
+            "put_EncryptionEnabled(1)",
         ],
     );
 }
@@ -1851,17 +1986,19 @@ fn native_connection_entrypoints_validate_gate_outputs_and_exceptions() {
     assert_contains_all(
         &format!("{HOST_CRATE}/native/configuration.cpp"),
         &[
-            "validate_struct_size",
+            "struct_size < NAVOP_RDP_CONNECTION_LEGACY_SIZE",
+            "connection_field_available",
+            "read_connection_field",
             "validate_abi_version",
-            "options->flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN",
+            "(options.flags & ~NAVOP_RDP_CONNECTION_FLAGS_KNOWN) != 0",
             "NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS",
-            "options->host.data == nullptr",
-            "options->port > UINT32_C(65535)",
-            "options->desktop_width <= 0",
-            "options->desktop_height <= 0",
+            "options.host.data == nullptr",
+            "options.port > UINT32_C(65535)",
+            "options.desktop_width <= 0",
+            "options.desktop_height <= 0",
             "valid_color_depth",
-            "options->host.data[index] == 0",
-            "connect_active_x(host->active_x_resources, *options)",
+            "text.data[index] == 0",
+            "connect_active_x(host, host->active_x_resources, normalized)",
         ],
     );
     assert_tokens_in_scope(

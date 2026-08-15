@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use connection_tunnel::ProxyTunnelConfig;
-pub use one_core::storage::RemoteDesktopBackendPreference;
+use one_core::storage::RdpAudioMode;
+pub use one_core::storage::{RdpSettings, RemoteDesktopBackendPreference};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,6 +42,7 @@ pub struct RemoteDesktopConnectionOptions {
     pub audio_playback: bool,
     pub audio_capture: bool,
     pub shared_folders: Vec<RemoteDesktopSharedFolder>,
+    pub rdp: RdpSettings,
     pub proxy: Option<ProxyTunnelConfig>,
 }
 
@@ -54,6 +56,23 @@ impl RemoteDesktopConnectionOptions {
             RemoteDesktopProtocol::Rdp => params.backend_preference,
             RemoteDesktopProtocol::Vnc => RemoteDesktopBackendPreference::Canvas,
         };
+        let rdp = match protocol {
+            RemoteDesktopProtocol::Rdp => params.effective_rdp_settings(),
+            RemoteDesktopProtocol::Vnc => RdpSettings::from_legacy_audio_playback(false),
+        };
+        let audio_playback =
+            protocol == RemoteDesktopProtocol::Rdp && rdp.audio.mode == RdpAudioMode::Local;
+        let audio_capture = protocol == RemoteDesktopProtocol::Rdp && rdp.audio.capture;
+        let shared_folders = rdp
+            .resources
+            .shared_folders
+            .iter()
+            .map(|folder| RemoteDesktopSharedFolder {
+                name: folder.name.clone(),
+                path: PathBuf::from(&folder.path),
+                read_only: folder.read_only,
+            })
+            .collect();
         Self {
             protocol,
             backend_preference,
@@ -62,9 +81,10 @@ impl RemoteDesktopConnectionOptions {
             password: params.password,
             domain: params.domain,
             read_only: params.read_only,
-            audio_playback: protocol == RemoteDesktopProtocol::Rdp && params.audio_playback,
-            audio_capture: false,
-            shared_folders: Vec::new(),
+            audio_playback,
+            audio_capture,
+            shared_folders,
+            rdp,
             proxy: params.proxy.map(storage_proxy_config),
         }
     }
@@ -99,6 +119,21 @@ impl fmt::Debug for RemoteDesktopConnectionOptions {
             .field("audio_playback", &self.audio_playback)
             .field("audio_capture", &self.audio_capture)
             .field("shared_folder_count", &self.shared_folders.len())
+            .field("admin_session", &self.rdp.admin_session)
+            .field("display_mode", &self.rdp.display.mode)
+            .field("gateway_mode", &self.rdp.gateway.mode)
+            .field(
+                "gateway_hostname_present",
+                &self.rdp.gateway.hostname.is_some(),
+            )
+            .field(
+                "gateway_username_present",
+                &self.rdp.gateway.username.is_some(),
+            )
+            .field(
+                "gateway_password_present",
+                &self.rdp.gateway.password.is_some(),
+            )
             .field("proxy", &proxy_debug_label(self.proxy.as_ref()))
             .finish()
     }
@@ -142,6 +177,9 @@ fn preserved_secret(value: Option<String>) -> Option<String> {
 mod tests {
     use one_core::storage::{
         ProxyConfig as StoredProxyConfig, ProxyType as StoredProxyType,
+        RdpAudioMode as StoredRdpAudioMode, RdpDisplayMode as StoredRdpDisplayMode,
+        RdpGatewayMode as StoredRdpGatewayMode, RdpSettings as StoredRdpSettings,
+        RdpSharedFolder as StoredRdpSharedFolder,
         RemoteDesktopBackendPreference as StoredRemoteDesktopBackendPreference,
         RemoteDesktopParams as StoredRemoteDesktopParams,
         RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
@@ -166,6 +204,7 @@ mod tests {
                 path: PathBuf::from("/Users/rachel/private-project"),
                 read_only: true,
             }],
+            rdp: StoredRdpSettings::default(),
             proxy: Some(ProxyTunnelConfig {
                 proxy_type: connection_tunnel::ProxyTunnelType::Http,
                 host: "proxy.private.example".to_string(),
@@ -217,6 +256,7 @@ mod tests {
                     credential_reference: None,
                 }),
                 backend_preference: StoredRemoteDesktopBackendPreference::WindowsNative,
+                rdp: None,
             });
 
         assert_eq!(RemoteDesktopProtocol::Rdp, options.protocol);
@@ -254,6 +294,7 @@ mod tests {
                 audio_playback: true,
                 proxy: None,
                 backend_preference: StoredRemoteDesktopBackendPreference::WindowsNative,
+                rdp: None,
             });
 
         assert_eq!(RemoteDesktopProtocol::Vnc, options.protocol);
@@ -262,5 +303,55 @@ mod tests {
             options.backend_preference
         );
         assert!(!options.audio_playback);
+    }
+
+    #[test]
+    fn complete_native_rdp_settings_map_into_runtime_options() {
+        let mut rdp = StoredRdpSettings::default();
+        rdp.admin_session = true;
+        rdp.display.mode = StoredRdpDisplayMode::Fixed;
+        rdp.display.width = 2560;
+        rdp.display.height = 1440;
+        rdp.audio.mode = StoredRdpAudioMode::Remote;
+        rdp.audio.capture = true;
+        rdp.resources.shared_folders.push(StoredRdpSharedFolder {
+            name: "workspace".to_string(),
+            path: "D:\\workspace".to_string(),
+            read_only: true,
+        });
+        rdp.gateway.mode = StoredRdpGatewayMode::Explicit;
+        rdp.gateway.hostname = Some("gateway.example".to_string());
+        rdp.gateway.username = Some("gateway-user".to_string());
+        rdp.gateway.password = Some("gateway-secret".to_string());
+
+        let options =
+            RemoteDesktopConnectionOptions::from_storage_params(StoredRemoteDesktopParams {
+                protocol: StoredRemoteDesktopProtocol::Rdp,
+                host: "rdp.example".to_string(),
+                port: 3389,
+                username: Some("alice".to_string()),
+                password: Some("secret".to_string()),
+                domain: Some("CORP".to_string()),
+                read_only: false,
+                audio_playback: true,
+                proxy: None,
+                backend_preference: StoredRemoteDesktopBackendPreference::WindowsNative,
+                rdp: Some(rdp.clone()),
+            });
+
+        assert_eq!(rdp, options.rdp);
+        assert!(!options.audio_playback);
+        assert!(options.audio_capture);
+        assert_eq!(1, options.shared_folders.len());
+        assert_eq!(
+            PathBuf::from("D:\\workspace"),
+            options.shared_folders[0].path
+        );
+        let debug = format!("{options:?}");
+        assert!(debug.contains("gateway_mode: Explicit"));
+        assert!(debug.contains("gateway_hostname_present: true"));
+        assert!(!debug.contains("gateway.example"));
+        assert!(!debug.contains("gateway-user"));
+        assert!(!debug.contains("gateway-secret"));
     }
 }

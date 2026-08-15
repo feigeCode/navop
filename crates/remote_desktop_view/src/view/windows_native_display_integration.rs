@@ -11,6 +11,10 @@ impl RemoteDesktopView {
         bounds: Bounds<Pixels>,
         scale_factor: f32,
     ) {
+        if !super::windows_native_policy::uses_dynamic_display_updates(&self.options.rdp) {
+            tracing::debug!("display: stage=observe skipped fixed desktop mode");
+            return;
+        }
         let Some(physical) = super::windows_native::logical_bounds_to_physical(
             bounds,
             point(px(0.0), px(0.0)),

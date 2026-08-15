@@ -159,6 +159,7 @@ fn options(protocol: RemoteDesktopProtocol) -> RemoteDesktopConnectionOptions {
         audio_playback: false,
         audio_capture: false,
         shared_folders: Vec::new(),
+        rdp: Default::default(),
         proxy: None,
     }
 }

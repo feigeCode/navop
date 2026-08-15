@@ -2,7 +2,7 @@
 
 #include "windows_rdp_host.h"
 
-struct IUnknown;
+#include <windows.h>
 
 enum class CallbackState : uint32_t {
     Open,
@@ -13,6 +13,12 @@ enum class CallbackState : uint32_t {
 struct NativeRdpHost;
 struct NativeRdpActiveXResources;
 struct NativeRdpEventSubscription;
+
+struct NativeRdpConnectionPolicyContext {
+    NativeRdpHost* owner;
+    IUnknown* control;
+    IUnknown* client;
+};
 
 void trace_native_stage(const char* stage) noexcept;
 
@@ -89,10 +95,39 @@ NavopRdpResult connect_active_x(
     NativeRdpActiveXResources* resources,
     const NavopRdpConnectionOptions& options) noexcept;
 
+NavopRdpResult configure_active_x_connection_policy(
+    const NativeRdpConnectionPolicyContext& context,
+    const NavopRdpConnectionOptions& options) noexcept;
+
 NavopRdpResult configure_audio_redirection(
     NativeRdpHost* owner,
     IUnknown* client,
-    uint32_t flags) noexcept;
+    const NavopRdpConnectionOptions& options) noexcept;
+
+HRESULT get_dispatch_object(
+    IUnknown* object,
+    const wchar_t* property_name,
+    IUnknown** out_object) noexcept;
+
+HRESULT get_dispatch_bool(
+    IUnknown* object,
+    const wchar_t* property_name,
+    bool* out_value) noexcept;
+
+HRESULT set_dispatch_bool(
+    IUnknown* object,
+    const wchar_t* property_name,
+    bool value) noexcept;
+
+HRESULT set_dispatch_long(
+    IUnknown* object,
+    const wchar_t* property_name,
+    LONG value) noexcept;
+
+HRESULT set_dispatch_utf16(
+    IUnknown* object,
+    const wchar_t* property_name,
+    NavopRdpBorrowedUtf16 value) noexcept;
 
 NavopRdpResult apply_active_x_credentials(
     NativeRdpHost* owner,

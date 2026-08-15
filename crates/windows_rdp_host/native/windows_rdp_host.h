@@ -24,10 +24,12 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_LAST_ERROR_LEGACY_SIZE UINT32_C(24)
 #if INTPTR_MAX == INT64_MAX
 #define NAVOP_RDP_CREDENTIAL_LEGACY_SIZE UINT32_C(48)
+#define NAVOP_RDP_CONNECTION_LEGACY_SIZE UINT32_C(48)
 #elif INTPTR_MAX == INT32_MAX
 #define NAVOP_RDP_CREDENTIAL_LEGACY_SIZE UINT32_C(28)
+#define NAVOP_RDP_CONNECTION_LEGACY_SIZE UINT32_C(36)
 #else
-#error Unsupported pointer width for the Windows RDP credential ABI
+#error Unsupported pointer width for the Windows RDP ABI
 #endif
 
 #define NAVOP_RDP_CREATE_STAGE_NONE UINT32_C(0)
@@ -110,6 +112,127 @@ typedef struct NavopRdpBorrowedUtf16 {
 #define NAVOP_RDP_CONNECTION_FLAGS_KNOWN \
     NAVOP_RDP_CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED
 
+/*
+ * Append-only connection policy constants. Numeric enum values are part of
+ * the C ABI and must remain synchronized with the Rust ffi module.
+ */
+#define NAVOP_RDP_DISPLAY_MODE_DYNAMIC UINT32_C(0)
+#define NAVOP_RDP_DISPLAY_MODE_FIXED UINT32_C(1)
+#define NAVOP_RDP_DISPLAY_FLAG_SMART_SIZING (UINT32_C(1) << 0)
+#define NAVOP_RDP_DISPLAY_FLAG_USE_MULTIMON (UINT32_C(1) << 1)
+#define NAVOP_RDP_DISPLAY_FLAG_SPAN_MONITORS (UINT32_C(1) << 2)
+#define NAVOP_RDP_DISPLAY_FLAGS_KNOWN \
+    (NAVOP_RDP_DISPLAY_FLAG_SMART_SIZING | \
+     NAVOP_RDP_DISPLAY_FLAG_USE_MULTIMON | \
+     NAVOP_RDP_DISPLAY_FLAG_SPAN_MONITORS)
+
+#define NAVOP_RDP_RESOURCE_FLAG_CLIPBOARD (UINT32_C(1) << 0)
+#define NAVOP_RDP_RESOURCE_FLAG_DRIVES (UINT32_C(1) << 1)
+#define NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DRIVES (UINT32_C(1) << 2)
+#define NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DEVICES (UINT32_C(1) << 3)
+#define NAVOP_RDP_RESOURCE_FLAG_PRINTERS (UINT32_C(1) << 4)
+#define NAVOP_RDP_RESOURCE_FLAG_SERIAL_PORTS (UINT32_C(1) << 5)
+#define NAVOP_RDP_RESOURCE_FLAG_SMART_CARDS (UINT32_C(1) << 6)
+#define NAVOP_RDP_RESOURCE_FLAG_CAMERAS (UINT32_C(1) << 7)
+#define NAVOP_RDP_RESOURCE_FLAG_MICROPHONES (UINT32_C(1) << 8)
+#define NAVOP_RDP_RESOURCE_FLAG_POS_DEVICES (UINT32_C(1) << 9)
+#define NAVOP_RDP_RESOURCE_FLAGS_KNOWN \
+    (NAVOP_RDP_RESOURCE_FLAG_CLIPBOARD | \
+     NAVOP_RDP_RESOURCE_FLAG_DRIVES | \
+     NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DRIVES | \
+     NAVOP_RDP_RESOURCE_FLAG_DYNAMIC_DEVICES | \
+     NAVOP_RDP_RESOURCE_FLAG_PRINTERS | \
+     NAVOP_RDP_RESOURCE_FLAG_SERIAL_PORTS | \
+     NAVOP_RDP_RESOURCE_FLAG_SMART_CARDS | \
+     NAVOP_RDP_RESOURCE_FLAG_CAMERAS | \
+     NAVOP_RDP_RESOURCE_FLAG_MICROPHONES | \
+     NAVOP_RDP_RESOURCE_FLAG_POS_DEVICES)
+
+#define NAVOP_RDP_AUDIO_MODE_LOCAL UINT32_C(0)
+#define NAVOP_RDP_AUDIO_MODE_REMOTE UINT32_C(1)
+#define NAVOP_RDP_AUDIO_MODE_DISABLED UINT32_C(2)
+#define NAVOP_RDP_AUDIO_QUALITY_DYNAMIC UINT32_C(0)
+#define NAVOP_RDP_AUDIO_QUALITY_MEDIUM UINT32_C(1)
+#define NAVOP_RDP_AUDIO_QUALITY_HIGH UINT32_C(2)
+#define NAVOP_RDP_AUDIO_FLAG_CAPTURE (UINT32_C(1) << 0)
+#define NAVOP_RDP_AUDIO_FLAGS_KNOWN NAVOP_RDP_AUDIO_FLAG_CAPTURE
+
+#define NAVOP_RDP_KEYBOARD_HOOK_LOCAL UINT32_C(0)
+#define NAVOP_RDP_KEYBOARD_HOOK_REMOTE UINT32_C(1)
+#define NAVOP_RDP_KEYBOARD_HOOK_FULLSCREEN UINT32_C(2)
+#define NAVOP_RDP_INPUT_FLAG_ENABLE_WINDOWS_KEY (UINT32_C(1) << 0)
+#define NAVOP_RDP_INPUT_FLAG_GRAB_FOCUS_ON_CONNECT (UINT32_C(1) << 1)
+#define NAVOP_RDP_INPUT_FLAGS_KNOWN \
+    (NAVOP_RDP_INPUT_FLAG_ENABLE_WINDOWS_KEY | \
+     NAVOP_RDP_INPUT_FLAG_GRAB_FOCUS_ON_CONNECT)
+
+#define NAVOP_RDP_PERFORMANCE_PRESET_AUTO UINT32_C(0)
+#define NAVOP_RDP_PERFORMANCE_PRESET_MODEM UINT32_C(1)
+#define NAVOP_RDP_PERFORMANCE_PRESET_BROADBAND_LOW UINT32_C(2)
+#define NAVOP_RDP_PERFORMANCE_PRESET_SATELLITE UINT32_C(3)
+#define NAVOP_RDP_PERFORMANCE_PRESET_LAN UINT32_C(4)
+#define NAVOP_RDP_PERFORMANCE_FLAG_WALLPAPER (UINT32_C(1) << 0)
+#define NAVOP_RDP_PERFORMANCE_FLAG_FULL_WINDOW_DRAG (UINT32_C(1) << 1)
+#define NAVOP_RDP_PERFORMANCE_FLAG_MENU_ANIMATIONS (UINT32_C(1) << 2)
+#define NAVOP_RDP_PERFORMANCE_FLAG_THEMES (UINT32_C(1) << 3)
+#define NAVOP_RDP_PERFORMANCE_FLAG_CURSOR_SHADOW (UINT32_C(1) << 4)
+#define NAVOP_RDP_PERFORMANCE_FLAG_CURSOR_SETTINGS (UINT32_C(1) << 5)
+#define NAVOP_RDP_PERFORMANCE_FLAG_FONT_SMOOTHING (UINT32_C(1) << 6)
+#define NAVOP_RDP_PERFORMANCE_FLAG_DESKTOP_COMPOSITION (UINT32_C(1) << 7)
+#define NAVOP_RDP_PERFORMANCE_FLAG_BITMAP_CACHE (UINT32_C(1) << 8)
+#define NAVOP_RDP_PERFORMANCE_FLAGS_KNOWN \
+    (NAVOP_RDP_PERFORMANCE_FLAG_WALLPAPER | \
+     NAVOP_RDP_PERFORMANCE_FLAG_FULL_WINDOW_DRAG | \
+     NAVOP_RDP_PERFORMANCE_FLAG_MENU_ANIMATIONS | \
+     NAVOP_RDP_PERFORMANCE_FLAG_THEMES | \
+     NAVOP_RDP_PERFORMANCE_FLAG_CURSOR_SHADOW | \
+     NAVOP_RDP_PERFORMANCE_FLAG_CURSOR_SETTINGS | \
+     NAVOP_RDP_PERFORMANCE_FLAG_FONT_SMOOTHING | \
+     NAVOP_RDP_PERFORMANCE_FLAG_DESKTOP_COMPOSITION | \
+     NAVOP_RDP_PERFORMANCE_FLAG_BITMAP_CACHE)
+
+#define NAVOP_RDP_NETWORK_CONNECTION_MODEM UINT32_C(0)
+#define NAVOP_RDP_NETWORK_CONNECTION_BROADBAND_LOW UINT32_C(1)
+#define NAVOP_RDP_NETWORK_CONNECTION_SATELLITE UINT32_C(2)
+#define NAVOP_RDP_NETWORK_CONNECTION_BROADBAND_HIGH UINT32_C(3)
+#define NAVOP_RDP_NETWORK_CONNECTION_WAN UINT32_C(4)
+#define NAVOP_RDP_NETWORK_CONNECTION_LAN UINT32_C(5)
+#define NAVOP_RDP_NETWORK_CONNECTION_AUTODETECT UINT32_C(6)
+
+#define NAVOP_RDP_SECURITY_FLAG_ENABLE_CREDSSP (UINT32_C(1) << 0)
+#define NAVOP_RDP_SECURITY_FLAG_PUBLIC_MODE (UINT32_C(1) << 1)
+#define NAVOP_RDP_SECURITY_FLAG_ENCRYPTION_ENABLED (UINT32_C(1) << 2)
+#define NAVOP_RDP_SECURITY_FLAGS_KNOWN \
+    (NAVOP_RDP_SECURITY_FLAG_ENABLE_CREDSSP | \
+     NAVOP_RDP_SECURITY_FLAG_PUBLIC_MODE | \
+     NAVOP_RDP_SECURITY_FLAG_ENCRYPTION_ENABLED)
+#define NAVOP_RDP_AUTHENTICATION_LEVEL_CONNECT UINT32_C(0)
+#define NAVOP_RDP_AUTHENTICATION_LEVEL_WARN UINT32_C(1)
+#define NAVOP_RDP_AUTHENTICATION_LEVEL_REJECT UINT32_C(2)
+
+#define NAVOP_RDP_GATEWAY_MODE_NONE UINT32_C(0)
+#define NAVOP_RDP_GATEWAY_MODE_EXPLICIT UINT32_C(1)
+#define NAVOP_RDP_GATEWAY_MODE_AUTO_DETECT UINT32_C(2)
+#define NAVOP_RDP_GATEWAY_FLAG_BYPASS_LOCAL (UINT32_C(1) << 0)
+#define NAVOP_RDP_GATEWAY_FLAGS_KNOWN NAVOP_RDP_GATEWAY_FLAG_BYPASS_LOCAL
+#define NAVOP_RDP_GATEWAY_CREDENTIAL_PASSWORD UINT32_C(0)
+#define NAVOP_RDP_GATEWAY_CREDENTIAL_SMART_CARD UINT32_C(1)
+#define NAVOP_RDP_GATEWAY_CREDENTIAL_ANY UINT32_C(4)
+#define NAVOP_RDP_MAX_GATEWAY_HOST_UTF16_CODE_UNITS UINT32_C(255)
+
+#define NAVOP_RDP_CONNECTION_POLICY_FLAG_ADMIN_SESSION (UINT32_C(1) << 0)
+#define NAVOP_RDP_CONNECTION_POLICY_FLAG_AUTO_RECONNECT (UINT32_C(1) << 1)
+#define NAVOP_RDP_CONNECTION_POLICY_FLAGS_KNOWN \
+    (NAVOP_RDP_CONNECTION_POLICY_FLAG_ADMIN_SESSION | \
+     NAVOP_RDP_CONNECTION_POLICY_FLAG_AUTO_RECONNECT)
+
+/*
+ * The first NAVOP_RDP_CONNECTION_LEGACY_SIZE bytes are the stable legacy
+ * prefix. legacy_reserved occupies historical tail padding and is ignored.
+ * Every following field is append-only. Implementations must read only fields
+ * fully covered by struct_size and use the documented current defaults for
+ * missing fields. Unknown trailing bytes are ignored.
+ */
 typedef struct NavopRdpConnectionOptions {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -119,6 +242,30 @@ typedef struct NavopRdpConnectionOptions {
     int32_t desktop_height;
     int32_t color_depth;
     uint32_t flags;
+    uint32_t legacy_reserved;
+    uint32_t display_mode;
+    uint32_t display_flags;
+    uint32_t desktop_scale_factor;
+    uint32_t device_scale_factor;
+    uint32_t resource_flags;
+    uint32_t audio_mode;
+    uint32_t audio_quality;
+    uint32_t audio_flags;
+    uint32_t keyboard_hook_mode;
+    uint32_t input_flags;
+    uint32_t performance_preset;
+    uint32_t performance_flags;
+    uint32_t network_connection_type;
+    uint32_t security_flags;
+    uint32_t authentication_level;
+    uint32_t gateway_mode;
+    uint32_t gateway_flags;
+    uint32_t gateway_credential_source;
+    NavopRdpBorrowedUtf16 gateway_hostname;
+    uint32_t keep_alive_seconds;
+    uint32_t timeout_seconds;
+    uint32_t connection_flags;
+    uint32_t max_reconnect_attempts;
 } NavopRdpConnectionOptions;
 
 /*
@@ -242,6 +389,8 @@ typedef struct NavopRdpCredentialBundle {
     uint32_t flags;
     NavopRdpBorrowedUtf16 username;
     NavopRdpBorrowedUtf16 domain;
+    NavopRdpBorrowedUtf16 gateway_username;
+    NavopRdpBorrowedUtf16 gateway_domain;
 } NavopRdpCredentialBundle;
 
 /*
@@ -273,8 +422,9 @@ typedef struct NavopRdpCredentialBundle {
  * be zero.
  *
  * The first NAVOP_RDP_CREDENTIAL_LEGACY_SIZE bytes are the stable legacy
- * password-only prefix. username and domain are append-only fields; callers
- * using the legacy prefix are accepted and treated as supplying no identity.
+ * password-only prefix. username, domain, gateway_username, and gateway_domain
+ * are append-only fields; callers using the legacy prefix are accepted and
+ * treated as supplying no identity.
  */
 #ifdef __cplusplus
 extern "C" {
@@ -329,24 +479,95 @@ static_assert(offsetof(NavopRdpConnectionOptions, host) == 8);
 static_assert(sizeof(NavopRdpBorrowedUtf16) == 16);
 static_assert(alignof(NavopRdpBorrowedUtf16) == 8);
 static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 8);
-static_assert(sizeof(NavopRdpConnectionOptions) == 48);
+static_assert(sizeof(NavopRdpConnectionOptions) == 152);
 static_assert(alignof(NavopRdpConnectionOptions) == 8);
 static_assert(offsetof(NavopRdpConnectionOptions, port) == 24);
 static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 28);
 static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 32);
 static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 36);
 static_assert(offsetof(NavopRdpConnectionOptions, flags) == 40);
+static_assert(offsetof(NavopRdpConnectionOptions, legacy_reserved) == 44);
+static_assert(offsetof(NavopRdpConnectionOptions, display_mode) == 48);
+static_assert(offsetof(NavopRdpConnectionOptions, display_flags) == 52);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, desktop_scale_factor) == 56);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, device_scale_factor) == 60);
+static_assert(offsetof(NavopRdpConnectionOptions, resource_flags) == 64);
+static_assert(offsetof(NavopRdpConnectionOptions, audio_mode) == 68);
+static_assert(offsetof(NavopRdpConnectionOptions, audio_quality) == 72);
+static_assert(offsetof(NavopRdpConnectionOptions, audio_flags) == 76);
+static_assert(offsetof(NavopRdpConnectionOptions, keyboard_hook_mode) == 80);
+static_assert(offsetof(NavopRdpConnectionOptions, input_flags) == 84);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, performance_preset) == 88);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, performance_flags) == 92);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, network_connection_type) == 96);
+static_assert(offsetof(NavopRdpConnectionOptions, security_flags) == 100);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, authentication_level) == 104);
+static_assert(offsetof(NavopRdpConnectionOptions, gateway_mode) == 108);
+static_assert(offsetof(NavopRdpConnectionOptions, gateway_flags) == 112);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, gateway_credential_source) == 116);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, gateway_hostname) == 120);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, keep_alive_seconds) == 136);
+static_assert(offsetof(NavopRdpConnectionOptions, timeout_seconds) == 140);
+static_assert(offsetof(NavopRdpConnectionOptions, connection_flags) == 144);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, max_reconnect_attempts) == 148);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, display_mode) ==
+    NAVOP_RDP_CONNECTION_LEGACY_SIZE);
 #elif INTPTR_MAX == INT32_MAX
 static_assert(sizeof(NavopRdpBorrowedUtf16) == 8);
 static_assert(alignof(NavopRdpBorrowedUtf16) == 4);
 static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 4);
-static_assert(sizeof(NavopRdpConnectionOptions) == 36);
+static_assert(sizeof(NavopRdpConnectionOptions) == 136);
 static_assert(alignof(NavopRdpConnectionOptions) == 4);
 static_assert(offsetof(NavopRdpConnectionOptions, port) == 16);
 static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 20);
 static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 24);
 static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 28);
 static_assert(offsetof(NavopRdpConnectionOptions, flags) == 32);
+static_assert(offsetof(NavopRdpConnectionOptions, legacy_reserved) == 36);
+static_assert(offsetof(NavopRdpConnectionOptions, display_mode) == 40);
+static_assert(offsetof(NavopRdpConnectionOptions, display_flags) == 44);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, desktop_scale_factor) == 48);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, device_scale_factor) == 52);
+static_assert(offsetof(NavopRdpConnectionOptions, resource_flags) == 56);
+static_assert(offsetof(NavopRdpConnectionOptions, audio_mode) == 60);
+static_assert(offsetof(NavopRdpConnectionOptions, audio_quality) == 64);
+static_assert(offsetof(NavopRdpConnectionOptions, audio_flags) == 68);
+static_assert(offsetof(NavopRdpConnectionOptions, keyboard_hook_mode) == 72);
+static_assert(offsetof(NavopRdpConnectionOptions, input_flags) == 76);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, performance_preset) == 80);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, performance_flags) == 84);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, network_connection_type) == 88);
+static_assert(offsetof(NavopRdpConnectionOptions, security_flags) == 92);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, authentication_level) == 96);
+static_assert(offsetof(NavopRdpConnectionOptions, gateway_mode) == 100);
+static_assert(offsetof(NavopRdpConnectionOptions, gateway_flags) == 104);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, gateway_credential_source) == 108);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, gateway_hostname) == 112);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, keep_alive_seconds) == 120);
+static_assert(offsetof(NavopRdpConnectionOptions, timeout_seconds) == 124);
+static_assert(offsetof(NavopRdpConnectionOptions, connection_flags) == 128);
+static_assert(
+    offsetof(NavopRdpConnectionOptions, max_reconnect_attempts) == 132);
 #else
 #error Unsupported pointer width for the Windows RDP connection ABI
 #endif
@@ -410,12 +631,14 @@ static_assert(offsetof(NavopRdpCredentialBundle, server_password) == 8);
 static_assert(sizeof(NavopRdpBorrowedSecret) == 16);
 static_assert(alignof(NavopRdpBorrowedSecret) == 8);
 static_assert(offsetof(NavopRdpBorrowedSecret, len) == 8);
-static_assert(sizeof(NavopRdpCredentialBundle) == 80);
+static_assert(sizeof(NavopRdpCredentialBundle) == 112);
 static_assert(alignof(NavopRdpCredentialBundle) == 8);
 static_assert(offsetof(NavopRdpCredentialBundle, gateway_password) == 24);
 static_assert(offsetof(NavopRdpCredentialBundle, flags) == 40);
 static_assert(offsetof(NavopRdpCredentialBundle, username) == 48);
 static_assert(offsetof(NavopRdpCredentialBundle, domain) == 64);
+static_assert(offsetof(NavopRdpCredentialBundle, gateway_username) == 80);
+static_assert(offsetof(NavopRdpCredentialBundle, gateway_domain) == 96);
 static_assert(
     offsetof(NavopRdpCredentialBundle, username) ==
     NAVOP_RDP_CREDENTIAL_LEGACY_SIZE);
@@ -423,12 +646,14 @@ static_assert(
 static_assert(sizeof(NavopRdpBorrowedSecret) == 8);
 static_assert(alignof(NavopRdpBorrowedSecret) == 4);
 static_assert(offsetof(NavopRdpBorrowedSecret, len) == 4);
-static_assert(sizeof(NavopRdpCredentialBundle) == 44);
+static_assert(sizeof(NavopRdpCredentialBundle) == 60);
 static_assert(alignof(NavopRdpCredentialBundle) == 4);
 static_assert(offsetof(NavopRdpCredentialBundle, gateway_password) == 16);
 static_assert(offsetof(NavopRdpCredentialBundle, flags) == 24);
 static_assert(offsetof(NavopRdpCredentialBundle, username) == 28);
 static_assert(offsetof(NavopRdpCredentialBundle, domain) == 36);
+static_assert(offsetof(NavopRdpCredentialBundle, gateway_username) == 44);
+static_assert(offsetof(NavopRdpCredentialBundle, gateway_domain) == 52);
 static_assert(
     offsetof(NavopRdpCredentialBundle, username) ==
     NAVOP_RDP_CREDENTIAL_LEGACY_SIZE);

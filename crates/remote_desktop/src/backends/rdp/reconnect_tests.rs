@@ -171,5 +171,6 @@ fn connect_request() -> HelperRequest {
         audio_playback: false,
         audio_capture: false,
         shared_folders: Vec::new(),
+        rdp: Default::default(),
     }
 }

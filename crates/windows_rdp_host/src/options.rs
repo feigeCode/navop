@@ -4,6 +4,7 @@ use crate::error::WindowsRdpHostError;
 use crate::ffi::{
     CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED, NavopRdpBorrowedUtf16, NavopRdpConnectionOptions,
 };
+use crate::policy::{WindowsRdpAudioMode, WindowsRdpConnectionPolicy};
 
 /// Maximum accepted RDP server name length, measured in UTF-16 code units.
 pub const WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS: usize = 255;
@@ -46,8 +47,7 @@ impl WindowsRdpColorDepth {
     }
 }
 
-/// Minimal connection configuration kept separate from credentials and future
-/// security/redirection policy.
+/// Connection endpoint and complete native MSTSC policy.
 #[derive(Clone, PartialEq, Eq)]
 pub struct WindowsRdpConnectionOptions {
     host: String,
@@ -55,7 +55,7 @@ pub struct WindowsRdpConnectionOptions {
     desktop_width: u32,
     desktop_height: u32,
     color_depth: WindowsRdpColorDepth,
-    audio_playback: bool,
+    policy: WindowsRdpConnectionPolicy,
 }
 
 impl fmt::Debug for WindowsRdpConnectionOptions {
@@ -67,7 +67,8 @@ impl fmt::Debug for WindowsRdpConnectionOptions {
             .field("desktop_width", &self.desktop_width)
             .field("desktop_height", &self.desktop_height)
             .field("color_depth", &self.color_depth)
-            .field("audio_playback", &self.audio_playback)
+            .field("audio_playback", &self.audio_playback())
+            .field("policy", &self.policy)
             .finish()
     }
 }
@@ -107,7 +108,7 @@ impl WindowsRdpConnectionOptions {
             desktop_width,
             desktop_height,
             color_depth,
-            audio_playback: true,
+            policy: WindowsRdpConnectionPolicy::default(),
         })
     }
 
@@ -131,43 +132,107 @@ impl WindowsRdpConnectionOptions {
         self.color_depth
     }
 
-    pub const fn audio_playback(&self) -> bool {
-        self.audio_playback
+    pub fn audio_playback(&self) -> bool {
+        self.policy.audio.mode == WindowsRdpAudioMode::Local
     }
 
     #[must_use]
-    pub const fn with_audio_playback(mut self, enabled: bool) -> Self {
-        self.audio_playback = enabled;
+    pub fn with_audio_playback(mut self, enabled: bool) -> Self {
+        self.policy.audio.mode = if enabled {
+            WindowsRdpAudioMode::Local
+        } else {
+            WindowsRdpAudioMode::Disabled
+        };
+        self
+    }
+
+    pub const fn policy(&self) -> &WindowsRdpConnectionPolicy {
+        &self.policy
+    }
+
+    #[must_use]
+    pub fn with_policy(mut self, policy: WindowsRdpConnectionPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
     pub(crate) fn as_native(&self) -> Result<NativeConnectionOptions, WindowsRdpHostError> {
+        self.policy.validate()?;
         let host_utf16: Vec<u16> = self.host.encode_utf16().collect();
-        let host_len =
-            u32::try_from(host_utf16.len()).map_err(|_| WindowsRdpHostError::InvalidArgument)?;
+        let host = borrowed_utf16(&host_utf16)?;
+        let gateway_hostname_utf16: Vec<u16> = self
+            .policy
+            .gateway
+            .hostname
+            .as_deref()
+            .map(|hostname| hostname.encode_utf16().collect())
+            .unwrap_or_default();
+        let gateway_hostname = borrowed_utf16(&gateway_hostname_utf16)?;
         let mut native = NavopRdpConnectionOptions::current(
-            NavopRdpBorrowedUtf16 {
-                data: host_utf16.as_ptr(),
-                len: host_len,
-            },
+            host,
             u32::from(self.port),
             self.desktop_width as i32,
             self.desktop_height as i32,
             self.color_depth.bits_per_pixel(),
         );
-        if !self.audio_playback {
+        if self.policy.audio.mode == WindowsRdpAudioMode::Disabled {
             native.flags |= CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
         }
+        apply_policy(&mut native, &self.policy, gateway_hostname);
         Ok(NativeConnectionOptions {
             native,
             _host_utf16: host_utf16,
+            _gateway_hostname_utf16: gateway_hostname_utf16,
         })
     }
+}
+
+fn borrowed_utf16(text: &[u16]) -> Result<NavopRdpBorrowedUtf16, WindowsRdpHostError> {
+    let len = u32::try_from(text.len()).map_err(|_| WindowsRdpHostError::InvalidArgument)?;
+    Ok(NavopRdpBorrowedUtf16 {
+        data: if text.is_empty() {
+            std::ptr::null()
+        } else {
+            text.as_ptr()
+        },
+        len,
+    })
+}
+
+fn apply_policy(
+    native: &mut NavopRdpConnectionOptions,
+    policy: &WindowsRdpConnectionPolicy,
+    gateway_hostname: NavopRdpBorrowedUtf16,
+) {
+    native.display_mode = policy.display.mode as u32;
+    native.display_flags = policy.display.flags();
+    native.desktop_scale_factor = policy.display.desktop_scale_factor;
+    native.device_scale_factor = policy.display.device_scale_factor;
+    native.resource_flags = policy.resources.flags();
+    native.audio_mode = policy.audio.mode as u32;
+    native.audio_quality = policy.audio.quality as u32;
+    native.audio_flags = policy.audio.flags();
+    native.keyboard_hook_mode = policy.input.keyboard_hook as u32;
+    native.input_flags = policy.input.flags();
+    native.performance_preset = policy.performance.preset as u32;
+    native.performance_flags = policy.performance.flags();
+    native.network_connection_type = policy.performance.network_connection_type as u32;
+    native.security_flags = policy.security.flags();
+    native.authentication_level = policy.security.authentication_level;
+    native.gateway_mode = policy.gateway.mode as u32;
+    native.gateway_flags = policy.gateway.flags();
+    native.gateway_credential_source = policy.gateway.credential_source as u32;
+    native.gateway_hostname = gateway_hostname;
+    native.keep_alive_seconds = policy.reconnect.keep_alive_seconds;
+    native.timeout_seconds = policy.reconnect.timeout_seconds;
+    native.connection_flags = policy.connection_flags();
+    native.max_reconnect_attempts = policy.reconnect.max_reconnect_attempts;
 }
 
 pub(crate) struct NativeConnectionOptions {
     pub(crate) native: NavopRdpConnectionOptions,
     _host_utf16: Vec<u16>,
+    _gateway_hostname_utf16: Vec<u16>,
 }
 
 /// A caller-owned native parent window handle for the Windows-only ActiveX

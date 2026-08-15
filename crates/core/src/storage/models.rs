@@ -11,6 +11,8 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt;
 
+use super::rdp_settings::RdpSettings;
+
 /// 活跃连接状态 - 用于跟踪哪些连接当前已打开
 #[derive(Default)]
 pub struct ActiveConnections {
@@ -557,6 +559,16 @@ pub struct RemoteDesktopParams {
         skip_serializing_if = "RemoteDesktopBackendPreference::is_canvas"
     )]
     pub backend_preference: RemoteDesktopBackendPreference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rdp: Option<RdpSettings>,
+}
+
+impl RemoteDesktopParams {
+    pub fn effective_rdp_settings(&self) -> RdpSettings {
+        self.rdp
+            .clone()
+            .unwrap_or_else(|| RdpSettings::from_legacy_audio_playback(self.audio_playback))
+    }
 }
 
 /// 跳板机配置
@@ -2237,6 +2249,7 @@ mod tests {
             proxy: None,
             credential_reference: None,
             backend_preference: RemoteDesktopBackendPreference::Auto,
+            rdp: None,
         };
         assert_eq!(
             "winhost:3389",
@@ -2824,6 +2837,7 @@ mod serial_tests {
             proxy: None,
             credential_reference: None,
             backend_preference: RemoteDesktopBackendPreference::Canvas,
+            rdp: None,
         };
 
         let conn = StoredConnection::new_remote_desktop("win-rdp".to_string(), params, Some(42));
@@ -2961,6 +2975,7 @@ mod serial_tests {
             }),
             credential_reference: None,
             backend_preference: RemoteDesktopBackendPreference::Auto,
+            rdp: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();

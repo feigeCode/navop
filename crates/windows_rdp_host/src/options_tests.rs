@@ -1,5 +1,21 @@
 use super::*;
-use crate::ffi::CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
+use crate::ffi::{
+    AUDIO_FLAG_CAPTURE, CONNECTION_FLAG_ADMIN_SESSION, CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED,
+    CONNECTION_FLAG_AUTO_RECONNECT, DISPLAY_FLAG_SMART_SIZING, DISPLAY_FLAG_SPAN_MONITORS,
+    DISPLAY_FLAG_USE_MULTIMON, INPUT_FLAG_ENABLE_WINDOWS_KEY, INPUT_FLAG_GRAB_FOCUS_ON_CONNECT,
+    PERFORMANCE_FLAG_BITMAP_CACHE, PERFORMANCE_FLAG_DESKTOP_COMPOSITION,
+    PERFORMANCE_FLAG_FONT_SMOOTHING, RESOURCE_FLAG_CAMERAS, RESOURCE_FLAG_CLIPBOARD,
+    RESOURCE_FLAG_DRIVES, RESOURCE_FLAG_MICROPHONES, SECURITY_FLAG_ENABLE_CREDSSP,
+    SECURITY_FLAG_ENCRYPTION_ENABLED,
+};
+use crate::policy::{
+    WindowsRdpAudioMode, WindowsRdpAudioPolicy, WindowsRdpAudioQuality, WindowsRdpConnectionPolicy,
+    WindowsRdpDisplayMode, WindowsRdpDisplayPolicy, WindowsRdpGatewayCredentialSource,
+    WindowsRdpGatewayMode, WindowsRdpGatewayPolicy, WindowsRdpInputPolicy,
+    WindowsRdpKeyboardHookMode, WindowsRdpNetworkConnectionType, WindowsRdpPerformancePolicy,
+    WindowsRdpPerformancePreset, WindowsRdpReconnectPolicy, WindowsRdpResourcePolicy,
+    WindowsRdpSecurityPolicy,
+};
 
 fn valid_options(
     host: impl Into<String>,
@@ -98,7 +114,190 @@ fn connection_options_encode_audio_playback() {
 }
 
 #[test]
+fn default_policy_preserves_legacy_behavior() {
+    let options = valid_options("rdp.example").expect("valid connection options");
+    let native = options.as_native().expect("native options");
+
+    assert_eq!(options.policy(), &WindowsRdpConnectionPolicy::default());
+    assert_eq!(native.native.audio_mode, WindowsRdpAudioMode::Local as u32);
+    assert_eq!(
+        native.native.security_flags,
+        SECURITY_FLAG_ENABLE_CREDSSP | SECURITY_FLAG_ENCRYPTION_ENABLED
+    );
+    assert_eq!(native.native.resource_flags, RESOURCE_FLAG_CLIPBOARD);
+    assert_eq!(
+        native.native.input_flags,
+        INPUT_FLAG_ENABLE_WINDOWS_KEY | INPUT_FLAG_GRAB_FOCUS_ON_CONNECT
+    );
+    assert_eq!(
+        native.native.connection_flags,
+        CONNECTION_FLAG_AUTO_RECONNECT
+    );
+}
+
+#[test]
+fn complete_policy_maps_to_native_fields() {
+    let policy = WindowsRdpConnectionPolicy {
+        admin_session: true,
+        display: WindowsRdpDisplayPolicy {
+            mode: WindowsRdpDisplayMode::Fixed,
+            smart_sizing: true,
+            use_multimon: true,
+            span_monitors: true,
+            desktop_scale_factor: 140,
+            device_scale_factor: 140,
+        },
+        resources: WindowsRdpResourcePolicy {
+            clipboard: true,
+            drives: true,
+            cameras: true,
+            microphones: true,
+            ..Default::default()
+        },
+        audio: WindowsRdpAudioPolicy {
+            mode: WindowsRdpAudioMode::Remote,
+            quality: WindowsRdpAudioQuality::High,
+            capture: true,
+        },
+        input: WindowsRdpInputPolicy {
+            keyboard_hook: WindowsRdpKeyboardHookMode::Fullscreen,
+            enable_windows_key: true,
+            grab_focus_on_connect: false,
+        },
+        performance: WindowsRdpPerformancePolicy {
+            preset: WindowsRdpPerformancePreset::Custom,
+            wallpaper: false,
+            full_window_drag: false,
+            menu_animations: false,
+            themes: false,
+            cursor_shadow: false,
+            cursor_settings: false,
+            font_smoothing: true,
+            desktop_composition: true,
+            bitmap_cache: true,
+            network_connection_type: WindowsRdpNetworkConnectionType::Lan,
+        },
+        security: WindowsRdpSecurityPolicy {
+            enable_credssp: true,
+            authentication_level: 2,
+            public_mode: false,
+            encryption_enabled: true,
+        },
+        gateway: WindowsRdpGatewayPolicy {
+            mode: WindowsRdpGatewayMode::Explicit,
+            bypass_local: true,
+            credential_source: WindowsRdpGatewayCredentialSource::Any,
+            hostname: Some("gateway.example".to_owned()),
+        },
+        reconnect: WindowsRdpReconnectPolicy {
+            keep_alive_seconds: 30,
+            timeout_seconds: 90,
+            auto_reconnect: true,
+            max_reconnect_attempts: 12,
+        },
+    };
+    let options = valid_options("rdp.example")
+        .expect("valid connection options")
+        .with_policy(policy.clone());
+    let native = options
+        .as_native()
+        .expect("complete policy should be valid");
+
+    assert_eq!(options.policy(), &policy);
+    assert_eq!(
+        native.native.display_mode,
+        WindowsRdpDisplayMode::Fixed as u32
+    );
+    assert_eq!(
+        native.native.display_flags,
+        DISPLAY_FLAG_SMART_SIZING | DISPLAY_FLAG_USE_MULTIMON | DISPLAY_FLAG_SPAN_MONITORS
+    );
+    assert_eq!(
+        native.native.resource_flags,
+        RESOURCE_FLAG_CLIPBOARD
+            | RESOURCE_FLAG_DRIVES
+            | RESOURCE_FLAG_CAMERAS
+            | RESOURCE_FLAG_MICROPHONES
+    );
+    assert_eq!(native.native.audio_mode, WindowsRdpAudioMode::Remote as u32);
+    assert_eq!(
+        native.native.audio_quality,
+        WindowsRdpAudioQuality::High as u32
+    );
+    assert_eq!(native.native.audio_flags, AUDIO_FLAG_CAPTURE);
+    assert_eq!(
+        native.native.keyboard_hook_mode,
+        WindowsRdpKeyboardHookMode::Fullscreen as u32
+    );
+    assert_eq!(native.native.input_flags, INPUT_FLAG_ENABLE_WINDOWS_KEY);
+    assert_eq!(
+        native.native.performance_flags,
+        PERFORMANCE_FLAG_FONT_SMOOTHING
+            | PERFORMANCE_FLAG_DESKTOP_COMPOSITION
+            | PERFORMANCE_FLAG_BITMAP_CACHE
+    );
+    assert_eq!(native.native.authentication_level, 2);
+    assert_eq!(
+        native.native.gateway_credential_source,
+        WindowsRdpGatewayCredentialSource::Any as u32
+    );
+    assert_eq!(
+        native.native.connection_flags,
+        CONNECTION_FLAG_ADMIN_SESSION | CONNECTION_FLAG_AUTO_RECONNECT
+    );
+    assert_eq!(native.native.keep_alive_seconds, 30);
+    assert_eq!(native.native.timeout_seconds, 90);
+    assert_eq!(native.native.max_reconnect_attempts, 12);
+}
+
+#[test]
+fn gateway_hostname_is_borrowed_for_the_native_call_lifetime() {
+    let mut policy = WindowsRdpConnectionPolicy::default();
+    policy.gateway.mode = WindowsRdpGatewayMode::Explicit;
+    policy.gateway.hostname = Some("网关.example".to_owned());
+    let options = valid_options("rdp.example")
+        .expect("valid connection options")
+        .with_policy(policy);
+    let native = options.as_native().expect("valid gateway hostname");
+    let hostname = unsafe {
+        std::slice::from_raw_parts(
+            native.native.gateway_hostname.data,
+            native.native.gateway_hostname.len as usize,
+        )
+    };
+
+    assert_eq!(String::from_utf16(hostname).unwrap(), "网关.example");
+}
+
+#[test]
+fn policy_rejects_invalid_scale_authentication_gateway_and_time_values() {
+    let base = valid_options("rdp.example").expect("valid connection options");
+    let mutations: [fn(&mut WindowsRdpConnectionPolicy); 5] = [
+        |policy| policy.display.desktop_scale_factor = 99,
+        |policy| policy.display.device_scale_factor = 120,
+        |policy| policy.security.authentication_level = 3,
+        |policy| {
+            policy.gateway.mode = WindowsRdpGatewayMode::Explicit;
+            policy.gateway.hostname = None;
+        },
+        |policy| policy.reconnect.keep_alive_seconds = u32::MAX,
+    ];
+
+    for mutate in mutations {
+        let mut policy = WindowsRdpConnectionPolicy::default();
+        mutate(&mut policy);
+        assert!(matches!(
+            base.clone().with_policy(policy).as_native(),
+            Err(WindowsRdpHostError::InvalidArgument)
+        ));
+    }
+}
+
+#[test]
 fn connection_options_debug_redacts_the_complete_endpoint() {
+    let mut policy = WindowsRdpConnectionPolicy::default();
+    policy.gateway.mode = WindowsRdpGatewayMode::Explicit;
+    policy.gateway.hostname = Some("gateway-debug-sentinel.example".to_owned());
     let options = WindowsRdpConnectionOptions::new(
         "alice@example.com:endpoint-sentinel@[2001:db8::1]",
         3390,
@@ -107,6 +306,7 @@ fn connection_options_debug_redacts_the_complete_endpoint() {
         WindowsRdpColorDepth::Bpp24,
     )
     .expect("valid connection options")
+    .with_policy(policy)
     .with_audio_playback(false);
     let debug = format!("{options:?}");
 
@@ -117,4 +317,5 @@ fn connection_options_debug_redacts_the_complete_endpoint() {
     assert!(!debug.contains("alice@example.com"));
     assert!(!debug.contains("endpoint-sentinel"));
     assert!(!debug.contains("2001:db8"));
+    assert!(!debug.contains("gateway-debug-sentinel"));
 }

@@ -14,7 +14,7 @@ use mongodb_view::MongoTabView;
 use notes::NotesView;
 use one_core::license::Feature;
 use one_core::settings::{LocalTerminalCustomProfile, LocalTerminalProfileKind};
-use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
+use one_core::storage::{ConnectionType, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
@@ -724,6 +724,7 @@ mod tests {
                     credential_reference: None,
                 }),
                 backend_preference: RemoteDesktopBackendPreference::WindowsNative,
+                rdp: None,
             },
             None,
         );
@@ -757,6 +758,7 @@ mod tests {
                 audio_playback: true,
                 proxy: None,
                 backend_preference: RemoteDesktopBackendPreference::WindowsNative,
+                rdp: None,
             },
             None,
         );
@@ -1753,46 +1755,12 @@ pub(crate) fn remote_desktop_options(
     conn: &StoredConnection,
     protocol: RemoteDesktopProtocol,
 ) -> Option<RemoteDesktopConnectionOptions> {
-    let params = conn.to_remote_desktop_params().ok()?;
-    Some(RemoteDesktopConnectionOptions {
-        protocol,
-        backend_preference: match protocol {
-            RemoteDesktopProtocol::Rdp => params.backend_preference,
-            RemoteDesktopProtocol::Vnc => one_core::storage::RemoteDesktopBackendPreference::Canvas,
-        },
-        destination: format!("{}:{}", params.host, params.port),
-        username: params.username,
-        password: params.password,
-        domain: params.domain,
-        read_only: params.read_only,
-        audio_playback: protocol == RemoteDesktopProtocol::Rdp && params.audio_playback,
-        audio_capture: false,
-        shared_folders: Vec::new(),
-        proxy: params.proxy.map(remote_desktop_proxy_config),
-    })
-}
-
-fn remote_desktop_proxy_config(proxy: ProxyConfig) -> remote_desktop::ProxyTunnelConfig {
-    remote_desktop::ProxyTunnelConfig {
-        proxy_type: match proxy.proxy_type {
-            ProxyType::Socks5 => remote_desktop::ProxyTunnelType::Socks5,
-            ProxyType::Http => remote_desktop::ProxyTunnelType::Http,
-        },
-        host: proxy.host.trim().to_string(),
-        port: proxy.port,
-        username: normalized_optional(proxy.username),
-        password: preserved_secret(proxy.password),
-    }
-}
-
-fn normalized_optional(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn preserved_secret(value: Option<String>) -> Option<String> {
-    value.filter(|value| !value.is_empty())
+    let mut params = conn.to_remote_desktop_params().ok()?;
+    params.protocol = match protocol {
+        RemoteDesktopProtocol::Rdp => one_core::storage::RemoteDesktopProtocol::Rdp,
+        RemoteDesktopProtocol::Vnc => one_core::storage::RemoteDesktopProtocol::Vnc,
+    };
+    Some(RemoteDesktopConnectionOptions::from_storage_params(params))
 }
 
 fn push_local_terminal_config_error<T>(

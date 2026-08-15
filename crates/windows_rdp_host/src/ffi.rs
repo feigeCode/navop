@@ -5,8 +5,76 @@ use std::mem::{align_of, size_of};
 pub(crate) const ABI_VERSION: u32 = 1;
 pub(crate) const CREATE_WITH_PARENT_ABI_VERSION: u32 = 1;
 pub(crate) const SESSION_DISPLAY_SETTINGS_ABI_VERSION: u32 = 1;
-pub(crate) const CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED: u32 = 1;
+pub(crate) const CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED: u32 = 1 << 0;
 pub(crate) const CONNECTION_FLAGS_KNOWN: u32 = CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
+
+pub(crate) const DISPLAY_FLAG_SMART_SIZING: u32 = 1 << 0;
+pub(crate) const DISPLAY_FLAG_USE_MULTIMON: u32 = 1 << 1;
+pub(crate) const DISPLAY_FLAG_SPAN_MONITORS: u32 = 1 << 2;
+pub(crate) const DISPLAY_FLAGS_KNOWN: u32 =
+    DISPLAY_FLAG_SMART_SIZING | DISPLAY_FLAG_USE_MULTIMON | DISPLAY_FLAG_SPAN_MONITORS;
+
+pub(crate) const RESOURCE_FLAG_CLIPBOARD: u32 = 1 << 0;
+pub(crate) const RESOURCE_FLAG_DRIVES: u32 = 1 << 1;
+pub(crate) const RESOURCE_FLAG_DYNAMIC_DRIVES: u32 = 1 << 2;
+pub(crate) const RESOURCE_FLAG_DYNAMIC_DEVICES: u32 = 1 << 3;
+pub(crate) const RESOURCE_FLAG_PRINTERS: u32 = 1 << 4;
+pub(crate) const RESOURCE_FLAG_SERIAL_PORTS: u32 = 1 << 5;
+pub(crate) const RESOURCE_FLAG_SMART_CARDS: u32 = 1 << 6;
+pub(crate) const RESOURCE_FLAG_CAMERAS: u32 = 1 << 7;
+pub(crate) const RESOURCE_FLAG_MICROPHONES: u32 = 1 << 8;
+pub(crate) const RESOURCE_FLAG_POS_DEVICES: u32 = 1 << 9;
+pub(crate) const RESOURCE_FLAGS_KNOWN: u32 = RESOURCE_FLAG_CLIPBOARD
+    | RESOURCE_FLAG_DRIVES
+    | RESOURCE_FLAG_DYNAMIC_DRIVES
+    | RESOURCE_FLAG_DYNAMIC_DEVICES
+    | RESOURCE_FLAG_PRINTERS
+    | RESOURCE_FLAG_SERIAL_PORTS
+    | RESOURCE_FLAG_SMART_CARDS
+    | RESOURCE_FLAG_CAMERAS
+    | RESOURCE_FLAG_MICROPHONES
+    | RESOURCE_FLAG_POS_DEVICES;
+
+pub(crate) const AUDIO_FLAG_CAPTURE: u32 = 1 << 0;
+pub(crate) const AUDIO_FLAGS_KNOWN: u32 = AUDIO_FLAG_CAPTURE;
+
+pub(crate) const INPUT_FLAG_ENABLE_WINDOWS_KEY: u32 = 1 << 0;
+pub(crate) const INPUT_FLAG_GRAB_FOCUS_ON_CONNECT: u32 = 1 << 1;
+pub(crate) const INPUT_FLAGS_KNOWN: u32 =
+    INPUT_FLAG_ENABLE_WINDOWS_KEY | INPUT_FLAG_GRAB_FOCUS_ON_CONNECT;
+
+pub(crate) const PERFORMANCE_FLAG_WALLPAPER: u32 = 1 << 0;
+pub(crate) const PERFORMANCE_FLAG_FULL_WINDOW_DRAG: u32 = 1 << 1;
+pub(crate) const PERFORMANCE_FLAG_MENU_ANIMATIONS: u32 = 1 << 2;
+pub(crate) const PERFORMANCE_FLAG_THEMES: u32 = 1 << 3;
+pub(crate) const PERFORMANCE_FLAG_CURSOR_SHADOW: u32 = 1 << 4;
+pub(crate) const PERFORMANCE_FLAG_CURSOR_SETTINGS: u32 = 1 << 5;
+pub(crate) const PERFORMANCE_FLAG_FONT_SMOOTHING: u32 = 1 << 6;
+pub(crate) const PERFORMANCE_FLAG_DESKTOP_COMPOSITION: u32 = 1 << 7;
+pub(crate) const PERFORMANCE_FLAG_BITMAP_CACHE: u32 = 1 << 8;
+pub(crate) const PERFORMANCE_FLAGS_KNOWN: u32 = PERFORMANCE_FLAG_WALLPAPER
+    | PERFORMANCE_FLAG_FULL_WINDOW_DRAG
+    | PERFORMANCE_FLAG_MENU_ANIMATIONS
+    | PERFORMANCE_FLAG_THEMES
+    | PERFORMANCE_FLAG_CURSOR_SHADOW
+    | PERFORMANCE_FLAG_CURSOR_SETTINGS
+    | PERFORMANCE_FLAG_FONT_SMOOTHING
+    | PERFORMANCE_FLAG_DESKTOP_COMPOSITION
+    | PERFORMANCE_FLAG_BITMAP_CACHE;
+
+pub(crate) const SECURITY_FLAG_ENABLE_CREDSSP: u32 = 1 << 0;
+pub(crate) const SECURITY_FLAG_PUBLIC_MODE: u32 = 1 << 1;
+pub(crate) const SECURITY_FLAG_ENCRYPTION_ENABLED: u32 = 1 << 2;
+pub(crate) const SECURITY_FLAGS_KNOWN: u32 =
+    SECURITY_FLAG_ENABLE_CREDSSP | SECURITY_FLAG_PUBLIC_MODE | SECURITY_FLAG_ENCRYPTION_ENABLED;
+
+pub(crate) const GATEWAY_FLAG_BYPASS_LOCAL: u32 = 1 << 0;
+pub(crate) const GATEWAY_FLAGS_KNOWN: u32 = GATEWAY_FLAG_BYPASS_LOCAL;
+
+pub(crate) const CONNECTION_FLAG_ADMIN_SESSION: u32 = 1 << 0;
+pub(crate) const CONNECTION_FLAG_AUTO_RECONNECT: u32 = 1 << 1;
+pub(crate) const CONNECTION_POLICY_FLAGS_KNOWN: u32 =
+    CONNECTION_FLAG_ADMIN_SESSION | CONNECTION_FLAG_AUTO_RECONNECT;
 
 pub(crate) type NativeResult = i32;
 
@@ -19,6 +87,16 @@ pub(crate) const RESULT_UNAVAILABLE: NativeResult = 5;
 pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
 pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
 pub(crate) const RESULT_INVALID_STATE: NativeResult = 8;
+pub(crate) const CREDENTIAL_LEGACY_SIZE: u32 = if cfg!(target_pointer_width = "64") {
+    48
+} else {
+    28
+};
+pub(crate) const CONNECTION_LEGACY_SIZE: u32 = if cfg!(target_pointer_width = "64") {
+    48
+} else {
+    36
+};
 #[allow(dead_code)]
 pub(crate) const LAST_ERROR_LEGACY_SIZE: u32 = 24;
 
@@ -309,6 +387,8 @@ pub(crate) struct NavopRdpCredentialBundle {
     pub(crate) flags: u32,
     pub(crate) username: NavopRdpBorrowedUtf16,
     pub(crate) domain: NavopRdpBorrowedUtf16,
+    pub(crate) gateway_username: NavopRdpBorrowedUtf16,
+    pub(crate) gateway_domain: NavopRdpBorrowedUtf16,
 }
 
 #[repr(C)]
@@ -321,6 +401,30 @@ pub(crate) struct NavopRdpConnectionOptions {
     pub(crate) desktop_height: i32,
     pub(crate) color_depth: i32,
     pub(crate) flags: u32,
+    pub(crate) legacy_reserved: u32,
+    pub(crate) display_mode: u32,
+    pub(crate) display_flags: u32,
+    pub(crate) desktop_scale_factor: u32,
+    pub(crate) device_scale_factor: u32,
+    pub(crate) resource_flags: u32,
+    pub(crate) audio_mode: u32,
+    pub(crate) audio_quality: u32,
+    pub(crate) audio_flags: u32,
+    pub(crate) keyboard_hook_mode: u32,
+    pub(crate) input_flags: u32,
+    pub(crate) performance_preset: u32,
+    pub(crate) performance_flags: u32,
+    pub(crate) network_connection_type: u32,
+    pub(crate) security_flags: u32,
+    pub(crate) authentication_level: u32,
+    pub(crate) gateway_mode: u32,
+    pub(crate) gateway_flags: u32,
+    pub(crate) gateway_credential_source: u32,
+    pub(crate) gateway_hostname: NavopRdpBorrowedUtf16,
+    pub(crate) keep_alive_seconds: u32,
+    pub(crate) timeout_seconds: u32,
+    pub(crate) connection_flags: u32,
+    pub(crate) max_reconnect_attempts: u32,
 }
 
 impl NavopRdpConnectionOptions {
@@ -340,8 +444,236 @@ impl NavopRdpConnectionOptions {
             desktop_height,
             color_depth,
             flags: 0,
+            legacy_reserved: 0,
+            display_mode: 0,
+            display_flags: 0,
+            desktop_scale_factor: 100,
+            device_scale_factor: 100,
+            resource_flags: RESOURCE_FLAG_CLIPBOARD,
+            audio_mode: 0,
+            audio_quality: 0,
+            audio_flags: 0,
+            keyboard_hook_mode: 1,
+            input_flags: INPUT_FLAGS_KNOWN,
+            performance_preset: 0,
+            performance_flags: PERFORMANCE_FLAGS_KNOWN,
+            network_connection_type: 6,
+            security_flags: SECURITY_FLAG_ENABLE_CREDSSP | SECURITY_FLAG_ENCRYPTION_ENABLED,
+            authentication_level: 0,
+            gateway_mode: 0,
+            gateway_flags: GATEWAY_FLAG_BYPASS_LOCAL,
+            gateway_credential_source: 0,
+            gateway_hostname: NavopRdpBorrowedUtf16 {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            keep_alive_seconds: 60,
+            timeout_seconds: 600,
+            connection_flags: CONNECTION_FLAG_AUTO_RECONNECT,
+            max_reconnect_attempts: 20,
         }
     }
+}
+
+fn abi_field_available<T>(struct_size: u32, offset: usize) -> bool {
+    offset
+        .checked_add(size_of::<T>())
+        .is_some_and(|end| end <= struct_size as usize)
+}
+
+unsafe fn read_abi_field<T: Copy>(
+    base: *const c_void,
+    struct_size: u32,
+    offset: usize,
+) -> Option<T> {
+    abi_field_available::<T>(struct_size, offset)
+        .then(|| unsafe { std::ptr::read_unaligned(base.cast::<u8>().add(offset).cast::<T>()) })
+}
+
+fn valid_borrowed_utf16(value: NavopRdpBorrowedUtf16) -> bool {
+    value.len == 0 || !value.data.is_null()
+}
+
+fn valid_borrowed_secret(value: NavopRdpBorrowedSecret) -> bool {
+    value.len == 0 || !value.data.is_null()
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn normalize_connection_options(
+    options: *const NavopRdpConnectionOptions,
+) -> Result<NavopRdpConnectionOptions, NativeResult> {
+    let base = options.cast::<c_void>();
+    let struct_size = unsafe { read_abi_field::<u32>(base, size_of::<u32>() as u32, 0) }
+        .ok_or(RESULT_INVALID_ARGUMENT)?;
+    if struct_size < CONNECTION_LEGACY_SIZE {
+        return Err(RESULT_INVALID_ARGUMENT);
+    }
+
+    let read_required = |offset| unsafe {
+        read_abi_field::<u32>(base, struct_size, offset).ok_or(RESULT_INVALID_ARGUMENT)
+    };
+    let abi_version = read_required(std::mem::offset_of!(NavopRdpConnectionOptions, abi_version))?;
+    if abi_version != ABI_VERSION {
+        return Err(RESULT_ABI_MISMATCH);
+    }
+
+    let host = unsafe {
+        read_abi_field::<NavopRdpBorrowedUtf16>(
+            base,
+            struct_size,
+            std::mem::offset_of!(NavopRdpConnectionOptions, host),
+        )
+    }
+    .ok_or(RESULT_INVALID_ARGUMENT)?;
+    let port = read_required(std::mem::offset_of!(NavopRdpConnectionOptions, port))?;
+    let desktop_width = unsafe {
+        read_abi_field::<i32>(
+            base,
+            struct_size,
+            std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width),
+        )
+    }
+    .ok_or(RESULT_INVALID_ARGUMENT)?;
+    let desktop_height = unsafe {
+        read_abi_field::<i32>(
+            base,
+            struct_size,
+            std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height),
+        )
+    }
+    .ok_or(RESULT_INVALID_ARGUMENT)?;
+    let color_depth = unsafe {
+        read_abi_field::<i32>(
+            base,
+            struct_size,
+            std::mem::offset_of!(NavopRdpConnectionOptions, color_depth),
+        )
+    }
+    .ok_or(RESULT_INVALID_ARGUMENT)?;
+    let flags = read_required(std::mem::offset_of!(NavopRdpConnectionOptions, flags))?;
+
+    let mut normalized =
+        NavopRdpConnectionOptions::current(host, port, desktop_width, desktop_height, color_depth);
+    normalized.flags = flags;
+
+    macro_rules! copy_optional_field {
+        ($field:ident) => {
+            if let Some(value) = unsafe {
+                read_abi_field(
+                    base,
+                    struct_size,
+                    std::mem::offset_of!(NavopRdpConnectionOptions, $field),
+                )
+            } {
+                normalized.$field = value;
+            }
+        };
+    }
+
+    copy_optional_field!(display_mode);
+    copy_optional_field!(display_flags);
+    copy_optional_field!(desktop_scale_factor);
+    copy_optional_field!(device_scale_factor);
+    copy_optional_field!(resource_flags);
+    let audio_mode_available = abi_field_available::<u32>(
+        struct_size,
+        std::mem::offset_of!(NavopRdpConnectionOptions, audio_mode),
+    );
+    copy_optional_field!(audio_mode);
+    copy_optional_field!(audio_quality);
+    copy_optional_field!(audio_flags);
+    copy_optional_field!(keyboard_hook_mode);
+    copy_optional_field!(input_flags);
+    copy_optional_field!(performance_preset);
+    copy_optional_field!(performance_flags);
+    copy_optional_field!(network_connection_type);
+    copy_optional_field!(security_flags);
+    copy_optional_field!(authentication_level);
+    copy_optional_field!(gateway_mode);
+    copy_optional_field!(gateway_flags);
+    copy_optional_field!(gateway_credential_source);
+    copy_optional_field!(gateway_hostname);
+    copy_optional_field!(keep_alive_seconds);
+    copy_optional_field!(timeout_seconds);
+    copy_optional_field!(connection_flags);
+    copy_optional_field!(max_reconnect_attempts);
+
+    if !audio_mode_available && flags & CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED != 0 {
+        normalized.audio_mode = 2;
+    }
+
+    Ok(normalized)
+}
+
+#[cfg(not(windows_rdp_host_native))]
+fn validate_connection_options(options: &NavopRdpConnectionOptions) -> NativeResult {
+    if options.flags & !CONNECTION_FLAGS_KNOWN != 0
+        || options.display_flags & !DISPLAY_FLAGS_KNOWN != 0
+        || options.resource_flags & !RESOURCE_FLAGS_KNOWN != 0
+        || options.audio_flags & !AUDIO_FLAGS_KNOWN != 0
+        || options.input_flags & !INPUT_FLAGS_KNOWN != 0
+        || options.performance_flags & !PERFORMANCE_FLAGS_KNOWN != 0
+        || options.security_flags & !SECURITY_FLAGS_KNOWN != 0
+        || options.gateway_flags & !GATEWAY_FLAGS_KNOWN != 0
+        || options.connection_flags & !CONNECTION_POLICY_FLAGS_KNOWN != 0
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    if !matches!(options.display_mode, 0 | 1)
+        || !matches!(options.audio_mode, 0 | 1 | 2)
+        || !matches!(options.audio_quality, 0 | 1 | 2)
+        || !matches!(options.keyboard_hook_mode, 0 | 1 | 2)
+        || !(0..=4).contains(&options.performance_preset)
+        || !(0..=6).contains(&options.network_connection_type)
+        || !(0..=2).contains(&options.authentication_level)
+        || !matches!(options.gateway_mode, 0 | 1 | 2)
+        || !matches!(options.gateway_credential_source, 0 | 1 | 4)
+        || !(100..=500).contains(&options.desktop_scale_factor)
+        || !matches!(options.device_scale_factor, 100 | 140 | 180)
+        || options.keep_alive_seconds.checked_mul(1_000).is_none()
+        || options.timeout_seconds > i32::MAX as u32
+        || options.max_reconnect_attempts > i32::MAX as u32
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    if options.host.len == 0
+        || options.host.len as usize > crate::options::WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS
+        || options.host.data.is_null()
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let host_slice =
+        unsafe { std::slice::from_raw_parts(options.host.data, options.host.len as usize) };
+    if host_slice.contains(&0) {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    if !(1..=u32::from(u16::MAX)).contains(&options.port)
+        || options.desktop_width <= 0
+        || options.desktop_height <= 0
+        || !matches!(options.color_depth, 8 | 15 | 16 | 24 | 32)
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let gateway = options.gateway_hostname;
+    if !valid_borrowed_utf16(gateway)
+        || gateway.len as usize > crate::policy::WINDOWS_RDP_MAX_GATEWAY_HOST_UTF16_CODE_UNITS
+        || (options.gateway_mode == 1 && gateway.len == 0)
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    if gateway.len > 0 {
+        let gateway_slice =
+            unsafe { std::slice::from_raw_parts(gateway.data, gateway.len as usize) };
+        if gateway_slice.contains(&0) {
+            return RESULT_INVALID_ARGUMENT;
+        }
+    }
+
+    RESULT_OK
 }
 
 const _: () = {
@@ -430,6 +762,14 @@ const _: () = {
         std::mem::offset_of!(NavopRdpCredentialBundle, domain)
             > std::mem::offset_of!(NavopRdpCredentialBundle, username)
     );
+    assert!(
+        std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username)
+            > std::mem::offset_of!(NavopRdpCredentialBundle, domain)
+    );
+    assert!(
+        std::mem::offset_of!(NavopRdpCredentialBundle, gateway_domain)
+            > std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username)
+    );
     assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, data) == 0);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, struct_size) == 0);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, abi_version) == 4);
@@ -443,22 +783,48 @@ const _: () = {
     assert!(size_of::<NavopRdpBorrowedSecret>() == 16);
     assert!(align_of::<NavopRdpBorrowedSecret>() == 8);
     assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 8);
-    assert!(size_of::<NavopRdpCredentialBundle>() == 80);
+    assert!(size_of::<NavopRdpCredentialBundle>() == 112);
     assert!(align_of::<NavopRdpCredentialBundle>() == 8);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 24);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 40);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, username) == 48);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, domain) == 64);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username) == 80);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_domain) == 96);
     assert!(size_of::<NavopRdpBorrowedUtf16>() == 16);
     assert!(align_of::<NavopRdpBorrowedUtf16>() == 8);
     assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len) == 8);
-    assert!(size_of::<NavopRdpConnectionOptions>() == 48);
+    assert!(size_of::<NavopRdpConnectionOptions>() == 152);
     assert!(align_of::<NavopRdpConnectionOptions>() == 8);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, port) == 24);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width) == 28);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height) == 32);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, color_depth) == 36);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, flags) == 40);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, legacy_reserved) == 44);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, display_mode) == 48);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, display_flags) == 52);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_scale_factor) == 56);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, device_scale_factor) == 60);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, resource_flags) == 64);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, audio_mode) == 68);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, audio_quality) == 72);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, audio_flags) == 76);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, keyboard_hook_mode) == 80);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, input_flags) == 84);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, performance_preset) == 88);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, performance_flags) == 92);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, network_connection_type) == 96);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, security_flags) == 100);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, authentication_level) == 104);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_mode) == 108);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_flags) == 112);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_credential_source) == 116);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_hostname) == 120);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, keep_alive_seconds) == 136);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, timeout_seconds) == 140);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, connection_flags) == 144);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, max_reconnect_attempts) == 148);
 };
 
 #[cfg(target_pointer_width = "32")]
@@ -468,22 +834,48 @@ const _: () = {
     assert!(size_of::<NavopRdpBorrowedSecret>() == 8);
     assert!(align_of::<NavopRdpBorrowedSecret>() == 4);
     assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 4);
-    assert!(size_of::<NavopRdpCredentialBundle>() == 44);
+    assert!(size_of::<NavopRdpCredentialBundle>() == 60);
     assert!(align_of::<NavopRdpCredentialBundle>() == 4);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 16);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 24);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, username) == 28);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, domain) == 36);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username) == 44);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_domain) == 52);
     assert!(size_of::<NavopRdpBorrowedUtf16>() == 8);
     assert!(align_of::<NavopRdpBorrowedUtf16>() == 4);
     assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len) == 4);
-    assert!(size_of::<NavopRdpConnectionOptions>() == 36);
+    assert!(size_of::<NavopRdpConnectionOptions>() == 136);
     assert!(align_of::<NavopRdpConnectionOptions>() == 4);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, port) == 16);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width) == 20);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height) == 24);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, color_depth) == 28);
     assert!(std::mem::offset_of!(NavopRdpConnectionOptions, flags) == 32);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, legacy_reserved) == 36);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, display_mode) == 40);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, display_flags) == 44);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_scale_factor) == 48);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, device_scale_factor) == 52);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, resource_flags) == 56);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, audio_mode) == 60);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, audio_quality) == 64);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, audio_flags) == 68);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, keyboard_hook_mode) == 72);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, input_flags) == 76);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, performance_preset) == 80);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, performance_flags) == 84);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, network_connection_type) == 88);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, security_flags) == 92);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, authentication_level) == 96);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_mode) == 100);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_flags) == 104);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_credential_source) == 108);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, gateway_hostname) == 112);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, keep_alive_seconds) == 120);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, timeout_seconds) == 124);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, connection_flags) == 128);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, max_reconnect_attempts) == 132);
 };
 
 impl NavopRdpEventCallbackOptions {
@@ -992,56 +1384,87 @@ unsafe fn apply_credentials(
     host: *mut NativeRdpHost,
     credentials: *const NavopRdpCredentialBundle,
 ) -> NativeResult {
-    const LEGACY_CREDENTIAL_SIZE: u32 = if cfg!(target_pointer_width = "64") {
-        48
-    } else {
-        28
-    };
-
     if host.is_null() || credentials.is_null() {
         return RESULT_INVALID_ARGUMENT;
     }
 
-    let struct_size = unsafe { std::ptr::addr_of!((*credentials).struct_size).read() };
-    if struct_size < LEGACY_CREDENTIAL_SIZE {
+    let base = credentials.cast::<c_void>();
+    let Some(struct_size) = (unsafe { read_abi_field::<u32>(base, size_of::<u32>() as u32, 0) })
+    else {
+        return RESULT_INVALID_ARGUMENT;
+    };
+    if struct_size < CREDENTIAL_LEGACY_SIZE {
         return RESULT_INVALID_ARGUMENT;
     }
-    let abi_version = unsafe { std::ptr::addr_of!((*credentials).abi_version).read() };
+
+    let read_required_u32 = |offset| unsafe {
+        read_abi_field::<u32>(base, struct_size, offset).ok_or(RESULT_INVALID_ARGUMENT)
+    };
+    let abi_version =
+        match read_required_u32(std::mem::offset_of!(NavopRdpCredentialBundle, abi_version)) {
+            Ok(value) => value,
+            Err(result) => return result,
+        };
     if abi_version != ABI_VERSION {
         return RESULT_ABI_MISMATCH;
     }
-    let flags = unsafe { std::ptr::addr_of!((*credentials).flags).read() };
+    let flags = match read_required_u32(std::mem::offset_of!(NavopRdpCredentialBundle, flags)) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     if flags != 0 {
         return RESULT_INVALID_ARGUMENT;
     }
 
-    let server_password = unsafe { std::ptr::addr_of!((*credentials).server_password).read() };
-    if server_password.len > 0 && server_password.data.is_null() {
+    let server_password = match unsafe {
+        read_abi_field::<NavopRdpBorrowedSecret>(
+            base,
+            struct_size,
+            std::mem::offset_of!(NavopRdpCredentialBundle, server_password),
+        )
+        .ok_or(RESULT_INVALID_ARGUMENT)
+    } {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if !valid_borrowed_secret(server_password) {
         return RESULT_INVALID_ARGUMENT;
     }
-    let gateway_password = unsafe { std::ptr::addr_of!((*credentials).gateway_password).read() };
-    if gateway_password.len > 0 && gateway_password.data.is_null() {
+    let gateway_password = match unsafe {
+        read_abi_field::<NavopRdpBorrowedSecret>(
+            base,
+            struct_size,
+            std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
+        )
+        .ok_or(RESULT_INVALID_ARGUMENT)
+    } {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if !valid_borrowed_secret(gateway_password) {
         return RESULT_INVALID_ARGUMENT;
     }
 
-    if struct_size
-        >= (std::mem::offset_of!(NavopRdpCredentialBundle, username)
-            + size_of::<NavopRdpBorrowedUtf16>()) as u32
-    {
-        let username = unsafe { std::ptr::addr_of!((*credentials).username).read() };
-        if username.len > 0 && username.data.is_null() {
-            return RESULT_INVALID_ARGUMENT;
-        }
+    macro_rules! validate_optional_identity {
+        ($field:ident) => {
+            if let Some(value) = unsafe {
+                read_abi_field::<NavopRdpBorrowedUtf16>(
+                    base,
+                    struct_size,
+                    std::mem::offset_of!(NavopRdpCredentialBundle, $field),
+                )
+            } {
+                if !valid_borrowed_utf16(value) {
+                    return RESULT_INVALID_ARGUMENT;
+                }
+            }
+        };
     }
-    if struct_size
-        >= (std::mem::offset_of!(NavopRdpCredentialBundle, domain)
-            + size_of::<NavopRdpBorrowedUtf16>()) as u32
-    {
-        let domain = unsafe { std::ptr::addr_of!((*credentials).domain).read() };
-        if domain.len > 0 && domain.data.is_null() {
-            return RESULT_INVALID_ARGUMENT;
-        }
-    }
+
+    validate_optional_identity!(username);
+    validate_optional_identity!(domain);
+    validate_optional_identity!(gateway_username);
+    validate_optional_identity!(gateway_domain);
 
     RESULT_UNAVAILABLE
 }
@@ -1055,41 +1478,13 @@ unsafe fn connect(
         return RESULT_INVALID_ARGUMENT;
     }
 
-    let struct_size = unsafe { std::ptr::addr_of!((*options).struct_size).read() };
-    if struct_size < size_of::<NavopRdpConnectionOptions>() as u32 {
-        return RESULT_INVALID_ARGUMENT;
-    }
-    let abi_version = unsafe { std::ptr::addr_of!((*options).abi_version).read() };
-    if abi_version != ABI_VERSION {
-        return RESULT_ABI_MISMATCH;
-    }
-    let flags = unsafe { std::ptr::addr_of!((*options).flags).read() };
-    if flags & !CONNECTION_FLAGS_KNOWN != 0 {
-        return RESULT_INVALID_ARGUMENT;
-    }
-
-    let host_name = unsafe { std::ptr::addr_of!((*options).host).read() };
-    if host_name.len == 0
-        || host_name.len as usize > crate::options::WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS
-        || host_name.data.is_null()
-    {
-        return RESULT_INVALID_ARGUMENT;
-    }
-    let host_slice = unsafe { std::slice::from_raw_parts(host_name.data, host_name.len as usize) };
-    if host_slice.contains(&0) {
-        return RESULT_INVALID_ARGUMENT;
-    }
-
-    let port = unsafe { std::ptr::addr_of!((*options).port).read() };
-    let desktop_width = unsafe { std::ptr::addr_of!((*options).desktop_width).read() };
-    let desktop_height = unsafe { std::ptr::addr_of!((*options).desktop_height).read() };
-    let color_depth = unsafe { std::ptr::addr_of!((*options).color_depth).read() };
-    if !(1..=u32::from(u16::MAX)).contains(&port)
-        || desktop_width <= 0
-        || desktop_height <= 0
-        || !matches!(color_depth, 8 | 15 | 16 | 24 | 32)
-    {
-        return RESULT_INVALID_ARGUMENT;
+    let normalized = match unsafe { normalize_connection_options(options) } {
+        Ok(options) => options,
+        Err(result) => return result,
+    };
+    let validation_result = validate_connection_options(&normalized);
+    if validation_result != RESULT_OK {
+        return validation_result;
     }
 
     RESULT_UNAVAILABLE
@@ -1277,7 +1672,7 @@ mod tests {
             assert_eq!(size_of::<NavopRdpBorrowedSecret>(), 16);
             assert_eq!(align_of::<NavopRdpBorrowedSecret>(), 8);
             assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, len), 8);
-            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 80);
+            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 112);
             assert_eq!(align_of::<NavopRdpCredentialBundle>(), 8);
             assert_eq!(
                 std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
@@ -1286,6 +1681,14 @@ mod tests {
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, flags), 40);
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, username), 48);
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, domain), 64);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username),
+                80
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpCredentialBundle, gateway_domain),
+                96
+            );
         }
 
         #[cfg(target_pointer_width = "32")]
@@ -1293,7 +1696,7 @@ mod tests {
             assert_eq!(size_of::<NavopRdpBorrowedSecret>(), 8);
             assert_eq!(align_of::<NavopRdpBorrowedSecret>(), 4);
             assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, len), 4);
-            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 44);
+            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 60);
             assert_eq!(align_of::<NavopRdpCredentialBundle>(), 4);
             assert_eq!(
                 std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
@@ -1302,6 +1705,14 @@ mod tests {
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, flags), 24);
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, username), 28);
             assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, domain), 36);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username),
+                44
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpCredentialBundle, gateway_domain),
+                52
+            );
         }
     }
 
@@ -1323,7 +1734,7 @@ mod tests {
             assert_eq!(size_of::<NavopRdpBorrowedUtf16>(), 16);
             assert_eq!(align_of::<NavopRdpBorrowedUtf16>(), 8);
             assert_eq!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len), 8);
-            assert_eq!(size_of::<NavopRdpConnectionOptions>(), 48);
+            assert_eq!(size_of::<NavopRdpConnectionOptions>(), 152);
             assert_eq!(align_of::<NavopRdpConnectionOptions>(), 8);
             assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, port), 24);
             assert_eq!(
@@ -1339,6 +1750,18 @@ mod tests {
                 36
             );
             assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, flags), 40);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, display_mode),
+                48
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, gateway_hostname),
+                120
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, max_reconnect_attempts),
+                148
+            );
         }
 
         #[cfg(target_pointer_width = "32")]
@@ -1346,7 +1769,7 @@ mod tests {
             assert_eq!(size_of::<NavopRdpBorrowedUtf16>(), 8);
             assert_eq!(align_of::<NavopRdpBorrowedUtf16>(), 4);
             assert_eq!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len), 4);
-            assert_eq!(size_of::<NavopRdpConnectionOptions>(), 36);
+            assert_eq!(size_of::<NavopRdpConnectionOptions>(), 136);
             assert_eq!(align_of::<NavopRdpConnectionOptions>(), 4);
             assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, port), 16);
             assert_eq!(
@@ -1362,6 +1785,18 @@ mod tests {
                 28
             );
             assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, flags), 32);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, display_mode),
+                40
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, gateway_hostname),
+                112
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, max_reconnect_attempts),
+                132
+            );
         }
     }
 
@@ -1423,6 +1858,14 @@ mod tests {
                 data: std::ptr::null(),
                 len: 0,
             },
+            gateway_username: NavopRdpBorrowedUtf16 {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            gateway_domain: NavopRdpBorrowedUtf16 {
+                data: std::ptr::null(),
+                len: 0,
+            },
         };
 
         credentials.struct_size = 4;
@@ -1473,6 +1916,95 @@ mod tests {
             unsafe { apply_credentials(host, &credentials) },
             RESULT_UNAVAILABLE
         );
+    }
+
+    #[cfg(not(windows_rdp_host_native))]
+    #[test]
+    fn non_windows_credentials_accept_append_only_callers_and_validate_gateway_identity() {
+        #[repr(C)]
+        struct ExtendedCredentials {
+            base: NavopRdpCredentialBundle,
+            trailing: [u8; 16],
+        }
+
+        let host = std::ptr::NonNull::<NativeRdpHost>::dangling().as_ptr();
+        let empty_secret = NavopRdpBorrowedSecret {
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let empty_text = NavopRdpBorrowedUtf16 {
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let mut credentials = NavopRdpCredentialBundle {
+            struct_size: size_of::<NavopRdpCredentialBundle>() as u32,
+            abi_version: ABI_VERSION,
+            server_password: empty_secret,
+            gateway_password: empty_secret,
+            flags: 0,
+            username: empty_text,
+            domain: empty_text,
+            gateway_username: empty_text,
+            gateway_domain: empty_text,
+        };
+
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_UNAVAILABLE
+        );
+
+        credentials.gateway_username.len = 1;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_INVALID_ARGUMENT
+        );
+        credentials.gateway_username.len = 0;
+        credentials.gateway_domain.len = 1;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_INVALID_ARGUMENT
+        );
+        credentials.gateway_domain.len = 0;
+
+        credentials.gateway_username.len = 1;
+        credentials.struct_size = (std::mem::offset_of!(NavopRdpCredentialBundle, gateway_username)
+            + size_of::<NavopRdpBorrowedUtf16>()
+            - 1) as u32;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_UNAVAILABLE
+        );
+        credentials.gateway_username.len = 0;
+
+        credentials.gateway_domain.len = 1;
+        credentials.struct_size = (std::mem::offset_of!(NavopRdpCredentialBundle, gateway_domain)
+            + size_of::<NavopRdpBorrowedUtf16>()
+            - 1) as u32;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_UNAVAILABLE
+        );
+
+        let trailing = [0xA5; 16];
+        let extended = ExtendedCredentials {
+            base: NavopRdpCredentialBundle {
+                struct_size: size_of::<ExtendedCredentials>() as u32,
+                abi_version: ABI_VERSION,
+                server_password: empty_secret,
+                gateway_password: empty_secret,
+                flags: 0,
+                username: empty_text,
+                domain: empty_text,
+                gateway_username: empty_text,
+                gateway_domain: empty_text,
+            },
+            trailing,
+        };
+        assert_eq!(
+            unsafe { apply_credentials(host, &extended.base) },
+            RESULT_UNAVAILABLE
+        );
+        assert_eq!(extended.trailing, trailing);
     }
 
     #[cfg(not(windows_rdp_host_native))]
@@ -1529,5 +2061,200 @@ mod tests {
             RESULT_INVALID_ARGUMENT
         );
         assert_eq!(status, REQUEST_CLOSE_CAN_PROCEED);
+    }
+
+    #[cfg(not(windows_rdp_host_native))]
+    #[test]
+    fn non_windows_connection_accepts_legacy_current_and_larger_callers() {
+        #[repr(C)]
+        struct ExtendedConnectionOptions {
+            base: NavopRdpConnectionOptions,
+            trailing: [u8; 16],
+        }
+
+        let host = std::ptr::NonNull::<NativeRdpHost>::dangling().as_ptr();
+        let host_name: Vec<u16> = "rdp.example".encode_utf16().collect();
+        let mut options = NavopRdpConnectionOptions::current(
+            NavopRdpBorrowedUtf16 {
+                data: host_name.as_ptr(),
+                len: host_name.len() as u32,
+            },
+            3389,
+            1920,
+            1080,
+            32,
+        );
+
+        options.struct_size = if cfg!(target_pointer_width = "64") {
+            48
+        } else {
+            36
+        };
+        options.legacy_reserved = u32::MAX;
+        options.display_mode = u32::MAX;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+
+        options.struct_size -= 1;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options = NavopRdpConnectionOptions::current(
+            NavopRdpBorrowedUtf16 {
+                data: host_name.as_ptr(),
+                len: host_name.len() as u32,
+            },
+            3389,
+            1920,
+            1080,
+            32,
+        );
+        options.legacy_reserved = u32::MAX;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+
+        let trailing = [0x5A; 16];
+        let extended = ExtendedConnectionOptions {
+            base: NavopRdpConnectionOptions {
+                struct_size: size_of::<ExtendedConnectionOptions>() as u32,
+                ..options
+            },
+            trailing,
+        };
+        assert_eq!(unsafe { connect(host, &extended.base) }, RESULT_UNAVAILABLE);
+        assert_eq!(extended.trailing, trailing);
+    }
+
+    #[cfg(not(windows_rdp_host_native))]
+    #[test]
+    fn non_windows_connection_ignores_partial_append_fields_and_preserves_legacy_audio() {
+        let host = std::ptr::NonNull::<NativeRdpHost>::dangling().as_ptr();
+        let host_name: Vec<u16> = "rdp.example".encode_utf16().collect();
+        let mut options = NavopRdpConnectionOptions::current(
+            NavopRdpBorrowedUtf16 {
+                data: host_name.as_ptr(),
+                len: host_name.len() as u32,
+            },
+            3389,
+            1920,
+            1080,
+            32,
+        );
+
+        options.display_mode = u32::MAX;
+        options.struct_size = (std::mem::offset_of!(NavopRdpConnectionOptions, display_mode)
+            + size_of::<u32>()
+            - 1) as u32;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+
+        options = NavopRdpConnectionOptions::current(
+            NavopRdpBorrowedUtf16 {
+                data: host_name.as_ptr(),
+                len: host_name.len() as u32,
+            },
+            3389,
+            1920,
+            1080,
+            32,
+        );
+        options.gateway_hostname = NavopRdpBorrowedUtf16 {
+            data: std::ptr::null(),
+            len: 1,
+        };
+        options.struct_size = (std::mem::offset_of!(NavopRdpConnectionOptions, gateway_hostname)
+            + size_of::<NavopRdpBorrowedUtf16>()
+            - 1) as u32;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+
+        options.struct_size = if cfg!(target_pointer_width = "64") {
+            48
+        } else {
+            36
+        };
+        options.flags = CONNECTION_FLAG_AUDIO_PLAYBACK_DISABLED;
+        options.audio_mode = u32::MAX;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+    }
+
+    #[cfg(not(windows_rdp_host_native))]
+    #[test]
+    fn non_windows_connection_validates_complete_policy_tail() {
+        let host = std::ptr::NonNull::<NativeRdpHost>::dangling().as_ptr();
+        let host_name: Vec<u16> = "rdp.example".encode_utf16().collect();
+        let gateway_name: Vec<u16> = "gateway.example".encode_utf16().collect();
+        let mut options = NavopRdpConnectionOptions::current(
+            NavopRdpBorrowedUtf16 {
+                data: host_name.as_ptr(),
+                len: host_name.len() as u32,
+            },
+            3389,
+            1920,
+            1080,
+            32,
+        );
+
+        macro_rules! invalid_field {
+            ($field:ident, $value:expr) => {{
+                let previous = options.$field;
+                options.$field = $value;
+                assert_eq!(
+                    unsafe { connect(host, &options) },
+                    RESULT_INVALID_ARGUMENT,
+                    stringify!($field)
+                );
+                options.$field = previous;
+            }};
+        }
+
+        invalid_field!(display_mode, 2);
+        invalid_field!(display_flags, DISPLAY_FLAGS_KNOWN << 1);
+        invalid_field!(desktop_scale_factor, 99);
+        invalid_field!(desktop_scale_factor, 501);
+        invalid_field!(device_scale_factor, 101);
+        invalid_field!(resource_flags, RESOURCE_FLAGS_KNOWN << 1);
+        invalid_field!(audio_mode, 3);
+        invalid_field!(audio_quality, 3);
+        invalid_field!(audio_flags, AUDIO_FLAGS_KNOWN << 1);
+        invalid_field!(keyboard_hook_mode, 3);
+        invalid_field!(input_flags, INPUT_FLAGS_KNOWN << 1);
+        invalid_field!(performance_preset, 5);
+        invalid_field!(performance_flags, PERFORMANCE_FLAGS_KNOWN << 1);
+        invalid_field!(network_connection_type, 7);
+        invalid_field!(security_flags, SECURITY_FLAGS_KNOWN << 1);
+        invalid_field!(authentication_level, 3);
+        invalid_field!(gateway_mode, 3);
+        invalid_field!(gateway_flags, GATEWAY_FLAGS_KNOWN << 1);
+        invalid_field!(gateway_credential_source, 2);
+        invalid_field!(keep_alive_seconds, u32::MAX);
+        invalid_field!(timeout_seconds, i32::MAX as u32 + 1);
+        invalid_field!(connection_flags, CONNECTION_POLICY_FLAGS_KNOWN << 1);
+        invalid_field!(max_reconnect_attempts, i32::MAX as u32 + 1);
+
+        options.gateway_mode = 1;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options.gateway_hostname = NavopRdpBorrowedUtf16 {
+            data: std::ptr::null(),
+            len: 1,
+        };
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        let gateway_with_nul: Vec<u16> = "gateway\0example".encode_utf16().collect();
+        options.gateway_hostname = NavopRdpBorrowedUtf16 {
+            data: gateway_with_nul.as_ptr(),
+            len: gateway_with_nul.len() as u32,
+        };
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        let oversized_gateway =
+            vec![b'g' as u16; crate::policy::WINDOWS_RDP_MAX_GATEWAY_HOST_UTF16_CODE_UNITS + 1];
+        options.gateway_hostname = NavopRdpBorrowedUtf16 {
+            data: oversized_gateway.as_ptr(),
+            len: oversized_gateway.len() as u32,
+        };
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options.gateway_hostname = NavopRdpBorrowedUtf16 {
+            data: gateway_name.as_ptr(),
+            len: gateway_name.len() as u32,
+        };
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
     }
 }

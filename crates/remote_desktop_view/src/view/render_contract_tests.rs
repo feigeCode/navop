@@ -702,10 +702,14 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
     let post_create = &initialize[post_create_start..];
     let mut previous = 0;
     for token in [
+        "windows_native_policy::initial_desktop_size",
         "native.update_bounds",
         "parse_destination",
+        "windows_native_policy::connection_policy",
         "WindowsRdpConnectionOptions::new",
-        ".with_audio_playback(self.options.audio_playback)",
+        ".with_policy(policy)",
+        "windows_native_policy::apply_gateway_credentials",
+        "native.apply_credentials",
         "native.connect",
         "attach_windows_native_presentation",
         "RemoteDesktopPresentationInitialization::Native",
@@ -738,6 +742,44 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
             "native initialization failure cleanup must retain ownership on the GPUI thread"
         );
     }
+}
+
+#[test]
+fn windows_native_fixed_mode_keeps_hwnd_bounds_but_skips_protocol_display_updates() {
+    let output = include_str!("output.rs").replace("\r\n", "\n");
+    let integration = include_str!("windows_native_display_integration.rs").replace("\r\n", "\n");
+
+    let update_bounds = function_body(
+        &output,
+        "pub(super) fn update_content_bounds",
+        "pub(super) fn flush_pending_start",
+    );
+    let native_bounds = update_bounds
+        .find("self.update_windows_native_bounds(bounds, display_scale_factor)")
+        .expect("native HWND bounds update");
+    let observe = update_bounds
+        .find("self.observe_windows_native_viewport(bounds, display_scale_factor)")
+        .expect("native protocol display observation");
+    assert!(
+        native_bounds < observe,
+        "native child HWND bounds must update before protocol-level display handling"
+    );
+
+    let observe = function_body(
+        &integration,
+        "pub(super) fn observe_windows_native_viewport",
+        "pub(super) fn flush_windows_native_display_settings",
+    );
+    let fixed_guard = observe
+        .find("windows_native_policy::uses_dynamic_display_updates")
+        .expect("fixed desktop mode guard");
+    let physical_conversion = observe
+        .find("logical_bounds_to_physical")
+        .expect("dynamic viewport conversion");
+    assert!(
+        fixed_guard < physical_conversion,
+        "fixed desktop mode must stop protocol display updates before observing viewport changes"
+    );
 }
 
 #[test]

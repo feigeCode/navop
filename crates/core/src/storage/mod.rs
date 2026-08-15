@@ -6,6 +6,7 @@ pub mod migration;
 pub mod models;
 pub mod query_directory;
 pub mod quick_command;
+pub mod rdp_settings;
 pub mod repository;
 pub mod row_mapping;
 pub mod sftp_favorite_path;
@@ -23,12 +24,17 @@ mod team_key_cache_tests;
 #[path = "quick_command_defaults_tests.rs"]
 mod quick_command_defaults_tests;
 
+#[cfg(test)]
+#[path = "rdp_settings_tests.rs"]
+mod rdp_settings_tests;
+
 pub use credential_vault::*;
 use gpui::App;
 pub use manager::*;
 pub use models::*;
 pub use query_directory::*;
 pub use quick_command::*;
+pub use rdp_settings::*;
 pub use repository::*;
 pub use sftp_favorite_path::*;
 pub use sql_execution_history::*;

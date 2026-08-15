@@ -57,6 +57,8 @@ mod surface;
 mod windows_native;
 #[allow(dead_code)]
 mod windows_native_display;
+#[cfg(feature = "windows-native-rdp")]
+mod windows_native_policy;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_display_integration;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -695,6 +697,8 @@ impl RemoteDesktopView {
             );
             return;
         };
+        let desktop_size =
+            windows_native_policy::initial_desktop_size(&self.options.rdp, size);
         if let Err(error) =
             native.update_bounds(bounds, point(px(0.0), px(0.0)), window.scale_factor())
         {
@@ -708,14 +712,28 @@ impl RemoteDesktopView {
                 return;
             }
         };
+        let policy = windows_native_policy::connection_policy(&self.options.rdp);
+        tracing::info!(
+            desktop_width = desktop_size.0,
+            desktop_height = desktop_size.1,
+            ?policy,
+            shared_folder_count = self.options.rdp.resources.shared_folders.len(),
+            "native RDP: stage=connection-policy"
+        );
+        if !self.options.rdp.resources.shared_folders.is_empty() {
+            tracing::warn!(
+                shared_folder_count = self.options.rdp.resources.shared_folders.len(),
+                "native RDP shared-folder redirection is not transported by the current ABI"
+            );
+        }
         let connection_options = match windows_rdp_host::WindowsRdpConnectionOptions::new(
             host,
             port,
-            u32::from(size.0),
-            u32::from(size.1),
+            desktop_size.0,
+            desktop_size.1,
             windows_rdp_host::WindowsRdpColorDepth::Bpp32,
         ) {
-            Ok(options) => options.with_audio_playback(self.options.audio_playback),
+            Ok(options) => options.with_policy(policy),
             Err(error) => {
                 self.fail_windows_native_presentation(
                     native,
@@ -737,6 +755,7 @@ impl RemoteDesktopView {
         if let Some(password) = self.options.password.as_ref() {
             credentials.set_server_password(password.clone());
         }
+        windows_native_policy::apply_gateway_credentials(&mut credentials, &self.options.rdp);
         if let Err(error) = native.apply_credentials(&credentials) {
             self.fail_windows_native_presentation(native, registration, "credentials", error, cx);
             return;

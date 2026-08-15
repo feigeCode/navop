@@ -731,6 +731,7 @@ mod tests {
                 audio_playback: false,
                 proxy: None,
                 backend_preference: Default::default(),
+                rdp: None,
             },
             None,
         );
@@ -800,6 +801,7 @@ mod tests {
                 audio_playback: false,
                 proxy: None,
                 backend_preference: Default::default(),
+                rdp: None,
             },
             None,
         );

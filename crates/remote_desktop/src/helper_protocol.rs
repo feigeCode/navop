@@ -1,4 +1,5 @@
 use base64::Engine as _;
+use one_core::storage::RdpSettings;
 use serde::{Deserialize, Serialize};
 
 use crate::{RemoteDesktopConnectionOptions, RemoteDesktopSharedFolder, RemoteDesktopSize};
@@ -20,6 +21,8 @@ pub enum HelperRequest {
         audio_capture: bool,
         #[serde(default)]
         shared_folders: Vec<RemoteDesktopSharedFolder>,
+        #[serde(default)]
+        rdp: RdpSettings,
     },
     Resize {
         width: u16,
@@ -80,6 +83,7 @@ impl HelperRequest {
             audio_playback: options.audio_playback,
             audio_capture: options.audio_capture,
             shared_folders: options.shared_folders.clone(),
+            rdp: options.rdp.clone(),
         }
     }
 }
