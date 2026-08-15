@@ -94,6 +94,7 @@ fn copy_action_presentation(action: ConnectionCopyAction) -> (String, IconName) 
         ConnectionCopyAction::RemoteDesktopAddress => {
             label("copy_remote_desktop_target", IconName::Network)
         }
+        ConnectionCopyAction::TelnetAddress => label("copy_telnet_target", IconName::Network),
         ConnectionCopyAction::Username => label("copy_username", IconName::User),
         ConnectionCopyAction::SerialPort => label("copy_serial_port", IconName::Network),
         ConnectionCopyAction::ForwardingRule => label("copy_forwarding_rule", IconName::Network),

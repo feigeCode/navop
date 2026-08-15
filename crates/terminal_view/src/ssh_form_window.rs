@@ -1,6 +1,7 @@
 use connection_form::credential::{
     CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, create_credential_picker, resolve_ssh_for_runtime,
+    CredentialReferencePicker, ManualCredentialOverride, create_credential_picker,
+    resolve_ssh_for_runtime,
 };
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -877,7 +878,7 @@ impl SshFormWindow {
             window,
             cx,
         );
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
             }),
@@ -890,6 +891,70 @@ impl SshFormWindow {
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
         ];
+        for binding in [
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &username_input,
+                CredentialField::Username,
+            ),
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &password_input,
+                CredentialField::Password,
+            ),
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &key_path_input,
+                CredentialField::PrivateKey,
+            ),
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &private_key_content_input,
+                CredentialField::PrivateKey,
+            ),
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &passphrase_input,
+                CredentialField::Passphrase,
+            ),
+            ManualCredentialOverride::new(
+                &jump_credential_picker,
+                &jump_username_input,
+                CredentialField::Username,
+            ),
+            ManualCredentialOverride::new(
+                &jump_credential_picker,
+                &jump_password_input,
+                CredentialField::Password,
+            ),
+            ManualCredentialOverride::new(
+                &jump_credential_picker,
+                &jump_key_path_input,
+                CredentialField::PrivateKey,
+            ),
+            ManualCredentialOverride::new(
+                &jump_credential_picker,
+                &jump_private_key_content_input,
+                CredentialField::PrivateKey,
+            ),
+            ManualCredentialOverride::new(
+                &jump_credential_picker,
+                &jump_passphrase_input,
+                CredentialField::Passphrase,
+            ),
+            ManualCredentialOverride::new(
+                &proxy_credential_picker,
+                &proxy_username_input,
+                CredentialField::Username,
+            ),
+            ManualCredentialOverride::new(
+                &proxy_credential_picker,
+                &proxy_password_input,
+                CredentialField::Password,
+            ),
+        ] {
+            subscriptions.push(binding.subscribe(window, cx));
+        }
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -1920,12 +1985,6 @@ impl SshFormWindow {
     /// 渲染基本信息标签页
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let auth_method = self.auth_method;
-        let credential_picker = self.credential_picker.read(cx);
-        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
-        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
-        let private_key_referenced =
-            credential_picker.field_referenced(CredentialField::PrivateKey);
-        let passphrase_referenced = credential_picker.field_referenced(CredentialField::Passphrase);
 
         v_flex()
             .w_full()
@@ -1934,13 +1993,10 @@ impl SshFormWindow {
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
             .child(self.render_form_row(&t!("SSH.host"), self.render_form_input(&self.host_input)))
             .child(self.render_form_row(&t!("SSH.port"), self.render_form_input(&self.port_input)))
-            .child(
-                self.render_form_row(
-                    &t!("SSH.username"),
-                    self.render_form_input(&self.username_input)
-                        .disabled(username_referenced),
-                ),
-            )
+            .child(self.render_form_row(
+                &t!("SSH.username"),
+                self.render_form_input(&self.username_input),
+            ))
             .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
             .child(
                 self.render_form_row(
@@ -2027,14 +2083,10 @@ impl SshFormWindow {
                 ),
             )
             .when(auth_method == AuthMethodSelection::Password, |this| {
-                this.child(
-                    self.render_form_row(
-                        &t!("SSH.password"),
-                        self.render_form_input(&self.password_input)
-                            .mask_toggle()
-                            .disabled(password_referenced),
-                    ),
-                )
+                this.child(self.render_form_row(
+                    &t!("SSH.password"),
+                    self.render_form_input(&self.password_input).mask_toggle(),
+                ))
                 .child(
                     self.render_form_row(
                         "",
@@ -2068,40 +2120,26 @@ impl SshFormWindow {
                 )
             })
             .when(auth_method == AuthMethodSelection::PrivateKey, |this| {
-                this.child(
-                    self.render_form_row(
-                        &t!("SSH.key_path"),
-                        self.render_form_input(&self.key_path_input)
-                            .disabled(private_key_referenced),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.passphrase"),
-                        self.render_form_input(&self.passphrase_input)
-                            .mask_toggle()
-                            .disabled(passphrase_referenced),
-                    ),
-                )
+                this.child(self.render_form_row(
+                    &t!("SSH.key_path"),
+                    self.render_form_input(&self.key_path_input),
+                ))
+                .child(self.render_form_row(
+                    &t!("SSH.passphrase"),
+                    self.render_form_input(&self.passphrase_input).mask_toggle(),
+                ))
             })
             .when(
                 auth_method == AuthMethodSelection::PrivateKeyContent,
                 |this| {
-                    this.child(
-                        self.render_form_row(
-                            &t!("SSH.private_key_content"),
-                            self.render_form_input(&self.private_key_content_input)
-                                .disabled(private_key_referenced),
-                        ),
-                    )
-                    .child(
-                        self.render_form_row(
-                            &t!("SSH.passphrase"),
-                            self.render_form_input(&self.passphrase_input)
-                                .mask_toggle()
-                                .disabled(passphrase_referenced),
-                        ),
-                    )
+                    this.child(self.render_form_row(
+                        &t!("SSH.private_key_content"),
+                        self.render_form_input(&self.private_key_content_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("SSH.passphrase"),
+                        self.render_form_input(&self.passphrase_input).mask_toggle(),
+                    ))
                     .child(
                         h_flex().justify_center().child(
                             div()
@@ -2328,12 +2366,6 @@ impl SshFormWindow {
     fn render_jump_server_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enable_jump = self.enable_jump_server;
         let jump_auth_method = self.jump_auth_method;
-        let credential_picker = self.jump_credential_picker.read(cx);
-        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
-        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
-        let private_key_referenced =
-            credential_picker.field_referenced(CredentialField::PrivateKey);
-        let passphrase_referenced = credential_picker.field_referenced(CredentialField::Passphrase);
 
         v_flex()
             .w_full()
@@ -2361,13 +2393,10 @@ impl SshFormWindow {
                     &t!("SSH.jump_port"),
                     self.render_form_input(&self.jump_port_input),
                 ))
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.jump_username"),
-                        self.render_form_input(&self.jump_username_input)
-                            .disabled(username_referenced),
-                    ),
-                )
+                .child(self.render_form_row(
+                    &t!("SSH.jump_username"),
+                    self.render_form_input(&self.jump_username_input),
+                ))
                 .child(self.render_form_row("钥匙串", self.jump_credential_picker.clone()))
                 .child(
                     self.render_form_row(
@@ -2444,27 +2473,22 @@ impl SshFormWindow {
                         self.render_form_row(
                             &t!("SSH.jump_password"),
                             self.render_form_input(&self.jump_password_input)
-                                .mask_toggle()
-                                .disabled(password_referenced),
+                                .mask_toggle(),
                         ),
                     )
                 })
                 .when(
                     jump_auth_method == AuthMethodSelection::PrivateKey,
                     |this| {
-                        this.child(
-                            self.render_form_row(
-                                &t!("SSH.jump_key_path"),
-                                self.render_form_input(&self.jump_key_path_input)
-                                    .disabled(private_key_referenced),
-                            ),
-                        )
+                        this.child(self.render_form_row(
+                            &t!("SSH.jump_key_path"),
+                            self.render_form_input(&self.jump_key_path_input),
+                        ))
                         .child(
                             self.render_form_row(
                                 &t!("SSH.jump_passphrase"),
                                 self.render_form_input(&self.jump_passphrase_input)
-                                    .mask_toggle()
-                                    .disabled(passphrase_referenced),
+                                    .mask_toggle(),
                             ),
                         )
                     },
@@ -2472,19 +2496,15 @@ impl SshFormWindow {
                 .when(
                     jump_auth_method == AuthMethodSelection::PrivateKeyContent,
                     |this| {
-                        this.child(
-                            self.render_form_row(
-                                &t!("SSH.private_key_content"),
-                                self.render_form_input(&self.jump_private_key_content_input)
-                                    .disabled(private_key_referenced),
-                            ),
-                        )
+                        this.child(self.render_form_row(
+                            &t!("SSH.private_key_content"),
+                            self.render_form_input(&self.jump_private_key_content_input),
+                        ))
                         .child(
                             self.render_form_row(
                                 &t!("SSH.jump_passphrase"),
                                 self.render_form_input(&self.jump_passphrase_input)
-                                    .mask_toggle()
-                                    .disabled(passphrase_referenced),
+                                    .mask_toggle(),
                             ),
                         )
                         .child(
@@ -2558,9 +2578,6 @@ impl SshFormWindow {
     fn render_proxy_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enable_proxy = self.enable_proxy;
         let proxy_type = self.proxy_type;
-        let credential_picker = self.proxy_credential_picker.read(cx);
-        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
-        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
 
         v_flex()
             .w_full()
@@ -2610,19 +2627,15 @@ impl SshFormWindow {
                     &t!("SSH.proxy_port"),
                     self.render_form_input(&self.proxy_port_input),
                 ))
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.proxy_username"),
-                        self.render_form_input(&self.proxy_username_input)
-                            .disabled(username_referenced),
-                    ),
-                )
+                .child(self.render_form_row(
+                    &t!("SSH.proxy_username"),
+                    self.render_form_input(&self.proxy_username_input),
+                ))
                 .child(
                     self.render_form_row(
                         &t!("SSH.proxy_password"),
                         self.render_form_input(&self.proxy_password_input)
-                            .mask_toggle()
-                            .disabled(password_referenced),
+                            .mask_toggle(),
                     ),
                 )
                 .child(self.render_form_row("钥匙串", self.proxy_credential_picker.clone()))

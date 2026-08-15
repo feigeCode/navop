@@ -4,7 +4,8 @@ use std::time::Instant;
 
 use connection_form::credential::{
     CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
+    CredentialReferencePicker, ManualCredentialOverride, create_credential_picker,
+    resolve_connection_for_runtime,
 };
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -1260,6 +1261,15 @@ fn credential_capabilities_for_fields(
     }
 }
 
+fn input_for_field<'a>(
+    values: &[(String, Entity<String>)],
+    inputs: &'a [Option<Entity<InputState>>],
+    field_name: &str,
+) -> Option<&'a Entity<InputState>> {
+    let index = values.iter().position(|(name, _)| name == field_name)?;
+    inputs.get(index)?.as_ref()
+}
+
 /// Event emitted when a connection is saved successfully
 #[derive(Clone, Debug)]
 pub enum DbConnectionFormEvent {
@@ -1446,7 +1456,7 @@ impl DbConnectionForm {
             window,
             cx,
         );
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
             }),
@@ -1455,6 +1465,26 @@ impl DbConnectionForm {
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
         ];
+        for (field_name, picker, field) in [
+            ("username", &credential_picker, CredentialField::Username),
+            ("password", &credential_picker, CredentialField::Password),
+            (
+                "proxy_username",
+                &proxy_credential_picker,
+                CredentialField::Username,
+            ),
+            (
+                "proxy_password",
+                &proxy_credential_picker,
+                CredentialField::Password,
+            ),
+        ] {
+            if let Some(input) = input_for_field(&field_values, &field_inputs, field_name) {
+                subscriptions.push(
+                    ManualCredentialOverride::new(picker, input, field).subscribe(window, cx),
+                );
+            }
+        }
 
         let form = Self {
             config,
@@ -2279,28 +2309,6 @@ impl DbConnectionForm {
             .unwrap_or(false)
     }
 
-    fn credential_field_referenced(&self, field_name: &str, cx: &App) -> bool {
-        match field_name {
-            "username" => self
-                .credential_picker
-                .read(cx)
-                .field_referenced(CredentialField::Username),
-            "password" => self
-                .credential_picker
-                .read(cx)
-                .field_referenced(CredentialField::Password),
-            "proxy_username" => self
-                .proxy_credential_picker
-                .read(cx)
-                .field_referenced(CredentialField::Username),
-            "proxy_password" => self
-                .proxy_credential_picker
-                .read(cx)
-                .field_referenced(CredentialField::Password),
-            _ => false,
-        }
-    }
-
     fn render_credential_picker_field(&self, proxy: bool) -> gpui_component::form::Field {
         let picker = if proxy {
             self.proxy_credential_picker.clone()
@@ -2427,9 +2435,7 @@ impl DbConnectionForm {
                     })
                     .when(!is_select && !is_checkbox, |el| {
                         if let Some(input_state) = self.get_input_by_name(&field_name) {
-                            let input = Input::new(&input_state)
-                                .w_full()
-                                .disabled(self.credential_field_referenced(&field_name, cx));
+                            let input = Input::new(&input_state).w_full();
                             let input = if is_password {
                                 input.mask_toggle()
                             } else {
@@ -2547,11 +2553,7 @@ impl DbConnectionForm {
                             })
                             .when(!is_select && !is_checkbox, |el| {
                                 if let Some(Some(input_state)) = self.field_inputs.get(input_idx) {
-                                    let input = Input::new(input_state)
-                                        .w_full()
-                                        .disabled(
-                                            self.credential_field_referenced(&field_name, cx),
-                                        );
+                                    let input = Input::new(input_state).w_full();
                                     let input = if is_password {
                                         input.mask_toggle()
                                     } else {

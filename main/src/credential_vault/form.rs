@@ -130,6 +130,10 @@ impl CredentialForm {
         build_entry(self.existing.clone(), self.values(cx))
     }
 
+    pub(super) fn is_editing(&self) -> bool {
+        self.existing.is_some()
+    }
+
     fn values(&self, cx: &App) -> CredentialFormValues {
         CredentialFormValues {
             name: input_value(&self.name_input, cx),
@@ -287,6 +291,19 @@ mod tests {
         assert_eq!(entry.private_key_path, None);
         assert_eq!(entry.private_key_content.as_deref(), Some("key"));
         assert!(entry.sync_enabled);
+    }
+
+    #[test]
+    fn allows_password_only_credentials() {
+        let mut values = values();
+        values.username.clear();
+        values.private_key_content.clear();
+        values.passphrase.clear();
+
+        let entry = build_entry(None, values).unwrap();
+
+        assert_eq!(entry.username, None);
+        assert_eq!(entry.password.as_deref(), Some("secret"));
     }
 
     #[test]

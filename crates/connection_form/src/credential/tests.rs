@@ -57,6 +57,30 @@ fn a_new_reference_only_selects_supported_available_fields() {
 }
 
 #[test]
+fn a_password_only_credential_only_references_the_password() {
+    let mut password_only = summary();
+    password_only.username = None;
+    password_only.has_private_key_path = false;
+    password_only.has_passphrase = false;
+
+    assert_eq!(
+        Some(CredentialReference {
+            credential_id: 42,
+            credential_cloud_id: None,
+            username: false,
+            password: true,
+            private_key: false,
+            passphrase: false,
+        }),
+        build_reference(
+            CredentialSelectValue::Credential(42),
+            CredentialCapabilities::login(),
+            &[password_only],
+        )
+    );
+}
+
+#[test]
 fn password_and_private_key_are_mutually_exclusive() {
     let reference = CredentialReference {
         credential_id: 42,

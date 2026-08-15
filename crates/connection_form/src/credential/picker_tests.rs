@@ -101,6 +101,52 @@ fn picker_selection_and_fields_follow_the_reference_contract(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn manual_username_override_preserves_password_reference(cx: &mut TestAppContext) {
+    let form = with_picker(cx, |window, cx| {
+        create_credential_picker_with_summaries(
+            CredentialPickerConfig::new("credential-test", CredentialCapabilities::login()),
+            vec![summary()],
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|cx| {
+        let picker = form.read(cx).picker.clone();
+        picker.update(cx, |picker, cx| {
+            picker.select_value(CredentialSelectValue::Credential(42), cx);
+            picker.use_manual_field_without_window(CredentialField::Username, cx);
+        });
+        let picker = form.read(cx).picker.read(cx);
+        assert!(!picker.field_referenced(CredentialField::Username));
+        assert!(picker.field_referenced(CredentialField::Password));
+    });
+}
+
+#[gpui::test]
+fn manual_password_override_preserves_username_reference(cx: &mut TestAppContext) {
+    let form = with_picker(cx, |window, cx| {
+        create_credential_picker_with_summaries(
+            CredentialPickerConfig::new("credential-test", CredentialCapabilities::login()),
+            vec![summary()],
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|cx| {
+        let picker = form.read(cx).picker.clone();
+        picker.update(cx, |picker, cx| {
+            picker.select_value(CredentialSelectValue::Credential(42), cx);
+            picker.use_manual_field_without_window(CredentialField::Password, cx);
+        });
+        let picker = form.read(cx).picker.read(cx);
+        assert!(picker.field_referenced(CredentialField::Username));
+        assert!(!picker.field_referenced(CredentialField::Password));
+    });
+}
+
+#[gpui::test]
 fn capability_changes_normalize_existing_references(cx: &mut TestAppContext) {
     let reference = CredentialReference {
         credential_id: 42,
@@ -133,7 +179,7 @@ fn capability_changes_normalize_existing_references(cx: &mut TestAppContext) {
 
 #[test]
 fn picker_source_never_reads_plaintext_credentials() {
-    let source = include_str!("picker.rs");
+    let source = concat!(include_str!("picker.rs"), include_str!("repository.rs"),);
 
     assert!(source.contains("list_summaries"));
     assert!(!source.contains("get_plaintext"));

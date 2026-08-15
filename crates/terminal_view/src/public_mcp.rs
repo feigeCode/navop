@@ -62,7 +62,7 @@ fn live_terminal_session_id(
     match kind {
         TerminalConnectionKind::Local => Some(format!("local-terminal-{nonce}")),
         TerminalConnectionKind::Ssh => connection_id.map(|id| format!("ssh-terminal-{id}-{nonce}")),
-        TerminalConnectionKind::Serial => None,
+        TerminalConnectionKind::Serial | TerminalConnectionKind::Telnet => None,
     }
 }
 
@@ -517,6 +517,7 @@ fn host_label(terminal: &Terminal) -> String {
             TerminalConnectionKind::Local => "local terminal",
             TerminalConnectionKind::Ssh => "ssh terminal",
             TerminalConnectionKind::Serial => "serial terminal",
+            TerminalConnectionKind::Telnet => "telnet terminal",
         })
         .to_string()
 }
@@ -526,6 +527,7 @@ fn map_kind(kind: TerminalConnectionKind) -> McpKind {
         TerminalConnectionKind::Local => McpKind::Local,
         TerminalConnectionKind::Ssh => McpKind::Ssh,
         TerminalConnectionKind::Serial => McpKind::Serial,
+        TerminalConnectionKind::Telnet => McpKind::Telnet,
     }
 }
 

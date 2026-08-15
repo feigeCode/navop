@@ -33,6 +33,7 @@ pub(crate) fn build_connection_open_strategy(
             workspace,
         }),
         ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
+        ConnectionType::Telnet => Box::new(TelnetOpenStrategy { connection }),
         ConnectionType::PortForwarding => Box::new(PortForwardingOpenStrategy { connection }),
         ConnectionType::Rdp => Box::new(RemoteDesktopOpenStrategy {
             connection,
@@ -218,6 +219,22 @@ impl ConnectionOpenStrategy for SerialOpenStrategy {
         cx: &mut Context<HomePage>,
     ) {
         home.open_serial_terminal_with_mode(self.connection, mode, window, cx);
+    }
+}
+
+struct TelnetOpenStrategy {
+    connection: StoredConnection,
+}
+
+impl ConnectionOpenStrategy for TelnetOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        home: &mut HomePage,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        home.open_telnet_terminal_with_mode(self.connection, mode, window, cx);
     }
 }
 

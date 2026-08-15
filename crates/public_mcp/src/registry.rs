@@ -23,6 +23,7 @@ pub enum TerminalConnectionKind {
     Local,
     Ssh,
     Serial,
+    Telnet,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

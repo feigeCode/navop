@@ -218,6 +218,8 @@ fn remote_detail(entry: &SessionLogEntry) -> Option<String> {
         RecordingBackend::Serial => {
             serial_port(entry).map(|value| format!("{}: {value}", t!("SessionLogs.serial_port")))
         }
+        RecordingBackend::Telnet => remote_identity(entry)
+            .map(|value| format!("{}: {value}", t!("SessionLogs.remote_identity"))),
         RecordingBackend::Local => None,
     }
 }
@@ -236,6 +238,7 @@ fn backend_name(backend: RecordingBackend) -> String {
         RecordingBackend::Local => t!("SessionLogs.local").to_string(),
         RecordingBackend::Ssh => t!("SessionLogs.ssh").to_string(),
         RecordingBackend::Serial => t!("SessionLogs.serial").to_string(),
+        RecordingBackend::Telnet => t!("SessionLogs.telnet").to_string(),
     }
 }
 
@@ -244,6 +247,7 @@ fn backend_icon(backend: RecordingBackend, cx: &gpui::App) -> impl IntoElement {
         RecordingBackend::Local => IconName::Terminal,
         RecordingBackend::Ssh => IconName::SquareTerminal,
         RecordingBackend::Serial => IconName::SerialPort,
+        RecordingBackend::Telnet => IconName::SquareTerminal,
     };
     div()
         .flex_shrink_0()

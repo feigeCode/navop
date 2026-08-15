@@ -1,3 +1,4 @@
+use gpui::prelude::FluentBuilder;
 use gpui::{
     ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
@@ -41,8 +42,7 @@ impl Render for CredentialForm {
                                 cx.notify();
                             }))
                             .child(Tab::new().label("基本信息"))
-                            .child(Tab::new().label("SSH 密钥"))
-                            .child(Tab::new().label("同步设置")),
+                            .child(Tab::new().label("SSH 密钥")),
                     ),
             )
             .child(
@@ -57,7 +57,6 @@ impl Render for CredentialForm {
                         match active_tab {
                             0 => self.render_basic_tab(cx).into_any_element(),
                             1 => self.render_ssh_key_tab(cx).into_any_element(),
-                            2 => self.render_sync_tab(cx).into_any_element(),
                             _ => div().into_any_element(),
                         },
                     )),
@@ -81,24 +80,27 @@ impl CredentialForm {
                 Input::new(&self.name_input).w_full(),
                 cx,
             ))
-            .child(form_field(
-                "类型",
-                "支持多选，用于分类和搜索；不会限制可引用这条凭据的连接类型。",
-                self.render_kind_picker(cx),
-                cx,
-            ))
+            .when(self.is_editing(), |this| {
+                this.child(form_field(
+                    "类型",
+                    "支持多选，用于分类和搜索；不会限制可引用这条凭据的连接类型。",
+                    self.render_kind_picker(cx),
+                    cx,
+                ))
+            })
             .child(form_field(
                 "用户名",
-                "可选；引用凭据时会自动填入支持用户名的连接。",
+                "可选；可以留空只保存密码。连接中手工填写的用户名可与这里的密码组合使用。",
                 Input::new(&self.username_input).w_full(),
                 cx,
             ))
             .child(form_field(
                 "密码",
-                "留空表示不保存密码；编辑时清空会删除原密码。",
+                "可独立保存，也可与这里的用户名一起引用；编辑时清空会删除原密码。",
                 Input::new(&self.password_input).w_full().mask_toggle(),
                 cx,
             ))
+            .child(self.render_sync_settings(cx))
     }
 
     fn render_kind_picker(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
@@ -266,7 +268,7 @@ impl CredentialForm {
             ))
     }
 
-    fn render_sync_tab(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render_sync_settings(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
             .gap_4()
@@ -384,7 +386,7 @@ mod tests {
         assert!(render.contains("TabBar::new(\"credential-form-tabs\")"));
         assert!(render.contains("Tab::new().label(\"基本信息\")"));
         assert!(render.contains("Tab::new().label(\"SSH 密钥\")"));
-        assert!(render.contains("Tab::new().label(\"同步设置\")"));
+        assert!(!render.contains("Tab::new().label(\"同步设置\")"));
         assert!(render.contains(".id(\"credential-form-content\")"));
         assert!(render.contains(".min_h_0()"));
         assert!(render.contains(".overflow_hidden()"));
@@ -395,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_fields_are_split_across_focused_tabs() {
+    fn credential_fields_are_grouped_across_basic_and_ssh_tabs() {
         let source = include_str!("form_render.rs");
         let basic = source
             .split("fn render_basic_tab")
@@ -405,13 +407,13 @@ mod tests {
         let ssh_key = source
             .split("fn render_ssh_key_tab")
             .nth(1)
-            .and_then(|source| source.split("fn render_sync_tab").next())
+            .and_then(|source| source.split("fn render_sync_settings").next())
             .expect("SSH key tab");
         let sync = source
-            .split("fn render_sync_tab")
+            .split("fn render_sync_settings")
             .nth(1)
             .and_then(|source| source.split("fn info_panel").next())
-            .expect("sync tab");
+            .expect("sync settings");
 
         for field in [
             "self.name_input",
@@ -421,6 +423,8 @@ mod tests {
         ] {
             assert!(basic.contains(field));
         }
+        assert!(basic.contains(".when(self.is_editing(),"));
+        assert!(basic.contains("self.render_sync_settings(cx)"));
         assert!(source.contains("Popover::new(\"credential-kind-picker\")"));
         assert!(source.contains("Checkbox::new(format!("));
         assert!(source.contains(".dropdown_caret(true)"));
@@ -436,5 +440,14 @@ mod tests {
             assert!(ssh_key.contains(field));
         }
         assert!(sync.contains("credential-sync-enabled"));
+    }
+
+    #[test]
+    fn new_credentials_hide_applicable_type_and_keep_sync_in_basic_info() {
+        let render = include_str!("form_render.rs");
+
+        assert!(render.contains(".when(self.is_editing(),"));
+        assert!(render.contains("self.render_sync_settings(cx)"));
+        assert!(!render.contains("Tab::new().label(\"同步设置\")"));
     }
 }

@@ -2,7 +2,8 @@
 
 use connection_form::credential::{
     CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
+    CredentialReferencePicker, ManualCredentialOverride, create_credential_picker,
+    resolve_connection_for_runtime,
 };
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -570,7 +571,7 @@ impl RedisFormWindow {
             window,
             cx,
         );
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
             }),
@@ -579,6 +580,25 @@ impl RedisFormWindow {
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
         ];
+        for binding in [
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &username_input,
+                CredentialField::Username,
+            ),
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &password_input,
+                CredentialField::Password,
+            ),
+            ManualCredentialOverride::new(
+                &sentinel_credential_picker,
+                &sentinel_password_input,
+                CredentialField::Password,
+            ),
+        ] {
+            subscriptions.push(binding.subscribe(window, cx));
+        }
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -996,28 +1016,17 @@ impl RedisFormWindow {
 
     /// 渲染基本信息标签页
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let credential_picker = self.credential_picker.read(cx);
-        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
-        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
-
         v_flex()
             .gap_2()
             .child(self.render_form_row(&t!("Redis.name"), Input::new(&self.name_input)))
             .child(self.render_form_row(&t!("Redis.host"), Input::new(&self.host_input)))
             .child(self.render_form_row(&t!("Redis.port"), Input::new(&self.port_input)))
-            .child(self.render_form_row(
-                &t!("Redis.username"),
-                Input::new(&self.username_input).disabled(username_referenced),
-            ))
+            .child(self.render_form_row(&t!("Redis.username"), Input::new(&self.username_input)))
             .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
-            .child(
-                self.render_form_row(
-                    &t!("Redis.password"),
-                    Input::new(&self.password_input)
-                        .mask_toggle()
-                        .disabled(password_referenced),
-                ),
-            )
+            .child(self.render_form_row(
+                &t!("Redis.password"),
+                Input::new(&self.password_input).mask_toggle(),
+            ))
             .child(self.render_form_row(&t!("Redis.db_index"), Input::new(&self.db_index_input)))
             .child(self.render_form_row(
                 &t!("Redis.workspace"),
@@ -1073,10 +1082,6 @@ impl RedisFormWindow {
     /// 渲染连接模式标签页
     fn render_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode;
-        let sentinel_password_referenced = self
-            .sentinel_credential_picker
-            .read(cx)
-            .field_referenced(CredentialField::Password);
 
         v_flex()
             .gap_2()
@@ -1125,14 +1130,10 @@ impl RedisFormWindow {
                     Input::new(&self.sentinel_nodes_input),
                 ))
                 .child(self.render_form_row("钥匙串", self.sentinel_credential_picker.clone()))
-                .child(
-                    self.render_form_row(
-                        &t!("Redis.sentinel_password"),
-                        Input::new(&self.sentinel_password_input)
-                            .mask_toggle()
-                            .disabled(sentinel_password_referenced),
-                    ),
-                )
+                .child(self.render_form_row(
+                    &t!("Redis.sentinel_password"),
+                    Input::new(&self.sentinel_password_input).mask_toggle(),
+                ))
             })
             // 集群模式配置
             .when(mode == ModeSelection::Cluster, |this| {

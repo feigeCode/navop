@@ -1,16 +1,14 @@
-use gpui::{App, AppContext, Context, Entity, EventEmitter, SharedString, Window};
+use gpui::{AppContext, Context, Entity, EventEmitter, SharedString, Window};
 use gpui_component::{
     IndexPath,
     select::{SelectEvent, SelectState},
 };
-use one_core::storage::{
-    CredentialReference, CredentialRepository, CredentialSummary, GlobalStorageState,
-};
+use one_core::storage::{CredentialReference, CredentialSummary};
 
 use super::{
     CredentialCapabilities, CredentialField, CredentialSelectItem, CredentialSelectValue,
-    apply_field_selection, build_reference, credential_select_items, normalize_reference,
-    summary_matches_reference,
+    apply_field_selection, build_reference, credential_select_items, has_selected_field,
+    load_summaries, normalize_reference, summary_matches_reference,
 };
 
 #[derive(Clone, Debug)]
@@ -106,19 +104,6 @@ fn subscribe_to_select<T: 'static>(
     .detach();
 }
 
-fn load_summaries(cx: &App) -> (Vec<CredentialSummary>, Option<SharedString>) {
-    let Some(repository) = cx
-        .try_global::<GlobalStorageState>()
-        .and_then(|state| state.storage.get::<CredentialRepository>())
-    else {
-        return (Vec::new(), None);
-    };
-    match repository.list_summaries() {
-        Ok(summaries) => (summaries, None),
-        Err(_) => (Vec::new(), Some("无法加载钥匙串列表，请稍后重试。".into())),
-    }
-}
-
 impl CredentialReferencePicker {
     fn new(
         config: CredentialPickerConfig,
@@ -163,6 +148,17 @@ impl CredentialReferencePicker {
             CredentialField::Password => reference.password,
             CredentialField::PrivateKey => reference.private_key,
             CredentialField::Passphrase => reference.passphrase,
+        }
+    }
+
+    pub fn use_manual_field(
+        &mut self,
+        field: CredentialField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.field_referenced(field) {
+            self.set_field_selection(field, false, window, cx);
         }
     }
 
@@ -211,6 +207,15 @@ impl CredentialReferencePicker {
         cx: &mut Context<Self>,
     ) {
         self.apply_field_value(field, selected, cx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn use_manual_field_without_window(
+        &mut self,
+        field: CredentialField,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_field_value(field, false, cx);
     }
 
     #[cfg(test)]
@@ -292,8 +297,4 @@ fn selected_value(reference: Option<&CredentialReference>) -> CredentialSelectVa
     reference
         .map(|reference| CredentialSelectValue::Credential(reference.credential_id))
         .unwrap_or(CredentialSelectValue::Manual)
-}
-
-fn has_selected_field(reference: &CredentialReference) -> bool {
-    reference.username || reference.password || reference.private_key || reference.passphrase
 }

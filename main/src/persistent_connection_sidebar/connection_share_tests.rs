@@ -1,6 +1,6 @@
 use one_core::storage::{
     JumpServerConfig, MongoDBParams, ProxyConfig, ProxyType, SshAuthMethod, SshParams,
-    StoredConnection,
+    StoredConnection, TelnetLoginStep, TelnetParams,
 };
 
 use super::{connection_full_info_text_for_locale, connection_share_text_for_locale};
@@ -288,4 +288,33 @@ fn full_info_redacts_private_key_payloads_even_when_their_json_shape_is_unexpect
     ] {
         assert!(!text.contains(private_key_body));
     }
+}
+
+#[test]
+fn full_info_redacts_telnet_login_script_send_values() {
+    let connection = StoredConnection::new_telnet(
+        "Telnet Switch".to_string(),
+        TelnetParams {
+            host: "switch.example.test".to_string(),
+            port: 23,
+            login_script: vec![
+                TelnetLoginStep {
+                    expect: "Username:".to_string(),
+                    send: "admin".to_string(),
+                },
+                TelnetLoginStep {
+                    expect: "Password:".to_string(),
+                    send: "telnet-password-secret".to_string(),
+                },
+            ],
+        },
+        None,
+    );
+
+    let text = connection_full_info_text_for_locale(&connection, "en").unwrap();
+    assert!(text.contains("switch.example.test"));
+    assert!(text.contains("Username:"));
+    assert!(text.contains("Password:"));
+    assert!(!text.contains("telnet-password-secret"));
+    assert!(text.contains("Redacted login script credential"));
 }

@@ -51,6 +51,7 @@ pub enum ConnectionType {
     Redis,
     MongoDB,
     Serial,
+    Telnet,
     PortForwarding,
     Rdp,
     Vnc,
@@ -65,6 +66,7 @@ impl fmt::Display for ConnectionType {
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Serial => "Serial",
+            ConnectionType::Telnet => "Telnet",
             ConnectionType::PortForwarding => "PortForwarding",
             ConnectionType::Rdp => "Rdp",
             ConnectionType::Vnc => "Vnc",
@@ -82,6 +84,7 @@ impl ConnectionType {
             ConnectionType::Redis,
             ConnectionType::MongoDB,
             ConnectionType::Serial,
+            ConnectionType::Telnet,
             ConnectionType::PortForwarding,
             ConnectionType::Rdp,
             ConnectionType::Vnc,
@@ -94,6 +97,7 @@ impl ConnectionType {
             "Redis" => ConnectionType::Redis,
             "MongoDB" => ConnectionType::MongoDB,
             "Serial" => ConnectionType::Serial,
+            "Telnet" => ConnectionType::Telnet,
             "PortForwarding" => ConnectionType::PortForwarding,
             "Rdp" => ConnectionType::Rdp,
             "Vnc" => ConnectionType::Vnc,
@@ -109,6 +113,7 @@ impl ConnectionType {
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Serial => "Serial",
+            ConnectionType::Telnet => "Telnet",
             ConnectionType::PortForwarding => "Port Forwarding",
             ConnectionType::Rdp => "RDP",
             ConnectionType::Vnc => "VNC",
@@ -123,6 +128,7 @@ impl ConnectionType {
             ConnectionType::Redis => IconName::Redis,
             ConnectionType::MongoDB => IconName::MongoDB,
             ConnectionType::Serial => IconName::SerialPort,
+            ConnectionType::Telnet => IconName::SquareTerminalColor,
             ConnectionType::PortForwarding => IconName::PortForwardingColor,
             ConnectionType::Rdp => IconName::Rdp,
             ConnectionType::Vnc => IconName::Vnc,
@@ -936,6 +942,46 @@ impl Default for SerialParams {
     }
 }
 
+/// Telnet 登录脚本步骤：匹配到服务端输出后，自动发送配置的内容。
+///
+/// 对应 Xshell / SecureCRT 的 expect/send 登录脚本模型。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelnetLoginStep {
+    /// 期望匹配的文本；支持 `\r`、`\n`、`\t`、`\xNN` 转义。
+    pub expect: String,
+    /// 匹配后发送的内容；支持与 `expect` 相同的转义，
+    /// 且不以 `\r`/`\n` 结尾时自动补一个回车。
+    #[serde(default)]
+    pub send: String,
+}
+
+/// Telnet 连接参数
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelnetParams {
+    /// 主机地址
+    pub host: String,
+    /// 端口（默认 23）
+    #[serde(default = "default_telnet_port")]
+    pub port: u16,
+    /// 可选登录脚本；旧连接没有该字段时保持为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub login_script: Vec<TelnetLoginStep>,
+}
+
+fn default_telnet_port() -> u16 {
+    23
+}
+
+impl Default for TelnetParams {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: 23,
+            login_script: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PortForwardingKind {
     #[default]
@@ -1376,6 +1422,10 @@ fn default_serial_name(name: String, params: &SerialParams) -> String {
     trimmed_or_default(name, params.port_name.trim().to_string())
 }
 
+fn default_telnet_name(name: String, params: &TelnetParams) -> String {
+    trimmed_or_default(name, host_port_name(&params.host, params.port))
+}
+
 fn default_port_forwarding_name(name: String, params: &PortForwardingParams) -> String {
     let default_name = match params.kind {
         PortForwardingKind::Local => format!(
@@ -1563,6 +1613,29 @@ impl StoredConnection {
         }
     }
 
+    pub fn new_telnet(name: String, params: TelnetParams, workspace_id: Option<i64>) -> Self {
+        let name = default_telnet_name(name, &params);
+        Self {
+            id: None,
+            credential_revision: None,
+            name,
+            connection_type: ConnectionType::Telnet,
+            params: serde_json::to_string(&params).expect("TelnetParams 序列化不应失败"),
+            workspace_id,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        }
+    }
+
     pub fn new_port_forwarding(
         name: String,
         params: PortForwardingParams,
@@ -1591,6 +1664,10 @@ impl StoredConnection {
     }
 
     pub fn to_serial_params(&self) -> Result<SerialParams, serde_json::Error> {
+        serde_json::from_str(&self.params)
+    }
+
+    pub fn to_telnet_params(&self) -> Result<TelnetParams, serde_json::Error> {
         serde_json::from_str(&self.params)
     }
 
@@ -1626,7 +1703,9 @@ impl StoredConnection {
     }
 
     /// 对 params 中的敏感字段进行加密，返回加密后的 params 字符串。
-    /// 敏感字段包括：password、passphrase、private_key、private_key_content 以及嵌套结构中的同类字段。
+    ///
+    /// 敏感字段包括：password、passphrase、private_key、private_key_content、
+    /// Telnet 登录脚本的 send 值，以及嵌套结构中的同类字段。
     pub fn encrypt_params(&self) -> String {
         encrypt_json_passwords(&self.params_for_storage())
     }
@@ -2260,6 +2339,8 @@ fn is_sensitive_field(key: &str) -> bool {
         || key == "passphrase"
         || key == "private_key"
         || key == "private_key_content"
+        // Telnet 登录脚本的自动发送内容通常包含密码/enable 密码/token。
+        || key == "send"
         || key.ends_with("_password")
         || key.ends_with("_passphrase")
         || key.ends_with("_private_key")
@@ -2900,5 +2981,78 @@ mod serial_tests {
         params.icon = None;
         params.os_id = None;
         assert!(matches!(params.os_icon(), IconName::LinuxPenguinColor));
+    }
+
+    #[test]
+    fn telnet_params_roundtrip_with_login_script() {
+        let params = TelnetParams {
+            host: "192.168.1.1".to_string(),
+            port: 2323,
+            login_script: vec![
+                TelnetLoginStep {
+                    expect: "login:".to_string(),
+                    send: "admin".to_string(),
+                },
+                TelnetLoginStep {
+                    expect: "Password:".to_string(),
+                    send: "secret".to_string(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&params).expect("TelnetParams 应可序列化");
+        let parsed: TelnetParams = serde_json::from_str(&json).expect("TelnetParams 应可反序列化");
+        assert_eq!(parsed, params);
+    }
+
+    #[test]
+    fn telnet_params_defaults_login_script_for_legacy_json() {
+        let params: TelnetParams = serde_json::from_str(r#"{"host":"10.0.0.1"}"#)
+            .expect("旧 Telnet 连接缺少 login_script 时应可反序列化");
+        assert_eq!(params.host, "10.0.0.1");
+        assert_eq!(params.port, 23);
+        assert!(params.login_script.is_empty());
+
+        let json = serde_json::to_string(&params).expect("TelnetParams 应可序列化");
+        assert!(!json.contains("login_script"));
+    }
+
+    #[test]
+    fn stored_connection_telnet_roundtrip() {
+        let params = TelnetParams {
+            host: "switch.example.com".to_string(),
+            port: 23,
+            login_script: vec![TelnetLoginStep {
+                expect: "Username:".to_string(),
+                send: "admin".to_string(),
+            }],
+        };
+        let conn = StoredConnection::new_telnet(String::new(), params, Some(7));
+        assert_eq!(conn.connection_type, ConnectionType::Telnet);
+        assert_eq!(conn.name, "switch.example.com:23");
+        assert_eq!(conn.workspace_id, Some(7));
+
+        let parsed = conn.to_telnet_params().expect("Telnet 参数应可反序列化");
+        assert_eq!(parsed.host, "switch.example.com");
+        assert_eq!(parsed.port, 23);
+        assert_eq!(parsed.login_script.len(), 1);
+        assert_eq!(parsed.login_script[0].expect, "Username:");
+        assert_eq!(parsed.login_script[0].send, "admin");
+    }
+
+    #[test]
+    fn telnet_login_script_send_is_a_sensitive_field() {
+        // encrypt_params/decrypt_params 依赖该字段名识别 Telnet 登录脚本中的
+        // 自动发送凭据；不要退回到只识别 password/passphrase/private_key。
+        assert!(is_sensitive_field("send"));
+        assert!(is_sensitive_field("password"));
+        assert!(is_sensitive_field("passphrase"));
+    }
+
+    #[test]
+    fn connection_type_telnet_methods() {
+        assert_eq!(ConnectionType::Telnet.label(), "Telnet");
+        assert_eq!(ConnectionType::from_str("Telnet"), ConnectionType::Telnet);
+        assert_eq!(format!("{}", ConnectionType::Telnet), "Telnet");
+        assert!(ConnectionType::all().contains(&ConnectionType::Telnet));
     }
 }

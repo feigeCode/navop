@@ -44,6 +44,7 @@ pub(super) fn backend_label(backend: RecordingBackend) -> &'static str {
         RecordingBackend::Local => "local",
         RecordingBackend::Ssh => "ssh",
         RecordingBackend::Serial => "serial",
+        RecordingBackend::Telnet => "telnet",
     }
 }
 

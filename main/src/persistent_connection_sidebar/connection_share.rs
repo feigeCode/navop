@@ -21,6 +21,7 @@ pub(super) fn connection_share_text_for_locale(
         ConnectionType::Redis => redis_fields(locale, connection.to_redis_params().ok()?),
         ConnectionType::MongoDB => mongodb_fields(locale, connection.to_mongodb_params().ok()?),
         ConnectionType::Serial => serial_fields(locale, connection.to_serial_params().ok()?),
+        ConnectionType::Telnet => telnet_fields(locale, connection.to_telnet_params().ok()?),
         ConnectionType::PortForwarding => {
             forwarding_fields(locale, connection.to_port_forwarding_params().ok()?)
         }
@@ -42,6 +43,7 @@ pub(crate) fn connection_full_info_text_for_locale(
 ) -> Option<String> {
     let mut params = serde_json::from_str::<Value>(&connection.params_for_storage()).ok()?;
     redact_embedded_private_keys(&mut params, locale);
+    redact_telnet_login_script_sends(&mut params, locale);
     let params = serde_json::to_string_pretty(&params).ok()?;
     let separator = tr(locale, "Connection.Share.separator");
     let mut lines = vec![
@@ -185,6 +187,13 @@ fn serial_fields(locale: &str, params: SerialParams) -> Vec<(&'static str, Strin
     ]
 }
 
+fn telnet_fields(
+    _locale: &str,
+    params: one_core::storage::TelnetParams,
+) -> Vec<(&'static str, String)> {
+    vec![("host", params.host), ("port", params.port.to_string())]
+}
+
 fn forwarding_fields(locale: &str, params: PortForwardingParams) -> Vec<(&'static str, String)> {
     let mut fields = vec![
         ("mode", tr(locale, forwarding_mode_key(params.kind))),
@@ -225,6 +234,42 @@ fn full_info_line(locale: &str, field: &str, value: &str, separator: &str) -> St
         "{}{separator}{value}",
         tr(locale, &format!("Connection.FullInfo.{field}"))
     )
+}
+
+/// “完整信息”复制/导出默认隐藏 Telnet 登录脚本的 send 值。
+///
+/// 这些值通常包含密码、enable 密码或 token；即使本地数据库中已经加密，
+/// 也不应在用户复制“全部连接信息”时默认明文输出。
+fn redact_telnet_login_script_sends(value: &mut Value, locale: &str) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if key == "login_script" {
+                    if let Some(steps) = value.as_array_mut() {
+                        for step in steps {
+                            if let Some(send) = step
+                                .as_object_mut()
+                                .and_then(|fields| fields.get_mut("send"))
+                            {
+                                *send = Value::String(tr(
+                                    locale,
+                                    "Connection.FullInfo.login_script_send_redacted",
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    redact_telnet_login_script_sends(value, locale);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_telnet_login_script_sends(value, locale);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn redact_embedded_private_keys(value: &mut Value, locale: &str) {
@@ -307,6 +352,7 @@ fn connection_type_key(connection_type: ConnectionType) -> &'static str {
         ConnectionType::Redis => "Connection.Share.type_redis",
         ConnectionType::MongoDB => "Connection.Share.type_mongodb",
         ConnectionType::Serial => "Connection.Share.type_serial",
+        ConnectionType::Telnet => "Connection.Share.type_telnet",
         ConnectionType::PortForwarding => "Connection.Share.type_port_forwarding",
         ConnectionType::Rdp => "Connection.Share.type_rdp",
         ConnectionType::Vnc => "Connection.Share.type_vnc",

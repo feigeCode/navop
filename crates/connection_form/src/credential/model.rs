@@ -261,7 +261,7 @@ fn normalize_auth_fields(reference: &mut CredentialReference) {
     }
 }
 
-fn has_selected_field(reference: &CredentialReference) -> bool {
+pub(super) fn has_selected_field(reference: &CredentialReference) -> bool {
     reference.username || reference.password || reference.private_key || reference.passphrase
 }
 

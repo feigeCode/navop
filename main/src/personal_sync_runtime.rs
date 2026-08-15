@@ -417,6 +417,10 @@ fn connection_endpoint(connection: &StoredConnection) -> Option<String> {
             .to_serial_params()
             .ok()
             .map(|params| params.port_name),
+        ConnectionType::Telnet => connection
+            .to_telnet_params()
+            .ok()
+            .map(|params| format!("{}:{}", params.host, params.port)),
         ConnectionType::Rdp | ConnectionType::Vnc => remote_desktop_endpoint(connection),
         ConnectionType::PortForwarding => port_forwarding_endpoint(connection),
         _ => None,

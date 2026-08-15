@@ -114,6 +114,35 @@ fn strict_resolution_preserves_unselected_manual_fields() {
 }
 
 #[test]
+fn strict_resolution_supports_vault_username_with_manual_password() {
+    let mut credential = CredentialEntry::new("Shared username", "username");
+    credential.username = Some("vault-user".to_string());
+    credential.password = Some("vault-password".to_string());
+    let reference = CredentialReference {
+        credential_id: 1,
+        credential_cloud_id: None,
+        username: true,
+        password: false,
+        private_key: false,
+        passphrase: false,
+    };
+    let resolved = resolve_credential_reference_strict(
+        ReferencedCredentialFields::new(
+            Some("manual-user".to_string()),
+            Some("manual-password".to_string()),
+            None,
+            None,
+        ),
+        &reference,
+        Some(&credential),
+    )
+    .expect("resolve selected username");
+
+    assert_eq!(Some("vault-user"), resolved.username.as_deref());
+    assert_eq!(Some("manual-password"), resolved.password.as_deref());
+}
+
+#[test]
 fn legacy_connection_json_without_credential_reference_still_deserializes() {
     let ssh = r#"{"host":"example.com","port":22,"username":"root","auth_method":{"Password":{"password":"pw"}},"terminal_encoding":"utf8","terminal_type":"xterm-256color"}"#;
     let db = r#"{"database_type":"MySQL","host":"localhost","port":3306,"username":"root","password":"pw","database":null,"service_name":null,"sid":null}"#;
