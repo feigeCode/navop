@@ -291,13 +291,26 @@ fn main() {
         let options = main_window_options(window_bounds);
 
         cx.spawn(async move |cx| {
-            let main_window = cx.open_window(options, |window, cx| {
+            let main_window = match cx.open_window(options, |window, cx| {
                 window.activate_window();
                 app_init::init_window_systems(window, cx);
                 update::schedule_update_check(window, cx);
                 let view = cx.new(|cx| OnetCliApp::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
-            })?;
+            }) {
+                Ok(window) => window,
+                Err(error) => {
+                    tracing::error!(error = %error, "failed to open the Navop main window");
+                    eprintln!("Failed to open the Navop main window: {error:#}");
+                    let _ = cx.update(|cx| {
+                        onetcli_app::shutdown_ssh_sessions_and_quit(
+                            cx,
+                            "main window initialization failed",
+                        );
+                    });
+                    return Ok::<_, anyhow::Error>(());
+                }
+            };
             let main_window = main_window.into();
 
             while let Ok(request) = startup_request_rx.recv().await {
@@ -440,6 +453,22 @@ mod embedded_cli_removal_tests {
 
         assert!(source.contains("if !one_core::app_paths::is_portable()"));
         assert!(source.contains("file_association::schedule_registration(cx)"));
+    }
+
+    #[test]
+    fn main_window_open_failure_is_reported_and_quits() {
+        let source = include_str!("main.rs");
+        let open = source
+            .find("let main_window = match cx.open_window")
+            .expect("main window open error handling");
+        let request_loop = source[open..]
+            .find("while let Ok(request)")
+            .expect("startup request loop");
+        let error_path = &source[open..open + request_loop];
+
+        assert!(error_path.contains("failed to open the Navop main window"));
+        assert!(error_path.contains("Failed to open the Navop main window: {error:#}"));
+        assert!(error_path.contains("shutdown_ssh_sessions_and_quit"));
     }
 
     #[test]
