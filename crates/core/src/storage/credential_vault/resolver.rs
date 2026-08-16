@@ -3,8 +3,8 @@ use anyhow::{Result, bail};
 use crate::storage::traits::Repository;
 use crate::storage::{
     ConnectionType, CredentialRepository, DbConnectionConfig, MongoDBParams, ProxyConfig,
-    RedisParams, ReferencedCredentialFields, RemoteDesktopParams, SshAuthMethod, SshParams,
-    StoredConnection, resolve_credential_reference_strict,
+    RedisParams, ReferencedCredentialFields, RemoteDesktopParams, SshAccountExpect, SshAuthMethod,
+    SshParams, StoredConnection, resolve_credential_reference_strict,
 };
 
 impl CredentialRepository {
@@ -36,6 +36,7 @@ impl CredentialRepository {
     }
 
     pub fn resolve_ssh(&self, mut params: SshParams) -> Result<SshParams> {
+        params.account_expect = SshAccountExpect::default();
         let Some(reference) = params.credential_reference.as_ref() else {
             self.resolve_optional_proxy(params.proxy.as_mut())?;
             self.resolve_optional_jump(params.jump_server.as_mut())?;
@@ -53,8 +54,7 @@ impl CredentialRepository {
             credential.as_ref(),
         )?;
         if let Some(credential) = credential.as_ref() {
-            params.account_expect =
-                merge_ssh_expect(credential.ssh_expect.clone(), params.account_expect);
+            params.account_expect = credential.ssh_expect.clone();
         }
         self.resolve_optional_proxy(params.proxy.as_mut())?;
         self.resolve_optional_jump(params.jump_server.as_mut())?;
@@ -301,22 +301,4 @@ fn reject_conflicting_ssh_fields(reference: &crate::storage::CredentialReference
         bail!("a credential reference cannot select password and private key together");
     }
     Ok(())
-}
-
-fn merge_ssh_expect(
-    credential_default: crate::storage::SshAccountExpect,
-    connection_override: crate::storage::SshAccountExpect,
-) -> crate::storage::SshAccountExpect {
-    crate::storage::SshAccountExpect {
-        username: if connection_override.username.is_empty() {
-            credential_default.username
-        } else {
-            connection_override.username
-        },
-        password: if connection_override.password.is_empty() {
-            credential_default.password
-        } else {
-            connection_override.password
-        },
-    }
 }

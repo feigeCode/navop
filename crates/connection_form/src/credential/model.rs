@@ -139,46 +139,13 @@ pub fn normalize_reference(
     summary: Option<&CredentialSummary>,
 ) -> CredentialReference {
     if let Some(summary) = summary {
-        reference.credential_id = summary.id;
-        reference.credential_cloud_id = summary.cloud_id.clone();
+        return default_reference(summary.id, capabilities, summary);
     }
     reference.username &= capabilities.username;
     reference.password &= capabilities.password;
     reference.private_key &= capabilities.private_key;
     reference.passphrase &= capabilities.passphrase;
     normalize_auth_fields(&mut reference);
-    if has_selected_field(&reference) {
-        return reference;
-    }
-    summary
-        .map(|summary| default_reference(reference.credential_id, capabilities, summary))
-        .unwrap_or(reference)
-}
-
-pub fn apply_field_selection(
-    mut reference: CredentialReference,
-    field: CredentialField,
-    selected: bool,
-) -> CredentialReference {
-    match field {
-        CredentialField::Username => reference.username = selected,
-        CredentialField::Password => {
-            reference.password = selected;
-            if selected {
-                reference.private_key = false;
-                reference.passphrase = false;
-            }
-        }
-        CredentialField::PrivateKey => {
-            reference.private_key = selected;
-            if selected {
-                reference.password = false;
-            } else {
-                reference.passphrase = false;
-            }
-        }
-        CredentialField::Passphrase => reference.passphrase = selected,
-    }
     reference
 }
 
@@ -259,10 +226,6 @@ fn normalize_auth_fields(reference: &mut CredentialReference) {
     if !reference.private_key {
         reference.passphrase = false;
     }
-}
-
-pub(super) fn has_selected_field(reference: &CredentialReference) -> bool {
-    reference.username || reference.password || reference.private_key || reference.passphrase
 }
 
 fn has_applicable_field(summary: &CredentialSummary, capabilities: CredentialCapabilities) -> bool {

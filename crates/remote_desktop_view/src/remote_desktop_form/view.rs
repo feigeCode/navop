@@ -32,6 +32,12 @@ impl RemoteDesktopFormWindow {
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let credential_is_manual = self
+            .credential_picker
+            .read(cx)
+            .selected_reference()
+            .is_none();
+
         v_flex()
             .gap_2()
             .child(self.render_form_row(
@@ -46,15 +52,17 @@ impl RemoteDesktopFormWindow {
                 t!("RemoteDesktopForm.label_port").to_string(),
                 Input::new(&self.port_input),
             ))
-            .child(self.render_form_row(
-                t!("RemoteDesktopForm.label_username").to_string(),
-                Input::new(&self.username_input),
-            ))
             .child(self.render_form_row("钥匙串".to_string(), self.credential_picker.clone()))
-            .child(self.render_form_row(
-                t!("RemoteDesktopForm.label_password").to_string(),
-                Input::new(&self.password_input).mask_toggle(),
-            ))
+            .when(credential_is_manual, |form| {
+                form.child(self.render_form_row(
+                    t!("RemoteDesktopForm.label_username").to_string(),
+                    Input::new(&self.username_input),
+                ))
+                .child(self.render_form_row(
+                    t!("RemoteDesktopForm.label_password").to_string(),
+                    Input::new(&self.password_input).mask_toggle(),
+                ))
+            })
             .child(self.render_form_row(
                 t!("RemoteDesktopForm.label_domain").to_string(),
                 Input::new(&self.domain_input),
@@ -96,6 +104,12 @@ impl RemoteDesktopFormWindow {
     }
 
     fn render_proxy_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let proxy_credential_is_manual = self
+            .proxy_credential_picker
+            .read(cx)
+            .selected_reference()
+            .is_none();
+
         v_flex()
             .gap_2()
             .child(
@@ -120,17 +134,19 @@ impl RemoteDesktopFormWindow {
                         Input::new(&self.proxy_port_input),
                     ))
                     .child(self.render_form_row(
-                        t!("RemoteDesktopForm.label_proxy_username").to_string(),
-                        Input::new(&self.proxy_username_input),
-                    ))
-                    .child(self.render_form_row(
                         "钥匙串".to_string(),
                         self.proxy_credential_picker.clone(),
                     ))
-                    .child(self.render_form_row(
-                        t!("RemoteDesktopForm.label_proxy_password").to_string(),
-                        Input::new(&self.proxy_password_input).mask_toggle(),
-                    ))
+                    .when(proxy_credential_is_manual, |form| {
+                        form.child(self.render_form_row(
+                            t!("RemoteDesktopForm.label_proxy_username").to_string(),
+                            Input::new(&self.proxy_username_input),
+                        ))
+                        .child(self.render_form_row(
+                            t!("RemoteDesktopForm.label_proxy_password").to_string(),
+                            Input::new(&self.proxy_password_input).mask_toggle(),
+                        ))
+                    })
             })
     }
 

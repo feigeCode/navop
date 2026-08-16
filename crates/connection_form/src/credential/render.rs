@@ -1,10 +1,5 @@
-use gpui::{
-    AnyElement, Context, IntoElement, ParentElement, Render, Styled, Window, div,
-    prelude::FluentBuilder as _,
-};
-use gpui_component::{
-    ActiveTheme, Disableable, checkbox::Checkbox, h_flex, select::Select, v_flex,
-};
+use gpui::{AnyElement, Context, IntoElement, ParentElement, Render, Styled, Window, div};
+use gpui_component::{ActiveTheme, select::Select, v_flex};
 use one_core::storage::CredentialSummary;
 
 use super::{CredentialField, CredentialReferencePicker};
@@ -12,7 +7,6 @@ use super::{CredentialField, CredentialReferencePicker};
 impl Render for CredentialReferencePicker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let summary = self.selected_summary();
-        let checkboxes = self.field_checkboxes(cx);
         let messages = self.messages(summary, cx);
 
         v_flex()
@@ -24,9 +18,6 @@ impl Render for CredentialReferencePicker {
                     .cleanable(false)
                     .placeholder("手工输入"),
             )
-            .when(!checkboxes.is_empty(), |this| {
-                this.child(h_flex().w_full().flex_wrap().gap_3().children(checkboxes))
-            })
             .children(messages)
     }
 }
@@ -37,45 +28,6 @@ impl CredentialReferencePicker {
         self.summaries
             .iter()
             .find(|summary| super::summary_matches_reference(summary, reference))
-    }
-
-    fn field_checkboxes(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut fields = Vec::new();
-        if self.capabilities.username {
-            fields.push(self.field_checkbox(CredentialField::Username, "用户名", false, cx));
-        }
-        if self.capabilities.password {
-            fields.push(self.field_checkbox(CredentialField::Password, "密码", false, cx));
-        }
-        if self.capabilities.private_key {
-            fields.push(self.field_checkbox(CredentialField::PrivateKey, "私钥", false, cx));
-        }
-        if self.capabilities.passphrase {
-            let disabled = !self.field_referenced(CredentialField::PrivateKey);
-            fields.push(self.field_checkbox(CredentialField::Passphrase, "私钥密码", disabled, cx));
-        }
-        if self.reference.is_some() {
-            fields
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn field_checkbox(
-        &self,
-        field: CredentialField,
-        label: &'static str,
-        disabled: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        Checkbox::new(format!("{}-{field:?}", self.id))
-            .label(label)
-            .checked(self.field_referenced(field))
-            .disabled(disabled)
-            .on_click(cx.listener(move |this, selected, window, cx| {
-                this.set_field_selection(field, *selected, window, cx);
-            }))
-            .into_any_element()
     }
 
     fn messages(

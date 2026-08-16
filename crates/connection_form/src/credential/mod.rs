@@ -1,16 +1,14 @@
-mod binding;
 mod model;
 mod picker;
 mod render;
 mod repository;
 mod runtime;
 
-pub use binding::ManualCredentialOverride;
+use model::summary_matches_reference;
 pub use model::{
     CredentialCapabilities, CredentialField, CredentialSelectItem, CredentialSelectValue,
-    apply_field_selection, build_reference, credential_select_items, normalize_reference,
+    build_reference, credential_select_items, normalize_reference,
 };
-use model::{has_selected_field, summary_matches_reference};
 #[cfg(test)]
 pub(crate) use picker::create_credential_picker_with_summaries;
 pub use picker::{

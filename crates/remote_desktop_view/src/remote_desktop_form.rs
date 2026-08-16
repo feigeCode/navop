@@ -6,8 +6,8 @@ mod selects;
 mod view;
 
 use connection_form::credential::{
-    CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, ManualCredentialOverride, create_credential_picker,
+    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker,
 };
 use connection_form::team::{
     TeamSelectItem, create_team_select, refresh_team_options, resolve_team_assignment,
@@ -117,7 +117,7 @@ impl RemoteDesktopFormWindow {
             window,
             cx,
         );
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
             }),
@@ -126,30 +126,6 @@ impl RemoteDesktopFormWindow {
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
         ];
-        for binding in [
-            ManualCredentialOverride::new(
-                &credential_picker,
-                &inputs.username,
-                CredentialField::Username,
-            ),
-            ManualCredentialOverride::new(
-                &credential_picker,
-                &inputs.password,
-                CredentialField::Password,
-            ),
-            ManualCredentialOverride::new(
-                &proxy_credential_picker,
-                &inputs.proxy_username,
-                CredentialField::Username,
-            ),
-            ManualCredentialOverride::new(
-                &proxy_credential_picker,
-                &inputs.proxy_password,
-                CredentialField::Password,
-            ),
-        ] {
-            subscriptions.push(binding.subscribe(window, cx));
-        }
         Self {
             protocol: config.protocol,
             focus_handle: cx.focus_handle(),

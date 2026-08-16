@@ -160,7 +160,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
 }
 
 #[test]
-fn resolver_inherits_credential_expect_and_allows_connection_overrides() {
+fn resolver_uses_only_credential_expect_and_ignores_connection_overrides() {
     with_master_key(|| {
         let (_temp, _connection, repository) = super::test_repository();
         let mut credential = CredentialEntry::new("Shared login", "username_password");
@@ -188,13 +188,31 @@ fn resolver_inherits_credential_expect_and_allows_connection_overrides() {
 
         let resolved = repository.resolve_ssh(connection).expect("resolve ssh");
 
-        assert_eq!(
-            resolved.account_expect.username.expect,
-            "Connection username:"
-        );
-        assert_eq!(resolved.account_expect.username.send, "override-user");
+        assert_eq!(resolved.account_expect.username.expect, "Vault username:");
+        assert!(resolved.account_expect.username.send.is_empty());
         assert_eq!(resolved.account_expect.password.expect, "Vault password:");
         assert!(resolved.account_expect.password.send.is_empty());
+    });
+}
+
+#[test]
+fn resolver_clears_legacy_connection_expect_without_a_credential_reference() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut connection = ssh_params(None);
+        connection.account_expect.username = TerminalExpectSend {
+            expect: "Legacy username:".to_string(),
+            send: "legacy-user".to_string(),
+        };
+        connection.account_expect.password = TerminalExpectSend {
+            expect: "Legacy password:".to_string(),
+            send: "legacy-password".to_string(),
+        };
+
+        let resolved = repository.resolve_ssh(connection).expect("resolve ssh");
+
+        assert!(resolved.account_expect.username.is_empty());
+        assert!(resolved.account_expect.password.is_empty());
     });
 }
 

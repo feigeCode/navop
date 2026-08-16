@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use connection_form::credential::{
-    CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, ManualCredentialOverride, create_credential_picker,
-    resolve_connection_for_runtime,
+    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
 };
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -1261,15 +1260,6 @@ fn credential_capabilities_for_fields(
     }
 }
 
-fn input_for_field<'a>(
-    values: &[(String, Entity<String>)],
-    inputs: &'a [Option<Entity<InputState>>],
-    field_name: &str,
-) -> Option<&'a Entity<InputState>> {
-    let index = values.iter().position(|(name, _)| name == field_name)?;
-    inputs.get(index)?.as_ref()
-}
-
 /// Event emitted when a connection is saved successfully
 #[derive(Clone, Debug)]
 pub enum DbConnectionFormEvent {
@@ -1456,7 +1446,7 @@ impl DbConnectionForm {
             window,
             cx,
         );
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
             }),
@@ -1465,27 +1455,6 @@ impl DbConnectionForm {
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
         ];
-        for (field_name, picker, field) in [
-            ("username", &credential_picker, CredentialField::Username),
-            ("password", &credential_picker, CredentialField::Password),
-            (
-                "proxy_username",
-                &proxy_credential_picker,
-                CredentialField::Username,
-            ),
-            (
-                "proxy_password",
-                &proxy_credential_picker,
-                CredentialField::Password,
-            ),
-        ] {
-            if let Some(input) = input_for_field(&field_values, &field_inputs, field_name) {
-                subscriptions.push(
-                    ManualCredentialOverride::new(picker, input, field).subscribe(window, cx),
-                );
-            }
-        }
-
         let form = Self {
             config,
             current_db_type,
@@ -2470,7 +2439,22 @@ impl DbConnectionForm {
         let visible_fields = current_tab_fields
             .iter()
             .enumerate()
-            .filter(|(_, field)| self.is_field_visible(field, cx))
+            .filter(|(_, field)| {
+                self.is_field_visible(field, cx)
+                    && match field.name.as_str() {
+                        "username" | "password" => self
+                            .credential_picker
+                            .read(cx)
+                            .selected_reference()
+                            .is_none(),
+                        "proxy_username" | "proxy_password" => self
+                            .proxy_credential_picker
+                            .read(cx)
+                            .selected_reference()
+                            .is_none(),
+                        _ => true,
+                    }
+            })
             .collect::<Vec<_>>();
 
         if visible_fields.is_empty() {

@@ -264,7 +264,7 @@ impl CredentialForm {
             ))
             .child(form_field(
                 "私钥密码",
-                "用于解锁加密私钥，可独立被连接字段引用。",
+                "用于解锁加密私钥；连接引用此钥匙串时会随私钥凭据一并使用。",
                 Input::new(&self.passphrase_input).w_full().mask_toggle(),
                 cx,
             ))
@@ -276,7 +276,7 @@ impl CredentialForm {
             .gap_4()
             .child(info_panel(
                 "自动登录（Expect）",
-                "这是与钥匙串账号绑定的可复用终端登录规则。引用此钥匙串的 SSH 连接会自动继承；连接页签中的同名配置可以单独覆盖。规则只在 SSH shell 打开后执行，不参与 SSH 协议认证。",
+                "这是与钥匙串账号绑定的可复用终端登录规则。引用此钥匙串的 SSH 连接会自动使用这些规则。规则只在 SSH shell 打开后执行，不参与 SSH 协议认证。",
                 cx,
             ))
             .child(form_field(

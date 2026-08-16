@@ -92,58 +92,35 @@ fn picker_selection_and_fields_follow_the_reference_contract(cx: &mut TestAppCon
         let picker = form.read(cx).picker.clone();
         picker.update(cx, |picker, cx| {
             picker.select_value(CredentialSelectValue::Credential(42), cx);
-            picker.select_field(CredentialField::PrivateKey, true, cx);
-        });
-        let picker = form.read(cx).picker.read(cx);
-        assert!(picker.field_referenced(CredentialField::PrivateKey));
-        assert!(picker.field_referenced(CredentialField::Passphrase));
-        assert!(!picker.field_referenced(CredentialField::Password));
-    });
-}
-
-#[gpui::test]
-fn manual_username_override_preserves_password_reference(cx: &mut TestAppContext) {
-    let form = with_picker(cx, |window, cx| {
-        create_credential_picker_with_summaries(
-            CredentialPickerConfig::new("credential-test", CredentialCapabilities::login()),
-            vec![summary()],
-            window,
-            cx,
-        )
-    });
-
-    cx.update(|cx| {
-        let picker = form.read(cx).picker.clone();
-        picker.update(cx, |picker, cx| {
-            picker.select_value(CredentialSelectValue::Credential(42), cx);
-            picker.use_manual_field_without_window(CredentialField::Username, cx);
-        });
-        let picker = form.read(cx).picker.read(cx);
-        assert!(!picker.field_referenced(CredentialField::Username));
-        assert!(picker.field_referenced(CredentialField::Password));
-    });
-}
-
-#[gpui::test]
-fn manual_password_override_preserves_username_reference(cx: &mut TestAppContext) {
-    let form = with_picker(cx, |window, cx| {
-        create_credential_picker_with_summaries(
-            CredentialPickerConfig::new("credential-test", CredentialCapabilities::login()),
-            vec![summary()],
-            window,
-            cx,
-        )
-    });
-
-    cx.update(|cx| {
-        let picker = form.read(cx).picker.clone();
-        picker.update(cx, |picker, cx| {
-            picker.select_value(CredentialSelectValue::Credential(42), cx);
-            picker.use_manual_field_without_window(CredentialField::Password, cx);
         });
         let picker = form.read(cx).picker.read(cx);
         assert!(picker.field_referenced(CredentialField::Username));
-        assert!(!picker.field_referenced(CredentialField::Password));
+        assert!(picker.field_referenced(CredentialField::Password));
+        assert!(!picker.field_referenced(CredentialField::PrivateKey));
+        assert!(!picker.field_referenced(CredentialField::Passphrase));
+    });
+}
+
+#[gpui::test]
+fn selecting_manual_clears_the_whole_reference(cx: &mut TestAppContext) {
+    let form = with_picker(cx, |window, cx| {
+        create_credential_picker_with_summaries(
+            CredentialPickerConfig::new("credential-test", CredentialCapabilities::login()),
+            vec![summary()],
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|cx| {
+        let picker = form.read(cx).picker.clone();
+        picker.update(cx, |picker, cx| {
+            picker.select_value(CredentialSelectValue::Credential(42), cx);
+            picker.select_value(CredentialSelectValue::Manual, cx);
+        });
+        let picker = form.read(cx).picker.read(cx);
+        assert_eq!(None, picker.selected_reference());
+        assert_eq!(CredentialSelectValue::Manual, picker.selected_value());
     });
 }
 

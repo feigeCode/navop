@@ -7,21 +7,19 @@ use one_core::storage::{CredentialReference, CredentialSummary};
 
 use super::{
     CredentialCapabilities, CredentialField, CredentialSelectItem, CredentialSelectValue,
-    apply_field_selection, build_reference, credential_select_items, has_selected_field,
-    load_summaries, normalize_reference, summary_matches_reference,
+    build_reference, credential_select_items, load_summaries, normalize_reference,
+    summary_matches_reference,
 };
 
 #[derive(Clone, Debug)]
 pub struct CredentialPickerConfig {
-    pub(super) id: SharedString,
     pub(super) capabilities: CredentialCapabilities,
     pub(super) reference: Option<CredentialReference>,
 }
 
 impl CredentialPickerConfig {
-    pub fn new(id: impl Into<SharedString>, capabilities: CredentialCapabilities) -> Self {
+    pub fn new(_id: impl Into<SharedString>, capabilities: CredentialCapabilities) -> Self {
         Self {
-            id: id.into(),
             capabilities,
             reference: None,
         }
@@ -39,7 +37,6 @@ pub enum CredentialPickerEvent {
 }
 
 pub struct CredentialReferencePicker {
-    pub(super) id: SharedString,
     pub(super) select: Entity<SelectState<Vec<CredentialSelectItem>>>,
     pub(super) summaries: Vec<CredentialSummary>,
     pub(super) capabilities: CredentialCapabilities,
@@ -122,7 +119,6 @@ impl CredentialReferencePicker {
         let select =
             cx.new(|cx| SelectState::new(items, selected_index, window, cx).searchable(true));
         Self {
-            id: config.id,
             select,
             summaries,
             capabilities: config.capabilities,
@@ -148,17 +144,6 @@ impl CredentialReferencePicker {
             CredentialField::Password => reference.password,
             CredentialField::PrivateKey => reference.private_key,
             CredentialField::Passphrase => reference.passphrase,
-        }
-    }
-
-    pub fn use_manual_field(
-        &mut self,
-        field: CredentialField,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.field_referenced(field) {
-            self.set_field_selection(field, false, window, cx);
         }
     }
 
@@ -200,25 +185,6 @@ impl CredentialReferencePicker {
     }
 
     #[cfg(test)]
-    pub(crate) fn select_field(
-        &mut self,
-        field: CredentialField,
-        selected: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_field_value(field, selected, cx);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn use_manual_field_without_window(
-        &mut self,
-        field: CredentialField,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_field_value(field, false, cx);
-    }
-
-    #[cfg(test)]
     pub(crate) fn set_capabilities_without_window(
         &mut self,
         capabilities: CredentialCapabilities,
@@ -229,42 +195,8 @@ impl CredentialReferencePicker {
         cx.notify();
     }
 
-    pub(super) fn set_field_selection(
-        &mut self,
-        field: CredentialField,
-        selected: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_field_value(field, selected, cx);
-        if self.reference.is_none() {
-            self.sync_select(window, cx);
-        }
-        cx.emit(CredentialPickerEvent::Changed);
-    }
-
     fn apply_selected_value(&mut self, value: CredentialSelectValue, cx: &mut Context<Self>) {
         self.reference = build_reference(value, self.capabilities, &self.summaries);
-        cx.notify();
-    }
-
-    fn apply_field_value(
-        &mut self,
-        field: CredentialField,
-        selected: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let selected_has_passphrase = self
-            .selected_summary()
-            .is_some_and(|summary| summary.has_passphrase);
-        let Some(reference) = self.reference.take() else {
-            return;
-        };
-        let mut changed = apply_field_selection(reference, field, selected);
-        if field == CredentialField::PrivateKey && selected && self.capabilities.passphrase {
-            changed.passphrase = selected_has_passphrase;
-        }
-        self.reference = has_selected_field(&changed).then_some(changed);
         cx.notify();
     }
 
