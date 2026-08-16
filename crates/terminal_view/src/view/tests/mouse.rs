@@ -206,6 +206,34 @@ fn shift_left_click_extends_existing_terminal_selection_only() {
 }
 
 #[test]
+fn selection_autoscroll_uses_terminal_scroll_direction_and_caps_speed() {
+    let top = px(100.0);
+    let bottom = px(300.0);
+    let line_height = px(20.0);
+
+    assert_eq!(
+        1,
+        terminal_selection_autoscroll_delta_rows(px(99.0), top, bottom, line_height)
+    );
+    assert_eq!(
+        4,
+        terminal_selection_autoscroll_delta_rows(px(0.0), top, bottom, line_height)
+    );
+    assert_eq!(
+        -1,
+        terminal_selection_autoscroll_delta_rows(px(301.0), top, bottom, line_height)
+    );
+    assert_eq!(
+        -4,
+        terminal_selection_autoscroll_delta_rows(px(500.0), top, bottom, line_height)
+    );
+    assert_eq!(
+        0,
+        terminal_selection_autoscroll_delta_rows(px(200.0), top, bottom, line_height)
+    );
+}
+
+#[test]
 fn playback_scroll_bypasses_live_alt_screen_and_vi_paths() {
     let source = include_str!("../scroll.rs");
     let handler = source

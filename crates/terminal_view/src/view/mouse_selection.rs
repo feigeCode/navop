@@ -162,6 +162,7 @@ impl TerminalView {
             PendingTerminalSelectionAction::Update { point, side },
             cx,
         );
+        self.update_selection_autoscroll(event.position, cx);
         cx.notify();
     }
 
@@ -339,6 +340,7 @@ impl TerminalView {
     }
 
     pub(super) fn finish_mouse_selection(&mut self, cx: &mut Context<Self>) {
+        self.clear_selection_autoscroll();
         if !self.mouse_state.selecting {
             return;
         }

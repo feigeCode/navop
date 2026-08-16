@@ -24,7 +24,8 @@ use super::{
     should_start_block_selection, should_start_selection_from_pending_sgr_press,
     should_upload_clipboard_image_to_remote_cli, take_whole_scroll_lines,
     terminal_duplicate_source_with_cwd, terminal_history_scope, terminal_paste_bytes,
-    terminal_tab_duplicate_supported, wrapped_addon_line_text,
+    terminal_selection_autoscroll_delta_rows, terminal_tab_duplicate_supported,
+    wrapped_addon_line_text,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};

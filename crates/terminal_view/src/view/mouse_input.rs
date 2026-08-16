@@ -2,7 +2,32 @@ use std::cell::Cell as StdCell;
 
 use alacritty_terminal::index::Point as AlacPoint;
 use alacritty_terminal::term::TermMode;
-use gpui::{Keystroke, Modifiers, MouseButton};
+use gpui::{Keystroke, Modifiers, MouseButton, Pixels};
+
+const TERMINAL_SELECTION_AUTOSCROLL_MAX_ROWS: i32 = 4;
+
+pub(super) fn terminal_selection_autoscroll_delta_rows(
+    position_y: Pixels,
+    top: Pixels,
+    bottom: Pixels,
+    line_height: Pixels,
+) -> i32 {
+    let distance = if position_y < top {
+        f32::from(top - position_y)
+    } else if position_y > bottom {
+        -f32::from(position_y - bottom)
+    } else {
+        return 0;
+    };
+
+    let line_height = f32::from(line_height).max(1.0);
+    let rows = (distance.abs() / line_height)
+        .ceil()
+        .max(1.0)
+        .min(TERMINAL_SELECTION_AUTOSCROLL_MAX_ROWS as f32) as i32;
+
+    if distance > 0.0 { rows } else { -rows }
+}
 
 pub(super) fn take_whole_scroll_lines(scroll_lines_accumulated: &mut f32) -> i32 {
     let lines = scroll_lines_accumulated.trunc() as i32;

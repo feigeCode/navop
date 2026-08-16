@@ -13,7 +13,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::tty::{self, Options as PtyOptions};
-use alacritty_terminal::vte::ansi::Color;
+use alacritty_terminal::vte::ansi::{Color, Processor, StdSyncHandler};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -3839,8 +3839,15 @@ impl Terminal {
     }
 
     fn prepare_surface_for_reconnect(&mut self) {
-        // Keep the existing alacritty grid and scrollback. The replacement
-        // backend appends its output to the same terminal surface.
+        // Keep the primary grid and scrollback, but never carry a stale full-screen
+        // alternate-screen application (such as Vim) into the replacement backend.
+        let mut term = self.term.lock();
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            let mut processor: Processor<StdSyncHandler> = Processor::new();
+            processor.advance(&mut *term, b"\x1b[?1049l");
+            term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        }
+        drop(term);
         self.child_exited = None;
         self.current_working_dir = None;
     }
@@ -4217,8 +4224,8 @@ mod tests {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line, Point, Side};
     use alacritty_terminal::selection::SelectionType;
-    use alacritty_terminal::term::TermDamage;
     use alacritty_terminal::term::cell::Flags;
+    use alacritty_terminal::term::{TermDamage, TermMode};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
     use one_core::storage::models::{SshAuthMethod, SshParams, StoredConnection};
@@ -6315,6 +6322,11 @@ mod tests {
         processor.advance(&mut *terminal.term.lock(), b"hello");
 
         assert_eq!(terminal.term.lock().grid()[Line(0)][Column(0)].c, 'h');
+        processor.advance(&mut *terminal.term.lock(), b"\x1b[?1049hvim");
+        {
+            let term = terminal.term.lock();
+            assert!(term.mode().contains(TermMode::ALT_SCREEN));
+        }
         let previous = terminal.performance_snapshot();
         terminal
             .performance_metrics()
@@ -6332,6 +6344,7 @@ mod tests {
 
         processor.advance(&mut *terminal.term.lock(), b" world");
         let term = terminal.term.lock();
+        assert!(!term.mode().contains(TermMode::ALT_SCREEN));
         assert_eq!(term.grid()[Line(0)][Column(0)].c, 'h');
         assert_eq!(term.grid()[Line(0)][Column(5)].c, ' ');
         assert_eq!(term.grid()[Line(0)][Column(6)].c, 'w');

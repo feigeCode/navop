@@ -90,7 +90,7 @@ use mouse_input::{
     sgr_mouse_wheel_report, should_defer_inline_history_prompt_input_to_text_system,
     should_defer_sgr_left_press, should_extend_selection_on_shift_click,
     should_scroll_to_bottom_on_user_input, should_start_selection_from_pending_sgr_press,
-    take_whole_scroll_lines,
+    take_whole_scroll_lines, terminal_selection_autoscroll_delta_rows,
 };
 use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{SidebarContribution, SidebarPlacement};
@@ -153,6 +153,7 @@ mod render_layout;
 mod render_surface;
 mod resize_event_handler;
 mod scroll;
+mod selection_autoscroll;
 mod selection_search;
 mod session_log_config;
 mod sidebar_events;
@@ -245,6 +246,9 @@ pub struct TerminalView {
     terminal_frame_snapshot: TerminalFrameSnapshot,
     /// Deduplicated delayed retry used when a non-blocking terminal lock misses.
     terminal_render_retry: Option<Task<()>>,
+    selection_autoscroll_position: Option<Point<Pixels>>,
+    selection_autoscroll_display_offset: Option<usize>,
+    selection_autoscroll_task: Option<Task<()>>,
     focus_handle: FocusHandle,
     /// Present only when the developer performance diagnostics switch was
     /// enabled when this terminal was created.
