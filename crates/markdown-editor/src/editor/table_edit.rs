@@ -136,84 +136,6 @@ impl Editor {
         });
     }
 
-    pub(super) fn append_table_column(
-        &mut self,
-        table_block: &Entity<Block>,
-        cx: &mut Context<Self>,
-    ) {
-        self.sync_table_record_from_runtime(table_block, cx);
-
-        let Some(mut table) = table_block.read(cx).record.table.clone() else {
-            return;
-        };
-        let started_local_capture = if self.pending_undo_capture.is_none() {
-            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
-            true
-        } else {
-            false
-        };
-        let alignment = table
-            .alignments
-            .last()
-            .copied()
-            .unwrap_or(TableColumnAlignment::Default);
-        table.append_column(alignment);
-
-        table_block.update(cx, move |block, _cx| {
-            block.record.table = Some(table.clone());
-        });
-        self.rebuild_table_runtimes(cx);
-        if let Some(cell) = table_block
-            .read(cx)
-            .table_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.header.last())
-        {
-            self.focus_block(cell.entity_id());
-        }
-        self.mark_dirty(cx);
-        self.request_active_block_scroll_into_view(cx);
-        if started_local_capture {
-            self.finalize_pending_undo_capture(cx);
-        }
-        cx.notify();
-    }
-
-    pub(super) fn append_table_row(&mut self, table_block: &Entity<Block>, cx: &mut Context<Self>) {
-        self.sync_table_record_from_runtime(table_block, cx);
-
-        let Some(mut table) = table_block.read(cx).record.table.clone() else {
-            return;
-        };
-        let started_local_capture = if self.pending_undo_capture.is_none() {
-            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
-            true
-        } else {
-            false
-        };
-        table.append_row();
-
-        table_block.update(cx, move |block, _cx| {
-            block.record.table = Some(table.clone());
-        });
-        self.rebuild_table_runtimes(cx);
-        if let Some(cell) = table_block
-            .read(cx)
-            .table_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.rows.last())
-            .and_then(|row| row.first())
-        {
-            self.focus_block(cell.entity_id());
-        }
-        self.mark_dirty(cx);
-        self.request_active_block_scroll_into_view(cx);
-        if started_local_capture {
-            self.finalize_pending_undo_capture(cx);
-        }
-        cx.notify();
-    }
-
     pub(super) fn insert_table_row(
         &mut self,
         table_block: &Entity<Block>,
@@ -392,9 +314,36 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.select_table_axis(table_block_id, kind, index, cx);
-        if let Some(selection) = self.table_axis_selection {
-            self.open_table_axis_context_menu(position, selection, cx);
-        }
+        let active_position = self.active_entity_id.and_then(|entity_id| {
+            self.table_cells.get(&entity_id).and_then(|binding| {
+                (binding.table_block.entity_id() == table_block_id).then_some(binding.position)
+            })
+        });
+        let target = match kind {
+            TableAxisKind::Row => TableCellPosition {
+                row: index,
+                column: active_position.map_or(0, |position| position.column),
+            },
+            TableAxisKind::Column => TableCellPosition {
+                row: active_position.map_or(0, |position| position.row),
+                column: index,
+            },
+        };
+        let block_target = self.active_entity_id.filter(|entity_id| {
+            self.table_cells
+                .get(entity_id)
+                .is_some_and(|binding| binding.table_block.entity_id() == table_block_id)
+        });
+        self.open_table_context_menu(
+            position,
+            block_target,
+            table_menu::TableMenuTarget {
+                table_block_id,
+                row: target.row,
+                column: target.column,
+            },
+            cx,
+        );
     }
 
     pub(super) fn set_table_column_alignment(
@@ -405,6 +354,12 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.sync_table_record_from_runtime(table_block, cx);
+        let focus_position = self
+            .active_entity_id
+            .and_then(|entity_id| self.table_cells.get(&entity_id))
+            .filter(|binding| binding.table_block.entity_id() == table_block.entity_id())
+            .map(|binding| binding.position)
+            .unwrap_or(TableCellPosition { row: 0, column });
         let Some(mut table) = table_block.read(cx).record.table.clone() else {
             return;
         };
@@ -424,13 +379,8 @@ impl Editor {
             block.record.table = Some(table.clone());
         });
         self.rebuild_table_runtimes(cx);
-        let selection = TableAxisSelection {
-            table_block_id: table_block.entity_id(),
-            kind: TableAxisKind::Column,
-            index: column,
-        };
-        self.set_table_axis_selection(Some(selection), cx);
-        self.focus_table_cell_position(table_block, TableCellPosition { row: 0, column }, cx);
+        self.clear_table_axis_selection(cx);
+        self.focus_table_cell_position(table_block, focus_position, cx);
         self.mark_dirty(cx);
         self.request_active_block_scroll_into_view(cx);
         if started_local_capture {
@@ -447,6 +397,12 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.sync_table_record_from_runtime(table_block, cx);
+        let focus_column = self
+            .active_entity_id
+            .and_then(|entity_id| self.table_cells.get(&entity_id))
+            .filter(|binding| binding.table_block.entity_id() == table_block.entity_id())
+            .map(|binding| binding.position.column)
+            .unwrap_or(0);
         let Some(mut table) = table_block.read(cx).record.table.clone() else {
             return;
         };
@@ -484,7 +440,7 @@ impl Editor {
             table_block,
             TableCellPosition {
                 row: next_row,
-                column: 0,
+                column: focus_column,
             },
             cx,
         );
@@ -504,6 +460,12 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.sync_table_record_from_runtime(table_block, cx);
+        let focus_row = self
+            .active_entity_id
+            .and_then(|entity_id| self.table_cells.get(&entity_id))
+            .filter(|binding| binding.table_block.entity_id() == table_block.entity_id())
+            .map(|binding| binding.position.row)
+            .unwrap_or(0);
         let Some(mut table) = table_block.read(cx).record.table.clone() else {
             return;
         };
@@ -538,7 +500,7 @@ impl Editor {
         self.focus_table_cell_position(
             table_block,
             TableCellPosition {
-                row: 0,
+                row: focus_row,
                 column: next_column,
             },
             cx,

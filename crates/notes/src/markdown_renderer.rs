@@ -69,7 +69,5 @@ fn map_artifact(
 
 fn color_u32(color: gpui::Hsla) -> u32 {
     let rgb: gpui::Rgba = color.into_color();
-    ((rgb.red * 255.) as u32) << 16
-        | ((rgb.green * 255.) as u32) << 8
-        | (rgb.blue * 255.) as u32
+    ((rgb.red * 255.) as u32) << 16 | ((rgb.green * 255.) as u32) << 8 | (rgb.blue * 255.) as u32
 }

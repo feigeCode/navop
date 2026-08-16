@@ -1042,7 +1042,6 @@ impl InlineTextTree {
         self.toggle_style(range, StyleFlag::Underline)
     }
 
-    #[allow(dead_code)]
     pub fn toggle_strikethrough(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Strikethrough)
     }

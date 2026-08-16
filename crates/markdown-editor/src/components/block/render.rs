@@ -4,20 +4,31 @@
 //! list items render a marker column (bullet / ordinal), and raw Markdown
 //! fallback renders as plain text.
 
+use std::sync::Arc;
+
 use gpui::*;
 use gpui_component::{
-    Icon, Sizable as _, Size,
+    Icon, IconName, Sizable as _, Size,
     button::{Button as UiButton, ButtonVariants as _},
     highlighter::LanguageRegistry,
     menu::{DropdownMenu as _, PopupMenuItem},
+    popover::Popover,
     spinner::Spinner,
     text::{MarkdownPalette, TextView, TextViewStyle},
+    tooltip::Tooltip,
 };
 use palette::IntoColor;
 
 mod host_artifact;
 
 const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
+const TABLE_TOOLBAR_HEIGHT: f32 = 28.0;
+const TABLE_TOOLBAR_BUTTON_SIZE: f32 = 24.0;
+const TABLE_TOOLBAR_GAP: f32 = 2.0;
+const TABLE_SIZE_PICKER_COLUMNS: usize = 6;
+const TABLE_SIZE_PICKER_ROWS: usize = 10;
+const TABLE_SIZE_PICKER_CELL_SIZE: f32 = 20.0;
+const TABLE_SIZE_PICKER_CELL_GAP: f32 = 4.0;
 
 use self::host_artifact::{
     HostArtifactSize, contained_block_size, inline_size, render_host_svg, scrollable_block_size,
@@ -29,15 +40,15 @@ use super::{
 };
 use crate::BlockRenderKind;
 use crate::components::{
-    Editor, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, TableAxisHighlight,
-    TableAxisKind, TableAxisMarker, TableCellInlineImageSegment, TableColumnLayout, attr_value,
+    Editor, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript,
+    TableCellInlineImageSegment, TableColumnAlignment, TableColumnLayout, attr_value,
     display_math_font_size, inline_math_font_size, parse_display_math_source,
     parse_html_image_block, parse_mermaid_fence_source, parse_table_cell_inline_images,
     render_display_math_svg, render_inline_math_svg, resolve_image_source, style_for_node,
 };
-use crate::i18n::{I18nManager, I18nStrings};
 use crate::icons::{callout as callout_icons, indicators};
 use crate::theme::{Theme, ThemeDimensions};
+use rust_i18n::t;
 
 // Unicode bullet glyphs for nested list depths.
 const BULLET_FILLED: &str = "\u{2022}";
@@ -51,38 +62,296 @@ fn bulleted_list_marker(depth: usize) -> &'static str {
     }
 }
 
-fn column_axis_gutter_visible(
-    preview_marker: Option<TableAxisMarker>,
-    selected_marker: Option<TableAxisMarker>,
-) -> bool {
-    matches!(
-        preview_marker,
-        Some(TableAxisMarker {
-            kind: TableAxisKind::Column,
-            ..
-        })
-    ) || matches!(
-        selected_marker,
-        Some(TableAxisMarker {
-            kind: TableAxisKind::Column,
-            ..
-        })
-    )
+#[derive(Clone, Copy)]
+enum TableToolbarAction {
+    Align {
+        column: usize,
+        alignment: TableColumnAlignment,
+    },
+    Delete,
 }
 
-/// Makes a row-axis highlight color more opaque (more solid, still translucent)
-/// for the header row, keeping the theme's hue so the header handle reads as a
-/// stronger version of the body-row handles in whatever colors the theme uses.
-fn header_axis_emphasis(color: Hsla) -> Hsla {
-    Hsla {
-        alpha: color.alpha + (1.0 - color.alpha) * 0.5,
-        ..color
-    }
+struct TableToolbarButton {
+    id: String,
+    icon: IconName,
+    tooltip: SharedString,
+    selected: bool,
+    danger: bool,
+    action: TableToolbarAction,
 }
 
-fn fallback_image_label(alt: &str, strings: &I18nStrings) -> SharedString {
+fn render_table_toolbar_button(
+    theme: &Theme,
+    table_block: WeakEntity<Block>,
+    button: TableToolbarButton,
+) -> AnyElement {
+    let c = &theme.colors;
+    let transparent = hsla(0.0, 0.0, 0.0, 0.0);
+    let debug_selector = button.id.clone();
+    let tooltip_text = button.tooltip.clone();
+    div()
+        .id(ElementId::Name(button.id.into()))
+        .debug_selector(move || debug_selector.clone())
+        .size(px(TABLE_TOOLBAR_BUTTON_SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .bg(if button.selected {
+            c.table_axis_selected_bg
+        } else {
+            transparent
+        })
+        .text_color(if button.danger {
+            c.dialog_danger_button_bg
+        } else {
+            c.dialog_secondary_button_text
+        })
+        .hover(|this| this.bg(c.dialog_secondary_button_hover))
+        .active(|this| this.opacity(0.86))
+        .cursor_pointer()
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .block_mouse_except_scroll()
+        .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(move |_event, _window, cx| {
+            cx.stop_propagation();
+            let _ = table_block.update(cx, |_block, cx| match button.action {
+                TableToolbarAction::Align { column, alignment } => {
+                    cx.emit(BlockEvent::RequestAlignTableColumn { column, alignment });
+                }
+                TableToolbarAction::Delete => cx.emit(BlockEvent::RequestDeleteTable),
+            });
+        })
+        .child(Icon::new(button.icon).with_size(Size::XSmall))
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_table_size_picker(
+    theme: Arc<Theme>,
+    table_block: WeakEntity<Block>,
+    table_id: String,
+    active_focus_handle: FocusHandle,
+    current_columns: usize,
+    current_visual_rows: usize,
+    resize_tooltip: SharedString,
+    columns_tooltip: SharedString,
+    rows_tooltip: SharedString,
+) -> AnyElement {
+    let close_block = table_block.clone();
+    let trigger_id = SharedString::from(format!("table-size-picker-trigger-{table_id}"));
+    let popover_id = SharedString::from(format!("table-size-picker-{table_id}"));
+    let trigger_cell = || {
+        div()
+            .size(px(4.0))
+            .border(px(1.0))
+            .border_color(theme.colors.dialog_secondary_button_text)
+    };
+    let trigger_grid = div()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .child(
+            div()
+                .flex()
+                .gap(px(2.0))
+                .child(trigger_cell())
+                .child(trigger_cell()),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(2.0))
+                .child(trigger_cell())
+                .child(trigger_cell()),
+        );
+
+    Popover::new(popover_id)
+        .anchor(Anchor::TopLeft)
+        .appearance(false)
+        // The table toolbar is rendered only while a cell is focused. Keep
+        // focus on that cell while the popover is open so the toolbar and its
+        // keyed popover state remain mounted.
+        .track_focus(&active_focus_handle)
+        .on_open_change(move |open, _window, cx| {
+            if !*open {
+                let _ = close_block.update(cx, |block, cx| {
+                    if block.table_size_picker_hover.take().is_some() {
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .trigger(
+            UiButton::new(trigger_id)
+                .child(trigger_grid)
+                .tooltip(resize_tooltip)
+                .ghost()
+                .small()
+                .px_0()
+                .w(px(TABLE_TOOLBAR_BUTTON_SIZE))
+                .h(px(TABLE_TOOLBAR_BUTTON_SIZE)),
+        )
+        .content(move |_popover, _window, cx| {
+            let popover_entity = cx.entity().downgrade();
+            let preview = table_block
+                .upgrade()
+                .and_then(|block| block.read(cx).table_size_picker_hover)
+                .unwrap_or((current_columns, current_visual_rows));
+            let preview_columns = preview.0.min(TABLE_SIZE_PICKER_COLUMNS);
+            let preview_rows = preview.1.min(TABLE_SIZE_PICKER_ROWS);
+            let c = &theme.colors;
+            let grid = div()
+                .flex()
+                .flex_col()
+                .gap(px(TABLE_SIZE_PICKER_CELL_GAP))
+                .children((1..=TABLE_SIZE_PICKER_ROWS).map(|visual_row| {
+                    div().flex().gap(px(TABLE_SIZE_PICKER_CELL_GAP)).children(
+                        (1..=TABLE_SIZE_PICKER_COLUMNS).map(|column| {
+                            let selected = column <= preview_columns && visual_row <= preview_rows;
+                            let hover_block = table_block.clone();
+                            let resize_block = table_block.clone();
+                            let popover_entity = popover_entity.clone();
+                            div()
+                                .id(ElementId::Name(
+                                    format!(
+                                        "table-size-picker-cell-{table_id}-{column}-{visual_row}"
+                                    )
+                                    .into(),
+                                ))
+                                .size(px(TABLE_SIZE_PICKER_CELL_SIZE))
+                                .rounded(px(3.0))
+                                .border(px(1.0))
+                                .border_color(if selected {
+                                    c.dialog_primary_button_bg
+                                } else {
+                                    c.dialog_border
+                                })
+                                .bg(if selected {
+                                    c.table_axis_selected_bg
+                                } else {
+                                    c.dialog_surface
+                                })
+                                .cursor_pointer()
+                                .on_hover(move |hovered, _window, cx| {
+                                    if *hovered {
+                                        let _ = hover_block.update(cx, |block, cx| {
+                                            let next = Some((column, visual_row));
+                                            if block.table_size_picker_hover != next {
+                                                block.table_size_picker_hover = next;
+                                                cx.notify();
+                                            }
+                                        });
+                                    }
+                                })
+                                .on_click(move |_event, window, cx| {
+                                    cx.stop_propagation();
+                                    let _ = resize_block.update(cx, |block, cx| {
+                                        block.table_size_picker_hover = None;
+                                        cx.emit(BlockEvent::RequestResizeTable {
+                                            visual_rows: visual_row,
+                                            columns: column,
+                                        });
+                                    });
+                                    let _ = popover_entity.update(cx, |popover, cx| {
+                                        popover.dismiss(window, cx);
+                                    });
+                                })
+                        }),
+                    )
+                }));
+            let columns_tooltip = columns_tooltip.clone();
+            let rows_tooltip = rows_tooltip.clone();
+            let hover_clear_block = table_block.clone();
+
+            div()
+                // TopLeft anchors to the trigger itself. Reserve the toolbar
+                // height so the visible panel opens directly below the button.
+                .pt(px(TABLE_TOOLBAR_HEIGHT + TABLE_TOOLBAR_GAP))
+                .child(
+                    div()
+                        .id(ElementId::Name(
+                            format!("table-size-picker-panel-{table_id}").into(),
+                        ))
+                        .p(px(10.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .occlude()
+                        .bg(c.dialog_surface)
+                        .border(px(1.0))
+                        .border_color(c.dialog_border)
+                        .rounded(px(6.0))
+                        .shadow_lg()
+                        .on_hover(move |hovered, _window, cx| {
+                            if !*hovered {
+                                let _ = hover_clear_block.update(cx, |block, cx| {
+                                    if block.table_size_picker_hover.take().is_some() {
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        })
+                        .child(grid)
+                        .child(div().w_full().h(px(1.0)).bg(c.dialog_border))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(7.0))
+                                .child(
+                                    div()
+                                        .id(ElementId::Name(
+                                            format!("table-size-picker-columns-{table_id}").into(),
+                                        ))
+                                        .min_w(px(36.0))
+                                        .h(px(24.0))
+                                        .px(px(8.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(4.0))
+                                        .border(px(1.0))
+                                        .border_color(c.dialog_border)
+                                        .bg(c.dialog_surface)
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(columns_tooltip.clone()).build(window, cx)
+                                        })
+                                        .child(preview_columns.to_string()),
+                                )
+                                .child("×")
+                                .child(
+                                    div()
+                                        .id(ElementId::Name(
+                                            format!("table-size-picker-rows-{table_id}").into(),
+                                        ))
+                                        .min_w(px(36.0))
+                                        .h(px(24.0))
+                                        .px(px(8.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(4.0))
+                                        .border(px(1.0))
+                                        .border_color(c.dialog_border)
+                                        .bg(c.dialog_surface)
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(rows_tooltip.clone()).build(window, cx)
+                                        })
+                                        .child(preview_rows.to_string()),
+                                ),
+                        ),
+                )
+        })
+        .into_any_element()
+}
+
+fn fallback_image_label(alt: &str) -> SharedString {
     if alt.trim().is_empty() {
-        SharedString::from(strings.image_placeholder.clone())
+        SharedString::from(t!("MarkdownEditor.image_placeholder").to_string())
     } else {
         SharedString::from(alt.to_string())
     }
@@ -93,7 +362,6 @@ fn render_image_placeholder(
     width: Length,
     height: Pixels,
     theme: &Theme,
-    strings: &I18nStrings,
 ) -> AnyElement {
     let c = &theme.colors;
     let d = &theme.dimensions;
@@ -112,7 +380,7 @@ fn render_image_placeholder(
         .text_center()
         .text_size(px(t.text_size))
         .text_color(c.image_placeholder_text)
-        .child(fallback_image_label(&runtime.alt, strings))
+        .child(fallback_image_label(&runtime.alt))
         .into_any_element()
 }
 
@@ -121,7 +389,6 @@ fn render_loading_placeholder(
     width: Length,
     height: Pixels,
     theme: &Theme,
-    strings: &I18nStrings,
 ) -> AnyElement {
     let c = &theme.colors;
     let d = &theme.dimensions;
@@ -141,12 +408,14 @@ fn render_loading_placeholder(
         .text_size(px(t.code_size))
         .text_color(c.image_placeholder_text)
         .child(if runtime.alt.trim().is_empty() {
-            SharedString::from(strings.image_loading_without_alt.clone())
+            SharedString::from(t!("MarkdownEditor.image_loading_without_alt").to_string())
         } else {
             SharedString::from(
-                strings
-                    .image_loading_with_alt_template
-                    .replace("{alt}", &runtime.alt),
+                t!(
+                    "MarkdownEditor.image_loading_with_alt_template",
+                    alt = runtime.alt.clone()
+                )
+                .to_string(),
             )
         })
         .into_any_element()
@@ -525,7 +794,6 @@ impl Block {
         max_height: Pixels,
         placeholder_height: Pixels,
         theme: &Theme,
-        strings: &I18nStrings,
     ) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -533,8 +801,6 @@ impl Block {
         let source = runtime.resolved_source.clone();
         let placeholder_theme = theme.clone();
         let loading_theme = theme.clone();
-        let placeholder_strings = strings.clone();
-        let loading_strings = strings.clone();
         let runtime_for_fallback = runtime.clone();
         let runtime_for_loading = runtime.clone();
 
@@ -551,7 +817,6 @@ impl Block {
                 max_width,
                 placeholder_height,
                 &placeholder_theme,
-                &placeholder_strings,
             )
         })
         .with_loading(move || {
@@ -560,7 +825,6 @@ impl Block {
                 max_width,
                 placeholder_height,
                 &loading_theme,
-                &loading_strings,
             )
         });
 
@@ -592,7 +856,7 @@ impl Block {
     }
 
     /// Renders a host-rendered Mermaid/Math SVG with a click-to-enlarge handler.
-    /// The click asks the editor to open the enlarged source/preview overlay.
+    /// The click asks the editor to open the enlarged preview overlay.
     fn render_clickable_host_svg(
         &self,
         rendered: &HostRenderedArtifact,
@@ -627,6 +891,60 @@ impl Block {
                     artifact: artifact.clone(),
                 });
             }))
+            .into_any_element()
+    }
+
+    fn render_rendered_block_source_button(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let c = &theme.colors;
+        let source_label =
+            SharedString::from(t!("MarkdownEditor.enlarged_view_source").to_string());
+
+        div()
+            .id(ElementId::Name(
+                format!("rendered-block-source-{}", self.record.id).into(),
+            ))
+            .debug_selector(|| "rendered-block-source".to_string())
+            .absolute()
+            .top(px(4.0))
+            .right(px(4.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(4.0))
+            .bg(c.dialog_secondary_button_bg)
+            .text_color(c.dialog_secondary_button_text)
+            .text_size(px(theme.typography.code_size))
+            .hover(|this| this.bg(c.dialog_secondary_button_hover))
+            .active(|this| this.opacity(0.86))
+            .cursor_pointer()
+            .tooltip(move |window, cx| Tooltip::new(source_label.clone()).build(window, cx))
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(|_block, _event, _window, cx| {
+                cx.stop_propagation();
+                cx.emit(BlockEvent::RequestFocus);
+            }))
+            .child(SharedString::from(
+                t!("MarkdownEditor.enlarged_view_source").to_string(),
+            ))
+            .into_any_element()
+    }
+
+    fn render_rendered_block(
+        &self,
+        content: AnyElement,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .relative()
+            .w_full()
+            .child(content)
+            .child(self.render_rendered_block_source_button(theme, cx))
             .into_any_element()
     }
 
@@ -1251,12 +1569,7 @@ impl Block {
         }
     }
 
-    fn render_inline_image_content(
-        &self,
-        runtime: &ImageRuntime,
-        theme: &Theme,
-        strings: &I18nStrings,
-    ) -> AnyElement {
+    fn render_inline_image_content(&self, runtime: &ImageRuntime, theme: &Theme) -> AnyElement {
         let d = &theme.dimensions;
         let source = runtime.resolved_source.clone();
         let max_height = px(d.image_cell_placeholder_height);
@@ -1264,8 +1577,6 @@ impl Block {
             Length::Definite(px((d.image_cell_placeholder_height * 1.6).max(48.0)).into());
         let placeholder_theme = theme.clone();
         let loading_theme = theme.clone();
-        let placeholder_strings = strings.clone();
-        let loading_strings = strings.clone();
         let runtime_for_fallback = runtime.clone();
         let runtime_for_loading = runtime.clone();
 
@@ -1282,17 +1593,10 @@ impl Block {
                 max_width,
                 max_height,
                 &placeholder_theme,
-                &placeholder_strings,
             )
         })
         .with_loading(move || {
-            render_loading_placeholder(
-                &runtime_for_loading,
-                max_width,
-                max_height,
-                &loading_theme,
-                &loading_strings,
-            )
+            render_loading_placeholder(&runtime_for_loading, max_width, max_height, &loading_theme)
         });
 
         div()
@@ -1307,7 +1611,6 @@ impl Block {
     fn render_table_cell_inline_images(
         &self,
         theme: &Theme,
-        strings: &I18nStrings,
         font_weight: FontWeight,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -1338,7 +1641,7 @@ impl Block {
                 }
                 TableCellInlineImageSegment::Image { markdown, syntax } => {
                     if let Some(runtime) = self.image_runtime_for_syntax(syntax) {
-                        children.push(self.render_inline_image_content(&runtime, theme, strings));
+                        children.push(self.render_inline_image_content(&runtime, theme));
                     } else {
                         let tree = crate::components::InlineTextTree::plain(markdown);
                         children.extend(self.render_inline_tree_children(
@@ -1524,7 +1827,7 @@ impl Block {
                 }
                 element.into_any_element()
             }
-            "img" => self.render_html_image(node, theme, node_style, cx),
+            "img" => self.render_html_image(node, theme, node_style),
             "table" => self.render_html_table(node, theme, node_style, cx),
             "thead" | "tbody" | "tfoot" => {
                 let mut element =
@@ -1676,7 +1979,6 @@ impl Block {
         node: &HtmlNode,
         theme: &Theme,
         node_style: HtmlNodeVisualStyle,
-        cx: &mut Context<Self>,
     ) -> AnyElement {
         let parsed_image = parse_html_image_block(&node.raw_source);
         let src = parsed_image
@@ -1708,14 +2010,12 @@ impl Block {
             title: None,
             resolved_source: resolve_image_source(src, self.image_base_dir()),
         };
-        let strings = cx.global::<I18nManager>().strings_arc();
         let content = self.render_image_content(
             &runtime,
             Length::Definite(relative(zoom)),
             px(theme.dimensions.image_root_max_height * zoom),
             px(theme.dimensions.image_root_placeholder_height * zoom),
             theme,
-            &strings,
         );
         if let Some(bg) = node_style.background {
             div().w_full().bg(bg).child(content).into_any_element()
@@ -1871,8 +2171,14 @@ impl Block {
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_cut))
             .on_action(cx.listener(Self::on_paste))
+            .on_action(cx.listener(Self::on_bold_selection))
+            .on_action(cx.listener(Self::on_italic_selection))
+            .on_action(cx.listener(Self::on_underline_selection))
+            .on_action(cx.listener(Self::on_strikethrough_selection))
+            .on_action(cx.listener(Self::on_code_selection))
+            .on_action(cx.listener(Self::on_indent_block))
+            .on_action(cx.listener(Self::on_outdent_block))
             .on_action(cx.listener(Self::on_exit_code_block))
-            .on_key_down(cx.listener(Self::on_block_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -1889,12 +2195,22 @@ impl Block {
         if source_mode {
             base
         } else {
-            base.on_action(cx.listener(Self::on_indent_block))
-                .on_action(cx.listener(Self::on_outdent_block))
-                .on_action(cx.listener(Self::on_bold_selection))
-                .on_action(cx.listener(Self::on_italic_selection))
-                .on_action(cx.listener(Self::on_underline_selection))
-                .on_action(cx.listener(Self::on_code_selection))
+            base.on_action(cx.listener(Self::on_set_paragraph))
+                .on_action(cx.listener(Self::on_set_heading_1))
+                .on_action(cx.listener(Self::on_set_heading_2))
+                .on_action(cx.listener(Self::on_set_heading_3))
+                .on_action(cx.listener(Self::on_set_heading_4))
+                .on_action(cx.listener(Self::on_set_heading_5))
+                .on_action(cx.listener(Self::on_set_heading_6))
+                .on_action(cx.listener(Self::on_toggle_bullet_list))
+                .on_action(cx.listener(Self::on_toggle_ordered_list))
+                .on_action(cx.listener(Self::on_toggle_task_list))
+                .on_action(cx.listener(Self::on_toggle_quote))
+                .on_action(cx.listener(Self::on_toggle_code_block))
+                .on_action(cx.listener(Self::on_move_block_up))
+                .on_action(cx.listener(Self::on_move_block_down))
+                .on_action(cx.listener(Self::on_duplicate_block))
+                .on_action(cx.listener(Self::on_delete_block))
         }
     }
 }
@@ -1949,7 +2265,6 @@ impl Render for Block {
             && self.marked_range.is_none();
 
         let theme = self.effective_theme(cx);
-        let strings = cx.global::<I18nManager>().strings_arc();
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
@@ -1961,34 +2276,25 @@ impl Render for Block {
         let depth_padding = d.block_padding_x + d.nested_block_indent * self.render_depth as f32;
 
         if self.is_table_cell() {
-            let is_header = self
-                .table_cell_position()
+            let table_cell_position = self.table_cell_position();
+            let is_header = table_cell_position
                 .map(|position| position.is_header())
                 .unwrap_or(false);
             // The header row is only styled distinctly (shaded background, medium
             // weight) when the show-table-headers preference is enabled.
             let style_as_header =
                 is_header && crate::config::EditorSettings::show_table_headers(cx);
-            let highlight = self.table_axis_highlight;
-            let base_bg = if style_as_header {
+            let bg = if style_as_header {
                 c.table_header_bg
             } else {
                 c.table_cell_bg
             };
-            let bg = match highlight {
-                TableAxisHighlight::None => base_bg,
-                TableAxisHighlight::Preview => c.table_axis_preview_bg,
-                TableAxisHighlight::Selected => c.table_axis_selected_bg,
-            };
             let border_color = if focused {
                 c.table_cell_active_outline
             } else {
-                match highlight {
-                    TableAxisHighlight::None => c.table_border,
-                    TableAxisHighlight::Preview => c.table_axis_preview_bg,
-                    TableAxisHighlight::Selected => c.table_axis_selected_bg,
-                }
+                c.table_border
             };
+            let cell_debug_selector = format!("table-cell-{}", self.record.id);
             let cell_base = self
                 .render_shell(
                     block_id,
@@ -2003,6 +2309,7 @@ impl Render for Block {
                     d,
                     cx,
                 )
+                .debug_selector(move || cell_debug_selector.clone())
                 .w_full()
                 .h_full()
                 .min_h(px(d.table_cell_min_height))
@@ -2014,7 +2321,11 @@ impl Render for Block {
                 .bg(bg)
                 .text_size(px(t.text_size))
                 .text_color(c.text_default)
-                .line_height(rems(t.text_line_height));
+                .line_height(rems(t.text_line_height))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(Self::on_table_cell_context_menu_mouse_down),
+                );
 
             let cell_base = if style_as_header {
                 cell_base.font_weight(FontWeight::MEDIUM)
@@ -2030,7 +2341,6 @@ impl Render for Block {
                         px(d.image_cell_max_height),
                         px(d.image_cell_placeholder_height),
                         &theme,
-                        &strings,
                     ))
                     .into_any_element();
             }
@@ -2038,7 +2348,6 @@ impl Render for Block {
             if !focused
                 && let Some(inline_images) = self.render_table_cell_inline_images(
                     &theme,
-                    &strings,
                     if style_as_header {
                         FontWeight::MEDIUM
                     } else {
@@ -2142,7 +2451,6 @@ impl Render for Block {
                         px(d.image_root_max_height),
                         px(d.image_root_placeholder_height),
                         &theme,
-                        &strings,
                     ))
                     .into_any_element();
             }
@@ -2281,7 +2589,6 @@ impl Render for Block {
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 &theme,
-                                &strings,
                             ))
                         } else {
                             div().min_w(px(0.0)).flex_grow_1().child(
@@ -2376,7 +2683,6 @@ impl Render for Block {
                                     px(d.image_root_max_height),
                                     px(d.image_root_placeholder_height),
                                     &theme,
-                                    &strings,
                                 ))
                             } else {
                                 div().min_w(px(0.0)).flex_grow_1().child(
@@ -2438,7 +2744,6 @@ impl Render for Block {
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 &theme,
-                                &strings,
                             ))
                         } else {
                             div().min_w(px(0.0)).flex_grow_1().child(
@@ -2722,470 +3027,202 @@ impl Render for Block {
                     .as_ref()
                     .map(|table| TableColumnLayout::measure(table, table_width, window, &theme))
                     .unwrap_or_else(|| TableColumnLayout::equal(runtime.header.len()));
-                let preview_marker = self.table_axis_preview;
-                let selected_marker = self.table_axis_selection;
                 let body_row_count = runtime.rows.len();
-                let append_extent = px(d.table_append_button_extent);
-                let append_inset = px(d.table_append_button_inset);
-                let activation_band = px(d.table_append_activation_band);
-                // The column-axis strip overlays the header's top edge instead of
-                // taking a layout row, so hovering a column never shifts the table.
-                let column_axis_visible =
-                    column_axis_gutter_visible(preview_marker, selected_marker);
-                let column_append_top = activation_band;
-                let column_control_visible = self.table_append_column_hovered;
-                let row_control_visible = self.table_append_row_hovered;
-                // Append zones and buttons overlay the table's right/bottom edges;
-                // they never consume layout space, so hovering shows them without
-                // resizing the table (Typora-style).
-                let right_gutter = if column_control_visible {
-                    append_extent + append_inset
-                } else {
-                    px(0.0)
-                };
-                let bottom_gutter = if row_control_visible {
-                    append_extent + append_inset
-                } else {
-                    px(0.0)
-                };
+                let current_visual_rows = body_row_count + 1;
+                let current_columns = runtime.header.len().max(1);
                 let weak_table_block = cx.entity().downgrade();
-
-                let header_cells = runtime.header;
-                let column_axis_overlay = column_axis_visible.then(|| {
-                    div()
-                        .id(ElementId::Name(
-                            format!("table-column-axis-overlay-{}", self.record.id).into(),
-                        ))
-                        .debug_selector(|| "table-column-axis-overlay".to_string())
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(activation_band)
-                        .flex()
-                        .gap(px(0.0))
-                        .children(header_cells.iter().enumerate().map(|(column, _cell)| {
-                            let hover_block = weak_table_block.clone();
-                            let select_block = weak_table_block.clone();
-                            let menu_block = weak_table_block.clone();
-                            let marker = crate::components::TableAxisMarker {
-                                kind: TableAxisKind::Column,
-                                index: column,
-                            };
-                            let band_bg = if selected_marker == Some(marker) {
-                                c.table_axis_selected_bg
-                            } else if preview_marker == Some(marker) {
-                                c.table_axis_preview_bg
-                            } else {
-                                hsla(0.0, 0.0, 0.0, 0.0)
-                            };
-                            div()
-                                .relative()
-                                .flex_none()
-                                .flex_basis(relative(column_layout.fraction(column)))
-                                .w(relative(column_layout.fraction(column)))
-                                .h_full()
-                                .min_w(px(0.0))
-                                .child(
-                                    div()
-                                        .id(ElementId::Name(
-                                            format!(
-                                                "table-column-axis-band-{}-{}",
-                                                self.record.id, column
-                                            )
-                                            .into(),
-                                        ))
-                                        .w_full()
-                                        .h_full()
-                                        .rounded(px(6.0))
-                                        .bg(band_bg)
-                                        .cursor_pointer()
-                                        .on_hover(move |hovered, _window, cx| {
-                                            let _ = hover_block.update(cx, |_block, cx| {
-                                                cx.emit(BlockEvent::RequestTableAxisPreview {
-                                                    kind: TableAxisKind::Column,
-                                                    index: column,
-                                                    hovered: *hovered,
-                                                });
-                                            });
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_event, _window, cx| {
-                                                let _ = select_block.update(cx, |_block, cx| {
-                                                    cx.stop_propagation();
-                                                    cx.emit(BlockEvent::RequestSelectTableAxis {
-                                                        kind: TableAxisKind::Column,
-                                                        index: column,
-                                                    });
-                                                });
-                                            },
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            move |event, _window, cx| {
-                                                let _ = menu_block.update(cx, |_block, cx| {
-                                                    cx.stop_propagation();
-                                                    cx.emit(BlockEvent::RequestOpenTableAxisMenu {
-                                                        kind: TableAxisKind::Column,
-                                                        index: column,
-                                                        position: event.position,
-                                                    });
-                                                });
-                                            },
-                                        )
-                                        .block_mouse_except_scroll(),
-                                )
-                        }))
+                let active_cell = runtime
+                    .header
+                    .iter()
+                    .enumerate()
+                    .find_map(|(column, cell)| {
+                        let focus_handle = cell.read(cx).focus_handle.clone();
+                        focus_handle
+                            .is_focused(window)
+                            .then_some((column, focus_handle))
+                    })
+                    .or_else(|| {
+                        runtime.rows.iter().find_map(|row| {
+                            row.iter().enumerate().find_map(|(column, cell)| {
+                                let focus_handle = cell.read(cx).focus_handle.clone();
+                                focus_handle
+                                    .is_focused(window)
+                                    .then_some((column, focus_handle))
+                            })
+                        })
+                    });
+                let active_column = active_cell.as_ref().map(|(column, _)| *column);
+                let active_alignment = active_column.and_then(|column| {
+                    self.record
+                        .table
+                        .as_ref()
+                        .and_then(|table| table.alignments.get(column))
+                        .copied()
                 });
 
-                let header_hover_block = weak_table_block.clone();
-                let header_select_block = weak_table_block.clone();
-                let header_menu_block = weak_table_block.clone();
-                // The header is visual row 0; its handle uses a more opaque
-                // version of the body-row color to signal its distinct role.
-                let header_marker = crate::components::TableAxisMarker {
-                    kind: TableAxisKind::Row,
-                    index: 0,
-                };
-                let header_band_bg = if selected_marker == Some(header_marker) {
-                    header_axis_emphasis(c.table_axis_selected_bg)
-                } else if preview_marker == Some(header_marker) {
-                    header_axis_emphasis(c.table_axis_preview_bg)
-                } else {
-                    hsla(0.0, 0.0, 0.0, 0.0)
-                };
-                let header_row = div()
-                    .relative()
-                    .w_full()
-                    .flex()
-                    .gap(px(0.0))
-                    .child(
-                        // Left-edge band mirrors the body rows so the header row
-                        // can be hovered, selected, and right-clicked just like
-                        // them, with the Header Row toggle added to its menu.
+                let header_cells = runtime.header;
+                let header_row = div().relative().w_full().flex().gap(px(0.0)).children(
+                    header_cells.into_iter().enumerate().map(|(column, cell)| {
                         div()
-                            .id(ElementId::Name(
-                                format!("table-header-axis-band-{}", self.record.id).into(),
-                            ))
-                            .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .left(-activation_band)
-                            .w(activation_band)
-                            .rounded(px(6.0))
-                            .bg(header_band_bg)
-                            .cursor_pointer()
-                            .on_hover(move |hovered, _window, cx| {
-                                let _ = header_hover_block.update(cx, |_block, cx| {
-                                    cx.emit(BlockEvent::RequestTableAxisPreview {
-                                        kind: TableAxisKind::Row,
-                                        index: 0,
-                                        hovered: *hovered,
-                                    });
-                                });
-                            })
-                            .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
-                                let _ = header_select_block.update(cx, |_block, cx| {
-                                    cx.stop_propagation();
-                                    cx.emit(BlockEvent::RequestSelectTableAxis {
-                                        kind: TableAxisKind::Row,
-                                        index: 0,
-                                    });
-                                });
-                            })
-                            .on_mouse_down(MouseButton::Right, move |event, _window, cx| {
-                                let _ = header_menu_block.update(cx, |_block, cx| {
-                                    cx.stop_propagation();
-                                    cx.emit(BlockEvent::RequestOpenTableAxisMenu {
-                                        kind: TableAxisKind::Row,
-                                        index: 0,
-                                        position: event.position,
-                                    });
-                                });
-                            })
-                            .block_mouse_except_scroll(),
-                    )
-                    .children(header_cells.into_iter().enumerate().map(|(column, cell)| {
-                        let hover_block = weak_table_block.clone();
-                        let select_block = weak_table_block.clone();
-                        let menu_block = weak_table_block.clone();
-                        div()
-                            .relative()
                             .flex_none()
                             .flex_basis(relative(column_layout.fraction(column)))
                             .w(relative(column_layout.fraction(column)))
                             .h_full()
                             .min_w(px(0.0))
-                            .child(
-                                div()
-                                    .id(ElementId::Name(
-                                        format!(
-                                            "table-column-axis-activation-{}-{}",
-                                            self.record.id, column
-                                        )
-                                        .into(),
-                                    ))
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .right_0()
-                                    .h(activation_band)
-                                    .cursor_pointer()
-                                    .on_hover(move |hovered, _window, cx| {
-                                        let _ = hover_block.update(cx, |_block, cx| {
-                                            cx.emit(BlockEvent::RequestTableAxisPreview {
-                                                kind: TableAxisKind::Column,
-                                                index: column,
-                                                hovered: *hovered,
-                                            });
-                                        });
-                                    })
-                                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
-                                        let _ = select_block.update(cx, |_block, cx| {
-                                            cx.stop_propagation();
-                                            cx.emit(BlockEvent::RequestSelectTableAxis {
-                                                kind: TableAxisKind::Column,
-                                                index: column,
-                                            });
-                                        });
-                                    })
-                                    .on_mouse_down(MouseButton::Right, move |event, _window, cx| {
-                                        let _ = menu_block.update(cx, |_block, cx| {
-                                            cx.stop_propagation();
-                                            cx.emit(BlockEvent::RequestOpenTableAxisMenu {
-                                                kind: TableAxisKind::Column,
-                                                index: column,
-                                                position: event.position,
-                                            });
-                                        });
-                                    })
-                                    .block_mouse_except_scroll(),
-                            )
                             .child(cell)
-                    }));
+                    }),
+                );
 
-                let body_rows =
-                    runtime
-                        .rows
-                        .into_iter()
-                        .enumerate()
-                        .map(|(body_row_index, row)| {
-                            let hover_block = weak_table_block.clone();
-                            let select_block = weak_table_block.clone();
-                            let menu_block = weak_table_block.clone();
-                            // Row selections are addressed by visual index, where
-                            // the header is `0` and body rows follow at `1..`.
-                            let visual_row = body_row_index + 1;
-                            let marker = crate::components::TableAxisMarker {
-                                kind: TableAxisKind::Row,
-                                index: visual_row,
-                            };
-                            let band_bg = if selected_marker == Some(marker) {
-                                c.table_axis_selected_bg
-                            } else if preview_marker == Some(marker) {
-                                c.table_axis_preview_bg
-                            } else {
-                                hsla(0.0, 0.0, 0.0, 0.0)
-                            };
+                let body_rows = runtime.rows.into_iter().map(|row| {
+                    div().relative().w_full().flex().gap(px(0.0)).children(
+                        row.into_iter().enumerate().map(|(column, cell)| {
                             div()
-                                .relative()
-                                .w_full()
-                                .flex()
-                                .gap(px(0.0))
-                                .child(
-                                    div()
-                                        .id(ElementId::Name(
-                                            format!(
-                                                "table-row-axis-band-{}-{}",
-                                                self.record.id, body_row_index
-                                            )
-                                            .into(),
-                                        ))
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .left(-activation_band)
-                                        .w(activation_band)
-                                        .rounded(px(6.0))
-                                        .bg(band_bg)
-                                        .cursor_pointer()
-                                        .on_hover(move |hovered, _window, cx| {
-                                            let _ = hover_block.update(cx, |_block, cx| {
-                                                cx.emit(BlockEvent::RequestTableAxisPreview {
-                                                    kind: TableAxisKind::Row,
-                                                    index: visual_row,
-                                                    hovered: *hovered,
-                                                });
-                                            });
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_event, _window, cx| {
-                                                let _ = select_block.update(cx, |_block, cx| {
-                                                    cx.stop_propagation();
-                                                    cx.emit(BlockEvent::RequestSelectTableAxis {
-                                                        kind: TableAxisKind::Row,
-                                                        index: visual_row,
-                                                    });
-                                                });
-                                            },
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            move |event, _window, cx| {
-                                                let _ = menu_block.update(cx, |_block, cx| {
-                                                    cx.stop_propagation();
-                                                    cx.emit(BlockEvent::RequestOpenTableAxisMenu {
-                                                        kind: TableAxisKind::Row,
-                                                        index: visual_row,
-                                                        position: event.position,
-                                                    });
-                                                });
-                                            },
-                                        )
-                                        .block_mouse_except_scroll(),
-                                )
-                                .children(row.into_iter().enumerate().map(|(column, cell)| {
-                                    div()
-                                        .flex_none()
-                                        .flex_basis(relative(column_layout.fraction(column)))
-                                        .w(relative(column_layout.fraction(column)))
-                                        .h_full()
-                                        .min_w(px(0.0))
-                                        .child(cell)
-                                }))
-                        });
+                                .flex_none()
+                                .flex_basis(relative(column_layout.fraction(column)))
+                                .w(relative(column_layout.fraction(column)))
+                                .h_full()
+                                .min_w(px(0.0))
+                                .child(cell)
+                        }),
+                    )
+                });
 
                 {
                     let mut rows = Vec::with_capacity(1 + body_row_count);
                     rows.push(header_row.into_any_element());
                     rows.extend(body_rows.map(|row| row.into_any_element()));
 
-                    let column_edge_band = div()
-                        .id(ElementId::Name(
-                            format!("table-append-column-edge-{}", self.record.id).into(),
-                        ))
-                        .absolute()
-                        .top(column_append_top)
-                        .bottom(bottom_gutter)
-                        .right(right_gutter)
-                        .w(activation_band)
-                        .on_hover(cx.listener(Self::on_table_append_column_edge_hover));
-
-                    let row_edge_band = div()
-                        .id(ElementId::Name(
-                            format!("table-append-row-edge-{}", self.record.id).into(),
-                        ))
-                        .absolute()
-                        .left_0()
-                        .right(right_gutter)
-                        .bottom(bottom_gutter)
-                        .h(activation_band)
-                        .on_hover(cx.listener(Self::on_table_append_row_edge_hover));
-
-                    let column_control = {
-                        let base = div()
-                            .id(ElementId::Name(
-                                format!("table-append-column-zone-{}", self.record.id).into(),
-                            ))
+                    let table_toolbar = active_cell.map(|(column, active_focus_handle)| {
+                        let alignment = active_alignment.unwrap_or(TableColumnAlignment::Default);
+                        let left_button_block = weak_table_block.clone();
+                        let center_button_block = weak_table_block.clone();
+                        let right_button_block = weak_table_block.clone();
+                        let delete_button_block = weak_table_block.clone();
+                        let table_id = self.record.id;
+                        let size_picker = render_table_size_picker(
+                            theme.clone(),
+                            weak_table_block.clone(),
+                            table_id.to_string(),
+                            active_focus_handle,
+                            current_columns,
+                            current_visual_rows,
+                            SharedString::from(
+                                t!("MarkdownEditor.table_toolbar_resize").to_string(),
+                            ),
+                            SharedString::from(
+                                t!("MarkdownEditor.table_size_picker_columns").to_string(),
+                            ),
+                            SharedString::from(
+                                t!("MarkdownEditor.table_size_picker_rows").to_string(),
+                            ),
+                        );
+                        div()
+                            .id(ElementId::Name(format!("table-toolbar-{table_id}").into()))
+                            .debug_selector(|| "table-toolbar".to_string())
                             .absolute()
-                            .top(column_append_top)
-                            .bottom(bottom_gutter)
-                            .right_0()
-                            .w(right_gutter)
-                            .on_hover(cx.listener(Self::on_table_append_column_zone_hover));
-
-                        if column_control_visible {
-                            base.child(
-                                div()
-                                    .id(ElementId::Name(
-                                        format!("table-append-column-button-{}", self.record.id)
-                                            .into(),
-                                    ))
-                                    .absolute()
-                                    .top(append_inset)
-                                    .bottom_0()
-                                    .right_0()
-                                    .w(append_extent)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(999.0))
-                                    .bg(c.table_append_button_bg)
-                                    .hover(|this| this.bg(c.table_append_button_hover))
-                                    .cursor_pointer()
-                                    .text_size(px(t.text_size))
-                                    .text_color(c.table_append_button_text)
-                                    .block_mouse_except_scroll()
-                                    .on_hover(
-                                        cx.listener(Self::on_table_append_column_button_hover),
-                                    )
-                                    .on_click(cx.listener(Self::on_append_table_column))
-                                    .child("+"),
-                            )
-                        } else {
-                            base
-                        }
-                    };
-
-                    let row_control = {
-                        let base = div()
-                            .id(ElementId::Name(
-                                format!("table-append-row-zone-{}", self.record.id).into(),
-                            ))
-                            .absolute()
+                            .top(px(-TABLE_TOOLBAR_HEIGHT))
                             .left_0()
-                            .right(right_gutter)
-                            .bottom_0()
-                            .h(bottom_gutter)
-                            .on_hover(cx.listener(Self::on_table_append_row_zone_hover));
-
-                        if row_control_visible {
-                            base.child(
+                            .right_0()
+                            .h(px(TABLE_TOOLBAR_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
                                 div()
-                                    .id(ElementId::Name(
-                                        format!("table-append-row-button-{}", self.record.id)
-                                            .into(),
-                                    ))
-                                    .absolute()
-                                    .left(append_inset)
-                                    .right(append_inset)
-                                    .bottom_0()
-                                    .h(append_extent)
+                                    .h_full()
                                     .flex()
                                     .items_center()
-                                    .justify_center()
-                                    .rounded(px(999.0))
-                                    .bg(c.table_append_button_bg)
-                                    .hover(|this| this.bg(c.table_append_button_hover))
-                                    .cursor_pointer()
-                                    .text_size(px(t.text_size))
-                                    .text_color(c.table_append_button_text)
-                                    .block_mouse_except_scroll()
-                                    .on_hover(cx.listener(Self::on_table_append_row_button_hover))
-                                    .on_click(cx.listener(Self::on_append_table_row))
-                                    .child("+"),
+                                    .gap(px(TABLE_TOOLBAR_GAP))
+                                    .child(size_picker)
+                                    .child(render_table_toolbar_button(
+                                        &theme,
+                                        left_button_block,
+                                        TableToolbarButton {
+                                            id: format!("table-toolbar-align-left-{table_id}"),
+                                            icon: IconName::AlignLeft,
+                                            tooltip: SharedString::from(
+                                                t!("MarkdownEditor.table_toolbar_align_left")
+                                                    .to_string(),
+                                            ),
+                                            selected: matches!(
+                                                alignment,
+                                                TableColumnAlignment::Default
+                                                    | TableColumnAlignment::Left
+                                            ),
+                                            danger: false,
+                                            action: TableToolbarAction::Align {
+                                                column,
+                                                alignment: TableColumnAlignment::Left,
+                                            },
+                                        },
+                                    ))
+                                    .child(render_table_toolbar_button(
+                                        &theme,
+                                        center_button_block,
+                                        TableToolbarButton {
+                                            id: format!("table-toolbar-align-center-{table_id}"),
+                                            icon: IconName::AlignCenter,
+                                            tooltip: SharedString::from(
+                                                t!("MarkdownEditor.table_toolbar_align_center")
+                                                    .to_string(),
+                                            ),
+                                            selected: alignment == TableColumnAlignment::Center,
+                                            danger: false,
+                                            action: TableToolbarAction::Align {
+                                                column,
+                                                alignment: TableColumnAlignment::Center,
+                                            },
+                                        },
+                                    ))
+                                    .child(render_table_toolbar_button(
+                                        &theme,
+                                        right_button_block,
+                                        TableToolbarButton {
+                                            id: format!("table-toolbar-align-right-{table_id}"),
+                                            icon: IconName::AlignRight,
+                                            tooltip: SharedString::from(
+                                                t!("MarkdownEditor.table_toolbar_align_right")
+                                                    .to_string(),
+                                            ),
+                                            selected: alignment == TableColumnAlignment::Right,
+                                            danger: false,
+                                            action: TableToolbarAction::Align {
+                                                column,
+                                                alignment: TableColumnAlignment::Right,
+                                            },
+                                        },
+                                    )),
                             )
-                        } else {
-                            base
-                        }
-                    };
+                            .child(render_table_toolbar_button(
+                                &theme,
+                                delete_button_block,
+                                TableToolbarButton {
+                                    id: format!("table-toolbar-delete-{table_id}"),
+                                    icon: IconName::Delete,
+                                    tooltip: SharedString::from(
+                                        t!("MarkdownEditor.table_toolbar_delete").to_string(),
+                                    ),
+                                    selected: false,
+                                    danger: true,
+                                    action: TableToolbarAction::Delete,
+                                },
+                            ))
+                    });
 
                     div()
                         .id(block_id)
                         .debug_selector(|| "table-root".to_string())
                         .w_full()
+                        // Keep enough of the normal inter-block gap available for the
+                        // Typora-style floating toolbar. The toolbar remains absolutely
+                        // positioned, so focusing a cell never resizes or shifts the table.
+                        .mt(px((TABLE_TOOLBAR_HEIGHT - d.block_gap).max(0.0)))
                         .relative()
                         .flex()
                         .flex_col()
                         .gap(px(0.0))
                         .children(rows)
-                        .children(column_axis_overlay)
-                        .child(column_edge_band)
-                        .child(row_edge_band)
-                        .child(column_control)
-                        .child(row_control)
+                        .children(table_toolbar)
                         .into_any_element()
                 }
             }
@@ -3230,7 +3267,8 @@ impl Render for Block {
                 let child = if focused {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
-                    self.render_math_content(&theme, cx)
+                    let preview = self.render_math_content(&theme, cx);
+                    self.render_rendered_block(preview, &theme, cx)
                 };
                 focused_base.w_full().child(child).into_any_element()
             }
@@ -3242,7 +3280,8 @@ impl Render for Block {
                 let child = if focused {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
-                    self.render_mermaid_content(&theme, window, cx)
+                    let preview = self.render_mermaid_content(&theme, window, cx);
+                    self.render_rendered_block(preview, &theme, cx)
                 };
                 focused_base.w_full().child(child).into_any_element()
             }

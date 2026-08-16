@@ -52,6 +52,10 @@ pub fn refresh_keybindings(cx: &mut gpui::App) {
     shortcuts::refresh(cx);
 }
 
+pub fn set_markdown_editor_locale(locale: &str, cx: &mut gpui::App) -> bool {
+    markdown_editor::set_locale(locale, cx)
+}
+
 pub fn shortcut_descriptors() -> Vec<NotesShortcutDescriptor> {
     shortcuts::descriptors()
 }

@@ -18,6 +18,7 @@ ratex-layout = "0.1.9"
 ratex-parser = "0.1.9"
 ratex-svg = { version = "0.1.9", features = ["embed-fonts", "standalone"] }
 ropey.workspace = true
+rust-i18n.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml = "1"

@@ -1,4 +1,4 @@
-//! Shared user-configuration helpers for app preferences and imported packs.
+//! Shared user-configuration helpers for app preferences and imported themes.
 
 use std::path::{Path, PathBuf};
 
@@ -10,8 +10,8 @@ pub(crate) mod preferences;
 
 pub(crate) use preferences::{EditorSettings, ImagePasteBehavior, read_app_preferences};
 
-/// Cross-platform configuration directories used for imported language/theme
-/// packs and the small embedded-editor preference file.
+/// Cross-platform configuration directories used for imported themes and the
+/// small embedded-editor preference file.
 #[derive(Debug, Clone)]
 pub(crate) struct VelotypeConfigDirs {
     root: PathBuf,
@@ -29,10 +29,6 @@ impl VelotypeConfigDirs {
     #[cfg(test)]
     pub(crate) fn from_root(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
-    }
-
-    pub(crate) fn languages_dir(&self) -> PathBuf {
-        self.root.join("languages")
     }
 
     pub(crate) fn themes_dir(&self) -> PathBuf {

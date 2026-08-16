@@ -47,16 +47,6 @@ impl Block {
         self.table_axis_preview = None;
         self.table_axis_selection = None;
         self.table_axis_highlight = TableAxisHighlight::None;
-        self.table_append_column_edge_hovered = false;
-        self.table_append_column_hovered = false;
-        self.table_append_column_zone_hovered = false;
-        self.table_append_column_button_hovered = false;
-        self.table_append_column_close_task = None;
-        self.table_append_row_edge_hovered = false;
-        self.table_append_row_hovered = false;
-        self.table_append_row_zone_hovered = false;
-        self.table_append_row_button_hovered = false;
-        self.table_append_row_close_task = None;
     }
 
     pub(crate) fn set_table_axis_visual_state(

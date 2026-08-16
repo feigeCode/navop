@@ -1,0 +1,327 @@
+_version: 2
+
+MarkdownEditor:
+  info_dialog_ok:
+    en: "OK"
+    zh-CN: "确定"
+    zh-HK: "確定"
+  image_paste_failed_title:
+    en: "Image Paste Failed"
+    zh-CN: "图片粘贴失败"
+    zh-HK: "圖片貼上失敗"
+  open_link_title:
+    en: "Open link?"
+    zh-CN: "打开链接？"
+    zh-HK: "開啟連結？"
+  open_link_open:
+    en: "Open"
+    zh-CN: "打开"
+    zh-HK: "開啟"
+  open_link_cancel:
+    en: "Cancel"
+    zh-CN: "取消"
+    zh-HK: "取消"
+  context_menu_undo:
+    en: "Undo"
+    zh-CN: "撤销"
+    zh-HK: "復原"
+  context_menu_redo:
+    en: "Redo"
+    zh-CN: "重做"
+    zh-HK: "重做"
+  context_menu_cut:
+    en: "Cut"
+    zh-CN: "剪切"
+    zh-HK: "剪下"
+  context_menu_copy:
+    en: "Copy"
+    zh-CN: "复制"
+    zh-HK: "複製"
+  context_menu_paste:
+    en: "Paste"
+    zh-CN: "粘贴"
+    zh-HK: "貼上"
+  context_menu_select_all:
+    en: "Select All"
+    zh-CN: "全选"
+    zh-HK: "全選"
+  context_menu_format:
+    en: "Format"
+    zh-CN: "格式"
+    zh-HK: "格式"
+  context_menu_block_type:
+    en: "Block Type"
+    zh-CN: "块类型"
+    zh-HK: "區塊類型"
+  context_menu_block:
+    en: "Block"
+    zh-CN: "块"
+    zh-HK: "區塊"
+  context_menu_insert:
+    en: "Insert"
+    zh-CN: "插入"
+    zh-HK: "插入"
+  context_menu_table:
+    en: "Table"
+    zh-CN: "表格"
+    zh-HK: "表格"
+  context_menu_toggle_view_mode:
+    en: "Toggle View Mode"
+    zh-CN: "切换编辑模式"
+    zh-HK: "切換編輯模式"
+  context_menu_bold:
+    en: "Bold"
+    zh-CN: "粗体"
+    zh-HK: "粗體"
+  context_menu_italic:
+    en: "Italic"
+    zh-CN: "斜体"
+    zh-HK: "斜體"
+  context_menu_underline:
+    en: "Underline"
+    zh-CN: "下划线"
+    zh-HK: "底線"
+  context_menu_strikethrough:
+    en: "Strikethrough"
+    zh-CN: "删除线"
+    zh-HK: "刪除線"
+  context_menu_inline_code:
+    en: "Inline Code"
+    zh-CN: "行内代码"
+    zh-HK: "行內程式碼"
+  context_menu_paragraph:
+    en: "Paragraph"
+    zh-CN: "段落"
+    zh-HK: "段落"
+  context_menu_heading_1:
+    en: "Heading 1"
+    zh-CN: "标题 1"
+    zh-HK: "標題 1"
+  context_menu_heading_2:
+    en: "Heading 2"
+    zh-CN: "标题 2"
+    zh-HK: "標題 2"
+  context_menu_heading_3:
+    en: "Heading 3"
+    zh-CN: "标题 3"
+    zh-HK: "標題 3"
+  context_menu_heading_4:
+    en: "Heading 4"
+    zh-CN: "标题 4"
+    zh-HK: "標題 4"
+  context_menu_heading_5:
+    en: "Heading 5"
+    zh-CN: "标题 5"
+    zh-HK: "標題 5"
+  context_menu_heading_6:
+    en: "Heading 6"
+    zh-CN: "标题 6"
+    zh-HK: "標題 6"
+  context_menu_bullet_list:
+    en: "Bullet List"
+    zh-CN: "无序列表"
+    zh-HK: "無序清單"
+  context_menu_ordered_list:
+    en: "Ordered List"
+    zh-CN: "有序列表"
+    zh-HK: "有序清單"
+  context_menu_task_list:
+    en: "Task List"
+    zh-CN: "任务列表"
+    zh-HK: "待辦清單"
+  context_menu_quote:
+    en: "Quote"
+    zh-CN: "引用"
+    zh-HK: "引用"
+  context_menu_code_block:
+    en: "Code Block"
+    zh-CN: "代码块"
+    zh-HK: "程式碼區塊"
+  context_menu_move_block_up:
+    en: "Move Block Up"
+    zh-CN: "上移块"
+    zh-HK: "上移區塊"
+  context_menu_move_block_down:
+    en: "Move Block Down"
+    zh-CN: "下移块"
+    zh-HK: "下移區塊"
+  context_menu_duplicate_block:
+    en: "Duplicate Block"
+    zh-CN: "复制块"
+    zh-HK: "複製區塊"
+  context_menu_delete_block:
+    en: "Delete Block"
+    zh-CN: "删除块"
+    zh-HK: "刪除區塊"
+  context_menu_indent_block:
+    en: "Indent Block"
+    zh-CN: "增加缩进"
+    zh-HK: "增加縮排"
+  context_menu_outdent_block:
+    en: "Outdent Block"
+    zh-CN: "减少缩进"
+    zh-HK: "減少縮排"
+  table_menu_insert_row_above:
+    en: "Insert Row Above"
+    zh-CN: "上方插入行"
+    zh-HK: "上方插入行"
+  table_menu_insert_row_below:
+    en: "Insert Row Below"
+    zh-CN: "下方插入行"
+    zh-HK: "下方插入行"
+  table_menu_insert_column_left:
+    en: "Insert Column Left"
+    zh-CN: "左侧插入列"
+    zh-HK: "左側插入欄"
+  table_menu_insert_column_right:
+    en: "Insert Column Right"
+    zh-CN: "右侧插入列"
+    zh-HK: "右側插入欄"
+  table_menu_delete_row:
+    en: "Delete Row"
+    zh-CN: "删除行"
+    zh-HK: "刪除行"
+  table_menu_delete_column:
+    en: "Delete Column"
+    zh-CN: "删除列"
+    zh-HK: "刪除欄"
+  table_menu_copy_table:
+    en: "Copy Table"
+    zh-CN: "复制表格"
+    zh-HK: "複製表格"
+  table_menu_format_source:
+    en: "Format Table Source"
+    zh-CN: "格式化表格源码"
+    zh-HK: "格式化表格原始碼"
+  table_menu_delete_table:
+    en: "Delete Table"
+    zh-CN: "删除表格"
+    zh-HK: "刪除表格"
+  table_axis_align_column_left:
+    en: "Align Column Left"
+    zh-CN: "左对齐此列"
+    zh-HK: "此欄靠左對齊"
+  table_axis_align_column_center:
+    en: "Align Column Center"
+    zh-CN: "居中此列"
+    zh-HK: "此欄置中對齊"
+  table_axis_align_column_right:
+    en: "Align Column Right"
+    zh-CN: "右对齐此列"
+    zh-HK: "此欄靠右對齊"
+  table_axis_move_column_left:
+    en: "Move Column Left"
+    zh-CN: "向左移动此列"
+    zh-HK: "向左移動此欄"
+  table_axis_move_column_right:
+    en: "Move Column Right"
+    zh-CN: "向右移动此列"
+    zh-HK: "向右移動此欄"
+  table_axis_delete_column:
+    en: "Delete Column"
+    zh-CN: "删除此列"
+    zh-HK: "刪除此欄"
+  table_axis_move_row_up:
+    en: "Move Row Up"
+    zh-CN: "向上移动此行"
+    zh-HK: "向上移動此行"
+  table_axis_move_row_down:
+    en: "Move Row Down"
+    zh-CN: "向下移动此行"
+    zh-HK: "向下移動此行"
+  table_axis_delete_row:
+    en: "Delete Row"
+    zh-CN: "删除此行"
+    zh-HK: "刪除此行"
+  table_header_row:
+    en: "Header Row"
+    zh-CN: "标题行"
+    zh-HK: "標題行"
+  table_insert_title:
+    en: "Insert Table"
+    zh-CN: "插入表格"
+    zh-HK: "插入表格"
+  table_insert_description:
+    en: "Create one header row and configure body rows and columns."
+    zh-CN: "创建 1 个表头行，并配置正文行数与列数。"
+    zh-HK: "建立 1 個表頭行，並設定正文行數與欄數。"
+  table_insert_body_rows:
+    en: "Body Rows"
+    zh-CN: "正文行数"
+    zh-HK: "正文行數"
+  table_insert_columns:
+    en: "Columns"
+    zh-CN: "列数"
+    zh-HK: "欄數"
+  table_insert_cancel:
+    en: "Cancel"
+    zh-CN: "取消"
+    zh-HK: "取消"
+  table_insert_confirm:
+    en: "Insert"
+    zh-CN: "插入"
+    zh-HK: "插入"
+  table_toolbar_resize:
+    en: "Resize Table"
+    zh-CN: "调整表格大小"
+    zh-HK: "調整表格大小"
+  table_toolbar_align_left:
+    en: "Align Left"
+    zh-CN: "左对齐"
+    zh-HK: "靠左對齊"
+  table_toolbar_align_center:
+    en: "Align Center"
+    zh-CN: "居中"
+    zh-HK: "置中對齊"
+  table_toolbar_align_right:
+    en: "Align Right"
+    zh-CN: "右对齐"
+    zh-HK: "靠右對齊"
+  table_toolbar_delete:
+    en: "Delete Table"
+    zh-CN: "删除表格"
+    zh-HK: "刪除表格"
+  table_size_picker_columns:
+    en: "Columns"
+    zh-CN: "列"
+    zh-HK: "欄"
+  table_size_picker_rows:
+    en: "Rows"
+    zh-CN: "行"
+    zh-HK: "行"
+  image_placeholder:
+    en: "Image"
+    zh-CN: "图片"
+    zh-HK: "圖片"
+  image_loading_without_alt:
+    en: "Loading image..."
+    zh-CN: "正在加载图片..."
+    zh-HK: "正在載入圖片..."
+  image_loading_with_alt_template:
+    en: "Loading %{alt}"
+    zh-CN: "正在加载 %{alt}"
+    zh-HK: "正在載入 %{alt}"
+  enlarged_view_source:
+    en: "Source"
+    zh-CN: "源码"
+    zh-HK: "原始碼"
+  enlarged_view_mermaid_title:
+    en: "Mermaid"
+    zh-CN: "Mermaid"
+    zh-HK: "Mermaid"
+  enlarged_view_math_title:
+    en: "Math"
+    zh-CN: "公式"
+    zh-HK: "公式"
+  enlarged_view_zoom_in:
+    en: "Zoom In"
+    zh-CN: "放大"
+    zh-HK: "放大"
+  enlarged_view_zoom_out:
+    en: "Zoom Out"
+    zh-CN: "缩小"
+    zh-HK: "縮小"
+  enlarged_view_close:
+    en: "Close Preview"
+    zh-CN: "关闭预览"
+    zh-HK: "關閉預覽"

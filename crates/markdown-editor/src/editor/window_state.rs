@@ -366,11 +366,10 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use gpui::TestAppContext;
+    use gpui::{Modifiers, MouseButton, TestAppContext, px};
 
     use super::Editor;
-    use crate::components::{BlockKind, TableAxisKind, TableAxisMarker};
-    use crate::i18n::I18nManager;
+    use crate::components::{BlockKind, TableColumnAlignment};
     use crate::theme::ThemeManager;
 
     fn uniform_strides(count: usize, height: f32) -> Vec<f32> {
@@ -379,7 +378,7 @@ mod tests {
 
     fn init_editor_test_app(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            I18nManager::init(cx);
+            gpui_component::init(cx);
             ThemeManager::init(cx);
             crate::components::init(cx);
         });
@@ -563,7 +562,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn table_hover_controls_overlay_without_resizing_table(cx: &mut TestAppContext) {
+    async fn right_clicking_table_cell_opens_menu_for_exact_cell(cx: &mut TestAppContext) {
         init_editor_test_app(cx);
         let markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |".to_string();
         let (editor, cx) =
@@ -572,81 +571,282 @@ mod tests {
             redraw(cx);
         }
 
-        let table_block = editor.read_with(cx, |editor, cx| {
-            editor
+        let (table_block_id, second_cell_id) = editor.read_with(cx, |editor, cx| {
+            let table_block = editor
                 .document
                 .visible_blocks()
                 .into_iter()
                 .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
                 .expect("the markdown table becomes a table block")
                 .entity
-                .clone()
+                .clone();
+            let second_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.first())
+                .and_then(|row| row.get(1))
+                .expect("the table has a second-column body cell");
+            (table_block.entity_id(), second_cell.read(cx).record.id)
         });
 
-        let baseline = cx.debug_bounds("table-root").expect("table root lays out");
-
-        // Hovering a column shows the axis strip overlaid on the header: the
-        // strip starts at the table's top edge and the table does not grow.
-        table_block.update(cx, |block, cx| {
-            block.table_axis_preview = Some(TableAxisMarker {
-                kind: TableAxisKind::Column,
-                index: 0,
-            });
-            cx.notify();
-        });
+        let cell_selector: &'static str =
+            Box::leak(format!("table-cell-{second_cell_id}").into_boxed_str());
+        let cell_bounds = cx
+            .debug_bounds(cell_selector)
+            .expect("the second-column body cell lays out");
+        cx.simulate_mouse_down(
+            cell_bounds.center(),
+            MouseButton::Right,
+            Modifiers::default(),
+        );
         redraw(cx);
-        let strip = cx
-            .debug_bounds("table-column-axis-overlay")
-            .expect("column axis strip renders on column hover");
-        let after_axis = cx.debug_bounds("table-root").expect("table root lays out");
+
+        editor.read_with(cx, |editor, _cx| {
+            let target = editor
+                .context_menu
+                .as_ref()
+                .and_then(|menu| menu.table_target)
+                .expect("right-clicking a table cell should open the table context menu");
+            assert_eq!(target.table_block_id, table_block_id);
+            assert_eq!(target.row, 1);
+            assert_eq!(target.column, 1);
+        });
         assert!(
-            (f32::from(strip.origin.y) - f32::from(after_axis.origin.y)).abs() < 0.5,
-            "the axis strip must overlay the header, not sit above it"
+            cx.debug_bounds("editor-table-context-menu-panel").is_some(),
+            "the table context-menu panel should be visible after the right click"
         );
-        assert_eq!(
-            after_axis.size.height, baseline.size.height,
-            "column hover must not grow the table"
+    }
+
+    #[gpui::test]
+    async fn table_toolbar_overlays_without_resizing_table(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |".to_string();
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        let (table_block, second_cell, table_id) = editor.read_with(cx, |editor, cx| {
+            let table_block = editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
+                .expect("the markdown table becomes a table block")
+                .entity
+                .clone();
+            let second_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.first())
+                .and_then(|row| row.get(1))
+                .expect("the table has a second-column body cell")
+                .clone();
+            let table_id = table_block.read(cx).record.id;
+            (table_block, second_cell, table_id)
+        });
+
+        cx.update(|window, _| window.blur());
+        redraw(cx);
+        let baseline = cx.debug_bounds("table-root").expect("table root lays out");
+        assert!(
+            cx.debug_bounds("table-toolbar").is_none(),
+            "the toolbar stays hidden while the table is not focused"
         );
 
-        // Hovering the right edge shows the column append button overlaid on
-        // the edge: the table width stays the same.
-        table_block.update(cx, |block, cx| {
-            block.table_append_column_hovered = true;
+        editor.update(cx, |editor, cx| {
+            editor.pending_focus = Some(second_cell.entity_id());
+            editor.active_entity_id = Some(second_cell.entity_id());
             cx.notify();
         });
         redraw(cx);
-        let after_column_append = cx.debug_bounds("table-root").expect("table root lays out");
-        assert_eq!(
-            after_column_append.size.width, baseline.size.width,
-            "column append control must not widen the table"
-        );
 
-        // Hovering the bottom edge shows the row append button overlaid on the
-        // edge: the table height stays the same.
-        table_block.update(cx, |block, cx| {
-            block.table_append_row_hovered = true;
-            cx.notify();
-        });
-        redraw(cx);
-        let after_row_append = cx.debug_bounds("table-root").expect("table root lays out");
+        let toolbar_bounds = cx
+            .debug_bounds("table-toolbar")
+            .expect("focusing a table cell shows the table toolbar");
         assert_eq!(
-            after_row_append.size.height, baseline.size.height,
-            "row append control must not grow the table"
-        );
-
-        // Leaving everything restores the exact baseline bounds.
-        table_block.update(cx, |block, cx| {
-            block.table_axis_preview = None;
-            block.table_axis_selection = None;
-            block.table_append_column_hovered = false;
-            block.table_append_row_hovered = false;
-            cx.notify();
-        });
-        redraw(cx);
-        assert_eq!(
-            cx.debug_bounds("table-root").expect("table root lays out"),
+            cx.debug_bounds("table-root")
+                .expect("table root remains laid out"),
             baseline,
-            "clearing hover states must restore the original table bounds"
+            "the table toolbar must overlay the table instead of resizing it"
         );
+        assert_eq!(
+            toolbar_bounds.origin.y + toolbar_bounds.size.height,
+            baseline.origin.y,
+            "the toolbar should sit immediately above the table"
+        );
+        assert!(
+            toolbar_bounds.origin.y >= px(0.0),
+            "the toolbar must remain inside the editor viewport for a leading table"
+        );
+
+        let center_button_selector: &'static str =
+            Box::leak(format!("table-toolbar-align-center-{table_id}").into_boxed_str());
+        let center_button = cx
+            .debug_bounds(center_button_selector)
+            .expect("the center-alignment toolbar button lays out");
+        cx.simulate_click(center_button.center(), Modifiers::default());
+        redraw(cx);
+
+        table_block.read_with(cx, |block, _cx| {
+            let alignments = &block
+                .record
+                .table
+                .as_ref()
+                .expect("the table record remains available")
+                .alignments;
+            assert_eq!(
+                alignments.first(),
+                Some(&TableColumnAlignment::Default),
+                "clicking the toolbar must not change another column"
+            );
+            assert_eq!(
+                alignments.get(1),
+                Some(&TableColumnAlignment::Center),
+                "the toolbar applies alignment to the active column"
+            );
+        });
+        editor.read_with(cx, |editor, cx| {
+            assert!(
+                editor.table_axis_selection.is_none(),
+                "toolbar alignment must not create a column-axis selection"
+            );
+            assert!(
+                table_block.read(cx).table_axis_selection.is_none(),
+                "toolbar alignment must not leave the table column selected"
+            );
+            let focused_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.first())
+                .and_then(|row| row.get(1))
+                .expect("the aligned column keeps its body cell");
+            assert_eq!(
+                editor.active_entity_id,
+                Some(focused_cell.entity_id()),
+                "the alignment action keeps the active cell in the edited column"
+            );
+        });
+
+        cx.update(|window, _| window.blur());
+        redraw(cx);
+        assert!(
+            cx.debug_bounds("table-toolbar").is_none(),
+            "the toolbar hides after focus leaves the table"
+        );
+        assert_eq!(
+            cx.debug_bounds("table-root")
+                .expect("table root remains laid out"),
+            baseline,
+            "hiding the table toolbar must preserve table bounds"
+        );
+    }
+
+    #[gpui::test]
+    async fn moving_table_row_keeps_active_cell_column(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |".to_string();
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        let (table_block, active_cell) = editor.read_with(cx, |editor, cx| {
+            let table_block = editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
+                .expect("the markdown table becomes a table block")
+                .entity
+                .clone();
+            let active_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.first())
+                .and_then(|row| row.get(1))
+                .expect("the table has a second-column body cell")
+                .clone();
+            (table_block, active_cell)
+        });
+
+        editor.update(cx, |editor, cx| {
+            editor.pending_focus = Some(active_cell.entity_id());
+            editor.active_entity_id = Some(active_cell.entity_id());
+            editor.move_table_row(&table_block, 1, 1, cx);
+        });
+
+        editor.read_with(cx, |editor, cx| {
+            let expected_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.get(1))
+                .and_then(|row| row.get(1))
+                .expect("the moved row keeps its second-column cell");
+            assert_eq!(
+                editor.active_entity_id,
+                Some(expected_cell.entity_id()),
+                "moving a row keeps the active cell in the same column"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn moving_table_column_keeps_active_cell_row(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |".to_string();
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        let (table_block, active_cell) = editor.read_with(cx, |editor, cx| {
+            let table_block = editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
+                .expect("the markdown table becomes a table block")
+                .entity
+                .clone();
+            let active_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.get(1))
+                .and_then(|row| row.first())
+                .expect("the table has a second body-row cell")
+                .clone();
+            (table_block, active_cell)
+        });
+
+        editor.update(cx, |editor, cx| {
+            editor.pending_focus = Some(active_cell.entity_id());
+            editor.active_entity_id = Some(active_cell.entity_id());
+            editor.move_table_column(&table_block, 0, 1, cx);
+        });
+
+        editor.read_with(cx, |editor, cx| {
+            let expected_cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.get(1))
+                .and_then(|row| row.get(1))
+                .expect("the moved column keeps its second-body-row cell");
+            assert_eq!(
+                editor.active_entity_id,
+                Some(expected_cell.entity_id()),
+                "moving a column keeps the active cell in the same row"
+            );
+        });
     }
 }

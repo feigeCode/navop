@@ -14,86 +14,13 @@ use gpui::*;
 
 use super::Editor;
 use crate::components::{
-    BlockEvent, BlockKind, BlockRecord, CollapsedCaretAffinity, IndentBlock, InlineTextTree,
-    OutdentBlock, PastedImageSource, TableCellPosition, TableData, is_table_row_candidate,
-    parse_root_table_region, parse_table_body_row,
+    BlockEvent, BlockKind, BlockRecord, CollapsedCaretAffinity, InlineTextTree, PastedImageSource,
+    TableCellPosition, TableData, is_table_row_candidate, parse_root_table_region,
+    parse_table_body_row,
 };
 use crate::config::{ImagePasteBehavior, read_app_preferences};
 
 impl Editor {
-    fn focused_block_for_tab_key(
-        &self,
-        window: &mut Window,
-        cx: &App,
-    ) -> Option<Entity<super::Block>> {
-        let is_focused = |block: &Entity<super::Block>| {
-            let block = block.read(cx);
-            block.focus_handle.is_focused(window)
-        };
-
-        if let Some(block) = self
-            .active_entity_id
-            .and_then(|entity_id| self.focusable_entity_by_id(entity_id))
-            .filter(is_focused)
-        {
-            return Some(block);
-        }
-
-        for binding in self.table_cells.values() {
-            if is_focused(&binding.cell) {
-                return Some(binding.cell.clone());
-            }
-        }
-
-        self.document
-            .visible_blocks()
-            .iter()
-            .find_map(|visible| is_focused(&visible.entity).then(|| visible.entity.clone()))
-    }
-
-    pub(crate) fn on_editor_key_down_capture(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if event.keystroke.key != "tab" {
-            return;
-        }
-
-        let modifiers = event.keystroke.modifiers;
-        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.function {
-            return;
-        }
-
-        let Some(target) = self.focused_block_for_tab_key(window, cx) else {
-            return;
-        };
-
-        let handles_tab = {
-            let block = target.read(cx);
-            block.is_table_cell()
-                || block.kind().is_list_item()
-                || block.kind() == BlockKind::Paragraph
-                || block.kind().is_code_block()
-        };
-
-        if !handles_tab {
-            return;
-        }
-
-        if modifiers.shift {
-            target.update(cx, |block, block_cx| {
-                block.on_outdent_block(&OutdentBlock, window, block_cx);
-            });
-        } else {
-            target.update(cx, |block, block_cx| {
-                block.on_indent_block(&IndentBlock, window, block_cx);
-            });
-        }
-        cx.stop_propagation();
-    }
-
     fn build_plain_paste_blocks_from_lines(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -240,8 +167,10 @@ impl Editor {
                 | BlockEvent::RequestOutdent
                 | BlockEvent::RequestDowngradeNestedListItemToChildParagraph
                 | BlockEvent::ToggleTaskChecked
-                | BlockEvent::RequestAppendTableColumn
-                | BlockEvent::RequestAppendTableRow
+                | BlockEvent::RequestSetBlockKind { .. }
+                | BlockEvent::RequestMoveBlockUp
+                | BlockEvent::RequestMoveBlockDown
+                | BlockEvent::RequestDuplicateBlock
                 | BlockEvent::RequestDelete
         )
     }
@@ -482,17 +411,16 @@ impl Editor {
     }
 
     fn show_image_paste_error(&self, err: anyhow::Error, cx: &mut Context<Self>) {
-        let strings = cx.global::<crate::i18n::I18nManager>().strings().clone();
+        let ok = rust_i18n::t!("MarkdownEditor.info_dialog_ok").to_string();
+        let title = rust_i18n::t!("MarkdownEditor.image_paste_failed_title").to_string();
         if let Some(window) = cx.active_window() {
-            let ok = strings.info_dialog_ok.clone();
-            let title = strings.image_paste_failed_title.clone();
             let detail = err.to_string();
             let _ = window.update(cx, |_view, window, cx| {
                 let buttons = [ok.as_str()];
                 let _ = window.prompt(PromptLevel::Critical, &title, Some(&detail), &buttons, cx);
             });
         } else {
-            eprintln!("{}: {err}", strings.image_paste_failed_title);
+            eprintln!("{title}: {err}");
         }
     }
 
@@ -696,6 +624,29 @@ impl Editor {
             block.cursor_blink_epoch = Instant::now();
             cx.notify();
         });
+    }
+
+    fn clone_block_subtree(
+        source: &Entity<super::Block>,
+        cx: &mut Context<Self>,
+    ) -> Entity<super::Block> {
+        let (mut record, children) = {
+            let source = source.read(cx);
+            (source.record.clone(), source.children.clone())
+        };
+        record.id = uuid::Uuid::new_v4();
+        record.parent = None;
+        record.content.clear();
+
+        let duplicate = Self::new_block(cx, record);
+        let duplicate_children = children
+            .iter()
+            .map(|child| Self::clone_block_subtree(child, cx))
+            .collect::<Vec<_>>();
+        duplicate.update(cx, move |duplicate, _cx| {
+            duplicate.children = duplicate_children;
+        });
+        duplicate
     }
 
     /// A block that a setext underline below it can promote into a heading: a
@@ -1362,6 +1313,18 @@ impl Editor {
                     &binding.table_block,
                     binding.position,
                     *delta,
+                    cx,
+                );
+            }
+            BlockEvent::RequestOpenTableContextMenu { position } => {
+                self.open_table_context_menu(
+                    *position,
+                    Some(binding.cell.entity_id()),
+                    super::table_menu::TableMenuTarget {
+                        table_block_id: binding.table_block.entity_id(),
+                        row: binding.position.row,
+                        column: binding.position.column,
+                    },
                     cx,
                 );
             }
@@ -2176,6 +2139,111 @@ impl Editor {
                 self.finalize_pending_undo_capture(cx);
                 cx.notify();
             }
+            BlockEvent::RequestSetBlockKind { kind } => {
+                if block.read(cx).kind() == *kind {
+                    return;
+                }
+
+                self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let changed = block.update(cx, |block, cx| {
+                    block.apply_shortcut_block_kind(kind.clone(), cx)
+                });
+                if !changed {
+                    self.finalize_pending_undo_capture(cx);
+                    return;
+                }
+
+                self.document.rebuild_metadata_and_snapshot(cx);
+                self.ensure_trailing_paragraph_after_structural(&block, cx);
+                self.rebuild_table_runtimes(cx);
+                self.rebuild_image_runtimes(cx);
+                self.focus_block(block.entity_id());
+                self.mark_dirty(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
+            }
+            BlockEvent::RequestMoveBlockUp => {
+                let Some(location) = self.document.find_block_location(block.entity_id()) else {
+                    return;
+                };
+                if location.index == 0 {
+                    return;
+                }
+
+                self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let parent = location.parent.clone();
+                let moved = self.document.with_structure_mutation(cx, |document, cx| {
+                    let moved = document.remove_block_by_id_raw(block.entity_id(), cx)?.0;
+                    document.insert_blocks_at_raw(
+                        parent,
+                        location.index - 1,
+                        vec![moved.clone()],
+                        cx,
+                    );
+                    Some(moved)
+                });
+                let Some(moved) = moved else {
+                    self.finalize_pending_undo_capture(cx);
+                    return;
+                };
+
+                self.focus_block(moved.entity_id());
+                self.mark_dirty(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
+            }
+            BlockEvent::RequestMoveBlockDown => {
+                let Some(location) = self.document.find_block_location(block.entity_id()) else {
+                    return;
+                };
+                if self.document.next_sibling(block.entity_id(), cx).is_none() {
+                    return;
+                }
+
+                self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let parent = location.parent.clone();
+                let moved = self.document.with_structure_mutation(cx, |document, cx| {
+                    let moved = document.remove_block_by_id_raw(block.entity_id(), cx)?.0;
+                    document.insert_blocks_at_raw(
+                        parent,
+                        location.index + 1,
+                        vec![moved.clone()],
+                        cx,
+                    );
+                    Some(moved)
+                });
+                let Some(moved) = moved else {
+                    self.finalize_pending_undo_capture(cx);
+                    return;
+                };
+
+                self.focus_block(moved.entity_id());
+                self.mark_dirty(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
+            }
+            BlockEvent::RequestDuplicateBlock => {
+                let Some(location) = self.document.find_block_location(block.entity_id()) else {
+                    return;
+                };
+
+                self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let duplicate = Self::clone_block_subtree(&block, cx);
+                self.document.insert_blocks_at(
+                    location.parent,
+                    location.index + 1,
+                    vec![duplicate.clone()],
+                    cx,
+                );
+                self.rebuild_table_runtimes(cx);
+                self.rebuild_image_runtimes(cx);
+                let cursor = duplicate.read(cx).visible_len();
+                duplicate.update(cx, |duplicate, cx| duplicate.move_to(cursor, cx));
+                self.focus_block(duplicate.entity_id());
+                self.mark_dirty(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
+            }
             BlockEvent::RequestOpenLink {
                 prompt_target,
                 open_target,
@@ -2189,26 +2257,6 @@ impl Editor {
             BlockEvent::RequestJumpToFootnoteBackref { id } => {
                 let _ = self.jump_to_footnote_backref(id, cx);
                 cx.notify();
-            }
-            BlockEvent::RequestAppendTableColumn => {
-                if block.read(cx).kind() == BlockKind::Table {
-                    self.prepare_undo_capture(
-                        crate::components::UndoCaptureKind::NonCoalescible,
-                        cx,
-                    );
-                    self.append_table_column(&block, cx);
-                    self.finalize_pending_undo_capture(cx);
-                }
-            }
-            BlockEvent::RequestAppendTableRow => {
-                if block.read(cx).kind() == BlockKind::Table {
-                    self.prepare_undo_capture(
-                        crate::components::UndoCaptureKind::NonCoalescible,
-                        cx,
-                    );
-                    self.append_table_row(&block, cx);
-                    self.finalize_pending_undo_capture(cx);
-                }
             }
             BlockEvent::RequestInsertTableRow { visual_row, after } => {
                 if block.read(cx).kind() == BlockKind::Table {
@@ -2333,7 +2381,8 @@ impl Editor {
                     self.open_table_axis_menu(block.entity_id(), *kind, *index, *position, cx);
                 }
             }
-            BlockEvent::RequestTableCellMoveHorizontal { .. }
+            BlockEvent::RequestOpenTableContextMenu { .. }
+            | BlockEvent::RequestTableCellMoveHorizontal { .. }
             | BlockEvent::RequestTableCellMoveVertical { .. } => {}
             BlockEvent::RequestFocusPrev { preferred_x } => {
                 if current_visible_index == 0 {
@@ -4924,6 +4973,182 @@ mod tests {
             assert_eq!(visible[2].entity.read(cx).display_text(), "");
             assert_eq!(visible[2].entity.read(cx).render_depth, 0);
             assert_eq!(editor.document.markdown_text(cx), "> first\n> - item\n\n");
+        });
+    }
+
+    #[gpui::test]
+    async fn shortcut_block_kind_converts_paragraph_heading_and_code(cx: &mut TestAppContext) {
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "Hello **world**".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let block = editor.document.first_root().expect("paragraph").clone();
+            editor.on_block_event(
+                block.clone(),
+                &BlockEvent::RequestSetBlockKind {
+                    kind: BlockKind::Heading { level: 1 },
+                },
+                cx,
+            );
+
+            assert_eq!(block.read(cx).kind(), BlockKind::Heading { level: 1 });
+            assert_eq!(block.read(cx).display_text(), "Hello world");
+            assert_eq!(
+                block.read(cx).record.title.serialize_markdown(),
+                "Hello **world**"
+            );
+
+            editor.on_block_event(
+                block.clone(),
+                &BlockEvent::RequestSetBlockKind {
+                    kind: BlockKind::Paragraph,
+                },
+                cx,
+            );
+
+            assert_eq!(block.read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(
+                block.read(cx).record.title.serialize_markdown(),
+                "Hello **world**"
+            );
+
+            editor.on_block_event(
+                block.clone(),
+                &BlockEvent::RequestSetBlockKind {
+                    kind: BlockKind::CodeBlock { language: None },
+                },
+                cx,
+            );
+
+            assert!(block.read(cx).kind().is_code_block());
+            assert_eq!(block.read(cx).display_text(), "Hello world");
+            assert_eq!(
+                block.read(cx).record.title.serialize_markdown(),
+                "Hello world"
+            );
+            assert_eq!(editor.document.root_count(), 2);
+            assert_eq!(
+                editor.document.root_blocks()[1].read(cx).kind(),
+                BlockKind::Paragraph
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn shortcut_leaf_conversion_hoists_nested_list_children(cx: &mut TestAppContext) {
+        let editor =
+            cx.new(|cx| Editor::from_markdown(cx, "- parent\n  - child".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let parent = editor.document.first_root().expect("parent item").clone();
+            let child = parent
+                .read(cx)
+                .children
+                .first()
+                .expect("nested child")
+                .clone();
+
+            editor.on_block_event(
+                parent.clone(),
+                &BlockEvent::RequestSetBlockKind {
+                    kind: BlockKind::Heading { level: 2 },
+                },
+                cx,
+            );
+
+            let roots = editor.document.root_blocks();
+            assert_eq!(roots.len(), 2);
+            assert_eq!(roots[0].entity_id(), parent.entity_id());
+            assert_eq!(roots[0].read(cx).kind(), BlockKind::Heading { level: 2 });
+            assert!(roots[0].read(cx).children.is_empty());
+            assert_eq!(roots[1].entity_id(), child.entity_id());
+            assert_eq!(roots[1].read(cx).kind(), BlockKind::BulletedListItem);
+            assert_eq!(roots[1].read(cx).display_text(), "child");
+        });
+    }
+
+    #[gpui::test]
+    async fn shortcut_move_block_reorders_only_siblings(cx: &mut TestAppContext) {
+        let editor =
+            cx.new(|cx| Editor::from_markdown(cx, "one\n\ntwo\n\nthree".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let two = editor.document.root_blocks()[1].clone();
+            editor.on_block_event(two.clone(), &BlockEvent::RequestMoveBlockUp, cx);
+
+            let titles = editor
+                .document
+                .root_blocks()
+                .iter()
+                .map(|block| block.read(cx).display_text().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(titles, ["two", "one", "three"]);
+            assert_eq!(editor.pending_focus, Some(two.entity_id()));
+
+            editor.on_block_event(two.clone(), &BlockEvent::RequestMoveBlockDown, cx);
+
+            let titles = editor
+                .document
+                .root_blocks()
+                .iter()
+                .map(|block| block.read(cx).display_text().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(titles, ["one", "two", "three"]);
+            assert_eq!(editor.pending_focus, Some(two.entity_id()));
+        });
+    }
+
+    #[gpui::test]
+    async fn shortcut_duplicate_block_clones_subtree_with_fresh_ids(cx: &mut TestAppContext) {
+        let editor = cx
+            .new(|cx| Editor::from_markdown(cx, "- parent\n  - child\n\nafter".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let original = editor.document.first_root().expect("original").clone();
+            let original_child = original.read(cx).children[0].clone();
+            let original_record_id = original.read(cx).record.id;
+            let original_child_record_id = original_child.read(cx).record.id;
+
+            editor.on_block_event(original.clone(), &BlockEvent::RequestDuplicateBlock, cx);
+
+            let roots = editor.document.root_blocks();
+            assert_eq!(roots.len(), 3);
+            let duplicate = roots[1].clone();
+            let duplicate_child = duplicate.read(cx).children[0].clone();
+
+            assert_ne!(duplicate.entity_id(), original.entity_id());
+            assert_ne!(duplicate.read(cx).record.id, original_record_id);
+            assert_eq!(duplicate.read(cx).kind(), original.read(cx).kind());
+            assert_eq!(
+                duplicate.read(cx).display_text(),
+                original.read(cx).display_text()
+            );
+            assert_ne!(duplicate_child.entity_id(), original_child.entity_id());
+            assert_ne!(duplicate_child.read(cx).record.id, original_child_record_id);
+            assert_eq!(
+                duplicate_child.read(cx).display_text(),
+                original_child.read(cx).display_text()
+            );
+            assert_eq!(editor.pending_focus, Some(duplicate.entity_id()));
+        });
+    }
+
+    #[gpui::test]
+    async fn shortcut_delete_block_uses_existing_delete_behavior(cx: &mut TestAppContext) {
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "one\n\ntwo".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let first = editor.document.root_blocks()[0].clone();
+            let second = editor.document.root_blocks()[1].clone();
+
+            editor.on_block_event(second, &BlockEvent::RequestDelete, cx);
+
+            assert_eq!(editor.document.root_count(), 1);
+            assert_eq!(
+                editor.document.first_root().expect("remaining").entity_id(),
+                first.entity_id()
+            );
+            assert_eq!(editor.pending_focus, Some(first.entity_id()));
+            assert_eq!(editor.document.markdown_text(cx), "one");
         });
     }
 }

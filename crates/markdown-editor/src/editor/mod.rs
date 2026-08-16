@@ -38,6 +38,7 @@ mod runtime_context;
 mod selection;
 mod source_mapping;
 mod table_edit;
+mod table_menu;
 mod tree;
 mod window_state;
 

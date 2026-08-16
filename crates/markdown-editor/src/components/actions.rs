@@ -44,7 +44,24 @@ actions!(
         BoldSelection,
         ItalicSelection,
         UnderlineSelection,
+        StrikethroughSelection,
         CodeSelection,
+        SetParagraph,
+        SetHeading1,
+        SetHeading2,
+        SetHeading3,
+        SetHeading4,
+        SetHeading5,
+        SetHeading6,
+        ToggleBulletList,
+        ToggleOrderedList,
+        ToggleTaskList,
+        ToggleQuote,
+        ToggleCodeBlock,
+        MoveBlockUp,
+        MoveBlockDown,
+        DuplicateBlock,
+        DeleteBlock,
         IndentBlock,
         OutdentBlock,
         ExitCodeBlock,
@@ -90,7 +107,24 @@ pub(crate) enum ShortcutCommand {
     BoldSelection,
     ItalicSelection,
     UnderlineSelection,
+    StrikethroughSelection,
     CodeSelection,
+    SetParagraph,
+    SetHeading1,
+    SetHeading2,
+    SetHeading3,
+    SetHeading4,
+    SetHeading5,
+    SetHeading6,
+    ToggleBulletList,
+    ToggleOrderedList,
+    ToggleTaskList,
+    ToggleQuote,
+    ToggleCodeBlock,
+    MoveBlockUp,
+    MoveBlockDown,
+    DuplicateBlock,
+    DeleteBlock,
     IndentBlock,
     OutdentBlock,
     ExitCodeBlock,
@@ -322,9 +356,111 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::StrikethroughSelection,
+        id: "strikethrough_selection",
+        default_keys: &["cmd-shift-x", "ctrl-shift-x"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::CodeSelection,
         id: "code_selection",
         default_keys: &["cmd-`", "ctrl-`"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetParagraph,
+        id: "set_paragraph",
+        default_keys: &["cmd-0", "ctrl-0"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading1,
+        id: "set_heading_1",
+        default_keys: &["cmd-1", "ctrl-1"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading2,
+        id: "set_heading_2",
+        default_keys: &["cmd-2", "ctrl-2"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading3,
+        id: "set_heading_3",
+        default_keys: &["cmd-3", "ctrl-3"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading4,
+        id: "set_heading_4",
+        default_keys: &["cmd-4", "ctrl-4"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading5,
+        id: "set_heading_5",
+        default_keys: &["cmd-5", "ctrl-5"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SetHeading6,
+        id: "set_heading_6",
+        default_keys: &["cmd-6", "ctrl-6"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ToggleBulletList,
+        id: "toggle_bullet_list",
+        default_keys: &["cmd-shift-8", "ctrl-shift-8"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ToggleOrderedList,
+        id: "toggle_ordered_list",
+        default_keys: &["cmd-shift-7", "ctrl-shift-7"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ToggleTaskList,
+        id: "toggle_task_list",
+        default_keys: &["cmd-shift-t", "ctrl-shift-t"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ToggleQuote,
+        id: "toggle_quote",
+        default_keys: &["cmd-shift-q", "ctrl-shift-q"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ToggleCodeBlock,
+        id: "toggle_code_block",
+        default_keys: &["cmd-alt-c", "ctrl-alt-c"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::MoveBlockUp,
+        id: "move_block_up",
+        default_keys: &["cmd-shift-up", "ctrl-shift-up"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::MoveBlockDown,
+        id: "move_block_down",
+        default_keys: &["cmd-shift-down", "ctrl-shift-down"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::DuplicateBlock,
+        id: "duplicate_block",
+        default_keys: &["cmd-d", "ctrl-d"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::DeleteBlock,
+        id: "delete_block",
+        default_keys: &["cmd-shift-backspace", "ctrl-shift-backspace"],
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
@@ -354,7 +490,7 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     ShortcutDefinition {
         command: ShortcutCommand::ToggleViewMode,
         id: "toggle_view_mode",
-        default_keys: &["ctrl-tab", "cmd-tab"],
+        default_keys: &["cmd-/", "ctrl-/"],
         context: None,
     },
 ];
@@ -551,7 +687,26 @@ fn key_binding_for(
         ShortcutCommand::BoldSelection => KeyBinding::new(key, BoldSelection, context),
         ShortcutCommand::ItalicSelection => KeyBinding::new(key, ItalicSelection, context),
         ShortcutCommand::UnderlineSelection => KeyBinding::new(key, UnderlineSelection, context),
+        ShortcutCommand::StrikethroughSelection => {
+            KeyBinding::new(key, StrikethroughSelection, context)
+        }
         ShortcutCommand::CodeSelection => KeyBinding::new(key, CodeSelection, context),
+        ShortcutCommand::SetParagraph => KeyBinding::new(key, SetParagraph, context),
+        ShortcutCommand::SetHeading1 => KeyBinding::new(key, SetHeading1, context),
+        ShortcutCommand::SetHeading2 => KeyBinding::new(key, SetHeading2, context),
+        ShortcutCommand::SetHeading3 => KeyBinding::new(key, SetHeading3, context),
+        ShortcutCommand::SetHeading4 => KeyBinding::new(key, SetHeading4, context),
+        ShortcutCommand::SetHeading5 => KeyBinding::new(key, SetHeading5, context),
+        ShortcutCommand::SetHeading6 => KeyBinding::new(key, SetHeading6, context),
+        ShortcutCommand::ToggleBulletList => KeyBinding::new(key, ToggleBulletList, context),
+        ShortcutCommand::ToggleOrderedList => KeyBinding::new(key, ToggleOrderedList, context),
+        ShortcutCommand::ToggleTaskList => KeyBinding::new(key, ToggleTaskList, context),
+        ShortcutCommand::ToggleQuote => KeyBinding::new(key, ToggleQuote, context),
+        ShortcutCommand::ToggleCodeBlock => KeyBinding::new(key, ToggleCodeBlock, context),
+        ShortcutCommand::MoveBlockUp => KeyBinding::new(key, MoveBlockUp, context),
+        ShortcutCommand::MoveBlockDown => KeyBinding::new(key, MoveBlockDown, context),
+        ShortcutCommand::DuplicateBlock => KeyBinding::new(key, DuplicateBlock, context),
+        ShortcutCommand::DeleteBlock => KeyBinding::new(key, DeleteBlock, context),
         ShortcutCommand::IndentBlock => KeyBinding::new(key, IndentBlock, context),
         ShortcutCommand::OutdentBlock => KeyBinding::new(key, OutdentBlock, context),
         ShortcutCommand::ExitCodeBlock => KeyBinding::new(key, ExitCodeBlock, context),
@@ -595,11 +750,11 @@ mod tests {
     #[test]
     fn custom_shortcut_replaces_command_defaults() {
         let mut config = BTreeMap::new();
-        config.insert("copy".to_string(), vec!["ctrl-alt-c".to_string()]);
+        config.insert("copy".to_string(), vec!["ctrl-alt-y".to_string()]);
 
         assert_eq!(
             resolved_shortcut_keys(&config, ShortcutCommand::Copy),
-            vec!["ctrl-alt-c".to_string()]
+            vec!["ctrl-alt-y".to_string()]
         );
     }
 
@@ -607,7 +762,31 @@ mod tests {
     fn toggle_view_mode_has_default_shortcuts() {
         assert_eq!(
             resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::ToggleViewMode),
-            vec!["ctrl-tab".to_string(), "cmd-tab".to_string()]
+            vec!["cmd-/".to_string(), "ctrl-/".to_string()]
+        );
+    }
+
+    #[test]
+    fn typora_style_block_commands_have_default_shortcuts() {
+        let config = BTreeMap::new();
+        assert_eq!(
+            resolved_shortcut_keys(&config, ShortcutCommand::SetHeading1),
+            vec!["cmd-1".to_string(), "ctrl-1".to_string()]
+        );
+        assert_eq!(
+            resolved_shortcut_keys(&config, ShortcutCommand::ToggleBulletList),
+            vec!["cmd-shift-8".to_string(), "ctrl-shift-8".to_string()]
+        );
+        assert_eq!(
+            resolved_shortcut_keys(&config, ShortcutCommand::DuplicateBlock),
+            vec!["cmd-d".to_string(), "ctrl-d".to_string()]
+        );
+        assert_eq!(
+            resolved_shortcut_keys(&config, ShortcutCommand::DeleteBlock),
+            vec![
+                "cmd-shift-backspace".to_string(),
+                "ctrl-shift-backspace".to_string()
+            ]
         );
     }
 

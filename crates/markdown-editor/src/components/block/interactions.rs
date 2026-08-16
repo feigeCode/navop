@@ -3,8 +3,6 @@
 //! in [`crate::components::actions`] and delegates structural changes to the
 //! parent editor via `BlockEvent` emissions.
 
-use std::time::Duration;
-
 use gpui::*;
 
 use super::CollapsedCaretAffinity;
@@ -13,11 +11,14 @@ use super::{
 };
 use crate::components::markdown::paste::should_split_plain_multiline_paste;
 use crate::components::{
-    BlockDown, BlockUp, BoldSelection, CodeSelection, Copy, Cut, Delete, DeleteBack, End,
-    ExitCodeBlock, FocusNext, FocusPrev, Home, IndentBlock, ItalicSelection, MoveLeft, MoveRight,
-    Newline, OutdentBlock, Paste, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight,
-    UnderlineSelection, WordDeleteBack, WordDeleteForward, WordMoveLeft, WordMoveRight,
-    WordSelectLeft, WordSelectRight,
+    BlockDown, BlockUp, BoldSelection, CodeSelection, Copy, Cut, Delete, DeleteBack, DeleteBlock,
+    DuplicateBlock, End, ExitCodeBlock, FocusNext, FocusPrev, Home, IndentBlock, ItalicSelection,
+    MoveBlockDown, MoveBlockUp, MoveLeft, MoveRight, Newline, OutdentBlock, Paste, SelectAll,
+    SelectEnd, SelectHome, SelectLeft, SelectRight, SetHeading1, SetHeading2, SetHeading3,
+    SetHeading4, SetHeading5, SetHeading6, SetParagraph, StrikethroughSelection, ToggleBulletList,
+    ToggleCodeBlock, ToggleOrderedList, ToggleQuote, ToggleTaskList, UnderlineSelection,
+    WordDeleteBack, WordDeleteForward, WordMoveLeft, WordMoveRight, WordSelectLeft,
+    WordSelectRight,
 };
 
 impl Block {
@@ -127,145 +128,6 @@ impl Block {
             return true;
         }
         false
-    }
-
-    fn table_append_column_should_stay_visible(&self) -> bool {
-        self.table_append_column_edge_hovered
-            || self.table_append_column_zone_hovered
-            || self.table_append_column_button_hovered
-    }
-
-    fn table_append_row_should_stay_visible(&self) -> bool {
-        self.table_append_row_edge_hovered
-            || self.table_append_row_zone_hovered
-            || self.table_append_row_button_hovered
-    }
-
-    fn schedule_table_append_column_close(&mut self, cx: &mut Context<Self>) {
-        if !self.table_append_column_hovered {
-            return;
-        }
-
-        self.table_append_column_close_task = Some(cx.spawn(
-            async |this: WeakEntity<Block>, cx: &mut AsyncApp| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
-                let _ = this.update(cx, |block, cx| {
-                    block.table_append_column_close_task = None;
-                    if !block.table_append_column_should_stay_visible() {
-                        block.table_append_column_hovered = false;
-                        cx.notify();
-                    }
-                });
-            },
-        ));
-    }
-
-    fn schedule_table_append_row_close(&mut self, cx: &mut Context<Self>) {
-        if !self.table_append_row_hovered {
-            return;
-        }
-
-        self.table_append_row_close_task = Some(cx.spawn(
-            async |this: WeakEntity<Block>, cx: &mut AsyncApp| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
-                let _ = this.update(cx, |block, cx| {
-                    block.table_append_row_close_task = None;
-                    if !block.table_append_row_should_stay_visible() {
-                        block.table_append_row_hovered = false;
-                        cx.notify();
-                    }
-                });
-            },
-        ));
-    }
-
-    fn set_table_append_column_hover_part(
-        &mut self,
-        edge_hovered: Option<bool>,
-        zone_hovered: Option<bool>,
-        button_hovered: Option<bool>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut changed = false;
-        if let Some(edge_hovered) = edge_hovered
-            && self.table_append_column_edge_hovered != edge_hovered
-        {
-            self.table_append_column_edge_hovered = edge_hovered;
-            changed = true;
-        }
-        if let Some(zone_hovered) = zone_hovered
-            && self.table_append_column_zone_hovered != zone_hovered
-        {
-            self.table_append_column_zone_hovered = zone_hovered;
-            changed = true;
-        }
-        if let Some(button_hovered) = button_hovered
-            && self.table_append_column_button_hovered != button_hovered
-        {
-            self.table_append_column_button_hovered = button_hovered;
-            changed = true;
-        }
-
-        if self.table_append_column_should_stay_visible() {
-            self.table_append_column_close_task = None;
-            if !self.table_append_column_hovered {
-                self.table_append_column_hovered = true;
-                changed = true;
-            }
-        } else if self.table_append_column_hovered && self.table_append_column_close_task.is_none()
-        {
-            self.schedule_table_append_column_close(cx);
-        }
-
-        if changed {
-            cx.notify();
-        }
-    }
-
-    fn set_table_append_row_hover_part(
-        &mut self,
-        edge_hovered: Option<bool>,
-        zone_hovered: Option<bool>,
-        button_hovered: Option<bool>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut changed = false;
-        if let Some(edge_hovered) = edge_hovered
-            && self.table_append_row_edge_hovered != edge_hovered
-        {
-            self.table_append_row_edge_hovered = edge_hovered;
-            changed = true;
-        }
-        if let Some(zone_hovered) = zone_hovered
-            && self.table_append_row_zone_hovered != zone_hovered
-        {
-            self.table_append_row_zone_hovered = zone_hovered;
-            changed = true;
-        }
-        if let Some(button_hovered) = button_hovered
-            && self.table_append_row_button_hovered != button_hovered
-        {
-            self.table_append_row_button_hovered = button_hovered;
-            changed = true;
-        }
-
-        if self.table_append_row_should_stay_visible() {
-            self.table_append_row_close_task = None;
-            if !self.table_append_row_hovered {
-                self.table_append_row_hovered = true;
-                changed = true;
-            }
-        } else if self.table_append_row_hovered && self.table_append_row_close_task.is_none() {
-            self.schedule_table_append_row_close(cx);
-        }
-
-        if changed {
-            cx.notify();
-        }
     }
 
     /// If the code block's last line is a bare fence (three or more backticks
@@ -653,29 +515,6 @@ impl Block {
         if self.can_outdent_list_nesting() {
             cx.emit(BlockEvent::RequestOutdent);
         }
-    }
-
-    pub(crate) fn on_block_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if event.keystroke.key != "tab" {
-            return;
-        }
-
-        let modifiers = event.keystroke.modifiers;
-        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.function {
-            return;
-        }
-
-        if modifiers.shift {
-            self.on_outdent_block(&OutdentBlock, window, cx);
-        } else {
-            self.on_indent_block(&IndentBlock, window, cx);
-        }
-        cx.stop_propagation();
     }
 
     pub(crate) fn on_focus_prev(
@@ -1202,79 +1041,17 @@ impl Block {
         cx.emit(BlockEvent::ToggleTaskChecked);
     }
 
-    pub(crate) fn on_table_append_column_zone_hover(
+    pub(crate) fn on_table_cell_context_menu_mouse_down(
         &mut self,
-        hovered: &bool,
+        event: &MouseDownEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_table_append_column_hover_part(None, Some(*hovered), None, cx);
-    }
-
-    pub(crate) fn on_table_append_column_button_hover(
-        &mut self,
-        hovered: &bool,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_table_append_column_hover_part(None, None, Some(*hovered), cx);
-    }
-
-    pub(crate) fn on_table_append_row_zone_hover(
-        &mut self,
-        hovered: &bool,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_table_append_row_hover_part(None, Some(*hovered), None, cx);
-    }
-
-    pub(crate) fn on_table_append_row_button_hover(
-        &mut self,
-        hovered: &bool,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_table_append_row_hover_part(None, None, Some(*hovered), cx);
-    }
-
-    pub(crate) fn on_table_append_column_edge_hover(
-        &mut self,
-        hovered: &bool,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_table_append_column_hover_part(Some(*hovered), None, None, cx);
-    }
-
-    pub(crate) fn on_table_append_row_edge_hover(
-        &mut self,
-        hovered: &bool,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_table_append_row_hover_part(Some(*hovered), None, None, cx);
-    }
-
-    pub(crate) fn on_append_table_column(
-        &mut self,
-        _: &ClickEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.kind() == BlockKind::Table {
-            cx.emit(BlockEvent::RequestAppendTableColumn);
-        }
-    }
-
-    pub(crate) fn on_append_table_row(
-        &mut self,
-        _: &ClickEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.kind() == BlockKind::Table {
-            cx.emit(BlockEvent::RequestAppendTableRow);
+        if self.is_table_cell() {
+            cx.stop_propagation();
+            cx.emit(BlockEvent::RequestOpenTableContextMenu {
+                position: event.position,
+            });
         }
     }
 
@@ -1305,6 +1082,15 @@ impl Block {
         self.toggle_inline_format(InlineFormat::Underline, cx);
     }
 
+    pub(crate) fn on_strikethrough_selection(
+        &mut self,
+        _: &StrikethroughSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Strikethrough, cx);
+    }
+
     pub(crate) fn on_code_selection(
         &mut self,
         _: &CodeSelection,
@@ -1312,6 +1098,197 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         self.toggle_inline_format(InlineFormat::Code, cx);
+    }
+
+    fn request_block_kind(&mut self, kind: BlockKind, cx: &mut Context<Self>) {
+        if !self.is_table_cell() && !self.is_source_raw_mode() {
+            cx.emit(BlockEvent::RequestSetBlockKind { kind });
+        }
+    }
+
+    fn request_toggle_block_kind(
+        &mut self,
+        target: BlockKind,
+        is_active: impl FnOnce(&BlockKind) -> bool,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.kind();
+        self.request_block_kind(
+            if is_active(&current) {
+                BlockKind::Paragraph
+            } else {
+                target
+            },
+            cx,
+        );
+    }
+
+    pub(crate) fn on_set_paragraph(
+        &mut self,
+        _: &SetParagraph,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Paragraph, cx);
+    }
+
+    pub(crate) fn on_set_heading_1(
+        &mut self,
+        _: &SetHeading1,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Heading { level: 1 }, cx);
+    }
+
+    pub(crate) fn on_set_heading_2(
+        &mut self,
+        _: &SetHeading2,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Heading { level: 2 }, cx);
+    }
+
+    pub(crate) fn on_set_heading_3(
+        &mut self,
+        _: &SetHeading3,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Heading { level: 3 }, cx);
+    }
+
+    pub(crate) fn on_set_heading_4(
+        &mut self,
+        _: &SetHeading4,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Heading { level: 4 }, cx);
+    }
+
+    pub(crate) fn on_set_heading_5(
+        &mut self,
+        _: &SetHeading5,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Heading { level: 5 }, cx);
+    }
+
+    pub(crate) fn on_set_heading_6(
+        &mut self,
+        _: &SetHeading6,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_block_kind(BlockKind::Heading { level: 6 }, cx);
+    }
+
+    pub(crate) fn on_toggle_bullet_list(
+        &mut self,
+        _: &ToggleBulletList,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_toggle_block_kind(
+            BlockKind::BulletedListItem,
+            |kind| *kind == BlockKind::BulletedListItem,
+            cx,
+        );
+    }
+
+    pub(crate) fn on_toggle_ordered_list(
+        &mut self,
+        _: &ToggleOrderedList,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_toggle_block_kind(
+            BlockKind::NumberedListItem,
+            |kind| *kind == BlockKind::NumberedListItem,
+            cx,
+        );
+    }
+
+    pub(crate) fn on_toggle_task_list(
+        &mut self,
+        _: &ToggleTaskList,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_toggle_block_kind(
+            BlockKind::TaskListItem { checked: false },
+            BlockKind::is_task_list_item,
+            cx,
+        );
+    }
+
+    pub(crate) fn on_toggle_quote(
+        &mut self,
+        _: &ToggleQuote,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_toggle_block_kind(BlockKind::Quote, |kind| *kind == BlockKind::Quote, cx);
+    }
+
+    pub(crate) fn on_toggle_code_block(
+        &mut self,
+        _: &ToggleCodeBlock,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_toggle_block_kind(
+            BlockKind::CodeBlock { language: None },
+            BlockKind::is_code_block,
+            cx,
+        );
+    }
+
+    pub(crate) fn on_move_block_up(
+        &mut self,
+        _: &MoveBlockUp,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_table_cell() && !self.is_source_raw_mode() {
+            cx.emit(BlockEvent::RequestMoveBlockUp);
+        }
+    }
+
+    pub(crate) fn on_move_block_down(
+        &mut self,
+        _: &MoveBlockDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_table_cell() && !self.is_source_raw_mode() {
+            cx.emit(BlockEvent::RequestMoveBlockDown);
+        }
+    }
+
+    pub(crate) fn on_duplicate_block(
+        &mut self,
+        _: &DuplicateBlock,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_table_cell() && !self.is_source_raw_mode() {
+            cx.emit(BlockEvent::RequestDuplicateBlock);
+        }
+    }
+
+    pub(crate) fn on_delete_block(
+        &mut self,
+        _: &DeleteBlock,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_table_cell() && !self.is_source_raw_mode() {
+            cx.emit(BlockEvent::RequestDelete);
+        }
     }
 
     pub(crate) fn on_exit_code_block(
@@ -1361,23 +1338,6 @@ mod tests {
         let _ = path.parent().map(|parent| fs::remove_dir_all(parent));
     }
 
-    #[gpui::test]
-    async fn append_column_button_stays_visible_while_crossing_hover_gap(cx: &mut TestAppContext) {
-        let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
-
-        block.update(cx, |block, cx| {
-            block.set_table_append_column_hover_part(Some(true), None, None, cx);
-            assert!(block.table_append_column_hovered);
-
-            block.set_table_append_column_hover_part(Some(false), None, Some(true), cx);
-            assert!(block.table_append_column_hovered);
-            assert!(!block.table_append_column_edge_hovered);
-            assert!(!block.table_append_column_zone_hovered);
-            assert!(block.table_append_column_button_hovered);
-            assert!(block.table_append_column_close_task.is_none());
-        });
-    }
-
     #[test]
     fn paste_image_text_accepts_plain_local_image_path() {
         let path = temp_image_path("copied.png");
@@ -1425,51 +1385,6 @@ mod tests {
 
         assert_eq!(source, None);
         remove_temp_image(&path);
-    }
-
-    #[gpui::test]
-    async fn append_row_button_stays_visible_while_crossing_hover_gap(cx: &mut TestAppContext) {
-        let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
-
-        block.update(cx, |block, cx| {
-            block.set_table_append_row_hover_part(Some(true), None, None, cx);
-            assert!(block.table_append_row_hovered);
-
-            block.set_table_append_row_hover_part(Some(false), None, Some(true), cx);
-            assert!(block.table_append_row_hovered);
-            assert!(!block.table_append_row_edge_hovered);
-            assert!(!block.table_append_row_zone_hovered);
-            assert!(block.table_append_row_button_hovered);
-            assert!(block.table_append_row_close_task.is_none());
-        });
-    }
-
-    #[gpui::test]
-    async fn column_edge_hover_reveals_only_column_append_control(cx: &mut TestAppContext) {
-        let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
-
-        block.update(cx, |block, cx| {
-            block.set_table_append_column_hover_part(Some(true), None, None, cx);
-            assert!(block.table_append_column_edge_hovered);
-            assert!(block.table_append_column_hovered);
-            assert!(!block.table_append_row_hovered);
-            assert!(block.table_append_column_close_task.is_none());
-            assert!(block.table_append_row_close_task.is_none());
-        });
-    }
-
-    #[gpui::test]
-    async fn row_edge_hover_reveals_only_row_append_control(cx: &mut TestAppContext) {
-        let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph(String::new())));
-
-        block.update(cx, |block, cx| {
-            block.set_table_append_row_hover_part(Some(true), None, None, cx);
-            assert!(block.table_append_row_edge_hovered);
-            assert!(block.table_append_row_hovered);
-            assert!(!block.table_append_column_hovered);
-            assert!(block.table_append_column_close_task.is_none());
-            assert!(block.table_append_row_close_task.is_none());
-        });
     }
 
     #[gpui::test]

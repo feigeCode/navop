@@ -874,12 +874,10 @@ mod tests {
 
     use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
     use crate::components::{Cut, Delete, DeleteBack, Undo, UndoCaptureKind};
-    use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
 
     fn init_editor_test_app(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            I18nManager::init(cx);
             ThemeManager::init(cx);
             crate::components::init(cx);
         });

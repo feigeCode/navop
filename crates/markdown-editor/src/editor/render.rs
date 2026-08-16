@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 use gpui_component::ElementExt as _;
+use rust_i18n::t;
 
 use super::{Editor, MountedRun};
 use crate::components::Block;
 use crate::components::CalloutVariant;
-use crate::i18n::I18nManager;
 use crate::theme::{Theme, ThemeDimensions};
 
 /// Rows within this many pixels of the viewport stay mounted, so a fast flick
@@ -288,14 +288,13 @@ impl Editor {
             return;
         };
 
-        let strings = cx.global::<I18nManager>().strings_arc();
-        let buttons = [
-            strings.open_link_open.as_str(),
-            strings.open_link_cancel.as_str(),
-        ];
+        let open = t!("MarkdownEditor.open_link_open").to_string();
+        let cancel = t!("MarkdownEditor.open_link_cancel").to_string();
+        let title = t!("MarkdownEditor.open_link_title").to_string();
+        let buttons = [open.as_str(), cancel.as_str()];
         let prompt = window.prompt(
             PromptLevel::Info,
-            &strings.open_link_title,
+            &title,
             Some(&link.prompt_target),
             &buttons,
             cx,
@@ -419,19 +418,16 @@ impl Render for Editor {
                                 .flex_shrink_0()
                                 .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
                                 .child(entity.clone());
-                            let row = if self.view_mode == super::ViewMode::Rendered {
-                                let row_editor = editor.clone();
-                                let entity_id = entity.entity_id();
+                            let row_editor = editor.clone();
+                            let entity_id = entity.entity_id();
+                            let row =
                                 row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
                                     let _ = row_editor.update(cx, |editor, cx| {
                                         editor.on_block_context_menu_mouse_down(
                                             entity_id, event, window, cx,
                                         );
                                     });
-                                })
-                            } else {
-                                row
-                            };
+                                });
                             footnote_children.push(row.into_any_element());
                             previous_footnote_row = Some(footnote_spacing);
                             footnote_end += 1;
@@ -464,18 +460,13 @@ impl Render for Editor {
                             d,
                         )))
                         .child(entity.clone());
-                    let row = if self.view_mode == super::ViewMode::Rendered {
-                        let row_editor = editor.clone();
-                        let entity_id = entity.entity_id();
-                        row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                            let _ = row_editor.update(cx, |editor, cx| {
-                                editor
-                                    .on_block_context_menu_mouse_down(entity_id, event, window, cx);
-                            });
-                        })
-                    } else {
-                        row
-                    };
+                    let row_editor = editor.clone();
+                    let entity_id = entity.entity_id();
+                    let row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                        let _ = row_editor.update(cx, |editor, cx| {
+                            editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                        });
+                    });
                     group_children.push(row.into_any_element());
                     previous_callout_row = Some(row_spacing);
                     group_end += 1;
@@ -521,18 +512,13 @@ impl Render for Editor {
                         .flex_shrink_0()
                         .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
                         .child(entity.clone());
-                    let row = if self.view_mode == super::ViewMode::Rendered {
-                        let row_editor = editor.clone();
-                        let entity_id = entity.entity_id();
-                        row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                            let _ = row_editor.update(cx, |editor, cx| {
-                                editor
-                                    .on_block_context_menu_mouse_down(entity_id, event, window, cx);
-                            });
-                        })
-                    } else {
-                        row
-                    };
+                    let row_editor = editor.clone();
+                    let entity_id = entity.entity_id();
+                    let row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                        let _ = row_editor.update(cx, |editor, cx| {
+                            editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                        });
+                    });
                     group_children.push(row.into_any_element());
                     previous_footnote_row = Some(row_spacing);
                     group_end += 1;
@@ -561,17 +547,13 @@ impl Render for Editor {
                 .flex_shrink_0()
                 .mt(px(top_gap))
                 .child(entity.clone());
-            let row = if self.view_mode == super::ViewMode::Rendered {
-                let row_editor = editor.clone();
-                let entity_id = entity.entity_id();
-                row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                    let _ = row_editor.update(cx, |editor, cx| {
-                        editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
-                    });
-                })
-            } else {
-                row
-            };
+            let row_editor = editor.clone();
+            let entity_id = entity.entity_id();
+            let row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                let _ = row_editor.update(cx, |editor, cx| {
+                    editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                });
+            });
             row_starts.push(index);
             row_top_gaps.push(top_gap);
             row_elements.push(row.into_any_element());
@@ -775,14 +757,10 @@ impl Render for Editor {
                 + scroll_trigger_padding
                 + scroll_beyond_bottom))
             .children(block_rows);
-        let scroll_content = if self.view_mode == super::ViewMode::Rendered {
-            scroll_content.on_mouse_down(
-                MouseButton::Right,
-                cx.listener(Self::on_editor_context_menu_mouse_down),
-            )
-        } else {
-            scroll_content
-        };
+        let scroll_content = scroll_content.on_mouse_down(
+            MouseButton::Right,
+            cx.listener(Self::on_editor_context_menu_mouse_down),
+        );
 
         let content_area = div()
             .id("editor-scroll")
@@ -898,7 +876,6 @@ impl Render for Editor {
             .capture_action(cx.listener(Self::on_cut_capture))
             .capture_action(cx.listener(Self::on_delete_capture))
             .capture_action(cx.listener(Self::on_delete_back_capture))
-            .capture_key_down(cx.listener(Self::on_editor_key_down_capture))
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
             .on_action(cx.listener(Self::on_toggle_view_mode_action))

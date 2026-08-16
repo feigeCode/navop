@@ -6,6 +6,7 @@ use super::projection::{
     ExpandedInlineProjection, expanded_display_cursor_offset_for_clean,
     expanded_display_offset_for_clean,
 };
+use super::{InlineFormat, toggle_raw_inline_format_text};
 use crate::components::markdown::code_highlight::{CodeHighlightPaint, CodeLanguageKey};
 use crate::components::markdown::inline::{
     InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineScript, InlineStyle,
@@ -15,7 +16,6 @@ use crate::components::markdown::link::parse_link_reference_definitions;
 use crate::components::{
     Block, BlockKind, BlockRecord, DeleteBack, IndentBlock, Newline, TableCellPosition,
 };
-use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
 use crate::{
     CodeHighlightProvider, CodeHighlightResult as HostCodeHighlightResult, CodeHighlightService,
@@ -2218,6 +2218,119 @@ async fn source_raw_mode_does_not_enable_line_numbers(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn source_raw_inline_format_shortcuts_wrap_and_unwrap_selection(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(
+            cx,
+            BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain("alpha beta")),
+        );
+        block.set_source_document_mode();
+        block
+    });
+
+    block.update(cx, |block, block_cx| {
+        block.selected_range = 0..5;
+        block.toggle_inline_format(InlineFormat::Bold, block_cx);
+    });
+
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.display_text().to_string()),
+        "**alpha** beta"
+    );
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.selected_range.clone()),
+        2..7
+    );
+
+    block.update(cx, |block, block_cx| {
+        block.toggle_inline_format(InlineFormat::Bold, block_cx);
+    });
+
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.display_text().to_string()),
+        "alpha beta"
+    );
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.selected_range.clone()),
+        0..5
+    );
+}
+
+#[gpui::test]
+async fn source_raw_inline_code_uses_a_safe_delimiter_run(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(
+            cx,
+            BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain("a`b")),
+        );
+        block.set_source_document_mode();
+        block
+    });
+
+    block.update(cx, |block, block_cx| {
+        block.selected_range = 0..3;
+        block.toggle_inline_format(InlineFormat::Code, block_cx);
+    });
+
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.display_text().to_string()),
+        "``a`b``"
+    );
+    assert_eq!(
+        block.read_with(cx, |block, _cx| block.selected_range.clone()),
+        2..5
+    );
+}
+
+#[test]
+fn source_raw_inline_formats_round_trip_their_delimiters() {
+    for (format, wrapped, wrapped_selection) in [
+        (InlineFormat::Italic, "*alpha*", 1..6),
+        (InlineFormat::Underline, "<u>alpha</u>", 3..8),
+        (InlineFormat::Strikethrough, "~~alpha~~", 2..7),
+    ] {
+        let wrapped_edit =
+            toggle_raw_inline_format_text("alpha", 0..5, format).expect("format should wrap");
+        assert_eq!(wrapped_edit.text, wrapped);
+        assert_eq!(wrapped_edit.selection, wrapped_selection);
+
+        let unwrapped_edit =
+            toggle_raw_inline_format_text(&wrapped_edit.text, wrapped_edit.selection, format)
+                .expect("format should unwrap");
+        assert_eq!(unwrapped_edit.text, "alpha");
+        assert_eq!(unwrapped_edit.selection, 0..5);
+    }
+}
+
+#[test]
+fn source_raw_italic_preserves_existing_bold_delimiters() {
+    let italicized = toggle_raw_inline_format_text("**alpha**", 2..7, InlineFormat::Italic)
+        .expect("italic should be added");
+    assert_eq!(italicized.text, "***alpha***");
+    assert_eq!(italicized.selection, 3..8);
+
+    let restored =
+        toggle_raw_inline_format_text(&italicized.text, italicized.selection, InlineFormat::Italic)
+            .expect("italic should be removed");
+    assert_eq!(restored.text, "**alpha**");
+    assert_eq!(restored.selection, 2..7);
+}
+
+#[test]
+fn source_raw_inline_code_round_trips_padding_and_safe_delimiters() {
+    let wrapped = toggle_raw_inline_format_text("`alpha", 0..6, InlineFormat::Code)
+        .expect("inline code should wrap");
+    assert_eq!(wrapped.text, "`` `alpha ``");
+    assert_eq!(wrapped.selection, 3..9);
+
+    let unwrapped =
+        toggle_raw_inline_format_text(&wrapped.text, wrapped.selection, InlineFormat::Code)
+            .expect("inline code should unwrap");
+    assert_eq!(unwrapped.text, "`alpha");
+    assert_eq!(unwrapped.selection, 0..6);
+}
+
+#[gpui::test]
 async fn ime_replace_and_mark_text_replaces_right_to_left_selection_in_table_cell(
     cx: &mut TestAppContext,
 ) {
@@ -2853,7 +2966,6 @@ async fn code_block_language_accepts_unknown_language_as_plain_rendering(cx: &mu
 #[gpui::test]
 async fn non_dragging_mouse_move_ends_stale_text_selection(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        I18nManager::init(cx);
         ThemeManager::init(cx);
     });
     let (block, cx) = cx.add_window_view(|_window, cx| {
@@ -2886,7 +2998,6 @@ async fn non_dragging_mouse_move_ends_stale_text_selection(cx: &mut TestAppConte
 #[gpui::test]
 async fn dragging_mouse_move_keeps_text_selection_session_active(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        I18nManager::init(cx);
         ThemeManager::init(cx);
     });
     let (block, cx) = cx.add_window_view(|_window, cx| {

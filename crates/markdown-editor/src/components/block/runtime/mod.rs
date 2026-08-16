@@ -51,8 +51,198 @@ pub(crate) enum InlineFormat {
     Italic,
     /// Toggle underline formatting.
     Underline,
+    /// Toggle strikethrough formatting.
+    Strikethrough,
     /// Toggle inline code formatting.
     Code,
+}
+
+struct RawInlineFormatEdit {
+    text: String,
+    selection: Range<usize>,
+}
+
+fn repeated_ascii_before(text: &str, offset: usize, byte: u8) -> usize {
+    let bytes = text.as_bytes();
+    let mut cursor = offset;
+    while cursor > 0 && bytes[cursor - 1] == byte {
+        cursor -= 1;
+    }
+    offset - cursor
+}
+
+fn repeated_ascii_after(text: &str, offset: usize, byte: u8) -> usize {
+    let bytes = text.as_bytes();
+    let mut cursor = offset;
+    while cursor < bytes.len() && bytes[cursor] == byte {
+        cursor += 1;
+    }
+    cursor - offset
+}
+
+fn code_delimiter_run_len(text: &str) -> usize {
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for byte in text.bytes() {
+        if byte == b'`' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest + 1
+}
+
+fn toggle_fixed_raw_delimiters(
+    text: &str,
+    selection: Range<usize>,
+    open: &str,
+    close: &str,
+) -> Option<RawInlineFormatEdit> {
+    let selected = text.get(selection.clone())?;
+    let has_open = selection.start >= open.len()
+        && text.get(selection.start - open.len()..selection.start) == Some(open);
+    let has_close = selection.end + close.len() <= text.len()
+        && text.get(selection.end..selection.end + close.len()) == Some(close);
+
+    if has_open && has_close {
+        let mut next = String::with_capacity(text.len() - open.len() - close.len());
+        next.push_str(&text[..selection.start - open.len()]);
+        next.push_str(selected);
+        next.push_str(&text[selection.end + close.len()..]);
+        let next_selection = selection.start - open.len()..selection.end - open.len();
+        Some(RawInlineFormatEdit {
+            text: next,
+            selection: next_selection,
+        })
+    } else {
+        let mut next = String::with_capacity(text.len() + open.len() + close.len());
+        next.push_str(&text[..selection.start]);
+        next.push_str(open);
+        next.push_str(selected);
+        next.push_str(close);
+        next.push_str(&text[selection.end..]);
+        let next_selection = selection.start + open.len()..selection.end + open.len();
+        Some(RawInlineFormatEdit {
+            text: next,
+            selection: next_selection,
+        })
+    }
+}
+
+fn toggle_raw_inline_format_text(
+    text: &str,
+    selection: Range<usize>,
+    format: InlineFormat,
+) -> Option<RawInlineFormatEdit> {
+    let selected = text.get(selection.clone())?;
+    if selected.is_empty() {
+        return None;
+    }
+
+    match format {
+        InlineFormat::Bold => {
+            let left = repeated_ascii_before(text, selection.start, b'*');
+            let right = repeated_ascii_after(text, selection.end, b'*');
+            if left >= 2 && right >= 2 {
+                let mut next = String::with_capacity(text.len() - 4);
+                next.push_str(&text[..selection.start - 2]);
+                next.push_str(selected);
+                next.push_str(&text[selection.end + 2..]);
+                Some(RawInlineFormatEdit {
+                    text: next,
+                    selection: selection.start - 2..selection.end - 2,
+                })
+            } else {
+                toggle_fixed_raw_delimiters(text, selection, "**", "**")
+            }
+        }
+        InlineFormat::Italic => {
+            let left = repeated_ascii_before(text, selection.start, b'*');
+            let right = repeated_ascii_after(text, selection.end, b'*');
+            if left % 2 == 1 && right % 2 == 1 {
+                let mut next = String::with_capacity(text.len() - 2);
+                next.push_str(&text[..selection.start - 1]);
+                next.push_str(selected);
+                next.push_str(&text[selection.end + 1..]);
+                Some(RawInlineFormatEdit {
+                    text: next,
+                    selection: selection.start - 1..selection.end - 1,
+                })
+            } else {
+                let mut next = String::with_capacity(text.len() + 2);
+                next.push_str(&text[..selection.start]);
+                next.push('*');
+                next.push_str(selected);
+                next.push('*');
+                next.push_str(&text[selection.end..]);
+                Some(RawInlineFormatEdit {
+                    text: next,
+                    selection: selection.start + 1..selection.end + 1,
+                })
+            }
+        }
+        InlineFormat::Underline => toggle_fixed_raw_delimiters(text, selection, "<u>", "</u>"),
+        InlineFormat::Strikethrough => toggle_fixed_raw_delimiters(text, selection, "~~", "~~"),
+        InlineFormat::Code => {
+            let left = repeated_ascii_before(text, selection.start, b'`');
+            let right = repeated_ascii_after(text, selection.end, b'`');
+            let mut prefix_len = left;
+            let mut suffix_len = right;
+
+            if left == 0
+                && right == 0
+                && selection.start > 0
+                && selection.end < text.len()
+                && text.as_bytes()[selection.start - 1] == b' '
+                && text.as_bytes()[selection.end] == b' '
+            {
+                let left_delimiter_end = selection.start - 1;
+                let right_delimiter_start = selection.end + 1;
+                let padded_left = repeated_ascii_before(text, left_delimiter_end, b'`');
+                let padded_right = repeated_ascii_after(text, right_delimiter_start, b'`');
+                if padded_left > 0 && padded_left == padded_right {
+                    prefix_len = padded_left + 1;
+                    suffix_len = padded_right + 1;
+                }
+            }
+
+            if prefix_len > 0 && prefix_len == suffix_len {
+                let mut next = String::with_capacity(text.len() - prefix_len - suffix_len);
+                next.push_str(&text[..selection.start - prefix_len]);
+                next.push_str(selected);
+                next.push_str(&text[selection.end + suffix_len..]);
+                Some(RawInlineFormatEdit {
+                    text: next,
+                    selection: selection.start - prefix_len..selection.end - prefix_len,
+                })
+            } else {
+                let delimiter = "`".repeat(code_delimiter_run_len(selected));
+                let needs_padding = !selected.chars().all(|ch| ch == ' ')
+                    && (selected.starts_with([' ', '`']) || selected.ends_with([' ', '`']));
+                let padding = usize::from(needs_padding);
+                let mut next =
+                    String::with_capacity(text.len() + delimiter.len() * 2 + padding * 2);
+                next.push_str(&text[..selection.start]);
+                next.push_str(&delimiter);
+                if needs_padding {
+                    next.push(' ');
+                }
+                next.push_str(selected);
+                if needs_padding {
+                    next.push(' ');
+                }
+                next.push_str(&delimiter);
+                next.push_str(&text[selection.end..]);
+                let selection_start = selection.start + delimiter.len() + padding;
+                Some(RawInlineFormatEdit {
+                    text: next,
+                    selection: selection_start..selection_start + selected.len(),
+                })
+            }
+        }
+    }
 }
 
 /// Editing semantics for the current block.
@@ -165,16 +355,8 @@ pub struct Block {
     pub(crate) table_axis_preview: Option<TableAxisMarker>,
     pub(crate) table_axis_selection: Option<TableAxisMarker>,
     pub(crate) table_axis_highlight: TableAxisHighlight,
-    pub(crate) table_append_column_edge_hovered: bool,
-    pub(crate) table_append_column_hovered: bool,
-    pub(crate) table_append_column_zone_hovered: bool,
-    pub(crate) table_append_column_button_hovered: bool,
-    pub(crate) table_append_column_close_task: Option<Task<()>>,
-    pub(crate) table_append_row_edge_hovered: bool,
-    pub(crate) table_append_row_hovered: bool,
-    pub(crate) table_append_row_zone_hovered: bool,
-    pub(crate) table_append_row_button_hovered: bool,
-    pub(crate) table_append_row_close_task: Option<Task<()>>,
+    /// Hovered `(columns, visual_rows)` in the table size picker.
+    pub(crate) table_size_picker_hover: Option<(usize, usize)>,
     image_runtime: Option<ImageRuntime>,
     image_edit_expanded: bool,
     image_expand_requested: bool,
@@ -260,16 +442,7 @@ impl Block {
             table_axis_preview: None,
             table_axis_selection: None,
             table_axis_highlight: TableAxisHighlight::None,
-            table_append_column_edge_hovered: false,
-            table_append_column_hovered: false,
-            table_append_column_zone_hovered: false,
-            table_append_column_button_hovered: false,
-            table_append_column_close_task: None,
-            table_append_row_edge_hovered: false,
-            table_append_row_hovered: false,
-            table_append_row_zone_hovered: false,
-            table_append_row_button_hovered: false,
-            table_append_row_close_task: None,
+            table_size_picker_hover: None,
             image_runtime: None,
             image_edit_expanded: false,
             image_expand_requested: false,
@@ -1918,7 +2091,25 @@ impl Block {
     ///
     /// Serializers later translate these flags back to markers on export.
     pub(crate) fn toggle_inline_format(&mut self, format: InlineFormat, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() || self.uses_raw_text_editing() {
+        if self.selected_range.is_empty() {
+            return;
+        }
+        if self.uses_raw_text_editing() {
+            let selection = self.selection_clean_range();
+            let Some(edit) = toggle_raw_inline_format_text(self.display_text(), selection, format)
+            else {
+                return;
+            };
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            self.apply_title_edit(
+                InlineTextTree::plain(edit.text),
+                edit.selection.end,
+                None,
+                Some(edit.selection),
+                Some(self.selection_reversed),
+                false,
+                cx,
+            );
             return;
         }
 
@@ -1928,6 +2119,7 @@ impl Block {
             InlineFormat::Bold => next_title.toggle_bold(selection.clone()),
             InlineFormat::Italic => next_title.toggle_italic(selection.clone()),
             InlineFormat::Underline => next_title.toggle_underline(selection.clone()),
+            InlineFormat::Strikethrough => next_title.toggle_strikethrough(selection.clone()),
             InlineFormat::Code => next_title.toggle_code(selection.clone()),
         };
         if !changed {
@@ -1944,6 +2136,48 @@ impl Block {
             false,
             cx,
         );
+    }
+
+    /// Applies a block-format shortcut while preserving the current text and
+    /// selection. Structural metadata is rebuilt by the parent editor after
+    /// this local state transition.
+    pub(crate) fn apply_shortcut_block_kind(
+        &mut self,
+        kind: BlockKind,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.is_table_cell() || self.is_source_raw_mode() {
+            return false;
+        }
+
+        let selection = self.selection_clean_range();
+        let selection_reversed = self.selection_reversed;
+        let title = if kind.is_code_block() {
+            InlineTextTree::plain(self.display_text().to_string())
+        } else {
+            self.record.title.clone()
+        };
+
+        self.clear_inline_projection();
+        self.record.kind = kind;
+        self.record.table = None;
+        self.record.set_title(title);
+        self.heading_shortcut_marker = None;
+        self.quote_reparse_requested = false;
+        self.numbered_list_restart_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+
+        let len = self.record.title.visible_len();
+        let start = selection.start.min(len);
+        let end = selection.end.min(len);
+        self.selected_range = self.clean_to_current_range(start..end);
+        self.selection_reversed = selection_reversed;
+        self.marked_range = None;
+        self.vertical_motion_x = None;
+        self.cursor_blink_epoch = Instant::now();
+        cx.notify();
+        true
     }
 
     fn current_line_layout_and_offset(&self) -> Option<(&WrappedLine, usize)> {
