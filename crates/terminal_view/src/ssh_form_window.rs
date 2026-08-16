@@ -15,7 +15,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -32,10 +32,11 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SshAuthMethod,
-    SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType, Workspace,
-    ssh_os_icon,
+    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SshAccountExpect,
+    SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+    TerminalExpectSend, Workspace, ssh_os_icon,
 };
+use regex::bytes::Regex;
 use rust_i18n::t;
 use ssh::{
     ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
@@ -234,6 +235,10 @@ pub struct SshFormWindow {
     // 初始化
     init_script_input: Entity<InputState>,
     default_directory_input: Entity<InputState>,
+    username_expect_input: Entity<InputState>,
+    username_send_input: Entity<InputState>,
+    password_expect_input: Entity<InputState>,
+    password_send_input: Entity<InputState>,
 
     // 其他设置
     remark_input: Entity<InputState>,
@@ -288,6 +293,16 @@ fn credential_capabilities_for_auth(auth_method: AuthMethodSelection) -> Credent
             CredentialCapabilities::username_only()
         }
     }
+}
+
+fn terminal_expect_step_is_valid(step: &TerminalExpectSend, has_runtime_fallback: bool) -> bool {
+    if step.expect.is_empty() {
+        return step.send.is_empty();
+    }
+    let Ok(expect) = Regex::new(&step.expect) else {
+        return false;
+    };
+    !expect.is_match(b"") && (!step.send.is_empty() || has_runtime_fallback)
 }
 
 fn build_connection_test_signature(params: &SshParams) -> String {
@@ -624,6 +639,21 @@ impl SshFormWindow {
         let default_directory_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("SSH.default_directory_placeholder"))
         });
+        let username_expect_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("SSH.account_expect_pattern_placeholder"))
+        });
+        let username_send_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.account_expect_username_send_placeholder"))
+        });
+        let password_expect_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("SSH.account_expect_pattern_placeholder"))
+        });
+        let password_send_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.account_expect_password_send_placeholder"))
+                .masked(true)
+        });
 
         // 其他设置
         let remark_input = cx.new(|cx| {
@@ -757,6 +787,18 @@ impl SshFormWindow {
                 if let Some(ref script) = params.init_script {
                     init_script_input.update(cx, |s, cx| s.set_value(script, window, cx));
                 }
+                username_expect_input.update(cx, |s, cx| {
+                    s.set_value(&params.account_expect.username.expect, window, cx)
+                });
+                username_send_input.update(cx, |s, cx| {
+                    s.set_value(&params.account_expect.username.send, window, cx)
+                });
+                password_expect_input.update(cx, |s, cx| {
+                    s.set_value(&params.account_expect.password.expect, window, cx)
+                });
+                password_send_input.update(cx, |s, cx| {
+                    s.set_value(&params.account_expect.password.send, window, cx)
+                });
                 disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
@@ -1007,6 +1049,10 @@ impl SshFormWindow {
             allow_legacy_algorithms,
             init_script_input,
             default_directory_input,
+            username_expect_input,
+            username_send_input,
+            password_expect_input,
+            password_send_input,
             remark_input,
             last_tested_signature: None,
             detected_os_id,
@@ -1148,6 +1194,24 @@ impl SshFormWindow {
             let s = self.init_script_input.read(cx).text().to_string();
             if s.is_empty() { None } else { Some(s) }
         };
+        let account_expect = SshAccountExpect {
+            username: TerminalExpectSend {
+                expect: self.username_expect_input.read(cx).text().to_string(),
+                send: self.username_send_input.read(cx).text().to_string(),
+            },
+            password: TerminalExpectSend {
+                expect: self.password_expect_input.read(cx).text().to_string(),
+                send: self.password_send_input.read(cx).text().to_string(),
+            },
+        };
+        if !terminal_expect_step_is_valid(&account_expect.username, true)
+            || !terminal_expect_step_is_valid(
+                &account_expect.password,
+                self.auth_method == AuthMethodSelection::Password,
+            )
+        {
+            return None;
+        }
 
         // 跳板机配置
         let jump_server = if self.enable_jump_server {
@@ -1280,6 +1344,7 @@ impl SshFormWindow {
             proxy,
             os_id: self.detected_os_id.clone(),
             icon: self.manual_icon.clone(),
+            account_expect,
         })
     }
 
@@ -1888,6 +1953,43 @@ impl SshFormWindow {
         Input::new(input).w_full()
     }
 
+    fn render_account_expect(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .pt_2()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .child(t!("SSH.account_expect").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("SSH.account_expect_hint").to_string()),
+            )
+            .child(self.render_form_row(
+                &t!("SSH.account_expect_username"),
+                self.render_form_input(&self.username_expect_input),
+            ))
+            .child(self.render_form_row(
+                &t!("SSH.account_expect_username_send"),
+                self.render_form_input(&self.username_send_input),
+            ))
+            .child(self.render_form_row(
+                &t!("SSH.account_expect_password"),
+                self.render_form_input(&self.password_expect_input),
+            ))
+            .child(
+                self.render_form_row(
+                    &t!("SSH.account_expect_password_send"),
+                    self.render_form_input(&self.password_send_input)
+                        .mask_toggle(),
+                ),
+            )
+    }
+
     /// 渲染连接图标选择器：自动（跟随测试连接探测结果）或手动固定图标。
     fn render_icon_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
@@ -2160,6 +2262,7 @@ impl SshFormWindow {
                     ),
                 )
             })
+            .child(self.render_account_expect(cx))
             .child(
                 self.render_form_row(
                     &t!("SSH.keyboard_interactive"),
@@ -2910,6 +3013,7 @@ mod tests {
     use one_core::settings::AppSettings;
     use one_core::storage::{
         SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+        TerminalExpectSend,
     };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -2940,6 +3044,7 @@ mod tests {
             icon: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            account_expect: Default::default(),
         }
     }
 
@@ -2965,6 +3070,60 @@ mod tests {
             credential_capabilities_for_auth(AuthMethodSelection::AutoPublicKey),
             CredentialCapabilities::username_only()
         );
+    }
+
+    #[test]
+    fn ssh_expect_validation_rejects_send_without_expect() {
+        assert!(!super::terminal_expect_step_is_valid(
+            &TerminalExpectSend {
+                expect: String::new(),
+                send: "admin".to_string(),
+            },
+            true,
+        ));
+    }
+
+    #[test]
+    fn ssh_expect_validation_rejects_invalid_or_empty_matching_regex() {
+        assert!(!super::terminal_expect_step_is_valid(
+            &TerminalExpectSend {
+                expect: "(".to_string(),
+                send: "admin".to_string(),
+            },
+            true,
+        ));
+        assert!(!super::terminal_expect_step_is_valid(
+            &TerminalExpectSend {
+                expect: ".*".to_string(),
+                send: "admin".to_string(),
+            },
+            true,
+        ));
+    }
+
+    #[test]
+    fn ssh_expect_validation_allows_password_runtime_fallback() {
+        assert!(super::terminal_expect_step_is_valid(
+            &TerminalExpectSend {
+                expect: "Password:".to_string(),
+                send: String::new(),
+            },
+            true,
+        ));
+        assert!(!super::terminal_expect_step_is_valid(
+            &TerminalExpectSend {
+                expect: "Password:".to_string(),
+                send: String::new(),
+            },
+            false,
+        ));
+        assert!(super::terminal_expect_step_is_valid(
+            &TerminalExpectSend {
+                expect: "Password:".to_string(),
+                send: "secret".to_string(),
+            },
+            false,
+        ));
     }
 
     #[test]

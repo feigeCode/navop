@@ -22,8 +22,8 @@ use one_core::app_dirs;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{
-    ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAuthMethod,
-    StoredConnection, TelnetParams,
+    ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAccountExpect,
+    SshAuthMethod, StoredConnection, TelnetParams,
 };
 use one_core::storage::{
     GlobalStorageState, TerminalCommandHistoryRepository, TerminalCommandHistorySort,
@@ -249,6 +249,7 @@ pub struct SshTerminalConfig {
     pub ssh_config: SshConnectConfig,
     pub pty_config: PtyConfig,
     pub terminal_encoding: TerminalEncoding,
+    pub account_expect: SshAccountExpect,
     /// 关闭 shell integration 注入:走裸 request_shell,失去 OSC 集成。
     pub disable_shell_integration: bool,
 }
@@ -565,6 +566,7 @@ fn resolve_ssh_connection(
     };
     let keyboard_interactive_enabled = params.keyboard_interactive_enabled();
     let terminal_encoding = params.terminal_encoding.into();
+    let account_expect = params.account_expect.clone();
     let mut pty_config = PtyConfig::default();
     pty_config.term = params.terminal_type.as_str().to_string();
     let init_commands = build_ssh_init_commands(
@@ -607,6 +609,7 @@ fn resolve_ssh_connection(
             ssh_config,
             pty_config,
             terminal_encoding,
+            account_expect,
             disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
         },
         credential_prompt_policy,
@@ -2554,6 +2557,8 @@ impl Terminal {
             generation,
         } = task;
         let task = Tokio::spawn(cx, async move {
+            let expect_username = config.ssh_config.username.clone();
+            let expect_password = password_from_ssh_auth(&config.ssh_config.auth);
             let disconnect_tx = on_disconnect.map(|tx| {
                 let (sender, mut receiver) = unbounded_channel::<Option<String>>();
                 tokio::spawn(async move {
@@ -2574,6 +2579,9 @@ impl Terminal {
                     event_tx,
                     on_disconnect: disconnect_tx,
                     init_commands,
+                    account_expect: config.account_expect,
+                    expect_username,
+                    expect_password,
                     disable_shell_integration: config.disable_shell_integration,
                 },
                 recording_tap,
@@ -5231,6 +5239,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             None,
         );
@@ -5294,6 +5303,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             None,
         );
@@ -5364,6 +5374,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             None,
         );
@@ -5420,6 +5431,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             None,
         );

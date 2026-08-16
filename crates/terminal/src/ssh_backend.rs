@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
+use one_core::storage::SshAccountExpect;
 
 use ssh::{
     ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
@@ -25,6 +26,7 @@ use crate::recording::RecordingTap;
 use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
+use crate::ssh_expect::SshLoginExpect;
 use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
 use crate::zmodem::{ZmodemDetector, ZmodemResponder, is_channel_closed, run_transfer};
 use crate::{
@@ -318,6 +320,9 @@ pub struct SshBackendConnect {
     pub event_tx: UnboundedSender<TerminalEvent>,
     pub on_disconnect: Option<UnboundedSender<Option<String>>>,
     pub init_commands: Option<String>,
+    pub account_expect: SshAccountExpect,
+    pub expect_username: String,
+    pub expect_password: Option<String>,
     pub disable_shell_integration: bool,
 }
 
@@ -562,8 +567,17 @@ impl SshBackend {
             event_tx,
             on_disconnect,
             init_commands,
+            account_expect,
+            expect_username,
+            expect_password,
             disable_shell_integration,
         } = request;
+        let login_expect = SshLoginExpect::new(
+            &account_expect,
+            &expect_username,
+            expect_password.as_deref(),
+        )
+        .context("invalid SSH account expect configuration")?;
         let (client, mut channel, shell_integration_active) = Self::establish_channel(
             &session_manager,
             &pty_config,
@@ -610,6 +624,7 @@ impl SshBackend {
             let mut exec_results = HashMap::new();
             let mut shell_ready = !shell_integration_active;
             let mut init_sent = false;
+            let mut login_expect = login_expect;
 
             'actor: loop {
                 match next_ssh_actor_input(
@@ -833,6 +848,17 @@ impl SshBackend {
                                 if data.is_empty() {
                                     continue;
                                 }
+                                let expect_sends = login_expect.advance(&data);
+                                let expect_responded = !expect_sends.is_empty();
+                                for send in expect_sends {
+                                    if let Err(error) = send_terminal_data(&mut channel, &send)
+                                        .await
+                                        .context("failed to send SSH expect response")
+                                    {
+                                        disconnect_error = Some(error);
+                                        break 'actor;
+                                    }
+                                }
                                 // 解析所有 OSC 事件
                                 let osc_events = osc_parser.push(&data);
                                 let effects = encode_exec_effects(
@@ -892,8 +918,13 @@ impl SshBackend {
                                     }
                                 }
 
-                                // shell ready 后发送 init_commands（只发一次）
-                                if shell_ready && !init_sent {
+                                // 自动登录完成且本轮没有刚发送应答时，再发送 init_commands。
+                                // 避免用户名/密码应答和初始化命令落在同一轮输出中，被设备误当成登录输入。
+                                if shell_ready
+                                    && login_expect.is_complete()
+                                    && !expect_responded
+                                    && !init_sent
+                                {
                                     init_sent = true;
                                     if let Some(ref commands) = pending_init {
                                         let inter_command_delay = (!shell_integration_active)

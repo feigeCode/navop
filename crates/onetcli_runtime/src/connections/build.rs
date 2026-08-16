@@ -86,6 +86,7 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
         credential_reference: None,
         os_id: None,
         icon: None,
+        account_expect: Default::default(),
     };
     Ok(with_common_fields(
         StoredConnection::new_ssh(

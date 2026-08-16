@@ -147,6 +147,7 @@ mod tests {
                 credential_reference: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             Some(7),
         );

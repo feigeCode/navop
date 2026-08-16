@@ -269,6 +269,42 @@ SSH:
     en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response.
     zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。
     zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬件權杖或質詢回應。
+  account_expect:
+    en: Automatic Login (Expect)
+    zh-CN: 自动登录（Expect）
+    zh-HK: 自動登入（Expect）
+  account_expect_hint:
+    en: Match device CLI output after the SSH shell opens. Username is matched before password, and each response is sent at most once. Leave Send empty to use the final runtime username or password.
+    zh-CN: SSH shell 打开后匹配设备 CLI 输出；用户名优先于密码，每项最多自动发送一次。发送内容留空时使用最终运行时用户名或密码。
+    zh-HK: SSH shell 開啟後匹配裝置 CLI 輸出；使用者名稱優先於密碼，每項最多自動傳送一次。傳送內容留空時使用最終執行階段使用者名稱或密碼。
+  account_expect_username:
+    en: Username Expect
+    zh-CN: 用户名 Expect
+    zh-HK: 使用者名稱 Expect
+  account_expect_username_send:
+    en: Username Send
+    zh-CN: 用户名发送
+    zh-HK: 使用者名稱傳送
+  account_expect_password:
+    en: Password Expect
+    zh-CN: 密码 Expect
+    zh-HK: 密碼 Expect
+  account_expect_password_send:
+    en: Password Send
+    zh-CN: 密码发送
+    zh-HK: 密碼傳送
+  account_expect_pattern_placeholder:
+    en: "e.g. (?i)(?:login|username)\\s*:"
+    zh-CN: "如 (?i)(?:login|username)\\s*:"
+    zh-HK: "如 (?i)(?:login|username)\\s*:"
+  account_expect_username_send_placeholder:
+    en: Leave empty to use the runtime username
+    zh-CN: 留空时使用运行时用户名
+    zh-HK: 留空時使用執行階段使用者名稱
+  account_expect_password_send_placeholder:
+    en: Leave empty to use the runtime password
+    zh-CN: 留空时使用运行时密码
+    zh-HK: 留空時使用執行階段密碼
   terminal_encoding:
     en: Terminal Encoding
     zh-CN: 终端字符集

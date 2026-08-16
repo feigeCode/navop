@@ -2,7 +2,8 @@
 
 use connection_form::credential::{
     CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
+    CredentialReferencePicker, ManualCredentialOverride, create_credential_picker,
+    resolve_connection_for_runtime,
 };
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -581,11 +582,25 @@ impl MongoFormWindow {
             window,
             cx,
         );
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
             }),
         ];
+        for binding in [
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &username_input,
+                CredentialField::Username,
+            ),
+            ManualCredentialOverride::new(
+                &credential_picker,
+                &password_input,
+                CredentialField::Password,
+            ),
+        ] {
+            subscriptions.push(binding.subscribe(window, cx));
+        }
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -1027,10 +1042,6 @@ impl MongoFormWindow {
     }
 
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let credential_picker = self.credential_picker.read(cx);
-        let username_referenced = credential_picker.field_referenced(CredentialField::Username);
-        let password_referenced = credential_picker.field_referenced(CredentialField::Password);
-
         v_flex()
             .gap_2()
             .child(self.render_form_row(
@@ -1055,17 +1066,13 @@ impl MongoFormWindow {
             ))
             .child(self.render_form_row(
                 t!("MongoForm.username_label").as_ref(),
-                Input::new(&self.username_input).disabled(username_referenced),
+                Input::new(&self.username_input),
             ))
             .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
-            .child(
-                self.render_form_row(
-                    t!("MongoForm.password_label").as_ref(),
-                    Input::new(&self.password_input)
-                        .mask_toggle()
-                        .disabled(password_referenced),
-                ),
-            )
+            .child(self.render_form_row(
+                t!("MongoForm.password_label").as_ref(),
+                Input::new(&self.password_input).mask_toggle(),
+            ))
             .child(self.render_form_row(
                 t!("MongoForm.auth_source_label").as_ref(),
                 Input::new(&self.authentication_source_input),

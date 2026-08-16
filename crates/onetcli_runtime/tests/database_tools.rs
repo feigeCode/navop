@@ -289,6 +289,7 @@ fn ssh_params() -> SshParams {
         proxy: None,
         os_id: None,
         icon: None,
+        account_expect: Default::default(),
     }
 }
 

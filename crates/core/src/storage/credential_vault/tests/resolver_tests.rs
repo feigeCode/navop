@@ -47,6 +47,7 @@ fn ssh_params(reference: Option<CredentialReference>) -> SshParams {
         proxy: None,
         os_id: None,
         icon: None,
+        account_expect: Default::default(),
     }
 }
 

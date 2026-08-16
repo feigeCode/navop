@@ -140,6 +140,7 @@ fn to_ssh_connection(
         proxy: None,
         os_id: None,
         icon: None,
+        account_expect: Default::default(),
     };
     Ok(StoredConnection::new_ssh(name, params, None))
 }

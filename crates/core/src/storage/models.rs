@@ -333,6 +333,34 @@ impl StoredTerminalType {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalExpectSend {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub expect: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub send: String,
+}
+
+impl TerminalExpectSend {
+    pub fn is_empty(&self) -> bool {
+        self.expect.is_empty() && self.send.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshAccountExpect {
+    #[serde(default, skip_serializing_if = "TerminalExpectSend::is_empty")]
+    pub username: TerminalExpectSend,
+    #[serde(default, skip_serializing_if = "TerminalExpectSend::is_empty")]
+    pub password: TerminalExpectSend,
+}
+
+impl SshAccountExpect {
+    pub fn is_empty(&self) -> bool {
+        self.username.is_empty() && self.password.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshParams {
     pub host: String,
@@ -359,6 +387,9 @@ pub struct SshParams {
     /// SSH PTY 终端类型；旧连接缺少此字段时保持 xterm-256color。
     #[serde(default, skip_serializing_if = "StoredTerminalType::is_default")]
     pub terminal_type: StoredTerminalType,
+    /// SSH shell/channel 打开后，根据设备 CLI 输出自动应答用户名和密码提示。
+    #[serde(default, skip_serializing_if = "SshAccountExpect::is_empty")]
+    pub account_expect: SshAccountExpect,
     /// 连接超时（秒）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connect_timeout: Option<u64>,
@@ -1770,6 +1801,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             Some(7),
         );
@@ -1960,6 +1992,7 @@ mod tests {
             proxy: None,
             os_id: None,
             icon: None,
+            account_expect: Default::default(),
         };
         assert_eq!(
             "root@localhost:22",
@@ -2786,6 +2819,7 @@ mod serial_tests {
             proxy: None,
             os_id: Some("ubuntu".to_string()),
             icon: None,
+            account_expect: Default::default(),
         };
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(json.contains("\"os_id\":\"ubuntu\""));
@@ -2812,6 +2846,41 @@ mod serial_tests {
 
         let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
         assert_eq!(parsed.allow_legacy_algorithms, Some(true));
+    }
+
+    #[test]
+    fn ssh_account_expect_round_trips_and_legacy_json_defaults_empty() {
+        let params: SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": "Agent",
+            "account_expect": {
+                "username": {
+                    "expect": "(?i)login:",
+                    "send": "admin"
+                },
+                "password": {
+                    "expect": "(?i)password:",
+                    "send": "secret"
+                }
+            }
+        }))
+        .expect("SSH expect 配置应可反序列化");
+
+        let json = serde_json::to_string(&params).expect("SSH expect 配置应可序列化");
+        let parsed: SshParams =
+            serde_json::from_str(&json).expect("SSH expect 配置应可再次反序列化");
+        assert_eq!(parsed.account_expect, params.account_expect);
+        assert!(json.contains("\"account_expect\""));
+
+        let legacy: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧 SSH 配置应可反序列化");
+        assert!(legacy.account_expect.is_empty());
+        let legacy_json = serde_json::to_string(&legacy).expect("旧 SSH 配置应可序列化");
+        assert!(!legacy_json.contains("account_expect"));
     }
 
     #[test]
@@ -2898,6 +2967,7 @@ mod serial_tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             None,
         );

@@ -933,6 +933,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                account_expect: Default::default(),
             },
             None,
         )
@@ -1376,6 +1377,7 @@ mod tests {
             proxy: None,
             os_id: None,
             icon: None,
+            account_expect: Default::default(),
         })
         .expect("serialize SSH params");
         conn.with_connection(|conn| {

@@ -13,6 +13,7 @@ mod serial_ingress;
 mod session_logging;
 pub mod shell_integration;
 pub mod ssh_backend;
+mod ssh_expect;
 mod ssh_ingress;
 mod ssh_session_identity;
 pub mod telnet_backend;
