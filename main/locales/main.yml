@@ -631,6 +631,14 @@ Home:
     en: Notes
     zh-CN: 笔记
     zh-HK: 筆記
+  api_testing:
+    en: API Testing
+    zh-CN: 接口测试
+    zh-HK: 接口測試
+  json_formatter:
+    en: JSON Formatter
+    zh-CN: JSON 格式化
+    zh-HK: JSON 格式化
   session_logs:
     en: Session Logs
     zh-CN: 会话日志

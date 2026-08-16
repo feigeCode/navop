@@ -63,6 +63,8 @@ fn application_navigation_partition_preserves_optional_entries() {
         }
         expected.extend([
             NavigationApplication::Notes,
+            NavigationApplication::ApiTesting,
+            NavigationApplication::JsonFormatter,
             NavigationApplication::SessionLogs,
             NavigationApplication::CredentialVault,
             NavigationApplication::Extensions,

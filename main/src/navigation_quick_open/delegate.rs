@@ -165,6 +165,8 @@ fn application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::AiWorkbench => IconName::AILine,
         NavigationApplication::Team => IconName::TeamLine,
         NavigationApplication::Notes => IconName::NotesLine,
+        NavigationApplication::ApiTesting => IconName::Globe,
+        NavigationApplication::JsonFormatter => IconName::File,
         NavigationApplication::SessionLogs => IconName::Terminal,
         NavigationApplication::CredentialVault => IconName::Key,
         NavigationApplication::Extensions => IconName::ExtensionsLine,

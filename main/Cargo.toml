@@ -36,6 +36,7 @@ extension-runtime = { workspace = true, features = ["wasm-components"] }
 extension-host.workspace = true
 extension_view = { workspace = true }
 notes = { workspace = true }
+api_tools = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
 agent_runtime = { workspace = true }

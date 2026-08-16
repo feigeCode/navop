@@ -25,6 +25,8 @@ pub(crate) enum NavigationApplication {
     AiWorkbench,
     Team,
     Notes,
+    ApiTesting,
+    JsonFormatter,
     SessionLogs,
     CredentialVault,
     Extensions,
@@ -97,6 +99,8 @@ pub(crate) fn leading_navigation_applications(
         applications.push(NavigationApplication::Team);
     }
     applications.push(NavigationApplication::Notes);
+    applications.push(NavigationApplication::ApiTesting);
+    applications.push(NavigationApplication::JsonFormatter);
     applications
 }
 
@@ -120,6 +124,8 @@ impl NavigationApplication {
             }
             Self::Team => t!("TeamManagement.title").to_string(),
             Self::Notes => t!("Home.notes").to_string(),
+            Self::ApiTesting => t!("Home.api_testing").to_string(),
+            Self::JsonFormatter => t!("Home.json_formatter").to_string(),
             Self::SessionLogs => t!("Home.session_logs").to_string(),
             Self::CredentialVault => t!("Home.credential_vault").to_string(),
             Self::Extensions => t!("Home.extensions").to_string(),

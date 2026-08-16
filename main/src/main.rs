@@ -282,6 +282,7 @@ fn main() {
             file_association::schedule_registration(cx);
         }
         notes::init(cx);
+        api_tools::init(cx);
         extension_runtime::init(cx);
 
         let saved_size = AppSettings::current(cx).main_window_size;

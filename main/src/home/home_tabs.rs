@@ -4,6 +4,7 @@ use crate::license::is_feature_enabled;
 use crate::onetcli_app::{GlobalOnetCliApp, GlobalTabContainer};
 use crate::session_logs::SessionLogsPage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
+use api_tools::{ApiTestView, JsonFormatterView};
 use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Focusable, Window};
 use gpui_component::{WindowExt, notification::Notification};
@@ -1320,6 +1321,40 @@ impl HomePage {
                     |window, cx| {
                         let notes = cx.new(|cx| NotesView::new(window, cx));
                         TabItem::new("notes", "home", notes)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    pub(crate) fn add_api_test_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "api-testing",
+                    |window, cx| {
+                        let view = cx.new(|cx| ApiTestView::new(window, cx));
+                        TabItem::new("api-testing", "home", view)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    pub(crate) fn add_json_formatter_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "json-formatter",
+                    |window, cx| {
+                        let view = cx.new(|cx| JsonFormatterView::new(window, cx));
+                        TabItem::new("json-formatter", "home", view)
                     },
                     window,
                     cx,

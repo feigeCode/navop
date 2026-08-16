@@ -159,6 +159,7 @@ rustls = "0.23.35"
 tracing-subscriber = "0.3"
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 tokio-util = "0.7.17"
 dirs = "6.0"
 encoding_rs = "0.8.35"
