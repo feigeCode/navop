@@ -358,6 +358,11 @@ pub struct CredentialPlainData {
     pub private_key_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::storage::SshAccountExpect::is_empty"
+    )]
+    pub ssh_expect: crate::storage::SshAccountExpect,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
 }

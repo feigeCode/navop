@@ -15,6 +15,7 @@ fn summary() -> CredentialSummary {
         has_private_key_path: true,
         has_private_key_content: false,
         has_passphrase: true,
+        has_ssh_expect: false,
         sync_enabled: false,
         cloud_id: None,
         last_synced_at: None,

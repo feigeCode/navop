@@ -106,9 +106,15 @@ fn compile_step(
     }
 
     let send = if step.send.is_empty() {
+        let Some(fallback) = fallback.filter(|value| !value.is_empty()) else {
+            // A reusable credential may define a password prompt for password
+            // authentication while the current connection uses a key or
+            // agent. Without an explicit send value there is nothing safe to
+            // answer with, so ignore this step instead of failing the SSH
+            // connection during channel setup.
+            return Ok(());
+        };
         fallback
-            .filter(|value| !value.is_empty())
-            .with_context(|| format!("SSH {name} expect has no send value or runtime fallback"))?
     } else {
         step.send.as_str()
     };
@@ -297,11 +303,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_runtime_fallback() {
-        let error = SshLoginExpect::new(&config(("", ""), ("Password:", "")), "admin", None)
-            .err()
-            .expect("missing password fallback should fail");
-        assert!(error.to_string().contains("runtime fallback"));
+    fn skips_step_without_runtime_fallback() {
+        let script = SshLoginExpect::new(&config(("", ""), ("Password:", "")), "admin", None)
+            .expect("password expect without a runtime password should be ignored");
+        assert!(script.is_complete());
     }
 
     #[test]

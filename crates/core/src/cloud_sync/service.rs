@@ -435,13 +435,14 @@ impl CloudSyncService {
         }
 
         let plain_data = CredentialPlainData {
-            format_version: 1,
+            format_version: 2,
             name: credential.name.clone(),
             kind: credential.kind.clone(),
             username: credential.username.clone(),
             password: credential.password.clone(),
             private_key_content: credential.private_key_content.clone(),
             passphrase: credential.passphrase.clone(),
+            ssh_expect: credential.ssh_expect.clone(),
             owner_id: credential.owner_id.clone(),
         };
         let plaintext = serde_json::to_string(&plain_data)
@@ -561,7 +562,7 @@ impl CloudSyncService {
         }
         let plain_data: CredentialPlainData = serde_json::from_str(&plaintext)
             .map_err(|error| SyncError::DataFormatError(error.to_string()))?;
-        if plain_data.format_version != 1 {
+        if !matches!(plain_data.format_version, 1 | 2) {
             return Err(SyncError::DataFormatError(format!(
                 "unsupported credential format version {}",
                 plain_data.format_version
@@ -578,6 +579,7 @@ impl CloudSyncService {
             private_key_path: None,
             private_key_content: plain_data.private_key_content,
             passphrase: plain_data.passphrase,
+            ssh_expect: plain_data.ssh_expect,
             sync_enabled: true,
             cloud_id: Some(cloud_data.id.clone()),
             last_synced_at: Some(synced_at),
@@ -858,7 +860,7 @@ mod tests {
             .expect("credential blob decrypts");
         let mut plaintext_value: Value =
             serde_json::from_str(&plaintext).expect("credential plaintext parses");
-        plaintext_value["format_version"] = Value::from(2);
+        plaintext_value["format_version"] = Value::from(3);
         let unsupported_plaintext =
             serde_json::to_string(&plaintext_value).expect("credential plaintext serializes");
         record.checksum = CloudSyncService::calculate_blob_checksum(&unsupported_plaintext);
@@ -869,7 +871,7 @@ mod tests {
         assert!(matches!(
             service.decrypt_sync_data_credential(&record),
             Err(SyncError::DataFormatError(message))
-                if message.contains("unsupported credential format version 2")
+                if message.contains("unsupported credential format version 3")
         ));
 
         let mut team_credential = CredentialEntry::new("team production", "password");

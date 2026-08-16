@@ -90,6 +90,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260814000001",
         include_str!("../../migrations/20260814000001_personal_sync_conflict_type_key.sql"),
     ),
+    (
+        "20260816000001",
+        include_str!("../../migrations/20260816000001_credential_ssh_expect.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 
+use crate::storage::SshAccountExpect;
+
 /// A locally stored credential entry.
 ///
 /// Secret values are kept decrypted in memory only. The repository encrypts
@@ -19,6 +21,8 @@ pub struct CredentialEntry {
     pub private_key_content: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
+    #[serde(default)]
+    pub ssh_expect: SshAccountExpect,
     #[serde(default)]
     pub sync_enabled: bool,
     pub cloud_id: Option<String>,
@@ -76,6 +80,10 @@ impl std::fmt::Debug for CredentialEntry {
                 "passphrase",
                 &self.passphrase.as_ref().map(|_| "<redacted>"),
             )
+            .field(
+                "ssh_expect",
+                &(!self.ssh_expect.is_empty()).then_some("<redacted>"),
+            )
             .field("sync_enabled", &self.sync_enabled)
             .field("cloud_id", &self.cloud_id)
             .field("last_synced_at", &self.last_synced_at)
@@ -98,6 +106,7 @@ impl CredentialEntry {
             private_key_path: None,
             private_key_content: None,
             passphrase: None,
+            ssh_expect: SshAccountExpect::default(),
             sync_enabled: false,
             cloud_id: None,
             last_synced_at: None,
@@ -124,6 +133,7 @@ impl CredentialEntry {
             .into_iter()
             .flatten()
             .any(|value| !value.is_empty())
+            || !self.ssh_expect.is_empty()
     }
 }
 
@@ -155,6 +165,7 @@ pub struct CredentialSummary {
     pub has_private_key_path: bool,
     pub has_private_key_content: bool,
     pub has_passphrase: bool,
+    pub has_ssh_expect: bool,
     pub sync_enabled: bool,
     pub cloud_id: Option<String>,
     pub last_synced_at: Option<i64>,

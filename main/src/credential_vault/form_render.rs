@@ -42,7 +42,8 @@ impl Render for CredentialForm {
                                 cx.notify();
                             }))
                             .child(Tab::new().label("基本信息"))
-                            .child(Tab::new().label("SSH 密钥")),
+                            .child(Tab::new().label("SSH 密钥"))
+                            .child(Tab::new().label("自动登录")),
                     ),
             )
             .child(
@@ -57,6 +58,7 @@ impl Render for CredentialForm {
                         match active_tab {
                             0 => self.render_basic_tab(cx).into_any_element(),
                             1 => self.render_ssh_key_tab(cx).into_any_element(),
+                            2 => self.render_account_expect_tab(cx).into_any_element(),
                             _ => div().into_any_element(),
                         },
                     )),
@@ -268,6 +270,41 @@ impl CredentialForm {
             ))
     }
 
+    fn render_account_expect_tab(&self, cx: &gpui::App) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(info_panel(
+                "自动登录（Expect）",
+                "这是与钥匙串账号绑定的可复用终端登录规则。引用此钥匙串的 SSH 连接会自动继承；连接页签中的同名配置可以单独覆盖。规则只在 SSH shell 打开后执行，不参与 SSH 协议认证。",
+                cx,
+            ))
+            .child(form_field(
+                "用户名 Expect",
+                "终端提示的正则表达式；例如 (?i)(?:login|username)\\s*:。只配置密码时可以留空。",
+                Input::new(&self.username_expect_input).w_full(),
+                cx,
+            ))
+            .child(form_field(
+                "用户名发送",
+                "匹配后发送的内容；留空时使用最终运行时用户名。",
+                Input::new(&self.username_send_input).w_full(),
+                cx,
+            ))
+            .child(form_field(
+                "密码 Expect",
+                "终端密码提示的正则表达式；例如 (?i)password\\s*:。",
+                Input::new(&self.password_expect_input).w_full(),
+                cx,
+            ))
+            .child(form_field(
+                "密码发送",
+                "匹配后发送的内容；留空时使用最终运行时密码。",
+                Input::new(&self.password_send_input).w_full().mask_toggle(),
+                cx,
+            ))
+    }
+
     fn render_sync_settings(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
@@ -386,6 +423,7 @@ mod tests {
         assert!(render.contains("TabBar::new(\"credential-form-tabs\")"));
         assert!(render.contains("Tab::new().label(\"基本信息\")"));
         assert!(render.contains("Tab::new().label(\"SSH 密钥\")"));
+        assert!(render.contains("Tab::new().label(\"自动登录\")"));
         assert!(!render.contains("Tab::new().label(\"同步设置\")"));
         assert!(render.contains(".id(\"credential-form-content\")"));
         assert!(render.contains(".min_h_0()"));
@@ -407,8 +445,13 @@ mod tests {
         let ssh_key = source
             .split("fn render_ssh_key_tab")
             .nth(1)
-            .and_then(|source| source.split("fn render_sync_settings").next())
+            .and_then(|source| source.split("fn render_account_expect_tab").next())
             .expect("SSH key tab");
+        let expect = source
+            .split("fn render_account_expect_tab")
+            .nth(1)
+            .and_then(|source| source.split("fn render_sync_settings").next())
+            .expect("expect tab");
         let sync = source
             .split("fn render_sync_settings")
             .nth(1)
@@ -439,6 +482,16 @@ mod tests {
         ] {
             assert!(ssh_key.contains(field));
         }
+        for field in [
+            "self.username_expect_input",
+            "self.username_send_input",
+            "self.password_expect_input",
+            "self.password_send_input",
+        ] {
+            assert!(expect.contains(field));
+        }
+        assert!(!basic.contains("self.username_expect_input"));
+        assert!(!ssh_key.contains("self.username_expect_input"));
         assert!(sync.contains("credential-sync-enabled"));
     }
 

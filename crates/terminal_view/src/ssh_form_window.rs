@@ -1953,6 +1953,14 @@ impl SshFormWindow {
         Input::new(input).w_full()
     }
 
+    fn render_account_expect_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .debug_selector(|| "ssh-expect-tab".to_string())
+            .child(self.render_account_expect(cx))
+    }
+
     fn render_account_expect(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .pt_2()
@@ -2262,7 +2270,6 @@ impl SshFormWindow {
                     ),
                 )
             })
-            .child(self.render_account_expect(cx))
             .child(
                 self.render_form_row(
                     &t!("SSH.keyboard_interactive"),
@@ -2909,7 +2916,8 @@ impl Render for SshFormWindow {
                         .child(Tab::new().label(t!("SSH.tab_jump_server").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_proxy").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_advanced").to_string()))
-                        .child(Tab::new().label(t!("SSH.tab_other").to_string())),
+                        .child(Tab::new().label(t!("SSH.tab_other").to_string()))
+                        .child(Tab::new().label(t!("SSH.tab_account_expect").to_string())),
                 ),
             )
             // 标签页内容
@@ -2929,6 +2937,7 @@ impl Render for SshFormWindow {
                             3 => self.render_proxy_tab(cx).into_any_element(),
                             4 => self.render_advanced_tab(cx).into_any_element(),
                             5 => self.render_other_tab().into_any_element(),
+                            6 => self.render_account_expect_tab(cx).into_any_element(),
                             _ => div().into_any_element(),
                         },
                     )),

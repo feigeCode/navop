@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedString, Window};
 use gpui_component::input::InputState;
-use one_core::storage::CredentialEntry;
+use one_core::storage::{CredentialEntry, SshAccountExpect, TerminalExpectSend};
+use regex::Regex;
 
 pub(super) const CREDENTIAL_KIND_OPTIONS: [(&str, &str); 8] = [
     ("通用", "可用于任意支持凭据引用的连接"),
@@ -24,6 +25,7 @@ pub(super) struct CredentialFormValues {
     pub private_key_path: String,
     pub private_key_content: String,
     pub passphrase: String,
+    pub ssh_expect: SshAccountExpect,
     pub sync_enabled: bool,
 }
 
@@ -39,6 +41,10 @@ pub(crate) struct CredentialForm {
     pub(super) private_key_path_input: Entity<InputState>,
     pub(super) private_key_content_input: Entity<InputState>,
     pub(super) passphrase_input: Entity<InputState>,
+    pub(super) username_expect_input: Entity<InputState>,
+    pub(super) username_send_input: Entity<InputState>,
+    pub(super) password_expect_input: Entity<InputState>,
+    pub(super) password_send_input: Entity<InputState>,
     pub(super) sync_enabled: bool,
 }
 
@@ -108,6 +114,42 @@ impl CredentialForm {
             window,
             cx,
         );
+        let username_expect_input = text_input(
+            existing
+                .as_ref()
+                .map(|entry| entry.ssh_expect.username.expect.as_str()),
+            "如 (?i)(?:login|username)\\s*:",
+            false,
+            window,
+            cx,
+        );
+        let username_send_input = text_input(
+            existing
+                .as_ref()
+                .map(|entry| entry.ssh_expect.username.send.as_str()),
+            "留空时使用运行时用户名",
+            false,
+            window,
+            cx,
+        );
+        let password_expect_input = text_input(
+            existing
+                .as_ref()
+                .map(|entry| entry.ssh_expect.password.expect.as_str()),
+            "如 (?i)password\\s*:",
+            false,
+            window,
+            cx,
+        );
+        let password_send_input = text_input(
+            existing
+                .as_ref()
+                .map(|entry| entry.ssh_expect.password.send.as_str()),
+            "留空时使用运行时密码",
+            true,
+            window,
+            cx,
+        );
         let sync_enabled = existing.as_ref().is_some_and(|entry| entry.sync_enabled);
 
         Self {
@@ -122,6 +164,10 @@ impl CredentialForm {
             private_key_path_input,
             private_key_content_input,
             passphrase_input,
+            username_expect_input,
+            username_send_input,
+            password_expect_input,
+            password_send_input,
             sync_enabled,
         }
     }
@@ -143,6 +189,16 @@ impl CredentialForm {
             private_key_path: input_value(&self.private_key_path_input, cx),
             private_key_content: input_value(&self.private_key_content_input, cx),
             passphrase: input_value(&self.passphrase_input, cx),
+            ssh_expect: SshAccountExpect {
+                username: TerminalExpectSend {
+                    expect: input_value(&self.username_expect_input, cx),
+                    send: input_value(&self.username_send_input, cx),
+                },
+                password: TerminalExpectSend {
+                    expect: input_value(&self.password_expect_input, cx),
+                    send: input_value(&self.password_send_input, cx),
+                },
+            },
             sync_enabled: self.sync_enabled,
         }
     }
@@ -193,8 +249,38 @@ pub(super) fn build_entry(
     entry.private_key_path = optional_trimmed(values.private_key_path);
     entry.private_key_content = optional_trimmed(values.private_key_content);
     entry.passphrase = optional_trimmed(values.passphrase);
+    entry.ssh_expect = normalize_ssh_expect(values.ssh_expect)?;
     entry.sync_enabled = values.sync_enabled;
     Ok(entry)
+}
+
+fn normalize_ssh_expect(value: SshAccountExpect) -> Result<SshAccountExpect, String> {
+    Ok(SshAccountExpect {
+        username: normalize_expect_step(value.username, "用户名")?,
+        password: normalize_expect_step(value.password, "密码")?,
+    })
+}
+
+fn normalize_expect_step(
+    value: TerminalExpectSend,
+    label: &str,
+) -> Result<TerminalExpectSend, String> {
+    let expect = value.expect.trim().to_string();
+    let send = value.send;
+
+    if expect.is_empty() {
+        if !send.trim().is_empty() {
+            return Err(format!("{label}发送内容必须先配置 Expect 正则"));
+        }
+        return Ok(TerminalExpectSend::default());
+    }
+
+    let regex = Regex::new(&expect).map_err(|error| format!("{label} Expect 正则无效：{error}"))?;
+    if regex.is_match("") {
+        return Err(format!("{label} Expect 正则不能匹配空字符串"));
+    }
+
+    Ok(TerminalExpectSend { expect, send })
 }
 
 fn optional_trimmed(value: String) -> Option<String> {
@@ -271,6 +357,16 @@ mod tests {
             private_key_path: "   ".into(),
             private_key_content: " key ".into(),
             passphrase: " phrase ".into(),
+            ssh_expect: SshAccountExpect {
+                username: TerminalExpectSend {
+                    expect: " login: ".into(),
+                    send: " root ".into(),
+                },
+                password: TerminalExpectSend {
+                    expect: " Password: ".into(),
+                    send: " secret ".into(),
+                },
+            },
             sync_enabled: true,
         }
     }
@@ -291,6 +387,8 @@ mod tests {
         assert_eq!(entry.private_key_path, None);
         assert_eq!(entry.private_key_content.as_deref(), Some("key"));
         assert!(entry.sync_enabled);
+        assert_eq!(entry.ssh_expect.username.expect, "login:");
+        assert_eq!(entry.ssh_expect.username.send, " root ");
     }
 
     #[test]
@@ -304,6 +402,33 @@ mod tests {
 
         assert_eq!(entry.username, None);
         assert_eq!(entry.password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn allows_password_only_expect_rules() {
+        let mut values = values();
+        values.username.clear();
+        values.ssh_expect.username = TerminalExpectSend::default();
+        values.ssh_expect.password = TerminalExpectSend {
+            expect: "Password:".into(),
+            send: String::new(),
+        };
+
+        let entry = build_entry(None, values).unwrap();
+
+        assert!(entry.ssh_expect.username.is_empty());
+        assert_eq!(entry.ssh_expect.password.expect, "Password:");
+        assert!(entry.ssh_expect.password.send.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_expect_rules() {
+        let mut values = values();
+        values.ssh_expect.username.expect = ".*".into();
+        assert_eq!(
+            build_entry(None, values).unwrap_err(),
+            "用户名 Expect 正则不能匹配空字符串"
+        );
     }
 
     #[test]

@@ -274,9 +274,9 @@ SSH:
     zh-CN: 自动登录（Expect）
     zh-HK: 自動登入（Expect）
   account_expect_hint:
-    en: Match device CLI output after the SSH shell opens. Username is matched before password, and each response is sent at most once. Leave Send empty to use the final runtime username or password.
-    zh-CN: SSH shell 打开后匹配设备 CLI 输出；用户名优先于密码，每项最多自动发送一次。发送内容留空时使用最终运行时用户名或密码。
-    zh-HK: SSH shell 開啟後匹配裝置 CLI 輸出；使用者名稱優先於密碼，每項最多自動傳送一次。傳送內容留空時使用最終執行階段使用者名稱或密碼。
+    en: Inherit the reusable rules from the selected credential by default. Values on this tab override only this connection. Match device CLI output after the SSH shell opens; username is matched before password, and each response is sent at most once. Leave Send empty to use the final runtime username or password.
+    zh-CN: 默认继承所选钥匙串中的可复用规则；本页填写的内容仅覆盖当前连接。SSH shell 打开后匹配设备 CLI 输出；用户名优先于密码，每项最多自动发送一次。发送内容留空时使用最终运行时用户名或密码。
+    zh-HK: 預設繼承所選鑰匙串中的可重用規則；本頁填寫的內容僅覆蓋目前連線。SSH shell 開啟後匹配裝置 CLI 輸出；使用者名稱優先於密碼，每項最多自動傳送一次。傳送內容留空時使用最終執行階段使用者名稱或密碼。
   account_expect_username:
     en: Username Expect
     zh-CN: 用户名 Expect
@@ -410,6 +410,10 @@ SSH:
     en: Other
     zh-CN: 其他设置
     zh-HK: 其他設定
+  tab_account_expect:
+    en: Automatic Login (Expect)
+    zh-CN: 自动登录（Expect）
+    zh-HK: 自動登入（Expect）
   # 跳板机相关
   enable_jump_server:
     en: Enable Jump Server

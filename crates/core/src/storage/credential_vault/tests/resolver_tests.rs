@@ -4,8 +4,8 @@ use crate::storage::traits::Repository;
 use crate::storage::{
     ConnectionType, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
     JumpServerConfig, MongoDBParams, MongoDriverVariant, ProxyConfig, ProxyType, RedisMode,
-    RedisParams, RedisSentinelConfig, RemoteDesktopParams, RemoteDesktopProtocol, SshAuthMethod,
-    SshParams, StoredConnection,
+    RedisParams, RedisSentinelConfig, RemoteDesktopParams, RemoteDesktopProtocol, SshAccountExpect,
+    SshAuthMethod, SshParams, StoredConnection, TerminalExpectSend,
 };
 
 use super::with_master_key;
@@ -156,6 +156,45 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
             .expect("resolve remote desktop");
         assert_eq!(Some("vault-user"), remote.username.as_deref());
         assert_eq!(Some("vault-password"), remote.password.as_deref());
+    });
+}
+
+#[test]
+fn resolver_inherits_credential_expect_and_allows_connection_overrides() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut credential = CredentialEntry::new("Shared login", "username_password");
+        credential.username = Some("vault-user".to_string());
+        credential.password = Some("vault-password".to_string());
+        credential.ssh_expect = SshAccountExpect {
+            username: TerminalExpectSend {
+                expect: "Vault username:".to_string(),
+                send: String::new(),
+            },
+            password: TerminalExpectSend {
+                expect: "Vault password:".to_string(),
+                send: String::new(),
+            },
+        };
+        let credential_id = repository
+            .insert(&mut credential)
+            .expect("insert credential with expect rules");
+
+        let mut connection = ssh_params(Some(password_reference(credential_id)));
+        connection.account_expect.username = TerminalExpectSend {
+            expect: "Connection username:".to_string(),
+            send: "override-user".to_string(),
+        };
+
+        let resolved = repository.resolve_ssh(connection).expect("resolve ssh");
+
+        assert_eq!(
+            resolved.account_expect.username.expect,
+            "Connection username:"
+        );
+        assert_eq!(resolved.account_expect.username.send, "override-user");
+        assert_eq!(resolved.account_expect.password.expect, "Vault password:");
+        assert!(resolved.account_expect.password.send.is_empty());
     });
 }
 

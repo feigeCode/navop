@@ -25,6 +25,7 @@ tracing-appender = "0.2"
 dotenvy = "0.15"
 rust-i18n = { workspace = true }
 base64 = { workspace = true }
+regex = { workspace = true }
 percent-encoding = { workspace = true }
 url = { workspace = true }
 dirs = {workspace = true}
