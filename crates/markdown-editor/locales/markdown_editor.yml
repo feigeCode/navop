@@ -41,10 +41,14 @@ MarkdownEditor:
     en: "Paste"
     zh-CN: "粘贴"
     zh-HK: "貼上"
-  context_menu_select_all:
-    en: "Select All"
-    zh-CN: "全选"
-    zh-HK: "全選"
+  context_menu_select_current_line:
+    en: "Select Current Line"
+    zh-CN: "选中当前行"
+    zh-HK: "選取目前行"
+  context_menu_select_all_content:
+    en: "Select All Content"
+    zh-CN: "选中全部内容"
+    zh-HK: "選取全部內容"
   context_menu_format:
     en: "Format"
     zh-CN: "格式"

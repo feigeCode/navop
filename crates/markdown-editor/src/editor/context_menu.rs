@@ -6,7 +6,7 @@ use super::table_menu::{
 use super::{Editor, ViewMode};
 use crate::components::{
     BoldSelection, CodeSelection, Copy, Cut, DeleteBlock, DismissTransientUi, DuplicateBlock,
-    IndentBlock, ItalicSelection, MoveBlockDown, MoveBlockUp, OutdentBlock, Paste, Redo, SelectAll,
+    IndentBlock, ItalicSelection, MoveBlockDown, MoveBlockUp, OutdentBlock, Paste, Redo,
     SetHeading1, SetHeading2, SetHeading3, SetHeading4, SetHeading5, SetHeading6, SetParagraph,
     StrikethroughSelection, TableCellPosition, TableColumnAlignment, TableData, ToggleBulletList,
     ToggleCodeBlock, ToggleOrderedList, ToggleQuote, ToggleTaskList, ToggleViewMode,
@@ -42,7 +42,8 @@ enum ContextMenuAction {
     Cut,
     Copy,
     Paste,
-    SelectAll,
+    SelectCurrentLine,
+    SelectAllContent,
     Bold,
     Italic,
     Underline,
@@ -379,10 +380,10 @@ impl Editor {
             return;
         }
 
-        if let Some(entity_id) = block_target
-            && let Some(block) = self.focusable_entity_by_id(entity_id)
-        {
-            self.active_entity_id = Some(entity_id);
+        let target_block =
+            block_target.and_then(|entity_id| self.focusable_entity_by_id(entity_id));
+        if let Some(block) = target_block.as_ref() {
+            self.active_entity_id = Some(block.entity_id());
             block.read(cx).focus_handle.clone().focus(window, cx);
         }
         match action {
@@ -391,7 +392,14 @@ impl Editor {
             ContextMenuAction::Cut => window.dispatch_action(Box::new(Cut), cx),
             ContextMenuAction::Copy => window.dispatch_action(Box::new(Copy), cx),
             ContextMenuAction::Paste => window.dispatch_action(Box::new(Paste), cx),
-            ContextMenuAction::SelectAll => window.dispatch_action(Box::new(SelectAll), cx),
+            ContextMenuAction::SelectCurrentLine => {
+                if let Some(block) = target_block {
+                    self.select_current_line_from_context_menu(block, cx);
+                }
+            }
+            ContextMenuAction::SelectAllContent => {
+                self.select_all_content_from_context_menu(target_block, cx);
+            }
             ContextMenuAction::Bold => window.dispatch_action(Box::new(BoldSelection), cx),
             ContextMenuAction::Italic => window.dispatch_action(Box::new(ItalicSelection), cx),
             ContextMenuAction::Underline => {
@@ -652,8 +660,11 @@ impl Editor {
             ContextMenuAction::Cut => t!("MarkdownEditor.context_menu_cut").to_string(),
             ContextMenuAction::Copy => t!("MarkdownEditor.context_menu_copy").to_string(),
             ContextMenuAction::Paste => t!("MarkdownEditor.context_menu_paste").to_string(),
-            ContextMenuAction::SelectAll => {
-                t!("MarkdownEditor.context_menu_select_all").to_string()
+            ContextMenuAction::SelectCurrentLine => {
+                t!("MarkdownEditor.context_menu_select_current_line").to_string()
+            }
+            ContextMenuAction::SelectAllContent => {
+                t!("MarkdownEditor.context_menu_select_all_content").to_string()
             }
             ContextMenuAction::Bold => t!("MarkdownEditor.context_menu_bold").to_string(),
             ContextMenuAction::Italic => t!("MarkdownEditor.context_menu_italic").to_string(),
@@ -724,7 +735,6 @@ impl Editor {
             ContextMenuAction::Cut => Box::new(Cut),
             ContextMenuAction::Copy => Box::new(Copy),
             ContextMenuAction::Paste => Box::new(Paste),
-            ContextMenuAction::SelectAll => Box::new(SelectAll),
             ContextMenuAction::Bold => Box::new(BoldSelection),
             ContextMenuAction::Italic => Box::new(ItalicSelection),
             ContextMenuAction::Underline => Box::new(UnderlineSelection),
@@ -749,7 +759,9 @@ impl Editor {
             ContextMenuAction::IndentBlock => Box::new(IndentBlock),
             ContextMenuAction::OutdentBlock => Box::new(OutdentBlock),
             ContextMenuAction::ToggleViewMode => Box::new(ToggleViewMode),
-            ContextMenuAction::InsertTable => return None,
+            ContextMenuAction::SelectCurrentLine
+            | ContextMenuAction::SelectAllContent
+            | ContextMenuAction::InsertTable => return None,
         };
         Some(action)
     }
@@ -874,7 +886,8 @@ impl Editor {
             ContextMenuEntry::Action(ContextMenuAction::Cut),
             ContextMenuEntry::Action(ContextMenuAction::Copy),
             ContextMenuEntry::Action(ContextMenuAction::Paste),
-            ContextMenuEntry::Action(ContextMenuAction::SelectAll),
+            ContextMenuEntry::Action(ContextMenuAction::SelectCurrentLine),
+            ContextMenuEntry::Action(ContextMenuAction::SelectAllContent),
         ];
 
         // Context-specific table operations should be prominent and must not
@@ -1182,7 +1195,10 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextMenuEntry, ContextSubmenu, Editor, TableMenuAction, TableMenuTarget};
+    use super::{
+        ContextMenuAction, ContextMenuEntry, ContextSubmenu, Editor, TableMenuAction,
+        TableMenuTarget,
+    };
     use crate::components::BlockKind;
     use gpui::{AppContext, TestAppContext};
 
@@ -1281,6 +1297,36 @@ mod tests {
             table_index < format_index,
             "table operations should stay visible above generic block submenus"
         );
+    }
+
+    #[test]
+    fn context_menu_exposes_distinct_current_line_and_all_content_actions() {
+        let entries = Editor::popup_context_menu_entries(false, None, None, None);
+        let current_line_index = entries
+            .iter()
+            .position(|entry| {
+                matches!(
+                    entry,
+                    ContextMenuEntry::Action(ContextMenuAction::SelectCurrentLine)
+                )
+            })
+            .expect("the context menu should expose selecting the current line");
+        let all_content_index = entries
+            .iter()
+            .position(|entry| {
+                matches!(
+                    entry,
+                    ContextMenuEntry::Action(ContextMenuAction::SelectAllContent)
+                )
+            })
+            .expect("the context menu should expose selecting all content");
+
+        assert!(
+            current_line_index < all_content_index,
+            "the narrower selection action should appear first"
+        );
+        assert!(Editor::context_menu_action(ContextMenuAction::SelectCurrentLine).is_none());
+        assert!(Editor::context_menu_action(ContextMenuAction::SelectAllContent).is_none());
     }
 
     #[gpui::test]

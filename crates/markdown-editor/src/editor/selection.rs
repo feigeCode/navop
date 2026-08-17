@@ -275,6 +275,70 @@ impl Editor {
         cx.notify();
     }
 
+    pub(super) fn select_current_line_from_context_menu(
+        &mut self,
+        block: Entity<Block>,
+        cx: &mut Context<Self>,
+    ) {
+        self.rendered_select_all_cycle = None;
+        if self.view_mode == ViewMode::Rendered {
+            self.select_focused_block_text_for_rendered_select_all(block, cx);
+            return;
+        }
+
+        self.clear_cross_block_selection(cx);
+        self.end_block_pointer_selection_sessions(cx);
+        self.clear_table_axis_preview(cx);
+        self.clear_table_axis_selection(cx);
+        block.update(cx, |block, cx| {
+            let cursor = block.cursor_offset().min(block.display_text().len());
+            let text = block.display_text();
+            let start = text[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
+            let end = text[cursor..]
+                .find('\n')
+                .map_or(text.len(), |offset| cursor + offset);
+            block.selected_range = start..end;
+            block.selection_reversed = false;
+            block.marked_range = None;
+            block.vertical_motion_x = None;
+            block.cursor_blink_epoch = std::time::Instant::now();
+            cx.notify();
+        });
+        self.active_entity_id = Some(block.entity_id());
+        cx.notify();
+    }
+
+    pub(super) fn select_all_content_from_context_menu(
+        &mut self,
+        target_block: Option<Entity<Block>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.rendered_select_all_cycle = None;
+        if self.view_mode == ViewMode::Rendered {
+            self.select_all_rendered_document(cx);
+            return;
+        }
+
+        let block = target_block.or_else(|| self.document.first_root().cloned());
+        let Some(block) = block else {
+            return;
+        };
+        self.clear_cross_block_selection(cx);
+        self.end_block_pointer_selection_sessions(cx);
+        self.clear_table_axis_preview(cx);
+        self.clear_table_axis_selection(cx);
+        block.update(cx, |block, cx| {
+            block.selected_range = 0..block.visible_len();
+            block.selection_reversed = false;
+            block.marked_range = None;
+            block.vertical_motion_x = None;
+            block.cursor_blink_epoch = std::time::Instant::now();
+            cx.notify();
+        });
+        self.active_entity_id = Some(block.entity_id());
+        cx.notify();
+    }
+
     pub(super) fn on_rendered_select_all_press(
         &mut self,
         block: Entity<Block>,
@@ -881,7 +945,7 @@ impl Editor {
 mod tests {
     use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};
 
-    use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
+    use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor, ViewMode};
     use crate::components::{Cut, Delete, DeleteBack, Undo, UndoCaptureKind};
     use crate::theme::ThemeManager;
 
@@ -1169,6 +1233,81 @@ mod tests {
     #[gpui::test]
     fn delete_selection_across_unicode_footnote_run_does_not_panic(cx: &mut TestAppContext) {
         assert_unicode_footnote_selection_delete(cx, '😀', FootnoteDeleteAction::Forward);
+    }
+
+    #[test]
+    fn context_menu_select_current_line_selects_only_the_target_rendered_block() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "first\n\nsecond".to_string(), None));
+
+        editor.update(&mut cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 2);
+            let target = visible[1].entity.clone();
+            let target_len = target.read(cx).visible_len();
+
+            editor.select_current_line_from_context_menu(target.clone(), cx);
+
+            assert_eq!(target.read(cx).selected_range, 0..target_len);
+            assert!(editor.cross_block_selection.is_none());
+            assert_eq!(editor.active_entity_id, Some(target.entity_id()));
+        });
+        cx.quit();
+    }
+
+    #[test]
+    fn context_menu_select_all_content_selects_the_rendered_document_immediately() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "first\n\nsecond".to_string(), None));
+
+        editor.update(&mut cx, |editor, cx| {
+            editor.select_all_content_from_context_menu(None, cx);
+
+            assert!(editor.rendered_document_is_fully_selected(cx));
+            assert!(
+                editor.rendered_select_all_cycle.is_none(),
+                "the context-menu action must not depend on the Cmd/Ctrl+A cycle"
+            );
+        });
+        cx.quit();
+    }
+
+    #[test]
+    fn context_menu_selection_actions_have_explicit_source_mode_semantics() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let editor =
+            cx.new(|cx| Editor::from_markdown(cx, "第一行\n第二行\nthird".to_string(), None));
+
+        editor.update(&mut cx, |editor, cx| {
+            assert!(editor.set_view_mode(ViewMode::Source, cx));
+            let source = editor.document.visible_blocks()[0].entity.clone();
+            source.update(cx, |block, _cx| {
+                block.selected_range = 13..13;
+            });
+
+            editor.select_current_line_from_context_menu(source.clone(), cx);
+            assert_eq!(source.read(cx).selected_range, 10..19);
+
+            source.update(cx, |block, _cx| {
+                block.selected_range = 9..9;
+            });
+            editor.select_current_line_from_context_menu(source.clone(), cx);
+            assert_eq!(
+                source.read(cx).selected_range,
+                0..9,
+                "a caret on the newline belongs to the preceding hard line"
+            );
+
+            editor.select_all_content_from_context_menu(None, cx);
+            assert_eq!(
+                source.read(cx).selected_range,
+                0..source.read(cx).visible_len()
+            );
+        });
+        cx.quit();
     }
 
     const TABLE_DOC: &str = "alpha\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\ngamma";
