@@ -1,6 +1,8 @@
+use std::io::Read as _;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use flate2::read::GzDecoder;
 use futures::AsyncReadExt as _;
 use gpui::http_client::{AsyncBody, Builder, HttpClient, HttpRequestExt, Method, RedirectPolicy};
 
@@ -152,7 +154,12 @@ pub(crate) async fn execute(
         };
     }
 
-    match decode_response(&bytes) {
+    let grpc_encoding = headers
+        .iter()
+        .find(|header| header.key.eq_ignore_ascii_case("grpc-encoding"))
+        .map(|header| header.value.as_str());
+
+    match decode_response_with_encoding(&bytes, grpc_encoding) {
         Ok(decoded) => {
             let raw_body = String::from_utf8_lossy(&decoded.payload).into_owned();
             let parsed_json = serde_json::from_slice::<serde_json::Value>(&decoded.payload).ok();
@@ -204,7 +211,19 @@ pub(crate) fn frame_request(payload: &[u8]) -> Vec<u8> {
     framed
 }
 
+#[cfg(test)]
 pub(crate) fn decode_response(bytes: &[u8]) -> Result<DecodedGrpcWebResponse> {
+    decode_response_with_encoding(bytes, None)
+}
+
+/// 解码 gRPC-Web 响应；压缩数据帧按响应中的 `grpc-encoding` 解压。
+///
+/// `decode_response` 保留无响应头场景的严格行为，调用方如果拿到了响应头，
+/// 应使用这个函数传入编码名称。当前支持 gRPC-Web 最常见的 gzip 编码。
+pub(crate) fn decode_response_with_encoding(
+    bytes: &[u8],
+    grpc_encoding: Option<&str>,
+) -> Result<DecodedGrpcWebResponse> {
     if bytes.is_empty() {
         return Ok(DecodedGrpcWebResponse::default());
     }
@@ -256,12 +275,27 @@ pub(crate) fn decode_response(bytes: &[u8]) -> Result<DecodedGrpcWebResponse> {
             bail!("gRPC-Web trailers must be the final frame");
         }
         if flags & COMPRESSED_FLAG != 0 {
-            bail!("compressed gRPC-Web messages are not supported");
+            let encoding = grpc_encoding
+                .map(str::trim)
+                .filter(|encoding| {
+                    !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity")
+                })
+                .ok_or_else(|| anyhow!("compressed gRPC-Web message has no grpc-encoding"))?;
+            if !encoding.eq_ignore_ascii_case("gzip") {
+                bail!("unsupported gRPC-Web compression encoding: {encoding}");
+            }
+            let mut decoder = GzDecoder::new(frame);
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .context("decompress gzip gRPC-Web message")?;
+            decoded.payload.extend_from_slice(&decompressed);
+        } else {
+            if flags != DATA_FRAME {
+                bail!("unsupported gRPC-Web data flags 0x{flags:02x}");
+            }
+            decoded.payload.extend_from_slice(frame);
         }
-        if flags != DATA_FRAME {
-            bail!("unsupported gRPC-Web data flags 0x{flags:02x}");
-        }
-        decoded.payload.extend_from_slice(frame);
     }
     Ok(decoded)
 }

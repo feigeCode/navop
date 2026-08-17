@@ -118,7 +118,7 @@ impl ApiTestView {
             return;
         };
         if self.persist_environment_effects(result) {
-            self.refresh_environment_rows(window, cx);
+            self.refresh_environment_settings(window, cx);
         }
         self.save_store();
     }
@@ -183,6 +183,9 @@ impl ApiTestView {
 
     fn effective_folder_params(&self, request: &StoredRequest) -> Vec<KeyValue> {
         let mut scopes = vec![self.global_params.as_slice()];
+        if let Some(environment) = self.active_environment() {
+            scopes.push(environment.params.as_slice());
+        }
         scopes.extend(
             ancestor_folder_ids(&self.folders, request.folder_id.as_deref())
                 .into_iter()
@@ -198,6 +201,9 @@ impl ApiTestView {
 
     fn effective_folder_headers(&self, request: &StoredRequest) -> Vec<KeyValue> {
         let mut scopes = vec![self.global_headers.as_slice()];
+        if let Some(environment) = self.active_environment() {
+            scopes.push(environment.headers.as_slice());
+        }
         scopes.extend(
             ancestor_folder_ids(&self.folders, request.folder_id.as_deref())
                 .into_iter()
@@ -212,34 +218,34 @@ impl ApiTestView {
     }
 
     fn effective_cookies(&self, request: &StoredRequest) -> Vec<KeyValue> {
-        merge_inherited_key_values(&[self.global_cookies.as_slice()], &request.cookies)
+        let mut scopes = vec![self.global_cookies.as_slice()];
+        if let Some(environment) = self.active_environment() {
+            scopes.push(environment.cookies.as_slice());
+        }
+        merge_inherited_key_values(&scopes, &request.cookies)
     }
 
     fn inject_base_url(&self, request: &StoredRequest, vars: &mut BTreeMap<String, String>) {
-        let base = match &request.base_url_override {
-            Some(Some(value)) => Some(
-                http::substitute(value, vars)
-                    .trim_end_matches('/')
-                    .to_string(),
-            ),
-            Some(None) => None,
-            None => self.effective_folder_base_url(request, vars).map(|base| {
-                http::substitute(&base, vars)
-                    .trim_end_matches('/')
-                    .to_string()
-            }),
-        };
-        if let Some(base) = base.filter(|base| !base.trim().is_empty()) {
+        let folder_base_url = self.nearest_folder_base_url(request);
+        let environment_base_url = self
+            .active_environment()
+            .and_then(|environment| environment.base_url.as_deref());
+        let request_override = request
+            .base_url_override
+            .as_ref()
+            .map(|override_value| override_value.as_deref());
+        if let Some(base) = resolve_base_url(
+            request_override,
+            folder_base_url.as_deref(),
+            environment_base_url,
+            vars,
+        ) {
             vars.insert("__folder_base_url__".to_string(), base.clone());
             vars.entry("baseUrl".to_string()).or_insert(base);
         }
     }
 
-    fn effective_folder_base_url(
-        &self,
-        request: &StoredRequest,
-        vars: &BTreeMap<String, String>,
-    ) -> Option<String> {
+    fn nearest_folder_base_url(&self, request: &StoredRequest) -> Option<String> {
         ancestor_folder_ids(&self.folders, request.folder_id.as_deref())
             .into_iter()
             .rev()
@@ -250,7 +256,7 @@ impl ApiTestView {
                     .and_then(|folder| folder.base_url.as_deref())
             })
             .find(|base| !base.trim().is_empty())
-            .map(|base| http::substitute(base, vars))
+            .map(ToOwned::to_owned)
     }
 
     fn begin_send(
@@ -385,7 +391,7 @@ impl ApiTestView {
         if let Some(result) = &completion.test_result
             && self.persist_environment_effects(result)
         {
-            self.refresh_environment_rows(window, cx);
+            self.refresh_environment_settings(window, cx);
         }
         self.test_result = completion.test_result;
         self.save_store();
@@ -394,11 +400,11 @@ impl ApiTestView {
 }
 
 fn merge_inherited_key_values(
-    folder_scopes: &[&[KeyValue]],
+    inherited_scopes: &[&[KeyValue]],
     request: &[KeyValue],
 ) -> Vec<KeyValue> {
     let mut merged = Vec::new();
-    for scope in folder_scopes
+    for scope in inherited_scopes
         .iter()
         .copied()
         .chain(std::iter::once(request))
@@ -419,13 +425,35 @@ fn merge_inherited_key_values(
     merged
 }
 
+fn resolve_base_url(
+    request_override: Option<Option<&str>>,
+    folder_base_url: Option<&str>,
+    environment_base_url: Option<&str>,
+    vars: &BTreeMap<String, String>,
+) -> Option<String> {
+    let value = match request_override {
+        Some(Some(value)) => Some(value),
+        Some(None) => None,
+        None => folder_base_url
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| environment_base_url.filter(|value| !value.trim().is_empty())),
+    }?;
+    let value = http::substitute(value, vars)
+        .trim_end_matches('/')
+        .trim()
+        .to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 fn normalize_key(key: &str) -> String {
     key.trim().to_ascii_uppercase()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::merge_inherited_key_values;
+    use std::collections::BTreeMap;
+
+    use super::{merge_inherited_key_values, resolve_base_url};
     use crate::http::KeyValue;
 
     #[test]
@@ -491,6 +519,67 @@ mod tests {
         assert_eq!(
             merge_inherited_key_values(&[folder.as_slice()], &request),
             vec![KeyValue::new("authorization", "request-token")]
+        );
+    }
+
+    #[test]
+    fn inherited_key_values_follow_global_environment_folder_and_request_precedence() {
+        let global = vec![KeyValue::new("scope", "global")];
+        let environment = vec![
+            KeyValue::new("scope", "environment"),
+            KeyValue::new("environment-only", "yes"),
+        ];
+        let folder = vec![KeyValue::new("scope", "folder")];
+        let request = vec![KeyValue::new("scope", "request")];
+
+        assert_eq!(
+            merge_inherited_key_values(
+                &[global.as_slice(), environment.as_slice(), folder.as_slice()],
+                &request,
+            ),
+            vec![
+                KeyValue::new("environment-only", "yes"),
+                KeyValue::new("scope", "request"),
+            ]
+        );
+    }
+
+    #[test]
+    fn base_url_uses_environment_then_folder_then_request_override() {
+        let vars = BTreeMap::from([("host".to_string(), "api.example.test".to_string())]);
+
+        assert_eq!(
+            resolve_base_url(None, None, Some("https://{{host}}/"), &vars).as_deref(),
+            Some("https://api.example.test")
+        );
+        assert_eq!(
+            resolve_base_url(
+                None,
+                Some("https://folder.example.test/"),
+                Some("https://environment.example.test"),
+                &vars,
+            )
+            .as_deref(),
+            Some("https://folder.example.test")
+        );
+        assert_eq!(
+            resolve_base_url(
+                Some(Some("https://request.example.test/")),
+                Some("https://folder.example.test"),
+                Some("https://environment.example.test"),
+                &vars,
+            )
+            .as_deref(),
+            Some("https://request.example.test")
+        );
+        assert_eq!(
+            resolve_base_url(
+                Some(None),
+                Some("https://folder.example.test"),
+                Some("https://environment.example.test"),
+                &vars,
+            ),
+            None
         );
     }
 }

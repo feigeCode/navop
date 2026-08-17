@@ -12,6 +12,7 @@ boa_engine = "0.20"
 chrono.workspace = true
 futures.workspace = true
 futures-util.workspace = true
+flate2 = "1"
 gpui.workspace = true
 gpui-component.workspace = true
 one-core.workspace = true

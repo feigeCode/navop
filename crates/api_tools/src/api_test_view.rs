@@ -18,8 +18,9 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
+use gpui_component::popover::Popover;
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarShow};
 use gpui_component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::status_bar::{StatusBar, StatusPresentation};
@@ -27,7 +28,8 @@ use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tag::Tag;
 use gpui_component::tree::{Tree, TreeItem, TreeState};
 use gpui_component::{
-    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex, v_flex,
+    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -57,7 +59,8 @@ use tcp_state::TcpSession;
 use websocket_state::{WebSocketSession, WebSocketState};
 
 const REQUEST_TIMEOUT_SECS: u64 = 30;
-const REQUEST_TREE_WIDTH: f32 = 248.;
+const REQUEST_TREE_WIDTH: f32 = 280.;
+const REQUEST_TREE_COLLAPSED_WIDTH: f32 = 28.;
 const TREE_ROOT_ID: &str = "api-requests-root";
 const TREE_EMPTY_ID: &str = "api-requests-empty";
 
@@ -351,7 +354,7 @@ impl ResponseTab {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum KvSection {
     Params,
     Path,
@@ -363,6 +366,9 @@ enum KvSection {
     GlobalHeaders,
     GlobalCookies,
     Environment,
+    EnvironmentParams,
+    EnvironmentHeaders,
+    EnvironmentCookies,
     FolderParams,
     FolderHeaders,
     FolderVariables,
@@ -382,6 +388,9 @@ impl KvSection {
             KvSection::GlobalHeaders => "global-headers",
             KvSection::GlobalCookies => "global-cookies",
             KvSection::Environment => "environment",
+            KvSection::EnvironmentParams => "environment-params",
+            KvSection::EnvironmentHeaders => "environment-headers",
+            KvSection::EnvironmentCookies => "environment-cookies",
             KvSection::FolderParams => "folder-params",
             KvSection::FolderHeaders => "folder-headers",
             KvSection::FolderVariables => "folder-variables",
@@ -389,6 +398,26 @@ impl KvSection {
         }
     }
 }
+
+const KV_SECTIONS: [KvSection; 17] = [
+    KvSection::Params,
+    KvSection::Path,
+    KvSection::Headers,
+    KvSection::Cookies,
+    KvSection::Body,
+    KvSection::Globals,
+    KvSection::GlobalParams,
+    KvSection::GlobalHeaders,
+    KvSection::GlobalCookies,
+    KvSection::Environment,
+    KvSection::EnvironmentParams,
+    KvSection::EnvironmentHeaders,
+    KvSection::EnvironmentCookies,
+    KvSection::FolderParams,
+    KvSection::FolderHeaders,
+    KvSection::FolderVariables,
+    KvSection::RequestVariables,
+];
 
 #[derive(Clone)]
 struct KvRow {
@@ -423,7 +452,7 @@ pub struct ApiTestView {
     auth_value_input: Entity<InputState>,
     folder_base_url_input: Entity<InputState>,
     folder_description_input: Entity<InputState>,
-    environment_select: Entity<SelectState<Vec<EnvironmentOption>>>,
+    environment_base_url_input: Entity<InputState>,
     variables_environment_select: Entity<SelectState<Vec<EnvironmentOption>>>,
     folders: Vec<StoredFolder>,
     requests: Vec<StoredRequest>,
@@ -437,10 +466,16 @@ pub struct ApiTestView {
     global_header_rows: Vec<KvRow>,
     global_cookie_rows: Vec<KvRow>,
     environment_rows: Vec<KvRow>,
+    environment_param_rows: Vec<KvRow>,
+    environment_header_rows: Vec<KvRow>,
+    environment_cookie_rows: Vec<KvRow>,
     folder_param_rows: Vec<KvRow>,
     folder_header_rows: Vec<KvRow>,
     folder_variable_rows: Vec<KvRow>,
     variable_rows: Vec<KvRow>,
+    kv_scroll_handles: BTreeMap<KvSection, ScrollHandle>,
+    response_headers_scroll_handle: ScrollHandle,
+    response_cookies_scroll_handle: ScrollHandle,
     globals: Vec<KeyValue>,
     global_params: Vec<KeyValue>,
     global_headers: Vec<KeyValue>,
@@ -587,16 +622,18 @@ impl ApiTestView {
                     .position(|option| option.id == id)
             })
             .map(|row| IndexPath::default().row(row));
-        let environment_select = cx.new(|cx| {
-            SelectState::new(
-                environment_options.clone(),
-                selected_environment,
-                window,
-                cx,
-            )
-        });
         let variables_environment_select =
             cx.new(|cx| SelectState::new(environment_options, selected_environment, window, cx));
+        let active_environment = store
+            .active_environment_id
+            .as_deref()
+            .and_then(|active_id| {
+                store
+                    .environments
+                    .iter()
+                    .find(|environment| environment.id == active_id)
+            })
+            .cloned();
 
         let name_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("ApiTest.request_name").to_string())
@@ -670,6 +707,15 @@ impl ApiTestView {
                 .auto_grow(2, 4)
                 .placeholder(t!("ApiTest.folder_description_placeholder").to_string())
         });
+        let environment_base_url = active_environment
+            .as_ref()
+            .and_then(|environment| environment.base_url.clone())
+            .unwrap_or_default();
+        let environment_base_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(environment_base_url)
+                .placeholder(t!("ApiTest.environment_base_url_placeholder").to_string())
+        });
 
         // 基础输入失焦时回写当前请求。
         let mut subs = Vec::new();
@@ -687,6 +733,7 @@ impl ApiTestView {
             auth_value_input.clone(),
             folder_base_url_input.clone(),
             folder_description_input.clone(),
+            environment_base_url_input.clone(),
         ] {
             let sub = cx.subscribe(&input, move |this: &mut Self, _src, ev: &InputEvent, cx| {
                 if matches!(ev, InputEvent::Change | InputEvent::Blur) {
@@ -785,16 +832,6 @@ impl ApiTestView {
             },
         );
         subs.push(auth_target_sub);
-        let environment_sub = cx.subscribe_in(
-            &environment_select,
-            window,
-            |this, _, event: &SelectEvent<Vec<EnvironmentOption>>, window, cx| {
-                if let SelectEvent::Confirm(Some(id)) = event {
-                    this.select_environment(id, window, cx);
-                }
-            },
-        );
-        subs.push(environment_sub);
         let variables_environment_sub = cx.subscribe_in(
             &variables_environment_select,
             window,
@@ -812,20 +849,35 @@ impl ApiTestView {
             Self::create_kv_rows(&store.global_headers, "Header", "Value", window, cx);
         let global_cookie_rows =
             Self::create_kv_rows(&store.global_cookies, "Cookie", "Value", window, cx);
-        let environment_values = store
-            .active_environment_id
-            .as_deref()
-            .and_then(|active_id| {
-                store
-                    .environments
-                    .iter()
-                    .find(|env| env.id == active_id)
-                    .map(|env| env.variables.as_slice())
-            })
+        let environment_values = active_environment
+            .as_ref()
+            .map(|environment| environment.variables.as_slice())
+            .unwrap_or_default();
+        let environment_param_values = active_environment
+            .as_ref()
+            .map(|environment| environment.params.as_slice())
+            .unwrap_or_default();
+        let environment_header_values = active_environment
+            .as_ref()
+            .map(|environment| environment.headers.as_slice())
+            .unwrap_or_default();
+        let environment_cookie_values = active_environment
+            .as_ref()
+            .map(|environment| environment.cookies.as_slice())
             .unwrap_or_default();
         let environment_rows = Self::create_kv_rows(environment_values, "Key", "Value", window, cx);
+        let environment_param_rows =
+            Self::create_kv_rows(environment_param_values, "Key", "Value", window, cx);
+        let environment_header_rows =
+            Self::create_kv_rows(environment_header_values, "Header", "Value", window, cx);
+        let environment_cookie_rows =
+            Self::create_kv_rows(environment_cookie_values, "Cookie", "Value", window, cx);
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let first_id = store.requests.first().map(|r| r.id.clone());
+        let kv_scroll_handles = KV_SECTIONS
+            .into_iter()
+            .map(|section| (section, ScrollHandle::new()))
+            .collect();
         let mut this = Self {
             name_input,
             search_input,
@@ -850,7 +902,7 @@ impl ApiTestView {
             auth_value_input,
             folder_base_url_input,
             folder_description_input,
-            environment_select,
+            environment_base_url_input,
             variables_environment_select,
             folders: store.folders,
             requests: store.requests,
@@ -864,10 +916,16 @@ impl ApiTestView {
             global_header_rows,
             global_cookie_rows,
             environment_rows,
+            environment_param_rows,
+            environment_header_rows,
+            environment_cookie_rows,
             folder_param_rows: Vec::new(),
             folder_header_rows: Vec::new(),
             folder_variable_rows: Vec::new(),
             variable_rows: Vec::new(),
+            kv_scroll_handles,
+            response_headers_scroll_handle: ScrollHandle::new(),
+            response_cookies_scroll_handle: ScrollHandle::new(),
             globals: store.globals,
             global_params: store.global_params,
             global_headers: store.global_headers,
@@ -1098,6 +1156,9 @@ impl ApiTestView {
             KvSection::GlobalHeaders => &self.global_header_rows,
             KvSection::GlobalCookies => &self.global_cookie_rows,
             KvSection::Environment => &self.environment_rows,
+            KvSection::EnvironmentParams => &self.environment_param_rows,
+            KvSection::EnvironmentHeaders => &self.environment_header_rows,
+            KvSection::EnvironmentCookies => &self.environment_cookie_rows,
             KvSection::FolderParams => &self.folder_param_rows,
             KvSection::FolderHeaders => &self.folder_header_rows,
             KvSection::FolderVariables => &self.folder_variable_rows,
@@ -1117,6 +1178,9 @@ impl ApiTestView {
             KvSection::GlobalHeaders => &mut self.global_header_rows,
             KvSection::GlobalCookies => &mut self.global_cookie_rows,
             KvSection::Environment => &mut self.environment_rows,
+            KvSection::EnvironmentParams => &mut self.environment_param_rows,
+            KvSection::EnvironmentHeaders => &mut self.environment_header_rows,
+            KvSection::EnvironmentCookies => &mut self.environment_cookie_rows,
             KvSection::FolderParams => &mut self.folder_param_rows,
             KvSection::FolderHeaders => &mut self.folder_header_rows,
             KvSection::FolderVariables => &mut self.folder_variable_rows,
@@ -1347,13 +1411,26 @@ impl ApiTestView {
         self.global_params = self.keyvalues_from_rows(KvSection::GlobalParams, cx);
         self.global_headers = self.keyvalues_from_rows(KvSection::GlobalHeaders, cx);
         self.global_cookies = self.keyvalues_from_rows(KvSection::GlobalCookies, cx);
-        if let Some(active_id) = self.active_environment_id.as_deref() {
+        if let Some(active_id) = self.active_environment_id.clone() {
+            let base_url = self
+                .environment_base_url_input
+                .read(cx)
+                .value()
+                .trim()
+                .to_string();
+            let params = self.keyvalues_from_rows(KvSection::EnvironmentParams, cx);
+            let headers = self.keyvalues_from_rows(KvSection::EnvironmentHeaders, cx);
+            let cookies = self.keyvalues_from_rows(KvSection::EnvironmentCookies, cx);
             let variables = self.keyvalues_from_rows(KvSection::Environment, cx);
             if let Some(environment) = self
                 .environments
                 .iter_mut()
                 .find(|environment| environment.id == active_id)
             {
+                environment.base_url = (!base_url.is_empty()).then_some(base_url);
+                environment.params = params;
+                environment.headers = headers;
+                environment.cookies = cookies;
                 environment.variables = variables;
             }
         }
@@ -1407,6 +1484,9 @@ impl ApiTestView {
             self.global_header_rows.as_slice(),
             self.global_cookie_rows.as_slice(),
             self.environment_rows.as_slice(),
+            self.environment_param_rows.as_slice(),
+            self.environment_header_rows.as_slice(),
+            self.environment_cookie_rows.as_slice(),
             self.folder_param_rows.as_slice(),
             self.folder_header_rows.as_slice(),
             self.folder_variable_rows.as_slice(),
@@ -1621,14 +1701,20 @@ impl ApiTestView {
         }
     }
 
-    /// 新建一个请求并选中。
-    fn new_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 新建指定协议的请求并选中。
+    fn new_request_with_protocol(
+        &mut self,
+        protocol: Protocol,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.commit_current_to_store(cx);
         let index = self.requests.len() + 1;
         let mut req = StoredRequest::new(
             format!("{} {}", t!("ApiTest.new_request"), index),
             RequestMethod::Get,
         );
+        req.protocol = protocol;
         req.folder_id = self.current_parent_folder_id();
         let id = req.id.clone();
         self.requests.push(req);
@@ -1770,12 +1856,53 @@ impl ApiTestView {
         apply_environment_effects(&mut environment.variables, result)
     }
 
-    fn refresh_environment_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let variables = self
-            .active_environment()
-            .map(|environment| environment.variables.clone())
-            .unwrap_or_default();
+    fn refresh_environment_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let environment = self.active_environment().cloned();
         self.suppress_commit = true;
+        self.environment_base_url_input.update(cx, |input, cx| {
+            input.set_value(
+                environment
+                    .as_ref()
+                    .and_then(|environment| environment.base_url.clone())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+        self.environment_param_rows = Self::create_kv_rows(
+            environment
+                .as_ref()
+                .map(|environment| environment.params.as_slice())
+                .unwrap_or_default(),
+            "Key",
+            "Value",
+            window,
+            cx,
+        );
+        self.environment_header_rows = Self::create_kv_rows(
+            environment
+                .as_ref()
+                .map(|environment| environment.headers.as_slice())
+                .unwrap_or_default(),
+            "Header",
+            "Value",
+            window,
+            cx,
+        );
+        self.environment_cookie_rows = Self::create_kv_rows(
+            environment
+                .as_ref()
+                .map(|environment| environment.cookies.as_slice())
+                .unwrap_or_default(),
+            "Cookie",
+            "Value",
+            window,
+            cx,
+        );
+        let variables = environment
+            .as_ref()
+            .map(|environment| environment.variables.as_slice())
+            .unwrap_or_default();
         self.environment_rows = Self::create_kv_rows(&variables, "Key", "Value", window, cx);
         self.subscribe_editor_inputs(cx);
         self.suppress_commit = false;
@@ -1794,14 +1921,12 @@ impl ApiTestView {
     fn rebuild_environment_select(&self, window: &mut Window, cx: &mut Context<Self>) {
         let options = self.environment_options();
         let active_id = self.active_environment_id.clone();
-        for select in [&self.environment_select, &self.variables_environment_select] {
-            select.update(cx, |state, cx| {
-                state.set_items(options.clone(), window, cx);
-                if let Some(active_id) = &active_id {
-                    state.set_selected_value(active_id, window, cx);
-                }
-            });
-        }
+        self.variables_environment_select.update(cx, |state, cx| {
+            state.set_items(options, window, cx);
+            if let Some(active_id) = active_id {
+                state.set_selected_value(&active_id, window, cx);
+            }
+        });
     }
 
     fn select_environment(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1818,24 +1943,147 @@ impl ApiTestView {
         }
         self.active_environment_id = Some(id.to_string());
         self.rebuild_environment_select(window, cx);
-        self.refresh_environment_rows(window, cx);
+        self.refresh_environment_settings(window, cx);
         self.save_store();
         cx.notify();
     }
 
-    fn new_environment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn create_environment_named(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.commit_current_to_store(cx);
-        let environment = ApiEnvironment::new(format!(
-            "{} {}",
-            t!("ApiTest.environment"),
-            self.environments.len() + 1
-        ));
+        let environment = ApiEnvironment::new(name);
         self.active_environment_id = Some(environment.id.clone());
         self.environments.push(environment);
         self.rebuild_environment_select(window, cx);
-        self.refresh_environment_rows(window, cx);
+        self.refresh_environment_settings(window, cx);
         self.save_store();
         cx.notify();
+    }
+
+    fn rename_active_environment_named(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_current_to_store(cx);
+        let Some(active_id) = self.active_environment_id.as_deref() else {
+            return;
+        };
+        let Some(environment) = self
+            .environments
+            .iter_mut()
+            .find(|environment| environment.id == active_id)
+        else {
+            return;
+        };
+        environment.name = name;
+        self.rebuild_environment_select(window, cx);
+        self.save_store();
+        cx.notify();
+    }
+
+    fn prompt_new_environment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("ApiTest.environment_name_placeholder").to_string())
+        });
+        let input_for_focus = input.clone();
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let input_for_ok = input.clone();
+            let view_for_ok = view.clone();
+            dialog
+                .title(t!("ApiTest.new_environment").to_string())
+                .w(px(400.))
+                .confirm()
+                .on_ok(move |_, window, cx| {
+                    let name = input_for_ok.read(cx).value().trim().to_owned();
+                    if name.is_empty() {
+                        let message = t!("ApiTest.environment_name_required").to_string();
+                        view_for_ok.update(cx, |view, cx| {
+                            view.notice = Some(message);
+                            cx.notify();
+                        });
+                        return false;
+                    }
+                    view_for_ok.update(cx, |view, cx| {
+                        view.notice = None;
+                        view.create_environment_named(name, window, cx);
+                    });
+                    true
+                })
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(t!("ApiTest.environment_name").to_string()),
+                        )
+                        .child(Input::new(&input).w_full()),
+                )
+        });
+        window.defer(cx, move |window, cx| {
+            input_for_focus.update(cx, |input, cx| input.focus(window, cx));
+        });
+    }
+
+    fn prompt_rename_active_environment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(current_name) = self
+            .active_environment()
+            .map(|environment| environment.name.clone())
+        else {
+            return;
+        };
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(current_name)
+                .placeholder(t!("ApiTest.environment_name_placeholder").to_string())
+        });
+        let input_for_focus = input.clone();
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let input_for_ok = input.clone();
+            let view_for_ok = view.clone();
+            dialog
+                .title(t!("ApiTest.rename_environment").to_string())
+                .w(px(400.))
+                .confirm()
+                .on_ok(move |_, window, cx| {
+                    let name = input_for_ok.read(cx).value().trim().to_owned();
+                    if name.is_empty() {
+                        let message = t!("ApiTest.environment_name_required").to_string();
+                        view_for_ok.update(cx, |view, cx| {
+                            view.notice = Some(message);
+                            cx.notify();
+                        });
+                        return false;
+                    }
+                    view_for_ok.update(cx, |view, cx| {
+                        view.notice = None;
+                        view.rename_active_environment_named(name, window, cx);
+                    });
+                    true
+                })
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(t!("ApiTest.environment_name").to_string()),
+                        )
+                        .child(Input::new(&input).w_full()),
+                )
+        });
+        window.defer(cx, move |window, cx| {
+            input_for_focus.update(cx, |input, cx| input.focus(window, cx));
+        });
     }
 
     fn delete_active_environment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1844,6 +2092,7 @@ impl ApiTestView {
             cx.notify();
             return;
         }
+        self.commit_current_to_store(cx);
         let Some(active_id) = self.active_environment_id.clone() else {
             return;
         };
@@ -1854,7 +2103,7 @@ impl ApiTestView {
             .first()
             .map(|environment| environment.id.clone());
         self.rebuild_environment_select(window, cx);
-        self.refresh_environment_rows(window, cx);
+        self.refresh_environment_settings(window, cx);
         self.save_store();
         cx.notify();
     }
@@ -1918,7 +2167,7 @@ impl ApiTestView {
             self.active_environment_id = Some(environment.id.clone());
             self.environments.push(environment);
             self.rebuild_environment_select(window, cx);
-            self.refresh_environment_rows(window, cx);
+            self.refresh_environment_settings(window, cx);
         }
         self.save_store();
         self.rebuild_tree(cx);
@@ -1990,9 +2239,10 @@ impl ApiTestView {
         Button::new("api-export-collection")
             .ghost()
             .small()
-            .flex_shrink_0()
+            .w_full()
+            .justify_start()
             .icon(IconName::Export)
-            .dropdown_caret(true)
+            .label(t!("ApiTest.export").to_string())
             .tooltip(t!("ApiTest.export").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
                 for kind in CollectionExport::ALL {
@@ -2005,6 +2255,42 @@ impl ApiTestView {
                                     this.export_collection(kind, cx);
                                 });
                             }),
+                    );
+                }
+                menu
+            })
+    }
+
+    fn protocol_icon(protocol: Protocol) -> IconName {
+        match protocol {
+            Protocol::Http => IconName::Globe,
+            Protocol::Graphql => IconName::Query,
+            Protocol::Sse => IconName::Sync,
+            Protocol::WebSocket => IconName::Network,
+            Protocol::Tcp => IconName::Terminal,
+            Protocol::GrpcWeb => IconName::Server,
+            Protocol::SocketIo => IconName::Network,
+        }
+    }
+
+    fn render_new_request_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        Button::new("api-new-request")
+            .primary()
+            .small()
+            .flex_shrink_0()
+            .icon(IconName::Plus)
+            .tooltip(t!("ApiTest.new_request").to_string())
+            .dropdown_menu(move |mut menu, window, _| {
+                for protocol in Protocol::ALL {
+                    let view = view.clone();
+                    let protocol = *protocol;
+                    menu = menu.item(
+                        PopupMenuItem::new(protocol.label())
+                            .icon(Self::protocol_icon(protocol))
+                            .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                                this.new_request_with_protocol(protocol, window, cx);
+                            })),
                     );
                 }
                 menu
@@ -2084,10 +2370,26 @@ impl Render for ApiTestView {
             self.render_request_bar(protocol, method, cx)
                 .into_any_element()
         });
+        let notice = self.notice.clone().map(|notice| {
+            h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1p5()
+                .border_b_1()
+                .border_color(theme.danger.opacity(0.25))
+                .bg(theme.danger.opacity(0.08))
+                .text_sm()
+                .text_color(theme.danger)
+                .child(Icon::new(IconName::TriangleAlert).small())
+                .child(notice)
+                .into_any_element()
+        });
 
         let tree_sidebar = self.render_sidebar(cx);
         let editor_pane = self.render_editor_pane(cx);
-        let request_workspace = if self.active_folder_id.is_some() {
+        let request_panes = if self.active_folder_id.is_some() {
             div()
                 .size_full()
                 .min_h_0()
@@ -2110,11 +2412,34 @@ impl Render for ApiTestView {
                 )
                 .into_any_element()
         };
+        let request_workspace = v_flex()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .bg(theme.background)
+            .child(request_meta_bar)
+            .when_some(request_bar, |workspace, bar| workspace.child(bar))
+            .when_some(notice, |workspace, notice| workspace.child(notice))
+            .child(div().flex_1().min_h_0().min_w_0().child(request_panes));
         let request_content = if self.sidebar_collapsed {
-            div()
+            h_flex()
                 .size_full()
                 .min_h_0()
                 .min_w_0()
+                .overflow_hidden()
+                .child(
+                    v_flex()
+                        .id("api-request-sidebar-collapsed")
+                        .relative()
+                        .w(px(REQUEST_TREE_COLLAPSED_WIDTH))
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_r_1()
+                        .border_color(theme.sidebar_border)
+                        .bg(theme.sidebar)
+                        .child(self.render_sidebar_toggle_handle(true, cx)),
+                )
                 .child(request_workspace)
                 .into_any_element()
         } else {
@@ -2136,26 +2461,8 @@ impl Render for ApiTestView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .child(request_meta_bar)
-            .when_some(request_bar, |root, bar| root.child(bar))
-            .when_some(self.notice.clone(), |flex, notice| {
-                flex.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .py_1p5()
-                        .border_b_1()
-                        .border_color(theme.danger.opacity(0.25))
-                        .bg(theme.danger.opacity(0.08))
-                        .text_sm()
-                        .text_color(theme.danger)
-                        .child(Icon::new(IconName::TriangleAlert).small())
-                        .child(notice),
-                )
-            })
-            .child(div().flex_1().min_h_0().min_w_0().child(request_content))
+            .bg(theme.background)
+            .child(request_content)
     }
 }
 
@@ -2165,59 +2472,74 @@ impl ApiTestView {
         cx.notify();
     }
 
+    fn render_sidebar_toggle_handle(
+        &self,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme().clone();
+
+        div()
+            .id("api-sidebar-toggle")
+            .absolute()
+            .right(px(5.))
+            .top_0()
+            .bottom_0()
+            .w(px(18.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .id("api-sidebar-toggle-button")
+                    .w(px(18.))
+                    .h(px(52.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
+                    .shadow_sm()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.muted))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.toggle_sidebar(cx);
+                        }),
+                    )
+                    .child(
+                        Icon::new(if collapsed {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronLeft
+                        })
+                        .xsmall()
+                        .text_color(theme.muted_foreground),
+                    ),
+            )
+    }
+
     fn render_request_meta_bar(&self, cx: &mut Context<Self>) -> PanelHeader {
         let theme = cx.theme().clone();
-        let sidebar_tooltip = if self.sidebar_collapsed {
-            t!("ApiTest.open_sidebar").to_string()
-        } else {
-            t!("ApiTest.close_sidebar").to_string()
-        };
         let actions = h_flex()
             .items_center()
             .gap_1()
-            .child(
-                Button::new("api-sidebar-toggle")
-                    .ghost()
-                    .small()
-                    .flex_shrink_0()
-                    .icon(if self.sidebar_collapsed {
-                        IconName::PanelLeftOpen
-                    } else {
-                        IconName::PanelLeftClose
-                    })
-                    .tooltip(sidebar_tooltip)
-                    .on_click(cx.listener(|this, _ev, _window, cx| {
-                        this.toggle_sidebar(cx);
-                    })),
-            )
-            .child(
-                div()
-                    .id("api-environment-select")
-                    .w(px(148.))
-                    .flex_shrink_0()
-                    .child(Select::new(&self.environment_select).small()),
-            )
-            .child(
-                Button::new("api-import-collection")
-                    .ghost()
-                    .small()
-                    .flex_shrink_0()
-                    .icon(IconName::Upload)
-                    .tooltip(t!("ApiTest.import_collection").to_string())
-                    .on_click(cx.listener(|this, _ev, window, cx| {
-                        this.import_collection_file(window, cx);
-                    })),
-            )
-            .child(self.render_export_button(cx));
+            .child(self.render_environment_manager(cx));
 
         PanelHeader::new("api-request-meta-bar")
             .variant(PanelHeaderVariant::Toolbar)
-            .background(theme.muted.opacity(0.1))
-            .border_bottom(false)
+            .background(theme.background)
+            .border_bottom(true)
             .title(
                 h_flex()
+                    .w(px(320.))
+                    .flex_shrink_0()
                     .min_w_0()
-                    .max_w(px(360.))
                     .gap_2()
                     .child(
                         Icon::new(if self.active_folder_id.is_some() {
@@ -2237,6 +2559,352 @@ impl ApiTestView {
             .trailing(actions)
     }
 
+    fn render_environment_manager(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let active_id = self.active_environment_id.clone();
+        let active_name = self
+            .active_environment()
+            .map(|environment| environment.name.clone())
+            .unwrap_or_else(|| t!("ApiTest.environment").to_string());
+        let environment_count = self.environments.len();
+        let environment_options = self
+            .environments
+            .iter()
+            .enumerate()
+            .map(|(index, environment)| {
+                let environment_id = environment.id.clone();
+                let is_active = active_id.as_deref() == Some(environment.id.as_str());
+                Button::new(format!("api-environment-option-{index}"))
+                    .ghost()
+                    .small()
+                    .w_full()
+                    .justify_start()
+                    .icon(if is_active {
+                        IconName::Check
+                    } else {
+                        IconName::Globe
+                    })
+                    .label(environment.name.clone())
+                    .when(is_active, |button| {
+                        button
+                            .bg(theme.accent.opacity(0.12))
+                            .text_color(theme.accent)
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_environment(&environment_id, window, cx);
+                    }))
+            })
+            .collect::<Vec<_>>();
+        let mut settings_card =
+            |id: &'static str, title: String, hint: String, section: KvSection| {
+                v_flex()
+                    .id(id)
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(205.))
+                    .min_h(px(180.))
+                    .gap_2()
+                    .p_3()
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(px(8.))
+                    .bg(theme.background)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .child(self.render_kv_editor(section, cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(hint),
+                    )
+            };
+        let environment_variables_card = settings_card(
+            "api-environment-variables",
+            t!("ApiTest.environment_variables").to_string(),
+            t!("ApiTest.environment_variables_hint").to_string(),
+            KvSection::Environment,
+        );
+        let environment_headers_card = settings_card(
+            "api-environment-headers",
+            t!("ApiTest.environment_headers").to_string(),
+            t!("ApiTest.environment_headers_hint").to_string(),
+            KvSection::EnvironmentHeaders,
+        );
+        let environment_params_card = settings_card(
+            "api-environment-params",
+            t!("ApiTest.environment_params").to_string(),
+            t!("ApiTest.environment_params_hint").to_string(),
+            KvSection::EnvironmentParams,
+        );
+        let environment_cookies_card = settings_card(
+            "api-environment-cookies",
+            t!("ApiTest.environment_cookies").to_string(),
+            t!("ApiTest.environment_cookies_hint").to_string(),
+            KvSection::EnvironmentCookies,
+        );
+        drop(settings_card);
+        let trigger = Button::new("api-environment-manager-trigger")
+            .outline()
+            .small()
+            .w(px(188.))
+            .flex_shrink_0()
+            .justify_start()
+            .icon(IconName::Globe)
+            .label(active_name.clone())
+            .dropdown_caret(true)
+            .tooltip(t!("ApiTest.manage_environments").to_string());
+        let content = h_flex()
+            .id("api-environment-manager-content")
+            .w(px(920.))
+            .h(px(620.))
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .bg(theme.background)
+            .child(
+                v_flex()
+                    .w(px(232.))
+                    .h_full()
+                    .flex_shrink_0()
+                    .min_h_0()
+                    .border_r_1()
+                    .border_color(theme.border)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.foreground)
+                                            .child(t!("ApiTest.environments").to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(environment_count.to_string()),
+                                    ),
+                            )
+                            .child(
+                                Button::new("api-new-environment")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Plus)
+                                    .tooltip(t!("ApiTest.new_environment").to_string())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.prompt_new_environment(window, cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .scrollbar_show(ScrollbarShow::Always)
+                            .p_2()
+                            .child(v_flex().w_full().gap_1().children(environment_options)),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .p_2()
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .child(
+                                Button::new("api-rename-environment")
+                                    .ghost()
+                                    .xsmall()
+                                    .flex_1()
+                                    .icon(IconName::Edit)
+                                    .label(t!("ApiTest.rename_environment").to_string())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.prompt_rename_active_environment(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("api-delete-environment")
+                                    .ghost()
+                                    .xsmall()
+                                    .flex_1()
+                                    .icon(IconName::Delete)
+                                    .label(t!("ApiTest.delete_environment").to_string())
+                                    .tooltip(if environment_count <= 1 {
+                                        t!("ApiTest.cannot_delete_last_environment").to_string()
+                                    } else {
+                                        t!("ApiTest.delete_environment").to_string()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.delete_active_environment(window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_3()
+                            .px_4()
+                            .py_3()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .child(
+                                div()
+                                    .size(px(32.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(8.))
+                                    .bg(theme.accent.opacity(0.12))
+                                    .child(
+                                        Icon::new(IconName::Globe).small().text_color(theme.accent),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.foreground)
+                                            .child(active_name),
+                                    )
+                                    .child(
+                                        div().text_xs().text_color(theme.muted_foreground).child(
+                                            t!("ApiTest.environment_settings_hint").to_string(),
+                                        ),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .scrollbar_show(ScrollbarShow::Always)
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_3()
+                                    .p_4()
+                                    .child(
+                                        v_flex()
+                                            .w_full()
+                                            .gap_2()
+                                            .p_3()
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .rounded(px(8.))
+                                            .bg(theme.background)
+                                            .child(
+                                                h_flex()
+                                                    .w_full()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .text_sm()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(theme.foreground)
+                                                            .child(
+                                                                t!("ApiTest.environment_base_url")
+                                                                    .to_string(),
+                                                            ),
+                                                    )
+                                                    .child(Tag::secondary().small().child(
+                                                        t!("ApiTest.inherited").to_string(),
+                                                    )),
+                                            )
+                                            .child(
+                                                Input::new(&self.environment_base_url_input)
+                                                    .small()
+                                                    .w_full(),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(
+                                                        t!("ApiTest.environment_base_url_hint")
+                                                            .to_string(),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .gap_3()
+                                            .child(environment_variables_card)
+                                            .child(environment_headers_card),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .gap_3()
+                                            .child(environment_params_card)
+                                            .child(environment_cookies_card),
+                                    ),
+                            ),
+                    ),
+            );
+
+        div()
+            .id("api-environment-select")
+            .flex_shrink_0()
+            .child(
+                Popover::new("api-environment-manager")
+                    .anchor(Anchor::TopRight)
+                    .p_0()
+                    .trigger(trigger)
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
     fn render_request_bar(
         &self,
         protocol: Protocol,
@@ -2244,17 +2912,12 @@ impl ApiTestView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = cx.theme().clone();
-        h_flex()
-            .id("api-request-bar")
-            .w_full()
+        let controls = h_flex()
+            .flex_1()
+            .min_w_0()
             .flex_shrink_0()
             .gap_2()
             .items_center()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted.opacity(0.18))
             .child(
                 div()
                     .id("api-protocol-select")
@@ -2272,7 +2935,18 @@ impl ApiTestView {
                     .min_w_0()
                     .child(Input::new(&self.url_input).small().w_full()),
             )
-            .child(self.render_send_button(protocol, cx))
+            .child(self.render_send_button(protocol, cx));
+
+        div()
+            .id("api-request-bar")
+            .w_full()
+            .flex_shrink_0()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .child(controls)
     }
 
     fn render_method_select(&self, method: RequestMethod, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -2374,15 +3048,19 @@ impl ApiTestView {
         };
         v_flex()
             .id("api-request-sidebar")
+            .relative()
             .size_full()
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .bg(theme.muted.opacity(0.08))
+            .border_r_1()
+            .border_color(theme.sidebar_border)
+            .bg(theme.sidebar)
+            .text_color(theme.sidebar_foreground)
             .child(
                 PanelHeader::new("api-sidebar-mode-bar")
                     .variant(PanelHeaderVariant::Sidebar)
-                    .background(theme.muted.opacity(0.14))
+                    .background(theme.sidebar)
                     .title(
                         h_flex()
                             .min_w_0()
@@ -2412,6 +3090,7 @@ impl ApiTestView {
                     ),
             )
             .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .child(self.render_sidebar_toggle_handle(false, cx))
     }
 
     /// 左侧请求列表树（gpui-component 的可折叠 Tree）。
@@ -2470,71 +3149,82 @@ impl ApiTestView {
                     row = row
                         .child(
                             h_flex()
-                                .flex_1()
+                                .w_full()
                                 .min_w_0()
                                 .items_center()
                                 .gap_1()
                                 .child(
-                                    Icon::new(if entry.is_expanded() {
-                                        IconName::ChevronDown
-                                    } else {
-                                        IconName::ChevronRight
-                                    })
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .text_color(theme.muted_foreground),
-                                )
-                                .child(
-                                    Icon::new(if entry.is_expanded() {
-                                        IconName::FolderOpen
-                                    } else {
-                                        IconName::FolderClosed
-                                    })
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .text_color(
-                                        if item.id == TREE_ROOT_ID {
-                                            theme.primary
-                                        } else {
-                                            theme.muted_foreground
-                                        },
-                                    ),
-                                )
-                                .child(
-                                    div()
+                                    h_flex()
                                         .flex_1()
                                         .min_w_0()
-                                        .overflow_hidden()
-                                        .whitespace_nowrap()
-                                        .text_ellipsis()
-                                        .text_sm()
-                                        .font_weight(if item.id == TREE_ROOT_ID {
-                                            FontWeight::SEMIBOLD
-                                        } else {
-                                            FontWeight::NORMAL
-                                        })
-                                        .child(item.label.clone()),
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            Icon::new(if entry.is_expanded() {
+                                                IconName::ChevronDown
+                                            } else {
+                                                IconName::ChevronRight
+                                            })
+                                            .xsmall()
+                                            .flex_shrink_0()
+                                            .text_color(theme.muted_foreground),
+                                        )
+                                        .child(
+                                            Icon::new(if entry.is_expanded() {
+                                                IconName::FolderOpen
+                                            } else {
+                                                IconName::FolderClosed
+                                            })
+                                            .xsmall()
+                                            .flex_shrink_0()
+                                            .text_color(if item.id == TREE_ROOT_ID {
+                                                theme.primary
+                                            } else {
+                                                theme.muted_foreground
+                                            }),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .text_sm()
+                                                .font_weight(if item.id == TREE_ROOT_ID {
+                                                    FontWeight::SEMIBOLD
+                                                } else {
+                                                    FontWeight::NORMAL
+                                                })
+                                                .child(item.label.clone()),
+                                        ),
+                                )
+                                .when(
+                                    item.id != TREE_ROOT_ID && item.id != TREE_EMPTY_ID,
+                                    |content| {
+                                        content.child(
+                                            Button::new(("api-folder-delete", ix))
+                                                .ghost()
+                                                .xsmall()
+                                                .flex_shrink_0()
+                                                .icon(IconName::Delete)
+                                                .tooltip(t!("ApiTest.delete_folder").to_string())
+                                                .on_click({
+                                                    let folder_id = item.id.clone();
+                                                    let weak = weak.clone();
+                                                    move |_event, window, cx| {
+                                                        cx.stop_propagation();
+                                                        let _ = weak.update(cx, |this, cx| {
+                                                            this.delete_folder(
+                                                                &folder_id, window, cx,
+                                                            );
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                    },
                                 ),
                         )
-                        .when(item.id != TREE_ROOT_ID && item.id != TREE_EMPTY_ID, |row| {
-                            row.child(
-                                Button::new(("api-folder-delete", ix))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Delete)
-                                    .tooltip(t!("ApiTest.delete_folder").to_string())
-                                    .on_click({
-                                        let folder_id = item.id.clone();
-                                        let weak = weak.clone();
-                                        move |_event, window, cx| {
-                                            cx.stop_propagation();
-                                            let _ = weak.update(cx, |this, cx| {
-                                                this.delete_folder(&folder_id, window, cx);
-                                            });
-                                        }
-                                    }),
-                            )
-                        })
                         .on_click({
                             let folder_id = item.id.clone();
                             let weak = weak.clone();
@@ -2557,46 +3247,54 @@ impl ApiTestView {
                     row = row
                         .child(
                             h_flex()
-                                .flex_1()
+                                .w_full()
                                 .min_w_0()
                                 .items_center()
-                                .gap_2()
-                                .child(Self::render_request_badge(
-                                    protocol,
-                                    method,
-                                    if protocol.uses_http_method() {
-                                        crate::method_badge_color(method, cx)
-                                    } else {
-                                        theme.primary
-                                    },
-                                ))
+                                .gap_1()
                                 .child(
-                                    div()
+                                    h_flex()
                                         .flex_1()
                                         .min_w_0()
-                                        .overflow_hidden()
-                                        .whitespace_nowrap()
-                                        .text_ellipsis()
-                                        .text_sm()
-                                        .child(item.label.clone()),
+                                        .items_center()
+                                        .gap_2()
+                                        .child(Self::render_request_badge(
+                                            protocol,
+                                            method,
+                                            if protocol.uses_http_method() {
+                                                crate::method_badge_color(method, cx)
+                                            } else {
+                                                theme.primary
+                                            },
+                                        ))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .text_sm()
+                                                .child(item.label.clone()),
+                                        ),
+                                )
+                                .child(
+                                    Button::new(("api-request-delete", ix))
+                                        .ghost()
+                                        .xsmall()
+                                        .flex_shrink_0()
+                                        .icon(IconName::Delete)
+                                        .tooltip(t!("ApiTest.delete_request").to_string())
+                                        .on_click({
+                                            let request_id = item.id.clone();
+                                            let weak = weak.clone();
+                                            move |_event, window, cx| {
+                                                cx.stop_propagation();
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.delete_request(&request_id, window, cx);
+                                                });
+                                            }
+                                        }),
                                 ),
-                        )
-                        .child(
-                            Button::new(("api-request-delete", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Delete)
-                                .tooltip(t!("ApiTest.delete_request").to_string())
-                                .on_click({
-                                    let request_id = item.id.clone();
-                                    let weak = weak.clone();
-                                    move |_event, window, cx| {
-                                        cx.stop_propagation();
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.delete_request(&request_id, window, cx);
-                                        });
-                                    }
-                                }),
                         )
                         .on_click({
                             let request_id = item.id.clone();
@@ -2624,11 +3322,32 @@ impl ApiTestView {
                     .w_full()
                     .flex_shrink_0()
                     .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme.sidebar_border)
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.search_input)
+                                .small()
+                                .w_full()
+                                .prefix(IconName::Search)
+                                .cleanable(true),
+                        ),
+                    )
+                    .child(self.render_new_request_button(cx)),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_shrink_0()
+                    .items_center()
                     .justify_between()
                     .px_2()
                     .py_1()
                     .border_b_1()
-                    .border_color(theme.border)
+                    .border_color(theme.sidebar_border)
                     .child(
                         div()
                             .flex_1()
@@ -2638,45 +3357,18 @@ impl ApiTestView {
                             .child(t!("ApiTest.request_list").to_string()),
                     )
                     .child(
-                        h_flex()
-                            .flex_shrink_0()
-                            .gap_1()
-                            .child(
-                                Button::new("api-new-folder")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::NewFolder)
-                                    .tooltip(t!("ApiTest.new_folder").to_string())
-                                    .on_click(cx.listener(|this, _ev, window, cx| {
+                        h_flex().flex_shrink_0().items_center().gap_0p5().child(
+                            Button::new("api-new-folder")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::NewFolder)
+                                .tooltip(t!("ApiTest.new_folder").to_string())
+                                .on_click(
+                                    cx.listener(|this, _ev, window, cx| {
                                         this.new_folder(window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("api-new-request")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Plus)
-                                    .tooltip(t!("ApiTest.new_request").to_string())
-                                    .on_click(cx.listener(|this, _ev, window, cx| {
-                                        this.new_request(window, cx)
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .px_2()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        Input::new(&self.search_input)
-                            .small()
-                            .w_full()
-                            .prefix(IconName::Search)
-                            .cleanable(true),
+                                    }),
+                                ),
+                        ),
                     ),
             )
             .child(
@@ -2687,6 +3379,29 @@ impl ApiTestView {
                     .min_w_0()
                     .overflow_hidden()
                     .child(tree),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .flex_shrink_0()
+                    .gap_1()
+                    .p_2()
+                    .border_t_1()
+                    .border_color(theme.sidebar_border)
+                    .child(
+                        Button::new("api-import-collection")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .justify_start()
+                            .icon(IconName::Upload)
+                            .label(t!("ApiTest.import_collection").to_string())
+                            .tooltip(t!("ApiTest.import_collection").to_string())
+                            .on_click(cx.listener(|this, _ev, window, cx| {
+                                this.import_collection_file(window, cx);
+                            })),
+                    )
+                    .child(self.render_export_button(cx)),
             )
     }
 
@@ -2749,6 +3464,7 @@ impl ApiTestView {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scrollbar()
+                    .scrollbar_show(ScrollbarShow::Always)
                     .child(v_flex().w_full().p_2().gap_1().children(rows))
                     .into_any_element()
             })
@@ -2924,57 +3640,50 @@ impl ApiTestView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .bg(theme.muted.opacity(0.06))
+            .bg(theme.background)
+            .child(
+                tabs.w_full()
+                    .px_3()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.background),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1p5()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.muted.opacity(0.04))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.muted_foreground)
+                            .child(t!("ApiTest.request_description").to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.request_description_input).small().w_full()),
+                    ),
+            )
             .child(
                 v_flex()
-                    .mx_3()
-                    .mt_3()
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(8.))
-                    .bg(theme.background)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.request_description").to_string()),
-                            )
-                            .child(
-                                Tag::secondary()
-                                    .small()
-                                    .child(t!("ApiTest.request_description_hint").to_string()),
-                            ),
-                    )
-                    .child(Input::new(&self.request_description_input).w_full()),
-            )
-            .child(tabs.w_full().px_3().bg(theme.muted.opacity(0.14)))
-            .child(
-                div()
                     .id("api-active-editor")
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    .overflow_hidden()
+                    .bg(theme.background)
                     .p_3()
-                    .child(
-                        div()
-                            .size_full()
-                            .min_h_0()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .border_1()
-                            .border_color(theme.border)
-                            .rounded(px(8.))
-                            .bg(theme.background)
-                            .child(content),
-                    ),
+                    .child(content),
             )
             .into_any_element()
     }
@@ -2988,6 +3697,7 @@ impl ApiTestView {
             .min_h_0()
             .min_w_0()
             .overflow_y_scrollbar()
+            .scrollbar_show(ScrollbarShow::Always)
             .gap_3()
             .p_4()
             .bg(theme.muted.opacity(0.06))
@@ -3261,90 +3971,55 @@ impl ApiTestView {
                 .child(text)
                 .into_any_element()
         };
-        let environment_header = h_flex()
-            .w_full()
-            .flex_shrink_0()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.foreground)
-                    .child(t!("ApiTest.environment_variables").to_string()),
-            )
-            .child(
-                div()
-                    .id("api-variables-environment-select")
-                    .w(px(190.))
-                    .child(Select::new(&self.variables_environment_select).small()),
-            )
-            .child(
-                Button::new("api-new-environment")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Plus)
-                    .tooltip(t!("ApiTest.new_environment").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.new_environment(window, cx);
-                    })),
-            )
-            .child(
-                Button::new("api-delete-environment")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Delete)
-                    .tooltip(t!("ApiTest.delete_environment").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.delete_active_environment(window, cx);
-                    })),
-            )
-            .into_any_element();
 
-        div().size_full().min_h_0().overflow_y_scrollbar().child(
-            v_flex()
-                .w_full()
-                .gap_4()
-                .child(section(
-                    title(t!("ApiTest.global_variables").to_string()),
-                    None,
-                    self.render_kv_editor(KvSection::Globals, cx),
-                ))
-                .child(section(
-                    title(t!("ApiTest.global_params").to_string()),
-                    Some(t!("ApiTest.global_params_hint").to_string()),
-                    self.render_kv_editor(KvSection::GlobalParams, cx),
-                ))
-                .child(section(
-                    title(t!("ApiTest.global_headers").to_string()),
-                    Some(t!("ApiTest.global_headers_hint").to_string()),
-                    self.render_kv_editor(KvSection::GlobalHeaders, cx),
-                ))
-                .child(section(
-                    title(t!("ApiTest.global_cookies").to_string()),
-                    Some(t!("ApiTest.global_cookies_hint").to_string()),
-                    self.render_kv_editor(KvSection::GlobalCookies, cx),
-                ))
-                .child(section(
-                    environment_header,
-                    None,
-                    self.render_kv_editor(KvSection::Environment, cx),
-                ))
-                .child(section(
-                    title(t!("ApiTest.request_variables").to_string()),
-                    None,
-                    self.render_kv_editor(KvSection::RequestVariables, cx),
-                )),
-        )
+        div()
+            .size_full()
+            .min_h_0()
+            .overflow_y_scrollbar()
+            .scrollbar_show(ScrollbarShow::Always)
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_4()
+                    .child(section(
+                        title(t!("ApiTest.global_variables").to_string()),
+                        None,
+                        self.render_kv_editor(KvSection::Globals, cx),
+                    ))
+                    .child(section(
+                        title(t!("ApiTest.global_params").to_string()),
+                        Some(t!("ApiTest.global_params_hint").to_string()),
+                        self.render_kv_editor(KvSection::GlobalParams, cx),
+                    ))
+                    .child(section(
+                        title(t!("ApiTest.global_headers").to_string()),
+                        Some(t!("ApiTest.global_headers_hint").to_string()),
+                        self.render_kv_editor(KvSection::GlobalHeaders, cx),
+                    ))
+                    .child(section(
+                        title(t!("ApiTest.global_cookies").to_string()),
+                        Some(t!("ApiTest.global_cookies_hint").to_string()),
+                        self.render_kv_editor(KvSection::GlobalCookies, cx),
+                    ))
+                    .child(section(
+                        title(t!("ApiTest.request_variables").to_string()),
+                        None,
+                        self.render_kv_editor(KvSection::RequestVariables, cx),
+                    )),
+            )
     }
 
     fn render_kv_editor(&self, section: KvSection, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let rows = self.rows_for_section(section);
+        let has_rows = !rows.is_empty();
         let section_for_closure = section;
         let section_id = section.element_id();
+        let scroll_handle = self
+            .kv_scroll_handles
+            .get(&section)
+            .expect("every key-value section must have a scroll handle")
+            .clone();
         let is_form_data =
             section == KvSection::Body && self.current_body_type(cx) == BodyType::FormData;
 
@@ -3360,27 +4035,47 @@ impl ApiTestView {
                 h_flex()
                     .id(format!("api-kv-row-{section_id}-{ix}"))
                     .w_full()
+                    .h(px(38.))
                     .min_w_0()
-                    .gap_1()
+                    .flex_shrink_0()
                     .items_center()
+                    .border_b_1()
+                    .border_color(theme.border.opacity(0.55))
+                    .bg(theme.background)
+                    .hover(|style| style.bg(theme.muted.opacity(0.16)))
                     .child(
-                        div().w(px(24.)).flex_shrink_0().child(
-                            Checkbox::new(format!("api-kv-enabled-{section_id}-{ix}"))
-                                .checked(enabled)
-                                .on_click(cx.listener(move |this, &checked, _, cx| {
-                                    this.set_kv_row_enabled(section_for_closure, ix, checked, cx);
-                                })),
-                        ),
+                        div()
+                            .w(px(36.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Checkbox::new(format!("api-kv-enabled-{section_id}-{ix}"))
+                                    .checked(enabled)
+                                    .on_click(cx.listener(move |this, &checked, _, cx| {
+                                        this.set_kv_row_enabled(
+                                            section_for_closure,
+                                            ix,
+                                            checked,
+                                            cx,
+                                        );
+                                    })),
+                            ),
                     )
                     .when(is_form_data, |row| {
                         row.child(
                             h_flex()
-                                .w(px(108.))
+                                .w(px(120.))
                                 .flex_shrink_0()
                                 .gap_0p5()
+                                .px_2()
+                                .border_l_1()
+                                .border_color(theme.border.opacity(0.55))
                                 .child(
                                     Button::new(format!("api-form-field-text-{section_id}-{ix}"))
                                         .xsmall()
+                                        .flex_1()
                                         .label(t!("ApiTest.text").to_string())
                                         .when(
                                             field_type == crate::http::FieldType::Text,
@@ -3402,6 +4097,7 @@ impl ApiTestView {
                                 .child(
                                     Button::new(format!("api-form-field-file-{section_id}-{ix}"))
                                         .xsmall()
+                                        .flex_1()
                                         .label(t!("ApiTest.file").to_string())
                                         .when(
                                             field_type == crate::http::FieldType::File,
@@ -3426,7 +4122,10 @@ impl ApiTestView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&key).small().w_full()),
+                            .px_2()
+                            .border_l_1()
+                            .border_color(theme.border.opacity(0.55))
+                            .child(Input::new(&key).small().w_full().appearance(false).bare()),
                     )
                     .child(
                         if is_form_data && field_type == crate::http::FieldType::File {
@@ -3440,11 +4139,15 @@ impl ApiTestView {
                             div()
                                 .flex_1()
                                 .min_w_0()
+                                .px_2()
+                                .border_l_1()
+                                .border_color(theme.border.opacity(0.55))
                                 .child(
                                     Button::new(format!("api-form-file-picker-{section_id}-{ix}"))
-                                        .outline()
+                                        .ghost()
                                         .small()
                                         .w_full()
+                                        .justify_start()
                                         .icon(IconName::File)
                                         .label(label)
                                         .tooltip(if full_path.is_empty() {
@@ -3466,20 +4169,32 @@ impl ApiTestView {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .child(Input::new(&value).small().w_full())
+                                .px_2()
+                                .border_l_1()
+                                .border_color(theme.border.opacity(0.55))
+                                .child(Input::new(&value).small().w_full().appearance(false).bare())
                                 .into_any_element()
                         },
                     )
                     .child(
-                        Button::new(format!("api-kv-delete-{section_id}-{ix}"))
-                            .ghost()
-                            .xsmall()
+                        div()
+                            .w(px(36.))
                             .flex_shrink_0()
-                            .icon(IconName::Delete)
-                            .tooltip(t!("ApiTest.delete_row").to_string())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.remove_kv_row(section_for_closure, ix, cx);
-                            })),
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_l_1()
+                            .border_color(theme.border.opacity(0.55))
+                            .child(
+                                Button::new(format!("api-kv-delete-{section_id}-{ix}"))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Delete)
+                                    .tooltip(t!("ApiTest.delete_row").to_string())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.remove_kv_row(section_for_closure, ix, cx);
+                                    })),
+                            ),
                     )
             })
             .collect::<Vec<_>>();
@@ -3488,85 +4203,194 @@ impl ApiTestView {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .gap_1()
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(6.))
+            .bg(theme.background)
             .child(
                 h_flex()
                     .w_full()
+                    .min_h(px(36.))
                     .flex_shrink_0()
                     .items_center()
-                    .justify_between()
+                    .gap_1()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.muted.opacity(0.14))
                     .child(
-                        h_flex()
+                        div()
+                            .w(px(36.))
+                            .flex_shrink_0()
+                            .text_center()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.muted_foreground)
+                            .child(""),
+                    )
+                    .when(is_form_data, |header| {
+                        header.child(
+                            div()
+                                .w(px(120.))
+                                .flex_shrink_0()
+                                .px_2()
+                                .border_l_1()
+                                .border_color(theme.border.opacity(0.55))
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.muted_foreground)
+                                .child(t!("ApiTest.text").to_string()),
+                        )
+                    })
+                    .child(
+                        div()
                             .flex_1()
                             .min_w_0()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w(px(24.)).child(""))
-                            .when(is_form_data, |header| {
-                                header.child(
-                                    div()
-                                        .w(px(108.))
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme.muted_foreground)
-                                        .child(t!("ApiTest.text").to_string()),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.muted_foreground)
-                                    .child(t!("ApiTest.key").to_string()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.muted_foreground)
-                                    .child(t!("ApiTest.value").to_string()),
-                            )
-                            .child(div().w(px(28.))),
+                            .px_2()
+                            .border_l_1()
+                            .border_color(theme.border.opacity(0.55))
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.muted_foreground)
+                            .child(t!("ApiTest.key").to_string()),
                     )
                     .child(
-                        Button::new(format!("api-kv-add-{section_id}"))
-                            .ghost()
-                            .xsmall()
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_2()
+                            .border_l_1()
+                            .border_color(theme.border.opacity(0.55))
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.muted_foreground)
+                            .child(t!("ApiTest.value").to_string()),
+                    )
+                    .child(
+                        div()
+                            .w(px(36.))
                             .flex_shrink_0()
-                            .icon(IconName::Plus)
-                            .tooltip(t!("ApiTest.add_row").to_string())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.add_kv_row(section_for_closure, window, cx);
-                            })),
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_l_1()
+                            .border_color(theme.border.opacity(0.55))
+                            .child(
+                                Button::new(format!("api-kv-add-{section_id}"))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Plus)
+                                    .tooltip(t!("ApiTest.add_row").to_string())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.add_kv_row(section_for_closure, window, cx);
+                                    })),
+                            ),
                     ),
             )
-            .child({
-                let scroll_body = div()
+            .child(
+                v_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(v_flex().w_full().gap_1().children(row_elements));
-                match section {
-                    KvSection::Params => scroll_body.overflow_y_scrollbar(),
-                    KvSection::Path => scroll_body.overflow_y_scrollbar(),
-                    KvSection::Headers => scroll_body.overflow_y_scrollbar(),
-                    KvSection::Cookies => scroll_body.overflow_y_scrollbar(),
-                    KvSection::Body => scroll_body.overflow_y_scrollbar(),
-                    KvSection::Globals => scroll_body.overflow_y_scrollbar(),
-                    KvSection::GlobalParams => scroll_body.overflow_y_scrollbar(),
-                    KvSection::GlobalHeaders => scroll_body.overflow_y_scrollbar(),
-                    KvSection::GlobalCookies => scroll_body.overflow_y_scrollbar(),
-                    KvSection::Environment => scroll_body.overflow_y_scrollbar(),
-                    KvSection::FolderParams => scroll_body.overflow_y_scrollbar(),
-                    KvSection::FolderHeaders => scroll_body.overflow_y_scrollbar(),
-                    KvSection::FolderVariables => scroll_body.overflow_y_scrollbar(),
-                    KvSection::RequestVariables => scroll_body.overflow_y_scrollbar(),
-                }
-            })
+                    .min_w_0()
+                    .relative()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id(format!("api-kv-scroll-view-{section_id}"))
+                            .size_full()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll_handle)
+                            .when(has_rows, |body| {
+                                body.child(
+                                    v_flex()
+                                        .w_full()
+                                        .flex_shrink_0()
+                                        .children(row_elements)
+                                        .child(
+                                            h_flex()
+                                                .id(format!("api-kv-add-footer-{section_id}"))
+                                                .w_full()
+                                                .h(px(34.))
+                                                .flex_shrink_0()
+                                                .items_center()
+                                                .justify_center()
+                                                .gap_1()
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .hover(|style| {
+                                                    style
+                                                        .bg(theme.muted.opacity(0.12))
+                                                        .text_color(theme.foreground)
+                                                })
+                                                .child(Icon::new(IconName::Plus).xsmall())
+                                                .child(t!("ApiTest.add_row").to_string())
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.add_kv_row(
+                                                            section_for_closure,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        ),
+                                )
+                            })
+                            .when(!has_rows, |body| {
+                                body.child(
+                                    v_flex()
+                                        .id(format!("api-kv-empty-{section_id}"))
+                                        .size_full()
+                                        .min_h(px(96.))
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .text_color(theme.muted_foreground)
+                                        .bg(theme.muted.opacity(0.04))
+                                        .hover(|style| style.bg(theme.muted.opacity(0.1)))
+                                        .child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .px_3()
+                                                .py_1p5()
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .rounded(px(6.))
+                                                .bg(theme.background)
+                                                .text_color(theme.foreground)
+                                                .child(Icon::new(IconName::Plus).small())
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .child(t!("ApiTest.add_row").to_string()),
+                                                ),
+                                        )
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.add_kv_row(section_for_closure, window, cx);
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&scroll_handle)
+                                    .id(format!("api-kv-scrollbar-{section_id}"))
+                                    .scrollbar_show(ScrollbarShow::Always),
+                            ),
+                    ),
+            )
     }
 
     fn render_body_editor(&self, cx: &mut Context<Self>) -> Div {
@@ -3609,11 +4433,12 @@ impl ApiTestView {
                     .min_h_0()
                     .border_1()
                     .border_color(theme.border)
-                    .rounded(px(4.))
+                    .rounded(px(6.))
                     .overflow_hidden()
                     .child(
                         Input::new(&self.body_input)
                             .h_full()
+                            .editor_scrollbar_show(ScrollbarShow::Always)
                             .font_family(theme.mono_font_family.clone()),
                     )
                     .into_any_element(),
@@ -3745,11 +4570,12 @@ impl ApiTestView {
                     .min_h_0()
                     .border_1()
                     .border_color(theme.border)
-                    .rounded(px(4.))
+                    .rounded(px(6.))
                     .overflow_hidden()
                     .child(
                         Input::new(input)
                             .h_full()
+                            .editor_scrollbar_show(ScrollbarShow::Always)
                             .font_family(theme.mono_font_family.clone()),
                     ),
             )
@@ -3765,7 +4591,8 @@ impl ApiTestView {
         let theme = cx.theme().clone();
         let active_tab = self.active_response_tab;
         let tabs = self.render_response_tabs(active_tab, cx);
-        let status_bar = self.render_response_status_bar(cx);
+        let status_bar = (self.sending || self.stream_stop.is_some() || self.response.is_some())
+            .then(|| self.render_response_status_bar(cx));
 
         let body_text = self
             .response
@@ -3829,6 +4656,7 @@ impl ApiTestView {
                         .min_h_0()
                         .min_w_0()
                         .overflow_hidden()
+                        .p_3()
                         .child(
                             h_flex()
                                 .w_full()
@@ -3886,36 +4714,38 @@ impl ApiTestView {
                                 .flex_1()
                                 .min_h_0()
                                 .min_w_0()
-                                .overflow_hidden()
-                                .bg(theme.muted.opacity(0.3))
-                                .p_2()
-                                .child(
-                                    div()
-                                        .size_full()
-                                        .overflow_scrollbar()
-                                        .font_family(theme.mono_font_family.clone())
-                                        .text_sm()
-                                        .child(body_text),
-                                ),
+                                .overflow_scrollbar()
+                                .scrollbar_show(ScrollbarShow::Always)
+                                .rounded(px(6.))
+                                .bg(theme.muted.opacity(0.14))
+                                .p_3()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_sm()
+                                .text_color(theme.foreground)
+                                .child(body_text),
                         )
                         .into_any_element()
                 }
                 ResponseTab::Headers => Self::render_readonly_kv(
                     &headers,
+                    &self.response_headers_scroll_handle,
+                    t!("ApiTest.no_response_headers").to_string(),
+                    "api-copy-response-header",
                     theme.border,
                     theme.muted_foreground,
                     theme.foreground,
                     theme.mono_font_family.clone(),
-                )
-                .into_any_element(),
+                ),
                 ResponseTab::Cookies => Self::render_readonly_kv(
                     &cookies,
+                    &self.response_cookies_scroll_handle,
+                    t!("ApiTest.no_response_cookies").to_string(),
+                    "api-copy-response-cookie",
                     theme.border,
                     theme.muted_foreground,
                     theme.foreground,
                     theme.mono_font_family.clone(),
-                )
-                .into_any_element(),
+                ),
                 ResponseTab::ActualRequest => Self::render_text_response(
                     "api-actual-request",
                     "api-copy-actual-request",
@@ -3947,25 +4777,18 @@ impl ApiTestView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.muted.opacity(0.06))
+            .bg(theme.background)
             .child(tabs)
             .child(
-                div().flex_1().min_h_0().min_w_0().p_3().child(
-                    div()
-                        .size_full()
-                        .min_h_0()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .border_1()
-                        .border_color(theme.border)
-                        .rounded(px(8.))
-                        .bg(theme.background)
-                        .child(response_content),
-                ),
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .bg(theme.background)
+                    .child(response_content),
             )
-            .child(status_bar)
+            .when_some(status_bar, |pane, status_bar| pane.child(status_bar))
     }
 
     fn render_response_examples(&self, theme: &gpui_component::theme::Theme) -> AnyElement {
@@ -4061,6 +4884,7 @@ impl ApiTestView {
             .size_full()
             .min_h_0()
             .overflow_y_scrollbar()
+            .scrollbar_show(ScrollbarShow::Always)
             .child(v_flex().w_full().gap_4().p_3().children(sections))
             .into_any_element()
     }
@@ -4143,6 +4967,7 @@ impl ApiTestView {
                     .min_h(px(52.))
                     .max_h(px(260.))
                     .overflow_scrollbar()
+                    .scrollbar_show(ScrollbarShow::Always)
                     .rounded(px(6.))
                     .bg(theme.muted.opacity(0.28))
                     .p_3()
@@ -4154,6 +4979,23 @@ impl ApiTestView {
     }
 
     fn render_response_tabs(&self, active_tab: ResponseTab, cx: &mut Context<Self>) -> TabBar {
+        let header_count = self
+            .response
+            .as_ref()
+            .map(|response| response.headers.len())
+            .unwrap_or_default();
+        let cookie_count = self
+            .response
+            .as_ref()
+            .map(|response| {
+                response
+                    .headers
+                    .iter()
+                    .filter(|header| header.key.eq_ignore_ascii_case("set-cookie"))
+                    .count()
+            })
+            .unwrap_or_default();
+
         TabBar::new("api-response-tabs")
             .small()
             .underline()
@@ -4163,13 +5005,6 @@ impl ApiTestView {
             .bg(cx.theme().muted.opacity(0.14))
             .border_b_1()
             .border_color(cx.theme().border)
-            .prefix(
-                div()
-                    .pr_2()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t!("ApiTest.response").to_string()),
-            )
             .selected_index(active_tab as usize)
             .on_click(cx.listener(|this, ix: &usize, _, cx| {
                 if let Some(tab) = RESPONSE_TABS.get(*ix).copied() {
@@ -4178,6 +5013,11 @@ impl ApiTestView {
                 }
             }))
             .children(RESPONSE_TABS.into_iter().map(|tab| {
+                let label = match tab {
+                    ResponseTab::Headers => format!("{} ({header_count})", tab.title()),
+                    ResponseTab::Cookies => format!("{} ({cookie_count})", tab.title()),
+                    _ => tab.title(),
+                };
                 Tab::new()
                     .prefix(
                         div()
@@ -4186,7 +5026,7 @@ impl ApiTestView {
                             .size(px(0.))
                             .overflow_hidden(),
                     )
-                    .label(tab.title())
+                    .label(label)
             }))
     }
 
@@ -4230,9 +5070,7 @@ impl ApiTestView {
                 .into_any_element();
         }
         let Some(response) = &self.response else {
-            return div()
-                .child(t!("ApiTest.response").to_string())
-                .into_any_element();
+            return div().into_any_element();
         };
         Self::response_status_tag(response, cx.theme()).into_any_element()
     }
@@ -4321,17 +5159,15 @@ impl ApiTestView {
         theme: &gpui_component::theme::Theme,
     ) -> AnyElement {
         let text_for_copy = text.clone();
-        let display_text = if text.trim().is_empty() {
-            placeholder
-        } else {
-            text
-        };
+        let is_empty = text.trim().is_empty();
+        let display_text = if is_empty { placeholder } else { text };
         v_flex()
             .id(panel_id)
             .flex_1()
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
+            .p_3()
             .child(
                 h_flex()
                     .w_full()
@@ -4356,39 +5192,60 @@ impl ApiTestView {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .overflow_hidden()
-                    .bg(theme.muted.opacity(0.3))
-                    .p_2()
-                    .child(
-                        div()
-                            .size_full()
-                            .overflow_scrollbar()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_sm()
-                            .child(display_text),
-                    ),
+                    .overflow_scrollbar()
+                    .scrollbar_show(ScrollbarShow::Always)
+                    .rounded(px(6.))
+                    .bg(theme.muted.opacity(0.14))
+                    .p_3()
+                    .text_sm()
+                    .text_color(if is_empty {
+                        theme.muted_foreground
+                    } else {
+                        theme.foreground
+                    })
+                    .when(!is_empty, |content| {
+                        content.font_family(theme.mono_font_family.clone())
+                    })
+                    .child(display_text),
             )
             .into_any_element()
     }
 
     fn render_readonly_kv(
         rows: &[KeyValue],
+        scroll_handle: &ScrollHandle,
+        empty_text: String,
+        copy_id_prefix: &'static str,
         border: Hsla,
         muted: Hsla,
         foreground: Hsla,
         mono_font: SharedString,
-    ) -> Div {
-        let rows = rows.iter().map(|row| {
+    ) -> AnyElement {
+        if rows.is_empty() {
+            return div()
+                .size_full()
+                .min_h_0()
+                .min_w_0()
+                .child(ContentState::empty(empty_text))
+                .into_any_element();
+        }
+
+        let rows = rows.iter().enumerate().map(|(index, row)| {
+            let copy_text = format!("{}: {}", row.key, row.value);
             h_flex()
                 .w_full()
+                .h(px(36.))
+                .min_w_0()
+                .flex_shrink_0()
                 .gap_2()
-                .items_start()
+                .items_center()
+                .px_2()
                 .py_1()
                 .border_b_1()
-                .border_color(border)
+                .border_color(border.opacity(0.7))
                 .child(
                     div()
-                        .w(px(220.))
+                        .w(px(180.))
                         .flex_shrink_0()
                         .min_w_0()
                         .overflow_hidden()
@@ -4396,26 +5253,101 @@ impl ApiTestView {
                         .text_ellipsis()
                         .font_family(mono_font.clone())
                         .text_sm()
-                        .text_color(foreground)
+                        .text_color(muted)
                         .child(row.key.clone()),
                 )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
                         .font_family(mono_font.clone())
                         .text_sm()
-                        .text_color(muted)
+                        .text_color(foreground)
                         .child(row.value.clone()),
+                )
+                .child(
+                    Button::new(format!("{copy_id_prefix}-{index}"))
+                        .ghost()
+                        .xsmall()
+                        .flex_shrink_0()
+                        .icon(IconName::Copy)
+                        .tooltip(t!("ApiTest.copy").to_string())
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                        }),
                 )
         });
 
-        div().flex_1().min_h_0().overflow_hidden().child(
-            div()
-                .size_full()
-                .overflow_y_scrollbar()
-                .child(v_flex().w_full().gap_1().children(rows)),
-        )
+        div()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .relative()
+            .overflow_hidden()
+            .child(
+                div()
+                    .id(format!("{copy_id_prefix}-scroll-view"))
+                    .size_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_y_scroll()
+                    .track_scroll(scroll_handle)
+                    .p_3()
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .border_1()
+                            .border_color(border)
+                            .rounded(px(6.))
+                            .overflow_hidden()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .h(px(32.))
+                                    .flex_shrink_0()
+                                    .gap_2()
+                                    .items_center()
+                                    .px_2()
+                                    .border_b_1()
+                                    .border_color(border)
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(muted)
+                                    .child(
+                                        div()
+                                            .w(px(180.))
+                                            .flex_shrink_0()
+                                            .child(t!("ApiTest.key").to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(t!("ApiTest.value").to_string()),
+                                    )
+                                    .child(div().w(px(28.)).flex_shrink_0()),
+                            )
+                            .child(v_flex().w_full().flex_shrink_0().children(rows)),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(12.))
+                    .child(
+                        Scrollbar::vertical(scroll_handle)
+                            .id(format!("{copy_id_prefix}-scrollbar"))
+                            .scrollbar_show(ScrollbarShow::Always),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -4542,6 +5474,31 @@ mod render_contract_tests {
         let send_behavior = include_str!("api_test_view/send.rs");
         let websocket_render = include_str!("api_test_view/websocket_view.rs");
         let socket_io_render = include_str!("api_test_view/socket_io_view.rs");
+        let tcp_render = include_str!("api_test_view/tcp_view.rs");
+        let assert_always_visible_scrollbars = |scope_source: &str, scope_name: &str| {
+            let wrapped_scrollbar_count = [
+                ".overflow_scrollbar()",
+                ".overflow_x_scrollbar()",
+                ".overflow_y_scrollbar()",
+            ]
+            .into_iter()
+            .map(|call| scope_source.matches(call).count())
+            .sum::<usize>();
+            let explicit_scrollbar_count = scope_source.matches("Scrollbar::vertical(").count();
+            let scrollbar_count = wrapped_scrollbar_count + explicit_scrollbar_count;
+            let always_visible_count = scope_source
+                .matches(".scrollbar_show(ScrollbarShow::Always)")
+                .count();
+
+            assert!(
+                scrollbar_count > 0,
+                "{scope_name} must contain at least one scrollable surface"
+            );
+            assert_eq!(
+                always_visible_count, scrollbar_count,
+                "{scope_name} scrollable surfaces must keep their scrollbars visible"
+            );
+        };
         let render_start = source
             .find("impl Render for ApiTestView")
             .expect("api test render impl");
@@ -4551,6 +5508,43 @@ mod render_contract_tests {
         let production_source = &source[..render_end];
         let behavior = &source[..render_start];
         let render = &source[render_start..render_end];
+        let environment_manager_start = production_source
+            .find("fn render_environment_manager")
+            .expect("environment manager renderer");
+        let environment_manager_end = production_source[environment_manager_start..]
+            .find("\n    fn render_request_bar")
+            .map(|offset| environment_manager_start + offset)
+            .expect("environment manager renderer end");
+        let environment_manager =
+            &production_source[environment_manager_start..environment_manager_end];
+        let response_renderer_start = production_source
+            .find("fn render_response(&mut self")
+            .expect("response renderer");
+        let response_renderer_end = production_source[response_renderer_start..]
+            .find("\n    fn render_response_examples")
+            .map(|offset| response_renderer_start + offset)
+            .expect("response renderer end");
+        let response_renderer = &production_source[response_renderer_start..response_renderer_end];
+        let response_tabs_start = production_source
+            .find("fn render_response_tabs")
+            .expect("response tabs renderer");
+        let response_tabs_end = production_source[response_tabs_start..]
+            .find("\n    fn response_presentation")
+            .map(|offset| response_tabs_start + offset)
+            .expect("response tabs renderer end");
+        let response_tabs = &production_source[response_tabs_start..response_tabs_end];
+        let kv_editor_start = production_source
+            .find("fn render_kv_editor")
+            .expect("key-value editor renderer");
+        let kv_editor_end = production_source[kv_editor_start..]
+            .find("\n    fn render_body_editor")
+            .map(|offset| kv_editor_start + offset)
+            .expect("key-value editor renderer end");
+        let kv_editor = &production_source[kv_editor_start..kv_editor_end];
+        let readonly_kv_start = production_source
+            .find("fn render_readonly_kv")
+            .expect("read-only key-value renderer");
+        let readonly_kv = &production_source[readonly_kv_start..];
 
         assert!(
             render.contains("Tree::new"),
@@ -4594,6 +5588,65 @@ mod render_contract_tests {
                 && production_source.contains("fail_examples"),
             "saved response examples must remain visible from the response tabs"
         );
+        assert!(
+            !response_tabs.contains("ApiTest.response"),
+            "the response tab bar must not render a standalone response label before its tabs"
+        );
+        assert!(
+            !production_source.contains("t!(\"ApiTest.response\")"),
+            "the response area must not render a standalone response label outside its tabs"
+        );
+        assert!(
+            response_renderer.contains("api-response-body")
+                && response_renderer.contains(".overflow_scrollbar()")
+                && response_renderer.contains(".scrollbar_show(ScrollbarShow::Always)")
+                && response_renderer.contains(".text_color(theme.foreground)")
+                && response_renderer.contains(".child(body_text)"),
+            "the response body must remain visible in a foreground-colored scroll container"
+        );
+        for (scope_name, scroll_renderer) in [
+            ("request key-value editor", kv_editor),
+            ("response key-value viewer", readonly_kv),
+        ] {
+            assert!(
+                scroll_renderer.contains(".overflow_y_scroll()")
+                    && scroll_renderer.contains(".track_scroll(")
+                    && scroll_renderer.contains("Scrollbar::vertical(")
+                    && scroll_renderer.contains(".scrollbar_show(ScrollbarShow::Always)")
+                    && scroll_renderer.contains(".flex_shrink_0()"),
+                "{scope_name} must use a tracked scroll handle and non-shrinking rows"
+            );
+        }
+        assert!(
+            behavior.contains("kv_scroll_handles: BTreeMap<KvSection, ScrollHandle>")
+                && behavior.contains("response_headers_scroll_handle: ScrollHandle")
+                && behavior.contains("response_cookies_scroll_handle: ScrollHandle")
+                && response_renderer.contains("&self.response_headers_scroll_handle")
+                && response_renderer.contains("&self.response_cookies_scroll_handle"),
+            "request and response key-value surfaces must keep stable independent scroll handles"
+        );
+        assert_always_visible_scrollbars(production_source, "the API request and response panes");
+        assert_eq!(
+            production_source
+                .matches(".editor_scrollbar_show(ScrollbarShow::Always)")
+                .count(),
+            2,
+            "raw request bodies and request scripts must keep visible editor scrollbars"
+        );
+        for (scope_name, protocol_render) in [
+            ("WebSocket", websocket_render),
+            ("Socket.IO", socket_io_render),
+            ("TCP", tcp_render),
+        ] {
+            assert_always_visible_scrollbars(protocol_render, scope_name);
+            assert_eq!(
+                protocol_render
+                    .matches(".editor_scrollbar_show(ScrollbarShow::Always)")
+                    .count(),
+                1,
+                "{scope_name} message editors must keep visible scrollbars"
+            );
+        }
         assert!(
             production_source.contains("ButtonCustomVariant")
                 && production_source.contains("Tag::custom")
@@ -4642,6 +5695,61 @@ mod render_contract_tests {
             render.contains("search_input") && render.contains("IconName::Search"),
             "the request tree must expose search"
         );
+        assert!(
+            behavior.contains("render_new_request_button")
+                && behavior.contains("Protocol::ALL")
+                && behavior.contains("new_request_with_protocol")
+                && behavior.contains("req.protocol = protocol"),
+            "the new-request popover must create the selected protocol"
+        );
+        assert!(
+            environment_manager.contains("Popover::new(\"api-environment-manager\")")
+                && environment_manager.contains("this.select_environment")
+                && behavior.contains("prompt_new_environment")
+                && behavior.contains("prompt_rename_active_environment")
+                && behavior.contains("create_environment_named")
+                && behavior.contains("rename_active_environment_named")
+                && behavior.contains("window.open_dialog")
+                && behavior.contains("rebuild_environment_select")
+                && behavior.contains("refresh_environment_settings")
+                && behavior.contains("environment_base_url_input")
+                && behavior.contains("EnvironmentParams")
+                && behavior.contains("EnvironmentHeaders")
+                && behavior.contains("EnvironmentCookies"),
+            "environment management must support switching, lifecycle actions, and scoped request settings"
+        );
+        assert!(
+            environment_manager.contains("self.render_kv_editor(section, cx)"),
+            "environment cards must mount their scoped key-value editors"
+        );
+        for editor in [
+            "\"api-environment-variables\"",
+            "\"api-environment-params\"",
+            "\"api-environment-headers\"",
+            "\"api-environment-cookies\"",
+            "Input::new(&self.environment_base_url_input)",
+        ] {
+            assert_eq!(
+                production_source.matches(editor).count(),
+                1,
+                "environment input entities must only be mounted once: {editor}"
+            );
+        }
+        assert_eq!(
+            production_source
+                .matches("Button::new(\"api-delete-environment\")")
+                .count(),
+            1,
+            "the environment delete action must not duplicate its element id"
+        );
+        assert!(
+            render.contains("api-kv-empty-")
+                && render.contains("api-kv-add-footer-")
+                && render.contains(".appearance(false)")
+                && render.contains(".bare()")
+                && render.contains("this.add_kv_row(section_for_closure, window, cx)"),
+            "the key-value table must use integrated cells and expose real add-row actions"
+        );
         for contract in [
             "api-protocol-select",
             "api-sidebar-toggle",
@@ -4649,7 +5757,10 @@ mod render_contract_tests {
             "api-sidebar-history",
             "api-history-list",
             "api-environment-select",
+            "api-environment-manager",
+            "api-environment-manager-trigger",
             "api-new-environment",
+            "api-rename-environment",
             "api-delete-environment",
             "api-import-collection",
             "api-export-collection",
@@ -4663,9 +5774,11 @@ mod render_contract_tests {
         assert!(
             behavior.contains("sidebar_collapsed")
                 && render.contains("if self.sidebar_collapsed")
-                && render.contains("IconName::PanelLeftOpen")
-                && render.contains("IconName::PanelLeftClose"),
-            "the request sidebar must remain collapsible on narrow windows"
+                && render.contains("render_sidebar_toggle_handle")
+                && render.contains("REQUEST_TREE_COLLAPSED_WIDTH")
+                && render.contains("IconName::ChevronLeft")
+                && render.contains("IconName::ChevronRight"),
+            "the request sidebar must remain collapsible through an edge handle on narrow windows"
         );
         assert!(
             behavior.contains("prompt_for_paths")
@@ -4728,8 +5841,16 @@ mod render_contract_tests {
             "request tree and history badges must distinguish non-HTTP protocols"
         );
         assert!(
-            behavior.matches("refresh_environment_rows").count() >= 3,
-            "pre-request and post-request environment effects must refresh the editor rows"
+            behavior.matches("refresh_environment_settings").count() >= 3,
+            "environment changes and script effects must refresh the complete environment editor"
+        );
+        assert!(
+            response_renderer.contains("r.headers.clone()")
+                && response_renderer.contains("eq_ignore_ascii_case(\"set-cookie\")")
+                && response_renderer.contains("response_cookie_pair")
+                && response_renderer.contains("ApiTest.no_response_headers")
+                && response_renderer.contains("ApiTest.no_response_cookies"),
+            "response header and cookie tabs must read transport headers and expose explicit empty states"
         );
     }
 }

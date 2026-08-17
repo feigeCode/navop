@@ -2,7 +2,7 @@ use std::{panic::Location, rc::Rc};
 
 use crate::{StyledExt, scroll::ScrollbarHandle};
 
-use super::{Scrollbar, ScrollbarAxis};
+use super::{Scrollbar, ScrollbarAxis, ScrollbarShow};
 use gpui::{
     App, Div, Element, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
@@ -61,6 +61,7 @@ pub struct Scrollable<E: InteractiveElement + Styled + ParentElement + Element> 
     id: ElementId,
     element: E,
     axis: ScrollbarAxis,
+    scrollbar_show: Option<ScrollbarShow>,
 }
 
 impl<E> Scrollable<E>
@@ -74,7 +75,16 @@ where
             id: ElementId::CodeLocation(*caller),
             element,
             axis: axis.into(),
+            scrollbar_show: None,
         }
+    }
+
+    /// Override how the scrollbar is displayed for this scrollable surface.
+    ///
+    /// If not set, the scrollbar inherits [`crate::theme::Theme::scrollbar_show`].
+    pub fn scrollbar_show(mut self, scrollbar_show: ScrollbarShow) -> Self {
+        self.scrollbar_show = Some(scrollbar_show);
+        self
     }
 }
 
@@ -151,6 +161,7 @@ where
                 "scrollbar",
                 &scroll_handle,
                 self.axis,
+                self.scrollbar_show,
                 window,
                 cx,
             ))
@@ -177,7 +188,14 @@ where
     H: ScrollbarHandle + Clone + 'static,
 {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        render_scrollbar(self.id, self.scroll_handle.as_ref(), self.axis, window, cx)
+        render_scrollbar(
+            self.id,
+            self.scroll_handle.as_ref(),
+            self.axis,
+            None,
+            window,
+            cx,
+        )
     }
 }
 
@@ -187,6 +205,7 @@ fn render_scrollbar<H: ScrollbarHandle + Clone>(
     id: impl Into<ElementId>,
     scroll_handle: &H,
     axis: ScrollbarAxis,
+    scrollbar_show: Option<ScrollbarShow>,
     window: &mut Window,
     cx: &mut App,
 ) -> Div {
@@ -197,11 +216,18 @@ fn render_scrollbar<H: ScrollbarHandle + Clone>(
         return div();
     }
 
+    let scrollbar = Scrollbar::new(scroll_handle).id(id).axis(axis);
+    let scrollbar = if let Some(scrollbar_show) = scrollbar_show {
+        scrollbar.scrollbar_show(scrollbar_show)
+    } else {
+        scrollbar
+    };
+
     div()
         .absolute()
         .top_0()
         .left_0()
         .right_0()
         .bottom_0()
-        .child(Scrollbar::new(scroll_handle).id(id).axis(axis))
+        .child(scrollbar)
 }

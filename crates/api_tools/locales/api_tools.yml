@@ -344,29 +344,77 @@ ApiTest:
     zh-CN: 全局查询参数
     zh-HK: 全域查詢參數
   global_params_hint:
-    en: Added to every request; folder and request values take precedence.
-    zh-CN: 自动附加到所有请求；目录和请求级同名参数优先。
-    zh-HK: 自動附加到所有請求；目錄和請求級同名參數優先。
+    en: "Priority: Global < Environment < Folder < Request"
+    zh-CN: "优先级：全局 < 环境 < 目录 < 请求"
+    zh-HK: "優先級：全域 < 環境 < 目錄 < 請求"
   global_headers:
     en: Global Headers
     zh-CN: 全局请求头
     zh-HK: 全域請求頭
   global_headers_hint:
-    en: Injected into every request; folder and request values take precedence.
-    zh-CN: 自动注入所有请求；目录和请求级同名请求头优先。
-    zh-HK: 自動注入所有請求；目錄和請求級同名請求頭優先。
+    en: "Priority: Global < Environment < Folder < Request"
+    zh-CN: "优先级：全局 < 环境 < 目录 < 请求"
+    zh-HK: "優先級：全域 < 環境 < 目錄 < 請求"
   global_cookies:
     en: Global Cookies
     zh-CN: 全局 Cookies
     zh-HK: 全域 Cookies
   global_cookies_hint:
-    en: Merged into every request; request cookies take precedence.
-    zh-CN: 自动合并到所有请求；请求级同名 Cookie 优先。
-    zh-HK: 自動合併到所有請求；請求級同名 Cookie 優先。
+    en: "Priority: Global < Environment < Request"
+    zh-CN: "优先级：全局 < 环境 < 请求"
+    zh-HK: "優先級：全域 < 環境 < 請求"
   environment_variables:
     en: Environment Variables
     zh-CN: 环境变量
     zh-HK: 環境變量
+  environment_variables_hint:
+    en: Environment variables override global variables and can be used as {{name}}.
+    zh-CN: 环境变量覆盖全局变量，可通过 {{name}} 引用。
+    zh-HK: 環境變量覆蓋全域變量，可透過 {{name}} 引用。
+  environment_settings:
+    en: Environment settings
+    zh-CN: 环境配置
+    zh-HK: 環境配置
+  environment_settings_hint:
+    en: These settings apply only while this environment is active.
+    zh-CN: 以下配置仅在当前环境启用时生效。
+    zh-HK: 以下配置僅在目前環境啟用時生效。
+  environment_base_url:
+    en: Base URL
+    zh-CN: Base URL
+    zh-HK: Base URL
+  environment_base_url_placeholder:
+    en: e.g. https://api.example.com
+    zh-CN: 例如 https://api.example.com
+    zh-HK: 例如 https://api.example.com
+  environment_base_url_hint:
+    en: Available as {{baseUrl}} and used for relative URLs; folder and request Base URLs take precedence.
+    zh-CN: 可通过 {{baseUrl}} 引用，并用于补全相对请求地址；目录和请求级 Base URL 优先。
+    zh-HK: 可透過 {{baseUrl}} 引用，並用於補全相對請求地址；目錄和請求級 Base URL 優先。
+  environment_params:
+    en: Query Parameters
+    zh-CN: 查询参数
+    zh-HK: 查詢參數
+  environment_params_hint:
+    en: "Priority: Global < Environment < Folder < Request"
+    zh-CN: "优先级：全局 < 环境 < 目录 < 请求"
+    zh-HK: "優先級：全域 < 環境 < 目錄 < 請求"
+  environment_headers:
+    en: Headers
+    zh-CN: 请求头
+    zh-HK: 請求頭
+  environment_headers_hint:
+    en: "Priority: Global < Environment < Folder < Request"
+    zh-CN: "优先级：全局 < 环境 < 目录 < 请求"
+    zh-HK: "優先級：全域 < 環境 < 目錄 < 請求"
+  environment_cookies:
+    en: Cookies
+    zh-CN: Cookies
+    zh-HK: Cookies
+  environment_cookies_hint:
+    en: "Priority: Global < Environment < Request"
+    zh-CN: "优先级：全局 < 环境 < 请求"
+    zh-HK: "優先級：全域 < 環境 < 請求"
   request_variables:
     en: Request Variables
     zh-CN: 请求变量
@@ -399,14 +447,38 @@ ApiTest:
     en: Environment
     zh-CN: 环境
     zh-HK: 環境
+  environments:
+    en: Environments
+    zh-CN: 环境列表
+    zh-HK: 環境列表
+  manage_environments:
+    en: Manage environments
+    zh-CN: 环境管理
+    zh-HK: 環境管理
   new_environment:
     en: New environment
     zh-CN: 新建环境
     zh-HK: 新建環境
+  rename_environment:
+    en: Rename environment
+    zh-CN: 重命名环境
+    zh-HK: 重新命名環境
   delete_environment:
     en: Delete environment
     zh-CN: 删除环境
     zh-HK: 刪除環境
+  environment_name:
+    en: Environment name
+    zh-CN: 环境名称
+    zh-HK: 環境名稱
+  environment_name_placeholder:
+    en: Enter an environment name
+    zh-CN: 请输入环境名称
+    zh-HK: 請輸入環境名稱
+  environment_name_required:
+    en: Environment name cannot be empty
+    zh-CN: 环境名称不能为空
+    zh-HK: 環境名稱不能為空
   cannot_delete_last_environment:
     en: At least one environment must be kept
     zh-CN: 至少需要保留一个环境
@@ -707,6 +779,14 @@ ApiTest:
     en: No request sent yet
     zh-CN: 尚未发送请求
     zh-HK: 尚未發送請求
+  no_response_headers:
+    en: No response headers
+    zh-CN: 暂无响应头
+    zh-HK: 暫無響應頭
+  no_response_cookies:
+    en: No response cookies
+    zh-CN: 暂无响应 Cookies
+    zh-HK: 暫無響應 Cookies
   no_console_output:
     en: No console output
     zh-CN: 暂无控制台输出

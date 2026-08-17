@@ -2,7 +2,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::scroll::ScrollableElement;
+use gpui_component::scroll::{ScrollableElement, ScrollbarShow};
 use gpui_component::{ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use rust_i18n::t;
 
@@ -44,6 +44,7 @@ impl ApiTestView {
                         div()
                             .size_full()
                             .overflow_scrollbar()
+                            .scrollbar_show(ScrollbarShow::Always)
                             .when(rows.is_empty(), |list| {
                                 list.child(self.render_tcp_empty(cx))
                             })
@@ -246,6 +247,7 @@ impl ApiTestView {
                 div().id("api-tcp-message-input").flex_1().min_w_0().child(
                     Input::new(&self.tcp_message_input)
                         .w_full()
+                        .editor_scrollbar_show(ScrollbarShow::Always)
                         .disabled(!connected),
                 ),
             )

@@ -50,10 +50,11 @@ fn import_variables(root: &Value, name: &str) -> Option<ApiEnvironment> {
             ))
         })
         .collect::<Vec<_>>();
-    (!variables.is_empty()).then(|| ApiEnvironment {
-        id: uuid::Uuid::new_v4().simple().to_string(),
-        name: name.to_string(),
-        variables,
+    (!variables.is_empty()).then(|| {
+        let mut environment = ApiEnvironment::new(name);
+        environment.variables = variables;
+        environment.migrate_base_url_variable();
+        environment
     })
 }
 
@@ -220,11 +221,25 @@ pub fn export_postman_v2_1(name: &str, store: &ApiStore) -> Result<String> {
         .and_then(|id| store.environments.iter().find(|env| env.id == id))
         .or_else(|| store.environments.first())
         .map(|env| {
-            env.variables
-                .iter()
-                .filter(|row| row.enabled && !row.key.is_empty())
-                .map(|row| json!({"key": row.key, "value": row.value}))
-                .collect::<Vec<_>>()
+            let mut variables = env
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| vec![json!({"key": "baseUrl", "value": value})])
+                .unwrap_or_default();
+            variables.extend(
+                env.variables
+                    .iter()
+                    .filter(|row| {
+                        row.enabled
+                            && !row.key.trim().is_empty()
+                            && (env.base_url.is_none() || row.key.trim() != "baseUrl")
+                    })
+                    .map(|row| json!({"key": row.key, "value": row.value}))
+                    .collect::<Vec<_>>(),
+            );
+            variables
         })
         .unwrap_or_default();
     Ok(serde_json::to_string_pretty(&json!({

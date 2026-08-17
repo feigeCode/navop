@@ -1,6 +1,8 @@
 use crate::collection_io::{export_postman_v2_1, import_postman_v2_1};
-use crate::http::{AuthTarget, AuthType, BodyType, FieldType, RawLanguage, RequestMethod};
-use crate::request_store::{ApiStore, StoredFolder};
+use crate::http::{
+    AuthTarget, AuthType, BodyType, FieldType, KeyValue, RawLanguage, RequestMethod,
+};
+use crate::request_store::{ApiEnvironment, ApiStore, StoredFolder};
 
 #[test]
 fn imports_nested_requests_parameters_auth_and_files() {
@@ -48,7 +50,9 @@ fn imports_nested_requests_parameters_auth_and_files() {
         request.body_rows[1].file_path.as_deref(),
         Some("/tmp/avatar.png")
     );
-    assert_eq!(imported.environment.unwrap().variables[0].key, "baseUrl");
+    let environment = imported.environment.unwrap();
+    assert_eq!(environment.base_url.as_deref(), Some("https://api.test"));
+    assert!(environment.variables.iter().all(|row| row.key != "baseUrl"));
 }
 
 #[test]
@@ -111,6 +115,41 @@ fn export_then_import_preserves_nested_http_request_details() {
     assert_eq!(imported.requests[0].body_type, BodyType::Urlencoded);
     assert_eq!(imported.requests[0].auth.auth_type, AuthType::Basic);
     assert_eq!(imported.requests[0].body_rows[0].value, "Navop");
+}
+
+#[test]
+fn postman_export_uses_the_environment_base_url_as_the_canonical_variable() {
+    let mut environment = ApiEnvironment::new("Production");
+    environment.base_url = Some("https://api.current.test".into());
+    environment.variables = vec![
+        KeyValue::new("baseUrl", "https://api.stale.test"),
+        KeyValue::new("tenant", "navop"),
+    ];
+    let store = ApiStore {
+        active_environment_id: Some(environment.id.clone()),
+        environments: vec![environment],
+        ..ApiStore::default()
+    };
+
+    let json = export_postman_v2_1("Navop", &store).unwrap();
+    let exported: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let variables = exported["variable"].as_array().unwrap();
+
+    assert_eq!(
+        variables
+            .iter()
+            .filter(|variable| variable["key"] == "baseUrl")
+            .count(),
+        1
+    );
+    assert_eq!(
+        variables
+            .iter()
+            .find(|variable| variable["key"] == "baseUrl")
+            .unwrap()["value"],
+        "https://api.current.test"
+    );
+    assert!(variables.iter().any(|variable| variable["key"] == "tenant"));
 }
 
 #[test]

@@ -63,12 +63,20 @@ where
     Option::<String>::deserialize(deserializer).map(Some)
 }
 
-/// 一套可持久化的接口测试环境变量。
+/// 一套可持久化的接口测试环境配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiEnvironment {
     pub id: String,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<KeyValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<KeyValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cookies: Vec<KeyValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<KeyValue>,
 }
 
@@ -77,7 +85,34 @@ impl ApiEnvironment {
         Self {
             id: uuid::Uuid::new_v4().simple().to_string(),
             name: name.into(),
+            base_url: None,
+            params: Vec::new(),
+            headers: Vec::new(),
+            cookies: Vec::new(),
             variables: Vec::new(),
+        }
+    }
+
+    /// 把旧版环境变量中的 `baseUrl` 迁移到专用 Base URL 配置。
+    pub(crate) fn migrate_base_url_variable(&mut self) {
+        let variable_base_url = self
+            .variables
+            .iter()
+            .rev()
+            .find(|row| row.enabled && row.key.trim() == "baseUrl")
+            .map(|row| row.value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let configured_base_url = self
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+
+        self.base_url = configured_base_url.or(variable_base_url);
+        if self.base_url.is_some() {
+            self.variables.retain(|row| row.key.trim() != "baseUrl");
         }
     }
 }
@@ -377,7 +412,7 @@ pub fn save_requests(requests: &[StoredRequest]) {
 /// 从指定路径加载完整数据。
 pub fn load_store_from(path: &Path) -> Result<ApiStore> {
     let text = std::fs::read_to_string(path)?;
-    let store = match serde_json::from_str::<StoreFile>(&text)? {
+    let mut store = match serde_json::from_str::<StoreFile>(&text)? {
         StoreFile::V2(store) => store,
         StoreFile::Legacy(requests) => ApiStore {
             folders: Vec::new(),
@@ -385,6 +420,9 @@ pub fn load_store_from(path: &Path) -> Result<ApiStore> {
             ..ApiStore::default()
         },
     };
+    for environment in &mut store.environments {
+        environment.migrate_base_url_variable();
+    }
     Ok(store)
 }
 
@@ -630,7 +668,12 @@ mod tests {
     fn store_round_trip_preserves_environments_and_globals() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("requests.json");
-        let environment = ApiEnvironment::new("开发环境");
+        let mut environment = ApiEnvironment::new("开发环境");
+        environment.base_url = Some("https://dev.example.test".into());
+        environment.params = vec![KeyValue::new("debug", "true")];
+        environment.headers = vec![KeyValue::new("X-Environment", "development")];
+        environment.cookies = vec![KeyValue::new("region", "cn")];
+        environment.variables = vec![KeyValue::new("tenant_id", "navop")];
         let store = ApiStore {
             globals: vec![KeyValue::new("tenant", "navop")],
             global_params: vec![KeyValue::new("locale", "zh-CN")],
@@ -653,6 +696,69 @@ mod tests {
             Some(environment.id.as_str())
         );
         assert_eq!(loaded.environments[0].name, "开发环境");
+        assert_eq!(
+            loaded.environments[0].base_url.as_deref(),
+            Some("https://dev.example.test")
+        );
+        assert_eq!(loaded.environments[0].params[0].value, "true");
+        assert_eq!(loaded.environments[0].headers[0].value, "development");
+        assert_eq!(loaded.environments[0].cookies[0].value, "cn");
+        assert_eq!(loaded.environments[0].variables[0].value, "navop");
+    }
+
+    #[test]
+    fn legacy_environment_without_scoped_settings_is_still_loadable() {
+        let environment: ApiEnvironment = serde_json::from_str(
+            r#"{
+                "id": "legacy-env",
+                "name": "旧环境",
+                "variables": [
+                    {"key": "token", "value": "legacy", "enabled": true}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(environment.id, "legacy-env");
+        assert_eq!(environment.name, "旧环境");
+        assert_eq!(environment.base_url, None);
+        assert!(environment.params.is_empty());
+        assert!(environment.headers.is_empty());
+        assert!(environment.cookies.is_empty());
+        assert_eq!(environment.variables[0].value, "legacy");
+    }
+
+    #[test]
+    fn loading_store_migrates_legacy_base_url_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("requests.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "environments": [{
+                    "id": "legacy-env",
+                    "name": "旧环境",
+                    "variables": [
+                        {"key": "baseUrl", "value": "https://legacy.example.test", "enabled": true},
+                        {"key": "token", "value": "legacy-token", "enabled": true}
+                    ]
+                }],
+                "active_environment_id": "legacy-env"
+            }"#,
+        )
+        .unwrap();
+
+        let store = load_store_from(&path).unwrap();
+        let environment = &store.environments[0];
+
+        assert_eq!(
+            environment.base_url.as_deref(),
+            Some("https://legacy.example.test")
+        );
+        assert_eq!(
+            environment.variables,
+            vec![KeyValue::new("token", "legacy-token")]
+        );
     }
 
     #[test]

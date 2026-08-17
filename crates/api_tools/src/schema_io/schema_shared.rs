@@ -27,10 +27,10 @@ pub const OPENAPI_METHODS: [(&str, RequestMethod); 8] = [
 ];
 
 pub fn environment(name: &str, server: Option<String>) -> Option<ApiEnvironment> {
-    server.map(|value| ApiEnvironment {
-        id: uuid::Uuid::new_v4().simple().to_string(),
-        name: name.to_string(),
-        variables: vec![KeyValue::new("baseUrl", value)],
+    server.map(|value| {
+        let mut environment = ApiEnvironment::new(name);
+        environment.base_url = Some(value);
+        environment
     })
 }
 
@@ -220,17 +220,29 @@ pub fn active_server(store: &ApiStore) -> Option<String> {
         .as_deref()
         .and_then(|id| store.environments.iter().find(|env| env.id == id))
         .or_else(|| store.environments.first())?;
+
+    if let Some(base_url) = environment
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(base_url.to_string());
+    }
+
     environment
         .variables
         .iter()
-        .find(|row| row.enabled && row.key == "baseUrl")
+        .rev()
+        .find(|row| row.enabled && row.key.trim() == "baseUrl" && !row.value.trim().is_empty())
         .or_else(|| {
             environment
                 .variables
                 .iter()
-                .find(|row| row.enabled && row.value.starts_with("http"))
+                .rev()
+                .find(|row| row.enabled && row.value.trim().starts_with("http"))
         })
-        .map(|row| row.value.clone())
+        .map(|row| row.value.trim().to_string())
 }
 
 pub fn operation_id(name: &str, method: RequestMethod) -> String {

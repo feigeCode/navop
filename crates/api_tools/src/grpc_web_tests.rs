@@ -1,10 +1,14 @@
+use std::io::Write as _;
 use std::sync::{Arc, Mutex};
 
 use futures::AsyncReadExt as _;
 use futures::future::{BoxFuture, FutureExt as _};
 use gpui::http_client::{AsyncBody, HttpClient, Response, Url, http};
 
-use crate::grpc_web::{decode_response, execute, frame_request, prepare_grpc_web_request};
+use crate::grpc_web::{
+    decode_response, decode_response_with_encoding, execute, frame_request,
+    prepare_grpc_web_request,
+};
 use crate::http::{PreparedRequest, RequestMethod};
 
 #[test]
@@ -95,7 +99,7 @@ fn grpc_web_decoder_joins_data_frames_and_parses_trailers() {
 #[test]
 fn grpc_web_decoder_reports_compression_and_truncation() {
     let compressed = [vec![0x01, 0, 0, 0, 1], vec![b'x']].concat();
-    let compression_error = decode_response(&compressed).expect_err("compression unsupported");
+    let compression_error = decode_response(&compressed).expect_err("compression needs encoding");
     assert!(compression_error.to_string().contains("compressed"));
 
     let truncated = [vec![0x00, 0, 0, 0, 4], vec![b'a', b'b']].concat();
@@ -105,6 +109,29 @@ fn grpc_web_decoder_reports_compression_and_truncation() {
             .to_string()
             .contains("truncated frame payload")
     );
+}
+
+#[test]
+fn grpc_web_decoder_decompresses_gzip_data_frames_when_encoding_is_declared() {
+    let payload = br#"{\"message\":\"hello\"}"#;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(payload)
+        .expect("compress gRPC-Web payload");
+    let compressed = encoder.finish().expect("finish gzip payload");
+    let frame = [
+        vec![0x01],
+        (compressed.len() as u32).to_be_bytes().to_vec(),
+        compressed,
+    ]
+    .concat();
+
+    let decoded =
+        decode_response_with_encoding(&frame, Some("gzip")).expect("decode gzip gRPC-Web response");
+    assert_eq!(decoded.payload, payload);
+
+    let missing_encoding = decode_response(&frame).expect_err("encoding must be declared");
+    assert!(missing_encoding.to_string().contains("no grpc-encoding"));
 }
 
 #[test]

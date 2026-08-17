@@ -125,10 +125,12 @@ fn imports_openapi_parameters_body_auth_and_server() {
     );
     assert_eq!(request.auth.auth_type, AuthType::Bearer);
     assert!(request.auth.token.is_empty());
+    let environment = imported.environment.unwrap();
     assert_eq!(
-        imported.environment.unwrap().variables[0],
-        KeyValue::new("baseUrl", "https://api.example.com/v1")
+        environment.base_url.as_deref(),
+        Some("https://api.example.com/v1")
     );
+    assert!(environment.variables.is_empty());
 }
 
 #[test]
@@ -159,10 +161,12 @@ fn imports_swagger_form_file_and_query_api_key() {
     assert_eq!(request.auth.auth_type, AuthType::ApiKey);
     assert_eq!(request.auth.key, "api_key");
     assert_eq!(request.auth.add_to, AuthTarget::Query);
+    let environment = imported.environment.unwrap();
     assert_eq!(
-        imported.environment.unwrap().variables[0].value,
-        "https://upload.example.com/v2"
+        environment.base_url.as_deref(),
+        Some("https://upload.example.com/v2")
     );
+    assert!(environment.variables.is_empty());
 }
 
 #[test]
@@ -229,6 +233,26 @@ fn exports_swagger_form_data_and_round_trips() {
     assert_eq!(request.auth.add_to, AuthTarget::Query);
 }
 
+#[test]
+fn schema_exports_prefer_environment_base_url_and_support_legacy_variable() {
+    let mut store = sample_store();
+    store.environments[0]
+        .variables
+        .push(KeyValue::new("baseUrl", "https://legacy.example.com/v0"));
+
+    let openapi: Value =
+        serde_json::from_str(&export_openapi("Navop API", &store, DocumentEncoding::Json).unwrap())
+            .unwrap();
+    assert_eq!(openapi["servers"][0]["url"], "https://api.example.com/v1");
+
+    store.environments[0].base_url = None;
+    let swagger: Value =
+        serde_json::from_str(&export_swagger("Navop API", &store, DocumentEncoding::Json).unwrap())
+            .unwrap();
+    assert_eq!(swagger["host"], "legacy.example.com");
+    assert_eq!(swagger["basePath"], "/v0");
+}
+
 fn sample_store() -> ApiStore {
     let folder = StoredFolder::new("Users", None);
     let mut request = StoredRequest::new("Upload user asset", RequestMethod::Post);
@@ -243,14 +267,13 @@ fn sample_store() -> ApiStore {
     request.auth.auth_type = AuthType::ApiKey;
     request.auth.key = "api_key".into();
     request.auth.add_to = AuthTarget::Query;
+    let mut environment = ApiEnvironment::new("Production");
+    environment.id = "env".into();
+    environment.base_url = Some("https://api.example.com/v1".into());
     ApiStore {
         folders: vec![folder],
         requests: vec![request],
-        environments: vec![ApiEnvironment {
-            id: "env".into(),
-            name: "Production".into(),
-            variables: vec![KeyValue::new("baseUrl", "https://api.example.com/v1")],
-        }],
+        environments: vec![environment],
         active_environment_id: Some("env".into()),
         ..ApiStore::default()
     }
