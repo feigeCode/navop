@@ -598,6 +598,7 @@ impl DataCompareWindow {
         }
         start_sync_sql_execution(
             self.compare_target.read(cx).clone(),
+            self.sync_plan.clone(),
             self.sync_execution_snapshot(cx),
             self.sync_execution_options(cx),
             self.status.clone(),

@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Instant;
 
-use db::{GlobalDbState, SqlResult, StreamingProgress};
+use db::{GlobalDbState, SqlResult, StreamingProgress, compare::SyncPlan};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, Hsla, InteractiveElement, IntoElement,
     ParentElement, ScrollHandle, StatefulInteractiveElement, Styled, Window, div,
@@ -132,6 +132,13 @@ impl SyncSqlExecutionRuntime {
     fn fail_start(&self, is_executing: &Entity<bool>, error: impl Display, cx: &mut App) {
         self.set_executing(is_executing, false, cx);
         let entry = sync_sql_execution_error_log_entry(error);
+        self.set_status(entry.message.clone(), cx);
+        self.append_app(entry, cx);
+    }
+
+    fn fail_stale_plan(&self, is_executing: &Entity<bool>, cx: &mut App) {
+        self.set_executing(is_executing, false, cx);
+        let entry = sync_sql_plan_changed_log_entry();
         self.set_status(entry.message.clone(), cx);
         self.append_app(entry, cx);
     }
@@ -422,6 +429,7 @@ pub(super) fn compare_progress_view(progress: &CompareProgress, cx: &App) -> imp
 
 pub(super) fn start_sync_sql_execution<T: 'static>(
     target: Option<CompareTargetScope>,
+    current_plan: Entity<Option<SyncPlan>>,
     snapshot: SyncExecutionSnapshot,
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
@@ -455,8 +463,19 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
     }
 
     if snapshot.is_destructive() {
+        if !ensure_sync_execution_plan_current(
+            &current_plan,
+            &snapshot,
+            &status,
+            &execution_log,
+            &execution_log_scroll,
+            cx,
+        ) {
+            return;
+        }
         open_destructive_sync_sql_dialog(
             target,
+            current_plan,
             snapshot,
             options,
             status,
@@ -471,6 +490,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
 
     execute_sync_sql_now(
         target,
+        current_plan,
         snapshot,
         options,
         status,
@@ -483,6 +503,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
 
 fn open_destructive_sync_sql_dialog<T: 'static>(
     target: CompareTargetScope,
+    current_plan: Entity<Option<SyncPlan>>,
     snapshot: SyncExecutionSnapshot,
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
@@ -495,6 +516,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
     let view = cx.entity().clone();
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let target = target.clone();
+        let current_plan = current_plan.clone();
         let snapshot = snapshot.clone();
         let options = options;
         let status = status.clone();
@@ -521,6 +543,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
             )
             .on_ok(move |_, _, cx| {
                 let target = target.clone();
+                let current_plan = current_plan.clone();
                 let snapshot = snapshot.clone();
                 let options = options;
                 let status = status.clone();
@@ -530,6 +553,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
                 view.update(cx, |_, cx| {
                     execute_sync_sql_now(
                         target,
+                        current_plan,
                         snapshot,
                         options,
                         status,
@@ -546,6 +570,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
 
 fn execute_sync_sql_now<T: 'static>(
     target: CompareTargetScope,
+    current_plan: Entity<Option<SyncPlan>>,
     snapshot: SyncExecutionSnapshot,
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
@@ -554,6 +579,17 @@ fn execute_sync_sql_now<T: 'static>(
     execution_log_scroll: ScrollHandle,
     cx: &mut Context<T>,
 ) {
+    if !ensure_sync_execution_plan_current(
+        &current_plan,
+        &snapshot,
+        &status,
+        &execution_log,
+        &execution_log_scroll,
+        cx,
+    ) {
+        return;
+    }
+
     let db_state = Arc::new(cx.global::<GlobalDbState>().clone());
     is_executing.update(cx, |executing, cx| {
         *executing = true;
@@ -569,13 +605,27 @@ fn execute_sync_sql_now<T: 'static>(
     );
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
-        let sql = snapshot.sql;
         let runtime = SyncSqlExecutionRuntime {
             options,
             status,
             execution_log,
             execution_log_scroll,
         };
+        // Keep the final plan check and execution start in the same foreground task
+        // without an await between them, so another UI update cannot replace the plan
+        // after validation but before the SQL is submitted.
+        let plan_matches = cx.update(|cx| {
+            let current_plan = current_plan.read(cx);
+            sync_execution_plan_matches(current_plan.as_ref(), &snapshot.plan_id)
+        });
+        if !plan_matches {
+            let _ = cx.update(|cx| {
+                runtime.fail_stale_plan(&is_executing, cx);
+            });
+            return;
+        }
+
+        let sql = snapshot.sql;
         let mut rx = match execute_sync_sql(target, sql, db_state, options, cx) {
             Ok(rx) => rx,
             Err(error) => {
@@ -591,6 +641,36 @@ fn execute_sync_sql_now<T: 'static>(
         });
     })
     .detach();
+}
+
+fn sync_execution_plan_matches(current_plan: Option<&SyncPlan>, snapshot_plan_id: &str) -> bool {
+    !snapshot_plan_id.is_empty() && current_plan.is_some_and(|plan| plan.id == snapshot_plan_id)
+}
+
+fn sync_sql_plan_changed_log_entry() -> SyncSqlExecutionLogEntry {
+    SyncSqlExecutionLogEntry::error(t!("Compare.sync_sql_plan_changed").to_string())
+}
+
+fn ensure_sync_execution_plan_current<T: 'static>(
+    current_plan: &Entity<Option<SyncPlan>>,
+    snapshot: &SyncExecutionSnapshot,
+    status: &Entity<String>,
+    execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: &ScrollHandle,
+    cx: &mut Context<T>,
+) -> bool {
+    let plan_matches = {
+        let current_plan = current_plan.read(cx);
+        sync_execution_plan_matches(current_plan.as_ref(), &snapshot.plan_id)
+    };
+    if plan_matches {
+        return true;
+    }
+
+    let entry = sync_sql_plan_changed_log_entry();
+    set_sync_sql_execution_status(status, entry.message.clone(), cx);
+    append_sync_sql_execution_log(execution_log, execution_log_scroll, entry, cx);
+    false
 }
 
 pub(crate) fn sync_sql_execution_start_log_entries(sql: &str) -> Vec<SyncSqlExecutionLogEntry> {
@@ -1024,6 +1104,7 @@ fn sync_sql_execution_log_row(
 
 #[cfg(test)]
 mod tests {
+    use db::compare::{SyncPlan, SyncPlanSummary, SyncStatement, SyncStatementKind};
     use gpui::{
         AppContext, Context, Entity, IntoElement, Render, ScrollHandle, TestAppContext, Window, div,
     };
@@ -1031,11 +1112,13 @@ mod tests {
         input::InputState,
         select::{SearchableVec, SelectState},
     };
+    use rust_i18n::t;
 
     use super::{
-        CompareSyncExecutionOptions, ConnectionSelectItem, SyncSqlExecutionLogEntry,
-        SyncSqlExecutionSummary, connection_select_state, selected_connection_id,
-        start_sync_sql_execution, sync_sql_execution_summary_log_entry,
+        CompareSyncExecutionOptions, CompareTargetScope, ConnectionSelectItem,
+        SyncSqlExecutionLogEntry, SyncSqlExecutionSummary, connection_select_state,
+        execute_sync_sql_now, selected_connection_id, start_sync_sql_execution,
+        sync_execution_plan_matches, sync_sql_execution_summary_log_entry,
         sync_sql_progress_error_log_entry,
     };
     use crate::compare::sync_statement_picker::SyncExecutionSnapshot;
@@ -1046,6 +1129,7 @@ mod tests {
     }
 
     struct SyncSqlExecutionTestRoot {
+        current_plan: Entity<Option<SyncPlan>>,
         status: Entity<String>,
         is_executing: Entity<bool>,
         execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
@@ -1101,6 +1185,7 @@ mod tests {
     #[gpui::test]
     fn sync_sql_execution_error_updates_footer_status(cx: &mut TestAppContext) {
         let (root, cx) = cx.add_window_view(|_, cx| SyncSqlExecutionTestRoot {
+            current_plan: cx.new(|_| Some(sync_plan("plan-1"))),
             status: cx.new(|_| "compare complete".to_string()),
             is_executing: cx.new(|_| false),
             execution_log: cx.new(|_| Vec::new()),
@@ -1110,6 +1195,7 @@ mod tests {
         root.update_in(cx, |root, window, cx| {
             start_sync_sql_execution(
                 None,
+                root.current_plan.clone(),
                 SyncExecutionSnapshot {
                     plan_id: "plan-1".to_string(),
                     statements: Vec::new(),
@@ -1134,6 +1220,105 @@ mod tests {
         assert_eq!(1, logs.len());
         assert!(logs[0].is_error);
         assert_eq!(logs[0].message, status);
+    }
+
+    #[test]
+    fn sync_execution_plan_validation_requires_the_current_non_empty_plan_id() {
+        let current_plan = sync_plan("plan-1");
+        let changed_plan = sync_plan("plan-2");
+
+        assert!(sync_execution_plan_matches(Some(&current_plan), "plan-1"));
+        assert!(!sync_execution_plan_matches(None, "plan-1"));
+        assert!(!sync_execution_plan_matches(Some(&changed_plan), "plan-1"));
+        assert!(!sync_execution_plan_matches(Some(&current_plan), ""));
+    }
+
+    #[gpui::test]
+    fn sync_sql_execution_rejects_a_stale_plan_before_execution(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|_, cx| SyncSqlExecutionTestRoot {
+            current_plan: cx.new(|_| Some(sync_plan("plan-2"))),
+            status: cx.new(|_| "compare complete".to_string()),
+            is_executing: cx.new(|_| false),
+            execution_log: cx.new(|_| Vec::new()),
+            execution_log_scroll: ScrollHandle::new(),
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            start_sync_sql_execution(
+                Some(compare_target()),
+                root.current_plan.clone(),
+                sync_snapshot("plan-1", false),
+                CompareSyncExecutionOptions::default(),
+                root.status.clone(),
+                root.is_executing.clone(),
+                root.execution_log.clone(),
+                root.execution_log_scroll.clone(),
+                window,
+                cx,
+            );
+        });
+
+        assert_stale_plan_rejected(&root, cx);
+    }
+
+    #[gpui::test]
+    fn destructive_sync_sql_rejects_stale_plan_before_confirmation(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|_, cx| SyncSqlExecutionTestRoot {
+            current_plan: cx.new(|_| Some(sync_plan("plan-2"))),
+            status: cx.new(|_| "compare complete".to_string()),
+            is_executing: cx.new(|_| false),
+            execution_log: cx.new(|_| Vec::new()),
+            execution_log_scroll: ScrollHandle::new(),
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            start_sync_sql_execution(
+                Some(compare_target()),
+                root.current_plan.clone(),
+                sync_snapshot("plan-1", true),
+                CompareSyncExecutionOptions::default(),
+                root.status.clone(),
+                root.is_executing.clone(),
+                root.execution_log.clone(),
+                root.execution_log_scroll.clone(),
+                window,
+                cx,
+            );
+        });
+
+        assert_stale_plan_rejected(&root, cx);
+    }
+
+    #[gpui::test]
+    fn execute_sync_sql_now_rechecks_plan_after_destructive_confirmation(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|_, cx| SyncSqlExecutionTestRoot {
+            current_plan: cx.new(|_| Some(sync_plan("plan-1"))),
+            status: cx.new(|_| "compare complete".to_string()),
+            is_executing: cx.new(|_| false),
+            execution_log: cx.new(|_| Vec::new()),
+            execution_log_scroll: ScrollHandle::new(),
+        });
+        let snapshot = sync_snapshot("plan-1", true);
+
+        root.update_in(cx, |root, _, cx| {
+            root.current_plan.update(cx, |plan, cx| {
+                *plan = Some(sync_plan("plan-2"));
+                cx.notify();
+            });
+            execute_sync_sql_now(
+                compare_target(),
+                root.current_plan.clone(),
+                snapshot,
+                CompareSyncExecutionOptions::default(),
+                root.status.clone(),
+                root.is_executing.clone(),
+                root.execution_log.clone(),
+                root.execution_log_scroll.clone(),
+                cx,
+            );
+        });
+
+        assert_stale_plan_rejected(&root, cx);
     }
 
     #[test]
@@ -1171,5 +1356,69 @@ mod tests {
         assert!(entry.is_error);
         assert!(entry.message.contains("session failed"));
         assert!(!entry.message.contains(" 0 "));
+    }
+
+    fn sync_plan(id: &str) -> SyncPlan {
+        SyncPlan {
+            id: id.to_string(),
+            target_table: "users".to_string(),
+            statements: Vec::new(),
+            summary: SyncPlanSummary {
+                insert_count: 0,
+                update_count: 0,
+                delete_count: 0,
+                ddl_count: 0,
+                total_count: 0,
+            },
+            warnings: Vec::new(),
+            sql_text: String::new(),
+        }
+    }
+
+    fn sync_snapshot(plan_id: &str, destructive: bool) -> SyncExecutionSnapshot {
+        let sql = if destructive {
+            "DELETE FROM users;"
+        } else {
+            "SELECT 1;"
+        };
+        SyncExecutionSnapshot {
+            plan_id: plan_id.to_string(),
+            statements: vec![SyncStatement {
+                id: "statement-1".to_string(),
+                sql: sql.to_string(),
+                kind: SyncStatementKind::Unknown,
+                object_name: None,
+                row_key: None,
+                destructive,
+                transactional_safe: true,
+                selected_by_default: true,
+                warnings: Vec::new(),
+            }],
+            sql: sql.to_string(),
+        }
+    }
+
+    fn compare_target() -> CompareTargetScope {
+        CompareTargetScope {
+            connection_id: "connection-1".to_string(),
+            database: "database-1".to_string(),
+            schema: None,
+        }
+    }
+
+    fn assert_stale_plan_rejected(root: &Entity<SyncSqlExecutionTestRoot>, cx: &TestAppContext) {
+        let (status, is_executing, logs) = root.read_with(cx, |root, cx| {
+            (
+                root.status.read(cx).clone(),
+                *root.is_executing.read(cx),
+                root.execution_log.read(cx).clone(),
+            )
+        });
+        let expected = t!("Compare.sync_sql_plan_changed").to_string();
+        assert_eq!(expected, status);
+        assert!(!is_executing);
+        assert_eq!(1, logs.len());
+        assert!(logs[0].is_error);
+        assert_eq!(expected, logs[0].message);
     }
 }

@@ -3725,6 +3725,10 @@ Compare:
     en: No sync SQL to execute
     zh-CN: 没有可执行的同步 SQL
     zh-HK: 沒有可執行的同步 SQL
+  sync_sql_plan_changed:
+    en: The sync plan has changed. Review the latest compare results and confirm the SQL again.
+    zh-CN: 同步计划已发生变化，请检查最新比较结果并重新确认执行内容
+    zh-HK: 同步計劃已發生變化，請檢查最新比較結果並重新確認執行內容
   sync_sql_executing:
     en: Executing sync SQL...
     zh-CN: 正在执行同步 SQL…
