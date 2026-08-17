@@ -136,6 +136,7 @@ impl HistoryPromptState {
         self.tracking_state = TrackingState::Active;
         self.input = input;
         self.dropdown_visible = !self.input.is_empty();
+        self.matches.clear();
         self.selected = None;
     }
 
@@ -146,6 +147,7 @@ impl HistoryPromptState {
         self.search_base_input.clear();
         self.tracking_state = TrackingState::Active;
         self.dropdown_visible = !self.input.is_empty();
+        self.matches.clear();
         self.selected = None;
     }
 
@@ -183,6 +185,7 @@ impl HistoryPromptState {
             HistoryPromptMode::Search => self.search_query.push_str(text),
         }
         self.dropdown_visible = true;
+        self.matches.clear();
         self.selected = None;
     }
 
@@ -190,13 +193,12 @@ impl HistoryPromptState {
         if self.tracking_state != TrackingState::Active {
             return;
         }
-        match self.mode {
-            HistoryPromptMode::InlineSuggest => {
-                self.input.pop();
-            }
-            HistoryPromptMode::Search => {
-                self.search_query.pop();
-            }
+        let query_changed = match self.mode {
+            HistoryPromptMode::InlineSuggest => self.input.pop().is_some(),
+            HistoryPromptMode::Search => self.search_query.pop().is_some(),
+        };
+        if query_changed {
+            self.matches.clear();
         }
         self.dropdown_visible = match self.mode {
             HistoryPromptMode::InlineSuggest => !self.input.is_empty(),
@@ -216,11 +218,19 @@ impl HistoryPromptState {
         self.append_text(text);
     }
 
-    pub fn set_matches(&mut self, matches: Vec<String>) {
+    pub fn set_matches(&mut self, mut matches: Vec<String>) {
         if self.tracking_state != TrackingState::Active {
             self.matches.clear();
             self.selected = None;
             return;
+        }
+
+        if self.mode == HistoryPromptMode::InlineSuggest {
+            matches.retain(|candidate| {
+                candidate
+                    .strip_prefix(&self.input)
+                    .is_some_and(|suffix| !suffix.is_empty())
+            });
         }
 
         self.matches = matches;
@@ -317,9 +327,21 @@ impl HistoryPromptState {
         };
 
         let word = &suffix[..word_end];
+        let had_explicit_selection = self.selected.is_some();
         self.input.push_str(word);
-        self.dropdown_visible = true;
-        // 不清除 selected，保持同一条建议继续部分接受
+        self.matches.retain(|candidate| {
+            candidate
+                .strip_prefix(&self.input)
+                .is_some_and(|remaining| !remaining.is_empty())
+        });
+        if let Some(index) = self.matches.iter().position(|item| item == &candidate) {
+            self.selected = had_explicit_selection.then_some(index);
+            self.dropdown_visible = true;
+        } else {
+            self.dropdown_visible = false;
+            self.matches.clear();
+            self.selected = None;
+        }
         Some(HistoryPromptAccept::AppendSuffix(word.to_string()))
     }
 
@@ -471,6 +493,88 @@ mod tests {
     }
 
     #[test]
+    fn inline_matches_drop_non_prefix_and_equal_candidates() {
+        let mut state = HistoryPromptState::from_input("netsta");
+
+        state.set_matches(vec![
+            "wget https://example.com/netsta/archive".to_string(),
+            "netstat -an".to_string(),
+            "netsta".to_string(),
+            "NETSTAT -an".to_string(),
+        ]);
+
+        assert_eq!(state.matches(), &["netstat -an".to_string()]);
+        assert!(state.dropdown_visible());
+        assert_eq!(
+            state.accept_selected_suggestion(),
+            Some(HistoryPromptAccept::AppendSuffix("t -an".to_string()))
+        );
+    }
+
+    #[test]
+    fn inline_empty_filtered_matches_are_not_acceptable() {
+        let mut state = HistoryPromptState::from_input("netsta");
+
+        state.set_matches(vec![
+            "wget https://example.com/netsta/archive".to_string(),
+            "netsta".to_string(),
+        ]);
+
+        assert!(state.matches().is_empty());
+        assert_eq!(state.accept_selected_suggestion(), None);
+    }
+
+    #[test]
+    fn inline_matches_can_arrive_after_an_empty_loading_state() {
+        let mut state = HistoryPromptState::from_input("cd /u");
+
+        state.set_matches(Vec::new());
+        state.set_matches(vec!["cd /usr/".to_string()]);
+
+        assert_eq!(state.matches(), &["cd /usr/".to_string()]);
+        assert!(state.dropdown_visible());
+    }
+
+    #[test]
+    fn search_mode_keeps_non_prefix_matches() {
+        let mut state = HistoryPromptState::from_input("git st");
+        state.enter_search();
+        state.append_text("status");
+
+        state.set_matches(vec!["git status".to_string(), "status report".to_string()]);
+
+        assert_eq!(
+            state.matches(),
+            &["git status".to_string(), "status report".to_string()]
+        );
+        assert!(state.dropdown_visible());
+    }
+
+    #[test]
+    fn query_change_clears_stale_inline_matches_before_refresh() {
+        let mut state = HistoryPromptState::from_input("net");
+        state.set_matches(vec!["netstat -an".to_string()]);
+
+        state.append_text("x");
+
+        assert_eq!(state.input(), "netx");
+        assert!(state.matches().is_empty());
+        assert_eq!(state.selected_index(), None);
+    }
+
+    #[test]
+    fn backspace_clears_stale_inline_matches_before_refresh() {
+        let mut state = HistoryPromptState::from_input("nets");
+        state.set_matches(vec!["netstat -an".to_string()]);
+
+        state.backspace();
+
+        assert_eq!(state.input(), "net");
+        assert!(state.matches().is_empty());
+        assert_eq!(state.selected_index(), None);
+    }
+
+    #[test]
     fn history_prompt_dismiss_exits_search_and_clears_shell_input() {
         let mut state = HistoryPromptState::from_input("git st");
         state.enter_search();
@@ -562,6 +666,21 @@ mod tests {
         assert_eq!(state.input(), "git status");
         // selected 应保持，以便继续部分接受
         assert!(state.selected_match().is_some());
+    }
+
+    #[test]
+    fn accept_next_word_drops_candidates_that_no_longer_match_input() {
+        let mut state = HistoryPromptState::from_input("g");
+        state.set_matches(vec!["git status".to_string(), "grep foo".to_string()]);
+
+        let result = state.accept_next_word();
+
+        assert_eq!(
+            result,
+            Some(HistoryPromptAccept::AppendSuffix("it".to_string()))
+        );
+        assert_eq!(state.input(), "git");
+        assert_eq!(state.matches(), &["git status".to_string()]);
     }
 
     #[test]

@@ -187,19 +187,29 @@ impl TerminalCommandHistoryRepository {
         query: &str,
         limit: usize,
     ) -> Result<Vec<String>> {
-        let Some(query) = normalize_command(query) else {
+        if query.trim().is_empty() {
             return Ok(Vec::new());
-        };
-        Ok(self
-            .list(
-                scope,
-                TerminalCommandHistorySort::MostUsed,
-                Some(&query),
-                limit,
-            )?
-            .into_iter()
-            .map(|item| item.command)
-            .collect())
+        }
+
+        let limit = limit.max(1) as i64;
+        let order = sort_order(TerminalCommandHistorySort::MostUsed);
+        self.conn.with_connection(|conn| {
+            let sql = format!(
+                "SELECT command FROM terminal_command_history
+                 WHERE scope_key = ?1
+                   AND substr(command, 1, length(?2)) COLLATE BINARY = ?2
+                   AND length(command) > length(?2)
+                 {order}
+                 LIMIT ?3"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![scope.scope_key, query, limit], |row| row.get(0))?;
+            let mut suggestions = Vec::new();
+            for row in rows {
+                suggestions.push(row?);
+            }
+            Ok(suggestions)
+        })
     }
 
     pub fn toggle_favorite(&self, id: i64) -> Result<bool> {

@@ -214,26 +214,11 @@ pub fn push_history_entry(
     push_rich_history_entry(entries, HistoryEntry::new(command), limit)
 }
 
-/// InlineSuggest 策略链匹配排名
-///
-/// 按优先级返回匹配等级：
-/// - 0: 前缀匹配（ghost text 可直接追加后缀）
-/// - 1: 单词前缀匹配（命令中某个 token 以 query 开头）
-/// - 2: 子串包含匹配
-fn suggestion_rank(command: &str, query: &str) -> Option<u8> {
-    if command.starts_with(query) {
-        Some(0)
-    } else if has_token_prefix(command, query) {
-        Some(1)
-    } else if has_token_initialism_prefix(command, query) {
-        Some(2)
-    } else if command.contains(query) {
-        Some(3)
-    } else if is_subsequence(query, command) {
-        Some(4)
-    } else {
-        None
-    }
+fn is_completable_history_suggestion(command: &str, input: &str) -> bool {
+    !input.trim().is_empty()
+        && command
+            .strip_prefix(input)
+            .is_some_and(|suffix| !suffix.is_empty())
 }
 
 /// 从 session (HistoryEntry) + persisted (String) 中收集唯一命令
@@ -295,32 +280,29 @@ pub fn collect_history_suggestions_with_cwd(
     current_cwd: Option<&str>,
 ) -> Vec<String> {
     let limit = limit.max(1);
-    let prefix = prefix.trim();
-    if prefix.is_empty() {
+    if prefix.trim().is_empty() {
         return Vec::new();
     }
 
     let commands = collect_unique_commands(session, persisted);
-    let lowered_prefix = prefix.to_lowercase();
     let frecency_map = build_frecency_map(session, current_cwd);
 
-    let mut matches: Vec<(u8, i64, String)> = commands
+    let mut matches: Vec<(i64, String)> = commands
         .into_iter()
-        .filter_map(|command| {
-            let lowered_command = command.to_lowercase();
-            let rank = suggestion_rank(&lowered_command, &lowered_prefix)?;
+        .filter(|command| is_completable_history_suggestion(command, prefix))
+        .map(|command| {
             // 使用 frecency 的负数作为排序键（越高越优先 → 负数越小排在前面）
             let neg_frecency = frecency_map
                 .get(&command)
                 .map(|s| (-s * 1000.0) as i64)
                 .unwrap_or(0);
-            Some((rank, neg_frecency, command))
+            (neg_frecency, command)
         })
         .collect();
 
-    matches.sort_by_key(|(rank, neg_frecency, _)| (*rank, *neg_frecency));
+    matches.sort_by_key(|(neg_frecency, _)| *neg_frecency);
     matches.truncate(limit);
-    matches.into_iter().map(|(_, _, command)| command).collect()
+    matches.into_iter().map(|(_, command)| command).collect()
 }
 
 fn has_token_prefix(command: &str, query: &str) -> bool {
@@ -558,69 +540,66 @@ mod tests {
     }
 
     #[test]
-    fn inline_suggest_matches_substring() {
-        let session = session_from_strings(&["cargo test", "cargo build", "npm test"]);
-        let persisted = vec![];
+    fn inline_suggest_only_returns_exact_prefix_completions() {
+        let session = session_from_strings(&[
+            "netstat -an",
+            "wget https://example.com/netsta/archive",
+            "find /var/lib -name netstat",
+            "NETSTAT -an",
+            "netsta",
+        ]);
+        let persisted = vec!["netstat -rn".to_string()];
 
-        let matches = collect_history_suggestions(&session, &persisted, "test", 5);
-
-        assert!(matches.contains(&"cargo test".to_string()));
-        assert!(matches.contains(&"npm test".to_string()));
-        assert!(!matches.contains(&"cargo build".to_string()));
-    }
-
-    #[test]
-    fn inline_suggest_matches_token_prefix() {
-        let session = session_from_strings(&["git status", "git stash", "status report"]);
-        let persisted = vec![];
-
-        let matches = collect_history_suggestions(&session, &persisted, "status", 5);
-
-        // "status report" 是前缀匹配 (rank 0)，排最前
-        assert_eq!(matches[0], "status report");
-        assert!(matches.contains(&"git status".to_string()));
-    }
-
-    #[test]
-    fn inline_suggest_prefix_ranked_first() {
-        let session =
-            session_from_strings(&["cargo test --release", "test-runner start", "npm run test"]);
-        let persisted = vec![];
-
-        let matches = collect_history_suggestions(&session, &persisted, "test", 5);
-
-        assert_eq!(matches[0], "test-runner start");
-    }
-
-    #[test]
-    fn inline_suggest_case_insensitive() {
-        let session = session_from_strings(&["Git Status", "GIT PUSH"]);
-        let persisted = vec![];
-
-        let matches = collect_history_suggestions(&session, &persisted, "git", 5);
+        let matches = collect_history_suggestions(&session, &persisted, "netsta", 10);
 
         assert_eq!(matches.len(), 2);
+        assert!(matches.contains(&"netstat -an".to_string()));
+        assert!(matches.contains(&"netstat -rn".to_string()));
     }
 
     #[test]
-    fn inline_suggest_matches_token_initialism() {
-        let session = session_from_strings(&["git commit -m", "git checkout main"]);
-        let persisted = vec![];
+    fn inline_suggest_rejects_substring_token_and_subsequence_matches() {
+        let session =
+            session_from_strings(&["cargo test", "git status", "git stash", "npm run test"]);
 
-        let matches = collect_history_suggestions(&session, &persisted, "gcm", 5);
-
-        assert!(matches.contains(&"git commit -m".to_string()));
+        assert!(collect_history_suggestions(&session, &[], "test", 10).is_empty());
+        assert!(collect_history_suggestions(&session, &[], "status", 10).is_empty());
+        assert!(collect_history_suggestions(&session, &[], "gst", 10).is_empty());
     }
 
     #[test]
-    fn inline_suggest_matches_subsequence_after_stronger_strategies() {
-        let session = session_from_strings(&["git status", "git stash", "cargo test"]);
-        let persisted = vec![];
+    fn inline_suggest_is_case_sensitive() {
+        let session = session_from_strings(&["Git Status", "GIT PUSH"]);
 
-        let matches = collect_history_suggestions(&session, &persisted, "gst", 5);
+        assert!(collect_history_suggestions(&session, &[], "git", 5).is_empty());
+        assert_eq!(
+            collect_history_suggestions(&session, &[], "Git", 5),
+            vec!["Git Status".to_string()]
+        );
+    }
 
-        assert!(matches.contains(&"git status".to_string()));
-        assert!(matches.contains(&"git stash".to_string()));
+    #[test]
+    fn inline_suggest_excludes_command_equal_to_current_input() {
+        let session = session_from_strings(&["git status", "git status --short"]);
+
+        assert_eq!(
+            collect_history_suggestions(&session, &[], "git status", 5),
+            vec!["git status --short".to_string()]
+        );
+    }
+
+    #[test]
+    fn inline_suggest_preserves_real_input_whitespace() {
+        let session = session_from_strings(&["git status", " git status"]);
+
+        assert_eq!(
+            collect_history_suggestions(&session, &[], "git ", 5),
+            vec!["git status".to_string()]
+        );
+        assert_eq!(
+            collect_history_suggestions(&session, &[], " git", 5),
+            vec![" git status".to_string()]
+        );
     }
 
     #[test]

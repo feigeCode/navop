@@ -44,12 +44,11 @@ impl TerminalView {
         let ghost_suffix = if search_mode {
             None
         } else {
-            self.history_prompt.selected_match().map(|selected| {
-                selected
-                    .strip_prefix(self.history_prompt.query_input())
-                    .unwrap_or_default()
-                    .to_string()
-            })
+            self.history_prompt
+                .selected_match()
+                .and_then(|selected| selected.strip_prefix(self.history_prompt.query_input()))
+                .filter(|suffix| !suffix.is_empty())
+                .map(str::to_string)
         };
 
         Some(

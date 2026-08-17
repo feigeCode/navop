@@ -159,21 +159,34 @@ fn list_supports_most_used_latest_query_and_limit() {
 }
 
 #[test]
-fn suggestions_match_case_insensitively_and_prefer_db_ranking() {
+fn suggestions_only_return_exact_prefix_completions_and_prefer_db_ranking() {
     let repo = test_repository();
     let local = TerminalHistoryScope::local();
 
-    repo.record_success(&local, "Git Status", None, Some(0))
+    repo.record_success(&local, "netstat -an", None, Some(0))
         .unwrap();
-    repo.record_success(&local, "git stash", None, Some(0))
+    repo.record_success(&local, "netstat -rn", None, Some(0))
         .unwrap();
-    repo.record_success(&local, "git stash", None, Some(0))
+    repo.record_success(&local, "netstat -rn", None, Some(0))
+        .unwrap();
+    repo.record_success(
+        &local,
+        "wget https://example.com/netsta/archive",
+        None,
+        Some(0),
+    )
+    .unwrap();
+    repo.record_success(&local, "find /var/lib -name netstat", None, Some(0))
+        .unwrap();
+    repo.record_success(&local, "NETSTAT -an", None, Some(0))
+        .unwrap();
+    repo.record_success(&local, "netsta", None, Some(0))
         .unwrap();
 
-    let suggestions = repo.suggestions(&local, "GIT S", 5).unwrap();
+    let suggestions = repo.suggestions(&local, "netsta", 10).unwrap();
 
     assert_eq!(
-        vec!["git stash".to_string(), "Git Status".to_string()],
+        vec!["netstat -rn".to_string(), "netstat -an".to_string()],
         suggestions
     );
 }
