@@ -971,6 +971,16 @@ impl SshFormWindow {
         refresh_team_options(&self.team_select, window, cx);
     }
 
+    fn set_auth_method(
+        &mut self,
+        auth_method: AuthMethodSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.auth_method = auth_method;
+        cx.notify();
+    }
+
     fn set_jump_auth_method(
         &mut self,
         auth_method: AuthMethodSelection,
@@ -1920,6 +1930,76 @@ impl SshFormWindow {
             .when(credential_is_manual, |form| {
                 form.child(
                     self.render_form_row(
+                        &t!("SSH.auth_method"),
+                        h_flex()
+                            .gap_4()
+                            .flex_wrap()
+                            .child(
+                                Radio::new("password")
+                                    .label(t!("SSH.password").to_string())
+                                    .checked(auth_method == AuthMethodSelection::Password)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::Password,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Radio::new("private-key")
+                                    .label(t!("SSH.private_key").to_string())
+                                    .checked(auth_method == AuthMethodSelection::PrivateKey)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::PrivateKey,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Radio::new("private-key-content")
+                                    .label(t!("SSH.private_key_content").to_string())
+                                    .checked(auth_method == AuthMethodSelection::PrivateKeyContent)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::PrivateKeyContent,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Radio::new("agent")
+                                    .label(t!("SSH.agent").to_string())
+                                    .checked(auth_method == AuthMethodSelection::Agent)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::Agent,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Radio::new("auto-publickey")
+                                    .label(t!("SSH.auto_publickey").to_string())
+                                    .checked(auth_method == AuthMethodSelection::AutoPublicKey)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::AutoPublicKey,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            ),
+                    ),
+                )
+            })
+            .when(credential_is_manual, |form| {
+                form.child(
+                    self.render_form_row(
                         &t!("SSH.username"),
                         h_flex()
                             .w_full()
@@ -1998,6 +2078,53 @@ impl SshFormWindow {
                                                 ),
                                         ),
                                 ),
+                        ),
+                    )
+                },
+            )
+            .when(
+                credential_is_manual && auth_method == AuthMethodSelection::PrivateKey,
+                |this| {
+                    this.child(self.render_form_row(
+                        &t!("SSH.key_path"),
+                        self.render_form_input(&self.key_path_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("SSH.passphrase"),
+                        self.render_form_input(&self.passphrase_input).mask_toggle(),
+                    ))
+                },
+            )
+            .when(
+                credential_is_manual && auth_method == AuthMethodSelection::PrivateKeyContent,
+                |this| {
+                    this.child(self.render_form_row(
+                        &t!("SSH.private_key_content"),
+                        self.render_form_input(&self.private_key_content_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("SSH.passphrase"),
+                        self.render_form_input(&self.passphrase_input).mask_toggle(),
+                    ))
+                    .child(
+                        h_flex().justify_center().child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.private_key_content_sync_hint").to_string()),
+                        ),
+                    )
+                },
+            )
+            .when(
+                credential_is_manual && auth_method == AuthMethodSelection::AutoPublicKey,
+                |this| {
+                    this.child(
+                        h_flex().justify_center().child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.auto_publickey_hint").to_string()),
                         ),
                     )
                 },
@@ -2830,6 +2957,39 @@ mod tests {
         assert_eq!(
             credential_capabilities_for_auth(AuthMethodSelection::AutoPublicKey),
             CredentialCapabilities::username_only()
+        );
+    }
+
+    #[test]
+    fn ssh_manual_authentication_controls_are_hidden_only_for_keychain_references() {
+        let source = include_str!("ssh_form_window.rs");
+        let basic_tab = source
+            .split_once("fn render_basic_tab")
+            .expect("SSH basic tab renderer should exist")
+            .1
+            .split_once("fn render_init_tab")
+            .expect("SSH basic tab renderer should end before the init tab")
+            .0;
+
+        let auth_method = basic_tab
+            .split_once("&t!(\"SSH.auth_method\")")
+            .expect("manual SSH authentication method controls should be rendered")
+            .0;
+        assert!(
+            auth_method.contains(".when(credential_is_manual, |form|"),
+            "authentication methods must only be rendered without a keychain reference"
+        );
+        assert!(
+            basic_tab
+                .contains("credential_is_manual && auth_method == AuthMethodSelection::PrivateKey")
+        );
+        assert!(basic_tab.contains(
+            "credential_is_manual && auth_method == AuthMethodSelection::PrivateKeyContent"
+        ));
+        assert!(
+            basic_tab.contains(
+                "credential_is_manual && auth_method == AuthMethodSelection::AutoPublicKey"
+            )
         );
     }
 
