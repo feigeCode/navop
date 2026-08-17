@@ -94,6 +94,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260816000001",
         include_str!("../../migrations/20260816000001_credential_ssh_expect.sql"),
     ),
+    (
+        "20260817000001",
+        include_str!("../../migrations/20260817000001_quick_command_shortcut.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

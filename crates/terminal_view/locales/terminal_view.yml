@@ -1232,6 +1232,38 @@ QuickCommand:
     en: Enter command
     zh-CN: 输入命令
     zh-HK: 輸入命令
+  shortcut:
+    en: Shortcut
+    zh-CN: 快捷键
+    zh-HK: 快捷鍵
+  shortcut_unassigned:
+    en: Not assigned
+    zh-CN: 未绑定
+    zh-HK: 未綁定
+  press_shortcut:
+    en: Press a shortcut
+    zh-CN: 请按下快捷键
+    zh-HK: 請按下快捷鍵
+  invalid_shortcut:
+    en: Shortcut must include Ctrl, Alt, Shift, or Command
+    zh-CN: 快捷键必须包含 Ctrl、Alt、Shift 或 Command
+    zh-HK: 快捷鍵必須包含 Ctrl、Alt、Shift 或 Command
+  scope:
+    en: Scope
+    zh-CN: 作用范围
+    zh-HK: 作用範圍
+  current_connection:
+    en: Current connection
+    zh-CN: 当前连接
+    zh-HK: 目前連線
+  global_shared:
+    en: Global
+    zh-CN: 全局共享
+    zh-HK: 全域共享
+  global_shared_description:
+    en: Available to all connections and local terminals
+    zh-CN: 所有连接和本地终端均可使用
+    zh-HK: 所有連線和本機終端均可使用
   add:
     en: Add Quick Command
     zh-CN: 新增快捷命令

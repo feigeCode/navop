@@ -151,6 +151,88 @@ fn playback_key_handler_retains_copy_before_rejecting_input() {
 }
 
 #[test]
+fn quick_command_shortcuts_run_after_terminal_handlers_but_before_raw_input() {
+    let source = include_str!("../text_input.rs");
+    let key_event = source
+        .split("pub(super) fn handle_key_event")
+        .nth(1)
+        .expect("key event handler should exist");
+    let history = key_event
+        .find("self.history_prompt.mode()")
+        .expect("history prompt handling should remain available");
+    let built_in = key_event
+        .find("is_terminal_action_shortcut")
+        .expect("built-in terminal shortcuts should be checked");
+    let quick_command = key_event
+        .find("command_for_shortcut")
+        .expect("quick-command shortcuts should be dispatched");
+    let raw_input = key_event
+        .find("crate::keys::to_esc_str")
+        .expect("ordinary terminal input should remain available");
+
+    assert!(
+        history < built_in && built_in < quick_command && quick_command < raw_input,
+        "history and built-in terminal handling must take priority over quick commands, while \
+         quick commands must run before ordinary terminal input"
+    );
+}
+
+#[test]
+fn quick_command_shortcuts_do_not_override_any_terminal_action_shortcut() {
+    let source = include_str!("../keybindings.rs");
+    let guard = function_region(source, "pub(super) fn is_terminal_action_shortcut", "\n}");
+
+    for action_id in [
+        "action_id::TERMINAL_SEND_TAB",
+        "action_id::TERMINAL_SEND_SHIFT_TAB",
+        "action_id::TERMINAL_COPY",
+        "action_id::TERMINAL_PASTE",
+        "action_id::TERMINAL_SELECT_ALL",
+        "action_id::TERMINAL_CLEAR_SCREEN",
+        "action_id::TERMINAL_CLEAR_SELECTION",
+        "action_id::TERMINAL_SEARCH_FORWARD",
+        "action_id::TERMINAL_SEARCH_BACKWARD",
+        "action_id::TERMINAL_TOGGLE_VI_MODE",
+        "action_id::TERMINAL_INCREASE_FONT",
+        "action_id::TERMINAL_DECREASE_FONT",
+        "action_id::TERMINAL_RESET_FONT",
+    ] {
+        assert!(
+            guard.contains(action_id),
+            "{action_id} must remain protected from quick-command shortcut overrides"
+        );
+    }
+    assert!(
+        guard.contains("shortcuts_for(cx, action_id, &defaults)"),
+        "the protection catalog must honor user-customized terminal shortcuts"
+    );
+}
+
+#[test]
+fn quick_command_changes_refresh_the_command_bar_cache() {
+    let source = include_str!("../sidebar_events.rs");
+    let handler = function_region(
+        source,
+        "pub(super) fn handle_sidebar_event",
+        "pub(super) fn invalidate_terminal_searches",
+    );
+    let event = handler
+        .find("TerminalSidebarEvent::QuickCommandsChanged")
+        .expect("sidebar should forward quick-command changes");
+    let update = handler[event..]
+        .find("self.command_bar.update")
+        .expect("quick-command changes should update the command bar");
+    let load = handler[event..]
+        .find("load_quick_commands")
+        .expect("quick-command changes should reload the cache");
+    let refresh = handler[event..]
+        .find("refresh_suggestions")
+        .expect("quick-command changes should refresh active suggestions");
+
+    assert!(update < load && load < refresh);
+}
+
+#[test]
 fn playback_paste_is_rejected_before_clipboard_or_prompt_side_effects() {
     let source = include_str!("../clipboard.rs");
 

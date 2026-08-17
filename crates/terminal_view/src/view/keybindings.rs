@@ -267,3 +267,49 @@ pub(super) fn terminal_platform_shortcut(macos: &'static str, other: &'static st
         other
     }
 }
+
+pub(super) fn is_terminal_action_shortcut(keystroke: &Keystroke, cx: &App) -> bool {
+    [
+        (action_id::TERMINAL_SEND_TAB, vec!["tab"]),
+        (action_id::TERMINAL_SEND_SHIFT_TAB, vec!["shift-tab"]),
+        (action_id::TERMINAL_COPY, vec![TERMINAL_COPY_SHORTCUT]),
+        (action_id::TERMINAL_PASTE, terminal_paste_defaults()),
+        (
+            action_id::TERMINAL_SELECT_ALL,
+            vec![TERMINAL_SELECT_ALL_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_CLEAR_SCREEN,
+            vec![TERMINAL_CLEAR_SCREEN_SHORTCUT],
+        ),
+        (action_id::TERMINAL_CLEAR_SELECTION, vec!["escape"]),
+        (
+            action_id::TERMINAL_SEARCH_FORWARD,
+            vec![TERMINAL_SEARCH_FORWARD_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_SEARCH_BACKWARD,
+            vec![TERMINAL_SEARCH_BACKWARD_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_TOGGLE_VI_MODE,
+            vec![TERMINAL_TOGGLE_VI_MODE_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_INCREASE_FONT,
+            terminal_increase_font_defaults(),
+        ),
+        (
+            action_id::TERMINAL_DECREASE_FONT,
+            vec![terminal_platform_shortcut("cmd--", "ctrl--")],
+        ),
+        (
+            action_id::TERMINAL_RESET_FONT,
+            vec![terminal_platform_shortcut("cmd-0", "ctrl-0")],
+        ),
+    ]
+    .into_iter()
+    .any(|(action_id, defaults)| {
+        keystroke_matches_shortcuts(keystroke, &shortcuts_for(cx, action_id, &defaults))
+    })
+}

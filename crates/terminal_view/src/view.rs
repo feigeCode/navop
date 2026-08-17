@@ -175,7 +175,7 @@ use init_config::TerminalViewInit;
 use keybindings::{
     TERMINAL_CLEAR_SCREEN_SHORTCUT, TERMINAL_CONTEXT, TERMINAL_COPY_SHORTCUT,
     TERMINAL_PASTE_SHORTCUT, TERMINAL_SELECT_ALL_SHORTCUT, TERMINAL_TOGGLE_VI_MODE_SHORTCUT,
-    terminal_paste_defaults, terminal_shortcut_label,
+    is_terminal_action_shortcut, terminal_paste_defaults, terminal_shortcut_label,
 };
 pub use keybindings::{init, refresh_keybindings};
 pub use recording_playback_config::RecordingPlaybackViewConfig;

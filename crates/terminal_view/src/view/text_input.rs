@@ -226,6 +226,19 @@ impl TerminalView {
             self.dismiss_history_prompt();
         }
 
+        if is_terminal_action_shortcut(&event.keystroke, cx) {
+            return;
+        }
+
+        if let Some(command) = self
+            .command_bar
+            .read(cx)
+            .command_for_shortcut(&event.keystroke)
+        {
+            self.write_to_pty(command.into_bytes(), cx);
+            return;
+        }
+
         if let Some(esc_str) = crate::keys::to_esc_str(&event.keystroke, &mode, false) {
             let bytes = match esc_str {
                 Cow::Borrowed(s) => s.as_bytes().to_vec(),

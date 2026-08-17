@@ -60,6 +60,36 @@ fn migration_preserves_an_existing_global_command() {
     assert_eq!("My PWD", name);
 }
 
+#[test]
+fn migration_adds_nullable_quick_command_shortcut_column() {
+    let connection = Connection::open_in_memory().expect("open memory sqlite");
+
+    run_migrations(&connection).expect("run migrations");
+
+    assert_eq!(
+        1,
+        connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM pragma_table_info('quick_commands')
+                 WHERE name = 'shortcut' AND type = 'TEXT'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count shortcut columns")
+    );
+    assert_eq!(
+        0,
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM quick_commands WHERE shortcut IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count default shortcuts")
+    );
+}
+
 fn count_commands(connection: &Connection) -> i64 {
     connection
         .query_row("SELECT COUNT(*) FROM quick_commands", [], |row| row.get(0))

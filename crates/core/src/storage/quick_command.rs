@@ -27,6 +27,9 @@ pub struct QuickCommand {
     pub group_color: Option<String>,
     /// 命令内容
     pub command: String,
+    /// 可选快捷键规范字符串
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
     /// 命令描述
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -69,6 +72,7 @@ impl QuickCommand {
             group_name: None,
             group_color: None,
             command,
+            shortcut: None,
             description: None,
             pinned: false,
             sort_order: 0,
@@ -105,6 +109,7 @@ struct QuickCommandRow {
     group_name: Option<String>,
     group_color: Option<String>,
     command: String,
+    shortcut: Option<String>,
     description: Option<String>,
     pinned: i32,
     sort_order: i32,
@@ -121,6 +126,7 @@ impl FromSqliteRow for QuickCommandRow {
             group_name: row.get("group_name").unwrap_or(None),
             group_color: row.get("group_color").unwrap_or(None),
             command: row.get("command")?,
+            shortcut: row.get("shortcut")?,
             description: row.get("description")?,
             pinned: row.get("pinned")?,
             sort_order: row.get("sort_order")?,
@@ -139,6 +145,7 @@ impl From<QuickCommandRow> for QuickCommand {
             group_name: row.group_name,
             group_color: row.group_color,
             command: row.command,
+            shortcut: row.shortcut,
             description: row.description,
             pinned: row.pinned != 0,
             sort_order: row.sort_order,
@@ -223,7 +230,7 @@ impl QuickCommandRepository {
 
             if let Some(cid) = connection_id {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE connection_id = ?1 OR connection_id IS NULL
                      ORDER BY pinned DESC, sort_order ASC, created_at DESC"
@@ -234,7 +241,7 @@ impl QuickCommandRepository {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE connection_id IS NULL
                      ORDER BY pinned DESC, sort_order ASC, created_at DESC"
@@ -257,7 +264,7 @@ impl QuickCommandRepository {
 
             if let Some(cid) = connection_id {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE (command LIKE ?1 OR name LIKE ?1 OR description LIKE ?1)
                        AND (connection_id = ?2 OR connection_id IS NULL)
@@ -269,7 +276,7 @@ impl QuickCommandRepository {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE (command LIKE ?1 OR name LIKE ?1 OR description LIKE ?1)
                        AND connection_id IS NULL
@@ -349,13 +356,14 @@ impl Repository for QuickCommandRepository {
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO quick_commands (name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO quick_commands (name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     item.name,
                     item.group_name,
                     item.group_color,
                     item.command,
+                    item.shortcut,
                     item.description,
                     pinned,
                     item.sort_order,
@@ -388,17 +396,19 @@ impl Repository for QuickCommandRepository {
                      group_name = ?2,
                      group_color = ?3,
                      command = ?4,
-                     description = ?5,
-                     pinned = ?6,
-                     sort_order = ?7,
-                     connection_id = ?8,
-                     updated_at = ?9
-                 WHERE id = ?10",
+                     shortcut = ?5,
+                     description = ?6,
+                     pinned = ?7,
+                     sort_order = ?8,
+                     connection_id = ?9,
+                     updated_at = ?10
+                 WHERE id = ?11",
                 params![
                     item.name,
                     item.group_name,
                     item.group_color,
                     item.command,
+                    item.shortcut,
                     item.description,
                     pinned,
                     item.sort_order,
@@ -421,7 +431,7 @@ impl Repository for QuickCommandRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands WHERE id = ?1",
+                "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -435,7 +445,7 @@ impl Repository for QuickCommandRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands ORDER BY pinned DESC, sort_order ASC, created_at DESC",
+                "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands ORDER BY pinned DESC, sort_order ASC, created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| QuickCommandRow::from_row(row))?;
             let mut results = Vec::new();
@@ -506,6 +516,21 @@ mod tests {
         repository.insert(&mut item).expect("insert command")
     }
 
+    fn insert_connection(repository: &QuickCommandRepository, id: i64) {
+        repository
+            .conn
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO connections
+                     (id, name, connection_type, params, created_at, updated_at)
+                     VALUES (?1, ?2, 'ssh', '{}', 0, 0)",
+                    rusqlite::params![id, format!("connection-{id}")],
+                )?;
+                Ok(())
+            })
+            .expect("insert connection");
+    }
+
     #[test]
     fn group_management_updates_every_command_in_the_group() {
         let repository = test_repository();
@@ -537,5 +562,97 @@ mod tests {
         assert_eq!("echo keep", command.command);
         assert_eq!(None, command.group_name);
         assert_eq!(None, command.group_color);
+    }
+
+    #[test]
+    fn shortcut_round_trips_updates_and_can_be_cleared() {
+        let repository = test_repository();
+        let mut command = QuickCommand::new("cargo test".to_string());
+        command.shortcut = Some("ctrl-alt-t".to_string());
+
+        let id = repository.insert(&mut command).expect("insert command");
+        assert_eq!(
+            Some("ctrl-alt-t"),
+            repository
+                .get(id)
+                .expect("load command")
+                .expect("command")
+                .shortcut
+                .as_deref()
+        );
+
+        command.shortcut = Some("ctrl-shift-t".to_string());
+        repository.update(&command).expect("update shortcut");
+        assert_eq!(
+            Some("ctrl-shift-t"),
+            repository
+                .get(id)
+                .expect("load updated command")
+                .expect("command")
+                .shortcut
+                .as_deref()
+        );
+
+        command.shortcut = None;
+        repository.update(&command).expect("clear shortcut");
+        assert_eq!(
+            None,
+            repository
+                .get(id)
+                .expect("load cleared command")
+                .expect("command")
+                .shortcut
+        );
+    }
+
+    #[test]
+    fn connection_listing_includes_global_commands_without_leaking_other_connections() {
+        let repository = test_repository();
+        insert_connection(&repository, 7);
+        insert_connection(&repository, 8);
+        let mut global = QuickCommand::new("echo global".to_string());
+        global.shortcut = Some("ctrl-alt-g".to_string());
+        repository.insert(&mut global).expect("insert global");
+
+        let mut current = QuickCommand::new("echo current".to_string()).for_connection(7);
+        current.shortcut = Some("ctrl-alt-c".to_string());
+        repository.insert(&mut current).expect("insert current");
+
+        let mut other = QuickCommand::new("echo other".to_string()).for_connection(8);
+        other.shortcut = Some("ctrl-alt-o".to_string());
+        repository.insert(&mut other).expect("insert other");
+
+        let current_commands = repository
+            .list_by_connection(Some(7))
+            .expect("list current connection");
+        assert!(
+            current_commands
+                .iter()
+                .any(|command| command.command == "echo global")
+        );
+        assert!(
+            current_commands
+                .iter()
+                .any(|command| command.command == "echo current")
+        );
+        assert!(
+            current_commands
+                .iter()
+                .all(|command| command.command != "echo other")
+        );
+
+        let global_commands = repository
+            .list_by_connection(None)
+            .expect("list global commands");
+        assert!(
+            global_commands
+                .iter()
+                .any(|command| command.command == "echo global")
+        );
+        assert!(
+            global_commands
+                .iter()
+                .all(|command| command.connection_id.is_none())
+        );
     }
 }

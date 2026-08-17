@@ -121,6 +121,12 @@ impl TerminalView {
                 // 仅粘贴命令，不自动回车执行，降低误操作风险
                 self.paste_text(command, window, cx);
             }
+            TerminalSidebarEvent::QuickCommandsChanged => {
+                self.command_bar.update(cx, |command_bar, cx| {
+                    command_bar.load_quick_commands(cx);
+                    command_bar.refresh_suggestions(cx);
+                });
+            }
             TerminalSidebarEvent::PasteCodeToTerminal(code) => {
                 // 粘贴代码块到终端（使用 bracketed paste 模式，不自动执行）
                 self.paste_code_block(&code, window, cx);

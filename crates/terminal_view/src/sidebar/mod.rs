@@ -550,6 +550,8 @@ pub enum TerminalSidebarEvent {
     ScrollbackLinesChanged(usize),
     /// 粘贴命令到终端输入区（不自动回车）
     ExecuteCommand(String),
+    /// 快捷命令数据已变更
+    QuickCommandsChanged,
     /// 请求询问 AI
     AskAi,
     /// 粘贴代码到终端（用于AI生成的代码块）
@@ -841,6 +843,9 @@ impl TerminalSidebar {
                 }
                 quick_command_panel::QuickCommandPanelEvent::ExecuteCommand(cmd) => {
                     cx.emit(TerminalSidebarEvent::ExecuteCommand(cmd.clone()));
+                }
+                quick_command_panel::QuickCommandPanelEvent::QuickCommandsChanged => {
+                    cx.emit(TerminalSidebarEvent::QuickCommandsChanged);
                 }
             },
         );
