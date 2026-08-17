@@ -1,7 +1,7 @@
 use super::{
     ColumnDiff, ColumnSchema, DiffStatus, ForeignKeyDiff, ForeignKeySchema, IndexDiff, IndexSchema,
-    SchemaCompareError, SchemaCompareOptions, SchemaCompareResult, SchemaObjectType, TableDiff,
-    TableSchema,
+    SchemaCompareError, SchemaCompareOptions, SchemaCompareResult, SchemaObjectType,
+    SchemaTypeMappingContext, TableDiff, TableSchema, column_types_equivalent,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -10,6 +10,16 @@ pub fn compare_schemas(
     source_tables: Vec<TableSchema>,
     target_tables: Vec<TableSchema>,
     options: SchemaCompareOptions,
+) -> Result<SchemaCompareResult, SchemaCompareError> {
+    compare_schemas_with_type_mapping(source_tables, target_tables, options, None)
+}
+
+/// 比较源端和目标端的表结构，并在跨数据库时按字段类型语义判断等价性。
+pub fn compare_schemas_with_type_mapping(
+    source_tables: Vec<TableSchema>,
+    target_tables: Vec<TableSchema>,
+    options: SchemaCompareOptions,
+    type_mapping: Option<SchemaTypeMappingContext<'_>>,
 ) -> Result<SchemaCompareResult, SchemaCompareError> {
     validate_schema_identifiers(&source_tables, &options)?;
     validate_schema_identifiers(&target_tables, &options)?;
@@ -81,7 +91,7 @@ pub fn compare_schemas(
         let source_table = &source_map[name];
         let target_table = &target_map[name];
 
-        if let Some(diff) = compare_table(source_table, target_table, &options) {
+        if let Some(diff) = compare_table(source_table, target_table, &options, type_mapping) {
             table_diffs.push(diff);
         }
     }
@@ -101,8 +111,10 @@ fn compare_table(
     source: &TableSchema,
     target: &TableSchema,
     options: &SchemaCompareOptions,
+    type_mapping: Option<SchemaTypeMappingContext<'_>>,
 ) -> Option<TableDiff> {
-    let column_diffs = compare_columns_with_options(&source.columns, &target.columns, options);
+    let column_diffs =
+        compare_columns_with_options(&source.columns, &target.columns, options, type_mapping);
     let index_diffs = if options.compare_indexes {
         compare_indexes_with_options(&source.indexes, &target.indexes, options)
     } else {
@@ -223,13 +235,14 @@ fn column_order_change(
 /// 比较列
 #[cfg(test)]
 fn compare_columns(source: &[ColumnSchema], target: &[ColumnSchema]) -> Vec<ColumnDiff> {
-    compare_columns_with_options(source, target, &SchemaCompareOptions::default())
+    compare_columns_with_options(source, target, &SchemaCompareOptions::default(), None)
 }
 
 fn compare_columns_with_options(
     source: &[ColumnSchema],
     target: &[ColumnSchema],
     options: &SchemaCompareOptions,
+    type_mapping: Option<SchemaTypeMappingContext<'_>>,
 ) -> Vec<ColumnDiff> {
     let source_map = source
         .iter()
@@ -274,11 +287,11 @@ fn compare_columns_with_options(
         let src = source_map[name];
         let tgt = target_map[name];
 
-        if !column_eq(src, tgt, options) {
+        if !column_eq(src, tgt, options, type_mapping) {
             diffs.push(ColumnDiff {
                 name: src.name.clone(),
                 status: DiffStatus::Modified,
-                changes: column_changes(src, tgt, options),
+                changes: column_changes(src, tgt, options, type_mapping),
                 source: Some((*src).clone()),
                 target: Some((*tgt).clone()),
             });
@@ -415,8 +428,13 @@ fn identifier_key(value: &str, options: &SchemaCompareOptions) -> String {
     }
 }
 
-fn column_eq(left: &ColumnSchema, right: &ColumnSchema, options: &SchemaCompareOptions) -> bool {
-    data_type_eq(&left.data_type, &right.data_type, options)
+fn column_eq(
+    left: &ColumnSchema,
+    right: &ColumnSchema,
+    options: &SchemaCompareOptions,
+    type_mapping: Option<SchemaTypeMappingContext<'_>>,
+) -> bool {
+    data_type_eq(&left.data_type, &right.data_type, options, type_mapping)
         && left.nullable == right.nullable
         && left.default_value == right.default_value
         && (options.ignore_comments || left.comment == right.comment)
@@ -427,8 +445,18 @@ fn column_eq(left: &ColumnSchema, right: &ColumnSchema, options: &SchemaCompareO
                     == normalized_metadata(right.collation.as_deref())))
 }
 
-fn data_type_eq(left: &str, right: &str, options: &SchemaCompareOptions) -> bool {
-    normalized_data_type(left, options).eq_ignore_ascii_case(&normalized_data_type(right, options))
+fn data_type_eq(
+    left: &str,
+    right: &str,
+    options: &SchemaCompareOptions,
+    type_mapping: Option<SchemaTypeMappingContext<'_>>,
+) -> bool {
+    let left = normalized_data_type(left, options);
+    let right = normalized_data_type(right, options);
+    type_mapping.map_or_else(
+        || left.eq_ignore_ascii_case(&right),
+        |context| column_types_equivalent(&left, &right, context),
+    )
 }
 
 fn normalized_data_type(value: &str, options: &SchemaCompareOptions) -> String {
@@ -504,9 +532,10 @@ fn column_changes(
     source: &ColumnSchema,
     target: &ColumnSchema,
     options: &SchemaCompareOptions,
+    type_mapping: Option<SchemaTypeMappingContext<'_>>,
 ) -> Vec<String> {
     let mut changes = Vec::new();
-    if !data_type_eq(&source.data_type, &target.data_type, options) {
+    if !data_type_eq(&source.data_type, &target.data_type, options, type_mapping) {
         changes.push(format!("type: {} → {}", target.data_type, source.data_type));
     }
     if source.nullable != target.nullable {
@@ -753,6 +782,7 @@ fn validate_unique_names<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::storage::DatabaseType;
 
     fn column(name: &str, data_type: &str, nullable: bool) -> ColumnSchema {
         ColumnSchema {
@@ -1404,5 +1434,95 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a_column", "m_column", "z_column"]
         );
+    }
+
+    #[test]
+    fn cross_database_compare_treats_mapped_column_types_as_equivalent() {
+        let source_database_type = DatabaseType::MySQL;
+        let target_database_type = DatabaseType::PostgreSQL;
+        let result = compare_schemas_with_type_mapping(
+            vec![table(
+                "users",
+                vec![
+                    column("id", "INT", false),
+                    column("balance", "DECIMAL(10,2)", false),
+                    column("name", "VARCHAR(255)", false),
+                ],
+            )],
+            vec![table(
+                "users",
+                vec![
+                    column("id", "INTEGER", false),
+                    column("balance", "NUMERIC(10,2)", false),
+                    column("name", "CHARACTER VARYING(255)", false),
+                ],
+            )],
+            SchemaCompareOptions::default(),
+            Some(SchemaTypeMappingContext::new(
+                &source_database_type,
+                &target_database_type,
+            )),
+        )
+        .unwrap();
+
+        assert!(result.table_diffs.is_empty());
+    }
+
+    #[test]
+    fn cross_database_compare_keeps_precision_changes() {
+        let source_database_type = DatabaseType::MySQL;
+        let target_database_type = DatabaseType::PostgreSQL;
+        let result = compare_schemas_with_type_mapping(
+            vec![table(
+                "accounts",
+                vec![column("balance", "DECIMAL(10,2)", false)],
+            )],
+            vec![table(
+                "accounts",
+                vec![column("balance", "NUMERIC(12,2)", false)],
+            )],
+            SchemaCompareOptions::default(),
+            Some(SchemaTypeMappingContext::new(
+                &source_database_type,
+                &target_database_type,
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(result.modified_count, 1);
+        assert_eq!(
+            result.table_diffs[0].column_diffs[0].changes,
+            vec!["type: NUMERIC(12,2) → DECIMAL(10,2)"]
+        );
+    }
+
+    #[test]
+    fn legacy_compare_does_not_apply_cross_database_type_aliases() {
+        let result = compare_schemas(
+            vec![table("users", vec![column("id", "INT", false)])],
+            vec![table("users", vec![column("id", "INTEGER", false)])],
+            SchemaCompareOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.modified_count, 1);
+    }
+
+    #[test]
+    fn cross_database_compare_does_not_equate_sql_server_rowversion_with_timestamp() {
+        let source_database_type = DatabaseType::MSSQL;
+        let target_database_type = DatabaseType::PostgreSQL;
+        let result = compare_schemas_with_type_mapping(
+            vec![table("events", vec![column("version", "TIMESTAMP", false)])],
+            vec![table("events", vec![column("version", "TIMESTAMP", false)])],
+            SchemaCompareOptions::default(),
+            Some(SchemaTypeMappingContext::new(
+                &source_database_type,
+                &target_database_type,
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(result.modified_count, 1);
     }
 }

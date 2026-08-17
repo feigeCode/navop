@@ -17,9 +17,13 @@
 ### 结构比较
 - 比较表、列、索引、外键
 - 识别新增、删除、修改
+- 跨数据库比较时按字段类型语义判断等价性，避免 `INT`/`INTEGER` 等别名产生无效差异
 - 生成 DDL 语句
+- 跨数据库同步时把源字段类型映射为目标数据库合法类型
 - DROP TABLE/COLUMN 默认不选中（P0 安全保护）
 - 列类型修改默认不选中
+- 有损类型映射生成合法 SQL，但默认不选中并附带警告
+- 不支持的类型映射跳过相关 SQL，并写入同步计划警告
 - 方言分支按 `DatabaseType` 枚举归一化（外部驱动按 `driver_id` 归类）
 
 ## 快速开始
@@ -49,6 +53,26 @@ let result = compare_schemas(
 
 // 生成同步计划（使用目标数据库插件）
 let plan = build_schema_sync_plan_with_plugin(&result, "target_db", Some("public"), plugin);
+
+// 跨数据库比较：显式传入源端和目标端数据库类型
+let result = compare_schemas_with_type_mapping(
+    source_tables,
+    target_tables,
+    SchemaCompareOptions::default(),
+    Some(SchemaTypeMappingContext::new(
+        &source_database_type,
+        &target_database_type,
+    )),
+)?;
+
+// 跨数据库同步：源类型用于映射，目标插件决定 DDL 方言
+let plan = build_schema_sync_plan_with_plugin_for_source(
+    &result,
+    "target_db",
+    Some("public"),
+    &source_database_type,
+    plugin,
+);
 ```
 
 ## 模块说明
@@ -57,6 +81,7 @@ let plan = build_schema_sync_plan_with_plugin(&result, "target_db", Some("public
 - `data_diff.rs` - 数据比较算法
 - `schema_model.rs` - 结构比较数据结构
 - `schema_diff.rs` - 结构比较算法
+- `type_mapping.rs` - 跨数据库字段类型归一化、等价判断和目标类型映射
 - `sync_plan.rs` - 同步计划生成
 - `capabilities.rs` - 数据库能力声明
 - `task.rs` - 任务进度事件
@@ -69,10 +94,15 @@ let plan = build_schema_sync_plan_with_plugin(&result, "target_db", Some("public
 - DROP COLUMN（结构）
 - ALTER COLUMN TYPE（结构）
 
+跨数据库类型映射按兼容性处理：
+- `Exact` / `Equivalent` / `Widening`：允许默认选中
+- `Lossy`：生成目标数据库合法 SQL，但默认不选中并提示可能丢失的语义
+- `Unsupported`：不输出源类型到目标 DDL，跳过相关 SQL 并记录计划警告
+
 ## 测试
 
 ```bash
 cargo test -p db --lib compare
 ```
 
-15 个单元测试覆盖所有核心功能。
+单元测试覆盖核心比较、字段类型映射和同步计划安全策略。

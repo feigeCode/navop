@@ -239,6 +239,7 @@ fn schema_side_label(side: CompareSchemaSide) -> String {
 pub fn generate_schema_sync_plan_for_target(
     result: &SchemaCompareResult,
     db_state: &GlobalDbState,
+    source_connection_id: &str,
     target_connection_id: &str,
     target_database: &str,
     target_schema: Option<&str>,
@@ -246,6 +247,7 @@ pub fn generate_schema_sync_plan_for_target(
 ) -> anyhow::Result<SyncPlan> {
     db_state.prepare_schema_sync_plan_for_target(
         result,
+        source_connection_id,
         target_connection_id,
         target_database,
         target_schema,
@@ -1007,6 +1009,7 @@ mod tests {
             &result,
             &GlobalDbState::new(),
             "missing-connection",
+            "missing-connection",
             "app",
             None,
             false,
@@ -1554,6 +1557,7 @@ mod tests {
         let plan = generate_schema_sync_plan_for_target(
             &schema,
             db_state,
+            connection_id,
             connection_id,
             "onetcli_compare_dst",
             None,

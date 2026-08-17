@@ -1,7 +1,8 @@
 use super::{
     CellValue, ColumnSchema, DataCompareBatchResult, DataCompareBatchWarningKind,
-    DataCompareResult, DataCompareTableDependency, DiffStatus, RowData, SchemaCompareResult,
-    SchemaObjectType, TableSchema,
+    DataCompareResult, DataCompareTableDependency, DatabaseFamily, DiffStatus, RowData,
+    SchemaCompareResult, SchemaObjectType, SchemaTypeMappingContext, TableSchema,
+    TypeCompatibility, column_types_equivalent, database_family, map_column_type,
 };
 use crate::plugin::DatabasePlugin;
 use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
@@ -1044,38 +1045,10 @@ fn foreign_key_action_sql(value: Option<&str>) -> Option<String> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyncDatabaseKind {
-    MySql,
-    PostgreSql,
-    SqlServer,
-    Oracle,
-    ClickHouse,
-    Sqlite,
-    DuckDb,
-    Other,
-}
+type SyncDatabaseKind = DatabaseFamily;
 
 fn sync_database_kind(database_type: &DatabaseType) -> SyncDatabaseKind {
-    match database_type {
-        DatabaseType::MySQL => SyncDatabaseKind::MySql,
-        DatabaseType::PostgreSQL => SyncDatabaseKind::PostgreSql,
-        DatabaseType::MSSQL => SyncDatabaseKind::SqlServer,
-        DatabaseType::Oracle => SyncDatabaseKind::Oracle,
-        DatabaseType::ClickHouse => SyncDatabaseKind::ClickHouse,
-        DatabaseType::SQLite => SyncDatabaseKind::Sqlite,
-        DatabaseType::DuckDB => SyncDatabaseKind::DuckDb,
-        DatabaseType::External { driver_id } => match driver_id.to_ascii_lowercase().as_str() {
-            "mysql" | "mariadb" | "oceanbase" => SyncDatabaseKind::MySql,
-            "postgres" | "postgresql" | "kingbase" | "opengauss" => SyncDatabaseKind::PostgreSql,
-            "mssql" | "sqlserver" | "sql server" => SyncDatabaseKind::SqlServer,
-            "oracle" | "dm" | "oracle-go" => SyncDatabaseKind::Oracle,
-            "clickhouse" => SyncDatabaseKind::ClickHouse,
-            "sqlite" => SyncDatabaseKind::Sqlite,
-            "duckdb" => SyncDatabaseKind::DuckDb,
-            _ => SyncDatabaseKind::Other,
-        },
-    }
+    database_family(database_type)
 }
 
 fn is_mysql_family(database_type: &DatabaseType) -> bool {
@@ -1186,6 +1159,7 @@ fn raw_column_comment_sql(
     table_name: &str,
     source: &ColumnSchema,
     target: Option<&ColumnSchema>,
+    source_definition: Option<&ColumnDefinition>,
     dialect: &dyn SyncSqlDialect,
 ) -> Option<String> {
     let original_comment = target.and_then(|column| column.comment.as_deref());
@@ -1195,7 +1169,9 @@ fn raw_column_comment_sql(
     }
     let new_comment = new_comment.unwrap_or_default();
     if is_mysql_family(target_db_type) {
-        let mut column = column_schema_to_definition(source);
+        let mut column = source_definition
+            .cloned()
+            .unwrap_or_else(|| column_schema_to_definition(source));
         column.comment = new_comment.to_string();
         let mut definition = dialect.build_column_def(&column);
         if !new_comment.is_empty() {
@@ -1250,45 +1226,96 @@ fn mssql_comment_property_sql(
     sql
 }
 
-fn raw_column_definition_changed(source: &ColumnSchema, target: &ColumnSchema) -> bool {
-    source.data_type != target.data_type
-        || source.nullable != target.nullable
+fn raw_column_definition_changed(
+    source: &ColumnSchema,
+    target: &ColumnSchema,
+    source_db_type: &DatabaseType,
+    target_db_type: &DatabaseType,
+) -> bool {
+    !column_types_equivalent(
+        &source.data_type,
+        &target.data_type,
+        SchemaTypeMappingContext::new(source_db_type, target_db_type),
+    ) || source.nullable != target.nullable
         || source.default_value != target.default_value
         || source.charset != target.charset
         || source.collation != target.collation
 }
 
+struct TableDesignerSyncOutcome {
+    statement: Option<SyncStatement>,
+    warnings: Vec<String>,
+}
+
 fn table_designer_sync_statement(
     table_diff: &super::TableDiff,
     target_database: &str,
+    source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
     dialect: &dyn SyncSqlDialect,
     options: SchemaSyncPlanOptions,
-) -> Option<SyncStatement> {
-    let source = table_diff.source.as_ref()?;
-    let target = table_diff.target.as_ref()?;
-    let original = table_schema_to_design(target_database, target);
-    let new = if options.compare_column_order {
-        table_schema_to_design(target_database, source)
-    } else {
-        table_schema_to_compare_design(target_database, source, target)
+) -> TableDesignerSyncOutcome {
+    let Some(source) = table_diff.source.as_ref() else {
+        return TableDesignerSyncOutcome {
+            statement: None,
+            warnings: vec![],
+        };
     };
-    let sql = dialect.build_alter_table_sql(&original, &new)?;
-    if !has_executable_sync_sql(&sql) {
-        return None;
+    let Some(target) = table_diff.target.as_ref() else {
+        return TableDesignerSyncOutcome {
+            statement: None,
+            warnings: vec![],
+        };
+    };
+    let original = table_schema_to_design(target_database, target);
+    let mapped = match mapped_table_schema_to_design(
+        target_database,
+        source,
+        Some(target),
+        source_db_type,
+        target_db_type,
+    ) {
+        Ok(mapped) => mapped,
+        Err(warnings) => {
+            return TableDesignerSyncOutcome {
+                statement: None,
+                warnings,
+            };
+        }
+    };
+    let mut new = mapped.design;
+    if !options.compare_column_order {
+        new.columns = compare_sync_columns_ignoring_order(new.columns, target);
     }
-    let safety = table_designer_statement_safety(table_diff, target_db_type);
-    Some(SyncStatement {
-        id: uuid::Uuid::new_v4().to_string(),
-        sql,
-        kind: SyncStatementKind::AlterTable,
-        object_name: Some(table_diff.name.clone()),
-        row_key: None,
-        destructive: safety.destructive,
-        transactional_safe: true,
-        selected_by_default: safety.selected_by_default,
-        warnings: safety.warnings,
-    })
+    let Some(sql) = dialect.build_alter_table_sql(&original, &new) else {
+        return TableDesignerSyncOutcome {
+            statement: None,
+            warnings: vec![],
+        };
+    };
+    if !has_executable_sync_sql(&sql) {
+        return TableDesignerSyncOutcome {
+            statement: None,
+            warnings: vec![],
+        };
+    }
+    let safety = table_designer_statement_safety(table_diff, source_db_type, target_db_type);
+    let mut statement_warnings = safety.warnings;
+    statement_warnings.extend(mapped.warnings);
+    TableDesignerSyncOutcome {
+        statement: Some(SyncStatement {
+            id: uuid::Uuid::new_v4().to_string(),
+            sql,
+            kind: SyncStatementKind::AlterTable,
+            object_name: Some(table_diff.name.clone()),
+            row_key: None,
+            destructive: safety.destructive,
+            transactional_safe: true,
+            selected_by_default: safety.selected_by_default && mapped.selected_by_default,
+            warnings: statement_warnings,
+        }),
+        warnings: vec![],
+    }
 }
 
 fn has_executable_sync_sql(sql: &str) -> bool {
@@ -1304,6 +1331,7 @@ struct SyncStatementSafety {
 
 fn table_designer_statement_safety(
     table_diff: &super::TableDiff,
+    source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
 ) -> SyncStatementSafety {
     let destructive_column_diff = table_diff
@@ -1313,7 +1341,9 @@ fn table_designer_statement_safety(
             DiffStatus::Removed => true,
             DiffStatus::Added => false,
             DiffStatus::Modified => match (&diff.source, &diff.target) {
-                (Some(source), Some(target)) => raw_column_definition_changed(source, target),
+                (Some(source), Some(target)) => {
+                    raw_column_definition_changed(source, target, source_db_type, target_db_type)
+                }
                 _ => true,
             },
         });
@@ -1771,6 +1801,48 @@ pub fn build_schema_sync_plan_with_plugin_options(
         target_database,
         target_schema,
         &target_db_type,
+        &target_db_type,
+        &PluginSyncSqlDialect(plugin),
+        options,
+    )
+}
+
+/// Build a schema sync plan while mapping source column types into the target
+/// plugin's database dialect.
+pub fn build_schema_sync_plan_with_plugin_for_source(
+    result: &SchemaCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    source_db_type: &DatabaseType,
+    plugin: &dyn DatabasePlugin,
+) -> SyncPlan {
+    build_schema_sync_plan_with_plugin_options_for_source(
+        result,
+        target_database,
+        target_schema,
+        source_db_type,
+        plugin,
+        SchemaSyncPlanOptions::default(),
+    )
+}
+
+/// Option-aware counterpart of
+/// [`build_schema_sync_plan_with_plugin_for_source`].
+pub fn build_schema_sync_plan_with_plugin_options_for_source(
+    result: &SchemaCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    source_db_type: &DatabaseType,
+    plugin: &dyn DatabasePlugin,
+    options: SchemaSyncPlanOptions,
+) -> SyncPlan {
+    let target_db_type = plugin.name();
+    build_schema_sync_plan_with_dialect(
+        result,
+        target_database,
+        target_schema,
+        source_db_type,
+        &target_db_type,
         &PluginSyncSqlDialect(plugin),
         options,
     )
@@ -1780,6 +1852,7 @@ fn build_schema_sync_plan_with_dialect(
     result: &SchemaCompareResult,
     target_database: &str,
     target_schema: Option<&str>,
+    source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
     dialect: &dyn SyncSqlDialect,
     options: SchemaSyncPlanOptions,
@@ -1820,8 +1893,23 @@ fn build_schema_sync_plan_with_dialect(
             DiffStatus::Added => {
                 if let Some(source_table) = &table_diff.source {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
-                    let mut design = table_schema_to_design(target_database, source_table);
+                    let mapped = match mapped_table_schema_to_design(
+                        target_database,
+                        source_table,
+                        None,
+                        source_db_type,
+                        target_db_type,
+                    ) {
+                        Ok(mapped) => mapped,
+                        Err(mapping_warnings) => {
+                            warnings.extend(mapping_warnings);
+                            continue;
+                        }
+                    };
+                    let mut design = mapped.design;
                     design.foreign_keys.clear();
+                    let selected_by_default = mapped.selected_by_default;
+                    let mapping_warnings = mapped.warnings;
                     let table_ref = compare_table_reference(
                         dialect,
                         target_database,
@@ -1836,8 +1924,8 @@ fn build_schema_sync_plan_with_dialect(
                         row_key: None,
                         destructive: false,
                         transactional_safe: true,
-                        selected_by_default: true,
-                        warnings: vec![],
+                        selected_by_default,
+                        warnings: mapping_warnings.clone(),
                     });
 
                     if dialect.needs_raw_comment_statements() {
@@ -1861,17 +1949,31 @@ fn build_schema_sync_plan_with_dialect(
                                 row_key: None,
                                 destructive: false,
                                 transactional_safe: true,
-                                selected_by_default: true,
-                                warnings: vec![],
+                                selected_by_default,
+                                warnings: mapping_warnings.clone(),
                             });
                         }
                         for column in &source_table.columns {
+                            let mapped_column = match mapped_column_schema_to_definition(
+                                &source_table.name,
+                                column,
+                                None,
+                                source_db_type,
+                                target_db_type,
+                            ) {
+                                Ok(mapped_column) => mapped_column,
+                                Err(mapping_warning) => {
+                                    warnings.push(mapping_warning);
+                                    continue;
+                                }
+                            };
                             if let Some(sql) = raw_column_comment_sql(
                                 target_db_type,
                                 &table_ref,
                                 &source_table.name,
                                 column,
                                 None,
+                                Some(&mapped_column.definition),
                                 dialect,
                             ) {
                                 statements.push(SyncStatement {
@@ -1882,8 +1984,8 @@ fn build_schema_sync_plan_with_dialect(
                                     row_key: None,
                                     destructive: false,
                                     transactional_safe: true,
-                                    selected_by_default: true,
-                                    warnings: vec![],
+                                    selected_by_default,
+                                    warnings: mapping_warnings.clone(),
                                 });
                             }
                         }
@@ -1910,8 +2012,8 @@ fn build_schema_sync_plan_with_dialect(
                                 row_key: None,
                                 destructive: false,
                                 transactional_safe: true,
-                                selected_by_default: true,
-                                warnings: vec![],
+                                selected_by_default,
+                                warnings: mapping_warnings.clone(),
                             });
                         }
                     }
@@ -1943,13 +2045,16 @@ fn build_schema_sync_plan_with_dialect(
                     target_schema,
                     &table_diff.name,
                 );
-                let table_designer_statement = table_designer_sync_statement(
+                let table_designer_outcome = table_designer_sync_statement(
                     table_diff,
                     target_database,
+                    source_db_type,
                     target_db_type,
                     dialect,
                     options,
                 );
+                warnings.extend(table_designer_outcome.warnings);
+                let table_designer_statement = table_designer_outcome.statement;
                 let table_designer_handles_table = table_designer_statement.is_some();
 
                 if !table_designer_handles_table && sync_supports_foreign_keys(target_db_type) {
@@ -1996,21 +2101,33 @@ fn build_schema_sync_plan_with_dialect(
                         match col_diff.status {
                             DiffStatus::Added => {
                                 if let Some(src) = &col_diff.source {
-                                    let column = column_schema_to_definition(src);
+                                    let mapped_column = match mapped_column_schema_to_definition(
+                                        &table_diff.name,
+                                        src,
+                                        None,
+                                        source_db_type,
+                                        target_db_type,
+                                    ) {
+                                        Ok(mapped_column) => mapped_column,
+                                        Err(mapping_warning) => {
+                                            warnings.push(mapping_warning);
+                                            continue;
+                                        }
+                                    };
                                     statements.push(SyncStatement {
                                         id: stmt_id,
                                         sql: format!(
                                             "ALTER TABLE {} ADD COLUMN {};",
                                             table_ref,
-                                            dialect.build_column_def(&column)
+                                            dialect.build_column_def(&mapped_column.definition)
                                         ),
                                         kind: SyncStatementKind::AlterTable,
                                         object_name: Some(table_diff.name.clone()),
                                         row_key: None,
                                         destructive: false,
                                         transactional_safe: true,
-                                        selected_by_default: true,
-                                        warnings: vec![],
+                                        selected_by_default: mapped_column.selected_by_default,
+                                        warnings: mapped_column.warnings.clone(),
                                     });
                                     if dialect.needs_raw_comment_statements() {
                                         if let Some(sql) = raw_column_comment_sql(
@@ -2019,6 +2136,7 @@ fn build_schema_sync_plan_with_dialect(
                                             &table_diff.name,
                                             src,
                                             None,
+                                            Some(&mapped_column.definition),
                                             dialect,
                                         ) {
                                             statements.push(SyncStatement {
@@ -2029,8 +2147,9 @@ fn build_schema_sync_plan_with_dialect(
                                                 row_key: None,
                                                 destructive: false,
                                                 transactional_safe: true,
-                                                selected_by_default: true,
-                                                warnings: vec![],
+                                                selected_by_default: mapped_column
+                                                    .selected_by_default,
+                                                warnings: mapped_column.warnings,
                                             });
                                         }
                                     }
@@ -2059,7 +2178,25 @@ fn build_schema_sync_plan_with_dialect(
                                 if let (Some(src), Some(target)) =
                                     (&col_diff.source, &col_diff.target)
                                 {
-                                    if !raw_column_definition_changed(src, target) {
+                                    let mapped_column = match mapped_column_schema_to_definition(
+                                        &table_diff.name,
+                                        src,
+                                        Some(target),
+                                        source_db_type,
+                                        target_db_type,
+                                    ) {
+                                        Ok(mapped_column) => mapped_column,
+                                        Err(mapping_warning) => {
+                                            warnings.push(mapping_warning);
+                                            continue;
+                                        }
+                                    };
+                                    if !raw_column_definition_changed(
+                                        src,
+                                        target,
+                                        source_db_type,
+                                        target_db_type,
+                                    ) {
                                         if dialect.needs_raw_comment_statements() {
                                             if let Some(sql) = raw_column_comment_sql(
                                                 target_db_type,
@@ -2067,6 +2204,7 @@ fn build_schema_sync_plan_with_dialect(
                                                 &table_diff.name,
                                                 src,
                                                 Some(target),
+                                                Some(&mapped_column.definition),
                                                 dialect,
                                             ) {
                                                 statements.push(SyncStatement {
@@ -2077,29 +2215,33 @@ fn build_schema_sync_plan_with_dialect(
                                                     row_key: None,
                                                     destructive: false,
                                                     transactional_safe: true,
-                                                    selected_by_default: true,
-                                                    warnings: vec![],
+                                                    selected_by_default: mapped_column
+                                                        .selected_by_default,
+                                                    warnings: mapped_column.warnings,
                                                 });
                                             }
                                         }
                                         continue;
                                     }
                                     let sql = if is_mysql_family(target_db_type) {
-                                        let column = column_schema_to_definition(src);
                                         format!(
                                             "ALTER TABLE {} MODIFY COLUMN {};",
                                             table_ref,
-                                            dialect.build_column_def(&column)
+                                            dialect.build_column_def(&mapped_column.definition)
                                         )
                                     } else {
                                         format!(
                                             "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
                                             table_ref,
                                             dialect.quote_identifier(&src.name),
-                                            src.data_type
+                                            mapped_column.definition.data_type
                                         )
                                     };
 
+                                    let mut statement_warnings = vec![
+                                        "此操作可能导致数据类型转换失败或数据丢失".to_string(),
+                                    ];
+                                    statement_warnings.extend(mapped_column.warnings.clone());
                                     statements.push(SyncStatement {
                                         id: stmt_id,
                                         sql,
@@ -2109,9 +2251,7 @@ fn build_schema_sync_plan_with_dialect(
                                         destructive: true,
                                         transactional_safe: true,
                                         selected_by_default: false,
-                                        warnings: vec![
-                                            "此操作可能导致数据类型转换失败或数据丢失".to_string(),
-                                        ],
+                                        warnings: statement_warnings.clone(),
                                     });
                                     if dialect.needs_raw_comment_statements() {
                                         if let Some(sql) = raw_column_comment_sql(
@@ -2120,6 +2260,7 @@ fn build_schema_sync_plan_with_dialect(
                                             &table_diff.name,
                                             src,
                                             Some(target),
+                                            Some(&mapped_column.definition),
                                             dialect,
                                         ) {
                                             statements.push(SyncStatement {
@@ -2130,8 +2271,8 @@ fn build_schema_sync_plan_with_dialect(
                                                 row_key: None,
                                                 destructive: false,
                                                 transactional_safe: true,
-                                                selected_by_default: true,
-                                                warnings: vec![],
+                                                selected_by_default: false,
+                                                warnings: statement_warnings,
                                             });
                                         }
                                     }
@@ -2503,14 +2644,120 @@ fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
     design
 }
 
-fn table_schema_to_compare_design(
+struct MappedColumnDefinition {
+    definition: ColumnDefinition,
+    selected_by_default: bool,
+    warnings: Vec<String>,
+}
+
+struct MappedTableDesign {
+    design: TableDesign,
+    selected_by_default: bool,
+    warnings: Vec<String>,
+}
+
+fn mapped_column_schema_to_definition(
+    table_name: &str,
+    source: &ColumnSchema,
+    target: Option<&ColumnSchema>,
+    source_db_type: &DatabaseType,
+    target_db_type: &DatabaseType,
+) -> Result<MappedColumnDefinition, String> {
+    let mapping = map_column_type(&source.data_type, source_db_type, target_db_type);
+    let mapping_warning = mapping.warning.as_deref().map(|warning| {
+        format!(
+            "字段 `{}.{}`：{}",
+            table_name.trim(),
+            source.name.trim(),
+            warning
+        )
+    });
+
+    if mapping.compatibility == TypeCompatibility::Unsupported {
+        return Err(mapping_warning.unwrap_or_else(|| {
+            format!(
+                "字段 `{}.{}` 的类型 `{}` 无法安全映射到目标数据库，已跳过相关同步 SQL",
+                table_name.trim(),
+                source.name.trim(),
+                source.data_type
+            )
+        }));
+    }
+
+    let mut definition = column_schema_to_definition(source);
+    definition.data_type = if mapping.compatibility == TypeCompatibility::Exact {
+        source.data_type.clone()
+    } else if target.is_some_and(|target| {
+        column_types_equivalent(
+            &source.data_type,
+            &target.data_type,
+            SchemaTypeMappingContext::new(source_db_type, target_db_type),
+        )
+    }) {
+        target
+            .map(|target| target.data_type.clone())
+            .unwrap_or(mapping.target_type)
+    } else {
+        mapping.target_type
+    };
+
+    Ok(MappedColumnDefinition {
+        definition,
+        selected_by_default: mapping.compatibility.is_safe_for_automatic_sync(),
+        warnings: mapping_warning.into_iter().collect(),
+    })
+}
+
+fn mapped_table_schema_to_design(
     database: &str,
     source: &TableSchema,
-    target: &TableSchema,
-) -> TableDesign {
+    target: Option<&TableSchema>,
+    source_db_type: &DatabaseType,
+    target_db_type: &DatabaseType,
+) -> Result<MappedTableDesign, Vec<String>> {
     let mut design = table_schema_to_design(database, source);
-    design.columns = compare_sync_columns_ignoring_order(design.columns, target);
-    design
+    let mut selected_by_default = true;
+    let mut warnings = Vec::new();
+    let mut unsupported_warnings = Vec::new();
+
+    for (definition, source_column) in design.columns.iter_mut().zip(&source.columns) {
+        let target_column = target.and_then(|target| {
+            target
+                .columns
+                .iter()
+                .find(|column| column.name.trim() == source_column.name.trim())
+                .or_else(|| {
+                    target
+                        .columns
+                        .iter()
+                        .find(|column| column.name.eq_ignore_ascii_case(&source_column.name))
+                })
+        });
+        match mapped_column_schema_to_definition(
+            &source.name,
+            source_column,
+            target_column,
+            source_db_type,
+            target_db_type,
+        ) {
+            Ok(mapped) => {
+                definition.data_type = mapped.definition.data_type;
+                selected_by_default &= mapped.selected_by_default;
+                warnings.extend(mapped.warnings);
+            }
+            Err(warning) => unsupported_warnings.push(warning),
+        }
+    }
+
+    if !unsupported_warnings.is_empty() {
+        return Err(unsupported_warnings);
+    }
+
+    Ok(MappedTableDesign {
+        design,
+        selected_by_default,
+        warnings,
+    })
 }
 
 fn compare_sync_columns_ignoring_order(
@@ -2661,6 +2908,189 @@ mod tests {
     fn postgres_schema_plan(result: &SchemaCompareResult) -> SyncPlan {
         let plugin = crate::postgresql::PostgresPlugin::new();
         build_schema_sync_plan_with_plugin(result, "", None, &plugin)
+    }
+
+    fn schema_column(name: &str, data_type: &str) -> ColumnSchema {
+        ColumnSchema {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable: false,
+            ..Default::default()
+        }
+    }
+
+    fn added_table_result(table: &str, columns: Vec<ColumnSchema>) -> SchemaCompareResult {
+        let source = TableSchema {
+            name: table.to_string(),
+            columns,
+            ..Default::default()
+        };
+        SchemaCompareResult {
+            table_diffs: vec![super::super::TableDiff {
+                name: table.to_string(),
+                status: DiffStatus::Added,
+                object_type: Default::default(),
+                changes: vec![],
+                source: Some(source),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+                table_options_changed: false,
+            }],
+            added_count: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cross_database_create_table_maps_mysql_integer_types_to_postgres() {
+        let result = added_table_result(
+            "accounts",
+            vec![
+                schema_column("id", "INT"),
+                schema_column("balance", "BIGINT UNSIGNED"),
+            ],
+        );
+        let plugin = crate::postgresql::PostgresPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin_for_source(
+            &result,
+            "",
+            Some("public"),
+            &DatabaseType::MySQL,
+            &plugin,
+        );
+
+        assert_eq!(1, plan.statements.len());
+        let statement = &plan.statements[0];
+        assert!(statement.sql.contains("\"id\" INTEGER"));
+        assert!(statement.sql.contains("\"balance\" NUMERIC(20,0)"));
+        assert!(!statement.sql.contains("BIGINT UNSIGNED"));
+        assert!(statement.selected_by_default);
+    }
+
+    #[test]
+    fn cross_database_create_table_maps_binary_and_uuid_types() {
+        let postgres_result =
+            added_table_result("documents", vec![schema_column("payload", "BYTEA")]);
+        let mysql_plugin = crate::mysql::MySqlPlugin::new();
+        let mysql_plan = build_schema_sync_plan_with_plugin_for_source(
+            &postgres_result,
+            "app",
+            None,
+            &DatabaseType::PostgreSQL,
+            &mysql_plugin,
+        );
+
+        assert_eq!(1, mysql_plan.statements.len());
+        assert!(mysql_plan.statements[0].sql.contains("`payload` LONGBLOB"));
+        assert!(!mysql_plan.statements[0].sql.contains("BYTEA"));
+        assert!(mysql_plan.statements[0].selected_by_default);
+
+        let mssql_result =
+            added_table_result("sessions", vec![schema_column("session_id", "UUID")]);
+        let mssql_plugin = crate::mssql::MsSqlPlugin::new();
+        let mssql_plan = build_schema_sync_plan_with_plugin_for_source(
+            &mssql_result,
+            "app",
+            Some("dbo"),
+            &DatabaseType::PostgreSQL,
+            &mssql_plugin,
+        );
+
+        assert_eq!(1, mssql_plan.statements.len());
+        assert!(
+            mssql_plan.statements[0]
+                .sql
+                .contains("[session_id] UNIQUEIDENTIFIER")
+        );
+        assert!(!mssql_plan.statements[0].sql.contains(" UUID"));
+    }
+
+    #[test]
+    fn lossy_cross_database_mapping_is_valid_but_not_selected() {
+        let result = added_table_result(
+            "events",
+            vec![schema_column("occurred_at", "TIMESTAMPTZ(9)")],
+        );
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin_for_source(
+            &result,
+            "app",
+            None,
+            &DatabaseType::PostgreSQL,
+            &plugin,
+        );
+
+        assert_eq!(1, plan.statements.len());
+        let statement = &plan.statements[0];
+        assert!(statement.sql.contains("`occurred_at` DATETIME(6)"));
+        assert!(!statement.sql.contains("TIMESTAMPTZ"));
+        assert!(!statement.selected_by_default);
+        assert!(
+            statement
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("时区语义"))
+        );
+        assert!(
+            statement
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("精度"))
+        );
+    }
+
+    #[test]
+    fn unsupported_cross_database_mapping_skips_invalid_target_ddl() {
+        let result = added_table_result("events", vec![schema_column("payload", "Array(Int32)")]);
+        let plugin = crate::postgresql::PostgresPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin_for_source(
+            &result,
+            "",
+            Some("public"),
+            &DatabaseType::ClickHouse,
+            &plugin,
+        );
+
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("events.payload")
+                    && warning.contains("Array(Int32)"))
+        );
+    }
+
+    #[test]
+    fn mapped_table_design_preserves_equivalent_target_type_declaration() {
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![schema_column("id", "INT4")],
+            ..Default::default()
+        };
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![schema_column("id", "INTEGER")],
+            ..Default::default()
+        };
+
+        let mapped = mapped_table_schema_to_design(
+            "app",
+            &source,
+            Some(&target),
+            &DatabaseType::PostgreSQL,
+            &DatabaseType::MySQL,
+        )
+        .expect("equivalent cross-database type should be mapped");
+
+        assert_eq!("INTEGER", mapped.design.columns[0].data_type);
+        assert!(mapped.selected_by_default);
     }
 
     #[test]

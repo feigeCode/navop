@@ -342,6 +342,7 @@ impl SchemaCompareWindow {
         self.clear_compare_preview(window, cx);
         register_connection_for_compare(&params.source_connection_id, cx);
         register_connection_for_compare(&params.target_connection_id, cx);
+        let source_connection_id = params.source_connection_id.clone();
         let target_connection_id = params.target_connection_id.clone();
         let target_database = params.target_database.clone();
         let target_schema = params.target_schema.clone();
@@ -394,6 +395,7 @@ impl SchemaCompareWindow {
                         match generate_schema_sync_plan_for_target(
                             &result,
                             &db_state,
+                            &source_connection_id,
                             &target_connection_id,
                             &target_database,
                             target_schema.as_deref(),

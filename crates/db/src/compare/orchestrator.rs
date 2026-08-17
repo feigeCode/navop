@@ -8,10 +8,11 @@ use crate::{
 };
 
 use super::{
-    ColumnSchema, CompareSchemaSide, CompareTaskEvent, ForeignKeySchema, IndexSchema,
-    RoutineKind, RoutineSchema, SchemaCompareOptions, SchemaCompareParams, SchemaCompareResult,
-    SchemaCompareTableFailure, SchemaObjectType, SchemaSyncPlanOptions, SyncPlan, TableSchema,
-    TriggerSchema, compare_routines, compare_schemas, compare_triggers, identifier_key,
+    ColumnSchema, CompareSchemaSide, CompareTaskEvent, ForeignKeySchema, IndexSchema, RoutineKind,
+    RoutineSchema, SchemaCompareOptions, SchemaCompareParams, SchemaCompareResult,
+    SchemaCompareTableFailure, SchemaObjectType, SchemaSyncPlanOptions, SchemaTypeMappingContext,
+    SyncPlan, TableSchema, TriggerSchema, compare_routines, compare_schemas_with_type_mapping,
+    compare_triggers, identifier_key,
 };
 
 #[derive(Debug, Default)]
@@ -49,6 +50,7 @@ impl GlobalDbState {
     pub fn prepare_schema_sync_plan_for_target(
         &self,
         result: &SchemaCompareResult,
+        source_connection_id: &str,
         target_connection_id: &str,
         target_database: &str,
         target_schema: Option<&str>,
@@ -58,20 +60,26 @@ impl GlobalDbState {
             return Ok(super::blocked_schema_sync_plan(result));
         }
 
-        let config = self
+        let source_config = self
+            .get_config(source_connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {source_connection_id}"))?;
+        let target_config = self
             .get_config(target_connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {target_connection_id}"))?;
-        let plugin = self.get_plugin(&config.database_type)?;
+        let plugin = self.get_plugin(&target_config.database_type)?;
 
-        Ok(super::build_schema_sync_plan_with_plugin_options(
-            result,
-            target_database,
-            target_schema,
-            plugin.as_ref(),
-            SchemaSyncPlanOptions {
-                compare_column_order,
-            },
-        ))
+        Ok(
+            super::build_schema_sync_plan_with_plugin_options_for_source(
+                result,
+                target_database,
+                target_schema,
+                &source_config.database_type,
+                plugin.as_ref(),
+                SchemaSyncPlanOptions {
+                    compare_column_order,
+                },
+            ),
+        )
     }
 
     /// Loads both schema targets and computes their structural diff.
@@ -117,6 +125,16 @@ impl GlobalDbState {
             compare_column_order,
             ..SchemaCompareOptions::default()
         };
+        let source_database_type = self
+            .get_config(&source_connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {source_connection_id}"))?
+            .database_type
+            .clone();
+        let target_database_type = self
+            .get_config(&target_connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {target_connection_id}"))?
+            .database_type
+            .clone();
 
         let source = load_schema_tables(
             self,
@@ -146,7 +164,15 @@ impl GlobalDbState {
         .await?;
 
         report(CompareTaskEvent::ComparingSchema);
-        let mut result = compare_schemas(source.schemas, target.schemas, options.clone())?;
+        let mut result = compare_schemas_with_type_mapping(
+            source.schemas,
+            target.schemas,
+            options.clone(),
+            Some(SchemaTypeMappingContext::new(
+                &source_database_type,
+                &target_database_type,
+            )),
+        )?;
         if compare_routines_enabled {
             let source_routines = load_schema_routines(
                 self,
@@ -166,8 +192,7 @@ impl GlobalDbState {
                 case_sensitive_identifiers,
             )
             .await?;
-            result.routine_diffs =
-                compare_routines(source_routines, target_routines, &options)?;
+            result.routine_diffs = compare_routines(source_routines, target_routines, &options)?;
         }
         if compare_triggers_enabled {
             let source_triggers = load_schema_triggers(
@@ -186,8 +211,7 @@ impl GlobalDbState {
                 target_schema.as_deref(),
             )
             .await?;
-            result.trigger_diffs =
-                compare_triggers(source_triggers, target_triggers, &options)?;
+            result.trigger_diffs = compare_triggers(source_triggers, target_triggers, &options)?;
         }
         result.table_failures = source.failures.into_iter().chain(target.failures).collect();
         result.refresh_counts();
