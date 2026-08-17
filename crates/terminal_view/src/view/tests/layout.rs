@@ -42,7 +42,7 @@ fn disconnected_terminal_uses_a_non_blocking_status_banner() {
 }
 
 #[test]
-fn ssh_credentials_and_mfa_keep_the_blocking_connection_dialog() {
+fn terminal_credentials_and_ssh_mfa_keep_the_blocking_connection_dialog() {
     assert_eq!(
         Some(ConnectionStatusPresentation::Dialog),
         connection_status_presentation(&ConnectionState::Connecting, false, true, false)
@@ -96,20 +96,30 @@ fn connection_error_banner_shows_scrollable_multiline_details() {
 
     assert!(
         error_block.contains(".whitespace_normal()"),
-        "SSH error details should wrap instead of staying on one line"
+        "terminal connection error details should wrap instead of staying on one line"
     );
     assert!(
         error_block.contains(".overflow_scrollbar()"),
-        "long SSH error details, including unbroken tokens, should remain inspectable"
+        "long terminal connection error details, including unbroken tokens, should remain inspectable"
     );
     assert!(
         error_block.contains(".max_h(px("),
-        "the scrollable SSH error area should have a bounded height"
+        "the scrollable terminal connection error area should have a bounded height"
     );
     assert!(
         !error_block.contains(".truncate()"),
-        "SSH error details must not be visually truncated"
+        "terminal connection error details must not be visually truncated"
     );
+}
+
+#[test]
+fn credential_dialog_supports_ssh_and_telnet_runtime_prompts() {
+    let source = include_str!("../connection_overlay.rs");
+
+    assert!(source.contains("SshSession.credentials_required"));
+    assert!(source.contains("TelnetSession.credentials_required"));
+    assert!(source.contains("submit-terminal-credentials"));
+    assert!(source.contains("submit_credentials"));
 }
 
 #[test]

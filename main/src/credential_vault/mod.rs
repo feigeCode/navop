@@ -16,6 +16,7 @@ use one_core::{
     storage::{CredentialRepository, CredentialSummary, GlobalStorageState, StorageManager},
     tab_container::{TabContent, TabContentEvent},
 };
+use rust_i18n::t;
 
 pub(crate) struct CredentialVaultView {
     focus_handle: FocusHandle,
@@ -29,8 +30,10 @@ pub(crate) struct CredentialVaultView {
 impl CredentialVaultView {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let storage_manager = cx.global::<GlobalStorageState>().storage.clone();
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索名称、类型或用户名"));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("CredentialVault.search_placeholder").to_string())
+        });
         let subscription = cx.subscribe(&search_input, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
@@ -51,7 +54,7 @@ impl CredentialVaultView {
     fn repository(&self) -> Result<std::sync::Arc<CredentialRepository>, String> {
         self.storage_manager
             .get::<CredentialRepository>()
-            .ok_or_else(|| "CredentialRepository 尚未注册".to_string())
+            .ok_or_else(|| t!("CredentialVault.repository_unavailable").to_string())
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -95,7 +98,7 @@ impl TabContent for CredentialVaultView {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        "钥匙串".into()
+        t!("CredentialVault.title").into()
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {

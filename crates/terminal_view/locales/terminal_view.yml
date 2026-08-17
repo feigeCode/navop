@@ -185,6 +185,10 @@ SSH:
     en: Enter username
     zh-CN: 请输入用户名
     zh-HK: 請輸入用戶名
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
   save_username_desc:
     en: Save username
     zh-CN: 保存用户名
@@ -1559,6 +1563,10 @@ Telnet:
     en: "23"
     zh-CN: "23"
     zh-HK: "23"
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
   workspace:
     en: Workspace
     zh-CN: 工作区
@@ -1580,13 +1588,13 @@ Telnet:
     zh-CN: 登录脚本
     zh-HK: 登入腳本
   login_script_hint:
-    en: "Sequentially match server output with regular expressions and send the configured content. Expect supports regex escapes such as \\r, \\n, \\t and \\xNN; a carriage return is appended automatically when send does not end with \\r or \\n."
-    zh-CN: "按顺序使用正则表达式匹配服务端输出并自动发送配置内容。expect 支持 \\r、\\n、\\t、\\xNN 等正则转义；发送内容不以 \\r 或 \\n 结尾时自动补回车。"
-    zh-HK: "按順序使用正規表示式匹配伺服器輸出並自動傳送設定內容。expect 支援 \\r、\\n、\\t、\\xNN 等正規表示式跳脫；傳送內容不以 \\r 或 \\n 結尾時自動補回車。"
+    en: "Expect is a regular expression matched against server output. An explicit Send value takes priority; when Send is empty, Navop recognizes username/password prompts from Expect and uses the referenced keychain value. A carriage return is appended automatically when Send does not end with \\r or \\n."
+    zh-CN: "Expect 是匹配服务端输出的正则表达式。显式填写的发送内容优先；发送内容为空时，Navop 会根据 Expect 识别用户名或密码提示，并使用引用钥匙串中的对应值。发送内容不以 \\r 或 \\n 结尾时会自动补回车。"
+    zh-HK: "Expect 是比對伺服器輸出的正規表示式。明確填寫的傳送內容優先；傳送內容為空時，Navop 會依據 Expect 識別使用者名稱或密碼提示，並使用引用鑰匙圈中的對應值。傳送內容不以 \\r 或 \\n 結尾時會自動補回車。"
   login_script_credential_hint:
-    en: "Send values often contain passwords, enable passwords or tokens. They are encrypted in the local connection database and automated login sends are excluded from input recording, but Telnet still transmits them in plaintext on the network."
-    zh-CN: "发送内容通常包含密码、enable 密码或 token：它们会在本地连接数据库中加密保存，自动登录发送内容不会写入输入录制，但 Telnet 仍会在网络上明文传输。"
-    zh-HK: "傳送內容通常包含密碼、enable 密碼或 token：它們會在本地連線資料庫中加密儲存，自動登入傳送內容不會寫入輸入錄製，但 Telnet 仍會在網路上明文傳輸。"
+    en: "Keychain values are injected only into the in-memory connection and are not written to the connection configuration. Automated login sends are excluded from input recording, but Telnet still transmits credentials in plaintext on the network."
+    zh-CN: "钥匙串中的值只会注入本次内存连接，不会写入连接配置；自动登录发送内容不会写入输入录制，但 Telnet 仍会在网络上明文传输凭据。"
+    zh-HK: "鑰匙圈中的值只會注入本次記憶體連線，不會寫入連線設定；自動登入傳送內容不會寫入輸入錄製，但 Telnet 仍會在網路上以明文傳輸憑據。"
   login_script_expect:
     en: Expect Regex
     zh-CN: Expect 正则
@@ -1600,9 +1608,9 @@ Telnet:
     zh-CN: 发送内容
     zh-HK: 傳送內容
   login_script_send_placeholder:
-    en: "e.g. admin"
-    zh-CN: "如 admin"
-    zh-HK: "如 admin"
+    en: "Leave empty to use the recognized keychain field"
+    zh-CN: "留空时使用识别到的钥匙串字段"
+    zh-HK: "留空時使用識別到的鑰匙圈欄位"
   login_script_add:
     en: Add Step
     zh-CN: 添加步骤
@@ -1631,6 +1639,24 @@ Telnet:
     en: TCP connection timed out
     zh-CN: TCP 连接超时
     zh-HK: TCP 連接超時
+
+TelnetSession:
+  credentials_required:
+    en: Telnet Credentials Required
+    zh-CN: 需要 Telnet 连接凭据
+    zh-HK: 需要 Telnet 連線憑據
+  credentials_hint:
+    en: The referenced keychain item is unavailable on this device. Enter a username and password for this connection only; they will not be saved or synced.
+    zh-CN: 当前设备无法获取此连接引用的钥匙串，请仅为本次连接输入用户名和密码；这些内容不会保存或同步。
+    zh-HK: 目前裝置無法取得此連線引用的鑰匙圈，請只為本次連線輸入使用者名稱和密碼；這些內容不會儲存或同步。
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
 
 # 串口连接
 Serial:
@@ -1766,9 +1792,9 @@ SshSession:
     zh-CN: 需要 SSH 连接凭据
     zh-HK: 需要 SSH 連線憑據
   credentials_hint:
-    en: This connection does not save the following credentials. Enter them to continue.
-    zh-CN: 此连接未保存以下凭据，请输入后继续连接。
-    zh-HK: 此連線未儲存以下憑據，請輸入後繼續連線。
+    en: Enter the required credentials for this connection only. They will not be saved or synced.
+    zh-CN: 请输入本次连接所需的凭据；这些内容不会保存或同步。
+    zh-HK: 請輸入本次連線所需的憑據；這些內容不會儲存或同步。
   username:
     en: Username
     zh-CN: 用户名

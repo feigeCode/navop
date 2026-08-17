@@ -183,15 +183,38 @@ pub(crate) fn resolve_connection_credentials(
     window: &mut Window,
     cx: &mut Context<HomePage>,
 ) -> Option<StoredConnection> {
-    let result = cx
+    let repository = cx
         .global::<GlobalStorageState>()
         .storage
-        .get::<ConnectionRepository>()
+        .get::<ConnectionRepository>();
+    let result = repository
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))
         .and_then(|repository| repository.resolve_runtime_connection(connection));
     match result {
         Ok(connection) => Some(connection),
         Err(error) => {
+            if let (Some(repository), Some(credential_id)) =
+                (repository.as_ref(), missing_credential_id(&error))
+            {
+                match temporary_missing_credential_connection(repository, connection, credential_id)
+                {
+                    Ok(connection) => {
+                        tracing::warn!(
+                            connection_id = ?connection.id,
+                            "当前设备缺少连接引用的钥匙串，改为仅本次连接输入凭据"
+                        );
+                        return Some(connection);
+                    }
+                    Err(fallback_error) => {
+                        tracing::warn!(
+                            connection_id = ?connection.id,
+                            error = %fallback_error,
+                            "无法创建缺失钥匙串的临时连接参数"
+                        );
+                    }
+                }
+            }
             tracing::warn!(
                 connection_id = ?connection.id,
                 error = %error,
@@ -204,4 +227,80 @@ pub(crate) fn resolve_connection_credentials(
             None
         }
     }
+}
+
+fn missing_credential_id(error: &anyhow::Error) -> Option<i64> {
+    error.chain().find_map(|cause| {
+        let CredentialResolutionError::MissingCredential(credential_id) =
+            cause.downcast_ref::<CredentialResolutionError>()?
+        else {
+            return None;
+        };
+        Some(*credential_id)
+    })
+}
+
+fn temporary_missing_credential_connection(
+    repository: &ConnectionRepository,
+    connection: &StoredConnection,
+    missing_credential_id: i64,
+) -> anyhow::Result<StoredConnection> {
+    let mut runtime = connection.clone();
+    runtime.params = match connection.connection_type {
+        ConnectionType::SshSftp => {
+            let mut params = connection.to_ssh_params()?;
+            let Some(reference) = params.credential_reference.as_ref() else {
+                anyhow::bail!("the missing credential is not the primary SSH credential");
+            };
+            if reference.credential_id != missing_credential_id {
+                anyhow::bail!("the missing credential belongs to an SSH proxy or jump server");
+            }
+            params.credential_reference = None;
+            params.username.clear();
+            params.auth_method = SshAuthMethod::Password {
+                password: String::new(),
+            };
+            params.prompt_username = Some(true);
+            params.prompt_password = Some(true);
+            let params = repository.credential_repository().resolve_ssh(params)?;
+            serde_json::to_string(&params)?
+        }
+        ConnectionType::Telnet => {
+            let mut params = connection.to_telnet_params()?;
+            let Some(reference) = params.credential_reference.as_ref() else {
+                anyhow::bail!("the missing credential is not the Telnet login credential");
+            };
+            if reference.credential_id != missing_credential_id {
+                anyhow::bail!("the missing credential does not belong to this Telnet connection");
+            }
+            params.credential_reference = None;
+            if params.login_script.is_empty() {
+                params.login_script = vec![
+                    TelnetLoginStep {
+                        expect: r"(?i)(?:login|username|user\s*name|account)\s*[:>]\s*$"
+                            .to_string(),
+                        send: String::new(),
+                    },
+                    TelnetLoginStep {
+                        expect: r"(?i)(?:password|passwd|passcode)\s*[:>]\s*$".to_string(),
+                        send: String::new(),
+                    },
+                ];
+            }
+            let (prompt_username, prompt_password) = params.login_credential_prompt_fields();
+            if !prompt_username && !prompt_password {
+                anyhow::bail!(
+                    "unable to identify username or password prompts in the Telnet expect script"
+                );
+            }
+            params.prompt_username = prompt_username.then_some(true);
+            params.prompt_password = prompt_password.then_some(true);
+            serde_json::to_string(&params)?
+        }
+        _ => anyhow::bail!(
+            "temporary credential input is unsupported for {:?}",
+            connection.connection_type
+        ),
+    };
+    Ok(runtime)
 }

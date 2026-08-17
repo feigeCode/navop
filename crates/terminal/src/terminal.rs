@@ -98,6 +98,8 @@ pub enum TerminalModelEvent {
     HostKeyVerificationRequired,
     /// SSH 临时用户名/密码请求状态变化
     SshCredentialChanged,
+    /// Telnet 临时用户名/密码请求状态变化
+    TelnetCredentialChanged,
     /// SSH keyboard-interactive/MFA 请求状态变化
     SshMfaChanged,
     /// SSH ZMODEM 文件选择请求状态变化
@@ -287,6 +289,25 @@ impl TerminalSshCredentialRequest {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TerminalSshCredentials {
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalTelnetCredentialRequest {
+    generation: u64,
+    pub username: bool,
+    pub password: bool,
+}
+
+impl TerminalTelnetCredentialRequest {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalTelnetCredentials {
     pub username: Option<String>,
     pub password: Option<String>,
 }
@@ -1141,6 +1162,10 @@ pub struct Terminal {
     serial_params: Option<SerialParams>,
     /// Telnet 参数（用于重连）
     telnet_params: Option<TelnetParams>,
+    /// 未注入本次临时用户名/密码的 Telnet 参数模板。
+    telnet_base_params: Option<TelnetParams>,
+    /// 等待用户输入的临时 Telnet 用户名/密码。
+    telnet_credential_request: Option<TerminalTelnetCredentialRequest>,
     /// 完整事件链路中是否已有尚未被 GPUI 消费的 Wakeup。
     wakeup_pending: Arc<AtomicBool>,
     /// 事件发送器（用于 SSH 重连）
@@ -1598,6 +1623,8 @@ impl Terminal {
             pending_host_key_verification: None,
             serial_params: None,
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx.clone()),
             event_proxy: None,
@@ -1748,6 +1775,8 @@ impl Terminal {
             pending_host_key_verification: None,
             serial_params: None,
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
@@ -1890,6 +1919,8 @@ impl Terminal {
             pending_host_key_verification: None,
             serial_params: None,
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx.clone()),
             event_proxy: Some(event_proxy),
@@ -2021,6 +2052,8 @@ impl Terminal {
             pending_host_key_verification: None,
             serial_params: Some(serial_params),
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -2088,21 +2121,26 @@ impl Terminal {
             });
         let recording_tap =
             Self::recording_tap_for_runtimes(&recording_runtime, &session_log_runtime);
-        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
         let connection_generation = 1;
+        let prompt_username = telnet_params.prompts_for_username();
+        let prompt_password = telnet_params.prompts_for_password();
+        let requires_credentials = prompt_username || prompt_password;
 
-        Self::spawn_telnet_disconnect_handler(disconnect_rx, connection_generation, cx);
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
-        Self::spawn_telnet_connect(
-            telnet_params.clone(),
-            term.clone(),
-            event_proxy.clone(),
-            performance_metrics.clone(),
-            Some(disconnect_tx),
-            recording_tap,
-            connection_generation,
-            cx,
-        );
+        if !requires_credentials {
+            let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+            Self::spawn_telnet_disconnect_handler(disconnect_rx, connection_generation, cx);
+            Self::spawn_telnet_connect(
+                telnet_params.clone(),
+                term.clone(),
+                event_proxy.clone(),
+                performance_metrics.clone(),
+                Some(disconnect_tx),
+                recording_tap,
+                connection_generation,
+                cx,
+            );
+        }
 
         Self {
             term,
@@ -2132,7 +2170,15 @@ impl Terminal {
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
-            telnet_params: Some(telnet_params),
+            telnet_params: Some(telnet_params.clone()),
+            telnet_base_params: Some(telnet_params),
+            telnet_credential_request: requires_credentials.then_some(
+                TerminalTelnetCredentialRequest {
+                    generation: connection_generation,
+                    username: prompt_username,
+                    password: prompt_password,
+                },
+            ),
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -2268,6 +2314,8 @@ impl Terminal {
                 pending_host_key_verification: None,
                 serial_params: None,
                 telnet_params: None,
+                telnet_base_params: None,
+                telnet_credential_request: None,
                 wakeup_pending: wakeup_pending.clone(),
                 event_tx: Some(event_tx),
                 event_proxy: None,
@@ -2607,6 +2655,56 @@ impl Terminal {
         });
         cx.emit(TerminalModelEvent::SshCredentialChanged);
         cx.emit(TerminalModelEvent::Wakeup);
+    }
+
+    fn queue_telnet_credential_request(&mut self, generation: u64, cx: &mut Context<Self>) -> bool {
+        let Some(params) = self.telnet_base_params.as_ref() else {
+            return false;
+        };
+        let username = params.prompts_for_username();
+        let password = params.prompts_for_password();
+        if !username && !password {
+            return false;
+        }
+
+        self.telnet_credential_request = Some(TerminalTelnetCredentialRequest {
+            generation,
+            username,
+            password,
+        });
+        cx.emit(TerminalModelEvent::TelnetCredentialChanged);
+        cx.emit(TerminalModelEvent::Wakeup);
+        true
+    }
+
+    fn start_telnet_connection_attempt(
+        &mut self,
+        params: TelnetParams,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(event_proxy) = self.event_proxy.clone() else {
+            return false;
+        };
+
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+        Self::spawn_telnet_disconnect_handler(disconnect_rx, generation, cx);
+        Self::spawn_telnet_connect(
+            params.clone(),
+            self.term.clone(),
+            event_proxy,
+            self.performance_metrics.clone(),
+            Some(disconnect_tx),
+            self.recording_tap(),
+            generation,
+            cx,
+        );
+
+        self.telnet_params = Some(params);
+        self.telnet_credential_request = None;
+        cx.emit(TerminalModelEvent::TelnetCredentialChanged);
+        cx.emit(TerminalModelEvent::Wakeup);
+        true
     }
 
     fn start_ssh_connection_attempt(
@@ -3287,6 +3385,71 @@ impl Terminal {
         self.start_ssh_connection_attempt(runtime_config, responder, generation, cx)
     }
 
+    pub fn telnet_credential_request(&self) -> Option<TerminalTelnetCredentialRequest> {
+        self.telnet_credential_request.clone()
+    }
+
+    pub fn submit_telnet_credentials(
+        &mut self,
+        generation: u64,
+        credentials: TerminalTelnetCredentials,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(request) = self.telnet_credential_request.clone() else {
+            return false;
+        };
+        if generation != request.generation
+            || !self.is_current_connection_generation(request.generation)
+        {
+            return false;
+        }
+
+        let username = if request.username {
+            let Some(username) = credentials.username.as_deref().map(str::trim) else {
+                return false;
+            };
+            if username.is_empty() {
+                return false;
+            }
+            Some(username.to_string())
+        } else {
+            None
+        };
+        let password = if request.password {
+            let Some(password) = credentials.password else {
+                return false;
+            };
+            if password.is_empty() {
+                return false;
+            }
+            Some(password)
+        } else {
+            None
+        };
+
+        let Some(mut params) = self.telnet_base_params.clone() else {
+            return false;
+        };
+        params.apply_login_credentials(username.as_deref(), password.as_deref());
+        params.credential_reference = None;
+        params.prompt_username = None;
+        params.prompt_password = None;
+
+        self.connection_state = ConnectionState::Connecting;
+        self.set_connection_active(false, cx);
+        if self.start_telnet_connection_attempt(params, generation, cx) {
+            true
+        } else {
+            self.telnet_credential_request = None;
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some("Telnet connection runtime is unavailable".to_string()),
+            };
+            cx.emit(TerminalModelEvent::TelnetCredentialChanged);
+            cx.emit(TerminalModelEvent::Wakeup);
+            false
+        }
+    }
+
     pub fn ssh_mfa_request(&self) -> Option<TerminalMfaRequest> {
         self.ssh_mfa_responder
             .as_ref()
@@ -3803,11 +3966,11 @@ impl Terminal {
                 generation,
                 cx,
             );
-        } else if let Some(params) = self.telnet_params.clone() {
-            let Some(event_proxy) = self.event_proxy.clone() else {
-                return false;
-            };
-
+        } else if let Some(params) = self
+            .telnet_base_params
+            .clone()
+            .or_else(|| self.telnet_params.clone())
+        {
             self.connection_state = ConnectionState::Connecting;
             self.set_connection_active(false, cx);
             if let Some(backend) = self.backend.take() {
@@ -3816,20 +3979,15 @@ impl Terminal {
             self.prepare_surface_for_reconnect();
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
-            let recording_tap = self.recording_tap();
+            self.telnet_credential_request = None;
 
-            let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
-            Self::spawn_telnet_disconnect_handler(disconnect_rx, generation, cx);
-            Self::spawn_telnet_connect(
-                params,
-                self.term.clone(),
-                event_proxy,
-                self.performance_metrics.clone(),
-                Some(disconnect_tx),
-                recording_tap,
-                generation,
-                cx,
-            );
+            if params.prompts_for_username() || params.prompts_for_password() {
+                if !self.queue_telnet_credential_request(generation, cx) {
+                    return false;
+                }
+            } else if !self.start_telnet_connection_attempt(params, generation, cx) {
+                return false;
+            }
         } else {
             return false;
         }
@@ -4357,6 +4515,8 @@ mod tests {
             pending_host_key_verification: None,
             serial_params: None,
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -6302,6 +6462,8 @@ mod tests {
             pending_host_key_verification: None,
             serial_params: None,
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -6583,6 +6745,8 @@ mod tests {
             pending_host_key_verification: None,
             serial_params: None,
             telnet_params: None,
+            telnet_base_params: None,
+            telnet_credential_request: None,
             wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),

@@ -13,6 +13,7 @@ use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{
     CredentialEntry, CredentialRepository, StorageManager, traits::Repository,
 };
+use rust_i18n::t;
 
 use super::{CredentialVaultView, form::CredentialForm};
 
@@ -48,9 +49,11 @@ impl CredentialFormWindow {
             let repository = self
                 .storage_manager
                 .get::<CredentialRepository>()
-                .ok_or_else(|| "CredentialRepository 尚未注册".to_string())?;
+                .ok_or_else(|| t!("CredentialVault.repository_unavailable").to_string())?;
             if self.editing {
-                let id = entry.id.ok_or_else(|| "编辑凭据缺少本地 ID".to_string())?;
+                let id = entry
+                    .id
+                    .ok_or_else(|| t!("CredentialForm.error_missing_local_id").to_string())?;
                 repository
                     .update(&entry)
                     .map(|_| id)
@@ -77,9 +80,9 @@ impl CredentialFormWindow {
                     .update(cx, |vault_view, cx| vault_view.reload(cx));
                 window.push_notification(
                     Notification::success(if self.editing {
-                        "凭据已更新"
+                        t!("CredentialForm.updated").to_string()
                     } else {
-                        "凭据已创建"
+                        t!("CredentialForm.created").to_string()
                     })
                     .autohide(true),
                     cx,
@@ -88,7 +91,10 @@ impl CredentialFormWindow {
             }
             Err(error) => {
                 window.push_notification(
-                    Notification::error(format!("保存凭据失败：{error}")).autohide(true),
+                    Notification::error(
+                        t!("CredentialForm.save_failed", error = error).to_string(),
+                    )
+                    .autohide(true),
                     cx,
                 );
             }
@@ -128,14 +134,14 @@ impl Render for CredentialFormWindow {
                     .child(
                         Button::new("credential-form-cancel")
                             .small()
-                            .label("取消")
+                            .label(t!("CredentialForm.cancel").to_string())
                             .on_click(|_, window, _| window.remove_window()),
                     )
                     .child(
                         Button::new("credential-form-save")
                             .small()
                             .primary()
-                            .label("保存")
+                            .label(t!("CredentialForm.save").to_string())
                             .on_click(cx.listener(|form_window, _, window, cx| {
                                 form_window.save(window, cx);
                             })),

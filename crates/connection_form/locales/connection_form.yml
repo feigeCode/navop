@@ -21,3 +21,49 @@ TeamSync:
     en: Key saved
     zh-CN: 已保存密钥
     zh-HK: 已保存密鑰
+
+Credential:
+  manual_input:
+    en: Enter manually
+    zh-CN: 手工输入
+    zh-HK: 手動輸入
+  empty:
+    en: No credentials are available in the keychain. Create one first.
+    zh-CN: 钥匙串中暂无可用凭据，请先创建。
+    zh-HK: 鑰匙圈中暫無可用憑證，請先建立。
+  sync_enabled:
+    en: Included in personal end-to-end encrypted sync
+    zh-CN: 已参与个人端到端加密同步
+    zh-HK: 已參與個人端對端加密同步
+  local_only:
+    en: Local only
+    zh-CN: 仅本地
+    zh-HK: 僅本機
+  missing_username:
+    en: This keychain item no longer contains a username.
+    zh-CN: 当前钥匙串条目已不再包含用户名。
+    zh-HK: 目前鑰匙圈項目已不再包含使用者名稱。
+  missing_password:
+    en: This keychain item no longer contains a password.
+    zh-CN: 当前钥匙串条目已不再包含密码。
+    zh-HK: 目前鑰匙圈項目已不再包含密碼。
+  missing_private_key:
+    en: This keychain item no longer contains a private key.
+    zh-CN: 当前钥匙串条目已不再包含私钥。
+    zh-HK: 目前鑰匙圈項目已不再包含私鑰。
+  missing_passphrase:
+    en: This keychain item no longer contains a private key passphrase.
+    zh-CN: 当前钥匙串条目已不再包含私钥密码。
+    zh-HK: 目前鑰匙圈項目已不再包含私鑰密碼。
+  unavailable:
+    en: "Unavailable keychain item #%{id}"
+    zh-CN: "不可用的钥匙串条目 #%{id}"
+    zh-HK: "不可用的鑰匙圈項目 #%{id}"
+  item_label:
+    en: "%{name} (%{kind})"
+    zh-CN: "%{name}（%{kind}）"
+    zh-HK: "%{name}（%{kind}）"
+  load_failed:
+    en: Unable to load the keychain. Try again later.
+    zh-CN: 无法加载钥匙串列表，请稍后重试。
+    zh-HK: 無法載入鑰匙圈清單，請稍後再試。

@@ -951,6 +951,53 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn open_telnet_terminal(
+        &mut self,
+        conn: StoredConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_telnet_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
+    }
+
+    pub(crate) fn open_telnet_terminal_with_mode(
+        &mut self,
+        conn: StoredConnection,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let conn_id = conn.id.unwrap_or(0);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let tab_id = format!("telnet-terminal-{}-{}", conn_id, timestamp);
+
+        let prefix = format!("telnet-terminal-{}-", conn_id);
+        let tab_container = self.active_tab_container(cx);
+        let existing_count = tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .filter(|t| t.id().starts_with(&prefix))
+            .count();
+        let tab_index = if existing_count > 0 {
+            Some(existing_count + 1)
+        } else {
+            None
+        };
+
+        let terminal_view =
+            cx.new(|cx| TerminalWorkspace::new_telnet_with_index(conn, tab_index, window, cx));
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tc, cx| {
+                let tab = TabItem::new(tab_id, "telnet", terminal_view);
+                tc.add_tab_with_mode(tab, mode, window, cx);
+            });
+        });
+    }
+
     pub(crate) fn open_sftp_view(
         &mut self,
         conn: StoredConnection,
@@ -1650,6 +1697,19 @@ impl HomePage {
                                 .cloned()
                             {
                                 self.open_serial_terminal(conn, window, cx);
+                            }
+                        }
+                    }
+                    TerminalConnectionKind::Telnet => {
+                        let conn_id = terminal_view.read(cx).connection_id(cx);
+                        if let Some(conn_id) = conn_id {
+                            if let Some(conn) = self
+                                .connections
+                                .iter()
+                                .find(|c| c.id == Some(conn_id))
+                                .cloned()
+                            {
+                                self.open_telnet_terminal(conn, window, cx);
                             }
                         }
                     }

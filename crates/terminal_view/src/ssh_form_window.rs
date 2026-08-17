@@ -14,7 +14,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -854,11 +854,8 @@ impl SshFormWindow {
         }
 
         let credential_picker = create_credential_picker(
-            CredentialPickerConfig::new(
-                "ssh-credential",
-                credential_capabilities_for_auth(auth_method),
-            )
-            .reference(credential_reference),
+            CredentialPickerConfig::new("ssh-credential", CredentialCapabilities::all())
+                .reference(credential_reference),
             window,
             cx,
         );
@@ -972,19 +969,6 @@ impl SshFormWindow {
 
     fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         refresh_team_options(&self.team_select, window, cx);
-    }
-
-    fn set_auth_method(
-        &mut self,
-        auth_method: AuthMethodSelection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.auth_method = auth_method;
-        self.credential_picker.update(cx, |picker, cx| {
-            picker.set_capabilities(credential_capabilities_for_auth(auth_method), window, cx);
-        });
-        cx.notify();
     }
 
     fn set_jump_auth_method(
@@ -1932,181 +1916,92 @@ impl SshFormWindow {
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
             .child(self.render_form_row(&t!("SSH.host"), self.render_form_input(&self.host_input)))
             .child(self.render_form_row(&t!("SSH.port"), self.render_form_input(&self.port_input)))
-            .child(self.render_form_row("钥匙串", self.credential_picker.clone()))
+            .child(self.render_form_row(&t!("SSH.keychain"), self.credential_picker.clone()))
             .when(credential_is_manual, |form| {
-                form.child(self.render_form_row(
-                    &t!("SSH.username"),
-                    self.render_form_input(&self.username_input),
-                ))
-                .child(
+                form.child(
                     self.render_form_row(
-                        "",
+                        &t!("SSH.username"),
                         h_flex()
+                            .w_full()
                             .items_center()
-                            .gap_1()
+                            .gap_2()
                             .child(
-                                Checkbox::new("save-username")
-                                    .label(t!("SSH.save_username_desc").to_string())
-                                    .checked(self.save_username)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.save_username = !this.save_username;
-                                        cx.notify();
-                                    })),
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .child(self.render_form_input(&self.username_input)),
                             )
                             .child(
-                                Button::new("save-username-help")
-                                    .icon(IconName::Info)
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip(t!("SSH.save_username_hint").to_string()),
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_shrink_0()
+                                    .child(
+                                        Checkbox::new("save-username")
+                                            .label(t!("SSH.save_username_desc").to_string())
+                                            .checked(self.save_username)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.save_username = !this.save_username;
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("save-username-help")
+                                            .icon(IconName::Info)
+                                            .ghost()
+                                            .xsmall()
+                                            .tooltip(t!("SSH.save_username_hint").to_string()),
+                                    ),
                             ),
                     ),
                 )
             })
-            .child(
-                self.render_form_row(
-                    &t!("SSH.auth_method"),
-                    h_flex()
-                        .gap_4()
-                        .flex_wrap()
-                        .child(
-                            Radio::new("password")
-                                .label(t!("SSH.password").to_string())
-                                .checked(auth_method == AuthMethodSelection::Password)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.set_auth_method(AuthMethodSelection::Password, window, cx);
-                                })),
-                        )
-                        .child(
-                            Radio::new("private-key")
-                                .label(t!("SSH.private_key").to_string())
-                                .checked(auth_method == AuthMethodSelection::PrivateKey)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.set_auth_method(
-                                        AuthMethodSelection::PrivateKey,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            Radio::new("private-key-content")
-                                .label(t!("SSH.private_key_content").to_string())
-                                .checked(auth_method == AuthMethodSelection::PrivateKeyContent)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.set_auth_method(
-                                        AuthMethodSelection::PrivateKeyContent,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            Radio::new("agent")
-                                .label(t!("SSH.agent").to_string())
-                                .checked(auth_method == AuthMethodSelection::Agent)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.set_auth_method(AuthMethodSelection::Agent, window, cx);
-                                })),
-                        )
-                        .child(
-                            Radio::new("auto-publickey")
-                                .label(t!("SSH.auto_publickey").to_string())
-                                .checked(auth_method == AuthMethodSelection::AutoPublicKey)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.set_auth_method(
-                                        AuthMethodSelection::AutoPublicKey,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        ),
-                ),
-            )
             .when(
                 credential_is_manual && auth_method == AuthMethodSelection::Password,
                 |this| {
-                    this.child(self.render_form_row(
-                        &t!("SSH.password"),
-                        self.render_form_input(&self.password_input).mask_toggle(),
-                    ))
-                    .child(
+                    this.child(
                         self.render_form_row(
-                            "",
+                            &t!("SSH.password"),
                             h_flex()
+                                .w_full()
                                 .items_center()
-                                .gap_1()
+                                .gap_2()
+                                .child(div().min_w_0().flex_1().child(
+                                    self.render_form_input(&self.password_input).mask_toggle(),
+                                ))
                                 .child(
-                                    Checkbox::new("save-password")
-                                        .label(t!("SSH.save_password_desc").to_string())
-                                        .checked(self.save_password)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.save_password = !this.save_password;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    Button::new("save-password-help")
-                                        .icon(IconName::Info)
-                                        .ghost()
-                                        .xsmall()
-                                        .tooltip(
-                                            if self.save_password {
-                                                t!("SSH.save_password_enabled_hint")
-                                            } else {
-                                                t!("SSH.save_password_disabled_hint")
-                                            }
-                                            .to_string(),
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .flex_shrink_0()
+                                        .child(
+                                            Checkbox::new("save-password")
+                                                .label(t!("SSH.save_password_desc").to_string())
+                                                .checked(self.save_password)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_password = !this.save_password;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("save-password-help")
+                                                .icon(IconName::Info)
+                                                .ghost()
+                                                .xsmall()
+                                                .tooltip(
+                                                    if self.save_password {
+                                                        t!("SSH.save_password_enabled_hint")
+                                                    } else {
+                                                        t!("SSH.save_password_disabled_hint")
+                                                    }
+                                                    .to_string(),
+                                                ),
                                         ),
                                 ),
                         ),
                     )
                 },
             )
-            .when(
-                credential_is_manual && auth_method == AuthMethodSelection::PrivateKey,
-                |this| {
-                    this.child(self.render_form_row(
-                        &t!("SSH.key_path"),
-                        self.render_form_input(&self.key_path_input),
-                    ))
-                    .child(self.render_form_row(
-                        &t!("SSH.passphrase"),
-                        self.render_form_input(&self.passphrase_input).mask_toggle(),
-                    ))
-                },
-            )
-            .when(
-                credential_is_manual && auth_method == AuthMethodSelection::PrivateKeyContent,
-                |this| {
-                    this.child(self.render_form_row(
-                        &t!("SSH.private_key_content"),
-                        self.render_form_input(&self.private_key_content_input),
-                    ))
-                    .child(self.render_form_row(
-                        &t!("SSH.passphrase"),
-                        self.render_form_input(&self.passphrase_input).mask_toggle(),
-                    ))
-                    .child(
-                        h_flex().justify_center().child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("SSH.private_key_content_sync_hint").to_string()),
-                        ),
-                    )
-                },
-            )
-            .when(auth_method == AuthMethodSelection::AutoPublicKey, |this| {
-                this.child(
-                    h_flex().justify_center().child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("SSH.auto_publickey_hint").to_string()),
-                    ),
-                )
-            })
             .child(
                 self.render_form_row(
                     &t!("SSH.keyboard_interactive"),
@@ -2345,7 +2240,9 @@ impl SshFormWindow {
                     &t!("SSH.jump_port"),
                     self.render_form_input(&self.jump_port_input),
                 ))
-                .child(self.render_form_row("钥匙串", self.jump_credential_picker.clone()))
+                .child(
+                    self.render_form_row(&t!("SSH.keychain"), self.jump_credential_picker.clone()),
+                )
                 .when(jump_credential_is_manual, |form| {
                     form.child(self.render_form_row(
                         &t!("SSH.jump_username"),
@@ -2591,7 +2488,9 @@ impl SshFormWindow {
                     &t!("SSH.proxy_port"),
                     self.render_form_input(&self.proxy_port_input),
                 ))
-                .child(self.render_form_row("钥匙串", self.proxy_credential_picker.clone()))
+                .child(
+                    self.render_form_row(&t!("SSH.keychain"), self.proxy_credential_picker.clone()),
+                )
                 .when(proxy_credential_is_manual, |form| {
                     form.child(self.render_form_row(
                         &t!("SSH.proxy_username"),

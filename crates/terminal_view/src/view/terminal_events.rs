@@ -36,7 +36,7 @@ impl TerminalView {
         match event {
             TerminalModelEvent::Wakeup => {
                 self.sync_recording_ticker(cx);
-                self.sync_ssh_credential_inputs(window, cx);
+                self.sync_credential_inputs(window, cx);
                 self.sync_ssh_mfa_inputs(window, cx);
                 self.sync_zmodem_picker(cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
@@ -54,7 +54,12 @@ impl TerminalView {
                 self.refresh_history_prompt_matches(cx);
             }
             TerminalModelEvent::SshCredentialChanged => {
-                self.sync_ssh_credential_inputs(window, cx);
+                self.sync_credential_inputs(window, cx);
+                self.focus_terminal_after_connect_if_ready(window, cx);
+                cx.notify();
+            }
+            TerminalModelEvent::TelnetCredentialChanged => {
+                self.sync_credential_inputs(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
@@ -94,36 +99,57 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn sync_ssh_credential_inputs(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(request) = self.terminal.read(cx).ssh_credential_request() else {
-            self.ssh_credential_inputs = None;
+    pub(super) fn sync_credential_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let request = {
+            let terminal = self.terminal.read(cx);
+            terminal
+                .ssh_credential_request()
+                .map(TerminalCredentialRequest::Ssh)
+                .or_else(|| {
+                    terminal
+                        .telnet_credential_request()
+                        .map(TerminalCredentialRequest::Telnet)
+                })
+        };
+        let Some(request) = request else {
+            self.credential_inputs = None;
             return;
         };
 
-        let inputs_match_request = self.ssh_credential_inputs.as_ref().is_some_and(|inputs| {
-            inputs.request.generation() == request.generation()
-                && inputs.request.username == request.username
-                && inputs.request.password == request.password
-        });
+        let inputs_match_request = self
+            .credential_inputs
+            .as_ref()
+            .is_some_and(|inputs| inputs.request == request);
 
         if !inputs_match_request {
-            let username = request.username.then(|| {
+            let is_telnet = request.is_telnet();
+            let username = request.username().then(|| {
                 cx.new(|cx| {
-                    InputState::new(window, cx).placeholder(t!("SshSession.username").to_string())
+                    InputState::new(window, cx).placeholder(
+                        if is_telnet {
+                            t!("TelnetSession.username")
+                        } else {
+                            t!("SshSession.username")
+                        }
+                        .to_string(),
+                    )
                 })
             });
-            let password = request.password.then(|| {
+            let password = request.password().then(|| {
                 cx.new(|cx| {
                     InputState::new(window, cx)
-                        .placeholder(t!("SshSession.password").to_string())
+                        .placeholder(
+                            if is_telnet {
+                                t!("TelnetSession.password")
+                            } else {
+                                t!("SshSession.password")
+                            }
+                            .to_string(),
+                        )
                         .masked(true)
                 })
             });
-            self.ssh_credential_inputs = Some(SshCredentialInputs {
+            self.credential_inputs = Some(TerminalCredentialInputs {
                 request,
                 username,
                 password,
@@ -131,7 +157,7 @@ impl TerminalView {
         }
 
         let first_input = self
-            .ssh_credential_inputs
+            .credential_inputs
             .as_ref()
             .and_then(|inputs| inputs.username.as_ref().or(inputs.password.as_ref()))
             .cloned();
@@ -140,27 +166,37 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn submit_ssh_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(inputs) = self.ssh_credential_inputs.as_ref() else {
+    pub(super) fn submit_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(inputs) = self.credential_inputs.as_ref() else {
             return;
         };
         let generation = inputs.request.generation();
-        let credentials = TerminalSshCredentials {
-            username: inputs
-                .username
-                .as_ref()
-                .map(|input| input.read(cx).text().to_string()),
-            password: inputs
-                .password
-                .as_ref()
-                .map(|input| input.read(cx).text().to_string()),
+        let username = inputs
+            .username
+            .as_ref()
+            .map(|input| input.read(cx).text().to_string());
+        let password = inputs
+            .password
+            .as_ref()
+            .map(|input| input.read(cx).text().to_string());
+        let submitted = match &inputs.request {
+            TerminalCredentialRequest::Ssh(_) => self.terminal.update(cx, |terminal, cx| {
+                terminal.submit_ssh_credentials(
+                    generation,
+                    TerminalSshCredentials { username, password },
+                    cx,
+                )
+            }),
+            TerminalCredentialRequest::Telnet(_) => self.terminal.update(cx, |terminal, cx| {
+                terminal.submit_telnet_credentials(
+                    generation,
+                    TerminalTelnetCredentials { username, password },
+                    cx,
+                )
+            }),
         };
-
-        let submitted = self.terminal.update(cx, |terminal, cx| {
-            terminal.submit_ssh_credentials(generation, credentials, cx)
-        });
         if submitted {
-            self.ssh_credential_inputs = None;
+            self.credential_inputs = None;
             self.focus_terminal_after_connect = true;
             self.focus_terminal_after_connect_if_ready(window, cx);
         }
@@ -230,7 +266,8 @@ impl TerminalView {
             let terminal = self.terminal.read(cx);
             (
                 terminal.connection_state().clone(),
-                terminal.ssh_credential_request().is_some(),
+                terminal.ssh_credential_request().is_some()
+                    || terminal.telnet_credential_request().is_some(),
                 terminal.ssh_mfa_request().is_some(),
             )
         };

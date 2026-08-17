@@ -72,7 +72,7 @@ impl TerminalView {
                     .rounded_lg()
                     .shadow_lg()
                     .child(self.render_connection_dialog_title(cx))
-                    .when_some(self.render_ssh_auth_form(cx), |this, form| this.child(form)),
+                    .when_some(self.render_auth_form(cx), |this, form| this.child(form)),
             )
             .into_any_element()
     }
@@ -154,7 +154,10 @@ impl TerminalView {
 
     fn render_connection_dialog_title(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let title = if self.terminal.read(cx).ssh_credential_request().is_some() {
+        let terminal = self.terminal.read(cx);
+        let title = if terminal.telnet_credential_request().is_some() {
+            t!("TelnetSession.credentials_required")
+        } else if terminal.ssh_credential_request().is_some() {
             t!("SshSession.credentials_required")
         } else {
             t!("SshSession.authentication_required")
@@ -177,17 +180,28 @@ impl TerminalView {
             .into_any_element()
     }
 
-    fn render_ssh_auth_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.render_ssh_credential_form(cx)
+    fn render_auth_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.render_credential_form(cx)
             .or_else(|| self.render_ssh_mfa_form(cx))
     }
 
-    fn render_ssh_credential_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let request = self.terminal.read(cx).ssh_credential_request()?;
-        let inputs = self.ssh_credential_inputs.as_ref()?;
-        if inputs.request.generation() != request.generation() {
+    fn render_credential_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let inputs = self.credential_inputs.as_ref()?;
+        let request_matches = {
+            let terminal = self.terminal.read(cx);
+            match &inputs.request {
+                TerminalCredentialRequest::Ssh(request) => {
+                    terminal.ssh_credential_request().as_ref() == Some(request)
+                }
+                TerminalCredentialRequest::Telnet(request) => {
+                    terminal.telnet_credential_request().as_ref() == Some(request)
+                }
+            }
+        };
+        if !request_matches {
             return None;
         }
+        let is_telnet = inputs.request.is_telnet();
 
         Some(
             v_flex()
@@ -199,7 +213,11 @@ impl TerminalView {
                         .w(px(400.0))
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t!("SshSession.credentials_hint")),
+                        .child(if is_telnet {
+                            t!("TelnetSession.credentials_hint")
+                        } else {
+                            t!("SshSession.credentials_hint")
+                        }),
                 )
                 .when_some(inputs.username.as_ref(), |this, input| {
                     this.child(
@@ -210,7 +228,11 @@ impl TerminalView {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(t!("SshSession.username")),
+                                    .child(if is_telnet {
+                                        t!("TelnetSession.username")
+                                    } else {
+                                        t!("SshSession.username")
+                                    }),
                             )
                             .child(Input::new(input)),
                     )
@@ -224,17 +246,21 @@ impl TerminalView {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(t!("SshSession.password")),
+                                    .child(if is_telnet {
+                                        t!("TelnetSession.password")
+                                    } else {
+                                        t!("SshSession.password")
+                                    }),
                             )
                             .child(Input::new(input).mask_toggle()),
                     )
                 })
                 .child(
-                    Button::new("submit-ssh-credentials")
+                    Button::new("submit-terminal-credentials")
                         .label(t!("Common.ok"))
                         .primary()
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.submit_ssh_credentials(window, cx);
+                            this.submit_credentials(window, cx);
                         })),
                 )
                 .into_any_element(),

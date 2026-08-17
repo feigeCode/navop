@@ -994,9 +994,169 @@ pub struct TelnetParams {
     /// 端口（默认 23）
     #[serde(default = "default_telnet_port")]
     pub port: u16,
+    /// Optional field-level reference to the local credential vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
+    /// 当前设备缺少引用的钥匙串时，仅本次连接提示输入用户名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_username: Option<bool>,
+    /// 当前设备缺少引用的钥匙串时，仅本次连接提示输入密码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_password: Option<bool>,
     /// 可选登录脚本；旧连接没有该字段时保持为空。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub login_script: Vec<TelnetLoginStep>,
+}
+
+impl TelnetParams {
+    pub fn prompts_for_username(&self) -> bool {
+        self.prompt_username.unwrap_or(false)
+    }
+
+    pub fn prompts_for_password(&self) -> bool {
+        self.prompt_password.unwrap_or(false)
+    }
+
+    /// 返回登录脚本中仍需要由运行时凭据填充的字段。
+    ///
+    /// 只有 `send` 为空且 `expect` 能明确识别为用户名或密码提示时，
+    /// 才会把该字段交给临时凭据输入框，避免把敏感信息发送到不明确的
+    /// 自定义正则步骤中。
+    pub fn login_credential_prompt_fields(&self) -> (bool, bool) {
+        self.login_script
+            .iter()
+            .filter(|step| step.send.is_empty())
+            .filter_map(|step| match telnet_expect_credential_kind(&step.expect) {
+                Some(TelnetExpectCredentialKind::Username) => Some((true, false)),
+                Some(TelnetExpectCredentialKind::Password) => Some((false, true)),
+                None => None,
+            })
+            .fold(
+                (false, false),
+                |(username, password), (step_username, step_password)| {
+                    (username || step_username, password || step_password)
+                },
+            )
+    }
+
+    /// 将临时用户名/密码填入 send 为空的对应 expect 步骤。
+    ///
+    /// 显式配置的 send 始终优先；无法明确识别为用户名或密码提示的步骤保持原样。
+    pub fn apply_login_credentials(&mut self, username: Option<&str>, password: Option<&str>) {
+        for step in &mut self.login_script {
+            if !step.send.is_empty() {
+                continue;
+            }
+            step.send = match telnet_expect_credential_kind(&step.expect) {
+                Some(TelnetExpectCredentialKind::Username) => username
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_default(),
+                Some(TelnetExpectCredentialKind::Password) => password
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_default(),
+                None => "",
+            }
+            .to_string();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelnetExpectCredentialKind {
+    Username,
+    Password,
+}
+
+/// 根据 expect 正则表达式中的提示词判断它需要用户名还是密码。
+///
+/// 这里识别的是正则源码，而真正的服务端输出匹配仍由 Telnet expect 引擎执行。
+/// 同时包含用户名和密码提示词的宽泛规则视为不明确，避免发送错误的敏感信息。
+pub fn telnet_expect_credential_kind(expect: &str) -> Option<TelnetExpectCredentialKind> {
+    let expect = expect.to_ascii_lowercase();
+    let username_markers = ["login", "username", "user name", "account"];
+    let password_markers = ["password", "passwd", "passcode"];
+    let username = username_markers
+        .iter()
+        .any(|marker| contains_telnet_marker(&expect, marker));
+    let password = password_markers
+        .iter()
+        .any(|marker| contains_telnet_marker(&expect, marker));
+    match (username, password) {
+        (true, false)
+            if username_markers
+                .iter()
+                .any(|marker| contains_telnet_prompt_marker(&expect, marker)) =>
+        {
+            Some(TelnetExpectCredentialKind::Username)
+        }
+        (false, true)
+            if password_markers
+                .iter()
+                .any(|marker| contains_telnet_prompt_marker(&expect, marker)) =>
+        {
+            Some(TelnetExpectCredentialKind::Password)
+        }
+        _ => None,
+    }
+}
+
+fn contains_telnet_marker(expect: &str, marker: &str) -> bool {
+    telnet_marker_occurrences(expect, marker).next().is_some()
+}
+
+fn contains_telnet_prompt_marker(expect: &str, marker: &str) -> bool {
+    telnet_marker_occurrences(expect, marker).any(|(_, end)| telnet_prompt_suffix(&expect[end..]))
+}
+
+fn telnet_marker_occurrences<'a>(
+    expect: &'a str,
+    marker: &'a str,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    expect.match_indices(marker).filter_map(move |(start, _)| {
+        let end = start + marker.len();
+        let has_word_boundary_before = start == 0
+            || !expect[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_alphanumeric() || character == '_');
+        let has_word_boundary_after = end == expect.len()
+            || !expect[end..]
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_alphanumeric() || character == '_');
+        (has_word_boundary_before && has_word_boundary_after).then_some((start, end))
+    })
+}
+
+fn telnet_prompt_suffix(mut suffix: &str) -> bool {
+    loop {
+        suffix = suffix.trim_start();
+        let Some(first) = suffix.chars().next() else {
+            return true;
+        };
+        if matches!(first, ':' | '>' | '#') {
+            return true;
+        }
+        if first == '$' {
+            return true;
+        }
+        if first == '\\' {
+            let mut indices = suffix.char_indices();
+            indices.next();
+            indices.next();
+            let next_index = indices
+                .next()
+                .map(|(index, _)| index)
+                .unwrap_or(suffix.len());
+            suffix = &suffix[next_index..];
+            continue;
+        }
+        if first.is_ascii_punctuation() {
+            suffix = &suffix[first.len_utf8()..];
+            continue;
+        }
+        return false;
+    }
 }
 
 fn default_telnet_port() -> u16 {
@@ -1008,6 +1168,9 @@ impl Default for TelnetParams {
         Self {
             host: String::new(),
             port: 23,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
             login_script: Vec::new(),
         }
     }
@@ -3058,6 +3221,9 @@ mod serial_tests {
         let params = TelnetParams {
             host: "192.168.1.1".to_string(),
             port: 2323,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
             login_script: vec![
                 TelnetLoginStep {
                     expect: "login:".to_string(),
@@ -3091,6 +3257,9 @@ mod serial_tests {
         let params = TelnetParams {
             host: "switch.example.com".to_string(),
             port: 23,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
             login_script: vec![TelnetLoginStep {
                 expect: "Username:".to_string(),
                 send: "admin".to_string(),
@@ -3107,6 +3276,129 @@ mod serial_tests {
         assert_eq!(parsed.login_script.len(), 1);
         assert_eq!(parsed.login_script[0].expect, "Username:");
         assert_eq!(parsed.login_script[0].send, "admin");
+    }
+
+    #[test]
+    fn telnet_params_credential_reference_and_prompt_policy_roundtrip() {
+        let params = TelnetParams {
+            host: "switch.example.com".to_string(),
+            port: 23,
+            credential_reference: Some(CredentialReference {
+                credential_id: 42,
+                credential_cloud_id: Some("credential-cloud-id".to_string()),
+                username: true,
+                password: true,
+                private_key: false,
+                passphrase: false,
+            }),
+            prompt_username: Some(true),
+            prompt_password: Some(true),
+            login_script: Vec::new(),
+        };
+
+        let json = serde_json::to_string(&params).expect("TelnetParams 应可序列化");
+        let parsed: TelnetParams = serde_json::from_str(&json).expect("TelnetParams 应可反序列化");
+        assert_eq!(parsed, params);
+        assert!(parsed.prompts_for_username());
+        assert!(parsed.prompts_for_password());
+    }
+
+    #[test]
+    fn telnet_login_credentials_fill_only_unambiguous_empty_send_steps() {
+        let mut params = TelnetParams {
+            host: "switch.example.com".to_string(),
+            port: 23,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
+            login_script: vec![
+                TelnetLoginStep {
+                    expect: r"(?i)(?:login|username)\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: r"(?i)password\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: r"(?i)(?:username|password)\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: "token:".to_string(),
+                    send: "explicit".to_string(),
+                },
+            ],
+        };
+
+        params.apply_login_credentials(Some("admin"), Some("secret"));
+
+        assert_eq!(params.login_script[0].send, "admin");
+        assert_eq!(params.login_script[1].send, "secret");
+        assert!(params.login_script[2].send.is_empty());
+        assert_eq!(params.login_script[3].send, "explicit");
+    }
+
+    #[test]
+    fn telnet_login_credential_prompt_fields_only_include_injectable_empty_steps() {
+        let params = TelnetParams {
+            host: "switch.example.com".to_string(),
+            port: 23,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
+            login_script: vec![
+                TelnetLoginStep {
+                    expect: r"(?i)(?:login|username)\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: r"(?i)(?:password|passwd|passcode)\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: r"(?i)(?:username|password)\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: r"(?i)login\s*:".to_string(),
+                    send: "explicit-user".to_string(),
+                },
+                TelnetLoginStep {
+                    expect: "token:".to_string(),
+                    send: String::new(),
+                },
+            ],
+        };
+
+        assert_eq!(params.login_credential_prompt_fields(), (true, true));
+
+        let ambiguous_or_explicit_only = TelnetParams {
+            login_script: params.login_script[2..].to_vec(),
+            ..params
+        };
+        assert_eq!(
+            ambiguous_or_explicit_only.login_credential_prompt_fields(),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn telnet_expect_credential_kind_requires_a_prompt_shaped_expression() {
+        assert_eq!(
+            telnet_expect_credential_kind(r"(?i)(?:login|username)\s*[:>]\s*$"),
+            Some(TelnetExpectCredentialKind::Username)
+        );
+        assert_eq!(
+            telnet_expect_credential_kind(r"(?i)(?:password|passwd)\s*[:>]\s*$"),
+            Some(TelnetExpectCredentialKind::Password)
+        );
+        assert_eq!(telnet_expect_credential_kind(r"(?i)password expired"), None);
+        assert_eq!(
+            telnet_expect_credential_kind(r"(?i)username and password are required"),
+            None
+        );
+        assert_eq!(telnet_expect_credential_kind("not_a_password_prompt"), None);
     }
 
     #[test]

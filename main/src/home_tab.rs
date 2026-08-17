@@ -43,10 +43,10 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::settings::{AppSettings, HomeConnectionLayout, HomePageStyle, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
-    PendingCloudDeletionRepository, RedisMode, RemoteDesktopParams,
-    RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, TeamMembershipState,
-    Workspace, WorkspaceRepository,
+    ActiveConnections, ConnectionRepository, ConnectionType, CredentialResolutionError,
+    DatabaseType, GlobalStorageState, PendingCloudDeletionRepository, RedisMode,
+    RemoteDesktopParams, RemoteDesktopProtocol as StoredRemoteDesktopProtocol, SshAuthMethod,
+    StoredConnection, TeamMembershipState, TelnetLoginStep, Workspace, WorkspaceRepository,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
 use port_forwarding::PortForwardingRuntime;

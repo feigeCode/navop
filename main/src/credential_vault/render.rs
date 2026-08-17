@@ -11,8 +11,9 @@ use gpui_component::{
     v_flex,
 };
 use one_core::storage::CredentialSummary;
+use rust_i18n::t;
 
-use super::form::credential_kind_values;
+use super::form::{credential_kind_label, credential_kind_values};
 use super::{CredentialVaultView, button_id, vault_unlocked};
 
 impl Render for CredentialVaultView {
@@ -55,7 +56,7 @@ impl Render for CredentialVaultView {
                             .child(
                                 Button::new("credential-vault-add")
                                     .icon(IconName::Plus)
-                                    .label("新建凭据")
+                                    .label(t!("CredentialVault.create").to_string())
                                     .small()
                                     .primary()
                                     .on_click(cx.listener(|view, _, window, cx| {
@@ -65,7 +66,7 @@ impl Render for CredentialVaultView {
                             .child(
                                 Button::new("credential-vault-refresh")
                                     .icon(IconName::Refresh)
-                                    .label("刷新")
+                                    .label(t!("CredentialVault.refresh").to_string())
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(|view, _, _, cx| view.reload(cx))),
@@ -106,14 +107,17 @@ impl Render for CredentialVaultView {
 
 fn header(unlocked: bool, total: usize, cx: &gpui::App) -> impl IntoElement {
     let (status, color) = if unlocked {
-        ("已解锁", cx.theme().success)
+        (
+            t!("CredentialVault.unlocked").to_string(),
+            cx.theme().success,
+        )
     } else {
-        ("已锁定", cx.theme().warning)
+        (t!("CredentialVault.locked").to_string(), cx.theme().warning)
     };
     let security_message = if unlocked {
-        "敏感字段使用主密钥加密保存，仅在打开单条凭据进行编辑时解密。"
+        t!("CredentialVault.security_unlocked").to_string()
     } else {
-        "摘要仍可查看；编辑包含密码或私钥的凭据前，需要先解锁主密钥。"
+        t!("CredentialVault.security_locked").to_string()
     };
 
     v_flex()
@@ -133,7 +137,7 @@ fn header(unlocked: bool, total: usize, cx: &gpui::App) -> impl IntoElement {
                     div()
                         .text_lg()
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child("钥匙串"),
+                        .child(t!("CredentialVault.title").to_string()),
                 )
                 .child(
                     div()
@@ -151,7 +155,7 @@ fn header(unlocked: bool, total: usize, cx: &gpui::App) -> impl IntoElement {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!("{total} 条凭据")),
+                        .child(t!("CredentialVault.total_count", count = total).to_string()),
                 ),
         )
         .child(
@@ -181,9 +185,14 @@ fn credential_list(
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(if total == filtered {
-                    format!("按最近更新时间排列，共 {total} 条")
+                    t!("CredentialVault.sorted_count", count = total).to_string()
                 } else {
-                    format!("找到 {filtered} 条，共 {total} 条")
+                    t!(
+                        "CredentialVault.filtered_count",
+                        filtered = filtered,
+                        total = total
+                    )
+                    .to_string()
                 }),
         )
         .child(
@@ -212,14 +221,14 @@ fn empty_state(
     let (icon, title, description) = if has_search_query {
         (
             IconName::Search,
-            "没有匹配的凭据",
-            "请尝试使用其他名称、类型或用户名进行搜索。",
+            t!("CredentialVault.no_matches").to_string(),
+            t!("CredentialVault.no_matches_description").to_string(),
         )
     } else {
         (
             IconName::Key,
-            "设置钥匙串",
-            "创建可供 SSH、数据库、Redis、MongoDB、RDP/VNC、代理和跳板机引用的用户名、密码与私钥。",
+            t!("CredentialVault.empty_title").to_string(),
+            t!("CredentialVault.empty_description").to_string(),
         )
     };
 
@@ -260,7 +269,7 @@ fn empty_state(
             this.child(
                 Button::new("credential-vault-empty-add")
                     .icon(IconName::Plus)
-                    .label("新建凭据")
+                    .label(t!("CredentialVault.create").to_string())
                     .primary()
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.open_create(window, cx);
@@ -295,7 +304,7 @@ fn load_error_state(error: String, cx: &gpui::Context<CredentialVaultView>) -> i
             div()
                 .text_lg()
                 .font_weight(gpui::FontWeight::BOLD)
-                .child("无法加载钥匙串"),
+                .child(t!("CredentialVault.load_failed_title").to_string()),
         )
         .child(
             div()
@@ -307,7 +316,7 @@ fn load_error_state(error: String, cx: &gpui::Context<CredentialVaultView>) -> i
         .child(
             Button::new("credential-vault-retry")
                 .icon(IconName::Refresh)
-                .label("重试")
+                .label(t!("CredentialVault.retry").to_string())
                 .on_click(cx.listener(|view, _, _, cx| view.reload(cx))),
         )
 }
@@ -323,10 +332,10 @@ fn credential_row(
     let username = summary
         .username
         .clone()
-        .unwrap_or_else(|| "未设置用户名".to_string());
+        .unwrap_or_else(|| t!("CredentialVault.username_not_set").to_string());
     let kind_chips = credential_kind_values(&summary.kind)
         .into_iter()
-        .map(|kind| chip(kind, cx).into_any_element())
+        .map(|kind| chip(credential_kind_label(&kind), cx).into_any_element())
         .collect::<Vec<_>>();
     let chips = capability_chips(&summary);
     v_flex()
@@ -360,9 +369,9 @@ fn credential_row(
                                 .children(kind_chips)
                                 .child(chip(
                                     if summary.sync_enabled {
-                                        "允许同步"
+                                        t!("CredentialVault.sync_enabled").to_string()
                                     } else {
-                                        "仅本地"
+                                        t!("CredentialVault.local_only").to_string()
                                     },
                                     cx,
                                 )),
@@ -379,7 +388,7 @@ fn credential_row(
                         .icon(IconName::Edit)
                         .ghost()
                         .small()
-                        .tooltip("编辑")
+                        .tooltip(t!("CredentialVault.edit").to_string())
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.open_edit(id, window, cx);
                         })),
@@ -389,7 +398,7 @@ fn credential_row(
                         .icon(IconName::Remove)
                         .ghost()
                         .small()
-                        .tooltip("删除")
+                        .tooltip(t!("CredentialVault.delete").to_string())
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.confirm_delete(id, name.clone(), window, cx);
                         })),
@@ -402,10 +411,22 @@ fn credential_row(
 
 fn capability_chips(summary: &CredentialSummary) -> Vec<gpui::AnyElement> {
     [
-        (summary.has_password, "密码"),
-        (summary.has_private_key_path, "私钥路径"),
-        (summary.has_private_key_content, "私钥内容"),
-        (summary.has_passphrase, "私钥密码"),
+        (
+            summary.has_password,
+            t!("CredentialVault.capability_password").to_string(),
+        ),
+        (
+            summary.has_private_key_path,
+            t!("CredentialVault.capability_private_key_path").to_string(),
+        ),
+        (
+            summary.has_private_key_content,
+            t!("CredentialVault.capability_private_key_content").to_string(),
+        ),
+        (
+            summary.has_passphrase,
+            t!("CredentialVault.capability_passphrase").to_string(),
+        ),
     ]
     .into_iter()
     .filter(|(present, _)| *present)
@@ -440,7 +461,7 @@ mod tests {
         let source = include_str!("render.rs");
 
         assert!(source.contains("Button::new(\"credential-vault-add\")"));
-        assert!(source.contains(".label(\"新建凭据\")"));
+        assert!(source.contains("CredentialVault.create"));
         assert!(source.contains("IconName::Search"));
         assert!(source.contains(".cleanable(true)"));
         assert!(source.contains(".id(\"credential-vault-content\")"));
@@ -454,8 +475,8 @@ mod tests {
     fn credential_vault_has_distinct_empty_and_search_states() {
         let source = include_str!("render.rs");
 
-        assert!(source.contains("\"设置钥匙串\""));
-        assert!(source.contains("\"没有匹配的凭据\""));
+        assert!(source.contains("CredentialVault.empty_title"));
+        assert!(source.contains("CredentialVault.no_matches"));
         assert!(source.contains("Button::new(\"credential-vault-empty-add\")"));
         assert!(source.contains("Button::new(\"credential-vault-retry\")"));
     }

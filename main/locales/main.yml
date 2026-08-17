@@ -757,6 +757,10 @@ SessionLogs:
     en: Serial
     zh-CN: 串口
     zh-HK: 串列
+  telnet:
+    en: Telnet
+    zh-CN: Telnet
+    zh-HK: Telnet
   skipped:
     en: "%{count} files skipped"
     zh-CN: "跳过 %{count} 个文件"
@@ -1346,6 +1350,10 @@ Connection:
     en: Copy SSH Target
     zh-CN: 复制 SSH 地址
     zh-HK: 複製 SSH 位址
+  copy_telnet_target:
+    en: Copy Telnet Address
+    zh-CN: 复制 Telnet 地址
+    zh-HK: 複製 Telnet 地址
   copy_redis_target:
     en: Copy Redis Address
     zh-CN: 复制 Redis 地址
@@ -1459,6 +1467,10 @@ Connection:
       en: Embedded private key configured; the private key content was not copied for security
       zh-CN: 已配置内嵌私钥，出于安全原因未复制私钥正文
       zh-HK: 已設定內嵌私鑰，基於安全原因未複製私鑰內容
+    login_script_send_redacted:
+      en: Redacted login script credential (copy full parameters explicitly if it must be shared)
+      zh-CN: 登录脚本凭据已隐藏（如确需分享请显式复制完整参数）
+      zh-HK: 登入腳本憑證已隱藏（如確需分享請明確複製完整參數）
   Share:
     title:
       en: "[Connection Info]"
@@ -1648,6 +1660,10 @@ Connection:
       en: Serial
       zh-CN: 串口
       zh-HK: 串列埠
+    type_telnet:
+      en: Telnet
+      zh-CN: Telnet
+      zh-HK: Telnet
     type_port_forwarding:
       en: Port Forwarding
       zh-CN: 端口转发
@@ -1787,6 +1803,10 @@ NewConnection:
     en: Serial device connection
     zh-CN: 串口设备连接
     zh-HK: 串口裝置連線
+  description_telnet:
+    en: Telnet network device connection
+    zh-CN: Telnet 网络设备连接
+    zh-HK: Telnet 網絡設備連線
   description_port_forwarding:
     en: SSH local, remote, or SOCKS port forwarding
     zh-CN: SSH 本地、远程端口转发或 SOCKS 隧道
@@ -3971,3 +3991,419 @@ SSH:
     en: Edit SSH Connection
     zh-CN: 编辑 SSH 连接
     zh-HK: 編輯 SSH 連線
+
+CredentialVault:
+  title:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
+  search_placeholder:
+    en: Search by name, type, or username
+    zh-CN: 按名称、类型或用户名搜索
+    zh-HK: 按名稱、類型或使用者名稱搜尋
+  repository_unavailable:
+    en: The credential repository is unavailable
+    zh-CN: 凭据仓库尚未注册
+    zh-HK: 憑證儲存庫尚未註冊
+  create:
+    en: New Credential
+    zh-CN: 新建凭据
+    zh-HK: 新增憑證
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  unlocked:
+    en: Unlocked
+    zh-CN: 已解锁
+    zh-HK: 已解鎖
+  locked:
+    en: Locked
+    zh-CN: 已锁定
+    zh-HK: 已鎖定
+  security_unlocked:
+    en: Sensitive fields are encrypted with the master key and decrypted only while editing an individual credential.
+    zh-CN: 敏感字段使用主密钥加密保存，仅在打开单条凭据进行编辑时解密。
+    zh-HK: 敏感欄位使用主密鑰加密儲存，僅在開啟單筆憑證進行編輯時解密。
+  security_locked:
+    en: Summaries remain visible. Unlock the master key before editing credentials that contain passwords or private keys.
+    zh-CN: 摘要仍可查看；编辑包含密码或私钥的凭据前，需要先解锁主密钥。
+    zh-HK: 摘要仍可檢視；編輯包含密碼或私鑰的憑證前，需要先解鎖主密鑰。
+  total_count:
+    en: "%{count} credentials"
+    zh-CN: "%{count} 条凭据"
+    zh-HK: "%{count} 筆憑證"
+  sorted_count:
+    en: "Sorted by most recently updated, %{count} total"
+    zh-CN: "按最近更新时间排列，共 %{count} 条"
+    zh-HK: "按最近更新時間排列，共 %{count} 筆"
+  filtered_count:
+    en: "%{filtered} found, %{total} total"
+    zh-CN: "找到 %{filtered} 条，共 %{total} 条"
+    zh-HK: "找到 %{filtered} 筆，共 %{total} 筆"
+  no_matches:
+    en: No Matching Credentials
+    zh-CN: 没有匹配的凭据
+    zh-HK: 沒有符合的憑證
+  no_matches_description:
+    en: Try searching with another name, type, or username.
+    zh-CN: 请尝试使用其他名称、类型或用户名进行搜索。
+    zh-HK: 請嘗試使用其他名稱、類型或使用者名稱搜尋。
+  empty_title:
+    en: Set Up Your Keychain
+    zh-CN: 设置钥匙串
+    zh-HK: 設定鑰匙圈
+  empty_description:
+    en: Store reusable usernames, passwords, private keys, and terminal auto-login rules for your connections.
+    zh-CN: 保存可供连接复用的用户名、密码、私钥和终端自动登录规则。
+    zh-HK: 儲存可供連線重複使用的使用者名稱、密碼、私鑰及終端機自動登入規則。
+  load_failed_title:
+    en: Unable to Load the Keychain
+    zh-CN: 无法加载钥匙串
+    zh-HK: 無法載入鑰匙圈
+  retry:
+    en: Retry
+    zh-CN: 重试
+    zh-HK: 重試
+  username_not_set:
+    en: Username not set
+    zh-CN: 未设置用户名
+    zh-HK: 未設定使用者名稱
+  sync_enabled:
+    en: Sync Enabled
+    zh-CN: 允许同步
+    zh-HK: 允許同步
+  local_only:
+    en: Local Only
+    zh-CN: 仅本地
+    zh-HK: 僅本機
+  edit:
+    en: Edit
+    zh-CN: 编辑
+    zh-HK: 編輯
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  capability_password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  capability_private_key_path:
+    en: Private Key Path
+    zh-CN: 私钥路径
+    zh-HK: 私鑰路徑
+  capability_private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
+  capability_passphrase:
+    en: Private Key Passphrase
+    zh-CN: 私钥密码
+    zh-HK: 私鑰密碼
+  not_found:
+    en: The credential no longer exists. It may have been deleted.
+    zh-CN: 凭据不存在，可能已被删除。
+    zh-HK: 憑證不存在，可能已被刪除。
+  open_failed:
+    en: "Unable to open the credential: %{error}. If the keychain is locked, unlock the master key first."
+    zh-CN: "无法打开凭据：%{error}。若钥匙串已锁定，请先解锁主密钥。"
+    zh-HK: "無法開啟憑證：%{error}。若鑰匙圈已鎖定，請先解鎖主密鑰。"
+  delete_title:
+    en: Delete Credential
+    zh-CN: 删除凭据
+    zh-HK: 刪除憑證
+  delete_description:
+    en: "Delete “%{name}”? If any connection still references it, deletion will be safely rejected."
+    zh-CN: "确定删除“%{name}”吗？如果有连接仍在引用它，删除会被安全拒绝。"
+    zh-HK: "確定刪除「%{name}」嗎？如果有連線仍在引用它，刪除會被安全拒絕。"
+  deleted:
+    en: Credential deleted
+    zh-CN: 凭据已删除
+    zh-HK: 憑證已刪除
+  already_deleted:
+    en: The credential no longer exists
+    zh-CN: 凭据已不存在
+    zh-HK: 憑證已不存在
+  delete_failed:
+    en: "Failed to delete credential: %{error}"
+    zh-CN: "删除凭据失败：%{error}"
+    zh-HK: "刪除憑證失敗：%{error}"
+  reference_header:
+    en: "This credential is still referenced by the following connections. Remove the references first:"
+    zh-CN: "该凭据仍被以下连接引用，请先取消引用："
+    zh-HK: "該憑證仍被以下連線引用，請先取消引用："
+  reference_via_ssh:
+    en: ", via SSH connection #%{id}"
+    zh-CN: "，经 SSH 连接 #%{id}"
+    zh-HK: "，經 SSH 連線 #%{id}"
+  reference_item:
+    en: "• %{name} (%{connection_type} / %{location}%{via})"
+    zh-CN: "• %{name}（%{connection_type} / %{location}%{via}）"
+    zh-HK: "• %{name}（%{connection_type} / %{location}%{via}）"
+  reference_more:
+    en: "…and %{count} more references"
+    zh-CN: "…以及另外 %{count} 个引用"
+    zh-HK: "…以及另外 %{count} 個引用"
+
+CredentialForm:
+  create_title:
+    en: New Credential
+    zh-CN: 新增凭据
+    zh-HK: 新增憑證
+  edit_title:
+    en: Edit Credential
+    zh-CN: 编辑凭据
+    zh-HK: 編輯憑證
+  tab_basic:
+    en: Basic
+    zh-CN: 基础信息
+    zh-HK: 基本資料
+  tab_ssh_key:
+    en: SSH Key
+    zh-CN: SSH 密钥
+    zh-HK: SSH 密鑰
+  tab_auto_login:
+    en: Auto Login
+    zh-CN: 自动登录
+    zh-HK: 自動登入
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  name_placeholder:
+    en: e.g. Production account
+    zh-CN: 例如：生产环境账号
+    zh-HK: 例如：正式環境帳號
+  applicable_types:
+    en: Applicable Types
+    zh-CN: 适用类型
+    zh-HK: 適用類型
+  select_types:
+    en: Select types
+    zh-CN: 请选择类型
+    zh-HK: 請選擇類型
+  selected_two_types:
+    en: "%{first}, %{second}"
+    zh-CN: "%{first}、%{second}"
+    zh-HK: "%{first}、%{second}"
+  selected_many_types:
+    en: "%{first}, %{second}, and %{count} total"
+    zh-CN: "%{first}、%{second} 等 %{count} 项"
+    zh-HK: "%{first}、%{second} 等 %{count} 項"
+  select_applicable_types:
+    en: Select applicable types
+    zh-CN: 选择适用类型
+    zh-HK: 選擇適用類型
+  selected_type_count:
+    en: "%{count} selected"
+    zh-CN: "已选择 %{count} 项"
+    zh-HK: "已選擇 %{count} 項"
+  clear:
+    en: Clear
+    zh-CN: 清空
+    zh-HK: 清除
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  username_placeholder:
+    en: Optional username
+    zh-CN: 可选用户名
+    zh-HK: 選填使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  password_placeholder:
+    en: Optional password
+    zh-CN: 可选密码
+    zh-HK: 選填密碼
+  ssh_key_title:
+    en: SSH Private Key
+    zh-CN: SSH 私钥
+    zh-HK: SSH 私鑰
+  ssh_key_description:
+    en: Store a local key path or encrypted private key content.
+    zh-CN: 保存本机私钥路径，或加密保存私钥内容。
+    zh-HK: 儲存本機私鑰路徑，或加密儲存私鑰內容。
+  private_key_path:
+    en: Private Key Path
+    zh-CN: 私钥路径
+    zh-HK: 私鑰路徑
+  private_key_path_placeholder:
+    en: e.g. ~/.ssh/id_ed25519 (local only)
+    zh-CN: 例如：~/.ssh/id_ed25519（仅本机使用）
+    zh-HK: 例如：~/.ssh/id_ed25519（僅供本機使用）
+  private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
+  private_key_content_placeholder:
+    en: Optional PEM/OpenSSH private key content
+    zh-CN: 可选，粘贴 PEM/OpenSSH 私钥内容
+    zh-HK: 選填，貼上 PEM/OpenSSH 私鑰內容
+  passphrase:
+    en: Private Key Passphrase
+    zh-CN: 私钥密码
+    zh-HK: 私鑰密碼
+  passphrase_placeholder:
+    en: Optional private key passphrase
+    zh-CN: 可选私钥密码
+    zh-HK: 選填私鑰密碼
+  auto_login_title:
+    en: Auto Login (Expect)
+    zh-CN: 自动登录（Expect）
+    zh-HK: 自動登入（Expect）
+  auto_login_description:
+    en: Reusable terminal prompt matching rules for connections that reference this credential.
+    zh-CN: 为引用此凭据的连接配置可复用的终端提示匹配规则。
+    zh-HK: 為引用此憑證的連線設定可重複使用的終端機提示比對規則。
+  username_expect:
+    en: Username Expect
+    zh-CN: 用户名 Expect
+    zh-HK: 使用者名稱 Expect
+  username_expect_placeholder:
+    en: 'e.g. (?i)(?:login|username)\s*:'
+    zh-CN: '例如：(?i)(?:login|username)\s*:'
+    zh-HK: '例如：(?i)(?:login|username)\s*:'
+  username_send:
+    en: Username to Send
+    zh-CN: 用户名发送
+    zh-HK: 傳送使用者名稱
+  username_send_placeholder:
+    en: Leave empty to use the runtime username
+    zh-CN: 留空时使用运行时用户名
+    zh-HK: 留空時使用執行階段使用者名稱
+  password_expect:
+    en: Password Expect
+    zh-CN: 密码 Expect
+    zh-HK: 密碼 Expect
+  password_expect_placeholder:
+    en: 'e.g. (?i)password\s*:'
+    zh-CN: '例如：(?i)password\s*:'
+    zh-HK: '例如：(?i)password\s*:'
+  password_send:
+    en: Password to Send
+    zh-CN: 密码发送
+    zh-HK: 傳送密碼
+  password_send_placeholder:
+    en: Leave empty to use the runtime password
+    zh-CN: 留空时使用运行时密码
+    zh-HK: 留空時使用執行階段密碼
+  allow_sync:
+    en: Allow Sync
+    zh-CN: 允许同步
+    zh-HK: 允許同步
+  allow_sync_description:
+    en: Include this credential in end-to-end encrypted sync.
+    zh-CN: 将此凭据加入端到端加密同步。
+    zh-HK: 將此憑證加入端對端加密同步。
+  kind_general:
+    en: General
+    zh-CN: 通用
+    zh-HK: 通用
+  kind_ssh:
+    en: SSH
+    zh-CN: SSH
+    zh-HK: SSH
+  kind_database:
+    en: Database
+    zh-CN: 数据库
+    zh-HK: 資料庫
+  kind_redis:
+    en: Redis
+    zh-CN: Redis
+    zh-HK: Redis
+  kind_mongodb:
+    en: MongoDB
+    zh-CN: MongoDB
+    zh-HK: MongoDB
+  kind_remote_desktop:
+    en: RDP/VNC
+    zh-CN: RDP/VNC
+    zh-HK: RDP/VNC
+  kind_proxy:
+    en: Proxy
+    zh-CN: 代理
+    zh-HK: Proxy
+  kind_jump_server:
+    en: Jump Server
+    zh-CN: 跳板机
+    zh-HK: 跳板機
+  kind_general_description:
+    en: Available to any connection that supports credential references
+    zh-CN: 可用于任意支持凭据引用的连接
+    zh-HK: 可用於任何支援憑證引用的連線
+  kind_ssh_description:
+    en: SSH, SFTP, and terminal connections
+    zh-CN: SSH、SFTP 和终端连接
+    zh-HK: SSH、SFTP 及終端機連線
+  kind_database_description:
+    en: MySQL, PostgreSQL, SQLite, and other database connections
+    zh-CN: MySQL、PostgreSQL、SQLite 等数据库连接
+    zh-HK: MySQL、PostgreSQL、SQLite 等資料庫連線
+  kind_redis_description:
+    en: Redis and compatible protocol connections
+    zh-CN: Redis 与兼容协议连接
+    zh-HK: Redis 及相容協定連線
+  kind_mongodb_description:
+    en: MongoDB database connections
+    zh-CN: MongoDB 数据库连接
+    zh-HK: MongoDB 資料庫連線
+  kind_remote_desktop_description:
+    en: Remote desktop connections
+    zh-CN: 远程桌面连接
+    zh-HK: 遠端桌面連線
+  kind_proxy_description:
+    en: Proxy server authentication
+    zh-CN: 代理服务器认证
+    zh-HK: Proxy 伺服器驗證
+  kind_jump_server_description:
+    en: Bastion and jump server authentication
+    zh-CN: 堡垒机与跳板机认证
+    zh-HK: 堡壘機及跳板機驗證
+  kind_custom_description:
+    en: Custom type from an existing credential
+    zh-CN: 现有凭据中的自定义类型
+    zh-HK: 現有憑證中的自訂類型
+  error_name_required:
+    en: Credential name is required
+    zh-CN: 凭据名称不能为空
+    zh-HK: 憑證名稱不能為空
+  error_expect_send_requires_pattern:
+    en: "%{field} content requires an Expect regular expression"
+    zh-CN: "%{field}发送内容必须先配置 Expect 正则"
+    zh-HK: "%{field}傳送內容必須先設定 Expect 正規表示式"
+  error_expect_invalid:
+    en: "%{field} Expect regular expression is invalid: %{error}"
+    zh-CN: "%{field} Expect 正则无效：%{error}"
+    zh-HK: "%{field} Expect 正規表示式無效：%{error}"
+  error_expect_matches_empty:
+    en: "%{field} Expect regular expression cannot match an empty string"
+    zh-CN: "%{field} Expect 正则不能匹配空字符串"
+    zh-HK: "%{field} Expect 正規表示式不能比對空字串"
+  error_missing_local_id:
+    en: The credential being edited has no local ID
+    zh-CN: 编辑凭据缺少本地 ID
+    zh-HK: 編輯憑證缺少本機 ID
+  created:
+    en: Credential created
+    zh-CN: 凭据已创建
+    zh-HK: 憑證已建立
+  updated:
+    en: Credential updated
+    zh-CN: 凭据已更新
+    zh-HK: 憑證已更新
+  save_failed:
+    en: "Failed to save credential: %{error}"
+    zh-CN: "保存凭据失败：%{error}"
+    zh-HK: "儲存憑證失敗：%{error}"
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 儲存

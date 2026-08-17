@@ -1,3 +1,7 @@
+use connection_form::credential::{
+    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker,
+};
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
     refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
@@ -105,6 +109,7 @@ pub struct TelnetFormWindow {
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     remark_input: Entity<InputState>,
+    credential_picker: Entity<CredentialReferencePicker>,
     login_script_rows: Vec<TelnetLoginStepInput>,
     sync_enabled: bool,
 
@@ -194,6 +199,7 @@ impl TelnetFormWindow {
         let mut sync_enabled = true;
         let mut workspace_id: Option<i64> = None;
         let mut team_id: Option<String> = None;
+        let mut credential_reference = None;
         let mut login_script_steps = Vec::new();
 
         // 编辑模式：加载已有数据
@@ -208,6 +214,7 @@ impl TelnetFormWindow {
                 port_select.update(cx, |s, cx| {
                     s.set_selected_value(&params.port, window, cx);
                 });
+                credential_reference = params.credential_reference.clone();
                 login_script_steps = params.login_script;
             }
             workspace_id = conn.workspace_id;
@@ -229,6 +236,17 @@ impl TelnetFormWindow {
                 select.set_selected_value(&Some(tid.clone()), window, cx);
             });
         }
+
+        let credential_picker = create_credential_picker(
+            CredentialPickerConfig::new("telnet-credential", CredentialCapabilities::login())
+                .reference(credential_reference),
+            window,
+            cx,
+        );
+        cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
+            cx.notify()
+        })
+        .detach();
 
         let login_script_rows = login_script_steps
             .into_iter()
@@ -256,6 +274,7 @@ impl TelnetFormWindow {
             workspace_select,
             team_select,
             remark_input,
+            credential_picker,
             login_script_rows,
             sync_enabled,
             is_testing: false,
@@ -348,6 +367,9 @@ impl TelnetFormWindow {
         Some(TelnetParams {
             host,
             port,
+            credential_reference: self.credential_picker.read(cx).selected_reference(),
+            prompt_username: None,
+            prompt_password: None,
             login_script,
         })
     }
@@ -640,6 +662,10 @@ impl Render for TelnetFormWindow {
                                         ),
                                 ),
                             )
+                            .child(self.render_form_row(
+                                &t!("Telnet.keychain"),
+                                self.credential_picker.clone(),
+                            ))
                             .child(self.render_form_row(
                                 &t!("Telnet.workspace"),
                                 Select::new(&self.workspace_select).w_full(),

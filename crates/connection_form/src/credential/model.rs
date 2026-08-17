@@ -1,6 +1,7 @@
 use gpui::SharedString;
 use gpui_component::select::SelectItem;
 use one_core::storage::{CredentialReference, CredentialSummary};
+use rust_i18n::t;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CredentialCapabilities {
@@ -173,7 +174,7 @@ pub fn credential_select_items(
 
     let mut items = vec![CredentialSelectItem::new(
         CredentialSelectValue::Manual,
-        "手工输入",
+        t!("Credential.manual_input"),
     )];
     items.extend(summaries.into_iter().map(summary_item));
     if let Some(id) = selected_id
@@ -183,7 +184,7 @@ pub fn credential_select_items(
     {
         items.push(CredentialSelectItem::new(
             CredentialSelectValue::Credential(id),
-            format!("不可用的钥匙串条目 #{id}"),
+            t!("Credential.unavailable", id = id),
         ));
     }
     items
@@ -239,6 +240,10 @@ fn has_applicable_field(summary: &CredentialSummary, capabilities: CredentialCap
 fn summary_item(summary: &CredentialSummary) -> CredentialSelectItem {
     CredentialSelectItem::new(
         CredentialSelectValue::Credential(summary.id),
-        format!("{}（{}）", summary.name, summary.kind),
+        t!(
+            "Credential.item_label",
+            name = summary.name,
+            kind = summary.kind
+        ),
     )
 }

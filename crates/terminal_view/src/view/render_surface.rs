@@ -5,7 +5,7 @@ struct TerminalViewportState {
     connection_state: ConnectionState,
     can_reconnect: bool,
     has_pending_host_key_verification: bool,
-    has_ssh_credential_request: bool,
+    has_credential_request: bool,
     has_ssh_mfa_request: bool,
     has_selection: bool,
     selection_text: Option<String>,
@@ -23,13 +23,13 @@ pub(super) enum ConnectionStatusPresentation {
 pub(super) fn connection_status_presentation(
     connection_state: &ConnectionState,
     has_pending_host_key_verification: bool,
-    has_ssh_credential_request: bool,
+    has_credential_request: bool,
     has_ssh_mfa_request: bool,
 ) -> Option<ConnectionStatusPresentation> {
     if has_pending_host_key_verification || matches!(connection_state, ConnectionState::Connected) {
         return None;
     }
-    if has_ssh_credential_request || has_ssh_mfa_request {
+    if has_credential_request || has_ssh_mfa_request {
         Some(ConnectionStatusPresentation::Dialog)
     } else {
         Some(ConnectionStatusPresentation::Banner)
@@ -114,7 +114,8 @@ impl TerminalView {
             connection_state,
             can_reconnect,
             has_pending_host_key_verification: terminal.host_key_verification_request().is_some(),
-            has_ssh_credential_request: terminal.ssh_credential_request().is_some(),
+            has_credential_request: terminal.ssh_credential_request().is_some()
+                || terminal.telnet_credential_request().is_some(),
             has_ssh_mfa_request: terminal.ssh_mfa_request().is_some(),
             has_selection,
             selection_text,
@@ -134,7 +135,7 @@ impl TerminalView {
         let connection_status = connection_status_presentation(
             &state.connection_state,
             state.has_pending_host_key_verification,
-            state.has_ssh_credential_request,
+            state.has_credential_request,
             state.has_ssh_mfa_request,
         );
         div()

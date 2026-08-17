@@ -1,5 +1,6 @@
 use gpui::{App, SharedString};
 use one_core::storage::{CredentialRepository, CredentialSummary, GlobalStorageState};
+use rust_i18n::t;
 
 pub(super) fn load_summaries(cx: &App) -> (Vec<CredentialSummary>, Option<SharedString>) {
     let Some(repository) = cx
@@ -10,6 +11,6 @@ pub(super) fn load_summaries(cx: &App) -> (Vec<CredentialSummary>, Option<Shared
     };
     match repository.list_summaries() {
         Ok(summaries) => (summaries, None),
-        Err(_) => (Vec::new(), Some("无法加载钥匙串列表，请稍后重试。".into())),
+        Err(_) => (Vec::new(), Some(t!("Credential.load_failed").into())),
     }
 }

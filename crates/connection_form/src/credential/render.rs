@@ -1,6 +1,7 @@
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Render, Styled, Window, div};
-use gpui_component::{ActiveTheme, select::Select, v_flex};
+use gpui_component::{ActiveTheme, h_flex, select::Select};
 use one_core::storage::CredentialSummary;
+use rust_i18n::t;
 
 use super::{CredentialField, CredentialReferencePicker};
 
@@ -9,14 +10,14 @@ impl Render for CredentialReferencePicker {
         let summary = self.selected_summary();
         let messages = self.messages(summary, cx);
 
-        v_flex()
+        h_flex()
             .w_full()
             .gap_2()
             .child(
                 Select::new(&self.select)
                     .w_full()
                     .cleanable(false)
-                    .placeholder("手工输入"),
+                    .placeholder(t!("Credential.manual_input")),
             )
             .children(messages)
     }
@@ -42,15 +43,15 @@ impl CredentialReferencePicker {
         }
         let Some(summary) = summary else {
             if self.summaries.is_empty() {
-                messages.push(message("钥匙串中暂无可用凭据，请先创建。", true, cx));
+                messages.push(message(t!("Credential.empty"), true, cx));
             }
             return messages;
         };
         messages.extend(self.missing_field_warnings(summary, cx));
         let sync_status = if summary.sync_enabled {
-            "已参与个人端到端加密同步"
+            t!("Credential.sync_enabled")
         } else {
-            "仅本地"
+            t!("Credential.local_only")
         };
         messages.push(message(sync_status, true, cx));
         messages
@@ -63,17 +64,17 @@ impl CredentialReferencePicker {
     ) -> Vec<AnyElement> {
         let mut warnings = Vec::new();
         if self.field_referenced(CredentialField::Username) && summary.username.is_none() {
-            warnings.push(message("当前钥匙串条目已不再包含用户名。", false, cx));
+            warnings.push(message(t!("Credential.missing_username"), false, cx));
         }
         if self.field_referenced(CredentialField::Password) && !summary.has_password {
-            warnings.push(message("当前钥匙串条目已不再包含密码。", false, cx));
+            warnings.push(message(t!("Credential.missing_password"), false, cx));
         }
         let has_key = summary.has_private_key_path || summary.has_private_key_content;
         if self.field_referenced(CredentialField::PrivateKey) && !has_key {
-            warnings.push(message("当前钥匙串条目已不再包含私钥。", false, cx));
+            warnings.push(message(t!("Credential.missing_private_key"), false, cx));
         }
         if self.field_referenced(CredentialField::Passphrase) && !summary.has_passphrase {
-            warnings.push(message("当前钥匙串条目已不再包含私钥密码。", false, cx));
+            warnings.push(message(t!("Credential.missing_passphrase"), false, cx));
         }
         warnings
     }

@@ -1658,6 +1658,9 @@ mod tests {
         let params = TelnetParams {
             host: address.ip().to_string(),
             port: address.port(),
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
             login_script: Vec::new(),
         };
 

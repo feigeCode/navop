@@ -113,7 +113,8 @@ use terminal::LocalConfig;
 use terminal::terminal::{
     ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
     TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, TerminalScrollSnapshot,
-    TerminalSshCredentialRequest, TerminalSshCredentials, resolve_local_working_dir,
+    TerminalSshCredentialRequest, TerminalSshCredentials, TerminalTelnetCredentialRequest,
+    TerminalTelnetCredentials, resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
@@ -286,7 +287,7 @@ pub struct TerminalView {
     cd_completion_cache: CdCompletionCache,
     /// 当前正在加载目录候选的父目录
     cd_completion_loading_parent: Option<String>,
-    ssh_credential_inputs: Option<SshCredentialInputs>,
+    credential_inputs: Option<TerminalCredentialInputs>,
     ssh_mfa_inputs: Vec<SshMfaInput>,
     /// 当前已打开系统选择器的 ZMODEM 请求 ID，用于去重和拒绝过期结果。
     zmodem_picker_request_id: Option<u64>,

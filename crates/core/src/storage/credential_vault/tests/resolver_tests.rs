@@ -5,7 +5,7 @@ use crate::storage::{
     ConnectionType, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
     JumpServerConfig, MongoDBParams, MongoDriverVariant, ProxyConfig, ProxyType, RedisMode,
     RedisParams, RedisSentinelConfig, RemoteDesktopParams, RemoteDesktopProtocol, SshAccountExpect,
-    SshAuthMethod, SshParams, StoredConnection, TerminalExpectSend,
+    SshAuthMethod, SshParams, StoredConnection, TelnetLoginStep, TelnetParams, TerminalExpectSend,
 };
 
 use super::with_master_key;
@@ -192,6 +192,87 @@ fn resolver_uses_only_credential_expect_and_ignores_connection_overrides() {
         assert!(resolved.account_expect.username.send.is_empty());
         assert_eq!(resolved.account_expect.password.expect, "Vault password:");
         assert!(resolved.account_expect.password.send.is_empty());
+    });
+}
+
+#[test]
+fn resolver_applies_keychain_login_to_telnet_expect_steps() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let credential_id = insert_password_credential(&repository);
+        let params = TelnetParams {
+            host: "switch.example.com".to_string(),
+            port: 23,
+            credential_reference: Some(password_reference(credential_id)),
+            prompt_username: None,
+            prompt_password: None,
+            login_script: vec![
+                TelnetLoginStep {
+                    expect: r"(?i)(?:login|username)\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: r"(?i)password\s*:".to_string(),
+                    send: String::new(),
+                },
+                TelnetLoginStep {
+                    expect: "token:".to_string(),
+                    send: "explicit-token".to_string(),
+                },
+            ],
+        };
+
+        let resolved = repository.resolve_telnet(params).expect("resolve telnet");
+
+        assert_eq!(resolved.login_script[0].send, "vault-user");
+        assert_eq!(resolved.login_script[1].send, "vault-password");
+        assert_eq!(resolved.login_script[2].send, "explicit-token");
+    });
+}
+
+#[test]
+fn resolver_reuses_keychain_expect_for_telnet_without_connection_script() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut credential = CredentialEntry::new("Telnet login", "username_password");
+        credential.username = Some("telnet-user".to_string());
+        credential.password = Some("telnet-password".to_string());
+        credential.ssh_expect = SshAccountExpect {
+            username: TerminalExpectSend {
+                expect: r"(?i)login\s*:".to_string(),
+                send: String::new(),
+            },
+            password: TerminalExpectSend {
+                expect: r"(?i)password\s*:".to_string(),
+                send: String::new(),
+            },
+        };
+        let credential_id = repository
+            .insert(&mut credential)
+            .expect("insert telnet credential");
+        let original = StoredConnection::new_telnet(
+            "Telnet".to_string(),
+            TelnetParams {
+                host: "switch.example.com".to_string(),
+                port: 23,
+                credential_reference: Some(password_reference(credential_id)),
+                prompt_username: None,
+                prompt_password: None,
+                login_script: Vec::new(),
+            },
+            None,
+        );
+        let original_params = original.params.clone();
+
+        let resolved = repository
+            .resolve_connection(&original)
+            .expect("resolve telnet connection");
+        let resolved_params = resolved.to_telnet_params().expect("parse resolved telnet");
+
+        assert_eq!(original.params, original_params);
+        assert_eq!(resolved_params.login_script.len(), 2);
+        assert_eq!(resolved_params.login_script[0].send, "telnet-user");
+        assert_eq!(resolved_params.login_script[1].send, "telnet-password");
     });
 }
 

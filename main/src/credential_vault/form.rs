@@ -4,16 +4,17 @@ use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedStrin
 use gpui_component::input::InputState;
 use one_core::storage::{CredentialEntry, SshAccountExpect, TerminalExpectSend};
 use regex::Regex;
+use rust_i18n::t;
 
-pub(super) const CREDENTIAL_KIND_OPTIONS: [(&str, &str); 8] = [
-    ("通用", "可用于任意支持凭据引用的连接"),
-    ("SSH", "SSH、SFTP 和终端连接"),
-    ("数据库", "MySQL、PostgreSQL、SQLite 等数据库连接"),
-    ("Redis", "Redis 与兼容协议连接"),
-    ("MongoDB", "MongoDB 数据库连接"),
-    ("RDP/VNC", "远程桌面连接"),
-    ("代理", "代理服务器认证"),
-    ("跳板机", "堡垒机与跳板机认证"),
+pub(super) const CREDENTIAL_KIND_OPTIONS: [&str; 8] = [
+    "通用",
+    "SSH",
+    "数据库",
+    "Redis",
+    "MongoDB",
+    "RDP/VNC",
+    "代理",
+    "跳板机",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +57,7 @@ impl CredentialForm {
     ) -> Self {
         let name_input = text_input(
             existing.as_ref().map(|entry| entry.name.as_str()),
-            "例如：生产环境通用账号",
+            t!("CredentialForm.name_placeholder").to_string(),
             false,
             window,
             cx,
@@ -69,7 +70,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .and_then(|entry| entry.username.as_deref()),
-            "可选用户名",
+            t!("CredentialForm.username_placeholder").to_string(),
             false,
             window,
             cx,
@@ -78,7 +79,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .and_then(|entry| entry.password.as_deref()),
-            "可选密码",
+            t!("CredentialForm.password_placeholder").to_string(),
             true,
             window,
             cx,
@@ -87,14 +88,14 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .and_then(|entry| entry.private_key_path.as_deref()),
-            "例如：~/.ssh/id_ed25519（仅本机使用）",
+            t!("CredentialForm.private_key_path_placeholder").to_string(),
             false,
             window,
             cx,
         );
         let private_key_content_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
-                .placeholder("可选，粘贴 PEM/OpenSSH 私钥内容")
+                .placeholder(t!("CredentialForm.private_key_content_placeholder").to_string())
                 .multi_line(true)
                 .rows(5);
             if let Some(value) = existing
@@ -109,7 +110,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .and_then(|entry| entry.passphrase.as_deref()),
-            "可选私钥密码",
+            t!("CredentialForm.passphrase_placeholder").to_string(),
             true,
             window,
             cx,
@@ -118,7 +119,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .map(|entry| entry.ssh_expect.username.expect.as_str()),
-            "如 (?i)(?:login|username)\\s*:",
+            t!("CredentialForm.username_expect_placeholder").to_string(),
             false,
             window,
             cx,
@@ -127,7 +128,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .map(|entry| entry.ssh_expect.username.send.as_str()),
-            "留空时使用运行时用户名",
+            t!("CredentialForm.username_send_placeholder").to_string(),
             false,
             window,
             cx,
@@ -136,7 +137,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .map(|entry| entry.ssh_expect.password.expect.as_str()),
-            "如 (?i)password\\s*:",
+            t!("CredentialForm.password_expect_placeholder").to_string(),
             false,
             window,
             cx,
@@ -145,7 +146,7 @@ impl CredentialForm {
             existing
                 .as_ref()
                 .map(|entry| entry.ssh_expect.password.send.as_str()),
-            "留空时使用运行时密码",
+            t!("CredentialForm.password_send_placeholder").to_string(),
             true,
             window,
             cx,
@@ -238,7 +239,7 @@ pub(super) fn build_entry(
 ) -> Result<CredentialEntry, String> {
     let name = values.name.trim().to_string();
     if name.is_empty() {
-        return Err("凭据名称不能为空".to_string());
+        return Err(t!("CredentialForm.error_name_required").to_string());
     }
     let kind = serialize_credential_kinds(values.kinds);
     let mut entry = existing.unwrap_or_else(|| CredentialEntry::new(&name, &kind));
@@ -256,8 +257,14 @@ pub(super) fn build_entry(
 
 fn normalize_ssh_expect(value: SshAccountExpect) -> Result<SshAccountExpect, String> {
     Ok(SshAccountExpect {
-        username: normalize_expect_step(value.username, "用户名")?,
-        password: normalize_expect_step(value.password, "密码")?,
+        username: normalize_expect_step(
+            value.username,
+            &t!("CredentialForm.username").to_string(),
+        )?,
+        password: normalize_expect_step(
+            value.password,
+            &t!("CredentialForm.password").to_string(),
+        )?,
     })
 }
 
@@ -270,14 +277,25 @@ fn normalize_expect_step(
 
     if expect.is_empty() {
         if !send.trim().is_empty() {
-            return Err(format!("{label}发送内容必须先配置 Expect 正则"));
+            return Err(t!(
+                "CredentialForm.error_expect_send_requires_pattern",
+                field = label
+            )
+            .to_string());
         }
         return Ok(TerminalExpectSend::default());
     }
 
-    let regex = Regex::new(&expect).map_err(|error| format!("{label} Expect 正则无效：{error}"))?;
+    let regex = Regex::new(&expect).map_err(|error| {
+        t!(
+            "CredentialForm.error_expect_invalid",
+            field = label,
+            error = error
+        )
+        .to_string()
+    })?;
     if regex.is_match("") {
-        return Err(format!("{label} Expect 正则不能匹配空字符串"));
+        return Err(t!("CredentialForm.error_expect_matches_empty", field = label).to_string());
     }
 
     Ok(TerminalExpectSend { expect, send })
@@ -311,7 +329,7 @@ fn parse_credential_kinds(value: &str) -> BTreeSet<String> {
 pub(super) fn ordered_credential_kinds(selected: &BTreeSet<String>) -> Vec<String> {
     let mut values = CREDENTIAL_KIND_OPTIONS
         .iter()
-        .map(|(kind, _)| *kind)
+        .copied()
         .filter(|kind| selected.contains(*kind))
         .map(str::to_string)
         .collect::<Vec<_>>();
@@ -321,11 +339,39 @@ pub(super) fn ordered_credential_kinds(selected: &BTreeSet<String>) -> Vec<Strin
             .filter(|kind| {
                 !CREDENTIAL_KIND_OPTIONS
                     .iter()
-                    .any(|(option, _)| option == &kind.as_str())
+                    .any(|option| *option == kind.as_str())
             })
             .cloned(),
     );
     values
+}
+
+pub(super) fn credential_kind_label(kind: &str) -> String {
+    match kind {
+        "通用" => t!("CredentialForm.kind_general").to_string(),
+        "SSH" => t!("CredentialForm.kind_ssh").to_string(),
+        "数据库" => t!("CredentialForm.kind_database").to_string(),
+        "Redis" => t!("CredentialForm.kind_redis").to_string(),
+        "MongoDB" => t!("CredentialForm.kind_mongodb").to_string(),
+        "RDP/VNC" => t!("CredentialForm.kind_remote_desktop").to_string(),
+        "代理" => t!("CredentialForm.kind_proxy").to_string(),
+        "跳板机" => t!("CredentialForm.kind_jump_server").to_string(),
+        _ => kind.to_string(),
+    }
+}
+
+pub(super) fn credential_kind_description(kind: &str) -> String {
+    match kind {
+        "通用" => t!("CredentialForm.kind_general_description").to_string(),
+        "SSH" => t!("CredentialForm.kind_ssh_description").to_string(),
+        "数据库" => t!("CredentialForm.kind_database_description").to_string(),
+        "Redis" => t!("CredentialForm.kind_redis_description").to_string(),
+        "MongoDB" => t!("CredentialForm.kind_mongodb_description").to_string(),
+        "RDP/VNC" => t!("CredentialForm.kind_remote_desktop_description").to_string(),
+        "代理" => t!("CredentialForm.kind_proxy_description").to_string(),
+        "跳板机" => t!("CredentialForm.kind_jump_server_description").to_string(),
+        _ => t!("CredentialForm.kind_custom_description").to_string(),
+    }
 }
 
 fn serialize_credential_kinds(kinds: Vec<String>) -> String {
@@ -375,7 +421,10 @@ mod tests {
     fn rejects_empty_name() {
         let mut values = values();
         values.name = "   ".into();
-        assert_eq!(build_entry(None, values).unwrap_err(), "凭据名称不能为空");
+        assert_eq!(
+            build_entry(None, values).unwrap_err(),
+            t!("CredentialForm.error_name_required").to_string()
+        );
     }
 
     #[test]
@@ -427,7 +476,11 @@ mod tests {
         values.ssh_expect.username.expect = ".*".into();
         assert_eq!(
             build_entry(None, values).unwrap_err(),
-            "用户名 Expect 正则不能匹配空字符串"
+            t!(
+                "CredentialForm.error_expect_matches_empty",
+                field = t!("CredentialForm.username")
+            )
+            .to_string()
         );
     }
 

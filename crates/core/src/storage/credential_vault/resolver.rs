@@ -4,7 +4,8 @@ use crate::storage::traits::Repository;
 use crate::storage::{
     ConnectionType, CredentialRepository, DbConnectionConfig, MongoDBParams, ProxyConfig,
     RedisParams, ReferencedCredentialFields, RemoteDesktopParams, SshAccountExpect, SshAuthMethod,
-    SshParams, StoredConnection, resolve_credential_reference_strict,
+    SshParams, StoredConnection, TelnetLoginStep, TelnetParams,
+    resolve_credential_reference_strict,
 };
 
 impl CredentialRepository {
@@ -26,6 +27,9 @@ impl CredentialRepository {
             }
             ConnectionType::MongoDB => {
                 serde_json::to_string(&self.resolve_mongodb(connection.to_mongodb_params()?)?)?
+            }
+            ConnectionType::Telnet => {
+                serde_json::to_string(&self.resolve_telnet(connection.to_telnet_params()?)?)?
             }
             ConnectionType::Rdp | ConnectionType::Vnc => serde_json::to_string(
                 &self.resolve_remote_desktop(connection.to_remote_desktop_params()?)?,
@@ -58,6 +62,28 @@ impl CredentialRepository {
         }
         self.resolve_optional_proxy(params.proxy.as_mut())?;
         self.resolve_optional_jump(params.jump_server.as_mut())?;
+        Ok(params)
+    }
+
+    pub fn resolve_telnet(&self, mut params: TelnetParams) -> Result<TelnetParams> {
+        let Some(reference) = params.credential_reference.as_ref() else {
+            return Ok(params);
+        };
+        let credential = self.resolve_reference_entry(reference)?;
+        let fields = resolve_credential_reference_strict(
+            ReferencedCredentialFields::new(None, None, None, None),
+            reference,
+            credential.as_ref(),
+        )?;
+        let username = fields.username.as_deref();
+        let password = fields.password.as_deref();
+
+        if params.login_script.is_empty()
+            && let Some(credential) = credential.as_ref()
+        {
+            params.login_script = telnet_login_script_from_credential(credential);
+        }
+        params.apply_login_credentials(username, password);
         Ok(params)
     }
 
@@ -301,4 +327,20 @@ fn reject_conflicting_ssh_fields(reference: &crate::storage::CredentialReference
         bail!("a credential reference cannot select password and private key together");
     }
     Ok(())
+}
+
+fn telnet_login_script_from_credential(
+    credential: &crate::storage::CredentialEntry,
+) -> Vec<TelnetLoginStep> {
+    [
+        &credential.ssh_expect.username,
+        &credential.ssh_expect.password,
+    ]
+    .into_iter()
+    .filter(|step| !step.expect.trim().is_empty())
+    .map(|step| TelnetLoginStep {
+        expect: step.expect.clone(),
+        send: step.send.clone(),
+    })
+    .collect()
 }

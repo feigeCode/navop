@@ -14,8 +14,12 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
+use rust_i18n::t;
 
-use super::form::{CREDENTIAL_KIND_OPTIONS, CredentialForm, ordered_credential_kinds};
+use super::form::{
+    CREDENTIAL_KIND_OPTIONS, CredentialForm, credential_kind_description, credential_kind_label,
+    ordered_credential_kinds,
+};
 
 impl Render for CredentialForm {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -41,9 +45,11 @@ impl Render for CredentialForm {
                                 form.active_tab = *index;
                                 cx.notify();
                             }))
-                            .child(Tab::new().label("基本信息"))
-                            .child(Tab::new().label("SSH 密钥"))
-                            .child(Tab::new().label("自动登录")),
+                            .child(Tab::new().label(t!("CredentialForm.tab_basic").to_string()))
+                            .child(Tab::new().label(t!("CredentialForm.tab_ssh_key").to_string()))
+                            .child(
+                                Tab::new().label(t!("CredentialForm.tab_auto_login").to_string()),
+                            ),
                     ),
             )
             .child(
@@ -70,37 +76,24 @@ impl CredentialForm {
     fn render_basic_tab(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
-            .gap_4()
-            .child(info_panel(
-                "账号与密码",
-                "这里保存的用户名和密码可以被 SSH、数据库、Redis、MongoDB、RDP/VNC 等连接引用。",
-                cx,
-            ))
+            .gap_3()
             .child(form_field(
-                "名称",
-                "用于在所有连接表单中识别这条凭据。",
+                t!("CredentialForm.name").to_string(),
                 Input::new(&self.name_input).w_full(),
-                cx,
             ))
             .when(self.is_editing(), |this| {
                 this.child(form_field(
-                    "类型",
-                    "支持多选，用于分类和搜索；不会限制可引用这条凭据的连接类型。",
+                    t!("CredentialForm.applicable_types").to_string(),
                     self.render_kind_picker(cx),
-                    cx,
                 ))
             })
             .child(form_field(
-                "用户名",
-                "可选；可以留空只保存密码。连接中手工填写的用户名可与这里的密码组合使用。",
+                t!("CredentialForm.username").to_string(),
                 Input::new(&self.username_input).w_full(),
-                cx,
             ))
             .child(form_field(
-                "密码",
-                "可独立保存，也可与这里的用户名一起引用；编辑时清空会删除原密码。",
+                t!("CredentialForm.password").to_string(),
                 Input::new(&self.password_input).w_full().mask_toggle(),
-                cx,
             ))
             .child(self.render_sync_settings(cx))
     }
@@ -109,16 +102,31 @@ impl CredentialForm {
         let selected_kinds = self.selected_kinds.clone();
         let ordered_selected = ordered_credential_kinds(&selected_kinds);
         let trigger_label = match ordered_selected.as_slice() {
-            [] => "请选择类型".to_string(),
-            [kind] => kind.clone(),
-            [first, second] => format!("{first}、{second}"),
-            [first, second, ..] => {
-                format!("{first}、{second} 等 {} 项", ordered_selected.len())
-            }
+            [] => t!("CredentialForm.select_types").to_string(),
+            [kind] => credential_kind_label(kind),
+            [first, second] => t!(
+                "CredentialForm.selected_two_types",
+                first = credential_kind_label(first),
+                second = credential_kind_label(second)
+            )
+            .to_string(),
+            [first, second, ..] => t!(
+                "CredentialForm.selected_many_types",
+                first = credential_kind_label(first),
+                second = credential_kind_label(second),
+                count = ordered_selected.len()
+            )
+            .to_string(),
         };
         let mut options = CREDENTIAL_KIND_OPTIONS
             .iter()
-            .map(|(kind, description)| ((*kind).to_string(), (*description).to_string()))
+            .map(|kind| {
+                (
+                    (*kind).to_string(),
+                    credential_kind_label(kind),
+                    credential_kind_description(kind),
+                )
+            })
             .collect::<Vec<_>>();
         options.extend(
             ordered_selected
@@ -126,9 +134,15 @@ impl CredentialForm {
                 .filter(|kind| {
                     !CREDENTIAL_KIND_OPTIONS
                         .iter()
-                        .any(|(option, _)| option == &kind.as_str())
+                        .any(|option| *option == kind.as_str())
                 })
-                .map(|kind| (kind.clone(), "现有凭据中的自定义类型".to_string())),
+                .map(|kind| {
+                    (
+                        kind.clone(),
+                        kind.clone(),
+                        credential_kind_description(kind),
+                    )
+                }),
         );
 
         let form = cx.entity();
@@ -165,13 +179,22 @@ impl CredentialForm {
                                         div()
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child("选择适用类型"),
+                                            .child(
+                                                t!("CredentialForm.select_applicable_types")
+                                                    .to_string(),
+                                            ),
                                     )
                                     .child(
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!("已选择 {selected_count} 项")),
+                                            .child(
+                                                t!(
+                                                    "CredentialForm.selected_type_count",
+                                                    count = selected_count
+                                                )
+                                                .to_string(),
+                                            ),
                                     ),
                             )
                             .child({
@@ -179,7 +202,7 @@ impl CredentialForm {
                                 Button::new("credential-kind-clear")
                                     .small()
                                     .ghost()
-                                    .label("清空")
+                                    .label(t!("CredentialForm.clear").to_string())
                                     .on_click(move |_, _, cx| {
                                         form.update(cx, |form, cx| {
                                             form.selected_kinds.clear();
@@ -195,7 +218,7 @@ impl CredentialForm {
                             .max_h(px(340.0))
                             .overflow_y_scrollbar()
                             .child(v_flex().w_full().gap_1().children(options.iter().map(
-                                |(kind, description)| {
+                                |(kind, label, description)| {
                                     let checked = selected_kinds.contains(kind);
                                     let kind_for_click = kind.clone();
                                     let form = form.clone();
@@ -209,7 +232,7 @@ impl CredentialForm {
                                         .child(
                                             Checkbox::new(format!("credential-kind-option-{kind}"))
                                                 .checked(checked)
-                                                .label(kind.clone())
+                                                .label(label.clone())
                                                 .on_click(move |checked, _, cx| {
                                                     form.update(cx, |form, cx| {
                                                         if *checked {
@@ -240,135 +263,95 @@ impl CredentialForm {
     fn render_ssh_key_tab(&self, cx: &gpui::App) -> impl IntoElement {
         v_flex()
             .w_full()
-            .gap_4()
+            .gap_3()
             .child(info_panel(
-                "SSH 私钥",
-                "可以只保存本机私钥路径，也可以将 PEM/OpenSSH 私钥内容加密保存到钥匙串。",
+                t!("CredentialForm.ssh_key_title").to_string(),
+                t!("CredentialForm.ssh_key_description").to_string(),
                 cx,
             ))
             .child(form_field(
-                "私钥路径",
-                "仅保存本机路径，不会作为密钥内容同步到其他设备。",
+                t!("CredentialForm.private_key_path").to_string(),
                 Input::new(&self.private_key_path_input).w_full(),
-                cx,
             ))
             .child(form_field(
-                "私钥内容",
-                "可粘贴 PEM/OpenSSH 私钥。内容只在打开编辑窗口后显示。",
+                t!("CredentialForm.private_key_content").to_string(),
                 div().w_full().h(px(150.0)).child(
                     Input::new(&self.private_key_content_input)
                         .w_full()
                         .h_full(),
                 ),
-                cx,
             ))
             .child(form_field(
-                "私钥密码",
-                "用于解锁加密私钥；连接引用此钥匙串时会随私钥凭据一并使用。",
+                t!("CredentialForm.passphrase").to_string(),
                 Input::new(&self.passphrase_input).w_full().mask_toggle(),
-                cx,
             ))
     }
 
     fn render_account_expect_tab(&self, cx: &gpui::App) -> impl IntoElement {
         v_flex()
             .w_full()
-            .gap_4()
+            .gap_3()
             .child(info_panel(
-                "自动登录（Expect）",
-                "这是与钥匙串账号绑定的可复用终端登录规则。引用此钥匙串的 SSH 连接会自动使用这些规则。规则只在 SSH shell 打开后执行，不参与 SSH 协议认证。",
+                t!("CredentialForm.auto_login_title").to_string(),
+                t!("CredentialForm.auto_login_description").to_string(),
                 cx,
             ))
             .child(form_field(
-                "用户名 Expect",
-                "终端提示的正则表达式；例如 (?i)(?:login|username)\\s*:。只配置密码时可以留空。",
+                t!("CredentialForm.username_expect").to_string(),
                 Input::new(&self.username_expect_input).w_full(),
-                cx,
             ))
             .child(form_field(
-                "用户名发送",
-                "匹配后发送的内容；留空时使用最终运行时用户名。",
+                t!("CredentialForm.username_send").to_string(),
                 Input::new(&self.username_send_input).w_full(),
-                cx,
             ))
             .child(form_field(
-                "密码 Expect",
-                "终端密码提示的正则表达式；例如 (?i)password\\s*:。",
+                t!("CredentialForm.password_expect").to_string(),
                 Input::new(&self.password_expect_input).w_full(),
-                cx,
             ))
             .child(form_field(
-                "密码发送",
-                "匹配后发送的内容；留空时使用最终运行时密码。",
+                t!("CredentialForm.password_send").to_string(),
                 Input::new(&self.password_send_input).w_full().mask_toggle(),
-                cx,
             ))
     }
 
     fn render_sync_settings(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        v_flex()
+        h_flex()
             .w_full()
+            .items_center()
+            .justify_between()
             .gap_4()
-            .child(info_panel(
-                "加密与同步",
-                "密码、私钥内容和私钥密码只在此窗口打开期间以明文驻留内存；保存时会使用主密钥加密。",
-                cx,
-            ))
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_3()
             .child(
                 v_flex()
-                    .gap_3()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .p_4()
+                    .min_w_0()
+                    .gap_1()
                     .child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .min_w_0()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child("允许同步"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                "允许此凭据使用主密钥端到端加密并参与个人同步。",
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                Switch::new("credential-sync-enabled")
-                                    .checked(self.sync_enabled)
-                                    .on_click(cx.listener(|form, checked, _, cx| {
-                                        form.sync_enabled = *checked;
-                                        cx.notify();
-                                    })),
-                            ),
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("CredentialForm.allow_sync").to_string()),
                     )
                     .child(
                         div()
-                            .rounded_md()
-                            .bg(cx.theme().muted.opacity(0.35))
-                            .p_3()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(
-                                "启用后，密码、已导入的私钥内容和私钥密码会使用主密钥端到端加密并参与个人同步；本地私钥路径始终只保存在本机。",
-                            ),
+                            .child(t!("CredentialForm.allow_sync_description").to_string()),
                     ),
+            )
+            .child(
+                Switch::new("credential-sync-enabled")
+                    .checked(self.sync_enabled)
+                    .on_click(cx.listener(|form, checked, _, cx| {
+                        form.sync_enabled = *checked;
+                        cx.notify();
+                    })),
             )
     }
 }
 
-fn info_panel(title: &'static str, description: &'static str, cx: &gpui::App) -> impl IntoElement {
+fn info_panel(title: String, description: String, cx: &gpui::App) -> impl IntoElement {
     v_flex()
         .gap_1()
         .rounded_md()
@@ -390,12 +373,7 @@ fn info_panel(title: &'static str, description: &'static str, cx: &gpui::App) ->
         )
 }
 
-fn form_field(
-    label: &'static str,
-    description: &'static str,
-    input: impl IntoElement,
-    cx: &gpui::App,
-) -> impl IntoElement {
+fn form_field(label: String, input: impl IntoElement) -> impl IntoElement {
     v_flex()
         .gap_1()
         .child(
@@ -403,12 +381,6 @@ fn form_field(
                 .text_sm()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .child(label),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(description),
         )
         .child(input)
 }
@@ -419,12 +391,16 @@ mod tests {
     fn credential_form_uses_grouped_tabs_with_a_bounded_scroll_region() {
         let render = include_str!("form_render.rs");
         let window = include_str!("form_window.rs");
+        let production = render
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production render source");
 
         assert!(render.contains("TabBar::new(\"credential-form-tabs\")"));
-        assert!(render.contains("Tab::new().label(\"基本信息\")"));
-        assert!(render.contains("Tab::new().label(\"SSH 密钥\")"));
-        assert!(render.contains("Tab::new().label(\"自动登录\")"));
-        assert!(!render.contains("Tab::new().label(\"同步设置\")"));
+        assert!(render.contains("CredentialForm.tab_basic"));
+        assert!(render.contains("CredentialForm.tab_ssh_key"));
+        assert!(render.contains("CredentialForm.tab_auto_login"));
+        assert!(!production.contains("CredentialForm.tab_sync"));
         assert!(render.contains(".id(\"credential-form-content\")"));
         assert!(render.contains(".min_h_0()"));
         assert!(render.contains(".overflow_hidden()"));
@@ -498,9 +474,13 @@ mod tests {
     #[test]
     fn new_credentials_hide_applicable_type_and_keep_sync_in_basic_info() {
         let render = include_str!("form_render.rs");
+        let production = render
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production render source");
 
         assert!(render.contains(".when(self.is_editing(),"));
         assert!(render.contains("self.render_sync_settings(cx)"));
-        assert!(!render.contains("Tab::new().label(\"同步设置\")"));
+        assert!(!production.contains("CredentialForm.tab_sync"));
     }
 }
