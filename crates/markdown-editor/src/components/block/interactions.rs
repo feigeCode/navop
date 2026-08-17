@@ -1048,7 +1048,6 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         if self.is_table_cell() {
-            cx.stop_propagation();
             cx.emit(BlockEvent::RequestOpenTableContextMenu {
                 position: event.position,
             });

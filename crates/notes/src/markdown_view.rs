@@ -1,11 +1,13 @@
 use crate::markdown_file_store::MarkdownFileStore;
-use crate::markdown_mode::{editor_view_mode, focus_markdown_editor, switch_markdown_mode};
+use crate::markdown_mode::{
+    editor_view_mode, focus_markdown_editor, markdown_view_mode, switch_markdown_mode,
+};
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
-use markdown_editor::{MarkdownEditor, MarkdownEditorEvent};
+use markdown_editor::{MarkdownEditor, MarkdownEditorEvent, ViewMode};
 use std::time::Duration;
 
 const MARKDOWN_SAVE_INTERVAL: Duration = Duration::from_secs(2);
@@ -273,6 +275,32 @@ impl NotesView {
         cx.notify();
     }
 
+    pub(crate) fn markdown_editor_view_mode_changed(
+        &mut self,
+        document_id: &str,
+        mode: ViewMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
+            return;
+        };
+        let mode = markdown_view_mode(mode);
+        if session.state.mode == mode {
+            return;
+        }
+        session.state.set_mode(mode);
+        self.tree
+            .markdown_view_modes
+            .insert(document_id.to_owned(), mode);
+        if let Some(storage) = self.storage.as_ref()
+            && let Err(error) = storage.save_state(&self.tree.to_ui_state())
+        {
+            notify_operation_error(window, cx, error);
+        }
+        cx.notify();
+    }
+
     fn switch_markdown_session(
         &mut self,
         document_id: &str,
@@ -342,6 +370,9 @@ fn subscribe_markdown_changes(
         move |view, _, event: &MarkdownEditorEvent, window, cx| match event {
             MarkdownEditorEvent::Changed { revision } => {
                 view.markdown_document_changed(&document_id, *revision, window, cx);
+            }
+            MarkdownEditorEvent::ViewModeChanged { mode } => {
+                view.markdown_editor_view_mode_changed(&document_id, *mode, window, cx);
             }
         },
     )

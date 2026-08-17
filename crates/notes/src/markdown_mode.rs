@@ -10,6 +10,13 @@ pub(crate) fn editor_view_mode(mode: MarkdownViewMode) -> ViewMode {
     }
 }
 
+pub(crate) fn markdown_view_mode(mode: ViewMode) -> MarkdownViewMode {
+    match mode {
+        ViewMode::Rendered => MarkdownViewMode::Wysiwyg,
+        ViewMode::Source => MarkdownViewMode::Source,
+    }
+}
+
 pub(crate) fn switch_markdown_mode(
     session: &mut MarkdownSession,
     mode: MarkdownViewMode,

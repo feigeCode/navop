@@ -7,6 +7,10 @@ use super::*;
 pub enum EditorEvent {
     /// The canonical Markdown document changed.
     Changed { revision: u64 },
+    /// The active editor view mode changed (for example through the context
+    /// menu or a shortcut handled inside the editor). Hosts that render their
+    /// own source/preview toggle should sync their button state from this event.
+    ViewModeChanged { mode: ViewMode },
 }
 
 impl EventEmitter<EditorEvent> for Editor {}

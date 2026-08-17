@@ -567,6 +567,59 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
+    fn internal_editor_mode_change_syncs_toolbar_toggle(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("internal-mode-change.md");
+        std::fs::write(&path, "# Title\n\nBody\n").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut cx, |view, _window, cx| {
+            let session = view.markdown_sessions.get_mut(&document_id).unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.set_view_mode(markdown_editor::ViewMode::Source, cx));
+            });
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            crate::MarkdownViewMode::Source,
+            view.read_with(&cx, |view, _| view
+                .markdown_sessions
+                .get(&document_id)
+                .unwrap()
+                .state
+                .mode)
+        );
+        assert_eq!(
+            crate::MarkdownViewMode::Source,
+            view.read_with(&cx, |view, _| view
+                .tree
+                .markdown_view_modes
+                .get(&document_id)
+                .copied()
+                .unwrap())
+        );
+    }
+
+    #[gpui::test]
     fn markdown_save_controls_switch_modes_and_save_immediately(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);

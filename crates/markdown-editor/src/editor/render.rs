@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use gpui_component::ElementExt as _;
+use gpui_component::{ElementExt as _, menu::ContextMenuExt};
 use rust_i18n::t;
 
 use super::{Editor, MountedRun};
@@ -347,6 +347,7 @@ impl Render for Editor {
         let theme = self.effective_theme(cx);
         let d = &theme.dimensions;
         let visible_blocks = self.document.visible_blocks().to_vec();
+        let editor_entity = cx.entity();
         let editor = cx.entity().downgrade();
         let scroll_trigger_padding = (d.block_min_height * 0.75).max(16.0);
         let max_scroll_y = f32::from(self.scroll_handle.max_offset().y.max(px(0.0)));
@@ -418,16 +419,13 @@ impl Render for Editor {
                                 .flex_shrink_0()
                                 .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
                                 .child(entity.clone());
-                            let row_editor = editor.clone();
+                            let row_editor = editor_entity.clone();
                             let entity_id = entity.entity_id();
-                            let row =
-                                row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                                    let _ = row_editor.update(cx, |editor, cx| {
-                                        editor.on_block_context_menu_mouse_down(
-                                            entity_id, event, window, cx,
-                                        );
-                                    });
+                            let row = row.on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                                row_editor.update(cx, |editor, cx| {
+                                    editor.set_block_context_menu_target(entity_id, cx);
                                 });
+                            });
                             footnote_children.push(row.into_any_element());
                             previous_footnote_row = Some(footnote_spacing);
                             footnote_end += 1;
@@ -460,11 +458,11 @@ impl Render for Editor {
                             d,
                         )))
                         .child(entity.clone());
-                    let row_editor = editor.clone();
+                    let row_editor = editor_entity.clone();
                     let entity_id = entity.entity_id();
-                    let row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                        let _ = row_editor.update(cx, |editor, cx| {
-                            editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                    let row = row.on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                        row_editor.update(cx, |editor, cx| {
+                            editor.set_block_context_menu_target(entity_id, cx);
                         });
                     });
                     group_children.push(row.into_any_element());
@@ -512,11 +510,11 @@ impl Render for Editor {
                         .flex_shrink_0()
                         .mt(px(footnote_row_top_gap(previous_footnote_row, d.block_gap)))
                         .child(entity.clone());
-                    let row_editor = editor.clone();
+                    let row_editor = editor_entity.clone();
                     let entity_id = entity.entity_id();
-                    let row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                        let _ = row_editor.update(cx, |editor, cx| {
-                            editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+                    let row = row.on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                        row_editor.update(cx, |editor, cx| {
+                            editor.set_block_context_menu_target(entity_id, cx);
                         });
                     });
                     group_children.push(row.into_any_element());
@@ -547,11 +545,11 @@ impl Render for Editor {
                 .flex_shrink_0()
                 .mt(px(top_gap))
                 .child(entity.clone());
-            let row_editor = editor.clone();
+            let row_editor = editor_entity.clone();
             let entity_id = entity.entity_id();
-            let row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                let _ = row_editor.update(cx, |editor, cx| {
-                    editor.on_block_context_menu_mouse_down(entity_id, event, window, cx);
+            let row = row.on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                row_editor.update(cx, |editor, cx| {
+                    editor.set_block_context_menu_target(entity_id, cx);
                 });
             });
             row_starts.push(index);
@@ -757,10 +755,23 @@ impl Render for Editor {
                 + scroll_trigger_padding
                 + scroll_beyond_bottom))
             .children(block_rows);
-        let scroll_content = scroll_content.on_mouse_down(
-            MouseButton::Right,
-            cx.listener(Self::on_editor_context_menu_mouse_down),
-        );
+        let scroll_editor = editor_entity.clone();
+        let scroll_content = scroll_content.context_menu(move |menu, window, cx| {
+            let target = scroll_editor.read(cx).context_menu_target;
+            Editor::build_popup_context_menu(
+                scroll_editor.clone(),
+                target.block_target,
+                target.insert_target.or_else(|| {
+                    (target.block_target.is_none()
+                        && scroll_editor.read(cx).view_mode == super::ViewMode::Rendered)
+                        .then_some(super::context_menu::TableInsertTarget::Append)
+                }),
+                target.table_target,
+                menu,
+                window,
+                cx,
+            )
+        });
 
         let content_area = div()
             .id("editor-scroll")
@@ -885,11 +896,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_jump_to_bottom))
             .on_action(cx.listener(Self::on_dismiss_transient_ui));
         let base = base.child(content_area);
-        let mut base = if let Some(context_menu) = self.render_context_menu_overlay(&theme, cx) {
-            base.child(context_menu)
-        } else {
-            base
-        };
+        let mut base = base;
         if let Some(table_dialog) = self.render_table_insert_dialog_overlay(&theme, cx) {
             base = base.child(table_dialog);
         }

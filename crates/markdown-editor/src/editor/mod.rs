@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use self::context_menu::{ContextMenuState, TableInsertDialogState};
+use self::context_menu::{ContextMenuTargetState, TableInsertDialogState};
 use self::enlarged::EnlargedBlockState;
 use self::tree::DocumentTree;
 use crate::EditorHostServices;
@@ -91,10 +91,9 @@ pub struct Editor {
     row_stride_width: Option<f32>,
     /// Where last frame's run sat among the scroll container's children.
     prev_mounted_run: Option<MountedRun>,
-    context_menu: Option<ContextMenuState>,
+    context_menu_target: ContextMenuTargetState,
     table_insert_dialog: Option<TableInsertDialogState>,
     enlarged_block: Option<EnlargedBlockState>,
-    context_menu_submenu_close_task: Option<Task<()>>,
     table_axis_preview: Option<TableAxisSelection>,
     table_axis_selection: Option<TableAxisSelection>,
     cross_block_selection: Option<CrossBlockSelection>,
@@ -332,10 +331,9 @@ impl Editor {
             row_stride_cache: HashMap::new(),
             row_stride_width: None,
             prev_mounted_run: None,
-            context_menu: None,
+            context_menu_target: ContextMenuTargetState::default(),
             table_insert_dialog: None,
             enlarged_block: None,
-            context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,
             cross_block_selection: None,

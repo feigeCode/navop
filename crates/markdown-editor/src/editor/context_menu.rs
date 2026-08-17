@@ -1,10 +1,7 @@
 //! Editor context menus and native table insertion dialog.
 
-use std::time::Duration;
-
 use super::table_menu::{
-    TableMenuAction, TableMenuEntry, TableMenuTarget, place_context_menu, table_menu_entries,
-    table_menu_move_delta,
+    TableMenuAction, TableMenuEntry, TableMenuTarget, table_menu_entries, table_menu_move_delta,
 };
 use super::{Editor, ViewMode};
 use crate::components::{
@@ -17,9 +14,8 @@ use crate::components::{
 };
 use crate::theme::Theme;
 use gpui::*;
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use rust_i18n::t;
-
-const CONTEXT_MENU_VIEWPORT_MARGIN: f32 = 8.0;
 
 /// Target block position for inserting a native table.
 #[derive(Clone, Copy)]
@@ -81,15 +77,13 @@ enum ContextMenuEntry {
     Separator,
 }
 
-/// Context menu currently open in the editor.
-pub(super) struct ContextMenuState {
-    position: Point<Pixels>,
-    block_target: Option<EntityId>,
-    insert_target: Option<TableInsertTarget>,
+/// Target captured during the right-click event before gpui-component builds
+/// the popup menu in its deferred frame.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ContextMenuTargetState {
+    pub(super) block_target: Option<EntityId>,
+    pub(super) insert_target: Option<TableInsertTarget>,
     pub(super) table_target: Option<TableMenuTarget>,
-    trigger_hovered: bool,
-    submenu_hovered: bool,
-    open_submenu: Option<ContextSubmenu>,
 }
 
 /// State for the table insertion dialog opened from the context menu.
@@ -99,22 +93,7 @@ pub(super) struct TableInsertDialogState {
     pub columns: usize,
 }
 
-macro_rules! table_menu_handler {
-    ($name:ident, $action:expr) => {
-        fn $name(&mut self, _event: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-            self.apply_table_menu_action($action, cx);
-        }
-    };
-}
-
 impl Editor {
-    fn context_menu_position_in_editor(&self, position: Point<Pixels>) -> Point<Pixels> {
-        point(
-            (position.x - self.root_bounds.origin.x).max(px(0.0)),
-            (position.y - self.root_bounds.origin.y).max(px(0.0)),
-        )
-    }
-
     pub(super) fn root_ancestor_entity_id(&self, entity_id: EntityId) -> EntityId {
         let mut current = entity_id;
         while let Some(location) = self.document.find_block_location(current) {
@@ -126,40 +105,52 @@ impl Editor {
         current
     }
 
-    fn open_context_menu(
-        &mut self,
-        position: Point<Pixels>,
-        block_target: Option<EntityId>,
-        insert_target: Option<TableInsertTarget>,
-        table_target: Option<TableMenuTarget>,
-        cx: &mut Context<Self>,
-    ) {
-        self.context_menu_submenu_close_task = None;
-        let position = self.context_menu_position_in_editor(position);
-        self.context_menu = Some(ContextMenuState {
-            position,
-            block_target,
-            insert_target,
-            table_target,
-            trigger_hovered: false,
-            submenu_hovered: false,
-            open_submenu: None,
-        });
-        cx.notify();
-    }
-
     pub(super) fn open_table_context_menu(
         &mut self,
-        position: Point<Pixels>,
+        _position: Point<Pixels>,
         block_target: Option<EntityId>,
         target: TableMenuTarget,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
         if self.view_mode != ViewMode::Rendered {
             return;
         }
 
-        self.open_context_menu(position, block_target, None, Some(target), cx);
+        self.context_menu_target = ContextMenuTargetState {
+            block_target,
+            insert_target: None,
+            table_target: Some(target),
+        };
+    }
+
+    pub(super) fn clear_context_menu_target(&mut self) {
+        self.context_menu_target = ContextMenuTargetState::default();
+    }
+
+    pub(super) fn set_block_context_menu_target(&mut self, entity_id: EntityId, cx: &App) {
+        if let Some(binding) = self.table_cell_binding(entity_id) {
+            self.context_menu_target = ContextMenuTargetState {
+                block_target: Some(entity_id),
+                insert_target: None,
+                table_target: Some(TableMenuTarget {
+                    table_block_id: binding.table_block.entity_id(),
+                    row: binding.position.row,
+                    column: binding.position.column,
+                }),
+            };
+            return;
+        }
+
+        let insert_target = (self.view_mode == ViewMode::Rendered
+            && self
+                .focusable_entity_by_id(entity_id)
+                .is_none_or(|block| block.read(cx).kind().allows_context_table_insert()))
+        .then(|| TableInsertTarget::After(self.root_ancestor_entity_id(entity_id)));
+        self.context_menu_target = ContextMenuTargetState {
+            block_target: Some(entity_id),
+            insert_target,
+            table_target: None,
+        };
     }
 
     pub(super) fn close_table_insert_dialog(&mut self, cx: &mut Context<Self>) {
@@ -168,146 +159,12 @@ impl Editor {
         }
     }
 
-    fn close_context_menu(&mut self, cx: &mut Context<Self>) {
-        let had_menu = self.context_menu.take().is_some();
-        let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
-        if had_menu || had_submenu_close {
-            cx.notify();
-        }
-    }
-
     pub(super) fn dismiss_contextual_overlays(&mut self, cx: &mut Context<Self>) {
-        let had_menu = self.context_menu.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
         let had_enlarged = self.enlarged_block.take().is_some();
-        let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
-        if had_menu || had_dialog || had_enlarged || had_submenu_close {
+        if had_dialog || had_enlarged {
             cx.notify();
         }
-    }
-
-    fn schedule_context_menu_submenu_close(&mut self, cx: &mut Context<Self>) {
-        let expected_submenu = self
-            .context_menu
-            .as_ref()
-            .and_then(|menu| menu.open_submenu);
-        if expected_submenu.is_none() {
-            return;
-        }
-
-        let weak_editor = cx.entity().downgrade();
-        self.context_menu_submenu_close_task = Some(cx.spawn(
-            async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
-                let _ = weak_editor.update(cx, |editor, cx| {
-                    editor.context_menu_submenu_close_task = None;
-                    let Some(menu) = editor.context_menu.as_mut() else {
-                        return;
-                    };
-                    if !menu.trigger_hovered
-                        && !menu.submenu_hovered
-                        && menu.open_submenu == expected_submenu
-                    {
-                        menu.open_submenu = None;
-                        cx.notify();
-                    }
-                });
-            },
-        ));
-    }
-
-    fn set_context_menu_hover_state(
-        &mut self,
-        hovered: bool,
-        submenu: Option<ContextSubmenu>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut changed = false;
-        let mut should_clear_close = false;
-        let mut should_schedule_close = false;
-
-        if let Some(menu) = self.context_menu.as_mut() {
-            if submenu.is_none() {
-                if menu.submenu_hovered != hovered {
-                    menu.submenu_hovered = hovered;
-                    changed = true;
-                }
-            } else if menu.trigger_hovered != hovered {
-                menu.trigger_hovered = hovered;
-                changed = true;
-            }
-
-            if hovered {
-                should_clear_close = true;
-                if let Some(submenu) = submenu
-                    && menu.open_submenu != Some(submenu)
-                {
-                    menu.open_submenu = Some(submenu);
-                    changed = true;
-                }
-            } else {
-                if !menu.trigger_hovered && !menu.submenu_hovered {
-                    should_schedule_close = true;
-                }
-            }
-        }
-
-        if should_clear_close {
-            self.context_menu_submenu_close_task = None;
-        }
-        if should_schedule_close {
-            self.schedule_context_menu_submenu_close(cx);
-        }
-        if changed {
-            cx.notify();
-        }
-    }
-
-    pub(super) fn on_editor_context_menu_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        self.open_context_menu(
-            event.position,
-            None,
-            (self.view_mode == ViewMode::Rendered).then_some(TableInsertTarget::Append),
-            None,
-            cx,
-        );
-    }
-
-    pub(super) fn on_block_context_menu_mouse_down(
-        &mut self,
-        entity_id: EntityId,
-        event: &MouseDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        if let Some(binding) = self.table_cell_binding(entity_id) {
-            self.open_table_context_menu(
-                event.position,
-                Some(entity_id),
-                TableMenuTarget {
-                    table_block_id: binding.table_block.entity_id(),
-                    row: binding.position.row,
-                    column: binding.position.column,
-                },
-                cx,
-            );
-            return;
-        }
-        let allows_insert = self
-            .focusable_entity_by_id(entity_id)
-            .is_none_or(|block| block.read(cx).kind().allows_context_table_insert());
-        let insert_target = (self.view_mode == ViewMode::Rendered && allows_insert)
-            .then(|| TableInsertTarget::After(self.root_ancestor_entity_id(entity_id)));
-        self.open_context_menu(event.position, Some(entity_id), insert_target, None, cx);
     }
 
     pub(super) fn on_dismiss_context_menu_overlay(
@@ -328,20 +185,14 @@ impl Editor {
         self.dismiss_contextual_overlays(cx);
     }
 
-    pub(super) fn on_context_menu_submenu_hover(
+    fn open_table_insert_dialog(
         &mut self,
-        hovered: &bool,
-        _window: &mut Window,
+        target: Option<TableInsertTarget>,
         cx: &mut Context<Self>,
     ) {
-        self.set_context_menu_hover_state(*hovered, None, cx);
-    }
-
-    fn open_table_insert_dialog_from_context_menu(&mut self, cx: &mut Context<Self>) {
-        let Some(target) = self.context_menu.take().and_then(|menu| menu.insert_target) else {
+        let Some(target) = target else {
             return;
         };
-        self.context_menu_submenu_close_task = None;
         self.table_insert_dialog = Some(TableInsertDialogState {
             target,
             body_rows: 2,
@@ -469,33 +320,25 @@ impl Editor {
         cx.notify();
     }
 
-    fn active_table_menu_target(&self) -> Option<TableMenuTarget> {
-        self.context_menu.as_ref()?.table_target
-    }
-
     fn apply_context_menu_action(
         &mut self,
         action: ContextMenuAction,
+        block_target: Option<EntityId>,
+        insert_target: Option<TableInsertTarget>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if action == ContextMenuAction::InsertTable {
-            self.open_table_insert_dialog_from_context_menu(cx);
+            self.open_table_insert_dialog(insert_target, cx);
             return;
         }
 
-        let block_target = self
-            .context_menu
-            .as_ref()
-            .and_then(|menu| menu.block_target);
         if let Some(entity_id) = block_target
             && let Some(block) = self.focusable_entity_by_id(entity_id)
         {
             self.active_entity_id = Some(entity_id);
             block.read(cx).focus_handle.clone().focus(window, cx);
         }
-        self.close_context_menu(cx);
-
         match action {
             ContextMenuAction::Undo => window.dispatch_action(Box::new(Undo), cx),
             ContextMenuAction::Redo => window.dispatch_action(Box::new(Redo), cx),
@@ -541,14 +384,15 @@ impl Editor {
         }
     }
 
-    fn apply_table_menu_action(&mut self, action: TableMenuAction, cx: &mut Context<Self>) {
-        let Some(target) = self.active_table_menu_target() else {
-            return;
-        };
+    fn apply_table_menu_action(
+        &mut self,
+        action: TableMenuAction,
+        target: TableMenuTarget,
+        cx: &mut Context<Self>,
+    ) {
         let Some(table_block) = self.table_block_by_id(target.table_block_id, cx) else {
             return;
         };
-        self.close_context_menu(cx);
         match action {
             TableMenuAction::InsertRowAbove => {
                 self.insert_table_row(&table_block, target.row, false, cx)
@@ -666,185 +510,6 @@ impl Editor {
         cx.notify();
     }
 
-    table_menu_handler!(on_insert_table_row_above, TableMenuAction::InsertRowAbove);
-    table_menu_handler!(on_insert_table_row_below, TableMenuAction::InsertRowBelow);
-    table_menu_handler!(
-        on_insert_table_column_left,
-        TableMenuAction::InsertColumnLeft
-    );
-    table_menu_handler!(
-        on_insert_table_column_right,
-        TableMenuAction::InsertColumnRight
-    );
-    table_menu_handler!(on_align_table_column_left, TableMenuAction::AlignColumnLeft);
-    table_menu_handler!(
-        on_align_table_column_center,
-        TableMenuAction::AlignColumnCenter
-    );
-    table_menu_handler!(
-        on_align_table_column_right,
-        TableMenuAction::AlignColumnRight
-    );
-    table_menu_handler!(on_move_table_row_up, TableMenuAction::MoveTableRowUp);
-    table_menu_handler!(on_move_table_row_down, TableMenuAction::MoveTableRowDown);
-    table_menu_handler!(
-        on_move_table_column_left,
-        TableMenuAction::MoveTableColumnLeft
-    );
-    table_menu_handler!(
-        on_move_table_column_right,
-        TableMenuAction::MoveTableColumnRight
-    );
-    table_menu_handler!(on_delete_table_menu_row, TableMenuAction::DeleteRow);
-    table_menu_handler!(on_delete_table_menu_column, TableMenuAction::DeleteColumn);
-    table_menu_handler!(on_copy_table, TableMenuAction::CopyTable);
-    table_menu_handler!(on_format_table_source, TableMenuAction::FormatTableSource);
-    table_menu_handler!(on_delete_table, TableMenuAction::DeleteTable);
-
-    fn render_table_menu_item(
-        theme: &Theme,
-        id: &'static str,
-        label: String,
-        enabled: bool,
-        danger: bool,
-        on_click: fn(&mut Editor, &ClickEvent, &mut Window, &mut Context<Editor>),
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        if enabled {
-            div()
-                .id(id)
-                .h(px(d.menu_item_height))
-                .px(px(d.menu_item_padding_x))
-                .flex()
-                .items_center()
-                .rounded(px(d.menu_item_radius))
-                .bg(c.dialog_surface)
-                .text_size(px(d.menu_text_size))
-                .font_weight(t.dialog_body_weight.to_font_weight())
-                .text_color(if danger {
-                    c.dialog_danger_button_bg
-                } else {
-                    c.dialog_secondary_button_text
-                })
-                .child(label)
-                .hover(|this| {
-                    this.bg(c.dialog_primary_button_bg)
-                        .text_color(c.dialog_primary_button_text)
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(on_click))
-                .into_any_element()
-        } else {
-            div()
-                .id(id)
-                .h(px(d.menu_item_height))
-                .px(px(d.menu_item_padding_x))
-                .flex()
-                .items_center()
-                .rounded(px(d.menu_item_radius))
-                .bg(c.dialog_surface)
-                .text_size(px(d.menu_text_size))
-                .font_weight(t.dialog_body_weight.to_font_weight())
-                .text_color(if danger {
-                    c.dialog_danger_button_bg
-                } else {
-                    c.dialog_muted
-                })
-                .child(label)
-                .into_any_element()
-        }
-    }
-
-    fn render_table_menu_action(
-        theme: &Theme,
-        action: TableMenuAction,
-        label: String,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let (id, danger, handler) = match action {
-            TableMenuAction::InsertRowAbove => (
-                "table-menu-insert-row-above",
-                false,
-                Self::on_insert_table_row_above as _,
-            ),
-            TableMenuAction::InsertRowBelow => (
-                "table-menu-insert-row-below",
-                false,
-                Self::on_insert_table_row_below as _,
-            ),
-            TableMenuAction::InsertColumnLeft => (
-                "table-menu-insert-column-left",
-                false,
-                Self::on_insert_table_column_left as _,
-            ),
-            TableMenuAction::InsertColumnRight => (
-                "table-menu-insert-column-right",
-                false,
-                Self::on_insert_table_column_right as _,
-            ),
-            TableMenuAction::AlignColumnLeft => (
-                "table-menu-align-column-left",
-                false,
-                Self::on_align_table_column_left as _,
-            ),
-            TableMenuAction::AlignColumnCenter => (
-                "table-menu-align-column-center",
-                false,
-                Self::on_align_table_column_center as _,
-            ),
-            TableMenuAction::AlignColumnRight => (
-                "table-menu-align-column-right",
-                false,
-                Self::on_align_table_column_right as _,
-            ),
-            TableMenuAction::MoveTableRowUp => (
-                "table-menu-move-row-up",
-                false,
-                Self::on_move_table_row_up as _,
-            ),
-            TableMenuAction::MoveTableRowDown => (
-                "table-menu-move-row-down",
-                false,
-                Self::on_move_table_row_down as _,
-            ),
-            TableMenuAction::MoveTableColumnLeft => (
-                "table-menu-move-column-left",
-                false,
-                Self::on_move_table_column_left as _,
-            ),
-            TableMenuAction::MoveTableColumnRight => (
-                "table-menu-move-column-right",
-                false,
-                Self::on_move_table_column_right as _,
-            ),
-            TableMenuAction::DeleteRow => (
-                "table-menu-delete-row",
-                false,
-                Self::on_delete_table_menu_row as _,
-            ),
-            TableMenuAction::DeleteColumn => (
-                "table-menu-delete-column",
-                false,
-                Self::on_delete_table_menu_column as _,
-            ),
-            TableMenuAction::CopyTable => {
-                ("table-menu-copy-table", false, Self::on_copy_table as _)
-            }
-            TableMenuAction::FormatTableSource => (
-                "table-menu-format-source",
-                false,
-                Self::on_format_table_source as _,
-            ),
-            TableMenuAction::DeleteTable => {
-                ("table-menu-delete-table", true, Self::on_delete_table as _)
-            }
-        };
-        Self::render_table_menu_item(theme, id, label, true, danger, handler, cx)
-    }
-
     fn table_menu_label(action: TableMenuAction) -> String {
         match action {
             TableMenuAction::InsertRowAbove => t!("MarkdownEditor.table_menu_insert_row_above"),
@@ -873,61 +538,6 @@ impl Editor {
             TableMenuAction::DeleteTable => t!("MarkdownEditor.table_menu_delete_table"),
         }
         .to_string()
-    }
-
-    fn render_menu_separator(theme: &Theme) -> AnyElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        div()
-            .mx(px(d.menu_separator_margin_x))
-            .my(px(d.menu_separator_margin_y))
-            .h(px(d.menu_separator_height))
-            .bg(c.dialog_border)
-            .into_any_element()
-    }
-
-    fn context_menu_entries(&self, menu: &ContextMenuState) -> Vec<ContextMenuEntry> {
-        let mut entries = vec![
-            ContextMenuEntry::Action(ContextMenuAction::Undo),
-            ContextMenuEntry::Action(ContextMenuAction::Redo),
-            ContextMenuEntry::Separator,
-            ContextMenuEntry::Action(ContextMenuAction::Cut),
-            ContextMenuEntry::Action(ContextMenuAction::Copy),
-            ContextMenuEntry::Action(ContextMenuAction::Paste),
-            ContextMenuEntry::Action(ContextMenuAction::SelectAll),
-        ];
-
-        if menu.block_target.is_some() {
-            entries.push(ContextMenuEntry::Separator);
-            entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Format));
-            if self.view_mode == ViewMode::Rendered {
-                entries.extend([
-                    ContextMenuEntry::Submenu(ContextSubmenu::BlockType),
-                    ContextMenuEntry::Submenu(ContextSubmenu::Block),
-                ]);
-            }
-        }
-
-        if self.view_mode == ViewMode::Rendered {
-            if menu.insert_target.is_some() {
-                if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
-                    entries.push(ContextMenuEntry::Separator);
-                }
-                entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Insert));
-            }
-            if menu.table_target.is_some() {
-                if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
-                    entries.push(ContextMenuEntry::Separator);
-                }
-                entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Table));
-            }
-        }
-
-        entries.extend([
-            ContextMenuEntry::Separator,
-            ContextMenuEntry::Action(ContextMenuAction::ToggleViewMode),
-        ]);
-        entries
     }
 
     fn context_submenu_entries(submenu: ContextSubmenu) -> Vec<ContextMenuEntry> {
@@ -967,42 +577,6 @@ impl Editor {
                 vec![ContextMenuEntry::Action(ContextMenuAction::InsertTable)]
             }
             ContextSubmenu::Table => Vec::new(),
-        }
-    }
-
-    fn context_menu_action_id(action: ContextMenuAction) -> &'static str {
-        match action {
-            ContextMenuAction::Undo => "editor-context-menu-undo",
-            ContextMenuAction::Redo => "editor-context-menu-redo",
-            ContextMenuAction::Cut => "editor-context-menu-cut",
-            ContextMenuAction::Copy => "editor-context-menu-copy",
-            ContextMenuAction::Paste => "editor-context-menu-paste",
-            ContextMenuAction::SelectAll => "editor-context-menu-select-all",
-            ContextMenuAction::Bold => "editor-context-menu-bold",
-            ContextMenuAction::Italic => "editor-context-menu-italic",
-            ContextMenuAction::Underline => "editor-context-menu-underline",
-            ContextMenuAction::Strikethrough => "editor-context-menu-strikethrough",
-            ContextMenuAction::InlineCode => "editor-context-menu-inline-code",
-            ContextMenuAction::Paragraph => "editor-context-menu-paragraph",
-            ContextMenuAction::Heading1 => "editor-context-menu-heading-1",
-            ContextMenuAction::Heading2 => "editor-context-menu-heading-2",
-            ContextMenuAction::Heading3 => "editor-context-menu-heading-3",
-            ContextMenuAction::Heading4 => "editor-context-menu-heading-4",
-            ContextMenuAction::Heading5 => "editor-context-menu-heading-5",
-            ContextMenuAction::Heading6 => "editor-context-menu-heading-6",
-            ContextMenuAction::BulletList => "editor-context-menu-bullet-list",
-            ContextMenuAction::OrderedList => "editor-context-menu-ordered-list",
-            ContextMenuAction::TaskList => "editor-context-menu-task-list",
-            ContextMenuAction::Quote => "editor-context-menu-quote",
-            ContextMenuAction::CodeBlock => "editor-context-menu-code-block",
-            ContextMenuAction::MoveBlockUp => "editor-context-menu-move-block-up",
-            ContextMenuAction::MoveBlockDown => "editor-context-menu-move-block-down",
-            ContextMenuAction::DuplicateBlock => "editor-context-menu-duplicate-block",
-            ContextMenuAction::DeleteBlock => "editor-context-menu-delete-block",
-            ContextMenuAction::IndentBlock => "editor-context-menu-indent-block",
-            ContextMenuAction::OutdentBlock => "editor-context-menu-outdent-block",
-            ContextMenuAction::InsertTable => "editor-context-menu-insert-table",
-            ContextMenuAction::ToggleViewMode => "editor-context-menu-toggle-view-mode",
         }
     }
 
@@ -1068,16 +642,6 @@ impl Editor {
         }
     }
 
-    fn context_submenu_id(submenu: ContextSubmenu) -> &'static str {
-        match submenu {
-            ContextSubmenu::Format => "editor-context-menu-format",
-            ContextSubmenu::BlockType => "editor-context-menu-block-type",
-            ContextSubmenu::Block => "editor-context-menu-block",
-            ContextSubmenu::Insert => "editor-context-menu-insert",
-            ContextSubmenu::Table => "editor-context-menu-table",
-        }
-    }
-
     fn context_submenu_label(submenu: ContextSubmenu) -> String {
         match submenu {
             ContextSubmenu::Format => t!("MarkdownEditor.context_menu_format").to_string(),
@@ -1088,314 +652,164 @@ impl Editor {
         }
     }
 
-    fn menu_entries_height(entries: &[ContextMenuEntry], theme: &Theme) -> f32 {
-        let d = &theme.dimensions;
-        let entries_height: f32 = entries
-            .iter()
-            .map(|entry| match entry {
-                ContextMenuEntry::Action(_) | ContextMenuEntry::Submenu(_) => d.menu_item_height,
-                ContextMenuEntry::Separator => {
-                    d.menu_separator_height + d.menu_separator_margin_y * 2.0
-                }
-            })
-            .sum();
-        d.menu_panel_padding * 2.0
-            + entries_height
-            + d.menu_panel_gap * entries.len().saturating_sub(1) as f32
-    }
-
-    fn table_menu_height(theme: &Theme) -> f32 {
-        let d = &theme.dimensions;
-        let entries_height: f32 = table_menu_entries()
-            .iter()
-            .map(|entry| match entry {
-                TableMenuEntry::Action(_) => d.menu_item_height,
-                TableMenuEntry::Separator => {
-                    d.menu_separator_height + d.menu_separator_margin_y * 2.0
-                }
-            })
-            .sum();
-        d.menu_panel_padding * 2.0
-            + entries_height
-            + d.menu_panel_gap * table_menu_entries().len().saturating_sub(1) as f32
-    }
-
-    fn context_submenu_offset(
-        entries: &[ContextMenuEntry],
-        submenu: ContextSubmenu,
-        theme: &Theme,
-    ) -> f32 {
-        let d = &theme.dimensions;
-        let mut offset = d.menu_panel_padding;
+    fn append_popup_actions(
+        mut menu: PopupMenu,
+        entries: impl IntoIterator<Item = ContextMenuEntry>,
+        editor: &Entity<Self>,
+        block_target: Option<EntityId>,
+        insert_target: Option<TableInsertTarget>,
+        table_target: Option<TableMenuTarget>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
         for entry in entries {
-            if matches!(entry, ContextMenuEntry::Submenu(candidate) if *candidate == submenu) {
-                break;
-            }
-            offset += match entry {
-                ContextMenuEntry::Action(_) | ContextMenuEntry::Submenu(_) => d.menu_item_height,
-                ContextMenuEntry::Separator => {
-                    d.menu_separator_height + d.menu_separator_margin_y * 2.0
+            match entry {
+                ContextMenuEntry::Action(action) => {
+                    let editor = editor.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(Self::context_menu_action_label(action)).on_click(
+                            window.listener_for(&editor, move |editor, _, window, cx| {
+                                editor.apply_context_menu_action(
+                                    action,
+                                    block_target,
+                                    insert_target,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
+                    );
                 }
-            };
-            offset += d.menu_panel_gap;
-        }
-        offset
-    }
-
-    fn render_context_menu_action(
-        theme: &Theme,
-        action: ContextMenuAction,
-        label: String,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        let danger = matches!(action, ContextMenuAction::DeleteBlock);
-        div()
-            .id(Self::context_menu_action_id(action))
-            .h(px(d.menu_item_height))
-            .px(px(d.menu_item_padding_x))
-            .flex()
-            .items_center()
-            .rounded(px(d.menu_item_radius))
-            .bg(c.dialog_surface)
-            .text_size(px(d.menu_text_size))
-            .font_weight(t.dialog_body_weight.to_font_weight())
-            .text_color(if danger {
-                c.dialog_danger_button_bg
-            } else {
-                c.dialog_secondary_button_text
-            })
-            .child(label)
-            .hover(|this| {
-                this.bg(c.dialog_primary_button_bg)
-                    .text_color(c.dialog_primary_button_text)
-            })
-            .active(|this| this.opacity(0.92))
-            .cursor_pointer()
-            .on_click(cx.listener(move |editor, _event, window, cx| {
-                editor.apply_context_menu_action(action, window, cx);
-            }))
-            .into_any_element()
-    }
-
-    fn render_context_submenu_trigger(
-        theme: &Theme,
-        submenu: ContextSubmenu,
-        label: String,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let t = &theme.typography;
-        div()
-            .id(Self::context_submenu_id(submenu))
-            .h(px(d.menu_item_height))
-            .px(px(d.menu_item_padding_x))
-            .flex()
-            .items_center()
-            .justify_between()
-            .rounded(px(d.menu_item_radius))
-            .bg(if open {
-                c.dialog_primary_button_bg
-            } else {
-                c.dialog_surface
-            })
-            .text_size(px(d.menu_text_size))
-            .font_weight(t.dialog_body_weight.to_font_weight())
-            .text_color(if open {
-                c.dialog_primary_button_text
-            } else {
-                c.dialog_secondary_button_text
-            })
-            .child(label)
-            .child("›")
-            .hover(|this| {
-                this.bg(c.dialog_primary_button_bg)
-                    .text_color(c.dialog_primary_button_text)
-            })
-            .cursor_pointer()
-            .on_hover(cx.listener(move |editor, hovered, _window, cx| {
-                editor.set_context_menu_hover_state(*hovered, Some(submenu), cx);
-            }))
-            .into_any_element()
-    }
-
-    fn render_context_menu_entries(
-        theme: &Theme,
-        entries: &[ContextMenuEntry],
-        open_submenu: Option<ContextSubmenu>,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        entries
-            .iter()
-            .map(|entry| match entry {
-                ContextMenuEntry::Action(action) => Self::render_context_menu_action(
-                    theme,
-                    *action,
-                    Self::context_menu_action_label(*action),
-                    cx,
-                ),
-                ContextMenuEntry::Submenu(submenu) => Self::render_context_submenu_trigger(
-                    theme,
-                    *submenu,
-                    Self::context_submenu_label(*submenu),
-                    open_submenu == Some(*submenu),
-                    cx,
-                ),
-                ContextMenuEntry::Separator => Self::render_menu_separator(theme),
-            })
-            .collect()
-    }
-
-    pub(super) fn render_context_menu_overlay(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let menu = self.context_menu.as_ref()?;
-        let c = &theme.colors;
-        let d = &theme.dimensions;
-        let entries = self.context_menu_entries(menu);
-        let panel_width = d.menu_panel_width.max(d.context_menu_axis_panel_width);
-        let panel_height = Self::menu_entries_height(&entries, theme);
-        let open_submenu = menu.open_submenu;
-        let submenu_width = match open_submenu {
-            Some(ContextSubmenu::Table) => d.menu_panel_width.max(d.context_menu_axis_panel_width),
-            Some(_) => d.menu_panel_width.max(d.context_menu_submenu_width),
-            None => d.context_menu_submenu_width,
-        };
-        let submenu_height = match open_submenu {
-            Some(ContextSubmenu::Table) => Self::table_menu_height(theme),
-            Some(submenu) => {
-                Self::menu_entries_height(&Self::context_submenu_entries(submenu), theme)
-            }
-            None => 0.0,
-        };
-        let submenu_anchor_offset = open_submenu
-            .map(|submenu| Self::context_submenu_offset(&entries, submenu, theme))
-            .unwrap_or(0.0);
-        let placement = place_context_menu(
-            f32::from(menu.position.x),
-            f32::from(menu.position.y),
-            f32::from(self.root_bounds.size.width),
-            f32::from(self.root_bounds.size.height),
-            panel_width,
-            panel_height,
-            submenu_width,
-            submenu_height,
-            submenu_anchor_offset,
-            CONTEXT_MENU_VIEWPORT_MARGIN,
-            d.context_menu_submenu_gap,
-        );
-        let main_items = Self::render_context_menu_entries(theme, &entries, open_submenu, cx);
-        let panel_id = if menu.table_target.is_some() {
-            "editor-table-context-menu-panel"
-        } else {
-            "editor-context-menu-panel"
-        };
-        let overlay_id = if menu.table_target.is_some() {
-            "editor-table-context-menu-overlay"
-        } else {
-            "editor-context-menu-overlay"
-        };
-
-        let panel = div()
-            .id(panel_id)
-            .debug_selector(move || panel_id.to_string())
-            .absolute()
-            .left(px(placement.panel_x))
-            .top(px(placement.panel_y))
-            .w(px(panel_width))
-            .p(px(d.menu_panel_padding))
-            .flex()
-            .flex_col()
-            .gap(px(d.menu_panel_gap))
-            .bg(c.dialog_surface)
-            .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .rounded(px(d.menu_panel_radius))
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                cx.stop_propagation()
-            })
-            .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
-                cx.stop_propagation()
-            })
-            .children(main_items);
-
-        let overlay = div()
-            .id(overlay_id)
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(Self::on_dismiss_context_menu_overlay),
-            )
-            .child(panel);
-
-        let Some(open_submenu) = open_submenu else {
-            return Some(overlay.into_any_element());
-        };
-
-        let submenu_items: Vec<AnyElement> = if open_submenu == ContextSubmenu::Table {
-            table_menu_entries()
-                .iter()
-                .map(|entry| match entry {
-                    TableMenuEntry::Action(action) => Self::render_table_menu_action(
-                        theme,
-                        *action,
-                        Self::table_menu_label(*action),
+                ContextMenuEntry::Separator => {
+                    menu = menu.separator();
+                }
+                ContextMenuEntry::Submenu(submenu) => {
+                    let editor = editor.clone();
+                    menu = menu.submenu(
+                        Self::context_submenu_label(submenu),
+                        window,
                         cx,
-                    ),
-                    TableMenuEntry::Separator => Self::render_menu_separator(theme),
-                })
-                .collect()
-        } else {
-            Self::render_context_menu_entries(
-                theme,
-                &Self::context_submenu_entries(open_submenu),
-                None,
-                cx,
-            )
-        };
-        let submenu_id = if open_submenu == ContextSubmenu::Table {
-            "editor-table-context-menu-submenu"
-        } else {
-            "editor-context-menu-submenu"
-        };
-        let submenu = div()
-            .id(submenu_id)
-            .absolute()
-            .left(px(placement.submenu_x))
-            .top(px(placement.submenu_y))
-            .w(px(submenu_width))
-            .p(px(d.menu_panel_padding))
-            .flex()
-            .flex_col()
-            .gap(px(d.menu_panel_gap))
-            .occlude()
-            .bg(c.dialog_surface)
-            .border(px(d.dialog_border_width))
-            .border_color(c.dialog_border)
-            .rounded(px(d.menu_panel_radius))
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                cx.stop_propagation()
-            })
-            .on_mouse_down(MouseButton::Right, |_event, _window, cx| {
-                cx.stop_propagation()
-            })
-            .on_hover(cx.listener(Self::on_context_menu_submenu_hover))
-            .children(submenu_items);
+                        move |submenu_menu, window, cx| {
+                            if submenu == ContextSubmenu::Table {
+                                return Self::append_popup_table_actions(
+                                    submenu_menu,
+                                    table_target,
+                                    &editor,
+                                    window,
+                                    cx,
+                                );
+                            }
+                            Self::append_popup_actions(
+                                submenu_menu,
+                                Self::context_submenu_entries(submenu),
+                                &editor,
+                                block_target,
+                                insert_target,
+                                table_target,
+                                window,
+                                cx,
+                            )
+                        },
+                    );
+                }
+            }
+        }
+        menu
+    }
 
-        Some(overlay.child(submenu).into_any_element())
+    fn append_popup_table_actions(
+        mut menu: PopupMenu,
+        target: Option<TableMenuTarget>,
+        editor: &Entity<Self>,
+        window: &mut Window,
+        _cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let Some(target) = target else {
+            return menu;
+        };
+        for entry in table_menu_entries() {
+            match entry {
+                TableMenuEntry::Action(action) => {
+                    let editor = editor.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(Self::table_menu_label(*action)).on_click(
+                            window.listener_for(&editor, move |editor, _, _, cx| {
+                                editor.apply_table_menu_action(*action, target, cx);
+                            }),
+                        ),
+                    );
+                }
+                TableMenuEntry::Separator => menu = menu.separator(),
+            }
+        }
+        menu
+    }
+
+    /// Build the native gpui-component context menu for a block or editor
+    /// surface. Targets are captured at the point where the user right-clicks,
+    /// so the menu does not depend on a separate editor-owned overlay state.
+    pub(super) fn build_popup_context_menu(
+        editor: Entity<Self>,
+        block_target: Option<EntityId>,
+        insert_target: Option<TableInsertTarget>,
+        table_target: Option<TableMenuTarget>,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let rendered = editor.read(cx).view_mode == ViewMode::Rendered;
+        let mut entries = vec![
+            ContextMenuEntry::Action(ContextMenuAction::Undo),
+            ContextMenuEntry::Action(ContextMenuAction::Redo),
+            ContextMenuEntry::Separator,
+            ContextMenuEntry::Action(ContextMenuAction::Cut),
+            ContextMenuEntry::Action(ContextMenuAction::Copy),
+            ContextMenuEntry::Action(ContextMenuAction::Paste),
+            ContextMenuEntry::Action(ContextMenuAction::SelectAll),
+        ];
+        if block_target.is_some() {
+            entries.push(ContextMenuEntry::Separator);
+            entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Format));
+            if rendered {
+                entries.extend([
+                    ContextMenuEntry::Submenu(ContextSubmenu::BlockType),
+                    ContextMenuEntry::Submenu(ContextSubmenu::Block),
+                ]);
+            }
+        }
+        if rendered {
+            if insert_target.is_some() {
+                if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
+                    entries.push(ContextMenuEntry::Separator);
+                }
+                entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Insert));
+            }
+            if table_target.is_some() {
+                if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
+                    entries.push(ContextMenuEntry::Separator);
+                }
+                entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Table));
+            }
+        }
+        entries.extend([
+            ContextMenuEntry::Separator,
+            ContextMenuEntry::Action(ContextMenuAction::ToggleViewMode),
+        ]);
+
+        // The table submenu is the only submenu whose contents are target
+        // dependent; build it separately so row/column actions keep the exact
+        // cell that was clicked.
+        let menu = Self::append_popup_actions(
+            menu,
+            entries.into_iter(),
+            &editor,
+            block_target,
+            insert_target,
+            table_target,
+            window,
+            cx,
+        );
+        menu
     }
 
     pub(super) fn render_table_insert_dialog_overlay(
@@ -1629,116 +1043,48 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextSubmenu, Editor, TableInsertTarget, TableMenuTarget};
+    use super::Editor;
     use crate::components::BlockKind;
-    use gpui::{AppContext, Point, TestAppContext, point, px};
+    use gpui::{AppContext, TestAppContext};
 
     #[gpui::test]
-    async fn context_menu_position_is_relative_to_embedded_editor_root(cx: &mut TestAppContext) {
-        let editor = cx.new(|cx| Editor::from_markdown(cx, "alpha".to_string(), None));
-
-        editor.update(cx, |editor, _cx| {
-            editor.root_bounds.origin = point(px(120.0), px(80.0));
-            assert_eq!(
-                editor.context_menu_position_in_editor(point(px(156.0), px(104.0))),
-                point(px(36.0), px(24.0)),
-            );
-        });
-    }
-
-    #[gpui::test]
-    async fn context_submenu_stays_open_while_crossing_hover_gap(cx: &mut TestAppContext) {
-        let editor = cx.new(|cx| Editor::from_markdown(cx, "alpha".to_string(), None));
-
-        editor.update(cx, |editor, cx| {
-            editor.open_context_menu(
-                Point {
-                    x: px(24.0),
-                    y: px(24.0),
-                },
-                None,
-                Some(TableInsertTarget::Append),
-                None,
-                cx,
-            );
-
-            editor.set_context_menu_hover_state(true, Some(ContextSubmenu::Insert), cx);
-            let menu = editor
-                .context_menu
-                .as_ref()
-                .expect("expected insert context menu");
-            assert_eq!(menu.open_submenu, Some(ContextSubmenu::Insert));
-            assert!(editor.context_menu_submenu_close_task.is_none());
-
-            editor.set_context_menu_hover_state(false, Some(ContextSubmenu::Insert), cx);
-            let menu = editor
-                .context_menu
-                .as_ref()
-                .expect("expected insert context menu");
-            assert_eq!(menu.open_submenu, Some(ContextSubmenu::Insert));
-            assert!(editor.context_menu_submenu_close_task.is_some());
-
-            editor.set_context_menu_hover_state(true, None, cx);
-            let menu = editor
-                .context_menu
-                .as_ref()
-                .expect("expected insert context menu");
-            assert_eq!(menu.open_submenu, Some(ContextSubmenu::Insert));
-            assert!(editor.context_menu_submenu_close_task.is_none());
-        });
-    }
-
-    #[gpui::test]
-    async fn table_submenu_stays_open_while_crossing_hover_gap(cx: &mut TestAppContext) {
+    async fn block_context_target_tracks_the_exact_table_cell(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| {
             Editor::from_markdown(cx, "| A | B |\n| --- | --- |\n| 1 | 2 |".to_string(), None)
         });
-        let table_block_id = editor.read_with(cx, |editor, cx| {
-            editor
+        let (table_block_id, cell_id) = editor.read_with(cx, |editor, cx| {
+            let table = editor
                 .document
                 .visible_blocks()
                 .into_iter()
                 .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
                 .expect("the markdown table becomes a table block")
                 .entity
-                .entity_id()
+                .clone();
+            let cell_id = table
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.first())
+                .and_then(|row| row.get(1))
+                .expect("the table has a second-column body cell")
+                .entity_id();
+            (table.entity_id(), cell_id)
         });
 
         editor.update(cx, |editor, cx| {
-            editor.open_table_context_menu(
-                point(px(24.0), px(24.0)),
-                None,
-                TableMenuTarget {
-                    table_block_id,
-                    row: 0,
-                    column: 0,
-                },
-                cx,
-            );
+            editor.set_block_context_menu_target(cell_id, cx);
+            let target = editor
+                .context_menu_target
+                .table_target
+                .expect("table target should be captured");
+            assert_eq!(target.table_block_id, table_block_id);
+            assert_eq!(target.row, 1);
+            assert_eq!(target.column, 1);
 
-            editor.set_context_menu_hover_state(true, Some(ContextSubmenu::Table), cx);
-            let menu = editor
-                .context_menu
-                .as_ref()
-                .expect("expected table context menu");
-            assert_eq!(menu.open_submenu, Some(ContextSubmenu::Table));
-            assert!(editor.context_menu_submenu_close_task.is_none());
-
-            editor.set_context_menu_hover_state(false, Some(ContextSubmenu::Table), cx);
-            let menu = editor
-                .context_menu
-                .as_ref()
-                .expect("expected table context menu");
-            assert_eq!(menu.open_submenu, Some(ContextSubmenu::Table));
-            assert!(editor.context_menu_submenu_close_task.is_some());
-
-            editor.set_context_menu_hover_state(true, None, cx);
-            let menu = editor
-                .context_menu
-                .as_ref()
-                .expect("expected table context menu");
-            assert_eq!(menu.open_submenu, Some(ContextSubmenu::Table));
-            assert!(editor.context_menu_submenu_close_task.is_none());
+            editor.clear_context_menu_target();
+            assert!(editor.context_menu_target.block_target.is_none());
+            assert!(editor.context_menu_target.table_target.is_none());
         });
     }
 }

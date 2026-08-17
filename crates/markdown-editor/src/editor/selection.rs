@@ -66,6 +66,15 @@ impl Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.button == MouseButton::Right {
+            // Capture runs before the clicked row's bubble handler. Resetting
+            // here ensures a right-click on editor whitespace cannot reuse the
+            // previous block/table target.
+            self.clear_context_menu_target();
+            cx.propagate();
+            return;
+        }
+
         if event.button != MouseButton::Left {
             cx.propagate();
             return;
