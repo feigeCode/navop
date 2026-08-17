@@ -73,6 +73,21 @@ enum ShortcutCapture {
     Shortcut(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShortcutCaptureLabel<'a> {
+    PressShortcut,
+    Unassigned,
+    Shortcut(&'a str),
+}
+
+fn shortcut_capture_label(shortcut: Option<&str>, is_focused: bool) -> ShortcutCaptureLabel<'_> {
+    match shortcut {
+        Some(shortcut) => ShortcutCaptureLabel::Shortcut(shortcut),
+        None if is_focused => ShortcutCaptureLabel::PressShortcut,
+        None => ShortcutCaptureLabel::Unassigned,
+    }
+}
+
 fn capture_quick_command_shortcut(keystroke: &Keystroke) -> ShortcutCapture {
     if keystroke.key == "escape" {
         return ShortcutCapture::Clear;
@@ -341,12 +356,13 @@ impl Focusable for QuickCommandEditorState {
 
 impl Render for QuickCommandEditorState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let capture_text = if self.shortcut_focus_handle.is_focused(window) {
-            t!("QuickCommand.press_shortcut").to_string()
-        } else {
-            self.shortcut
-                .clone()
-                .unwrap_or_else(|| t!("QuickCommand.shortcut_unassigned").to_string())
+        let capture_text = match shortcut_capture_label(
+            self.shortcut.as_deref(),
+            self.shortcut_focus_handle.is_focused(window),
+        ) {
+            ShortcutCaptureLabel::PressShortcut => t!("QuickCommand.press_shortcut").to_string(),
+            ShortcutCaptureLabel::Unassigned => t!("QuickCommand.shortcut_unassigned").to_string(),
+            ShortcutCaptureLabel::Shortcut(shortcut) => shortcut.to_string(),
         };
         let shortcut_focus_handle = self.shortcut_focus_handle.clone();
         let selected_scope = match self.scope {
@@ -355,117 +371,129 @@ impl Render for QuickCommandEditorState {
         };
         let editor = cx.entity().clone();
 
-        v_flex()
-            .gap_3()
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.colors.muted_foreground)
-                            .child(t!("QuickCommand.shortcut").to_string()),
-                    )
-                    .child(
-                        div()
-                            .id("quick-command-shortcut-capture")
-                            .w_full()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(if self.invalid_shortcut {
-                                gpui::red()
-                            } else if self.shortcut_focus_handle.is_focused(window) {
-                                self.colors.accent
-                            } else {
-                                self.colors.border
-                            })
-                            .bg(self.colors.muted)
-                            .text_sm()
-                            .text_color(self.colors.foreground)
-                            .cursor_pointer()
-                            .track_focus(&self.shortcut_focus_handle)
-                            .on_click(move |_, window, cx| {
-                                shortcut_focus_handle.focus(window, cx);
-                            })
-                            .on_key_down(cx.listener(
-                                |this, event: &gpui::KeyDownEvent, window, cx| {
-                                    window.prevent_default();
-                                    cx.stop_propagation();
-                                    match capture_quick_command_shortcut(&event.keystroke) {
-                                        ShortcutCapture::Clear => {
-                                            this.shortcut = None;
-                                            this.invalid_shortcut = false;
-                                        }
-                                        ShortcutCapture::Invalid => {
-                                            this.invalid_shortcut = true;
-                                        }
-                                        ShortcutCapture::Shortcut(shortcut) => {
-                                            this.shortcut = Some(shortcut);
-                                            this.invalid_shortcut = false;
-                                        }
-                                    }
-                                    cx.notify();
-                                },
-                            ))
-                            .child(capture_text),
-                    )
-                    .when(self.invalid_shortcut, |this| {
-                        this.child(
+        v_flex().gap_1().child(
+            h_flex()
+                .id("quick-command-shortcut-scope-row")
+                .items_start()
+                .gap_3()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_1()
+                        .child(
                             div()
                                 .text_xs()
-                                .text_color(gpui::red())
-                                .child(t!("QuickCommand.invalid_shortcut").to_string()),
+                                .text_color(self.colors.muted_foreground)
+                                .child(t!("QuickCommand.shortcut").to_string()),
                         )
-                    }),
-            )
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.colors.muted_foreground)
-                            .child(t!("QuickCommand.scope").to_string()),
-                    )
-                    .when_some(self.panel_connection_id, |this, _| {
-                        this.child(
-                            RadioGroup::vertical("quick-command-scope")
-                                .selected_index(Some(selected_scope))
-                                .on_click(move |index, _, cx| {
-                                    editor.update(cx, |this, cx| {
-                                        this.scope = if *index == 0 {
-                                            QuickCommandScope::CurrentConnection
-                                        } else {
-                                            QuickCommandScope::Global
-                                        };
-                                        cx.notify();
-                                    });
-                                })
-                                .children([
-                                    Radio::new("quick-command-current-connection")
-                                        .label(t!("QuickCommand.current_connection").to_string()),
-                                    Radio::new("quick-command-global")
-                                        .label(t!("QuickCommand.global_shared").to_string()),
-                                ]),
-                        )
-                    })
-                    .when(self.panel_connection_id.is_none(), |this| {
-                        this.child(
+                        .child(
                             div()
+                                .id("quick-command-shortcut-capture")
+                                .w_full()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(if self.invalid_shortcut {
+                                    gpui::red()
+                                } else if self.shortcut_focus_handle.is_focused(window) {
+                                    self.colors.accent
+                                } else {
+                                    self.colors.border
+                                })
+                                .bg(self.colors.muted)
                                 .text_sm()
                                 .text_color(self.colors.foreground)
-                                .child(t!("QuickCommand.global_shared").to_string()),
+                                .cursor_pointer()
+                                .track_focus(&self.shortcut_focus_handle)
+                                .on_click(move |_, window, cx| {
+                                    shortcut_focus_handle.focus(window, cx);
+                                })
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, window, cx| {
+                                        window.prevent_default();
+                                        cx.stop_propagation();
+                                        match capture_quick_command_shortcut(&event.keystroke) {
+                                            ShortcutCapture::Clear => {
+                                                this.shortcut = None;
+                                                this.invalid_shortcut = false;
+                                            }
+                                            ShortcutCapture::Invalid => {
+                                                this.invalid_shortcut = true;
+                                            }
+                                            ShortcutCapture::Shortcut(shortcut) => {
+                                                this.shortcut = Some(shortcut);
+                                                this.invalid_shortcut = false;
+                                            }
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(capture_text),
                         )
-                    })
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.colors.muted_foreground)
-                            .child(t!("QuickCommand.global_shared_description").to_string()),
-                    ),
-            )
+                        .when(self.invalid_shortcut, |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(gpui::red())
+                                    .child(t!("QuickCommand.invalid_shortcut").to_string()),
+                            )
+                        }),
+                )
+                .child(
+                    v_flex()
+                        .w(gpui::px(280.0))
+                        .flex_shrink_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(self.colors.muted_foreground)
+                                .child(t!("QuickCommand.scope").to_string()),
+                        )
+                        .when_some(self.panel_connection_id, |this, _| {
+                            this.child(
+                                RadioGroup::horizontal("quick-command-scope")
+                                    .selected_index(Some(selected_scope))
+                                    .on_click(move |index, _, cx| {
+                                        editor.update(cx, |this, cx| {
+                                            this.scope = if *index == 0 {
+                                                QuickCommandScope::CurrentConnection
+                                            } else {
+                                                QuickCommandScope::Global
+                                            };
+                                            cx.notify();
+                                        });
+                                    })
+                                    .children([
+                                        Radio::new("quick-command-current-connection").label(
+                                            t!("QuickCommand.current_connection").to_string(),
+                                        ),
+                                        Radio::new("quick-command-global")
+                                            .label(t!("QuickCommand.global_shared").to_string()),
+                                    ]),
+                            )
+                        })
+                        .when(self.panel_connection_id.is_none(), |this| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(self.colors.foreground)
+                                    .child(t!("QuickCommand.global_shared").to_string()),
+                            )
+                        })
+                        .when(self.scope == QuickCommandScope::Global, |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(self.colors.muted_foreground)
+                                    .child(
+                                        t!("QuickCommand.global_shared_description").to_string(),
+                                    ),
+                            )
+                        }),
+                ),
+        )
     }
 }
 
@@ -746,6 +774,7 @@ impl QuickCommandPanel {
             let (ok_variant, cancel_variant) =
                 quick_command_dialog_button_variants(&colors, dialog_cx);
             dialog
+                .width(gpui::px(640.0))
                 .bg(colors.background)
                 .text_color(colors.foreground)
                 .border_color(colors.border)
@@ -753,37 +782,47 @@ impl QuickCommandPanel {
                 .confirm()
                 .child(
                     v_flex()
-                        .gap_3()
+                        .gap_2()
                         .bg(colors.background)
                         .text_color(colors.foreground)
                         .child(
-                            v_flex()
-                                .gap_1()
+                            h_flex()
+                                .id("quick-command-primary-fields-row")
+                                .items_center()
+                                .gap_2()
                                 .child(
                                     div()
+                                        .w(gpui::px(84.0))
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
                                         .child(t!("QuickCommand.name").to_string()),
                                 )
                                 .child(
-                                    Input::new(&name_state)
-                                        .small()
-                                        .w_full()
-                                        .local_style(input_style)
-                                        .caret_color(colors.foreground),
+                                    div().flex_1().child(
+                                        Input::new(&name_state)
+                                            .small()
+                                            .w_full()
+                                            .local_style(input_style)
+                                            .caret_color(colors.foreground),
+                                    ),
                                 ),
                         )
                         .child(
-                            v_flex()
-                                .gap_1()
+                            h_flex()
+                                .items_start()
+                                .gap_2()
                                 .child(
                                     div()
+                                        .w(gpui::px(84.0))
+                                        .pt_2()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
                                         .child(t!("QuickCommand.description").to_string()),
                                 )
                                 .child(
-                                    div().w_full().h(gpui::px(76.0)).child(
+                                    div().flex_1().h(gpui::px(64.0)).child(
                                         Input::new(&description_state)
                                             .small()
                                             .w_full()
@@ -794,55 +833,65 @@ impl QuickCommandPanel {
                                 ),
                         )
                         .child(
-                            v_flex()
-                                .gap_1()
+                            h_flex()
+                                .id("quick-command-group-fields-row")
+                                .items_center()
+                                .gap_2()
                                 .child(
                                     div()
+                                        .w(gpui::px(84.0))
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
                                         .child(t!("QuickCommand.group").to_string()),
                                 )
                                 .child(
-                                    Input::new(&group_state)
-                                        .small()
-                                        .w_full()
-                                        .local_style(input_style)
-                                        .caret_color(colors.foreground),
-                                ),
-                        )
-                        .child(
-                            v_flex()
-                                .gap_1()
+                                    div().flex_1().child(
+                                        Input::new(&group_state)
+                                            .small()
+                                            .w_full()
+                                            .local_style(input_style)
+                                            .caret_color(colors.foreground),
+                                    ),
+                                )
                                 .child(
                                     div()
+                                        .w(gpui::px(84.0))
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
                                         .child(t!("QuickCommand.group_color").to_string()),
                                 )
                                 .child(
-                                    Select::new(&color_state)
-                                        .small()
-                                        .w_full()
-                                        .local_style(input_style)
-                                        .local_menu_item_style(
-                                            colors.foreground,
-                                            colors.muted,
-                                            colors.accent,
-                                            colors.accent_foreground,
-                                        ),
+                                    div().w(gpui::px(144.0)).flex_shrink_0().child(
+                                        Select::new(&color_state)
+                                            .small()
+                                            .w_full()
+                                            .local_style(input_style)
+                                            .local_menu_item_style(
+                                                colors.foreground,
+                                                colors.muted,
+                                                colors.accent,
+                                                colors.accent_foreground,
+                                            ),
+                                    ),
                                 ),
                         )
                         .child(
-                            v_flex()
-                                .gap_1()
+                            h_flex()
+                                .items_start()
+                                .gap_2()
                                 .child(
                                     div()
+                                        .w(gpui::px(84.0))
+                                        .pt_2()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
                                         .child(t!("QuickCommand.command").to_string()),
                                 )
                                 .child(
-                                    div().w_full().h(gpui::px(132.0)).child(
+                                    div().flex_1().h(gpui::px(108.0)).child(
                                         Input::new(&command_state)
                                             .small()
                                             .w_full()
@@ -1739,11 +1788,11 @@ impl Render for QuickCommandPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        QuickCommandGroupFilter, QuickCommandScope, ShortcutCapture,
+        QuickCommandGroupFilter, QuickCommandScope, ShortcutCapture, ShortcutCaptureLabel,
         capture_quick_command_shortcut, command_matches_group_filter, connection_id_for_scope,
         new_command_group_defaults, normalize_group_fields, quick_command_dialog_input_style,
         quick_command_group_chip_label, quick_command_group_color_items, quick_command_groups,
-        validated_quick_command_shortcut,
+        shortcut_capture_label, validated_quick_command_shortcut,
     };
     use crate::theme::TerminalColors;
     use gpui::{Keystroke, rgb};
@@ -1996,6 +2045,26 @@ mod tests {
     }
 
     #[test]
+    fn captured_shortcut_is_displayed_immediately_while_capture_keeps_focus() {
+        assert_eq!(
+            ShortcutCaptureLabel::Shortcut("ctrl-alt-k"),
+            shortcut_capture_label(Some("ctrl-alt-k"), true)
+        );
+        assert_eq!(
+            ShortcutCaptureLabel::PressShortcut,
+            shortcut_capture_label(None, true)
+        );
+        assert_eq!(
+            ShortcutCaptureLabel::Shortcut("ctrl-alt-k"),
+            shortcut_capture_label(Some("ctrl-alt-k"), false)
+        );
+        assert_eq!(
+            ShortcutCaptureLabel::Unassigned,
+            shortcut_capture_label(None, false)
+        );
+    }
+
+    #[test]
     fn invalid_shortcut_capture_blocks_saving_without_overwriting_the_previous_value() {
         assert_eq!(
             Err(()),
@@ -2033,10 +2102,30 @@ mod tests {
 
         assert!(editor.contains(".track_focus(&self.shortcut_focus_handle)"));
         assert!(editor.contains(".on_key_down("));
+        assert!(editor.contains("RadioGroup::horizontal(\"quick-command-scope\")"));
+        assert!(!editor.contains("RadioGroup::vertical(\"quick-command-scope\")"));
+        assert!(editor.contains(".id(\"quick-command-shortcut-scope-row\")"));
+        assert!(editor.contains(".w(gpui::px(280.0))"));
         assert!(editor.contains("QuickCommandScope::CurrentConnection"));
         assert!(editor.contains("QuickCommandScope::Global"));
         assert!(editor.contains("QuickCommand.shortcut_unassigned"));
         assert!(editor.contains("QuickCommand.global_shared_description"));
+    }
+
+    #[test]
+    fn command_editor_groups_short_fields_into_compact_rows() {
+        let source = include_str!("quick_command_panel.rs");
+        let editor = source
+            .split_once("fn open_command_editor(")
+            .expect("quick command editor implementation")
+            .1
+            .split_once("\n    fn ")
+            .expect("quick command editor boundary")
+            .0;
+
+        assert!(editor.contains(".id(\"quick-command-primary-fields-row\")"));
+        assert!(editor.contains(".id(\"quick-command-group-fields-row\")"));
+        assert!(editor.contains(".width(gpui::px(640.0))"));
     }
 
     #[test]
