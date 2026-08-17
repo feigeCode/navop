@@ -1044,10 +1044,18 @@ impl Block {
     pub(crate) fn on_table_cell_context_menu_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.is_table_cell() {
+            // Make the clicked cell active before the deferred PopupMenu
+            // builder snapshots its action context. This prevents table
+            // operations from falling back to whichever cell was active
+            // before the right-click.
+            if !self.focus_handle.is_focused(window) {
+                self.focus_handle.focus(window, cx);
+            }
+            cx.emit(BlockEvent::RequestFocus);
             cx.emit(BlockEvent::RequestOpenTableContextMenu {
                 position: event.position,
             });

@@ -8,9 +8,9 @@ use crate::components::{
     BoldSelection, CodeSelection, Copy, Cut, DeleteBlock, DismissTransientUi, DuplicateBlock,
     IndentBlock, ItalicSelection, MoveBlockDown, MoveBlockUp, OutdentBlock, Paste, Redo, SelectAll,
     SetHeading1, SetHeading2, SetHeading3, SetHeading4, SetHeading5, SetHeading6, SetParagraph,
-    StrikethroughSelection, TableColumnAlignment, TableData, ToggleBulletList, ToggleCodeBlock,
-    ToggleOrderedList, ToggleQuote, ToggleTaskList, ToggleViewMode, UnderlineSelection, Undo,
-    serialize_table_markdown_lines,
+    StrikethroughSelection, TableCellPosition, TableColumnAlignment, TableData, ToggleBulletList,
+    ToggleCodeBlock, ToggleOrderedList, ToggleQuote, ToggleTaskList, ToggleViewMode,
+    UnderlineSelection, Undo, serialize_table_markdown_lines,
 };
 use crate::theme::Theme;
 use gpui::*;
@@ -127,7 +127,53 @@ impl Editor {
         self.context_menu_target = ContextMenuTargetState::default();
     }
 
+    /// Resolve the target snapshot used by gpui-component's deferred popup
+    /// builder.
+    ///
+    /// A table cell focuses itself synchronously on right-click, while its
+    /// `BlockEvent` and the containing table row update the editor target
+    /// through separate bubble handlers. If the popup builder observes the
+    /// containing table block between those updates, recover the exact cell
+    /// from the editor's active table-cell binding instead of omitting the
+    /// table submenu for that frame.
+    pub(super) fn context_menu_target_for_popup(&self) -> ContextMenuTargetState {
+        let mut target = self.context_menu_target;
+        if target.table_target.is_some() {
+            return target;
+        }
+
+        let Some(block_target) = target.block_target else {
+            return target;
+        };
+        let Some(active_entity_id) = self.active_entity_id else {
+            return target;
+        };
+        let Some(binding) = self.table_cell_binding(active_entity_id) else {
+            return target;
+        };
+        let table_block_id = binding.table_block.entity_id();
+        if block_target != active_entity_id && block_target != table_block_id {
+            return target;
+        }
+
+        target.block_target = Some(active_entity_id);
+        target.insert_target = None;
+        target.table_target = Some(TableMenuTarget {
+            table_block_id,
+            row: binding.position.row,
+            column: binding.position.column,
+        });
+        target
+    }
+
     pub(super) fn set_block_context_menu_target(&mut self, entity_id: EntityId, cx: &App) {
+        // A table cell reports its exact row/column before the containing
+        // document row handles the same bubbled right-click. Keep that more
+        // specific target instead of replacing it with the table block.
+        if self.context_menu_target.table_target.is_some() {
+            return;
+        }
+
         if let Some(binding) = self.table_cell_binding(entity_id) {
             self.context_menu_target = ContextMenuTargetState {
                 block_target: Some(entity_id),
@@ -388,11 +434,30 @@ impl Editor {
         &mut self,
         action: TableMenuAction,
         target: TableMenuTarget,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(table_block) = self.table_block_by_id(target.table_block_id, cx) else {
             return;
         };
+        // Restore the exact cell before running a custom table handler.
+        // PopupMenu only applies action_context automatically to items
+        // dispatched as GPUI actions; table items use on_click handlers and
+        // therefore restore their target explicitly.
+        if let Some(cell) = table_block
+            .read(cx)
+            .table_runtime
+            .as_ref()
+            .and_then(|runtime| {
+                runtime.cell(TableCellPosition {
+                    row: target.row,
+                    column: target.column,
+                })
+            })
+        {
+            self.focus_block(cell.entity_id());
+            cell.read(cx).focus_handle.clone().focus(window, cx);
+        }
         match action {
             TableMenuAction::InsertRowAbove => {
                 self.insert_table_row(&table_block, target.row, false, cx)
@@ -652,6 +717,43 @@ impl Editor {
         }
     }
 
+    fn context_menu_action(action: ContextMenuAction) -> Option<Box<dyn Action>> {
+        let action: Box<dyn Action> = match action {
+            ContextMenuAction::Undo => Box::new(Undo),
+            ContextMenuAction::Redo => Box::new(Redo),
+            ContextMenuAction::Cut => Box::new(Cut),
+            ContextMenuAction::Copy => Box::new(Copy),
+            ContextMenuAction::Paste => Box::new(Paste),
+            ContextMenuAction::SelectAll => Box::new(SelectAll),
+            ContextMenuAction::Bold => Box::new(BoldSelection),
+            ContextMenuAction::Italic => Box::new(ItalicSelection),
+            ContextMenuAction::Underline => Box::new(UnderlineSelection),
+            ContextMenuAction::Strikethrough => Box::new(StrikethroughSelection),
+            ContextMenuAction::InlineCode => Box::new(CodeSelection),
+            ContextMenuAction::Paragraph => Box::new(SetParagraph),
+            ContextMenuAction::Heading1 => Box::new(SetHeading1),
+            ContextMenuAction::Heading2 => Box::new(SetHeading2),
+            ContextMenuAction::Heading3 => Box::new(SetHeading3),
+            ContextMenuAction::Heading4 => Box::new(SetHeading4),
+            ContextMenuAction::Heading5 => Box::new(SetHeading5),
+            ContextMenuAction::Heading6 => Box::new(SetHeading6),
+            ContextMenuAction::BulletList => Box::new(ToggleBulletList),
+            ContextMenuAction::OrderedList => Box::new(ToggleOrderedList),
+            ContextMenuAction::TaskList => Box::new(ToggleTaskList),
+            ContextMenuAction::Quote => Box::new(ToggleQuote),
+            ContextMenuAction::CodeBlock => Box::new(ToggleCodeBlock),
+            ContextMenuAction::MoveBlockUp => Box::new(MoveBlockUp),
+            ContextMenuAction::MoveBlockDown => Box::new(MoveBlockDown),
+            ContextMenuAction::DuplicateBlock => Box::new(DuplicateBlock),
+            ContextMenuAction::DeleteBlock => Box::new(DeleteBlock),
+            ContextMenuAction::IndentBlock => Box::new(IndentBlock),
+            ContextMenuAction::OutdentBlock => Box::new(OutdentBlock),
+            ContextMenuAction::ToggleViewMode => Box::new(ToggleViewMode),
+            ContextMenuAction::InsertTable => return None,
+        };
+        Some(action)
+    }
+
     fn append_popup_actions(
         mut menu: PopupMenu,
         entries: impl IntoIterator<Item = ContextMenuEntry>,
@@ -659,6 +761,7 @@ impl Editor {
         block_target: Option<EntityId>,
         insert_target: Option<TableInsertTarget>,
         table_target: Option<TableMenuTarget>,
+        action_context: Option<FocusHandle>,
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
@@ -666,30 +769,38 @@ impl Editor {
             match entry {
                 ContextMenuEntry::Action(action) => {
                     let editor = editor.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(Self::context_menu_action_label(action)).on_click(
-                            window.listener_for(&editor, move |editor, _, window, cx| {
-                                editor.apply_context_menu_action(
-                                    action,
-                                    block_target,
-                                    insert_target,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        ),
-                    );
+                    let mut item = PopupMenuItem::new(Self::context_menu_action_label(action));
+                    if let Some(shortcut_action) = Self::context_menu_action(action) {
+                        item = item.action(shortcut_action);
+                    }
+                    menu = menu.item(item.on_click(window.listener_for(
+                        &editor,
+                        move |editor, _, window, cx| {
+                            editor.apply_context_menu_action(
+                                action,
+                                block_target,
+                                insert_target,
+                                window,
+                                cx,
+                            );
+                        },
+                    )));
                 }
                 ContextMenuEntry::Separator => {
                     menu = menu.separator();
                 }
                 ContextMenuEntry::Submenu(submenu) => {
                     let editor = editor.clone();
+                    let submenu_action_context = action_context.clone();
                     menu = menu.submenu(
                         Self::context_submenu_label(submenu),
                         window,
                         cx,
                         move |submenu_menu, window, cx| {
+                            let submenu_menu = match submenu_action_context.clone() {
+                                Some(handle) => submenu_menu.action_context(handle),
+                                None => submenu_menu,
+                            };
                             if submenu == ContextSubmenu::Table {
                                 return Self::append_popup_table_actions(
                                     submenu_menu,
@@ -706,6 +817,7 @@ impl Editor {
                                 block_target,
                                 insert_target,
                                 table_target,
+                                submenu_action_context.clone(),
                                 window,
                                 cx,
                             )
@@ -718,7 +830,7 @@ impl Editor {
     }
 
     fn append_popup_table_actions(
-        mut menu: PopupMenu,
+        menu: PopupMenu,
         target: Option<TableMenuTarget>,
         editor: &Entity<Self>,
         window: &mut Window,
@@ -727,14 +839,18 @@ impl Editor {
         let Some(target) = target else {
             return menu;
         };
+        // The table menu intentionally contains all row, column, alignment and
+        // table-level commands. Make this leaf submenu scrollable so none of
+        // those operations disappear below short editor windows.
+        let mut menu = menu.scrollable(true);
         for entry in table_menu_entries() {
             match entry {
                 TableMenuEntry::Action(action) => {
                     let editor = editor.clone();
                     menu = menu.item(
                         PopupMenuItem::new(Self::table_menu_label(*action)).on_click(
-                            window.listener_for(&editor, move |editor, _, _, cx| {
-                                editor.apply_table_menu_action(*action, target, cx);
+                            window.listener_for(&editor, move |editor, _, window, cx| {
+                                editor.apply_table_menu_action(*action, target, window, cx);
                             }),
                         ),
                     );
@@ -743,6 +859,52 @@ impl Editor {
             }
         }
         menu
+    }
+
+    fn popup_context_menu_entries(
+        rendered: bool,
+        block_target: Option<EntityId>,
+        insert_target: Option<TableInsertTarget>,
+        table_target: Option<TableMenuTarget>,
+    ) -> Vec<ContextMenuEntry> {
+        let mut entries = vec![
+            ContextMenuEntry::Action(ContextMenuAction::Undo),
+            ContextMenuEntry::Action(ContextMenuAction::Redo),
+            ContextMenuEntry::Separator,
+            ContextMenuEntry::Action(ContextMenuAction::Cut),
+            ContextMenuEntry::Action(ContextMenuAction::Copy),
+            ContextMenuEntry::Action(ContextMenuAction::Paste),
+            ContextMenuEntry::Action(ContextMenuAction::SelectAll),
+        ];
+
+        // Context-specific table operations should be prominent and must not
+        // end up below the generic block submenus in a short window.
+        if rendered && table_target.is_some() {
+            entries.push(ContextMenuEntry::Separator);
+            entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Table));
+        }
+
+        if block_target.is_some() {
+            entries.push(ContextMenuEntry::Separator);
+            entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Format));
+            if rendered {
+                entries.extend([
+                    ContextMenuEntry::Submenu(ContextSubmenu::BlockType),
+                    ContextMenuEntry::Submenu(ContextSubmenu::Block),
+                ]);
+            }
+        }
+        if rendered && insert_target.is_some() {
+            if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
+                entries.push(ContextMenuEntry::Separator);
+            }
+            entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Insert));
+        }
+        entries.extend([
+            ContextMenuEntry::Separator,
+            ContextMenuEntry::Action(ContextMenuAction::ToggleViewMode),
+        ]);
+        entries
     }
 
     /// Build the native gpui-component context menu for a block or editor
@@ -758,43 +920,19 @@ impl Editor {
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let rendered = editor.read(cx).view_mode == ViewMode::Rendered;
-        let mut entries = vec![
-            ContextMenuEntry::Action(ContextMenuAction::Undo),
-            ContextMenuEntry::Action(ContextMenuAction::Redo),
-            ContextMenuEntry::Separator,
-            ContextMenuEntry::Action(ContextMenuAction::Cut),
-            ContextMenuEntry::Action(ContextMenuAction::Copy),
-            ContextMenuEntry::Action(ContextMenuAction::Paste),
-            ContextMenuEntry::Action(ContextMenuAction::SelectAll),
-        ];
-        if block_target.is_some() {
-            entries.push(ContextMenuEntry::Separator);
-            entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Format));
-            if rendered {
-                entries.extend([
-                    ContextMenuEntry::Submenu(ContextSubmenu::BlockType),
-                    ContextMenuEntry::Submenu(ContextSubmenu::Block),
-                ]);
-            }
-        }
-        if rendered {
-            if insert_target.is_some() {
-                if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
-                    entries.push(ContextMenuEntry::Separator);
-                }
-                entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Insert));
-            }
-            if table_target.is_some() {
-                if !matches!(entries.last(), Some(ContextMenuEntry::Separator)) {
-                    entries.push(ContextMenuEntry::Separator);
-                }
-                entries.push(ContextMenuEntry::Submenu(ContextSubmenu::Table));
-            }
-        }
-        entries.extend([
-            ContextMenuEntry::Separator,
-            ContextMenuEntry::Action(ContextMenuAction::ToggleViewMode),
-        ]);
+        let entries =
+            Self::popup_context_menu_entries(rendered, block_target, insert_target, table_target);
+
+        let action_context = block_target.and_then(|entity_id| {
+            editor
+                .read(cx)
+                .focusable_entity_by_id(entity_id)
+                .map(|block| block.read(cx).focus_handle.clone())
+        });
+        let menu = match action_context.clone() {
+            Some(handle) => menu.action_context(handle),
+            None => menu,
+        };
 
         // The table submenu is the only submenu whose contents are target
         // dependent; build it separately so row/column actions keep the exact
@@ -806,6 +944,7 @@ impl Editor {
             block_target,
             insert_target,
             table_target,
+            action_context,
             window,
             cx,
         );
@@ -1043,7 +1182,7 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::Editor;
+    use super::{ContextMenuEntry, ContextSubmenu, Editor, TableMenuAction, TableMenuTarget};
     use crate::components::BlockKind;
     use gpui::{AppContext, TestAppContext};
 
@@ -1082,9 +1221,121 @@ mod tests {
             assert_eq!(target.row, 1);
             assert_eq!(target.column, 1);
 
+            editor.set_block_context_menu_target(table_block_id, cx);
+            assert_eq!(
+                editor.context_menu_target.table_target,
+                Some(target),
+                "the containing table row must not overwrite the exact cell target"
+            );
+
+            editor.context_menu_target.table_target = None;
+            editor.context_menu_target.block_target = Some(table_block_id);
+            editor.active_entity_id = Some(cell_id);
+            let recovered = editor.context_menu_target_for_popup();
+            assert_eq!(
+                recovered.table_target,
+                Some(target),
+                "the deferred popup builder must recover the active cell when it observes only the containing table block"
+            );
+
             editor.clear_context_menu_target();
             assert!(editor.context_menu_target.block_target.is_none());
             assert!(editor.context_menu_target.table_target.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn table_submenu_is_present_and_precedes_generic_block_submenus(cx: &mut TestAppContext) {
+        let editor =
+            cx.new(|cx| Editor::from_markdown(cx, "| A |\n| --- |\n| 1 |".to_string(), None));
+        let table_target = editor.read_with(cx, |editor, cx| {
+            let table_block = editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
+                .expect("the markdown table becomes a table block")
+                .entity
+                .clone();
+            TableMenuTarget {
+                table_block_id: table_block.entity_id(),
+                row: 1,
+                column: 0,
+            }
+        });
+        let entries = Editor::popup_context_menu_entries(
+            true,
+            Some(table_target.table_block_id),
+            None,
+            Some(table_target),
+        );
+        let table_index = entries
+            .iter()
+            .position(|entry| matches!(entry, ContextMenuEntry::Submenu(ContextSubmenu::Table)))
+            .expect("a table target must add the table submenu");
+        let format_index = entries
+            .iter()
+            .position(|entry| matches!(entry, ContextMenuEntry::Submenu(ContextSubmenu::Format)))
+            .expect("a block target must add the format submenu");
+        assert!(
+            table_index < format_index,
+            "table operations should stay visible above generic block submenus"
+        );
+    }
+
+    #[gpui::test]
+    async fn table_menu_action_restores_focus_to_the_clicked_cell(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::theme::ThemeManager::init(cx);
+            crate::components::init(cx);
+        });
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "| A | B |\n| --- | --- |\n| 1 | 2 |".to_string(), None)
+        });
+
+        let (table_block, cell) = editor.read_with(cx, |editor, cx| {
+            let table_block = editor
+                .document
+                .visible_blocks()
+                .into_iter()
+                .find(|visible| visible.entity.read(cx).kind() == BlockKind::Table)
+                .expect("the markdown table becomes a table block")
+                .entity
+                .clone();
+            let cell = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.first())
+                .and_then(|row| row.get(1))
+                .expect("the table has a second-column body cell")
+                .clone();
+            (table_block, cell)
+        });
+
+        cx.update(|window, _cx| window.blur());
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.apply_table_menu_action(
+                    TableMenuAction::CopyTable,
+                    TableMenuTarget {
+                        table_block_id: table_block.entity_id(),
+                        row: 1,
+                        column: 1,
+                    },
+                    window,
+                    cx,
+                );
+            });
+            assert!(
+                cell.read(cx).focus_handle.is_focused(window),
+                "custom table menu handlers must restore focus to the exact clicked cell"
+            );
+        });
+
+        editor.read_with(cx, |editor, _cx| {
+            assert_eq!(editor.active_entity_id, Some(cell.entity_id()));
         });
     }
 }

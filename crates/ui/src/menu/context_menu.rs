@@ -44,6 +44,7 @@ pub struct ContextMenu<E: ParentElement + Styled + Sized> {
     // This is not in use, just for style refinement forwarding.
     _ignore_style: StyleRefinement,
     anchor: Anchor,
+    preserve_focus: bool,
 }
 
 impl<E: ParentElement + Styled> ContextMenu<E> {
@@ -54,8 +55,20 @@ impl<E: ParentElement + Styled> ContextMenu<E> {
             element: Some(element),
             menu: None,
             anchor: Anchor::TopLeft,
+            preserve_focus: false,
             _ignore_style: StyleRefinement::default(),
         }
+    }
+
+    /// Keep the currently focused element focused while the context menu is open.
+    ///
+    /// This is useful for editors whose commands depend on the active input
+    /// retaining focus. Mouse interaction with the menu remains available, but
+    /// keyboard navigation inside the popup requires the default focus behavior.
+    #[must_use]
+    pub fn preserve_focus(mut self) -> Self {
+        self.preserve_focus = true;
+        self
     }
 
     /// Build the context menu using the given builder function.
@@ -158,6 +171,7 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let anchor = self.anchor;
+        let preserve_focus = self.preserve_focus;
 
         self.with_element_state(
             id.unwrap(),
@@ -207,10 +221,12 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                                 .snap_to_window_with_margin(px(8.))
                                                 .anchor(anchor)
                                                 .when_some(menu_view, |this, menu| {
-                                                    // Focus the menu, so that can be handle the action.
-                                                    if !menu
-                                                        .focus_handle(cx)
-                                                        .contains_focused(window, cx)
+                                                    // Focus the menu so it can handle keyboard
+                                                    // actions unless its owner must retain focus.
+                                                    if !preserve_focus
+                                                        && !menu
+                                                            .focus_handle(cx)
+                                                            .contains_focused(window, cx)
                                                     {
                                                         menu.focus_handle(cx).focus(window, cx);
                                                     }

@@ -574,7 +574,7 @@ mod tests {
             redraw(cx);
         }
 
-        let (table_block_id, second_cell_id) = editor.read_with(cx, |editor, cx| {
+        let (table_block_id, second_cell, second_cell_id) = editor.read_with(cx, |editor, cx| {
             let table_block = editor
                 .document
                 .visible_blocks()
@@ -590,8 +590,13 @@ mod tests {
                 .and_then(|runtime| runtime.rows.first())
                 .and_then(|row| row.get(1))
                 .expect("the table has a second-column body cell");
-            (table_block.entity_id(), second_cell.read(cx).record.id)
+            (
+                table_block.entity_id(),
+                second_cell.clone(),
+                second_cell.read(cx).record.id,
+            )
         });
+        let second_cell_entity_id = second_cell.entity_id();
 
         let cell_selector: &'static str =
             Box::leak(format!("table-cell-{second_cell_id}").into_boxed_str());
@@ -603,8 +608,17 @@ mod tests {
             MouseButton::Right,
             Modifiers::default(),
         );
+        editor.read_with(cx, |editor, _cx| {
+            assert_eq!(
+                editor.active_entity_id,
+                Some(second_cell_entity_id),
+                "right-clicking a table cell must make that cell the action target before the popup takes focus"
+            );
+        });
         // gpui-component builds the popup in a deferred frame so the menu
-        // receives the final mouse position and focus before it is painted.
+        // receives the final mouse position before it is painted. The editor
+        // opts into preserving focus, so the active cell must stay focused
+        // after those deferred frames.
         redraw(cx);
         redraw(cx);
 
@@ -616,10 +630,18 @@ mod tests {
             assert_eq!(target.table_block_id, table_block_id);
             assert_eq!(target.row, 1);
             assert_eq!(target.column, 1);
+            assert_eq!(
+                editor.active_entity_id,
+                Some(second_cell_entity_id),
+                "opening the popup must keep the clicked cell as the editor action target"
+            );
         });
-        // PopupMenu is rendered in an anchored deferred overlay and does not
-        // expose the old editor-owned panel selector. The exact-cell target
-        // assertion above verifies the important part of this interaction.
+        cx.update(|window, cx| {
+            assert!(
+                second_cell.read(cx).focus_handle.is_focused(window),
+                "the context menu must not take physical focus from the clicked table cell"
+            );
+        });
     }
 
     #[gpui::test]
