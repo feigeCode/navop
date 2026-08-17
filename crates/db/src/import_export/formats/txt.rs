@@ -239,22 +239,28 @@ impl FormatHandler for TxtFormatHandler {
                 "*".to_string()
             };
 
-            let mut select_sql = format!("SELECT {} FROM {}", columns_str, table_ref);
+            let mut base_sql = format!("SELECT {} FROM {}", columns_str, table_ref);
             if let Some(where_clause) = &config.where_clause {
-                select_sql.push_str(" WHERE ");
-                select_sql.push_str(where_clause);
+                base_sql.push_str(" WHERE ");
+                base_sql.push_str(where_clause);
             }
-            if let Some(limit) = config.limit {
-                let pagination = plugin.format_pagination(limit, 0, "");
-                select_sql.push_str(&pagination);
-            }
+            let paginated_query = config
+                .limit
+                .map(|limit| plugin.build_paginated_query(&base_sql, limit, 0, ""));
+            let select_sql = paginated_query
+                .as_ref()
+                .map(|query| query.sql.as_str())
+                .unwrap_or(base_sql.as_str());
 
             let result = connection
-                .query(&select_sql)
+                .query(select_sql)
                 .await
                 .map_err(|e| anyhow!("Query failed: {}", e))?;
 
-            if let SqlResult::Query(query_result) = result {
+            if let SqlResult::Query(mut query_result) = result {
+                if let Some(paginated_query) = &paginated_query {
+                    paginated_query.strip_hidden_result_columns(&mut query_result)?;
+                }
                 let mut table_output = String::new();
 
                 if include_header {

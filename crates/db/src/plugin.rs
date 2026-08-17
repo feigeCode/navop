@@ -49,6 +49,76 @@ pub(crate) fn parse_table_data_total_count(result: SqlResult) -> Result<usize> {
         .map_err(|error| anyhow!("invalid table row count `{value}`: {error}"))
 }
 
+/// A complete paginated query together with any result columns used only to implement pagination.
+///
+/// Most databases only append a pagination clause and therefore have no hidden columns. Databases
+/// such as Oracle 11g need to wrap the base query and expose an internal `ROWNUM` column while
+/// applying an offset. Callers must pass the returned [`QueryResult`] through
+/// [`PaginatedQuery::strip_hidden_result_columns`] before displaying or exporting it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaginatedQuery {
+    pub sql: String,
+    hidden_result_columns: Vec<String>,
+}
+
+impl PaginatedQuery {
+    pub fn new(sql: impl Into<String>) -> Self {
+        Self {
+            sql: sql.into(),
+            hidden_result_columns: Vec::new(),
+        }
+    }
+
+    pub fn with_hidden_result_column(mut self, column: impl Into<String>) -> Self {
+        self.hidden_result_columns.push(column.into());
+        self
+    }
+
+    pub fn strip_hidden_result_columns(&self, query_result: &mut QueryResult) -> Result<()> {
+        if self.hidden_result_columns.is_empty() {
+            return Ok(());
+        }
+
+        let column_count = query_result.columns.len();
+        anyhow::ensure!(
+            query_result.column_meta.is_empty() || query_result.column_meta.len() == column_count,
+            "pagination result column metadata is inconsistent"
+        );
+        for row in &query_result.rows {
+            anyhow::ensure!(
+                row.len() == column_count,
+                "pagination result row has an inconsistent column count"
+            );
+        }
+
+        for hidden_column in self.hidden_result_columns.iter().rev() {
+            let column_index = query_result
+                .columns
+                .iter()
+                .rposition(|column| column.eq_ignore_ascii_case(hidden_column))
+                .ok_or_else(|| anyhow!("pagination result column `{hidden_column}` is missing"))?;
+
+            query_result.columns.remove(column_index);
+            if !query_result.column_meta.is_empty() {
+                query_result.column_meta.remove(column_index);
+            }
+            for row in &mut query_result.rows {
+                row.remove(column_index);
+            }
+            query_result
+                .binary_cells
+                .retain(|cell| cell.column_index != column_index);
+            for cell in &mut query_result.binary_cells {
+                if cell.column_index > column_index {
+                    cell.column_index -= 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Standard SQL functions common to most databases
 pub const STANDARD_SQL_FUNCTIONS: &[(&str, &str)] = &[
     // String functions
@@ -1830,6 +1900,25 @@ pub trait DatabasePlugin: Send + Sync {
         format!(" LIMIT {} OFFSET {}", limit, offset)
     }
 
+    /// Build a complete paginated query.
+    ///
+    /// The default implementation preserves the existing suffix-based pagination behavior.
+    /// Implementations that cannot express pagination as a SQL suffix (for example Oracle 11g)
+    /// should override this method and wrap `base_sql`.
+    fn build_paginated_query(
+        &self,
+        base_sql: &str,
+        limit: usize,
+        offset: usize,
+        order_clause: &str,
+    ) -> PaginatedQuery {
+        PaginatedQuery::new(format!(
+            "{}{}",
+            base_sql,
+            self.format_pagination(limit, offset, order_clause)
+        ))
+    }
+
     /// Format table reference for queries. Override for databases with different syntax.
     /// - MySQL: `database`.`table`
     /// - PostgreSQL: "schema"."table" (uses schema, ignores database since connection is db-specific)
@@ -1895,27 +1984,29 @@ pub trait DatabasePlugin: Send + Sync {
         };
 
         // Query with pagination, include rowid if supported
-        let pagination = self.format_pagination(request.page_size, offset, &order_clause);
-        let data_sql = if self.supports_rowid() {
+        let base_sql = if self.supports_rowid() {
             let rowid_col = self.rowid_column_name();
             format!(
-                "SELECT {} AS __rowid__, t.* FROM {} t{}{}{}",
-                rowid_col, table_ref, where_clause, order_clause, pagination
+                "SELECT {} AS __rowid__, t.* FROM {} t{}{}",
+                rowid_col, table_ref, where_clause, order_clause
             )
         } else {
             format!(
-                "SELECT * FROM {}{}{}{}",
-                table_ref, where_clause, order_clause, pagination
+                "SELECT * FROM {}{}{}",
+                table_ref, where_clause, order_clause
             )
         };
-        let sql_result = connection.query(&data_sql).await?;
+        let paginated_query =
+            self.build_paginated_query(&base_sql, request.page_size, offset, &order_clause);
+        let sql_result = connection.query(&paginated_query.sql).await?;
         let duration = start_time.elapsed().as_millis();
 
-        let query_result = match sql_result {
+        let mut query_result = match sql_result {
             SqlResult::Query(query_result) => Ok::<QueryResult, Error>(query_result),
             SqlResult::Exec(_) => bail!(t!("Error.query_type_error")),
             SqlResult::Error(sql_error_info) => bail!(sql_error_info.message),
         }?;
+        paginated_query.strip_hidden_result_columns(&mut query_result)?;
 
         Ok(TableDataResponse {
             query_result,
@@ -2484,23 +2575,28 @@ pub trait DatabasePlugin: Send + Sync {
         limit: Option<usize>,
     ) -> Result<String> {
         let table_ref = self.format_table_reference(database, schema, table);
-        let mut select_sql = format!("SELECT * FROM {}", table_ref);
+        let mut base_sql = format!("SELECT * FROM {}", table_ref);
         if let Some(where_c) = where_clause {
-            select_sql.push_str(" WHERE ");
-            select_sql.push_str(where_c);
+            base_sql.push_str(" WHERE ");
+            base_sql.push_str(where_c);
         }
-        if let Some(lim) = limit {
-            let pagination = self.format_pagination(lim, 0, "");
-            select_sql.push_str(&pagination);
-        }
+        let paginated_query =
+            limit.map(|limit| self.build_paginated_query(&base_sql, limit, 0, ""));
+        let select_sql = paginated_query
+            .as_ref()
+            .map(|query| query.sql.as_str())
+            .unwrap_or(base_sql.as_str());
 
         let result = connection
-            .query(&select_sql)
+            .query(select_sql)
             .await
             .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?;
 
         let mut output = String::new();
-        if let SqlResult::Query(query_result) = result {
+        if let SqlResult::Query(mut query_result) = result {
+            if let Some(paginated_query) = &paginated_query {
+                paginated_query.strip_hidden_result_columns(&mut query_result)?;
+            }
             if !query_result.rows.is_empty() {
                 let table_ident = self.format_export_table_reference(database, schema, table);
                 for row in &query_result.rows {

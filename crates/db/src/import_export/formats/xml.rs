@@ -377,16 +377,25 @@ async fn query_table(
                 .join(", ")
         })
         .unwrap_or_else(|| "*".to_string());
-    let mut sql = format!("SELECT {columns} FROM {table_ref}");
+    let mut base_sql = format!("SELECT {columns} FROM {table_ref}");
     if let Some(where_clause) = &config.where_clause {
-        sql.push_str(" WHERE ");
-        sql.push_str(where_clause);
+        base_sql.push_str(" WHERE ");
+        base_sql.push_str(where_clause);
     }
-    if let Some(limit) = config.limit {
-        sql.push_str(&plugin.format_pagination(limit, 0, ""));
-    }
-    match connection.query(&sql).await? {
-        SqlResult::Query(result) => Ok(result),
+    let paginated_query = config
+        .limit
+        .map(|limit| plugin.build_paginated_query(&base_sql, limit, 0, ""));
+    let sql = paginated_query
+        .as_ref()
+        .map(|query| query.sql.as_str())
+        .unwrap_or(base_sql.as_str());
+    match connection.query(sql).await? {
+        SqlResult::Query(mut result) => {
+            if let Some(paginated_query) = &paginated_query {
+                paginated_query.strip_hidden_result_columns(&mut result)?;
+            }
+            Ok(result)
+        }
         SqlResult::Error(error) => Err(anyhow!("Query failed: {}", error.message)),
         SqlResult::Exec(_) => Err(anyhow!("XML export query did not return rows")),
     }

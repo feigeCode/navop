@@ -74,9 +74,10 @@ pub(crate) fn apply_query_max_rows(
 
     match db_type {
         DatabaseType::MSSQL => apply_mssql_top(sql, max_rows, &tokens),
-        DatabaseType::Oracle => {
-            append_query_clause(sql, &format!("FETCH FIRST {max_rows} ROWS ONLY"))
-        }
+        // Oracle result limits are enforced while fetching rows from OCI.
+        // Rewriting here would break pre-12c servers and can alter valid SQL
+        // such as statements containing FOR UPDATE, comments, or complex CTEs.
+        DatabaseType::Oracle => Cow::Borrowed(sql),
         _ => append_query_clause(sql, &format!("LIMIT {max_rows}")),
     }
 }
@@ -373,10 +374,13 @@ mod tests {
     }
 
     #[test]
-    fn query_max_rows_adds_oracle_fetch() {
-        let sql =
-            apply_query_max_rows(DatabaseType::Oracle, "select * from users;", Some(25), true);
-        assert_eq!("select * from users FETCH FIRST 25 ROWS ONLY;", sql);
+    fn query_max_rows_keeps_oracle_sql_unchanged() {
+        for sql in ["select * from users", "select * from users;"] {
+            assert_eq!(
+                sql,
+                apply_query_max_rows(DatabaseType::Oracle, sql, Some(25), true)
+            );
+        }
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
-use crate::DatabasePlugin;
 use crate::connection::DbConnection;
 use crate::executor::{QueryResult, SqlResult};
 use crate::import_export::{ExportConfig, ExportProgressEvent};
+use crate::{DatabasePlugin, PaginatedQuery};
 
 const SQL_EXPORT_PAGE_SIZE: usize = 1000;
 
@@ -28,8 +28,8 @@ pub(super) async fn export_table_data_in_pages(
         let Some(page_limit) = next_export_page_limit(remaining) else {
             break;
         };
-        let select_sql = export_page_select_sql(plugin, config, table, page_limit, offset);
-        let query_result = query_export_page(connection, &select_sql).await?;
+        let paginated_query = export_page_select_sql(plugin, config, table, page_limit, offset);
+        let query_result = query_export_page(connection, &paginated_query).await?;
         let rows_count = query_result.rows.len() as u64;
         let data_output = sql_dump_page(
             plugin,
@@ -72,7 +72,7 @@ fn export_page_select_sql(
     table: &str,
     page_limit: usize,
     offset: usize,
-) -> String {
+) -> PaginatedQuery {
     let table_ref =
         plugin.format_table_reference(&config.database, config.schema.as_deref(), table);
     let mut select_sql = format!("SELECT * FROM {}", table_ref);
@@ -80,20 +80,26 @@ fn export_page_select_sql(
         select_sql.push_str(" WHERE ");
         select_sql.push_str(where_c);
     }
-    select_sql.push_str(&plugin.format_pagination(page_limit, offset, ""));
-    select_sql
+    plugin.build_paginated_query(&select_sql, page_limit, offset, "")
 }
 
-async fn query_export_page(connection: &dyn DbConnection, select_sql: &str) -> Result<QueryResult> {
-    match connection
-        .query(select_sql)
+async fn query_export_page(
+    connection: &dyn DbConnection,
+    paginated_query: &PaginatedQuery,
+) -> Result<QueryResult> {
+    let mut query_result = match connection
+        .query(&paginated_query.sql)
         .await
         .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?
     {
-        SqlResult::Query(query_result) => Ok(query_result),
-        SqlResult::Exec(_) => Err(anyhow::anyhow!("Expected query result for SQL export")),
-        SqlResult::Error(error) => Err(anyhow::anyhow!(error.message)),
-    }
+        SqlResult::Query(query_result) => query_result,
+        SqlResult::Exec(_) => {
+            return Err(anyhow::anyhow!("Expected query result for SQL export"));
+        }
+        SqlResult::Error(error) => return Err(anyhow::anyhow!(error.message)),
+    };
+    paginated_query.strip_hidden_result_columns(&mut query_result)?;
+    Ok(query_result)
 }
 
 fn sql_dump_page(

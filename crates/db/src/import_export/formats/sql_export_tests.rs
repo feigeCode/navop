@@ -60,14 +60,26 @@ impl DbConnection for PagedConnection {
 
     async fn query(&self, query: &str) -> std::result::Result<SqlResult, DbError> {
         self.queries.lock().unwrap().push(query.to_string());
-        let rows = self.pages.lock().unwrap().remove(0);
+        let mut rows = self.pages.lock().unwrap().remove(0);
+        let mut columns = vec!["id".to_string(), "name".to_string()];
+        let mut column_meta = vec![
+            QueryColumnMeta::new("id", "BIGINT"),
+            QueryColumnMeta::new("name", "VARCHAR"),
+        ];
+        if query.contains("__navop_pagination_rownum__") {
+            columns.push("__navop_pagination_rownum__".to_string());
+            column_meta.push(QueryColumnMeta::new(
+                "__navop_pagination_rownum__",
+                "NUMBER",
+            ));
+            for (index, row) in rows.iter_mut().enumerate() {
+                row.push(Some((index + 1).to_string()));
+            }
+        }
         Ok(SqlResult::Query(QueryResult {
             sql: query.to_string(),
-            columns: vec!["id".to_string(), "name".to_string()],
-            column_meta: vec![
-                QueryColumnMeta::new("id", "BIGINT"),
-                QueryColumnMeta::new("name", "VARCHAR"),
-            ],
+            columns,
+            column_meta,
             rows,
             binary_cells: vec![],
             elapsed_ms: 1,
@@ -163,6 +175,48 @@ async fn sql_export_streams_table_data_in_pages() {
         ExportProgressEvent::DataExported { rows: 1, data, .. }
             if !data.contains("-- Data for table users") && data.contains("'user''1000'")
     ));
+}
+
+#[tokio::test]
+async fn oracle_sql_export_uses_11g_pagination_without_exporting_internal_rownum() {
+    let first_page = (0..SQL_EXPORT_PAGE_SIZE).map(row).collect::<Vec<_>>();
+    let second_page = vec![row(SQL_EXPORT_PAGE_SIZE)];
+    let connection = PagedConnection::new(vec![first_page, second_page]);
+    let plugin = OraclePlugin::new();
+    let config = ExportConfig {
+        database: "APP".to_string(),
+        schema: Some("APP".to_string()),
+        tables: vec!["USERS".to_string()],
+        ..ExportConfig::default()
+    };
+    let mut output = String::new();
+
+    let rows = export_table_data_in_pages(
+        &plugin,
+        &connection,
+        &config,
+        "USERS",
+        false,
+        &mut output,
+        &|_| {},
+    )
+    .await
+    .expect("Oracle paged export should succeed");
+
+    assert_eq!(1001, rows);
+    let queries = connection.queries();
+    assert_eq!(2, queries.len());
+    assert_eq!(
+        "SELECT * FROM (SELECT * FROM \"APP\".\"USERS\") WHERE ROWNUM <= 1000",
+        queries[0]
+    );
+    assert!(!queries[1].contains(" LIMIT "));
+    assert!(!queries[1].contains(" OFFSET "));
+    assert!(!queries[1].contains("FETCH NEXT"));
+    assert!(queries[1].contains("WHERE ROWNUM <= 2000"));
+    assert!(queries[1].contains("\"__navop_pagination_rownum__\" > 1000"));
+    assert!(!output.contains("__navop_pagination_rownum__"));
+    assert!(output.contains("INSERT INTO \"APP\".\"USERS\" (\"id\", \"name\")"));
 }
 
 #[test]

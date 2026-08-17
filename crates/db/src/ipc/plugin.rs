@@ -15,8 +15,8 @@ use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
 use crate::plugin::{
-    ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo, format_binary_literal_for_database,
-    parse_table_data_total_count,
+    ConnectionLifecycle, DatabasePlugin, PaginatedQuery, SqlCompletionInfo,
+    format_binary_literal_for_database, parse_table_data_total_count,
 };
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::postgresql::PostgresPlugin;
@@ -637,8 +637,7 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             }
         };
 
-        let pagination = self.format_pagination(request.page_size, offset, &order_clause);
-        let data_sql = if let Some(row_id_column) = self
+        let base_sql = if let Some(row_id_column) = self
             .driver
             .dialect
             .row_id_column
@@ -653,29 +652,31 @@ impl DatabasePlugin for ExternalDatabasePlugin {
                 .filter(|alias| !alias.trim().is_empty())
                 .unwrap_or("__rowid__");
             format!(
-                "SELECT {} AS {}, t.* FROM {} t{}{}{}",
+                "SELECT {} AS {}, t.* FROM {} t{}{}",
                 row_id_column.trim(),
                 self.quote_identifier(row_id_alias.trim()),
                 table_ref,
                 where_clause,
-                order_clause,
-                pagination
+                order_clause
             )
         } else {
             format!(
-                "SELECT * FROM {}{}{}{}",
-                table_ref, where_clause, order_clause, pagination
+                "SELECT * FROM {}{}{}",
+                table_ref, where_clause, order_clause
             )
         };
+        let paginated_query =
+            self.build_paginated_query(&base_sql, request.page_size, offset, &order_clause);
 
-        let sql_result = connection.query(&data_sql).await?;
+        let sql_result = connection.query(&paginated_query.sql).await?;
         let duration = start_time.elapsed().as_millis();
 
-        let query_result = match sql_result {
+        let mut query_result = match sql_result {
             SqlResult::Query(query_result) => Ok::<QueryResult, anyhow::Error>(query_result),
             SqlResult::Exec(_) => anyhow::bail!(t!("Error.query_type_error")),
             SqlResult::Error(sql_error_info) => anyhow::bail!(sql_error_info.message),
         }?;
+        paginated_query.strip_hidden_result_columns(&mut query_result)?;
 
         Ok(TableDataResponse {
             query_result,
@@ -1494,6 +1495,35 @@ impl DatabasePlugin for ExternalDatabasePlugin {
                 }
             }
         }
+    }
+
+    fn build_paginated_query(
+        &self,
+        base_sql: &str,
+        limit: usize,
+        offset: usize,
+        order_clause: &str,
+    ) -> PaginatedQuery {
+        if self
+            .driver
+            .dialect
+            .compatible_database_type
+            .as_ref()
+            .is_some_and(|database_type| matches!(database_type, DatabaseType::Oracle))
+        {
+            return OraclePlugin::new().build_paginated_query(
+                base_sql,
+                limit,
+                offset,
+                order_clause,
+            );
+        }
+
+        PaginatedQuery::new(format!(
+            "{}{}",
+            base_sql,
+            self.format_pagination(limit, offset, order_clause)
+        ))
     }
 
     fn format_boolean_value(&self, v: &str) -> String {
@@ -2433,11 +2463,17 @@ mod tests {
                     elapsed_ms: 0,
                 }));
             }
+            let mut columns = vec!["__rowid__".into(), "ID".into()];
+            let mut rows = vec![vec![Some("AAABBB".into()), Some("1".into())]];
+            if query.contains("__navop_pagination_rownum__") {
+                columns.push("__navop_pagination_rownum__".into());
+                rows[0].push(Some("26".into()));
+            }
             Ok(SqlResult::Query(QueryResult {
                 sql: query.to_string(),
-                columns: vec!["__rowid__".into(), "ID".into()],
+                columns,
                 column_meta: vec![],
-                rows: vec![vec![Some("AAABBB".into()), Some("1".into())]],
+                rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
             }))
@@ -2741,6 +2777,45 @@ mod tests {
             "SELECT ROWID AS \"__rowid__\", t.* FROM \"APP\".\"EVENTS\" t ORDER BY ROWID OFFSET 0 ROWS FETCH NEXT 25 ROWS ONLY",
             queries[1]
         );
+    }
+
+    #[tokio::test]
+    async fn external_oracle_table_data_uses_11g_rownum_pagination() {
+        let mut driver = driver_manifest("oracle-ipc", true, "oracle.connection");
+        driver.dialect.compatible_database_type = Some(DatabaseType::Oracle);
+        driver.dialect.table_reference_schema_mode = TableReferenceSchemaMode::PreferSchema;
+        driver.dialect.row_id_column = Some("ROWID".to_string());
+        driver.dialect.row_id_alias = Some("__rowid__".to_string());
+        driver.dialect.default_order_by = Some("ROWID".to_string());
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let connection = RecordingQueryConnection::new();
+
+        let response = plugin
+            .query_table_data(
+                &connection,
+                TableDataRequest::new("", "EVENTS")
+                    .with_schema("APP")
+                    .with_page(2, 25)
+                    .with_known_total_count(100),
+            )
+            .await
+            .expect("Oracle IPC table data query should succeed");
+
+        assert_eq!(vec!["__rowid__", "ID"], response.query_result.columns);
+        assert_eq!(
+            vec![vec![Some("AAABBB".into()), Some("1".into())]],
+            response.query_result.rows
+        );
+        let queries = connection.queries();
+        assert_eq!(1, queries.len());
+        assert!(!queries[0].contains(" LIMIT "));
+        assert!(!queries[0].contains(" OFFSET "));
+        assert!(!queries[0].contains("FETCH NEXT"));
+        assert!(queries[0].contains(
+            "SELECT ROWID AS \"__rowid__\", t.* FROM \"APP\".\"EVENTS\" t ORDER BY ROWID"
+        ));
+        assert!(queries[0].contains("WHERE ROWNUM <= 50"));
+        assert!(queries[0].contains("\"__navop_pagination_rownum__\" > 25"));
     }
 
     #[tokio::test]

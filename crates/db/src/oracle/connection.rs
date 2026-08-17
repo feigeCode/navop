@@ -13,7 +13,7 @@ use tracing::{debug, error, info};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
-    SqlSource, apply_query_max_rows,
+    SqlSource,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -241,7 +241,15 @@ impl OracleDbConnection {
         })
     }
 
-    fn execute_statement_sync(conn: &oracle::Connection, sql: &str) -> Result<SqlResult, DbError> {
+    fn has_reached_query_row_limit(row_count: usize, max_rows: Option<usize>) -> bool {
+        matches!(max_rows, Some(limit) if limit > 0 && row_count >= limit)
+    }
+
+    fn execute_statement_sync(
+        conn: &oracle::Connection,
+        sql: &str,
+        max_rows: Option<usize>,
+    ) -> Result<SqlResult, DbError> {
         let start = Instant::now();
         let sql_string = sql.to_string();
         let sql_preview = if sql.len() > 200 {
@@ -281,6 +289,10 @@ impl OracleDbConnection {
                             let mut binary_cells = Vec::new();
                             let mut rows = rows;
                             loop {
+                                if Self::has_reached_query_row_limit(data_rows.len(), max_rows) {
+                                    break;
+                                }
+
                                 let Some(row_result) = rows.next() else {
                                     break;
                                 };
@@ -518,23 +530,17 @@ impl DbConnection for OracleDbConnection {
         let mut results = Vec::new();
         let conn_arc = self.conn.clone();
         let stop_on_error = options.stop_on_error;
+        let max_rows = options.max_rows;
         let mut saw_exec = false;
         let mut saw_error = false;
 
         for (idx, sql) in statements.iter().enumerate() {
             let conn_clone = conn_arc.clone();
-            let sql_to_execute = apply_query_max_rows(
-                plugin.name(),
-                sql,
-                options.max_rows,
-                plugin.is_query_statement(sql),
-            )
-            .into_owned();
-            let sql_clone = sql_to_execute.clone();
-            let sql_preview = if sql_to_execute.len() > 200 {
-                format!("{}...", truncate_str(&sql_to_execute, 200))
+            let sql_clone = sql.clone();
+            let sql_preview = if sql.len() > 200 {
+                format!("{}...", truncate_str(sql, 200))
             } else {
-                sql_to_execute
+                sql.clone()
             };
             debug!(
                 "[Oracle] Executing statement {}/{}",
@@ -546,7 +552,7 @@ impl DbConnection for OracleDbConnection {
                 let guard = conn_clone.blocking_lock();
                 let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
 
-                Self::execute_statement_sync(conn, &sql_clone)
+                Self::execute_statement_sync(conn, &sql_clone, max_rows)
             })
             .await
             .map_err(|e| {
@@ -608,7 +614,7 @@ impl DbConnection for OracleDbConnection {
             let guard = conn_arc.blocking_lock();
             let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
 
-            Self::execute_statement_sync(conn, &sql)
+            Self::execute_statement_sync(conn, &sql, None)
         })
         .await
         .map_err(|e| {
@@ -695,6 +701,7 @@ impl DbConnection for OracleDbConnection {
         let total_size = source.file_size().unwrap_or(0);
         let is_file_source = source.is_file();
         let stop_on_error = options.stop_on_error;
+        let max_rows = options.max_rows;
 
         let mut parser = plugin
             .create_parser(source)
@@ -735,19 +742,12 @@ impl DbConnection for OracleDbConnection {
                 debug!("[Oracle] Streaming statement {}", current);
 
                 let conn_arc = self.conn.clone();
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    &sql,
-                    options.max_rows,
-                    plugin.is_query_statement(&sql),
-                )
-                .into_owned();
-                let sql_clone = sql_to_execute.clone();
+                let sql_clone = sql.clone();
 
                 let result = match tokio::task::spawn_blocking(move || {
                     let guard = conn_arc.blocking_lock();
                     let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
-                    Self::execute_statement_sync(conn, &sql_clone)
+                    Self::execute_statement_sync(conn, &sql_clone, max_rows)
                 })
                 .await
                 {
@@ -805,19 +805,12 @@ impl DbConnection for OracleDbConnection {
                 debug!("[Oracle] Streaming statement {}/{}", current, total);
 
                 let conn_arc = self.conn.clone();
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    &sql,
-                    options.max_rows,
-                    plugin.is_query_statement(&sql),
-                )
-                .into_owned();
-                let sql_clone = sql_to_execute.clone();
+                let sql_clone = sql.clone();
 
                 let result = match tokio::task::spawn_blocking(move || {
                     let guard = conn_arc.blocking_lock();
                     let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
-                    Self::execute_statement_sync(conn, &sql_clone)
+                    Self::execute_statement_sync(conn, &sql_clone, max_rows)
                 })
                 .await
                 {
@@ -889,5 +882,22 @@ mod tests {
         let connection = OracleDbConnection::new(test_config());
 
         assert_eq!("SELECT 1 FROM DUAL", connection.ping_query());
+    }
+
+    #[test]
+    fn oracle_query_row_limit_treats_none_and_zero_as_unbounded() {
+        assert!(!OracleDbConnection::has_reached_query_row_limit(100, None));
+        assert!(!OracleDbConnection::has_reached_query_row_limit(
+            100,
+            Some(0)
+        ));
+        assert!(!OracleDbConnection::has_reached_query_row_limit(
+            24,
+            Some(25)
+        ));
+        assert!(OracleDbConnection::has_reached_query_row_limit(
+            25,
+            Some(25)
+        ));
     }
 }
