@@ -2,7 +2,6 @@ use gpui::App;
 
 rust_i18n::i18n!("locales", fallback = "zh-CN");
 
-pub mod agent;
 pub mod app_dirs;
 pub mod app_paths;
 pub mod cloud_sync;
@@ -49,16 +48,11 @@ mod tab_container_layout_contract_tests;
 #[cfg(test)]
 mod tab_content_contract_tests;
 
-pub use crate::agent::{
-    Agent, AgentContext, AgentDescriptor, AgentDispatcher, AgentEvent, AgentRegistry, AgentResult,
-    SessionAffinity,
-};
 pub fn init(cx: &mut App) {
     gpui_tokio::init(cx);
     themes::init(cx);
     storage::init(cx);
     llm::init(cx);
-    agent::init(cx);
     connection_notifier::init(cx);
     window_close::init(cx);
     popup_window::init(cx);
