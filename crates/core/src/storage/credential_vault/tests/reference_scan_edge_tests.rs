@@ -35,7 +35,7 @@ fn insert_cloud_credential(
     repository: &crate::storage::ConnectionRepository,
     cloud_id: &str,
 ) -> i64 {
-    let mut credential = CredentialEntry::new("Synced", "username_password");
+    let mut credential = CredentialEntry::new("Synced");
     credential.cloud_id = Some(cloud_id.to_string());
     repository
         .credential_repository()
@@ -258,7 +258,7 @@ fn scanning_summaries_does_not_require_an_unlocked_vault() {
     let (_temp, credential_id, repository) = {
         let (temp, _connection, repository) = repositories();
         let credential_id = super::with_master_key(|| {
-            let mut credential = CredentialEntry::new("Locked", "username_password");
+            let mut credential = CredentialEntry::new("Locked");
             credential.password = Some("secret".to_string());
             repository
                 .credential_repository()

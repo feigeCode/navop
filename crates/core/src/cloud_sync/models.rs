@@ -349,7 +349,6 @@ pub struct CredentialPlainData {
     /// 载荷格式版本，用于后续兼容升级。
     pub format_version: u32,
     pub name: String,
-    pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

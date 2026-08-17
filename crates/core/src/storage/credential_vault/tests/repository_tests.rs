@@ -8,7 +8,7 @@ use super::{crypto_guard, test_repository, with_master_key};
 fn repository_encrypts_secrets_at_rest_and_decrypts_on_read() {
     with_master_key(|| {
         let (_temp, connection, repository) = test_repository();
-        let mut credential = CredentialEntry::new("Production", "composite");
+        let mut credential = CredentialEntry::new("Production");
         credential.username = Some("deploy".to_string());
         credential.password = Some("plain-password".to_string());
         credential.private_key_content = Some("plain-private-key".to_string());
@@ -52,7 +52,7 @@ fn repository_refuses_to_persist_secrets_without_master_key() {
     let _guard = crypto_guard();
     crypto::clear_master_key();
     let (_temp, _connection, repository) = test_repository();
-    let mut credential = CredentialEntry::new("Production", "password");
+    let mut credential = CredentialEntry::new("Production");
     credential.password = Some("must-not-be-plaintext".to_string());
 
     let error = repository
@@ -67,7 +67,7 @@ fn repository_refuses_to_persist_secrets_without_master_key() {
 fn repository_round_trips_sync_metadata() {
     with_master_key(|| {
         let (_temp, _connection, repository) = test_repository();
-        let mut credential = CredentialEntry::new("Shared", "username_password");
+        let mut credential = CredentialEntry::new("Shared");
         credential.sync_enabled = true;
         credential.cloud_id = Some("cloud-credential-id".to_string());
         credential.team_id = Some("team-id".to_string());
@@ -89,7 +89,7 @@ fn repository_round_trips_sync_metadata() {
 fn repository_rejects_legacy_plaintext_and_corrupted_ciphertext() {
     with_master_key(|| {
         let (_temp, connection, repository) = test_repository();
-        let mut credential = CredentialEntry::new("Legacy", "password");
+        let mut credential = CredentialEntry::new("Legacy");
         let id = repository
             .insert(&mut credential)
             .expect("insert credential");
@@ -120,7 +120,7 @@ fn repository_rejects_legacy_plaintext_and_corrupted_ciphertext() {
 fn repository_update_encrypts_replaces_and_clears_secrets() {
     with_master_key(|| {
         let (_temp, connection, repository) = test_repository();
-        let mut credential = CredentialEntry::new("Rotating", "password");
+        let mut credential = CredentialEntry::new("Rotating");
         credential.password = Some("first-secret".to_string());
         let id = repository
             .insert(&mut credential)
@@ -155,7 +155,7 @@ fn repository_rejects_ciphertext_encrypted_with_another_master_key() {
     let _guard = crypto_guard();
     crypto::set_master_key_for_session("credential-vault-first-key");
     let (_temp, _connection, repository) = test_repository();
-    let mut credential = CredentialEntry::new("Wrong key", "password");
+    let mut credential = CredentialEntry::new("Wrong key");
     credential.password = Some("secret".to_string());
     let id = repository
         .insert(&mut credential)
@@ -175,7 +175,7 @@ fn repository_summary_reads_capabilities_while_vault_is_locked() {
     let _guard = crypto_guard();
     crypto::set_master_key_for_session("credential-vault-summary-key");
     let (_temp, _connection, repository) = test_repository();
-    let mut credential = CredentialEntry::new("Production SSH", "ssh");
+    let mut credential = CredentialEntry::new("Production SSH");
     credential.username = Some("deploy".to_string());
     credential.password = Some("secret".to_string());
     credential.private_key_path = Some("/Users/example/.ssh/id_ed25519".to_string());
@@ -209,9 +209,9 @@ fn repository_summary_reads_capabilities_while_vault_is_locked() {
 #[test]
 fn repository_summary_orders_rows_and_does_not_serialize_secrets() {
     let (_temp, connection, repository) = test_repository();
-    let mut first = CredentialEntry::new("First", "password");
+    let mut first = CredentialEntry::new("First");
     let first_id = repository.insert(&mut first).expect("insert first");
-    let mut second = CredentialEntry::new("Second", "password");
+    let mut second = CredentialEntry::new("Second");
     second.private_key_path = Some("/local/key".to_string());
     let second_id = repository.insert(&mut second).expect("insert second");
     connection
@@ -261,7 +261,7 @@ fn credential_summary_type_contains_metadata_only() {
     fn assert_summary(_: &CredentialSummary) {}
 
     let (_temp, _connection, repository) = test_repository();
-    let mut credential = CredentialEntry::new("Metadata", "username_password");
+    let mut credential = CredentialEntry::new("Metadata");
     let id = repository
         .insert(&mut credential)
         .expect("insert credential");

@@ -233,7 +233,7 @@ pub(super) fn repositories() -> (
 }
 
 pub(super) fn insert_credential(repository: &ConnectionRepository) -> i64 {
-    let mut credential = CredentialEntry::new("Shared", "username_password");
+    let mut credential = CredentialEntry::new("Shared");
     repository
         .credential_repository()
         .insert(&mut credential)

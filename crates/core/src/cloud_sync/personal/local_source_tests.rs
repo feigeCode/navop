@@ -639,7 +639,7 @@ impl Fixture {
 }
 
 fn credential(name: &str, sync_enabled: bool) -> CredentialEntry {
-    let mut entry = CredentialEntry::new(name, "login");
+    let mut entry = CredentialEntry::new(name);
     entry.sync_enabled = sync_enabled;
     entry
 }

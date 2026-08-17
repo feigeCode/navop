@@ -45,7 +45,7 @@ fn port_forwarding_indirect_reference_protects_credential_deletion() {
 fn protected_delete_does_not_require_master_key_for_existing_credential() {
     let (_temp, _connection, repository) = repositories();
     let credential_id = super::with_master_key(|| {
-        let mut credential = crate::storage::CredentialEntry::new("Encrypted", "username_password");
+        let mut credential = crate::storage::CredentialEntry::new("Encrypted");
         credential.password = Some("secret".to_string());
         repository
             .credential_repository()

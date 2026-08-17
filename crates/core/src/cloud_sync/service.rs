@@ -437,7 +437,6 @@ impl CloudSyncService {
         let plain_data = CredentialPlainData {
             format_version: 2,
             name: credential.name.clone(),
-            kind: credential.kind.clone(),
             username: credential.username.clone(),
             password: credential.password.clone(),
             private_key_content: credential.private_key_content.clone(),
@@ -573,7 +572,6 @@ impl CloudSyncService {
         Ok(CredentialEntry {
             id: None,
             name: plain_data.name,
-            kind: plain_data.kind,
             username: plain_data.username,
             password: plain_data.password,
             private_key_path: None,
@@ -763,7 +761,7 @@ mod tests {
         let mut service = CloudSyncService::new();
         service.set_logged_in("personal-user".to_string());
         service.set_master_key_directly("credential-sync-test-key".to_string());
-        let mut credential = CredentialEntry::new("production", "ssh_key");
+        let mut credential = CredentialEntry::new("production");
         credential.username = Some("deploy".to_string());
         credential.password = Some("credential-password-unique".to_string());
         credential.private_key_path = Some("/private/local-only/id_ed25519".to_string());
@@ -817,7 +815,7 @@ mod tests {
     fn credential_sync_data_rejects_wrong_type_team_and_checksum_tampering() {
         let mut service = CloudSyncService::new();
         service.set_master_key_directly("credential-sync-test-key".to_string());
-        let credential = CredentialEntry::new("production", "password");
+        let credential = CredentialEntry::new("production");
         let record = service
             .prepare_credential_sync_data_upload(&credential)
             .expect("credential prepares");
@@ -851,7 +849,7 @@ mod tests {
     fn credential_sync_data_rejects_unknown_format_and_team_uploads() {
         let mut service = CloudSyncService::new();
         service.set_master_key_directly("credential-sync-test-key".to_string());
-        let credential = CredentialEntry::new("production", "password");
+        let credential = CredentialEntry::new("production");
         let mut record = service
             .prepare_credential_sync_data_upload(&credential)
             .expect("credential prepares");
@@ -874,7 +872,7 @@ mod tests {
                 if message.contains("unsupported credential format version 3")
         ));
 
-        let mut team_credential = CredentialEntry::new("team production", "password");
+        let mut team_credential = CredentialEntry::new("team production");
         team_credential.team_id = Some("team-1".to_string());
         assert!(matches!(
             service.prepare_credential_sync_data_upload(&team_credential),
@@ -886,7 +884,7 @@ mod tests {
     #[test]
     fn credential_sync_data_requires_unlocked_personal_master_key() {
         let service = CloudSyncService::new();
-        let credential = CredentialEntry::new("production", "password");
+        let credential = CredentialEntry::new("production");
 
         assert!(matches!(
             service.prepare_credential_sync_data_upload(&credential),

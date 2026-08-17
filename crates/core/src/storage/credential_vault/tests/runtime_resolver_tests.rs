@@ -22,7 +22,7 @@ fn password_reference(id: i64) -> CredentialReference {
 
 fn insert_vault_ssh(repository: &ConnectionRepository) -> i64 {
     let credentials = repository.credential_repository();
-    let mut credential = CredentialEntry::new("Bastion login", "username_password");
+    let mut credential = CredentialEntry::new("Bastion login");
     credential.username = Some("vault-bastion-user".to_string());
     credential.password = Some("vault-bastion-password".to_string());
     let credential_id = credentials

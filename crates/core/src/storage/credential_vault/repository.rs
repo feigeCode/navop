@@ -114,7 +114,6 @@ impl CredentialRepository {
         Ok(CredentialEntry {
             id: row.get("id")?,
             name: row.get("name")?,
-            kind: row.get("kind")?,
             username: row.get("username")?,
             password: row.get("password")?,
             private_key_path: row.get("private_key_path")?,
@@ -257,7 +256,6 @@ impl Repository for CredentialRepository {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     item.name,
-                    item.kind,
                     item.username,
                     password,
                     item.private_key_path,
@@ -295,7 +293,6 @@ impl Repository for CredentialRepository {
                      updated_at = ?14 WHERE id = ?15",
                 rusqlite::params![
                     item.name,
-                    item.kind,
                     item.username,
                     password,
                     item.private_key_path,

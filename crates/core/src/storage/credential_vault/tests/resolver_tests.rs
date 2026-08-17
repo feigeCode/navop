@@ -51,8 +51,8 @@ fn ssh_params(reference: Option<CredentialReference>) -> SshParams {
     }
 }
 
-fn insert_password_credential(repository: &super::super::CredentialRepository) -> i64 {
-    let mut credential = CredentialEntry::new("Shared login", "username_password");
+fn insert_password_credential(repository: &super::CredentialRepository) -> i64 {
+    let mut credential = CredentialEntry::new("Shared login");
     credential.username = Some("vault-user".to_string());
     credential.password = Some("vault-password".to_string());
     repository
@@ -163,7 +163,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
 fn resolver_uses_only_credential_expect_and_ignores_connection_overrides() {
     with_master_key(|| {
         let (_temp, _connection, repository) = super::test_repository();
-        let mut credential = CredentialEntry::new("Shared login", "username_password");
+        let mut credential = CredentialEntry::new("Shared login");
         credential.username = Some("vault-user".to_string());
         credential.password = Some("vault-password".to_string());
         credential.ssh_expect = SshAccountExpect {
@@ -234,7 +234,7 @@ fn resolver_applies_keychain_login_to_telnet_expect_steps() {
 fn resolver_reuses_keychain_expect_for_telnet_without_connection_script() {
     with_master_key(|| {
         let (_temp, _connection, repository) = super::test_repository();
-        let mut credential = CredentialEntry::new("Telnet login", "username_password");
+        let mut credential = CredentialEntry::new("Telnet login");
         credential.username = Some("telnet-user".to_string());
         credential.password = Some("telnet-password".to_string());
         credential.ssh_expect = SshAccountExpect {
@@ -303,7 +303,7 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
         let (_temp, _connection, repository) = super::test_repository();
         let login_id = insert_password_credential(&repository);
         let login_reference = Some(password_reference(login_id));
-        let mut key = CredentialEntry::new("SSH key", "ssh_key");
+        let mut key = CredentialEntry::new("SSH key");
         key.username = Some("key-user".to_string());
         key.private_key_path = Some("/local/key".to_string());
         key.private_key_content = Some("private-key-content".to_string());
@@ -397,7 +397,7 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
 fn resolver_uses_stable_cloud_id_without_falling_back_to_foreign_local_id() {
     with_master_key(|| {
         let (_temp, _connection, repository) = super::test_repository();
-        let mut login = CredentialEntry::new("Cloud login", "username_password");
+        let mut login = CredentialEntry::new("Cloud login");
         login.username = Some("cloud-user".to_string());
         login.password = Some("cloud-password".to_string());
         login.cloud_id = Some("credential-cloud-login".to_string());
