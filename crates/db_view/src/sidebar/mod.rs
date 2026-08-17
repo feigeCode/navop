@@ -5,6 +5,9 @@
 
 mod ai_context;
 pub(crate) mod cell_preview_panel;
+pub(crate) mod execution_history;
+pub(crate) mod execution_history_panel;
+mod execution_history_view;
 
 use ai_chat_view::{
     AskAiEvent, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
@@ -27,10 +30,12 @@ use rust_i18n::t;
 use self::ai_context::{
     SelectedDatabaseScope, TableMentionLoad, TableMentionLoadParts, apply_database_scope,
 };
+use self::execution_history_panel::ExecutionHistoryPanel;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarPanel {
     AiChat,
+    ExecutionHistory,
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +47,7 @@ pub enum DatabaseSidebarEvent {
 pub struct DatabaseSidebar {
     active_panel: Option<SidebarPanel>,
     chat_panel: Entity<DefaultAgentChatPanel>,
+    execution_history: Entity<ExecutionHistoryPanel>,
     connections: Vec<StoredConnection>,
     active_conn_id: Option<i64>,
     table_context_seq: usize,
@@ -54,6 +60,7 @@ impl DatabaseSidebar {
     pub fn new(
         connections: Vec<StoredConnection>,
         active_conn_id: Option<i64>,
+        execution_history: Entity<ExecutionHistoryPanel>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -99,6 +106,7 @@ impl DatabaseSidebar {
         Self {
             active_panel: None,
             chat_panel,
+            execution_history,
             connections,
             active_conn_id,
             table_context_seq: 0,
@@ -217,15 +225,22 @@ impl DatabaseSidebar {
     ) -> impl IntoElement {
         let is_active = self.active_panel == Some(panel);
         let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let (icon, tooltip) = match panel {
+            SidebarPanel::AiChat => (IconName::AILine, t!("DatabaseSidebar.ai_chat").to_string()),
+            SidebarPanel::ExecutionHistory => (
+                IconName::BookOpen,
+                t!("DatabaseSidebar.execution_history").to_string(),
+            ),
+        };
 
         IconButton::new(
             format!("database-sidebar-btn-{panel:?}"),
-            ObjectIcon::new(IconName::AILine),
+            ObjectIcon::new(icon),
         )
         .hit_size(item_size)
         .glyph_size(IconSize::Medium)
         .selected(is_active)
-        .tooltip(t!("DatabaseSidebar.ai_chat").to_string())
+        .tooltip(tooltip)
         .on_click(cx.listener(move |this, _event, _window, cx| {
             this.toggle_panel(panel, cx);
         }))
@@ -246,6 +261,7 @@ impl DatabaseSidebar {
             .py_2()
             .gap_1()
             .child(self.render_toolbar_button(SidebarPanel::AiChat, window, cx))
+            .child(self.render_toolbar_button(SidebarPanel::ExecutionHistory, window, cx))
             .into_any_element()
     }
 
@@ -257,6 +273,7 @@ impl DatabaseSidebar {
     ) -> AnyElement {
         match panel {
             SidebarPanel::AiChat => self.chat_panel.clone().into_any_element(),
+            SidebarPanel::ExecutionHistory => self.execution_history.clone().into_any_element(),
         }
     }
 }

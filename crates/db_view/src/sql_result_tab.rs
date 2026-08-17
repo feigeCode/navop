@@ -25,6 +25,8 @@ use one_ui::edit_table::Column;
 use smol::Timer;
 use tracing::log::error;
 
+use crate::sidebar::execution_history::ExecutionContext;
+use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use ai_chat_view::AskAiButton;
@@ -200,6 +202,7 @@ pub struct SqlResultTabContainer {
     pub total_elapsed_ms: Entity<f64>,
     /// 执行开始时间，用于实时更新运行时间
     pub execution_start: Entity<Option<Instant>>,
+    execution_history: Entity<ExecutionHistoryPanel>,
     /// 停止计时器的标志
     timer_stop_flag: Arc<AtomicBool>,
     /// 当前执行的取消令牌
@@ -209,7 +212,11 @@ pub struct SqlResultTabContainer {
 }
 
 impl SqlResultTabContainer {
-    pub(crate) fn new(_window: &mut Window, cx: &mut Context<Self>) -> SqlResultTabContainer {
+    pub(crate) fn new(
+        execution_history: Entity<ExecutionHistoryPanel>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> SqlResultTabContainer {
         let result_tabs = cx.new(|_| vec![]);
         let active_result_tab = cx.new(|_| 0);
         let all_results = cx.new(|_| vec![]);
@@ -236,6 +243,7 @@ impl SqlResultTabContainer {
             show_errors_only,
             total_elapsed_ms,
             execution_start,
+            execution_history,
             timer_stop_flag,
             execution_cancellation,
             execution_generation,
@@ -417,10 +425,23 @@ impl SqlResultTabContainer {
                 Ok(receiver) => receiver,
                 Err(e) => {
                     error!("Error starting streaming execution: {:?}", e);
+                    let error_message = e.to_string();
                     cx.update(|cx| {
                         if !clone_self.is_current_execution(generation) {
                             return;
                         }
+                        clone_self.execution_history.update(cx, |history, cx| {
+                            history.record_transport_error(
+                                ExecutionContext {
+                                    connection_id: connection_id_clone.clone(),
+                                    database: database_clone.clone(),
+                                    schema: schema_clone.clone(),
+                                },
+                                sql.clone(),
+                                error_message,
+                                cx,
+                            );
+                        });
                         // 停止计时器
                         clone_self.timer_stop_flag.store(true, Ordering::SeqCst);
                         // 清除开始时间
@@ -758,6 +779,17 @@ impl SqlResultTabContainer {
             session_id,
             database_type,
         } = execution;
+        self.execution_history.update(cx, |history, cx| {
+            history.record_sql_results(
+                ExecutionContext {
+                    connection_id: connection_id.clone(),
+                    database: database.clone(),
+                    schema: schema.clone(),
+                },
+                &results,
+                cx,
+            );
+        });
         let mut new_all_results = Vec::new();
         let mut new_tabs = Vec::new();
 
@@ -797,7 +829,7 @@ impl SqlResultTabContainer {
                     config = config.with_session_id(session_id);
                 }
 
-                let data_grid = cx.new(|cx| DataGrid::new(config, _window, cx));
+                let data_grid = cx.new(|cx| DataGrid::new(config, None, _window, cx));
                 let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), _window, cx));
 
                 let columns = query_result

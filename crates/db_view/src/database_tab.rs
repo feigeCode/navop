@@ -11,6 +11,7 @@ use crate::database_toolbar::{
 use crate::database_users_tab::DatabaseUsersTab;
 use crate::db_tree_event::DatabaseEventHandler;
 use crate::db_tree_view::{DbTreeView, DbTreeViewEvent, SqlDumpMode};
+use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sidebar::{DatabaseSidebar, DatabaseSidebarEvent};
 use crate::sql_editor_view::SqlEditorTab;
 use ai_chat_view::{CodeBlockAction, LanguageMatcher};
@@ -192,6 +193,7 @@ impl DatabaseTabView {
             .iter()
             .filter_map(|connection| connection.id.map(|id| id.to_string()))
             .collect::<Vec<_>>();
+        let execution_history = cx.new(ExecutionHistoryPanel::new);
 
         let event_handler = cx.new(|cx| {
             DatabaseEventHandler::new(
@@ -199,16 +201,30 @@ impl DatabaseTabView {
                 tab_container.clone(),
                 objects_panel.clone(),
                 connection_ids.clone(),
+                execution_history.clone(),
                 window,
                 cx,
             )
         });
 
-        let sidebar =
-            cx.new(|cx| DatabaseSidebar::new(connections.clone(), active_conn_id, window, cx));
+        let sidebar = cx.new(|cx| {
+            DatabaseSidebar::new(
+                connections.clone(),
+                active_conn_id,
+                execution_history.clone(),
+                window,
+                cx,
+            )
+        });
 
         // 注册 SQL 代码块操作
-        Self::register_sql_code_block_actions(&sidebar, tab_container.clone(), &connections, cx);
+        Self::register_sql_code_block_actions(
+            &sidebar,
+            tab_container.clone(),
+            &connections,
+            execution_history,
+            cx,
+        );
 
         let mut subscriptions = Vec::new();
         subscriptions.push(
@@ -305,6 +321,7 @@ impl DatabaseTabView {
         sidebar: &Entity<DatabaseSidebar>,
         tab_container: Entity<TabContainer>,
         connections: &[StoredConnection],
+        execution_history: Entity<ExecutionHistoryPanel>,
         cx: &mut App,
     ) {
         // 获取第一个连接的信息用于创建新编辑器
@@ -344,6 +361,7 @@ impl DatabaseTabView {
 
         // 操作2：打开新编辑器
         let tab_container_for_new = tab_container.clone();
+        let execution_history_for_new = execution_history;
         if let Some(new_editor_action) = CodeBlockAction::new("sql-open-new-editor")
             .icon(IconName::Query)
             .label(t!("DatabaseTab.open_new_editor").to_string())
@@ -363,6 +381,7 @@ impl DatabaseTabView {
                 let conn_id_clone = connection_id.clone();
                 let code_clone = code.clone();
                 let available_connection_ids = available_connection_ids.clone();
+                let execution_history = execution_history_for_new.clone();
 
                 tab_container_for_new.update(cx, |container, cx| {
                     container.activate_or_add_tab_lazy(
@@ -379,6 +398,7 @@ impl DatabaseTabView {
                                         new_file_directory: None,
                                         initial_database: None,
                                         initial_schema: None,
+                                        execution_history,
                                     },
                                     window,
                                     cx,

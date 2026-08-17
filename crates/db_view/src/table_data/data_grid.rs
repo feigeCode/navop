@@ -23,6 +23,8 @@ use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, OpenTableDesigner,
     focus_search_input,
 };
+use crate::sidebar::execution_history::ExecutionContext;
+use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
@@ -432,6 +434,13 @@ fn table_has_unsaved_changes(editing_cell: Option<(usize, usize)>, change_count:
     editing_cell.is_some() || change_count > 0
 }
 
+fn first_execution_error(results: &[SqlResult]) -> Option<&str> {
+    results.iter().find_map(|result| match result {
+        SqlResult::Error(error) => Some(error.message.as_str()),
+        _ => None,
+    })
+}
+
 /// 数据表格组件
 pub struct DataGrid {
     /// 组件配置
@@ -452,12 +461,19 @@ pub struct DataGrid {
     search_input: Entity<InputState>,
     /// 搜索输入框事件订阅
     _search_sub: Option<Subscription>,
+    /// 当前数据库 tab 的共享 SQL 执行记录
+    execution_history: Option<Entity<ExecutionHistoryPanel>>,
     /// 侧边栏大文本编辑器是否已为当前表格打开
     is_large_text_editor_sidebar_open: bool,
 }
 
 impl DataGrid {
-    pub fn new(config: DataGridConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        config: DataGridConfig,
+        execution_history: Option<Entity<ExecutionHistoryPanel>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let editable = config.editable;
         let is_table_data = config.usage == DataGridUsage::TableData;
         let database_type = config.database_type.clone();
@@ -492,6 +508,7 @@ impl DataGrid {
             _filter_sub: None,
             search_input,
             _search_sub: None,
+            execution_history,
             is_large_text_editor_sidebar_open: false,
         };
         result.bind_table_event(window, cx);
@@ -555,6 +572,37 @@ impl DataGrid {
             cx.notify();
         });
         cx.notify();
+    }
+
+    fn execution_context(&self) -> ExecutionContext {
+        ExecutionContext {
+            connection_id: self.config.connection_id.clone(),
+            database: Some(self.config.database_name.clone()),
+            schema: self.config.schema_name.clone(),
+        }
+    }
+
+    fn record_execution_results(&self, sql: String, results: &[SqlResult], cx: &mut App) {
+        let Some(execution_history) = &self.execution_history else {
+            return;
+        };
+        execution_history.update(cx, |history, cx| {
+            history.record_table_data_results(self.execution_context(), sql, results, cx);
+        });
+    }
+
+    fn record_execution_failure(&self, error: String, sql: Option<String>, cx: &mut App) {
+        let Some(execution_history) = &self.execution_history else {
+            return;
+        };
+        execution_history.update(cx, |history, cx| {
+            history.record_transport_error(
+                self.execution_context(),
+                sql.unwrap_or_default(),
+                error,
+                cx,
+            );
+        });
     }
 
     fn on_action_focus_search(
@@ -2150,33 +2198,35 @@ impl DataGrid {
 
             cx.update(|cx| match result {
                 Ok(results) => {
-                    if let Some(err_msg) = results.iter().find_map(|res| match res {
-                        SqlResult::Error(err) => Some(err.message.clone()),
-                        _ => None,
-                    }) {
-                        notification(
-                            cx,
-                            t!("TableDataGrid.save_changes_failed", error = err_msg).to_string(),
-                        );
-                    } else {
-                        this.clear_changes(cx);
-                        notification(
-                            cx,
+                    let sql = sql_content.clone();
+                    let first_error = first_execution_error(&results).map(str::to_owned);
+                    let succeeded = first_error.is_none();
+                    this.record_execution_results(sql, &results, cx);
+                    let summary = first_error
+                        .map(|error| {
+                            t!("TableDataGrid.save_changes_failed", error = error).to_string()
+                        })
+                        .unwrap_or_else(|| {
                             t!("TableDataGrid.save_changes_success", count = change_count)
-                                .to_string(),
-                        );
+                                .to_string()
+                        });
+
+                    if succeeded {
+                        this.clear_changes(cx);
                         let _ = cx.update_window(window_handle, |_, window, cx| {
                             tab_container.update(cx, |container, cx| {
                                 container.force_close_tab_by_id(&tab_id, window, cx);
                             });
                         });
                     }
+                    notification(cx, summary);
                 }
-                Err(e) => {
-                    notification(
-                        cx,
-                        t!("TableDataGrid.save_changes_failed", error = e.to_string()).to_string(),
-                    );
+                Err(error) => {
+                    let error = error.to_string();
+                    let summary =
+                        t!("TableDataGrid.save_changes_failed", error = error).to_string();
+                    this.record_execution_failure(error, Some(sql_content), cx);
+                    notification(cx, summary);
                 }
             });
         })
@@ -2283,28 +2333,30 @@ impl DataGrid {
 
             cx.update(|cx| match result {
                 Ok(results) => {
-                    if let Some(err_msg) = results.iter().find_map(|res| match res {
-                        SqlResult::Error(err) => Some(err.message.clone()),
-                        _ => None,
-                    }) {
-                        notification(
-                            cx,
-                            t!("TableDataGrid.save_changes_failed", error = err_msg).to_string(),
-                        );
-                    } else {
-                        this.clear_changes_and_refresh(cx);
-                        notification(
-                            cx,
+                    let sql = sql_content.clone();
+                    let first_error = first_execution_error(&results).map(str::to_owned);
+                    let succeeded = first_error.is_none();
+                    this.record_execution_results(sql, &results, cx);
+                    let summary = first_error
+                        .map(|error| {
+                            t!("TableDataGrid.save_changes_failed", error = error).to_string()
+                        })
+                        .unwrap_or_else(|| {
                             t!("TableDataGrid.save_changes_success", count = change_count)
-                                .to_string(),
-                        );
+                                .to_string()
+                        });
+
+                    if succeeded {
+                        this.clear_changes_and_refresh(cx);
                     }
+                    notification(cx, summary);
                 }
-                Err(e) => {
-                    notification(
-                        cx,
-                        t!("TableDataGrid.save_changes_failed", error = e.to_string()).to_string(),
-                    );
+                Err(error) => {
+                    let error = error.to_string();
+                    let summary =
+                        t!("TableDataGrid.save_changes_failed", error = error).to_string();
+                    this.record_execution_failure(error, Some(sql_content), cx);
+                    notification(cx, summary);
                 }
             });
         })
@@ -2455,7 +2507,7 @@ impl DataGrid {
         connection_id: String,
         database_name: String,
         cx: &mut AsyncApp,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<SqlResult>, String> {
         let exec_options = ExecOptions {
             stop_on_error: true,
             transactional: true,
@@ -2463,30 +2515,17 @@ impl DataGrid {
             streaming: false,
         };
 
-        let result = global_state
+        global_state
             .execute_script(
                 cx,
-                connection_id.clone(),
-                sql.clone(),
-                Some(database_name.clone()),
+                connection_id,
+                sql,
+                Some(database_name),
                 None,
                 Some(exec_options),
             )
-            .await;
-
-        match result {
-            Ok(results) => {
-                if let Some(err_msg) = results.iter().find_map(|res| match res {
-                    SqlResult::Error(err) => Some(err.message.clone()),
-                    _ => None,
-                }) {
-                    Err(t!("TableDataGrid.execute_failed", error = err_msg).to_string())
-                } else {
-                    Ok(())
-                }
-            }
-            Err(e) => Err(t!("TableDataGrid.execute_failed", error = e).to_string()),
-        }
+            .await
+            .map_err(|error| error.to_string())
     }
 
     fn execute_sql_and_refresh(
@@ -2501,6 +2540,7 @@ impl DataGrid {
         let data_grid = self.clone();
 
         cx.spawn(async move |cx: &mut AsyncApp| {
+            let executed_sql = sql.clone();
             match Self::execute_sql_and_refresh_async(
                 sql,
                 global_state,
@@ -2510,27 +2550,33 @@ impl DataGrid {
             )
             .await
             {
-                Ok(_) => {
+                Ok(results) => {
                     cx.update(|cx| {
-                        if let Some(window_id) = cx.active_window() {
-                            let _ = cx.update_window(window_id, |_entity, window, cx| {
-                                data_grid.clear_changes_and_refresh(cx);
-                                window.close_dialog(cx);
-                                window.push_notification(
-                                    t!("TableDataGrid.execute_success").to_string(),
-                                    cx,
-                                );
-                            });
+                        let first_error = first_execution_error(&results).map(str::to_owned);
+                        let succeeded = first_error.is_none();
+                        data_grid.record_execution_results(executed_sql.clone(), &results, cx);
+                        let summary = first_error
+                            .map(|error| {
+                                t!("TableDataGrid.execute_failed", error = error).to_string()
+                            })
+                            .unwrap_or_else(|| t!("TableDataGrid.execute_success").to_string());
+
+                        if succeeded {
+                            data_grid.clear_changes_and_refresh(cx);
+                            if let Some(window_id) = cx.active_window() {
+                                let _ = cx.update_window(window_id, |_entity, window, cx| {
+                                    window.close_dialog(cx);
+                                });
+                            }
                         }
+                        notification(cx, summary);
                     });
                 }
-                Err(error_msg) => {
+                Err(error) => {
                     cx.update(|cx| {
-                        if let Some(window_id) = cx.active_window() {
-                            let _ = cx.update_window(window_id, |_entity, window, cx| {
-                                window.push_notification(error_msg, cx);
-                            });
-                        }
+                        let summary = t!("TableDataGrid.execute_failed", error = error).to_string();
+                        data_grid.record_execution_failure(error, Some(executed_sql), cx);
+                        notification(cx, summary);
                     });
                 }
             }
@@ -3000,6 +3046,7 @@ impl Clone for DataGrid {
             _filter_sub: None,
             search_input: self.search_input.clone(),
             _search_sub: None,
+            execution_history: self.execution_history.clone(),
             is_large_text_editor_sidebar_open: self.is_large_text_editor_sidebar_open,
         }
     }

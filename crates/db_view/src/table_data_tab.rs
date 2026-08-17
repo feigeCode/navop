@@ -1,3 +1,4 @@
+use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig};
 use futures::channel::oneshot;
@@ -47,6 +48,7 @@ pub struct TableDataTabParams {
     pub connection_id: String,
     pub database_type: one_core::storage::DatabaseType,
     pub editable: bool,
+    pub execution_history: Entity<ExecutionHistoryPanel>,
 }
 
 impl TableDataTabContent {
@@ -64,7 +66,8 @@ impl TableDataTabContent {
             config = config.with_schema(schema);
         }
 
-        let data_grid = cx.new(|cx| DataGrid::new(config, window, cx));
+        let data_grid =
+            cx.new(|cx| DataGrid::new(config, Some(params.execution_history.clone()), window, cx));
         let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), window, cx));
         let focus_handle = cx.focus_handle();
         let data_grid_sub = cx.subscribe_in(

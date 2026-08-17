@@ -1,3 +1,4 @@
+use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::{SqlEditor, SqlSchema};
 use crate::sql_result_tab::{SessionSqlRun, SqlResultTabContainer};
 use db::{DbManager, GlobalDbState, StreamingSqlParser, format_sql};
@@ -733,6 +734,7 @@ pub struct SqlEditorTabConfig {
     pub new_file_directory: Option<PathBuf>,
     pub initial_database: Option<String>,
     pub initial_schema: Option<String>,
+    pub execution_history: Entity<ExecutionHistoryPanel>,
 }
 
 pub struct SqlEditorTab {
@@ -773,6 +775,7 @@ impl SqlEditorTab {
         let editor = cx.new(|cx| SqlEditor::new(window, cx));
         let focus_handle = cx.focus_handle();
         let global_state = cx.global::<GlobalDbState>().clone();
+        let execution_history = config.execution_history.clone();
         let connection_id = config.connection_id;
         let connection_options = query_connection_options(
             &config.available_connection_ids,
@@ -839,7 +842,8 @@ impl SqlEditorTab {
             editor: editor.clone(),
             connection_id,
             database_type: config.database_type,
-            sql_result_tab_container: cx.new(|cx| SqlResultTabContainer::new(window, cx)),
+            sql_result_tab_container: cx
+                .new(|cx| SqlResultTabContainer::new(execution_history.clone(), window, cx)),
             connection_select: connection_select.clone(),
             database_select: database_select.clone(),
             schema_select: schema_select.clone(),

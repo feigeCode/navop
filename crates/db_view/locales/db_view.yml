@@ -3767,3 +3767,59 @@ DatabaseSidebar:
     en: AI Chat
     zh-CN: AI 对话
     zh-HK: AI 對話
+  execution_history:
+    en: Execution History
+    zh-CN: 执行记录
+    zh-HK: 執行記錄
+  query_succeeded:
+    en: Query succeeded
+    zh-CN: 查询成功
+    zh-HK: 查詢成功
+  execution_succeeded:
+    en: Execution succeeded
+    zh-CN: 执行成功
+    zh-HK: 執行成功
+  execution_history_count:
+    en: "%{count} records"
+    zh-CN: "%{count} 条"
+    zh-HK: "%{count} 條"
+  no_execution_history:
+    en: No execution records yet
+    zh-CN: 暂无执行记录
+    zh-HK: 暫無執行記錄
+  clear_execution_history:
+    en: Clear execution history
+    zh-CN: 清空执行记录
+    zh-HK: 清空執行記錄
+  filter_all:
+    en: "All (%{count})"
+    zh-CN: "全部（%{count}）"
+    zh-HK: "全部（%{count}）"
+  filter_success:
+    en: "Success (%{count})"
+    zh-CN: "成功（%{count}）"
+    zh-HK: "成功（%{count}）"
+  filter_failed:
+    en: "Failed (%{count})"
+    zh-CN: "失败（%{count}）"
+    zh-HK: "失敗（%{count}）"
+  affected_rows:
+    en: "%{count} rows affected"
+    zh-CN: "影响 %{count} 行"
+    zh-HK: "影響 %{count} 行"
+  returned_rows:
+    en: "%{count} rows returned"
+    zh-CN: "返回 %{count} 行"
+    zh-HK: "返回 %{count} 行"
+  execution_time:
+    en: "%{duration}ms"
+    zh-CN: "%{duration}ms"
+    zh-HK: "%{duration}ms"
+  server_result:
+    en: Server Result
+    zh-CN: 服务器返回
+    zh-HK: 伺服器回傳
+  executed_sql:
+    en: Executed SQL
+    zh-CN: 执行 SQL
+    zh-HK: 執行 SQL
