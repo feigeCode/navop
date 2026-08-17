@@ -6,15 +6,16 @@ use connection_form::team::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, IndexPath, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::{Input, InputState},
-    select::{Select, SelectItem, SelectState},
+    input::{Input, InputState, MaskPattern},
+    select::{Select, SelectEvent, SelectItem, SelectState},
     v_flex,
 };
 use one_core::cloud_sync::TeamOption;
@@ -24,6 +25,10 @@ use one_core::storage::{
     SerialFlowControl, SerialParams, SerialParity, StoredConnection, Workspace,
 };
 use rust_i18n::t;
+
+mod baud_rate;
+
+use baud_rate::{custom_baud_rate_text, is_valid_baud_rate_text, resolve_baud_rate};
 
 pub struct SerialFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
@@ -182,6 +187,7 @@ pub struct SerialFormWindow {
     port_name_input: Entity<InputState>,
     port_select: Entity<SelectState<Vec<PortItem>>>,
     baud_rate_select: Entity<SelectState<Vec<BaudRateItem>>>,
+    baud_rate_input: Entity<InputState>,
     data_bits_select: Entity<SelectState<Vec<DataBitsItem>>>,
     stop_bits_select: Entity<SelectState<Vec<StopBitsItem>>>,
     parity_select: Entity<SelectState<Vec<ParityItem>>>,
@@ -193,6 +199,7 @@ pub struct SerialFormWindow {
 
     is_testing: bool,
     test_result: Option<Result<(), String>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 fn enumerate_ports() -> Vec<PortItem> {
@@ -258,6 +265,23 @@ impl SerialFormWindow {
                 cx,
             )
         });
+        let baud_rate_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("Serial.custom_baud_rate_placeholder"))
+                .mask_pattern(MaskPattern::number(None))
+                .validate(|text, _| is_valid_baud_rate_text(text))
+        });
+        let baud_rate_select_subscription = cx.subscribe_in(
+            &baud_rate_select,
+            window,
+            |this, _, event: &SelectEvent<Vec<BaudRateItem>>, window, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    this.baud_rate_input.update(cx, |input, cx| {
+                        input.set_value("", window, cx);
+                    });
+                }
+            },
+        );
 
         // 数据位选择，默认 8（索引 3）
         let data_bits_items: Vec<DataBitsItem> = vec![
@@ -338,9 +362,16 @@ impl SerialFormWindow {
                 port_select.update(cx, |s, cx| {
                     s.set_selected_value(&params.port_name, window, cx);
                 });
-                baud_rate_select.update(cx, |s, cx| {
-                    s.set_selected_value(&params.baud_rate, window, cx);
-                });
+                if let Some(custom_baud_rate) = custom_baud_rate_text(params.baud_rate, BAUD_RATES)
+                {
+                    baud_rate_input.update(cx, |s, cx| {
+                        s.set_value(&custom_baud_rate, window, cx);
+                    });
+                } else {
+                    baud_rate_select.update(cx, |s, cx| {
+                        s.set_selected_value(&params.baud_rate, window, cx);
+                    });
+                }
                 data_bits_select.update(cx, |s, cx| {
                     s.set_selected_value(&params.data_bits, window, cx);
                 });
@@ -385,6 +416,7 @@ impl SerialFormWindow {
             port_name_input,
             port_select,
             baud_rate_select,
+            baud_rate_input,
             data_bits_select,
             stop_bits_select,
             parity_select,
@@ -395,6 +427,7 @@ impl SerialFormWindow {
             sync_enabled,
             is_testing: false,
             test_result: None,
+            _subscriptions: vec![baud_rate_select_subscription],
         }
     }
 
@@ -434,12 +467,9 @@ impl SerialFormWindow {
             return None;
         }
 
-        let baud_rate = self
-            .baud_rate_select
-            .read(cx)
-            .selected_value()
-            .copied()
-            .unwrap_or(115200);
+        let custom_baud_rate = self.baud_rate_input.read(cx).text().to_string();
+        let selected_baud_rate = self.baud_rate_select.read(cx).selected_value().copied();
+        let baud_rate = resolve_baud_rate(&custom_baud_rate, selected_baud_rate)?;
         let data_bits = self
             .data_bits_select
             .read(cx)
@@ -734,10 +764,21 @@ impl Render for SerialFormWindow {
                                 ),
                             )
                             .child(self.render_form_row("", Input::new(&self.port_name_input)))
-                            .child(self.render_form_row(
-                                &t!("Serial.baud_rate"),
-                                Select::new(&self.baud_rate_select).w_full(),
-                            ))
+                            .child(
+                                self.render_form_row(
+                                    &t!("Serial.baud_rate"),
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            div().flex_1().child(
+                                                Select::new(&self.baud_rate_select).w_full(),
+                                            ),
+                                        )
+                                        .child(
+                                            div().flex_1().child(Input::new(&self.baud_rate_input)),
+                                        ),
+                                ),
+                            )
                             .child(self.render_form_row(
                                 &t!("Serial.data_bits"),
                                 Select::new(&self.data_bits_select).w_full(),
@@ -860,5 +901,134 @@ impl Render for SerialFormWindow {
                             })),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+    use gpui_component::select::SelectEvent;
+    use one_core::settings::AppSettings;
+    use one_core::storage::{SerialFlowControl, SerialParams, SerialParity, StoredConnection};
+
+    fn custom_baud_rate_connection() -> StoredConnection {
+        StoredConnection::new_serial(
+            "custom baud rate".to_string(),
+            SerialParams {
+                port_name: "/dev/ttyUSB0".to_string(),
+                baud_rate: 1_500_000,
+                data_bits: 8,
+                stop_bits: 1,
+                parity: SerialParity::None,
+                flow_control: SerialFlowControl::None,
+            },
+            None,
+        )
+    }
+
+    #[gpui::test]
+    fn serial_form_preserves_and_builds_custom_baud_rate(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SerialFormWindow::new(
+                super::SerialFormWindowConfig {
+                    editing_connection: Some(custom_baud_rate_connection()),
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let (custom_baud_rate, built) = form.read_with(cx, |form, cx| {
+            (
+                form.baud_rate_input.read(cx).text().to_string(),
+                form.build_serial_params(cx),
+            )
+        });
+
+        assert_eq!(custom_baud_rate, "1500000");
+        assert_eq!(
+            built.expect("自定义波特率串口表单应能构建参数").baud_rate,
+            1_500_000
+        );
+    }
+
+    #[gpui::test]
+    fn serial_form_builds_user_entered_custom_baud_rate(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SerialFormWindow::new(
+                super::SerialFormWindowConfig {
+                    editing_connection: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        form.update_in(cx, |form, window, cx| {
+            form.port_name_input.update(cx, |input, cx| {
+                input.set_value("/dev/ttyUSB0", window, cx);
+            });
+            form.baud_rate_input.update(cx, |input, cx| {
+                input.set_value("1500000", window, cx);
+            });
+        });
+
+        assert_eq!(
+            form.read_with(cx, |form, cx| form.build_serial_params(cx))
+                .expect("用户输入自定义波特率后应能构建串口参数")
+                .baud_rate,
+            1_500_000
+        );
+    }
+
+    #[gpui::test]
+    fn selecting_preset_clears_custom_baud_rate(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SerialFormWindow::new(
+                super::SerialFormWindowConfig {
+                    editing_connection: Some(custom_baud_rate_connection()),
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        form.update_in(cx, |form, window, cx| {
+            form.baud_rate_select.update(cx, |select, cx| {
+                select.set_selected_value(&921_600, window, cx);
+                cx.emit(SelectEvent::Confirm(Some(921_600)));
+            });
+        });
+
+        let (custom_baud_rate, built_baud_rate) = form.read_with(cx, |form, cx| {
+            (
+                form.baud_rate_input.read(cx).text().to_string(),
+                form.build_serial_params(cx)
+                    .expect("选择预设波特率后应能构建串口参数")
+                    .baud_rate,
+            )
+        });
+        assert_eq!(custom_baud_rate, "");
+        assert_eq!(built_baud_rate, 921_600);
     }
 }

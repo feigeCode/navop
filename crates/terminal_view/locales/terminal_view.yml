@@ -1720,6 +1720,10 @@ Serial:
     en: Baud Rate
     zh-CN: 波特率
     zh-HK: 波特率
+  custom_baud_rate_placeholder:
+    en: Custom baud rate (optional)
+    zh-CN: 自定义波特率（可选）
+    zh-HK: 自訂波特率（可選）
   data_bits:
     en: Data Bits
     zh-CN: 数据位
