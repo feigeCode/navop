@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use db::compare::{SyncPlan, SyncStatement, SyncStatementKind};
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Task, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, ColorExt, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IndexPath, Sizable, StyledExt,
@@ -18,7 +18,31 @@ use rust_i18n::t;
 
 pub(super) type SyncStatementListState = Entity<ListState<SyncStatementListDelegate>>;
 
-const SYNC_STATEMENT_ROW_HEIGHT: f32 = 54.0;
+const SYNC_STATEMENT_ROW_HEIGHT: f32 = 74.0;
+
+/// Immutable execution input derived from a sync plan and the selected statement ids.
+///
+/// The SQL preview editor is intentionally not part of this snapshot. It may contain
+/// user edits, while execution safety and destructive confirmation must use the same
+/// structured statements that were selected from the generated plan.
+#[derive(Clone, Debug)]
+pub(super) struct SyncExecutionSnapshot {
+    pub plan_id: String,
+    pub statements: Vec<SyncStatement>,
+    pub sql: String,
+}
+
+impl SyncExecutionSnapshot {
+    pub(super) fn is_empty(&self) -> bool {
+        self.statements.is_empty() || self.sql.trim().is_empty()
+    }
+
+    pub(super) fn is_destructive(&self) -> bool {
+        self.statements
+            .iter()
+            .any(|statement| statement.destructive)
+    }
+}
 
 pub(super) fn sync_statement_list_state<T: 'static>(
     selected_ids: Entity<HashSet<String>>,
@@ -63,12 +87,29 @@ pub(super) fn selected_sync_sql_text_for_ids(
     plan: &SyncPlan,
     selected_ids: &HashSet<String>,
 ) -> String {
-    plan.statements
+    selected_sync_execution_snapshot(plan, selected_ids).sql
+}
+
+pub(super) fn selected_sync_execution_snapshot(
+    plan: &SyncPlan,
+    selected_ids: &HashSet<String>,
+) -> SyncExecutionSnapshot {
+    let statements = plan
+        .statements
         .iter()
         .filter(|statement| selected_ids.contains(&statement.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let sql = statements
+        .iter()
         .map(|statement| statement.sql.as_str())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    SyncExecutionSnapshot {
+        plan_id: plan.id.clone(),
+        statements,
+        sql,
+    }
 }
 
 pub(super) fn selected_sync_sql_summary_for_ids(
@@ -106,12 +147,39 @@ pub(super) fn sync_statement_picker(
         .filter(|s| !s.destructive)
         .map(|s| s.id.clone())
         .collect();
+    let plan_warnings = plan.warnings.clone();
 
     v_flex()
         .flex_1()
         .min_h_0()
         .gap_1()
         .child(picker_header(all_ids, safe_ids, selected_ids.clone()))
+        .when(!plan_warnings.is_empty(), |this| {
+            this.child(
+                v_flex()
+                    .id("sync-plan-warnings")
+                    .max_h(px(96.0))
+                    .gap_1()
+                    .p_2()
+                    .border_1()
+                    .border_color(cx.theme().warning.opacity(0.45))
+                    .rounded_md()
+                    .bg(cx.theme().warning.opacity(0.08))
+                    .overflow_y_scroll()
+                    .children(
+                        plan_warnings
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, warning)| {
+                                div()
+                                    .id(("sync-plan-warning", index))
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .child(warning)
+                            }),
+                    ),
+            )
+        })
         .child(
             v_flex()
                 .flex_1()
@@ -278,6 +346,7 @@ fn statement_row(
         .unwrap_or_else(|| t!("Compare.unnamed_object").to_string());
     let destructive = statement.destructive;
     let sql_preview = sql_preview(&statement.sql);
+    let warnings = statement.warnings.join(" · ");
 
     let row = h_flex()
         .w_full()
@@ -310,6 +379,13 @@ fn statement_row(
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(sql_preview),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().warning)
+                        .child(warnings),
                 ),
         );
 

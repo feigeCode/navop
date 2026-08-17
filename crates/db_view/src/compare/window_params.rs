@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::compare::{DataCompareParams, DataCompareTablePair, SchemaCompareParams};
+use crate::compare::{
+    DataCompareLimits, DataCompareParams, DataCompareTablePair, SchemaCompareParams,
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct DataCompareSelection {
@@ -21,6 +23,9 @@ pub(super) struct SchemaCompareSelection {
 #[derive(Debug, Clone)]
 pub(super) struct SchemaCompareSettings {
     pub case_sensitive_identifiers: bool,
+    pub compare_views: bool,
+    pub compare_routines: bool,
+    pub compare_triggers: bool,
     pub compare_indexes: bool,
     pub compare_foreign_keys: bool,
     pub ignore_comments: bool,
@@ -34,6 +39,9 @@ impl Default for SchemaCompareSettings {
     fn default() -> Self {
         Self {
             case_sensitive_identifiers: false,
+            compare_views: false,
+            compare_routines: false,
+            compare_triggers: false,
             compare_indexes: true,
             compare_foreign_keys: true,
             ignore_comments: false,
@@ -70,6 +78,7 @@ pub(super) fn data_compare_params(
         table_pairs,
         key_columns: split_columns(key_columns),
         case_sensitive_identifiers,
+        limits: DataCompareLimits::default(),
     })
 }
 
@@ -165,15 +174,8 @@ pub(super) fn schema_compare_params(
     if target.connection_id.trim().is_empty() || target.database.trim().is_empty() {
         return Err("Target connection and database are required");
     }
-    let mut source_tables =
-        normalized_table_list(&source.tables, settings.case_sensitive_identifiers)?;
-    let mut target_tables =
-        normalized_table_list(&target.tables, settings.case_sensitive_identifiers)?;
-    if source_tables.is_empty() && !target_tables.is_empty() {
-        source_tables = target_tables.clone();
-    } else if target_tables.is_empty() && !source_tables.is_empty() {
-        target_tables = source_tables.clone();
-    }
+    let source_tables = normalized_table_list(&source.tables, settings.case_sensitive_identifiers)?;
+    let target_tables = source_tables.clone();
 
     Ok(SchemaCompareParams {
         source_connection_id: source.connection_id,
@@ -185,6 +187,9 @@ pub(super) fn schema_compare_params(
         target_schema: empty_to_none(target.schema),
         target_tables,
         case_sensitive_identifiers: settings.case_sensitive_identifiers,
+        compare_views: settings.compare_views,
+        compare_routines: settings.compare_routines,
+        compare_triggers: settings.compare_triggers,
         compare_indexes: settings.compare_indexes,
         compare_foreign_keys: settings.compare_foreign_keys,
         ignore_comments: settings.ignore_comments,

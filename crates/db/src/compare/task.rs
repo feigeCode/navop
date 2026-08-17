@@ -17,8 +17,21 @@ pub enum CompareTaskEvent {
     },
     /// 加载元数据
     LoadingMetadata { table: Option<String> },
+    /// 加载用于同步排序的表依赖元数据
+    LoadingDependencyMetadata { table: Option<String> },
+    /// 加载结构比较一侧的表列表
+    LoadingTableList { side: CompareSchemaSide },
+    /// 加载结构比较一侧的单表结构
+    LoadingTableSchema {
+        side: CompareSchemaSide,
+        table: String,
+        table_index: usize,
+        total_tables: usize,
+    },
+    /// 比较已经加载的结构
+    ComparingSchema,
     /// 计数行数
-    CountingRows { table: String },
+    CountingRows { table: String, side: CompareRowSide },
     /// 读取行
     FetchingRows {
         table: String,
@@ -27,11 +40,7 @@ pub enum CompareTaskEvent {
         total_rows: Option<usize>,
     },
     /// 比较行
-    ComparingRows {
-        table: String,
-        compared_rows: usize,
-        total_rows: Option<usize>,
-    },
+    ComparingRows { table: String },
     /// 生成同步计划
     PlanningSql { table: Option<String> },
     /// 表完成
@@ -51,9 +60,17 @@ pub enum CompareTaskEvent {
 }
 
 /// 比较的源端或目标端
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompareRowSide {
+    Source,
+    Target,
+}
+
+/// 结构比较的源端或目标端
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompareSchemaSide {
     Source,
     Target,
 }

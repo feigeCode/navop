@@ -1408,11 +1408,12 @@ impl DatabasePlugin for PostgresPlugin {
                 pg_catalog.pg_get_userbyid(c.relowner) AS tableowner,
                 obj_description(c.oid, 'pg_class') AS table_comment,
                 c.reltuples::bigint AS row_count,
-                pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size
+                pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size,
+                c.relkind AS relation_kind
              FROM pg_class c
              JOIN pg_namespace n ON c.relnamespace = n.oid
              WHERE n.nspname = '{}'
-               AND c.relkind IN ('r', 'p')
+               AND c.relkind IN ('r', 'p', 'v', 'm')
              ORDER BY c.relname",
             schema_val.replace("'", "''")
         );
@@ -1431,9 +1432,14 @@ impl DatabasePlugin for PostgresPlugin {
                         .get(4)
                         .and_then(|v| v.clone())
                         .and_then(|s| s.parse::<i64>().ok());
+                    let object_type = match row.get(6).and_then(|v| v.as_deref()) {
+                        Some("v") | Some("m") => crate::TableObjectType::View,
+                        _ => crate::TableObjectType::Table,
+                    };
 
                     TableInfo {
                         name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+                        object_type,
                         schema: row.get(1).and_then(|v| v.clone()),
                         comment: row.get(3).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
                         engine: row.get(5).and_then(|v| v.clone()), // 用 engine 字段存储 size
@@ -1841,7 +1847,8 @@ impl DatabasePlugin for PostgresPlugin {
                 pg_get_function_result(p.oid), \
                 pg_get_function_identity_arguments(p.oid), \
                 p.oid::text, \
-                n.nspname \
+                n.nspname, \
+                pg_get_functiondef(p.oid) \
              FROM pg_proc p \
              JOIN pg_namespace n ON n.oid = p.pronamespace \
              WHERE n.nspname = {} \
@@ -1874,7 +1881,7 @@ impl DatabasePlugin for PostgresPlugin {
                             .collect(),
                         identity_arguments,
                         object_id: row.get(3).and_then(Clone::clone),
-                        definition: None,
+                        definition: row.get(5).and_then(Clone::clone),
                         comment: None,
                     }
                 })
@@ -1959,7 +1966,8 @@ impl DatabasePlugin for PostgresPlugin {
                 p.proname, \
                 pg_get_function_identity_arguments(p.oid), \
                 p.oid::text, \
-                n.nspname \
+                n.nspname, \
+                pg_get_functiondef(p.oid) \
              FROM pg_proc p \
              JOIN pg_namespace n ON n.oid = p.pronamespace \
              WHERE n.nspname = {} \
@@ -1992,7 +2000,7 @@ impl DatabasePlugin for PostgresPlugin {
                             .collect(),
                         identity_arguments,
                         object_id: row.get(2).and_then(Clone::clone),
-                        definition: None,
+                        definition: row.get(4).and_then(Clone::clone),
                         comment: None,
                     }
                 })
@@ -2057,15 +2065,46 @@ impl DatabasePlugin for PostgresPlugin {
     async fn list_triggers(
         &self,
         connection: &dyn DbConnection,
-        _database: &str,
+        database: &str,
     ) -> Result<Vec<TriggerInfo>> {
-        let sql = "SELECT trigger_name, event_object_table, event_manipulation, action_timing \
-                   FROM information_schema.triggers \
-                   WHERE trigger_schema = 'public' \
-                   ORDER BY trigger_name";
+        self.list_triggers_in_schema(connection, database, Some("public".to_string()))
+            .await
+    }
+
+    async fn list_triggers_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<TriggerInfo>> {
+        let schema = schema.unwrap_or_else(|| "public".to_string());
+        let sql = format!(
+            "SELECT \
+                t.tgname, \
+                c.relname, \
+                concat_ws(' OR ', \
+                    CASE WHEN (t.tgtype::int & 4) <> 0 THEN 'INSERT' END, \
+                    CASE WHEN (t.tgtype::int & 16) <> 0 THEN 'UPDATE' END, \
+                    CASE WHEN (t.tgtype::int & 8) <> 0 THEN 'DELETE' END, \
+                    CASE WHEN (t.tgtype::int & 32) <> 0 THEN 'TRUNCATE' END \
+                ), \
+                CASE \
+                    WHEN (t.tgtype::int & 64) <> 0 THEN 'INSTEAD OF' \
+                    WHEN (t.tgtype::int & 2) <> 0 THEN 'BEFORE' \
+                    ELSE 'AFTER' \
+                END, \
+                pg_get_triggerdef(t.oid, true) \
+             FROM pg_trigger t \
+             JOIN pg_class c ON c.oid = t.tgrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = {} \
+               AND NOT t.tgisinternal \
+             ORDER BY c.relname, t.tgname",
+            postgres_routine_string_literal(&schema),
+        );
 
         let result = connection
-            .query(sql)
+            .query(&sql)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
@@ -2078,7 +2117,7 @@ impl DatabasePlugin for PostgresPlugin {
                     table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
                     event: row.get(2).and_then(|v| v.clone()).unwrap_or_default(),
                     timing: row.get(3).and_then(|v| v.clone()).unwrap_or_default(),
-                    definition: None,
+                    definition: row.get(4).and_then(Clone::clone),
                 })
                 .collect())
         } else {
@@ -2951,14 +2990,35 @@ mod tests {
                 .push(query.to_string());
 
             let rows = if query.contains("table_comment") {
-                vec![vec![
-                    Some("users".to_string()),
-                    Some("public".to_string()),
-                    Some("postgres".to_string()),
-                    Some("Application users".to_string()),
-                    Some("42".to_string()),
-                    Some("16 kB".to_string()),
-                ]]
+                vec![
+                    vec![
+                        Some("users".to_string()),
+                        Some("public".to_string()),
+                        Some("postgres".to_string()),
+                        Some("Application users".to_string()),
+                        Some("42".to_string()),
+                        Some("16 kB".to_string()),
+                        Some("r".to_string()),
+                    ],
+                    vec![
+                        Some("active_users".to_string()),
+                        Some("public".to_string()),
+                        Some("postgres".to_string()),
+                        Some("Active users".to_string()),
+                        Some("-1".to_string()),
+                        Some("0 bytes".to_string()),
+                        Some("v".to_string()),
+                    ],
+                    vec![
+                        Some("daily_users".to_string()),
+                        Some("public".to_string()),
+                        Some("postgres".to_string()),
+                        Some("Daily users".to_string()),
+                        Some("10".to_string()),
+                        Some("8192 bytes".to_string()),
+                        Some("m".to_string()),
+                    ],
+                ]
             } else if query.contains("column_name") {
                 vec![vec![
                     Some("id".to_string()),
@@ -3052,6 +3112,10 @@ mod tests {
                         Some("integer".to_string()),
                         Some("101".to_string()),
                         Some("team's".to_string()),
+                        Some(
+                            "CREATE FUNCTION \"team's\".calculate_total(integer) RETURNS integer"
+                                .to_string(),
+                        ),
                     ],
                     vec![
                         Some("calculate_total".to_string()),
@@ -3059,6 +3123,10 @@ mod tests {
                         Some("text".to_string()),
                         Some("102".to_string()),
                         Some("team's".to_string()),
+                        Some(
+                            "CREATE FUNCTION \"team's\".calculate_total(text) RETURNS text"
+                                .to_string(),
+                        ),
                     ],
                 ]
             } else if query.contains("p.prokind = 'p'") {
@@ -3067,6 +3135,17 @@ mod tests {
                     Some("integer, text".to_string()),
                     Some("201".to_string()),
                     Some("operations".to_string()),
+                    Some("CREATE PROCEDURE operations.sync_orders(integer, text)".to_string()),
+                ]]
+            } else if query.contains("pg_get_triggerdef") {
+                vec![vec![
+                    Some("audit_orders".to_string()),
+                    Some("orders".to_string()),
+                    Some("INSERT OR UPDATE".to_string()),
+                    Some("AFTER".to_string()),
+                    Some(
+                        "CREATE TRIGGER audit_orders AFTER INSERT OR UPDATE ON orders".to_string(),
+                    ),
                 ]]
             } else {
                 vec![]
@@ -3148,13 +3227,20 @@ mod tests {
             .await
             .expect("list tables");
 
+        assert_eq!(3, tables.len());
+        assert_eq!(crate::TableObjectType::Table, tables[0].object_type);
+        assert_eq!(crate::TableObjectType::View, tables[1].object_type);
+        assert_eq!(crate::TableObjectType::View, tables[2].object_type);
         assert_eq!(Some("Application users"), tables[0].comment.as_deref());
+        assert_eq!(Some("Active users"), tables[1].comment.as_deref());
         let queries = connection.queries();
         let table_query = queries
             .iter()
             .find(|query| query.contains("table_comment"))
             .expect("table metadata query");
         assert!(table_query.contains("obj_description(c.oid, 'pg_class')"));
+        assert!(table_query.contains("c.relkind IN ('r', 'p', 'v', 'm')"));
+        assert!(table_query.contains("c.relkind AS relation_kind"));
     }
 
     #[tokio::test]
@@ -3202,10 +3288,18 @@ mod tests {
         assert_eq!(Some("integer"), functions[0].identity_arguments.as_deref());
         assert_eq!(Some("101"), functions[0].object_id.as_deref());
         assert_eq!(vec!["integer"], functions[0].parameters);
+        assert_eq!(
+            Some("CREATE FUNCTION \"team's\".calculate_total(integer) RETURNS integer"),
+            functions[0].definition.as_deref()
+        );
         assert_eq!("calculate_total", functions[1].name);
         assert_eq!(Some("text"), functions[1].identity_arguments.as_deref());
         assert_eq!(Some("102"), functions[1].object_id.as_deref());
         assert_eq!(vec!["text"], functions[1].parameters);
+        assert_eq!(
+            Some("CREATE FUNCTION \"team's\".calculate_total(text) RETURNS text"),
+            functions[1].definition.as_deref()
+        );
 
         let query = connection
             .queries()
@@ -3214,6 +3308,7 @@ mod tests {
             .expect("function metadata query");
         assert!(query.contains("n.nspname = E'team''s'"));
         assert!(query.contains("pg_get_function_identity_arguments"));
+        assert!(query.contains("pg_get_functiondef(p.oid)"));
     }
 
     #[tokio::test]
@@ -3235,6 +3330,10 @@ mod tests {
         );
         assert_eq!(Some("201"), procedures[0].object_id.as_deref());
         assert_eq!(vec!["integer", "text"], procedures[0].parameters);
+        assert_eq!(
+            Some("CREATE PROCEDURE operations.sync_orders(integer, text)"),
+            procedures[0].definition.as_deref()
+        );
 
         let query = connection
             .queries()
@@ -3242,6 +3341,38 @@ mod tests {
             .find(|query| query.contains("p.prokind = 'p'"))
             .expect("procedure metadata query");
         assert!(query.contains("n.nspname = E'operations'"));
+        assert!(query.contains("pg_get_functiondef(p.oid)"));
+    }
+
+    #[tokio::test]
+    async fn postgres_triggers_are_schema_aware_and_include_definition() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+
+        let triggers = plugin
+            .list_triggers_in_schema(&connection, "app", Some("audit's".to_string()))
+            .await
+            .expect("list triggers");
+
+        assert_eq!(1, triggers.len());
+        assert_eq!("audit_orders", triggers[0].name);
+        assert_eq!("orders", triggers[0].table_name);
+        assert_eq!("INSERT OR UPDATE", triggers[0].event);
+        assert_eq!("AFTER", triggers[0].timing);
+        assert_eq!(
+            Some("CREATE TRIGGER audit_orders AFTER INSERT OR UPDATE ON orders"),
+            triggers[0].definition.as_deref()
+        );
+
+        let query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("pg_get_triggerdef"))
+            .expect("trigger metadata query");
+        assert!(query.contains("n.nspname = E'audit''s'"));
+        assert!(query.contains("pg_get_triggerdef(t.oid, true)"));
+        assert!(query.contains("AND NOT t.tgisinternal"));
+        assert!(!query.contains("trigger_schema = 'public'"));
     }
 
     #[tokio::test]
@@ -3865,6 +3996,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "RESTRICT".to_string(),
@@ -4259,6 +4391,7 @@ mod tests {
                 name: "fk_order_items_legacy".to_string(),
                 columns: vec!["legacy_order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: String::new(),
                 on_update: String::new(),
@@ -4277,6 +4410,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "RESTRICT".to_string(),

@@ -30,6 +30,25 @@ use std::collections::HashMap;
 use std::io;
 use tracing::log::error;
 
+pub(crate) fn parse_table_data_total_count(result: SqlResult) -> Result<usize> {
+    let query_result = match result {
+        SqlResult::Query(query_result) => query_result,
+        SqlResult::Exec(_) => bail!("table row count query returned an execution result"),
+        SqlResult::Error(error) => bail!(error.message),
+    };
+    let value = query_result
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .ok_or_else(|| anyhow!("table row count query returned no scalar value"))?
+        .as_deref()
+        .ok_or_else(|| anyhow!("table row count query returned NULL"))?;
+    value
+        .trim()
+        .parse::<usize>()
+        .map_err(|error| anyhow!("invalid table row count `{value}`: {error}"))
+}
+
 /// Standard SQL functions common to most databases
 pub const STANDARD_SQL_FUNCTIONS: &[(&str, &str)] = &[
     // String functions
@@ -278,6 +297,14 @@ pub trait DatabasePlugin: Send + Sync {
     /// Get the rowid column name for this database
     fn rowid_column_name(&self) -> &'static str {
         "rowid"
+    }
+
+    /// Get the alias used for the synthetic rowid projection in table-data
+    /// queries. External drivers may override this when their manifest uses a
+    /// custom alias; compare consumers must use the same value when removing
+    /// the projection from query results.
+    fn rowid_column_alias(&self) -> &str {
+        "__rowid__"
     }
 
     /// Get the SQL dialect for this database type
@@ -708,6 +735,16 @@ pub trait DatabasePlugin: Send + Sync {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<Vec<TriggerInfo>>;
+
+    async fn list_triggers_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<TriggerInfo>> {
+        let _ = schema;
+        self.list_triggers(connection, database).await
+    }
 
     async fn list_triggers_view(
         &self,
@@ -1540,6 +1577,9 @@ pub trait DatabasePlugin: Send + Sync {
                             let mut m = folder_metadata.clone();
                             m.insert("columns".to_string(), fk.columns.join(", "));
                             m.insert("ref_table".to_string(), fk.ref_table.clone());
+                            if let Some(schema) = fk.ref_schema.as_deref() {
+                                m.insert("ref_schema".to_string(), schema.to_string());
+                            }
                             m.insert("ref_columns".to_string(), fk.ref_columns.join(", "));
                             m
                         })
@@ -1718,6 +1758,9 @@ pub trait DatabasePlugin: Send + Sync {
                         let mut meta = node.metadata.clone();
                         meta.insert("columns".to_string(), fk.columns.join(", "));
                         meta.insert("ref_table".to_string(), fk.ref_table.clone());
+                        if let Some(schema) = fk.ref_schema.as_deref() {
+                            meta.insert("ref_schema".to_string(), schema.to_string());
+                        }
                         meta.insert("ref_columns".to_string(), fk.ref_columns.join(", "));
                         DbNode::new(
                             format!("{}:{}", id, fk.name),
@@ -1834,8 +1877,7 @@ pub trait DatabasePlugin: Send + Sync {
             _ => String::new(),
         };
 
-        // Calculate offset
-        let offset = (request.page.saturating_sub(1)) * request.page_size;
+        let offset = request.effective_offset();
 
         // Build table reference
         let table_ref = self.format_table_reference(
@@ -1844,19 +1886,12 @@ pub trait DatabasePlugin: Send + Sync {
             &request.table,
         );
 
-        // Build count query
-        let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
-
-        // Get total count
-        let total_count = match connection.query(&count_sql).await? {
-            SqlResult::Query(result) => result
-                .rows
-                .first()
-                .and_then(|r| r.first())
-                .and_then(|v| v.as_ref())
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(0),
-            _ => 0,
+        let total_count = match request.known_total_count {
+            Some(total_count) => total_count,
+            None => {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
+                parse_table_data_total_count(connection.query(&count_sql).await?)?
+            }
         };
 
         // Query with pagination, include rowid if supported
@@ -2680,11 +2715,19 @@ pub trait DatabasePlugin: Send + Sync {
             .map(|column| self.quote_identifier(column))
             .collect::<Vec<_>>()
             .join(", ");
+        let referenced_table = match foreign_key.ref_schema.as_deref() {
+            Some(schema) if !schema.trim().is_empty() => format!(
+                "{}.{}",
+                self.quote_identifier(schema),
+                self.quote_identifier(&foreign_key.ref_table)
+            ),
+            _ => self.quote_identifier(&foreign_key.ref_table),
+        };
         let mut definition = format!(
             "CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
             self.quote_identifier(&foreign_key.name),
             columns,
-            self.quote_identifier(&foreign_key.ref_table),
+            referenced_table,
             ref_columns
         );
         if let Some(action) = foreign_key_action_sql(&foreign_key.on_delete) {
@@ -2704,6 +2747,7 @@ pub trait DatabasePlugin: Send + Sync {
     ) -> bool {
         left.columns != right.columns
             || left.ref_table != right.ref_table
+            || left.ref_schema != right.ref_schema
             || left.ref_columns != right.ref_columns
             || foreign_key_action_sql(&left.on_delete) != foreign_key_action_sql(&right.on_delete)
             || foreign_key_action_sql(&left.on_update) != foreign_key_action_sql(&right.on_update)
@@ -3310,6 +3354,7 @@ pub fn analyze_select_editability_fallback(sql: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::{ExecResult, SqlErrorInfo};
     use crate::mysql::MySqlPlugin;
     use sqlparser::dialect::MySqlDialect;
     use sqlparser::parser::Parser;
@@ -3350,6 +3395,66 @@ mod tests {
         assert!(plugin.capabilities().supports_functions);
 
         assert_eq!(" LIMIT 10 OFFSET 20", plugin.format_pagination(10, 20, ""));
+    }
+
+    #[test]
+    fn table_data_total_count_requires_a_scalar_integer_query_result() {
+        let valid = SqlResult::Query(QueryResult {
+            sql: "SELECT COUNT(*)".to_string(),
+            columns: vec!["count".to_string()],
+            column_meta: vec![],
+            rows: vec![vec![Some(" 42 ".to_string())]],
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        });
+        assert_eq!(42, parse_table_data_total_count(valid).unwrap());
+
+        let missing = SqlResult::Query(QueryResult {
+            sql: "SELECT COUNT(*)".to_string(),
+            columns: vec!["count".to_string()],
+            column_meta: vec![],
+            rows: vec![],
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        });
+        assert!(parse_table_data_total_count(missing).is_err());
+
+        let null = SqlResult::Query(QueryResult {
+            sql: "SELECT COUNT(*)".to_string(),
+            columns: vec!["count".to_string()],
+            column_meta: vec![],
+            rows: vec![vec![None]],
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        });
+        assert!(parse_table_data_total_count(null).is_err());
+
+        let invalid = SqlResult::Query(QueryResult {
+            sql: "SELECT COUNT(*)".to_string(),
+            columns: vec!["count".to_string()],
+            column_meta: vec![],
+            rows: vec![vec![Some("many".to_string())]],
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        });
+        assert!(parse_table_data_total_count(invalid).is_err());
+
+        let exec = SqlResult::Exec(ExecResult {
+            sql: "SELECT COUNT(*)".to_string(),
+            rows_affected: 0,
+            elapsed_ms: 0,
+            message: None,
+        });
+        assert!(parse_table_data_total_count(exec).is_err());
+
+        let error = SqlResult::Error(SqlErrorInfo {
+            sql: "SELECT COUNT(*)".to_string(),
+            message: "count failed".to_string(),
+        });
+        assert_eq!(
+            "count failed",
+            parse_table_data_total_count(error).unwrap_err().to_string()
+        );
     }
 
     #[test]

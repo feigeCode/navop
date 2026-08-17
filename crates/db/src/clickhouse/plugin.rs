@@ -842,6 +842,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
                     tables.push(TableInfo {
                         name: name.clone(),
+                        object_type: crate::TableObjectType::Table,
                         schema: None,
                         row_count: None,
                         create_time: None,
@@ -2070,6 +2071,7 @@ mod tests {
                 name: "fk_events_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: String::new(),
@@ -2226,6 +2228,7 @@ mod tests {
                 name: "fk_events_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: String::new(),

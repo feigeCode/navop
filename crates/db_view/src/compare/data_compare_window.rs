@@ -10,7 +10,7 @@ use gpui_component::{
     ActiveTheme, Disableable, IconName,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::InputState,
+    input::{InputEvent, InputState},
     select::{SearchableVec, SelectEvent, SelectState},
     v_flex,
 };
@@ -18,8 +18,9 @@ use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
-    SyncStatementListState, clear_sync_statement_list, default_selected_statement_ids,
-    refresh_sync_statement_list, selected_sync_sql_text_for_ids, sync_statement_list_state,
+    SyncExecutionSnapshot, SyncStatementListState, clear_sync_statement_list,
+    default_selected_statement_ids, refresh_sync_statement_list, selected_sync_execution_snapshot,
+    selected_sync_sql_text_for_ids, sync_statement_list_state,
 };
 use crate::compare::table_picker::{
     TableSelectionListState, ordered_selected_table_names, replace_table_selection_list,
@@ -74,6 +75,7 @@ pub struct DataCompareWindow {
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
     pub(super) sync_statement_list: SyncStatementListState,
     pub(super) sync_sql_editor: Entity<InputState>,
+    sync_sql_dirty: bool,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     pub(super) execution_log_scroll: ScrollHandle,
     use_transaction: Entity<bool>,
@@ -85,6 +87,7 @@ pub struct DataCompareWindow {
     is_running: Entity<bool>,
     is_executing: Entity<bool>,
     compare_task: Option<Task<()>>,
+    compare_generation: u64,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -188,6 +191,7 @@ impl DataCompareWindow {
                 sync_statement_list,
                 execution_log: cx.new(|_| Vec::new()),
                 execution_log_scroll,
+                sync_sql_dirty: false,
                 use_transaction: cx.new(|_| CompareSyncExecutionOptions::default().use_transaction),
                 continue_on_error: cx
                     .new(|_| CompareSyncExecutionOptions::default().continue_on_error),
@@ -198,6 +202,7 @@ impl DataCompareWindow {
                 is_running: cx.new(|_| false),
                 is_executing: cx.new(|_| false),
                 compare_task: None,
+                compare_generation: 0,
                 focus_handle: cx.focus_handle(),
                 _subscriptions: Vec::new(),
             };
@@ -206,11 +211,23 @@ impl DataCompareWindow {
                 &window_state.selected_statement_ids,
                 window,
                 |this, _, window, cx| {
-                    this.refresh_sync_editor(window, cx);
+                    if !this.sync_sql_dirty {
+                        this.refresh_sync_editor(window, cx);
+                    }
                     this.sync_statement_list.update(cx, |_, cx| cx.notify());
                 },
             );
             window_state._subscriptions.push(sub);
+            window_state._subscriptions.push(cx.subscribe_in(
+                &window_state.sync_sql_editor,
+                window,
+                |this, _, event: &InputEvent, _window, cx| {
+                    if let InputEvent::Change = event {
+                        this.sync_sql_dirty = true;
+                        cx.notify();
+                    }
+                },
+            ));
             // 源级联:连接 → 数据库 → Schema → 表
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.source_connection_select,
@@ -306,6 +323,8 @@ impl DataCompareWindow {
                 return;
             }
         };
+        self.compare_generation = self.compare_generation.wrapping_add(1);
+        let compare_generation = self.compare_generation;
         let compare_target = CompareTargetScope::from_data_params(&params);
         clear_sync_sql_execution_log(&self.execution_log, &self.execution_log_scroll, cx);
         self.clear_compare_preview(window, cx);
@@ -333,7 +352,11 @@ impl DataCompareWindow {
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             while let Some(progress) = progress_rx.recv().await {
                 if this
-                    .update(cx, |view, cx| view.set_progress(Some(progress), cx))
+                    .update(cx, |view, cx| {
+                        if view.compare_generation == compare_generation {
+                            view.set_progress(Some(progress), cx);
+                        }
+                    })
                     .is_err()
                 {
                     break;
@@ -343,55 +366,85 @@ impl DataCompareWindow {
         .detach();
 
         let task = cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = match execute_data_compare(params, db_state.clone(), progress_tx, cx).await
-            {
-                Ok(result) => generate_data_sync_plan_for_target(
-                    &result,
-                    &db_state,
-                    &target_connection_id,
-                    &target_database,
-                    target_schema.as_deref(),
-                )
-                .map(|plan| (result, plan)),
-                Err(error) => Err(error),
-            };
+            let result = execute_data_compare(params, db_state.clone(), progress_tx, cx).await;
             let _ = this.update(cx, |view, cx| {
+                if view.compare_generation != compare_generation {
+                    return;
+                }
                 view.is_running.update(cx, |running, cx| {
                     *running = false;
                     cx.notify();
                 });
                 view.set_progress(None, cx);
                 match result {
-                    Ok((result, plan)) => {
-                        let sync_sql_blocked = result.has_truncated_tables();
-                        let selected_ids = default_selected_statement_ids(&plan);
-                        refresh_sync_statement_list(&view.sync_statement_list, &plan, cx);
-                        view.result.update(cx, |slot, cx| {
-                            *slot = Some(result);
-                            cx.notify();
-                        });
-                        view.sync_plan.update(cx, |slot, cx| {
-                            *slot = Some(plan);
-                            cx.notify();
-                        });
-                        view.selected_statement_ids.update(cx, |slot, cx| {
-                            *slot = selected_ids;
-                            cx.notify();
-                        });
-                        view.compare_target.update(cx, |slot, cx| {
-                            *slot = Some(compare_target);
-                            cx.notify();
-                        });
-                        view.current_step = CompareStep::SqlPreview;
-                        if sync_sql_blocked {
+                    Ok(result) => match generate_data_sync_plan_for_target(
+                        &result,
+                        &db_state,
+                        &target_connection_id,
+                        &target_database,
+                        target_schema.as_deref(),
+                    ) {
+                        Ok(plan) => {
+                            let sync_sql_blocked = result.is_sync_sql_blocked();
+                            let sync_sql_blocked_status =
+                                data_compare_sync_sql_blocked_status(&result);
+                            let selected_ids = default_selected_statement_ids(&plan);
+                            refresh_sync_statement_list(&view.sync_statement_list, &plan, cx);
+                            view.result.update(cx, |slot, cx| {
+                                *slot = Some(result);
+                                cx.notify();
+                            });
+                            view.sync_plan.update(cx, |slot, cx| {
+                                *slot = Some(plan);
+                                cx.notify();
+                            });
+                            view.selected_statement_ids.update(cx, |slot, cx| {
+                                *slot = selected_ids;
+                                cx.notify();
+                            });
+                            view.compare_target.update(cx, |slot, cx| {
+                                *slot = Some(compare_target);
+                                cx.notify();
+                            });
+                            view.current_step = CompareStep::SqlPreview;
+                            if sync_sql_blocked {
+                                view.set_status(sync_sql_blocked_status.unwrap_or_default(), cx);
+                            } else {
+                                view.set_status(
+                                    t!("Compare.data_compare_complete").to_string(),
+                                    cx,
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            view.result.update(cx, |slot, cx| {
+                                *slot = Some(result);
+                                cx.notify();
+                            });
+                            view.sync_plan.update(cx, |slot, cx| {
+                                *slot = None;
+                                cx.notify();
+                            });
+                            view.compare_target.update(cx, |slot, cx| {
+                                *slot = None;
+                                cx.notify();
+                            });
+                            view.selected_statement_ids.update(cx, |slot, cx| {
+                                slot.clear();
+                                cx.notify();
+                            });
+                            clear_sync_statement_list(&view.sync_statement_list, cx);
+                            view.current_step = CompareStep::SqlPreview;
                             view.set_status(
-                                t!("Compare.data_compare_truncated_no_sql").to_string(),
+                                t!(
+                                    "Compare.data_compare_plan_failed",
+                                    error = error.to_string()
+                                )
+                                .to_string(),
                                 cx,
                             );
-                        } else {
-                            view.set_status(t!("Compare.data_compare_complete").to_string(), cx);
                         }
-                    }
+                    },
                     Err(error) => view.set_status(
                         t!("Compare.compare_failed", error = error.to_string()).to_string(),
                         cx,
@@ -502,7 +555,8 @@ impl DataCompareWindow {
     }
 
     fn cancel_compare(&mut self, cx: &mut Context<Self>) {
-        // 丢弃任务句柄即取消执行器 future,并关闭进度通道
+        // 先使本轮进度/完成回调失效，再丢弃句柄取消执行器 future。
+        self.compare_generation = self.compare_generation.wrapping_add(1);
         self.compare_task = None;
         self.is_running.update(cx, |running, cx| {
             *running = false;
@@ -521,6 +575,13 @@ impl DataCompareWindow {
         });
     }
 
+    fn restore_generated_sync_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_sync_editor(window, cx);
+        self.sync_sql_dirty = false;
+        self.set_status(t!("Compare.sync_sql_restored").to_string(), cx);
+        cx.notify();
+    }
+
     fn build_params(&self, cx: &mut Context<Self>) -> Result<DataCompareParams, &'static str> {
         data_compare_params(
             self.source_selection(cx),
@@ -531,13 +592,13 @@ impl DataCompareWindow {
     }
 
     fn start_execute_sync_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sync_sql_blocked(cx) {
-            self.set_status(t!("Compare.data_compare_truncated_no_sql").to_string(), cx);
+        if let Some(status) = self.sync_sql_blocked_status(cx) {
+            self.set_status(status, cx);
             return;
         }
         start_sync_sql_execution(
             self.compare_target.read(cx).clone(),
-            self.editor_sql(cx),
+            self.sync_execution_snapshot(cx),
             self.sync_execution_options(cx),
             self.status.clone(),
             self.is_executing.clone(),
@@ -566,11 +627,12 @@ impl DataCompareWindow {
 
     fn go_execute_step(&mut self, cx: &mut Context<Self>) {
         if self.current_step == CompareStep::SqlPreview {
-            if self.sync_sql_blocked(cx) {
-                self.set_status(t!("Compare.data_compare_truncated_no_sql").to_string(), cx);
+            if let Some(status) = self.sync_sql_blocked_status(cx) {
+                self.set_status(status, cx);
                 return;
             }
-            let entries = sync_sql_execution_start_log_entries(&self.editor_sql(cx));
+            let snapshot = self.sync_execution_snapshot(cx);
+            let entries = sync_sql_execution_start_log_entries(&snapshot.sql);
             if let Some(entry) = entries.first() {
                 self.set_status(entry.message.clone(), cx);
             }
@@ -585,7 +647,7 @@ impl DataCompareWindow {
         }
     }
 
-    /// 编辑器中实际待执行的 SQL(用户可能已手动修改)
+    /// SQL preview editor content. Execution uses the immutable plan snapshot instead.
     fn editor_sql(&self, cx: &Context<Self>) -> String {
         self.sync_sql_editor.read(cx).text().to_string()
     }
@@ -599,6 +661,18 @@ impl DataCompareWindow {
             .map_or_else(String::new, |plan| {
                 selected_sync_sql_text_for_ids(plan, selected_ids)
             })
+    }
+
+    fn sync_execution_snapshot(&self, cx: &Context<Self>) -> SyncExecutionSnapshot {
+        let selected_ids = self.selected_statement_ids.read(cx);
+        self.sync_plan.read(cx).as_ref().map_or_else(
+            || SyncExecutionSnapshot {
+                plan_id: String::new(),
+                statements: Vec::new(),
+                sql: String::new(),
+            },
+            |plan| selected_sync_execution_snapshot(plan, selected_ids),
+        )
     }
 
     fn has_editor_sql(&self, cx: &Context<Self>) -> bool {
@@ -626,6 +700,7 @@ impl DataCompareWindow {
         self.sync_sql_editor.update(cx, |state, cx| {
             state.set_value(String::new(), window, cx);
         });
+        self.sync_sql_dirty = false;
     }
 
     fn sync_execution_options(&self, cx: &Context<Self>) -> CompareSyncExecutionOptions {
@@ -636,10 +711,24 @@ impl DataCompareWindow {
     }
 
     fn sync_sql_blocked(&self, cx: &Context<Self>) -> bool {
-        self.result
-            .read(cx)
-            .as_ref()
-            .is_some_and(DataCompareBatchResult::has_truncated_tables)
+        self.sync_sql_dirty
+            || self.compare_target.read(cx).is_none()
+            || self
+                .result
+                .read(cx)
+                .as_ref()
+                .is_none_or(DataCompareBatchResult::is_sync_sql_blocked)
+    }
+
+    fn sync_sql_blocked_status(&self, cx: &Context<Self>) -> Option<String> {
+        if self.sync_sql_dirty {
+            return Some(t!("Compare.sync_sql_restore_before_execute").to_string());
+        }
+        let result = self.result.read(cx);
+        let Some(result) = result.as_ref() else {
+            return Some(t!("Compare.sync_sql_compare_first").to_string());
+        };
+        data_compare_sync_sql_blocked_status(result)
     }
 
     fn set_progress(&self, progress: Option<CompareProgress>, cx: &mut Context<Self>) {
@@ -711,6 +800,18 @@ fn first_table_name(tables: &[String]) -> String {
     tables.first().cloned().unwrap_or_default()
 }
 
+fn data_compare_sync_sql_blocked_status(result: &DataCompareBatchResult) -> Option<String> {
+    if result.has_truncated_tables() {
+        Some(t!("Compare.data_compare_truncated_no_sql").to_string())
+    } else if result.has_incomplete_dependency_metadata() {
+        Some(t!("Compare.data_compare_dependency_metadata_no_sql").to_string())
+    } else if result.has_inconsistent_snapshot_risk() {
+        Some(t!("Compare.data_compare_snapshot_unavailable_no_sql").to_string())
+    } else {
+        None
+    }
+}
+
 fn table_items_or_selection(items: Vec<String>, selected: &[String]) -> Vec<String> {
     if items.is_empty() {
         selected.to_vec()
@@ -740,8 +841,11 @@ impl Render for DataCompareWindow {
         let is_running = *self.is_running.read(cx);
         let is_executing = *self.is_executing.read(cx);
         let has_sync_sql = self.has_editor_sql(cx);
+        let sync_sql_dirty = self.sync_sql_dirty;
         let sync_sql_blocked = self.sync_sql_blocked(cx);
-        let status = if self.current_step == CompareStep::SqlExecute {
+        let status = if sync_sql_dirty && self.current_step == CompareStep::SqlPreview {
+            t!("Compare.sync_sql_modified").to_string()
+        } else if self.current_step == CompareStep::SqlExecute {
             String::new()
         } else {
             self.status.read(cx).clone()
@@ -906,6 +1010,15 @@ impl Render for DataCompareWindow {
                                             view.start_compare(window, cx);
                                         })),
                                 )
+                                .when(sync_sql_dirty, |this| {
+                                    this.child(
+                                        Button::new("restore-generated-sync-sql")
+                                            .child(t!("Compare.restore_generated_sql").to_string())
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.restore_generated_sync_sql(window, cx);
+                                            })),
+                                    )
+                                })
                                 .child(
                                     Button::new("compare-preview-next")
                                         .disabled(

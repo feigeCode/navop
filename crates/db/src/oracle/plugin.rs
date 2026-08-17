@@ -21,7 +21,9 @@ use crate::manifest_helpers::{
     ssh_password_field, tab, yes_no_options,
 };
 use crate::oracle::connection::OracleDbConnection;
-use crate::plugin::{DatabasePlugin, DatabaseUserOperationRequest, SqlCompletionInfo};
+use crate::plugin::{
+    DatabasePlugin, DatabaseUserOperationRequest, SqlCompletionInfo, parse_table_data_total_count,
+};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
@@ -1107,7 +1109,7 @@ impl DatabasePlugin for OraclePlugin {
             Some(ref c) if !c.trim().is_empty() => format!(" ORDER BY {}", c.trim()),
             _ => String::new(),
         };
-        let offset = (request.page.saturating_sub(1)) * request.page_size;
+        let offset = request.effective_offset();
 
         let table_ref = self.format_table_reference(
             &request.database,
@@ -1115,17 +1117,12 @@ impl DatabasePlugin for OraclePlugin {
             &request.table,
         );
 
-        let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
-
-        let total_count = match connection.query(&count_sql).await? {
-            SqlResult::Query(result) => result
-                .rows
-                .first()
-                .and_then(|r| r.first())
-                .and_then(|v| v.as_ref())
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(0),
-            _ => 0,
+        let total_count = match request.known_total_count {
+            Some(total_count) => total_count,
+            None => {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
+                parse_table_data_total_count(connection.query(&count_sql).await?)?
+            }
         };
 
         let order_by = if order_clause.is_empty() {
@@ -1485,6 +1482,7 @@ impl DatabasePlugin for OraclePlugin {
                 .iter()
                 .map(|row| TableInfo {
                     name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+                    object_type: crate::TableObjectType::Table,
                     schema: Some(schema.to_string()),
                     comment: row.get(1).and_then(|v| v.clone()),
                     engine: None,
@@ -1931,6 +1929,16 @@ impl DatabasePlugin for OraclePlugin {
         }
     }
 
+    async fn list_functions_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let schema = schema.unwrap_or_else(|| database.to_string());
+        self.list_functions(connection, &schema).await
+    }
+
     async fn list_functions_view(
         &self,
         connection: &dyn DbConnection,
@@ -2034,6 +2042,16 @@ impl DatabasePlugin for OraclePlugin {
         }
     }
 
+    async fn list_procedures_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let schema = schema.unwrap_or_else(|| database.to_string());
+        self.list_procedures(connection, &schema).await
+    }
+
     async fn list_procedures_view(
         &self,
         connection: &dyn DbConnection,
@@ -2135,6 +2153,16 @@ impl DatabasePlugin for OraclePlugin {
         } else {
             Ok(vec![])
         }
+    }
+
+    async fn list_triggers_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<TriggerInfo>> {
+        let schema = schema.unwrap_or_else(|| database.to_string());
+        self.list_triggers(connection, &schema).await
     }
 
     async fn list_triggers_view(
@@ -2553,11 +2581,19 @@ ORDER BY username;"#
             .map(|column| self.quote_identifier(column))
             .collect::<Vec<_>>()
             .join(", ");
+        let referenced_table = match foreign_key.ref_schema.as_deref() {
+            Some(schema) if !schema.trim().is_empty() => format!(
+                "{}.{}",
+                self.quote_identifier(schema),
+                self.quote_identifier(&foreign_key.ref_table)
+            ),
+            _ => self.quote_identifier(&foreign_key.ref_table),
+        };
         let mut definition = format!(
             "CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
             self.quote_identifier(&foreign_key.name),
             columns,
-            self.quote_identifier(&foreign_key.ref_table),
+            referenced_table,
             ref_columns
         );
         if let Some(action) = Self::foreign_key_delete_action_sql(&foreign_key.on_delete) {
@@ -2573,6 +2609,7 @@ ORDER BY username;"#
     ) -> bool {
         left.columns != right.columns
             || left.ref_table != right.ref_table
+            || left.ref_schema != right.ref_schema
             || left.ref_columns != right.ref_columns
             || Self::foreign_key_delete_action_sql(&left.on_delete)
                 != Self::foreign_key_delete_action_sql(&right.on_delete)
@@ -3465,6 +3502,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: String::new(),
@@ -3494,6 +3532,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "SET NULL".to_string(),
                 on_update: "CASCADE".to_string(),
@@ -3735,6 +3774,7 @@ mod tests {
                 name: "fk_order_items_legacy".to_string(),
                 columns: vec!["legacy_order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: String::new(),
                 on_update: String::new(),
@@ -3753,6 +3793,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: String::new(),

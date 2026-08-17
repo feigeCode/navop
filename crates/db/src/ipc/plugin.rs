@@ -16,6 +16,7 @@ use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
 use crate::plugin::{
     ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo, format_binary_literal_for_database,
+    parse_table_data_total_count,
 };
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::postgresql::PostgresPlugin;
@@ -489,6 +490,23 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         DatabaseType::external(self.driver.id.clone())
     }
 
+    fn supports_rowid(&self) -> bool {
+        self.driver
+            .dialect
+            .row_id_column
+            .as_deref()
+            .is_some_and(|column| !column.trim().is_empty())
+    }
+
+    fn rowid_column_alias(&self) -> &str {
+        self.driver
+            .dialect
+            .row_id_alias
+            .as_deref()
+            .filter(|alias| !alias.trim().is_empty())
+            .unwrap_or("__rowid__")
+    }
+
     fn quote_identifier(&self, identifier: &str) -> String {
         let (left, right) = self.driver.dialect.identifier_quote_pair();
         quote_identifier_with(left, right, identifier)
@@ -604,23 +622,19 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             }
         }
 
-        let offset = (request.page.saturating_sub(1)) * request.page_size;
+        let offset = request.effective_offset();
         let table_ref = self.format_table_reference(
             &request.database,
             request.schema.as_deref(),
             &request.table,
         );
 
-        let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
-        let total_count = match connection.query(&count_sql).await? {
-            SqlResult::Query(result) => result
-                .rows
-                .first()
-                .and_then(|row| row.first())
-                .and_then(|value| value.as_ref())
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(0),
-            _ => 0,
+        let total_count = match request.known_total_count {
+            Some(total_count) => total_count,
+            None => {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
+                parse_table_data_total_count(connection.query(&count_sql).await?)?
+            }
         };
 
         let pagination = self.format_pagination(request.page_size, offset, &order_clause);
@@ -1103,11 +1117,24 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<Vec<FunctionInfo>> {
+        self.list_functions_in_schema(connection, database, None)
+            .await
+    }
+
+    async fn list_functions_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
         let functions: Vec<wire_schema::FunctionInfo> = self
             .optional_metadata(
                 connection,
                 wire_method::SCHEMA_FUNCTIONS,
-                serde_json::json!({ "database": database }),
+                serde_json::json!({
+                    "database": database,
+                    "schema": schema,
+                }),
             )
             .await?
             .unwrap_or_default();
@@ -1162,11 +1189,24 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<Vec<FunctionInfo>> {
+        self.list_procedures_in_schema(connection, database, None)
+            .await
+    }
+
+    async fn list_procedures_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
         let procedures: Vec<wire_schema::ProcedureInfo> = self
             .optional_metadata(
                 connection,
                 wire_method::SCHEMA_PROCEDURES,
-                serde_json::json!({ "database": database }),
+                serde_json::json!({
+                    "database": database,
+                    "schema": schema,
+                }),
             )
             .await?
             .unwrap_or_default();
@@ -1216,11 +1256,24 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<Vec<TriggerInfo>> {
+        self.list_triggers_in_schema(connection, database, None)
+            .await
+    }
+
+    async fn list_triggers_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<TriggerInfo>> {
         let triggers: Vec<wire_schema::TriggerInfo> = self
             .optional_metadata(
                 connection,
                 wire_method::SCHEMA_TRIGGERS,
-                serde_json::json!({ "database": database }),
+                serde_json::json!({
+                    "database": database,
+                    "schema": schema,
+                }),
             )
             .await?
             .unwrap_or_default();
@@ -1820,6 +1873,7 @@ fn foreign_key_spec_from_definition(
         name: foreign_key.name.clone(),
         from_columns: foreign_key.columns.clone(),
         to_table: foreign_key.ref_table.clone(),
+        to_schema: foreign_key.ref_schema.clone(),
         to_columns: foreign_key.ref_columns.clone(),
         on_delete: empty_to_none(foreign_key.on_delete.clone()),
         on_update: empty_to_none(foreign_key.on_update.clone()),
@@ -1892,6 +1946,12 @@ fn database_info_from_wire(database: wire_schema::DatabaseInfo) -> DatabaseInfo 
 fn table_info_from_wire(object: wire_schema::ObjectInfo) -> TableInfo {
     TableInfo {
         name: object.name,
+        object_type: match object.kind {
+            wire_schema::ObjectKind::View | wire_schema::ObjectKind::MaterializedView => {
+                crate::TableObjectType::View
+            }
+            _ => crate::TableObjectType::Table,
+        },
         schema: None,
         comment: empty_to_none(object.comment),
         engine: None,
@@ -1939,6 +1999,7 @@ fn foreign_key_from_wire(foreign_key: wire_schema::ForeignKeyInfo) -> ForeignKey
         name: foreign_key.name,
         columns: foreign_key.from_columns,
         ref_table: foreign_key.to_table,
+        ref_schema: foreign_key.to_schema,
         ref_columns: foreign_key.to_columns,
         on_delete: foreign_key.on_delete.unwrap_or_default(),
         on_update: foreign_key.on_update.unwrap_or_default(),
@@ -2672,11 +2733,66 @@ mod tests {
             .expect("table data query should succeed");
 
         assert_eq!(1, response.total_count);
+        assert!(plugin.supports_rowid());
+        assert_eq!("__rowid__", plugin.rowid_column_alias());
         let queries = connection.queries();
         assert_eq!("SELECT COUNT(*) FROM \"APP\".\"EVENTS\"", queries[0]);
         assert_eq!(
             "SELECT ROWID AS \"__rowid__\", t.* FROM \"APP\".\"EVENTS\" t ORDER BY ROWID OFFSET 0 ROWS FETCH NEXT 25 ROWS ONLY",
             queries[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_table_data_reports_custom_manifest_row_id_alias() {
+        let mut driver = driver_manifest("ownerdb", true, "ownerdb.connection");
+        driver.dialect.row_id_column = Some("ROWID".to_string());
+        driver.dialect.row_id_alias = Some("dbx_rowid".to_string());
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert!(plugin.supports_rowid());
+        assert_eq!("dbx_rowid", plugin.rowid_column_alias());
+
+        let connection = RecordingQueryConnection::new();
+        plugin
+            .query_table_data(
+                &connection,
+                TableDataRequest::new("ownerdb", "EVENTS").with_page(1, 25),
+            )
+            .await
+            .expect("table data query should succeed");
+        assert_eq!(
+            "SELECT ROWID AS \"dbx_rowid\", t.* FROM \"ownerdb\".\"EVENTS\" t LIMIT 25 OFFSET 0",
+            connection.queries()[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_table_data_skips_count_when_total_is_known() {
+        let plugin = ExternalDatabasePlugin::for_driver(driver_manifest(
+            "duckdb",
+            true,
+            "duckdb.connection",
+        ));
+        let connection = RecordingQueryConnection::new();
+
+        let response = plugin
+            .query_table_data(
+                &connection,
+                TableDataRequest::new("main", "EVENTS")
+                    .with_page(2, 25)
+                    .with_offset(25)
+                    .with_known_total_count(50),
+            )
+            .await
+            .expect("table data query should reuse the known total");
+
+        assert_eq!(50, response.total_count);
+        let queries = connection.queries();
+        assert_eq!(1, queries.len());
+        assert_eq!(
+            "SELECT * FROM \"main\".\"EVENTS\" LIMIT 25 OFFSET 25",
+            queries[0]
         );
     }
 
@@ -3206,6 +3322,7 @@ mod tests {
             name: "fk_order_items_order".to_string(),
             columns: vec!["order_id".to_string()],
             ref_table: "orders".to_string(),
+            ref_schema: None,
             ref_columns: vec!["id".to_string()],
             on_delete: "CASCADE".to_string(),
             on_update: "NO ACTION".to_string(),
@@ -3229,6 +3346,7 @@ mod tests {
             name: "fk_order_items_legacy".to_string(),
             columns: vec!["legacy_order_id".to_string()],
             ref_table: "orders".to_string(),
+            ref_schema: None,
             ref_columns: vec!["id".to_string()],
             on_delete: String::new(),
             on_update: String::new(),
@@ -3241,6 +3359,7 @@ mod tests {
             name: "fk_order_items_order".to_string(),
             columns: vec!["order_id".to_string()],
             ref_table: "orders".to_string(),
+            ref_schema: None,
             ref_columns: vec!["id".to_string()],
             on_delete: "CASCADE".to_string(),
             on_update: "NO ACTION".to_string(),

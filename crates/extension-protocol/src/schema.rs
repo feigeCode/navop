@@ -332,6 +332,9 @@ pub struct ForeignKeyInfo {
     pub from_table: String,
     pub from_columns: Vec<String>,
     pub to_table: String,
+    /// Schema containing the referenced table. Omitted for the connection default schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_schema: Option<String>,
     pub to_columns: Vec<String>,
     /// `cascade` / `restrict` / `set_null` / `set_default` / `no_action`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -784,6 +787,7 @@ mod tests {
             from_table: "orders".into(),
             from_columns: vec!["user_id".into()],
             to_table: "users".into(),
+            to_schema: Some("audit".into()),
             to_columns: vec!["id".into()],
             on_delete: Some("cascade".into()),
             on_update: None,
@@ -792,6 +796,7 @@ mod tests {
         let j = serde_json::to_string(&fk).unwrap();
         let parsed: ForeignKeyInfo = serde_json::from_str(&j).unwrap();
         assert_eq!(parsed.from_columns, vec!["user_id".to_string()]);
+        assert_eq!(parsed.to_schema.as_deref(), Some("audit"));
         assert_eq!(parsed.on_delete.as_deref(), Some("cascade"));
         assert!(parsed.on_update.is_none());
     }

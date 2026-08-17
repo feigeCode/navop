@@ -157,6 +157,7 @@ impl DuckDbPlugin {
     fn foreign_key_changed(left: &ForeignKeyDefinition, right: &ForeignKeyDefinition) -> bool {
         left.columns != right.columns
             || left.ref_table != right.ref_table
+            || left.ref_schema != right.ref_schema
             || left.ref_columns != right.ref_columns
             || Self::foreign_key_action(&left.on_delete)
                 != Self::foreign_key_action(&right.on_delete)
@@ -910,6 +911,7 @@ impl DatabasePlugin for DuckDbPlugin {
                     .first()
                     .and_then(|value| value.clone())
                     .unwrap_or_default(),
+                object_type: crate::TableObjectType::Table,
                 schema: row.get(1).and_then(|value| value.clone()),
                 comment: None,
                 engine: None,
@@ -1692,6 +1694,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "NO ACTION".to_string(),
@@ -1825,6 +1828,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "NO ACTION".to_string(),

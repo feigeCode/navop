@@ -47,6 +47,7 @@ impl SqlitePlugin {
     fn foreign_key_changed(left: &ForeignKeyDefinition, right: &ForeignKeyDefinition) -> bool {
         left.columns != right.columns
             || left.ref_table != right.ref_table
+            || left.ref_schema != right.ref_schema
             || left.ref_columns != right.ref_columns
             || left.on_delete.trim().to_uppercase() != right.on_delete.trim().to_uppercase()
             || left.on_update.trim().to_uppercase() != right.on_update.trim().to_uppercase()
@@ -769,6 +770,7 @@ impl DatabasePlugin for SqlitePlugin {
                 .iter()
                 .map(|row| TableInfo {
                     name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+                    object_type: crate::TableObjectType::Table,
                     schema: None,
                     comment: None,
                     engine: None,
@@ -1737,6 +1739,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "NO ACTION".to_string(),
@@ -1870,6 +1873,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "NO ACTION".to_string(),

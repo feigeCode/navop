@@ -1,6 +1,7 @@
 use super::{
     ColumnDiff, ColumnSchema, DiffStatus, ForeignKeyDiff, ForeignKeySchema, IndexDiff, IndexSchema,
-    SchemaCompareError, SchemaCompareOptions, SchemaCompareResult, TableDiff, TableSchema,
+    SchemaCompareError, SchemaCompareOptions, SchemaCompareResult, SchemaObjectType, TableDiff,
+    TableSchema,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -36,12 +37,18 @@ pub fn compare_schemas(
                 .map(|table| table.name.clone())
                 .unwrap_or_default(),
             status: DiffStatus::Added,
+            object_type: source
+                .as_ref()
+                .map(|table| table.object_type)
+                .unwrap_or_default(),
+            changes: vec![],
             source,
             target: None,
             column_diffs: vec![],
             index_diffs: vec![],
             foreign_key_diffs: vec![],
             comment_changed: false,
+            table_options_changed: false,
         });
     }
 
@@ -54,12 +61,18 @@ pub fn compare_schemas(
                 .map(|table| table.name.clone())
                 .unwrap_or_default(),
             status: DiffStatus::Removed,
+            object_type: target
+                .as_ref()
+                .map(|table| table.object_type)
+                .unwrap_or_default(),
+            changes: vec![],
             source: None,
             target,
             column_diffs: vec![],
             index_diffs: vec![],
             foreign_key_diffs: vec![],
             comment_changed: false,
+            table_options_changed: false,
         });
     }
 
@@ -73,25 +86,14 @@ pub fn compare_schemas(
         }
     }
 
-    let added_count = table_diffs
-        .iter()
-        .filter(|d| matches!(d.status, DiffStatus::Added))
-        .count();
-    let removed_count = table_diffs
-        .iter()
-        .filter(|d| matches!(d.status, DiffStatus::Removed))
-        .count();
-    let modified_count = table_diffs
-        .iter()
-        .filter(|d| matches!(d.status, DiffStatus::Modified))
-        .count();
+    table_diffs.sort_by(|left, right| left.name.cmp(&right.name));
 
-    Ok(SchemaCompareResult {
+    let mut result = SchemaCompareResult {
         table_diffs,
-        added_count,
-        removed_count,
-        modified_count,
-    })
+        ..Default::default()
+    };
+    result.refresh_counts();
+    Ok(result)
 }
 
 /// 比较单个表
@@ -127,27 +129,95 @@ fn compare_table(
             || normalized_metadata(source.collation.as_deref())
                 != normalized_metadata(target.collation.as_deref())
     };
+    let object_type_changed = source.object_type != target.object_type;
+    let column_order_change = column_order_change(source, target, options);
 
     let has_changes = !column_diffs.is_empty()
         || !index_diffs.is_empty()
         || !foreign_key_diffs.is_empty()
         || comment_changed
-        || table_options_changed;
+        || table_options_changed
+        || object_type_changed
+        || column_order_change.is_some();
 
     if has_changes {
+        let mut changes = table_changes(
+            source,
+            target,
+            &column_diffs,
+            &index_diffs,
+            &foreign_key_diffs,
+            comment_changed,
+            table_options_changed,
+        );
+        if let Some(change) = column_order_change {
+            changes.push(change);
+        }
+        if object_type_changed {
+            changes.insert(
+                0,
+                format!(
+                    "object_type: {} → {}",
+                    object_type_label(target.object_type),
+                    object_type_label(source.object_type)
+                ),
+            );
+        }
         Some(TableDiff {
             name: source.name.clone(),
             status: DiffStatus::Modified,
+            object_type: source.object_type,
+            changes,
             source: Some(source.clone()),
             target: Some(target.clone()),
             column_diffs,
             index_diffs,
             foreign_key_diffs,
             comment_changed,
+            table_options_changed,
         })
     } else {
         None
     }
+}
+
+fn column_order_change(
+    source: &TableSchema,
+    target: &TableSchema,
+    options: &SchemaCompareOptions,
+) -> Option<String> {
+    if !options.compare_column_order {
+        return None;
+    }
+
+    let source_order = source
+        .columns
+        .iter()
+        .map(|column| identifier_key(&column.name, options))
+        .collect::<Vec<_>>();
+    let target_order = target
+        .columns
+        .iter()
+        .map(|column| identifier_key(&column.name, options))
+        .collect::<Vec<_>>();
+
+    if source_order == target_order || source_order.len() != target_order.len() {
+        return None;
+    }
+
+    let mut source_names = source_order.clone();
+    let mut target_names = target_order.clone();
+    source_names.sort();
+    target_names.sort();
+    if source_names != target_names {
+        return None;
+    }
+
+    Some(format!(
+        "column order: {} → {}",
+        target_order.join(", "),
+        source_order.join(", ")
+    ))
 }
 
 /// 比较列
@@ -181,6 +251,7 @@ fn compare_columns_with_options(
         diffs.push(ColumnDiff {
             name: source.name.clone(),
             status: DiffStatus::Added,
+            changes: vec!["column added".to_string()],
             source: Some(source),
             target: None,
         });
@@ -192,6 +263,7 @@ fn compare_columns_with_options(
         diffs.push(ColumnDiff {
             name: target.name.clone(),
             status: DiffStatus::Removed,
+            changes: vec!["column removed".to_string()],
             source: None,
             target: Some(target),
         });
@@ -206,12 +278,14 @@ fn compare_columns_with_options(
             diffs.push(ColumnDiff {
                 name: src.name.clone(),
                 status: DiffStatus::Modified,
+                changes: column_changes(src, tgt, options),
                 source: Some((*src).clone()),
                 target: Some((*tgt).clone()),
             });
         }
     }
 
+    diffs.sort_by(|left, right| left.name.cmp(&right.name));
     diffs
 }
 
@@ -239,6 +313,7 @@ fn compare_indexes_with_options(
         diffs.push(IndexDiff {
             name: source.name.clone(),
             status: DiffStatus::Added,
+            changes: vec!["index added".to_string()],
             source: Some(source),
             target: None,
         });
@@ -249,6 +324,7 @@ fn compare_indexes_with_options(
         diffs.push(IndexDiff {
             name: target.name.clone(),
             status: DiffStatus::Removed,
+            changes: vec!["index removed".to_string()],
             source: None,
             target: Some(target),
         });
@@ -261,12 +337,14 @@ fn compare_indexes_with_options(
             diffs.push(IndexDiff {
                 name: source_index.name.clone(),
                 status: DiffStatus::Modified,
+                changes: index_changes(source_index, target_index),
                 source: Some((*source_index).clone()),
                 target: Some((*target_index).clone()),
             });
         }
     }
 
+    diffs.sort_by(|left, right| left.name.cmp(&right.name));
     diffs
 }
 
@@ -294,6 +372,7 @@ fn compare_foreign_keys_with_options(
         diffs.push(ForeignKeyDiff {
             name: source.name.clone(),
             status: DiffStatus::Added,
+            changes: vec!["foreign key added".to_string()],
             source: Some(source),
             target: None,
         });
@@ -304,6 +383,7 @@ fn compare_foreign_keys_with_options(
         diffs.push(ForeignKeyDiff {
             name: target.name.clone(),
             status: DiffStatus::Removed,
+            changes: vec!["foreign key removed".to_string()],
             source: None,
             target: Some(target),
         });
@@ -316,12 +396,14 @@ fn compare_foreign_keys_with_options(
             diffs.push(ForeignKeyDiff {
                 name: source_fk.name.clone(),
                 status: DiffStatus::Modified,
+                changes: foreign_key_changes(source_fk, target_fk),
                 source: Some((*source_fk).clone()),
                 target: Some((*target_fk).clone()),
             });
         }
     }
 
+    diffs.sort_by(|left, right| left.name.cmp(&right.name));
     diffs
 }
 
@@ -384,6 +466,8 @@ fn foreign_key_eq(
 ) -> bool {
     identifier_key(&left.name, options) == identifier_key(&right.name, options)
         && identifier_list_eq(&left.columns, &right.columns, options)
+        && normalized_metadata(left.ref_schema.as_deref())
+            == normalized_metadata(right.ref_schema.as_deref())
         && identifier_key(&left.ref_table, options) == identifier_key(&right.ref_table, options)
         && identifier_list_eq(&left.ref_columns, &right.ref_columns, options)
         && foreign_key_action_eq(left.on_delete.as_deref(), right.on_delete.as_deref())
@@ -414,6 +498,207 @@ fn identifier_list_eq(left: &[String], right: &[String], options: &SchemaCompare
             .iter()
             .zip(right)
             .all(|(left, right)| identifier_key(left, options) == identifier_key(right, options))
+}
+
+fn column_changes(
+    source: &ColumnSchema,
+    target: &ColumnSchema,
+    options: &SchemaCompareOptions,
+) -> Vec<String> {
+    let mut changes = Vec::new();
+    if !data_type_eq(&source.data_type, &target.data_type, options) {
+        changes.push(format!("type: {} → {}", target.data_type, source.data_type));
+    }
+    if source.nullable != target.nullable {
+        changes.push(format!(
+            "nullable: {} → {}",
+            target.nullable, source.nullable
+        ));
+    }
+    if source.default_value != target.default_value {
+        changes.push(format!(
+            "default: {} → {}",
+            display_optional(target.default_value.as_deref()),
+            display_optional(source.default_value.as_deref())
+        ));
+    }
+    if !options.ignore_comments && source.comment != target.comment {
+        changes.push(format!(
+            "comment: {} → {}",
+            display_optional(target.comment.as_deref()),
+            display_optional(source.comment.as_deref())
+        ));
+    }
+    if !options.ignore_charset_collation {
+        if normalized_metadata(source.charset.as_deref())
+            != normalized_metadata(target.charset.as_deref())
+        {
+            changes.push(format!(
+                "charset: {} → {}",
+                display_optional(target.charset.as_deref()),
+                display_optional(source.charset.as_deref())
+            ));
+        }
+        if normalized_metadata(source.collation.as_deref())
+            != normalized_metadata(target.collation.as_deref())
+        {
+            changes.push(format!(
+                "collation: {} → {}",
+                display_optional(target.collation.as_deref()),
+                display_optional(source.collation.as_deref())
+            ));
+        }
+    }
+    changes
+}
+
+fn index_changes(source: &IndexSchema, target: &IndexSchema) -> Vec<String> {
+    let mut changes = Vec::new();
+    if source.unique != target.unique {
+        changes.push(format!("unique: {} → {}", target.unique, source.unique));
+    }
+    if source.columns != target.columns {
+        changes.push(format!(
+            "columns: {} → {}",
+            target.columns.join(", "),
+            source.columns.join(", ")
+        ));
+    }
+    changes
+}
+
+fn foreign_key_changes(source: &ForeignKeySchema, target: &ForeignKeySchema) -> Vec<String> {
+    let mut changes = Vec::new();
+    if source.columns != target.columns {
+        changes.push(format!(
+            "columns: {} → {}",
+            target.columns.join(", "),
+            source.columns.join(", ")
+        ));
+    }
+    if source.ref_schema != target.ref_schema {
+        changes.push(format!(
+            "referenced schema: {} → {}",
+            display_optional(target.ref_schema.as_deref()),
+            display_optional(source.ref_schema.as_deref())
+        ));
+    }
+    if source.ref_table != target.ref_table {
+        changes.push(format!(
+            "referenced table: {} → {}",
+            target.ref_table, source.ref_table
+        ));
+    }
+    if source.ref_columns != target.ref_columns {
+        changes.push(format!(
+            "referenced columns: {} → {}",
+            target.ref_columns.join(", "),
+            source.ref_columns.join(", ")
+        ));
+    }
+    if !foreign_key_action_eq(source.on_delete.as_deref(), target.on_delete.as_deref()) {
+        changes.push(format!(
+            "on delete: {} → {}",
+            display_optional(target.on_delete.as_deref()),
+            display_optional(source.on_delete.as_deref())
+        ));
+    }
+    if !foreign_key_action_eq(source.on_update.as_deref(), target.on_update.as_deref()) {
+        changes.push(format!(
+            "on update: {} → {}",
+            display_optional(target.on_update.as_deref()),
+            display_optional(source.on_update.as_deref())
+        ));
+    }
+    changes
+}
+
+fn table_changes(
+    source: &TableSchema,
+    target: &TableSchema,
+    column_diffs: &[ColumnDiff],
+    index_diffs: &[IndexDiff],
+    foreign_key_diffs: &[ForeignKeyDiff],
+    comment_changed: bool,
+    table_options_changed: bool,
+) -> Vec<String> {
+    let mut changes = Vec::new();
+    changes.extend(
+        column_diffs
+            .iter()
+            .flat_map(|diff| prefixed_changes("column", &diff.name, &diff.changes)),
+    );
+    changes.extend(
+        index_diffs
+            .iter()
+            .flat_map(|diff| prefixed_changes("index", &diff.name, &diff.changes)),
+    );
+    changes.extend(
+        foreign_key_diffs
+            .iter()
+            .flat_map(|diff| prefixed_changes("foreign key", &diff.name, &diff.changes)),
+    );
+    if comment_changed {
+        changes.push(format!(
+            "comment: {} → {}",
+            display_optional(target.comment.as_deref()),
+            display_optional(source.comment.as_deref())
+        ));
+    }
+    if table_options_changed {
+        if normalized_metadata(source.engine.as_deref())
+            != normalized_metadata(target.engine.as_deref())
+        {
+            changes.push(format!(
+                "engine: {} → {}",
+                display_optional(target.engine.as_deref()),
+                display_optional(source.engine.as_deref())
+            ));
+        }
+        if normalized_metadata(source.charset.as_deref())
+            != normalized_metadata(target.charset.as_deref())
+        {
+            changes.push(format!(
+                "charset: {} → {}",
+                display_optional(target.charset.as_deref()),
+                display_optional(source.charset.as_deref())
+            ));
+        }
+        if normalized_metadata(source.collation.as_deref())
+            != normalized_metadata(target.collation.as_deref())
+        {
+            changes.push(format!(
+                "collation: {} → {}",
+                display_optional(target.collation.as_deref()),
+                display_optional(source.collation.as_deref())
+            ));
+        }
+    }
+    changes
+}
+
+fn prefixed_changes<'a>(
+    kind: &'a str,
+    name: &'a str,
+    changes: &'a [String],
+) -> impl Iterator<Item = String> + 'a {
+    changes
+        .iter()
+        .map(move |change| format!("{kind} `{name}`: {change}"))
+}
+
+fn display_optional(value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("NULL")
+        .to_string()
+}
+
+fn object_type_label(object_type: SchemaObjectType) -> &'static str {
+    match object_type {
+        SchemaObjectType::Table => "table",
+        SchemaObjectType::View => "view",
+    }
 }
 
 fn validate_schema_identifiers(
@@ -572,6 +857,111 @@ mod tests {
     }
 
     #[test]
+    fn compare_schemas_ignores_column_order_by_default() {
+        let source = vec![table(
+            "users",
+            vec![column("id", "int", false), column("name", "varchar", true)],
+        )];
+        let target = vec![table(
+            "users",
+            vec![column("name", "varchar", true), column("id", "int", false)],
+        )];
+
+        let result = compare_schemas(source, target, SchemaCompareOptions::default()).unwrap();
+
+        assert!(result.table_diffs.is_empty());
+    }
+
+    #[test]
+    fn compare_schemas_reports_column_order_when_enabled() {
+        let source = vec![table(
+            "users",
+            vec![column("id", "int", false), column("name", "varchar", true)],
+        )];
+        let target = vec![table(
+            "users",
+            vec![column("name", "varchar", true), column("id", "int", false)],
+        )];
+
+        let result = compare_schemas(
+            source,
+            target,
+            SchemaCompareOptions {
+                compare_column_order: true,
+                ..SchemaCompareOptions::default()
+            },
+        )
+        .unwrap();
+
+        let diff = &result.table_diffs[0];
+        assert!(diff.column_diffs.is_empty());
+        assert_eq!(
+            diff.changes,
+            vec!["column order: name, id → id, name".to_string()]
+        );
+    }
+
+    #[test]
+    fn compare_schemas_does_not_report_column_order_with_added_or_removed_columns() {
+        let source = vec![table(
+            "users",
+            vec![column("id", "int", false), column("name", "varchar", true)],
+        )];
+        let target = vec![table(
+            "users",
+            vec![
+                column("name", "varchar", true),
+                column("legacy", "text", true),
+            ],
+        )];
+
+        let result = compare_schemas(
+            source,
+            target,
+            SchemaCompareOptions {
+                compare_column_order: true,
+                ..SchemaCompareOptions::default()
+            },
+        )
+        .unwrap();
+
+        let diff = &result.table_diffs[0];
+        assert!(
+            !diff
+                .changes
+                .iter()
+                .any(|change| change.starts_with("column order:"))
+        );
+    }
+
+    #[test]
+    fn compare_schemas_uses_normalized_names_for_column_order() {
+        let source = vec![table(
+            "users",
+            vec![column("ID", "int", false), column("Name", "varchar", true)],
+        )];
+        let target = vec![table(
+            "users",
+            vec![column("name", "varchar", true), column("id", "int", false)],
+        )];
+
+        let result = compare_schemas(
+            source,
+            target,
+            SchemaCompareOptions {
+                compare_column_order: true,
+                ..SchemaCompareOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.table_diffs[0].changes,
+            vec!["column order: name, id → id, name".to_string()]
+        );
+    }
+
+    #[test]
     fn test_compare_schemas_rejects_duplicate_case_insensitive_table_names() {
         let source = vec![
             table("Users", vec![column("ID", "int", false)]),
@@ -664,6 +1054,7 @@ mod tests {
             name: "fk_orders_user".to_string(),
             columns: vec!["user_id".to_string()],
             ref_table: "users".to_string(),
+            ref_schema: None,
             ref_columns: vec!["id".to_string()],
             on_delete: None,
             on_update: None,
@@ -749,6 +1140,7 @@ mod tests {
             name: "fk_orders_user".to_string(),
             columns: vec!["user_id".to_string()],
             ref_table: "users".to_string(),
+            ref_schema: None,
             ref_columns: vec!["id".to_string()],
             on_delete: Some("CASCADE".to_string()),
             on_update: Some("NO ACTION".to_string()),
@@ -779,12 +1171,40 @@ mod tests {
     }
 
     #[test]
+    fn test_foreign_key_referenced_schema_changes_are_modified() {
+        let mut source = table("orders", vec![column("id", "int", false)]);
+        source.foreign_keys = vec![ForeignKeySchema {
+            name: "fk_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            ref_table: "users".to_string(),
+            ref_schema: Some("audit".to_string()),
+            ref_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        }];
+        let mut target = source.clone();
+        target.foreign_keys[0].ref_schema = Some("public".to_string());
+
+        let result =
+            compare_schemas(vec![source], vec![target], SchemaCompareOptions::default()).unwrap();
+
+        let diff = &result.table_diffs[0].foreign_key_diffs[0];
+        assert_eq!(diff.status, DiffStatus::Modified);
+        assert!(
+            diff.changes
+                .iter()
+                .any(|change| change.contains("referenced schema"))
+        );
+    }
+
+    #[test]
     fn test_foreign_key_action_changes_are_modified() {
         let mut source = table("orders", vec![column("id", "int", false)]);
         source.foreign_keys = vec![ForeignKeySchema {
             name: "fk_orders_user".to_string(),
             columns: vec!["user_id".to_string()],
             ref_table: "users".to_string(),
+            ref_schema: None,
             ref_columns: vec!["id".to_string()],
             on_delete: Some("CASCADE".to_string()),
             on_update: Some("NO ACTION".to_string()),
@@ -836,6 +1256,153 @@ mod tests {
             diff.index_diffs
                 .iter()
                 .any(|d| d.name == "PRIMARY" && d.status == DiffStatus::Modified)
+        );
+    }
+
+    #[test]
+    fn modified_column_describes_target_to_source_changes() {
+        let mut source_column = column("name", "varchar(64)", true);
+        source_column.default_value = Some("'anonymous'".to_string());
+        let target_column = column("name", "varchar(32)", false);
+
+        let result = compare_schemas(
+            vec![table("users", vec![source_column])],
+            vec![table("users", vec![target_column])],
+            SchemaCompareOptions::default(),
+        )
+        .unwrap();
+
+        let table_diff = &result.table_diffs[0];
+        let column_diff = &table_diff.column_diffs[0];
+        assert_eq!(
+            column_diff.changes,
+            vec![
+                "type: varchar(32) → varchar(64)",
+                "nullable: false → true",
+                "default: NULL → 'anonymous'",
+            ]
+        );
+        assert_eq!(
+            table_diff.changes,
+            vec![
+                "column `name`: type: varchar(32) → varchar(64)",
+                "column `name`: nullable: false → true",
+                "column `name`: default: NULL → 'anonymous'",
+            ]
+        );
+    }
+
+    #[test]
+    fn table_diff_preserves_table_option_change_details() {
+        let mut source = table("users", vec![column("id", "int", false)]);
+        source.engine = Some("InnoDB".to_string());
+        source.charset = Some("utf8mb4".to_string());
+        source.collation = Some("utf8mb4_0900_ai_ci".to_string());
+
+        let mut target = source.clone();
+        target.engine = Some("MyISAM".to_string());
+        target.charset = Some("utf8".to_string());
+        target.collation = Some("utf8_general_ci".to_string());
+
+        let result =
+            compare_schemas(vec![source], vec![target], SchemaCompareOptions::default()).unwrap();
+
+        let table_diff = &result.table_diffs[0];
+        assert!(table_diff.table_options_changed);
+        assert_eq!(
+            table_diff.changes,
+            vec![
+                "engine: MyISAM → InnoDB",
+                "charset: utf8 → utf8mb4",
+                "collation: utf8_general_ci → utf8mb4_0900_ai_ci",
+            ]
+        );
+    }
+
+    #[test]
+    fn object_type_changes_and_added_removed_objects_keep_their_kind() {
+        let mut source_common = table("common", vec![column("id", "int", false)]);
+        source_common.object_type = SchemaObjectType::Table;
+        let mut target_common = source_common.clone();
+        target_common.object_type = SchemaObjectType::View;
+
+        let mut source_view = table("source_view", vec![]);
+        source_view.object_type = SchemaObjectType::View;
+        let mut target_view = table("target_view", vec![]);
+        target_view.object_type = SchemaObjectType::View;
+
+        let result = compare_schemas(
+            vec![source_view, source_common],
+            vec![target_view, target_common],
+            SchemaCompareOptions::default(),
+        )
+        .unwrap();
+
+        let common = result
+            .table_diffs
+            .iter()
+            .find(|diff| diff.name == "common")
+            .unwrap();
+        assert_eq!(common.object_type, SchemaObjectType::Table);
+        assert_eq!(common.changes, vec!["object_type: view → table"]);
+
+        let added = result
+            .table_diffs
+            .iter()
+            .find(|diff| diff.name == "source_view")
+            .unwrap();
+        assert_eq!(added.status, DiffStatus::Added);
+        assert_eq!(added.object_type, SchemaObjectType::View);
+        assert!(added.changes.is_empty());
+
+        let removed = result
+            .table_diffs
+            .iter()
+            .find(|diff| diff.name == "target_view")
+            .unwrap();
+        assert_eq!(removed.status, DiffStatus::Removed);
+        assert_eq!(removed.object_type, SchemaObjectType::View);
+        assert!(removed.changes.is_empty());
+    }
+
+    #[test]
+    fn schema_diff_order_is_deterministic() {
+        let source = vec![
+            table(
+                "zeta",
+                vec![
+                    column("z_column", "text", false),
+                    column("a_column", "text", false),
+                ],
+            ),
+            table("alpha", vec![column("id", "int", false)]),
+        ];
+        let target = vec![
+            table("zeta", vec![column("m_column", "text", false)]),
+            table("middle", vec![column("id", "int", false)]),
+        ];
+
+        let result = compare_schemas(source, target, SchemaCompareOptions::default()).unwrap();
+
+        assert_eq!(
+            result
+                .table_diffs
+                .iter()
+                .map(|diff| diff.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "middle", "zeta"]
+        );
+        let zeta = result
+            .table_diffs
+            .iter()
+            .find(|diff| diff.name == "zeta")
+            .unwrap();
+        assert_eq!(
+            zeta.column_diffs
+                .iter()
+                .map(|diff| diff.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a_column", "m_column", "z_column"]
         );
     }
 }

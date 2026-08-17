@@ -1,6 +1,7 @@
 pub mod data_compare_dialog;
 mod data_compare_target;
 pub mod data_compare_window;
+mod data_diff_detail;
 pub mod executor;
 pub mod progress;
 pub mod schema_compare_dialog;

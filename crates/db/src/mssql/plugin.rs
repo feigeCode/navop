@@ -1199,6 +1199,7 @@ impl DatabasePlugin for MsSqlPlugin {
                 .iter()
                 .map(|row| TableInfo {
                     name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+                    object_type: crate::TableObjectType::Table,
                     schema: row.get(1).and_then(|v| v.clone()),
                     comment: row.get(2).and_then(|v| v.clone()),
                     engine: None,
@@ -3267,6 +3268,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "NO ACTION".to_string(),
@@ -3481,6 +3483,7 @@ mod tests {
                 name: "fk_order_items_legacy".to_string(),
                 columns: vec!["legacy_order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: String::new(),
                 on_update: String::new(),
@@ -3499,6 +3502,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: "CASCADE".to_string(),
                 on_update: "NO ACTION".to_string(),

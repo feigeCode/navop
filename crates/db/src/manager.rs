@@ -1409,6 +1409,73 @@ impl GlobalDbState {
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
+    /// Execute SQL on an existing session from a GPUI async task.
+    ///
+    /// Session connections may use Tokio I/O internally, so callers running on
+    /// GPUI's executor must cross the Tokio runtime boundary explicitly.
+    pub async fn execute_session_on_runtime(
+        &self,
+        cx: &mut AsyncApp,
+        session_id: String,
+        script: String,
+        opts: Option<ExecOptions>,
+    ) -> anyhow::Result<Vec<SqlResult>> {
+        let clone_self = self.clone();
+        Tokio::spawn_result(cx, async move {
+            clone_self.execute_session(session_id, script, opts).await
+        })
+        .await
+    }
+
+    /// Query table data on an already-acquired session.
+    ///
+    /// Unlike `query_table_data`, this does not create or release a session.
+    /// Callers that need connection-scoped state such as a read transaction can
+    /// therefore keep COUNT, page queries, and terminal probes on one physical
+    /// connection.
+    pub async fn query_table_data_session(
+        &self,
+        session_id: &str,
+        request: crate::types::TableDataRequest,
+    ) -> anyhow::Result<crate::types::TableDataResponse> {
+        let config = self
+            .connection_manager
+            .get_session_config(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+        let plugin = self.get_plugin(&config.database_type)?;
+        let mut guard = self
+            .connection_manager
+            .get_session_connection(session_id)
+            .await?;
+        let conn = guard
+            .connection()
+            .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+        plugin
+            .query_table_data(&*conn, request)
+            .await
+            .map_err(|error| anyhow::anyhow!("{}", error))
+    }
+
+    /// Query table data on an existing session from a GPUI async task.
+    ///
+    /// Keeping this wrapper separate preserves the direct API for callers that
+    /// already execute inside a Tokio runtime.
+    pub async fn query_table_data_session_on_runtime(
+        &self,
+        cx: &mut AsyncApp,
+        session_id: String,
+        request: crate::types::TableDataRequest,
+    ) -> anyhow::Result<crate::types::TableDataResponse> {
+        let clone_self = self.clone();
+        Tokio::spawn_result(cx, async move {
+            clone_self
+                .query_table_data_session(&session_id, request)
+                .await
+        })
+        .await
+    }
+
     pub async fn switch_session_schema(
         &self,
         session_id: String,
@@ -1852,6 +1919,13 @@ impl GlobalDbState {
                 .map_err(|e| anyhow::anyhow!("{}", e))
         })
         .await
+    }
+
+    pub async fn close_session_direct(&self, session_id: &str) -> anyhow::Result<()> {
+        self.connection_manager
+            .close_session(session_id)
+            .await
+            .map_err(|error| anyhow::anyhow!("{}", error))
     }
 
     /// Disconnect all sessions for a connection
@@ -2531,6 +2605,21 @@ impl GlobalDbState {
         })
     }
 
+    /// List functions in a database schema.
+    pub async fn list_functions_in_schema(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin
+                .list_functions_in_schema(&*conn, &database, schema)
+                .await
+        })
+    }
+
     /// Load a stored function's CREATE statement
     pub async fn get_function_definition(
         &self,
@@ -2571,6 +2660,21 @@ impl GlobalDbState {
         })
     }
 
+    /// List procedures in a database schema.
+    pub async fn list_procedures_in_schema(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin
+                .list_procedures_in_schema(&*conn, &database, schema)
+                .await
+        })
+    }
+
     /// Load a stored procedure's CREATE statement
     pub async fn get_procedure_definition(
         &self,
@@ -2608,6 +2712,33 @@ impl GlobalDbState {
     ) -> anyhow::Result<crate::types::ObjectView> {
         with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
             plugin.list_triggers_view(&*conn, &database).await
+        })
+    }
+
+    /// List triggers for a database/schema scope.
+    pub async fn list_triggers(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+    ) -> anyhow::Result<Vec<crate::types::TriggerInfo>> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin.list_triggers(&*conn, &database).await
+        })
+    }
+
+    /// List triggers in a database schema.
+    pub async fn list_triggers_in_schema(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::TriggerInfo>> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin
+                .list_triggers_in_schema(&*conn, &database, schema)
+                .await
         })
     }
 

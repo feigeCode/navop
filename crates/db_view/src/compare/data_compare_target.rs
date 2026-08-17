@@ -1,4 +1,4 @@
-use db::GlobalDbState;
+use db::{GlobalDbState, TableObjectType};
 use extension_component::DbSelectorKind;
 use gpui::{
     AsyncApp, Context, Entity, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder,
@@ -8,6 +8,7 @@ use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::compare::data_compare_window::DataCompareWindow;
+use crate::compare::data_diff_detail::data_diff_detail_panel;
 use crate::compare::sync_statement_picker::{
     selected_sync_sql_summary_for_ids, sync_statement_picker,
 };
@@ -237,6 +238,30 @@ impl DataCompareWindow {
             .read(cx)
             .as_ref()
             .and_then(data_compare_batch_truncation_note);
+        let missing_target = self
+            .result
+            .read(cx)
+            .as_ref()
+            .filter(|result| result.has_missing_target_tables())
+            .map(|_| t!("Compare.data_compare_missing_target_note").to_string());
+        let failed_tables = self
+            .result
+            .read(cx)
+            .as_ref()
+            .filter(|result| result.has_failed_tables())
+            .map(|result| {
+                t!(
+                    "Compare.data_compare_table_failed_note",
+                    count = result.table_failures.len()
+                )
+                .to_string()
+            });
+        let dependency_metadata_warning = self
+            .result
+            .read(cx)
+            .as_ref()
+            .filter(|result| result.has_incomplete_dependency_metadata())
+            .map(|_| t!("Compare.data_compare_dependency_metadata_failed_note").to_string());
         let progress = self.progress.read(cx).clone();
         let plan = self.sync_plan.read(cx).clone();
         let selected_ids = self.selected_statement_ids.read(cx).clone();
@@ -255,7 +280,24 @@ impl DataCompareWindow {
             .when_some(stats, |this, (added, removed, modified)| {
                 this.child(stat_cards_row(added, removed, modified, cx))
             })
+            .when_some(self.result.read(cx).as_ref(), |this, result| {
+                this.child(data_diff_detail_panel(
+                    result,
+                    plan.as_ref(),
+                    self.selected_statement_ids.clone(),
+                    cx,
+                ))
+            })
             .when_some(truncation, |this, note| {
+                this.child(div().text_xs().text_color(cx.theme().warning).child(note))
+            })
+            .when_some(missing_target, |this, note| {
+                this.child(div().text_xs().text_color(cx.theme().warning).child(note))
+            })
+            .when_some(failed_tables, |this, note| {
+                this.child(div().text_xs().text_color(cx.theme().warning).child(note))
+            })
+            .when_some(dependency_metadata_warning, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))
             })
             .when_some(sync_summary, |this, sync_summary| {
@@ -385,6 +427,7 @@ impl DataCompareWindow {
                 .map(|tables| {
                     tables
                         .into_iter()
+                        .filter(|table| table.object_type == TableObjectType::Table)
                         .map(|table| table.name)
                         .collect::<Vec<_>>()
                 });

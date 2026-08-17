@@ -5,7 +5,9 @@ use db::{DbNode, DbNodeType};
 use one_core::storage::DatabaseType;
 use rust_i18n::t;
 
-use crate::compare::sync_statement_picker::selected_sync_sql_text_for_ids;
+use crate::compare::sync_statement_picker::{
+    selected_sync_execution_snapshot, selected_sync_sql_text_for_ids,
+};
 use crate::compare::window_params::{
     DataCompareSelection, SchemaCompareSelection, SchemaCompareSettings, data_compare_params,
     schema_compare_params, split_columns,
@@ -151,6 +153,9 @@ fn schema_compare_params_include_object_and_rule_settings() {
             tables: vec![],
         },
         SchemaCompareSettings {
+            compare_views: true,
+            compare_routines: true,
+            compare_triggers: true,
             compare_indexes: false,
             compare_foreign_keys: false,
             ignore_comments: true,
@@ -165,6 +170,9 @@ fn schema_compare_params_include_object_and_rule_settings() {
 
     assert!(!params.compare_indexes);
     assert!(!params.compare_foreign_keys);
+    assert!(params.compare_views);
+    assert!(params.compare_routines);
+    assert!(params.compare_triggers);
     assert!(params.ignore_comments);
     assert!(params.ignore_auto_increment);
     assert!(params.ignore_charset_collation);
@@ -173,7 +181,34 @@ fn schema_compare_params_include_object_and_rule_settings() {
 }
 
 #[test]
-fn schema_compare_params_include_selected_tables() {
+fn schema_compare_params_include_routine_and_trigger_selection() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec![],
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec![],
+        },
+        SchemaCompareSettings {
+            compare_routines: true,
+            compare_triggers: true,
+            ..SchemaCompareSettings::default()
+        },
+    )
+    .unwrap();
+
+    assert!(params.compare_routines);
+    assert!(params.compare_triggers);
+}
+
+#[test]
+fn schema_compare_params_maps_source_tables_to_same_named_target_tables() {
     let params = schema_compare_params(
         SchemaCompareSelection {
             connection_id: "source-1".to_string(),
@@ -185,14 +220,37 @@ fn schema_compare_params_include_selected_tables() {
             connection_id: "target-1".to_string(),
             database: "target_db".to_string(),
             schema: String::new(),
-            tables: vec!["users".to_string(), " Orders ".to_string()],
+            tables: vec!["stale_target".to_string()],
         },
         SchemaCompareSettings::default(),
     )
     .unwrap();
 
     assert_eq!(params.source_tables, vec!["Users", "orders"]);
-    assert_eq!(params.target_tables, vec!["users", "Orders"]);
+    assert_eq!(params.target_tables, vec!["Users", "orders"]);
+}
+
+#[test]
+fn schema_compare_params_ignores_target_tables_when_source_selection_is_empty() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec![],
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["stale_target".to_string()],
+        },
+        SchemaCompareSettings::default(),
+    )
+    .unwrap();
+
+    assert!(params.source_tables.is_empty());
+    assert!(params.target_tables.is_empty());
 }
 
 #[test]
@@ -431,6 +489,91 @@ fn selected_sync_sql_text_skips_unselected_destructive_statements() {
         selected_sync_sql_text_for_ids(&plan, &selected_ids),
         "INSERT INTO users (id) VALUES (1);"
     );
+}
+
+#[test]
+fn sync_execution_snapshot_uses_selected_statements_in_plan_order() {
+    let mut plan = SyncPlan {
+        id: "plan-1".to_string(),
+        target_table: "users".to_string(),
+        statements: vec![
+            statement("insert-2", "INSERT INTO users VALUES (2);", true, false),
+            statement("delete-1", "DELETE FROM users WHERE id = 1;", false, true),
+            statement("insert-1", "INSERT INTO users VALUES (1);", true, false),
+        ],
+        summary: SyncPlanSummary {
+            insert_count: 2,
+            update_count: 0,
+            delete_count: 1,
+            ddl_count: 0,
+            total_count: 3,
+        },
+        warnings: vec![],
+        sql_text: String::new(),
+    };
+    let mut selected_ids = HashSet::from([
+        "insert-1".to_string(),
+        "missing".to_string(),
+        "insert-2".to_string(),
+    ]);
+
+    let snapshot = selected_sync_execution_snapshot(&plan, &selected_ids);
+    selected_ids.clear();
+    plan.statements.clear();
+
+    assert_eq!("plan-1", snapshot.plan_id);
+    assert_eq!(
+        snapshot
+            .statements
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["insert-2", "insert-1"]
+    );
+    assert_eq!(
+        snapshot.sql,
+        "INSERT INTO users VALUES (2);\nINSERT INTO users VALUES (1);"
+    );
+    assert!(!snapshot.is_empty());
+    assert!(!snapshot.is_destructive());
+}
+
+#[test]
+fn sync_execution_snapshot_destructive_semantics_use_structured_flags() {
+    let plan = SyncPlan {
+        id: "plan-1".to_string(),
+        target_table: "users".to_string(),
+        statements: vec![
+            statement(
+                "text-danger",
+                "DELETE FROM users WHERE id = 1;",
+                true,
+                false,
+            ),
+            statement("flag-danger", "SELECT 1;", false, true),
+        ],
+        summary: SyncPlanSummary {
+            insert_count: 0,
+            update_count: 0,
+            delete_count: 1,
+            ddl_count: 0,
+            total_count: 2,
+        },
+        warnings: vec![],
+        sql_text: String::new(),
+    };
+
+    let text_only =
+        selected_sync_execution_snapshot(&plan, &HashSet::from(["text-danger".to_string()]));
+    assert!(!text_only.is_destructive());
+
+    let flagged =
+        selected_sync_execution_snapshot(&plan, &HashSet::from(["flag-danger".to_string()]));
+    assert!(flagged.is_destructive());
+
+    let empty = selected_sync_execution_snapshot(&plan, &HashSet::new());
+    assert!(empty.is_empty());
+    assert!(!empty.is_destructive());
 }
 
 fn statement(id: &str, sql: &str, selected: bool, destructive: bool) -> SyncStatement {

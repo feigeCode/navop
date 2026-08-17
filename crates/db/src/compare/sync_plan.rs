@@ -1,9 +1,11 @@
 use super::{
-    CellValue, ColumnSchema, DataCompareResult, DiffStatus, RowData, SchemaCompareResult,
-    TableSchema,
+    CellValue, ColumnSchema, DataCompareBatchResult, DataCompareBatchWarningKind,
+    DataCompareResult, DataCompareTableDependency, DiffStatus, RowData, SchemaCompareResult,
+    SchemaObjectType, TableSchema,
 };
 use crate::plugin::DatabasePlugin;
 use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
+use one_core::storage::DatabaseType;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -89,8 +91,42 @@ trait SyncSqlDialect {
     fn drop_table(&self, database: &str, schema: Option<&str>, table: &str) -> String;
     fn build_column_def(&self, column: &ColumnDefinition) -> String;
     fn build_create_table_sql(&self, design: &TableDesign) -> String;
+
+    /// Build CREATE TABLE with the exact qualified reference used by the compare plan.
+    ///
+    /// `TableDesign` currently carries no schema field and every supported dialect
+    /// emits `CREATE TABLE <quoted design.table_name>` as its prefix. Replacing only
+    /// that leading token keeps table-designer DDL generation unchanged while
+    /// preventing compare plans from creating a table in a different schema than
+    /// their subsequent INSERT/ALTER statements target.
+    fn build_create_table_sql_with_reference(
+        &self,
+        design: &TableDesign,
+        table_reference: &str,
+    ) -> String {
+        let sql = self.build_create_table_sql(design);
+        let unqualified_prefix =
+            format!("CREATE TABLE {}", self.quote_identifier(&design.table_name));
+        let qualified_prefix = format!("CREATE TABLE {table_reference}");
+        match sql.strip_prefix(&unqualified_prefix) {
+            Some(suffix) => format!("{qualified_prefix}{suffix}"),
+            None => {
+                debug_assert!(
+                    false,
+                    "CREATE TABLE SQL does not start with the expected table token: {sql}"
+                );
+                sql
+            }
+        }
+    }
+
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String>;
     fn needs_raw_comment_statements(&self) -> bool;
+
+    /// 按目标数据库类型和列类型格式化 SQL 字面量。
+    fn format_literal(&self, value: &CellValue, data_type: Option<&str>) -> String {
+        format_value_for_database(value, data_type, None)
+    }
 }
 
 impl<T> SyncSqlDialect for T
@@ -123,6 +159,10 @@ where
 
     fn needs_raw_comment_statements(&self) -> bool {
         false
+    }
+
+    fn format_literal(&self, value: &CellValue, data_type: Option<&str>) -> String {
+        format_value_for_database(value, data_type, Some(self.name()))
     }
 }
 
@@ -157,6 +197,10 @@ impl SyncSqlDialect for PluginSyncSqlDialect<'_> {
 
     fn needs_raw_comment_statements(&self) -> bool {
         false
+    }
+
+    fn format_literal(&self, value: &CellValue, data_type: Option<&str>) -> String {
+        format_value_for_database(value, data_type, Some(self.0.name()))
     }
 }
 
@@ -235,6 +279,361 @@ pub fn build_data_sync_plan_with_plugin(
     )
 }
 
+/// Build one deterministic sync plan for all successfully compared tables.
+///
+/// This is intentionally kept in the database layer: dependency ordering,
+/// statement grouping, destructive defaults, and dialect-specific SQL plans
+/// are database concerns. UI callers should only provide the compare result
+/// and, for dialect-aware SQL, the target plugin.
+pub fn build_data_sync_batch_plan(result: &DataCompareBatchResult) -> SyncPlan {
+    build_data_sync_batch_plan_with_plans(
+        result,
+        result
+            .table_results
+            .iter()
+            .map(build_data_sync_plan)
+            .collect(),
+    )
+}
+
+/// Dialect-aware counterpart of [`build_data_sync_batch_plan`].
+pub fn build_data_sync_batch_plan_with_plugin(
+    result: &DataCompareBatchResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    plugin: &dyn DatabasePlugin,
+) -> SyncPlan {
+    build_data_sync_batch_plan_with_plans(
+        result,
+        result
+            .table_results
+            .iter()
+            .map(|table_result| {
+                build_data_sync_plan_with_plugin(
+                    table_result,
+                    target_database,
+                    target_schema,
+                    plugin,
+                )
+            })
+            .collect(),
+    )
+}
+
+fn build_data_sync_batch_plan_with_plans(
+    result: &DataCompareBatchResult,
+    plans: Vec<SyncPlan>,
+) -> SyncPlan {
+    if result.is_sync_sql_blocked() {
+        return blocked_data_sync_batch_plan(result);
+    }
+
+    let plan_tables = plans
+        .iter()
+        .map(|plan| plan.target_table.clone())
+        .collect::<HashSet<_>>();
+    let external_dependency_warnings =
+        external_dependency_warnings_by_table(&plan_tables, &result.table_dependencies);
+    let target_table = match plans.as_slice() {
+        [] => String::new(),
+        [plan] => plan.target_table.clone(),
+        _ => format!("{} tables", plans.len()),
+    };
+    let summary = plans.iter().fold(
+        SyncPlanSummary {
+            insert_count: 0,
+            update_count: 0,
+            delete_count: 0,
+            ddl_count: 0,
+            total_count: 0,
+        },
+        |mut summary, plan| {
+            summary.insert_count += plan.summary.insert_count;
+            summary.update_count += plan.summary.update_count;
+            summary.delete_count += plan.summary.delete_count;
+            summary.ddl_count += plan.summary.ddl_count;
+            summary.total_count += plan.summary.total_count;
+            summary
+        },
+    );
+    let mut warnings = plans
+        .iter()
+        .flat_map(|plan| plan.warnings.iter().cloned())
+        .collect::<Vec<_>>();
+    warnings.extend(
+        external_dependency_warnings
+            .values()
+            .flat_map(|warnings| warnings.iter().cloned()),
+    );
+    warnings.extend(data_compare_batch_failure_warnings(result));
+    warnings.extend(data_compare_batch_warnings(result));
+
+    let (mut statements, dependency_cycle) =
+        ordered_sync_statements(plans, &result.table_dependencies);
+    if let Some(cycle) = dependency_cycle {
+        let mut blocked = blocked_data_sync_batch_plan(result);
+        blocked.warnings.push(format!(
+            "Foreign-key dependency cycle detected among tables ({}); sync SQL generation is disabled because no safe execution order exists.",
+            cycle.join(" → ")
+        ));
+        return blocked;
+    }
+    apply_external_dependency_warnings(&mut statements, &external_dependency_warnings);
+    let sql_text = statements
+        .iter()
+        .map(|statement| statement.sql.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    SyncPlan {
+        id: uuid::Uuid::new_v4().to_string(),
+        target_table,
+        statements,
+        summary,
+        warnings,
+        sql_text,
+    }
+}
+
+fn blocked_data_sync_batch_plan(result: &DataCompareBatchResult) -> SyncPlan {
+    let target_table = match result.table_results.as_slice() {
+        [] => String::new(),
+        [table_result] => table_result.target_table.clone(),
+        _ => format!("{} tables", result.table_results.len()),
+    };
+    let mut warnings = Vec::new();
+    if result.has_truncated_tables() {
+        warnings
+            .push("Data compare result is truncated; sync SQL generation is disabled.".to_string());
+    }
+    if result.has_incomplete_dependency_metadata() {
+        warnings.push(
+            "Dependency metadata is incomplete; sync SQL generation is disabled because statement ordering cannot be guaranteed."
+                .to_string(),
+        );
+    }
+    if result.has_inconsistent_snapshot_risk() {
+        warnings.push(
+            "A consistent read snapshot was unavailable; sync SQL generation is disabled because paged results may represent different database states."
+                .to_string(),
+        );
+    }
+    warnings.extend(data_compare_batch_failure_warnings(result));
+    warnings.extend(data_compare_batch_warnings(result));
+    SyncPlan {
+        id: uuid::Uuid::new_v4().to_string(),
+        target_table,
+        statements: vec![],
+        summary: empty_sync_plan_summary(),
+        warnings,
+        sql_text: String::new(),
+    }
+}
+
+fn data_compare_batch_failure_warnings(result: &DataCompareBatchResult) -> Vec<String> {
+    result
+        .table_failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "Table `{}` failed to compare and was excluded from the sync plan: {}",
+                failure.table, failure.error
+            )
+        })
+        .collect()
+}
+
+fn data_compare_batch_warnings(result: &DataCompareBatchResult) -> Vec<String> {
+    result
+        .batch_warnings
+        .iter()
+        .map(|warning| match warning.kind {
+            DataCompareBatchWarningKind::TargetTableMetadataUnavailable => format!(
+                "Target table metadata could not be loaded; dependency ordering is incomplete: {}",
+                warning.error
+            ),
+            DataCompareBatchWarningKind::ForeignKeyMetadataUnavailable => format!(
+                "Foreign key metadata for table `{}` could not be loaded; dependency ordering is incomplete: {}",
+                warning.table.as_deref().unwrap_or("<unknown>"),
+                warning.error
+            ),
+            DataCompareBatchWarningKind::ConsistentSnapshotUnavailable => format!(
+                "Consistent read snapshot unavailable; comparison is best-effort and cannot be used to generate sync SQL: {}",
+                warning.error
+            ),
+        })
+        .collect()
+}
+
+fn empty_sync_plan_summary() -> SyncPlanSummary {
+    SyncPlanSummary {
+        insert_count: 0,
+        update_count: 0,
+        delete_count: 0,
+        ddl_count: 0,
+        total_count: 0,
+    }
+}
+
+fn external_dependency_warnings_by_table(
+    plan_tables: &HashSet<String>,
+    dependencies: &[DataCompareTableDependency],
+) -> HashMap<String, Vec<String>> {
+    let mut warnings_by_table = HashMap::new();
+    let mut seen = HashSet::new();
+    for dependency in dependencies {
+        if !plan_tables.contains(&dependency.table)
+            || plan_tables.contains(&dependency.referenced_table)
+        {
+            continue;
+        }
+        let warning = format!(
+            "Table `{}` has a foreign key to `{}`, but `{}` is not included in this data compare. Insert/update SQL is skipped by default to avoid foreign key failures.",
+            dependency.table, dependency.referenced_table, dependency.referenced_table
+        );
+        if seen.insert((dependency.table.clone(), warning.clone())) {
+            warnings_by_table
+                .entry(dependency.table.clone())
+                .or_insert_with(Vec::new)
+                .push(warning);
+        }
+    }
+    warnings_by_table
+}
+
+fn apply_external_dependency_warnings(
+    statements: &mut [SyncStatement],
+    warnings_by_table: &HashMap<String, Vec<String>>,
+) {
+    for statement in statements {
+        let Some(table) = statement.object_name.as_ref() else {
+            continue;
+        };
+        let Some(warnings) = warnings_by_table.get(table) else {
+            continue;
+        };
+        if matches!(
+            statement.kind,
+            SyncStatementKind::Insert | SyncStatementKind::Update
+        ) {
+            statement.selected_by_default = false;
+            statement.warnings.extend(warnings.iter().cloned());
+        }
+    }
+}
+
+fn ordered_sync_statements(
+    plans: Vec<SyncPlan>,
+    dependencies: &[DataCompareTableDependency],
+) -> (Vec<SyncStatement>, Option<Vec<String>>) {
+    let tables = plans
+        .iter()
+        .map(|plan| plan.target_table.clone())
+        .collect::<Vec<_>>();
+    let table_set = tables.iter().cloned().collect::<HashSet<_>>();
+    let mut indegree: HashMap<String, usize> =
+        tables.iter().map(|table| (table.clone(), 0)).collect();
+    let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
+    let mut seen_edges = HashSet::new();
+    for dependency in dependencies {
+        if !table_set.contains(&dependency.table)
+            || !table_set.contains(&dependency.referenced_table)
+            || !seen_edges.insert((
+                dependency.table.clone(),
+                dependency.referenced_table.clone(),
+            ))
+        {
+            continue;
+        }
+        children_by_parent
+            .entry(dependency.referenced_table.clone())
+            .or_default()
+            .push(dependency.table.clone());
+        *indegree.entry(dependency.table.clone()).or_insert(0) += 1;
+    }
+    let mut ready = tables
+        .iter()
+        .filter(|table| indegree.get(*table).copied().unwrap_or(0) == 0)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut table_order = Vec::with_capacity(tables.len());
+    while let Some(table) = ready.first().cloned() {
+        ready.remove(0);
+        table_order.push(table.clone());
+        if let Some(children) = children_by_parent.get(&table) {
+            for child in children {
+                let Some(value) = indegree.get_mut(child) else {
+                    continue;
+                };
+                *value = value.saturating_sub(1);
+                if *value == 0 {
+                    ready.push(child.clone());
+                }
+            }
+        }
+    }
+    let ordered_set = table_order.iter().cloned().collect::<HashSet<_>>();
+    if ordered_set.len() != tables.len() {
+        let mut cycle = tables
+            .iter()
+            .filter(|table| !ordered_set.contains(*table))
+            .cloned()
+            .collect::<Vec<_>>();
+        cycle.sort();
+        return (Vec::new(), Some(cycle));
+    }
+    let table_rank = table_order
+        .iter()
+        .enumerate()
+        .map(|(index, table)| (table.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let fallback_rank = table_order.len();
+    let mut statements = plans
+        .into_iter()
+        .flat_map(|plan| plan.statements.into_iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    statements.sort_by(|(left_index, left), (right_index, right)| {
+        sync_statement_sort_key(left, &table_rank, fallback_rank, *left_index).cmp(
+            &sync_statement_sort_key(right, &table_rank, fallback_rank, *right_index),
+        )
+    });
+    (
+        statements
+            .into_iter()
+            .map(|(_, statement)| statement)
+            .collect(),
+        None,
+    )
+}
+
+fn sync_statement_sort_key(
+    statement: &SyncStatement,
+    table_rank: &HashMap<String, usize>,
+    fallback_rank: usize,
+    original_index: usize,
+) -> (usize, usize, usize) {
+    let group = match &statement.kind {
+        SyncStatementKind::CreateTable => 0,
+        SyncStatementKind::Insert => 1,
+        SyncStatementKind::Update => 2,
+        SyncStatementKind::Delete => 3,
+        _ => 4,
+    };
+    let rank = statement
+        .object_name
+        .as_ref()
+        .and_then(|table| table_rank.get(table))
+        .copied()
+        .unwrap_or(fallback_rank);
+    let rank = if group == 3 && rank < fallback_rank {
+        fallback_rank - rank
+    } else {
+        rank
+    };
+    (group, rank, original_index)
+}
+
 fn build_data_sync_plan_with_dialect(
     result: &DataCompareResult,
     target_database: &str,
@@ -242,14 +641,53 @@ fn build_data_sync_plan_with_dialect(
     dialect: &dyn SyncSqlDialect,
 ) -> SyncPlan {
     let mut statements = Vec::new();
+    let mut warnings = Vec::new();
+    let mut ddl_count = 0usize;
     let plan_id = uuid::Uuid::new_v4().to_string();
-    let target_table_ref =
-        dialect.format_table_reference(target_database, target_schema, &result.target_table);
+    let target_table_ref = compare_table_reference(
+        dialect,
+        target_database,
+        target_schema,
+        &result.target_table,
+    );
+
+    // 目标表不存在时，在 INSERT 前生成 CREATE TABLE（对齐 dbx 的 pre_sync_statements）
+    if let Some(schema) = result.missing_target_schema.as_ref() {
+        let sql =
+            missing_target_create_table_sql(target_database, schema, &target_table_ref, dialect);
+        statements.push(SyncStatement {
+            id: uuid::Uuid::new_v4().to_string(),
+            sql,
+            kind: SyncStatementKind::CreateTable,
+            object_name: Some(result.target_table.clone()),
+            row_key: None,
+            destructive: false,
+            transactional_safe: true,
+            selected_by_default: true,
+            warnings: vec![],
+        });
+        ddl_count += 1;
+        warnings.push(format!(
+            "目标表 `{}` 不存在，已按目标方言在同步计划开头生成 CREATE TABLE 语句",
+            result.target_table
+        ));
+    } else if result.target_table_missing {
+        warnings.push(format!(
+            "目标表 `{}` 不存在，但缺少源表结构信息，无法生成 CREATE TABLE 语句",
+            result.target_table
+        ));
+    }
 
     // 生成 INSERT 语句（新增行）
     for row in &result.added {
         let stmt_id = uuid::Uuid::new_v4().to_string();
-        let sql = generate_insert_sql(&target_table_ref, row, &result.columns, dialect);
+        let sql = generate_insert_sql(
+            &target_table_ref,
+            row,
+            &result.columns,
+            &result.column_types,
+            dialect,
+        );
 
         statements.push(SyncStatement {
             id: stmt_id,
@@ -272,6 +710,8 @@ fn build_data_sync_plan_with_dialect(
             &modified.source_values,
             &modified.key_values,
             &modified.changes,
+            &result.columns,
+            &result.column_types,
             dialect,
         );
 
@@ -299,7 +739,12 @@ fn build_data_sync_plan_with_dialect(
     for row in &result.removed {
         let stmt_id = uuid::Uuid::new_v4().to_string();
         let key_values = extract_key_values_from_row(row, &result.key_columns);
-        let sql = generate_delete_sql(&target_table_ref, &key_values, dialect);
+        let sql = generate_delete_sql(
+            &target_table_ref,
+            &key_values,
+            &result.column_types,
+            dialect,
+        );
 
         statements.push(SyncStatement {
             id: stmt_id,
@@ -323,13 +768,13 @@ fn build_data_sync_plan_with_dialect(
     let insert_count = result.added.len();
     let update_count = result.modified.len();
     let delete_count = result.removed.len();
-    let total_count = insert_count + update_count + delete_count;
+    let total_count = insert_count + update_count + delete_count + ddl_count;
 
     let summary = SyncPlanSummary {
         insert_count,
         update_count,
         delete_count,
-        ddl_count: 0,
+        ddl_count,
         total_count,
     };
 
@@ -345,9 +790,44 @@ fn build_data_sync_plan_with_dialect(
         target_table: result.target_table.clone(),
         statements,
         summary,
-        warnings: vec![],
+        warnings,
         sql_text,
     }
+}
+
+/// 生成缺失目标表的建表语句：只带列和主键，索引/外键由结构同步单独处理。
+fn missing_target_create_table_sql(
+    target_database: &str,
+    schema: &TableSchema,
+    target_table_ref: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let mut design = table_schema_to_design(target_database, schema);
+    design.indexes.clear();
+    design.foreign_keys.clear();
+    dialect.build_create_table_sql_with_reference(&design, target_table_ref)
+}
+
+fn compare_table_reference(
+    dialect: &dyn SyncSqlDialect,
+    database: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> String {
+    let schema = schema.map(str::trim).filter(|schema| !schema.is_empty());
+    if database.trim().is_empty() {
+        return schema.map_or_else(
+            || dialect.quote_identifier(table),
+            |schema| {
+                format!(
+                    "{}.{}",
+                    dialect.quote_identifier(schema),
+                    dialect.quote_identifier(table)
+                )
+            },
+        );
+    }
+    dialect.format_table_reference(database, schema, table)
 }
 
 /// 生成 INSERT SQL
@@ -355,6 +835,7 @@ fn generate_insert_sql(
     table: &str,
     row: &RowData,
     columns: &[String],
+    column_types: &HashMap<String, String>,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
     let cols = columns
@@ -364,7 +845,10 @@ fn generate_insert_sql(
         .join(", ");
     let values = columns
         .iter()
-        .map(|col| format_value(row.get(col).cloned().unwrap_or(CellValue::Null)))
+        .map(|col| {
+            let value = row.get(col).cloned().unwrap_or(CellValue::Null);
+            dialect.format_literal(&value, column_type_for(col, column_types))
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -377,16 +861,18 @@ fn generate_update_sql(
     source_values: &RowData,
     key_values: &std::collections::HashMap<String, CellValue>,
     changes: &std::collections::HashMap<String, (CellValue, CellValue)>,
+    column_order: &[String],
+    column_types: &HashMap<String, String>,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
-    let set_clause = changes
-        .keys()
+    let set_clause = ordered_change_columns(changes, column_order)
+        .into_iter()
         .map(|col| {
             let value = source_values.get(col).cloned().unwrap_or(CellValue::Null);
             format!(
                 "{} = {}",
                 dialect.quote_identifier(col),
-                format_value(value)
+                dialect.format_literal(&value, column_type_for(col, column_types))
             )
         })
         .collect::<Vec<_>>()
@@ -394,7 +880,7 @@ fn generate_update_sql(
 
     let where_clause = sorted_key_values(key_values)
         .into_iter()
-        .map(|(col, val)| format_where_condition(col, val, dialect))
+        .map(|(col, val)| format_where_condition(col, val, column_types, dialect))
         .collect::<Vec<_>>()
         .join(" AND ");
 
@@ -408,11 +894,12 @@ fn generate_update_sql(
 fn generate_delete_sql(
     table: &str,
     key_values: &std::collections::HashMap<String, CellValue>,
+    column_types: &HashMap<String, String>,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
     let where_clause = sorted_key_values(key_values)
         .into_iter()
-        .map(|(col, val)| format_where_condition(col, val, dialect))
+        .map(|(col, val)| format_where_condition(col, val, column_types, dialect))
         .collect::<Vec<_>>()
         .join(" AND ");
 
@@ -440,20 +927,19 @@ fn generate_create_index_sql(
 }
 
 fn generate_drop_index_sql(
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     table_name: &str,
     index_name: &str,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
     let index_name = dialect.quote_identifier(index_name);
-    let db_type = target_db_type.to_lowercase();
-    if db_type.contains("mysql") || db_type.contains("mariadb") {
+    if is_mysql_family(target_db_type) {
         format!("ALTER TABLE {} DROP INDEX {};", table_name, index_name)
-    } else if db_type.contains("mssql") || db_type.contains("sql server") {
+    } else if is_sqlserver_family(target_db_type) {
         format!("DROP INDEX {} ON {};", index_name, table_name)
-    } else if db_type.contains("oracle") {
+    } else if is_oracle_family(target_db_type) {
         format!("DROP INDEX {};", index_name)
-    } else if db_type.contains("clickhouse") {
+    } else if is_clickhouse_family(target_db_type) {
         format!("ALTER TABLE {} DROP INDEX {};", table_name, index_name)
     } else {
         format!("DROP INDEX IF EXISTS {};", index_name)
@@ -483,13 +969,12 @@ fn generate_add_primary_key_sql(
 }
 
 fn generate_drop_primary_key_sql(
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     table_name: &str,
     primary_key_name: &str,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
-    let db_type = target_db_type.to_lowercase();
-    if db_type.contains("mysql") || db_type.contains("mariadb") {
+    if is_mysql_family(target_db_type) {
         format!("ALTER TABLE {} DROP PRIMARY KEY;", table_name)
     } else {
         format!(
@@ -513,8 +998,11 @@ fn generate_add_foreign_key_sql(
         .map(|column| dialect.quote_identifier(column))
         .collect::<Vec<_>>()
         .join(", ");
-    let ref_table =
-        dialect.format_table_reference(target_database, target_schema, &foreign_key.ref_table);
+    let ref_table = dialect.format_table_reference(
+        target_database,
+        foreign_key.ref_schema.as_deref().or(target_schema),
+        &foreign_key.ref_table,
+    );
     let ref_columns = foreign_key
         .ref_columns
         .iter()
@@ -556,19 +1044,85 @@ fn foreign_key_action_sql(value: Option<&str>) -> Option<String> {
     }
 }
 
-fn sync_supports_foreign_keys(target_db_type: &str) -> bool {
-    !target_db_type.to_lowercase().contains("clickhouse")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncDatabaseKind {
+    MySql,
+    PostgreSql,
+    SqlServer,
+    Oracle,
+    ClickHouse,
+    Sqlite,
+    DuckDb,
+    Other,
+}
+
+fn sync_database_kind(database_type: &DatabaseType) -> SyncDatabaseKind {
+    match database_type {
+        DatabaseType::MySQL => SyncDatabaseKind::MySql,
+        DatabaseType::PostgreSQL => SyncDatabaseKind::PostgreSql,
+        DatabaseType::MSSQL => SyncDatabaseKind::SqlServer,
+        DatabaseType::Oracle => SyncDatabaseKind::Oracle,
+        DatabaseType::ClickHouse => SyncDatabaseKind::ClickHouse,
+        DatabaseType::SQLite => SyncDatabaseKind::Sqlite,
+        DatabaseType::DuckDB => SyncDatabaseKind::DuckDb,
+        DatabaseType::External { driver_id } => match driver_id.to_ascii_lowercase().as_str() {
+            "mysql" | "mariadb" | "oceanbase" => SyncDatabaseKind::MySql,
+            "postgres" | "postgresql" | "kingbase" | "opengauss" => SyncDatabaseKind::PostgreSql,
+            "mssql" | "sqlserver" | "sql server" => SyncDatabaseKind::SqlServer,
+            "oracle" | "dm" | "oracle-go" => SyncDatabaseKind::Oracle,
+            "clickhouse" => SyncDatabaseKind::ClickHouse,
+            "sqlite" => SyncDatabaseKind::Sqlite,
+            "duckdb" => SyncDatabaseKind::DuckDb,
+            _ => SyncDatabaseKind::Other,
+        },
+    }
+}
+
+fn is_mysql_family(database_type: &DatabaseType) -> bool {
+    matches!(sync_database_kind(database_type), SyncDatabaseKind::MySql)
+}
+
+fn is_postgres_family(database_type: &DatabaseType) -> bool {
+    matches!(
+        sync_database_kind(database_type),
+        SyncDatabaseKind::PostgreSql
+    )
+}
+
+fn is_sqlserver_family(database_type: &DatabaseType) -> bool {
+    matches!(
+        sync_database_kind(database_type),
+        SyncDatabaseKind::SqlServer
+    )
+}
+
+fn is_oracle_family(database_type: &DatabaseType) -> bool {
+    matches!(sync_database_kind(database_type), SyncDatabaseKind::Oracle)
+}
+
+fn is_clickhouse_family(database_type: &DatabaseType) -> bool {
+    matches!(
+        sync_database_kind(database_type),
+        SyncDatabaseKind::ClickHouse
+    )
+}
+
+fn is_sqlite_family(database_type: &DatabaseType) -> bool {
+    matches!(sync_database_kind(database_type), SyncDatabaseKind::Sqlite)
+}
+
+fn sync_supports_foreign_keys(target_db_type: &DatabaseType) -> bool {
+    !is_clickhouse_family(target_db_type)
 }
 
 fn generate_drop_foreign_key_sql(
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     table_name: &str,
     foreign_key_name: &str,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
     let foreign_key_name = dialect.quote_identifier(foreign_key_name);
-    let db_type = target_db_type.to_lowercase();
-    if db_type.contains("mysql") || db_type.contains("mariadb") {
+    if is_mysql_family(target_db_type) {
         format!(
             "ALTER TABLE {} DROP FOREIGN KEY {};",
             table_name, foreign_key_name
@@ -585,9 +1139,9 @@ fn escaped_comment(comment: &str) -> String {
     comment.replace('\'', "''")
 }
 
-fn comment_literal(target_db_type: &str, comment: Option<&str>) -> String {
+fn comment_literal(target_db_type: &DatabaseType, comment: Option<&str>) -> String {
     let comment = comment.unwrap_or_default();
-    if comment.is_empty() && target_db_type.to_lowercase().contains("postgres") {
+    if comment.is_empty() && is_postgres_family(target_db_type) {
         "NULL".to_string()
     } else {
         format!("'{}'", escaped_comment(comment))
@@ -595,7 +1149,7 @@ fn comment_literal(target_db_type: &str, comment: Option<&str>) -> String {
 }
 
 fn raw_table_comment_sql(
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     table_ref: &str,
     table_name: &str,
     original_comment: Option<&str>,
@@ -604,15 +1158,14 @@ fn raw_table_comment_sql(
     if original_comment.unwrap_or_default() == new_comment.unwrap_or_default() {
         return None;
     }
-    let db_type = target_db_type.to_lowercase();
     let new_comment = new_comment.unwrap_or_default();
-    if db_type.contains("mysql") || db_type.contains("mariadb") {
+    if is_mysql_family(target_db_type) {
         Some(format!(
             "ALTER TABLE {} COMMENT='{}';",
             table_ref,
             escaped_comment(new_comment)
         ))
-    } else if db_type.contains("mssql") || db_type.contains("sqlserver") {
+    } else if is_sqlserver_family(target_db_type) {
         Some(mssql_comment_property_sql(
             &["SCHEMA", "dbo", "TABLE", table_name],
             original_comment,
@@ -628,7 +1181,7 @@ fn raw_table_comment_sql(
 }
 
 fn raw_column_comment_sql(
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     table_ref: &str,
     table_name: &str,
     source: &ColumnSchema,
@@ -640,9 +1193,8 @@ fn raw_column_comment_sql(
     if original_comment.unwrap_or_default() == new_comment.unwrap_or_default() {
         return None;
     }
-    let db_type = target_db_type.to_lowercase();
     let new_comment = new_comment.unwrap_or_default();
-    if db_type.contains("mysql") || db_type.contains("mariadb") {
+    if is_mysql_family(target_db_type) {
         let mut column = column_schema_to_definition(source);
         column.comment = new_comment.to_string();
         let mut definition = dialect.build_column_def(&column);
@@ -653,7 +1205,7 @@ fn raw_column_comment_sql(
             "ALTER TABLE {} MODIFY COLUMN {};",
             table_ref, definition
         ))
-    } else if db_type.contains("mssql") || db_type.contains("sqlserver") {
+    } else if is_sqlserver_family(target_db_type) {
         Some(mssql_comment_property_sql(
             &["SCHEMA", "dbo", "TABLE", table_name, "COLUMN", &source.name],
             original_comment,
@@ -709,7 +1261,7 @@ fn raw_column_definition_changed(source: &ColumnSchema, target: &ColumnSchema) -
 fn table_designer_sync_statement(
     table_diff: &super::TableDiff,
     target_database: &str,
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     dialect: &dyn SyncSqlDialect,
     options: SchemaSyncPlanOptions,
 ) -> Option<SyncStatement> {
@@ -752,7 +1304,7 @@ struct SyncStatementSafety {
 
 fn table_designer_statement_safety(
     table_diff: &super::TableDiff,
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
 ) -> SyncStatementSafety {
     let destructive_column_diff = table_diff
         .column_diffs
@@ -768,12 +1320,9 @@ fn table_designer_statement_safety(
     let destructive = destructive_column_diff
         || table_diff.index_diffs.iter().any(|diff| {
             matches!(diff.status, DiffStatus::Removed | DiffStatus::Modified)
-                && diff
-                    .target
-                    .as_ref()
-                    .is_some_and(|index| is_primary_index(index))
+                && diff.target.as_ref().is_some_and(is_primary_index)
         });
-    let rebuilds_sqlite_table = destructive && target_db_type.to_lowercase().contains("sqlite");
+    let rebuilds_sqlite_table = destructive && is_sqlite_family(target_db_type);
     let modified_indexes = table_diff
         .index_diffs
         .iter()
@@ -796,20 +1345,345 @@ fn table_designer_statement_safety(
     }
 }
 
-/// 格式化值为 SQL 字面量
+/// 格式化值为 SQL 字面量（无类型信息，兼容旧测试与 Raw 方言）。
+#[cfg(test)]
 fn format_value(value: CellValue) -> String {
-    match value {
-        CellValue::Null => "NULL".to_string(),
-        CellValue::Bool(b) => if b { "TRUE" } else { "FALSE" }.to_string(),
-        CellValue::Number(n) => n.to_string(),
-        CellValue::String(s) => format!("'{}'", s.replace('\'', "''")),
+    format_value_for_database(&value, None, None)
+}
+
+/// 按目标数据库和列类型格式化 SQL 字面量。
+///
+/// 与 dbx `format_grid_sql_literal` 对齐的核心路径：
+/// - MySQL BIT 列输出裸位值或 `b'...'`
+/// - 数组输出 PostgreSQL `'{...}'` / ClickHouse `[...]`
+/// - MySQL 时间列把 RFC3339 归一化为 `YYYY-MM-DD HH:MM:SS[.ffffff]`
+/// - SQL Server 字符串使用 `N'...'`
+pub(super) fn format_value_for_database(
+    value: &CellValue,
+    data_type: Option<&str>,
+    database_type: Option<DatabaseType>,
+) -> String {
+    if value.is_null() {
+        return "NULL".to_string();
+    }
+    if is_mysql_bit_literal_column(database_type.as_ref(), data_type) {
+        if let Some(value) = value.as_bool() {
+            return if value { "1" } else { "0" }.to_string();
+        }
+        if let Some(number) = value.as_number() {
+            return number.to_string();
+        }
+        if let Some(text) = value.as_str().and_then(format_mysql_bit_literal_text) {
+            return text;
+        }
+    }
+    if let Some(value) = value.as_bool() {
+        return if value { "TRUE" } else { "FALSE" }.to_string();
+    }
+    if let Some(number) = value.as_number() {
+        return number.to_string();
+    }
+    if let Some(array) = value.as_array() {
+        if database_type.as_ref().is_some_and(is_clickhouse_family) {
+            return format_ch_array_sql_literal(array);
+        }
+        return format_pg_array_sql_literal(array);
+    }
+    let text = value
+        .as_str()
+        .map_or_else(|| value.to_string(), ToString::to_string);
+    if text.is_empty() {
+        return if database_type.as_ref().is_some_and(is_sqlserver_family) {
+            "N''".to_string()
+        } else {
+            "''".to_string()
+        };
+    }
+    let literal_text = if is_mysql_datetime_literal_database(database_type.as_ref())
+        && data_type.map(is_temporal_column_type).unwrap_or(true)
+    {
+        format_mysql_temporal_literal_text(&text, data_type)
+    } else {
+        text
+    };
+    let escaped_text = literal_text.replace('\'', "''");
+    let escaped_text = if database_type.as_ref().is_some_and(|database_type| {
+        is_mysql_family(database_type) || is_clickhouse_family(database_type)
+    }) {
+        escaped_text.replace('\\', "\\\\")
+    } else {
+        escaped_text
+    };
+    let escaped = format!("'{escaped_text}'");
+    if database_type.as_ref().is_some_and(is_sqlserver_family) {
+        format!("N{escaped}")
+    } else {
+        escaped
+    }
+}
+
+fn is_mysql_bit_literal_column(
+    database_type: Option<&DatabaseType>,
+    data_type: Option<&str>,
+) -> bool {
+    is_mysql_datetime_literal_database(database_type) && data_type.is_some_and(is_bit_column_type)
+}
+
+fn is_bit_column_type(data_type: &str) -> bool {
+    data_type
+        .to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| token == "bit")
+}
+
+fn format_mysql_bit_literal_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.eq_ignore_ascii_case("true") {
+        return Some("1".to_string());
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return Some("0".to_string());
+    }
+    if !trimmed.is_empty() && trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(if trimmed.len() == 1 {
+            trimmed.to_string()
+        } else if trimmed.chars().all(|ch| matches!(ch, '0' | '1')) {
+            format!("b'{trimmed}'")
+        } else {
+            trimmed.to_string()
+        });
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("b'") && trimmed.ends_with('\'') {
+        let bits = &trimmed[2..trimmed.len() - 1];
+        if !bits.is_empty() && bits.chars().all(|ch| matches!(ch, '0' | '1')) {
+            return Some(format!("b'{bits}'"));
+        }
+    }
+    None
+}
+
+fn is_mysql_datetime_literal_database(database_type: Option<&DatabaseType>) -> bool {
+    database_type.is_some_and(is_mysql_family)
+}
+
+fn is_temporal_column_type(data_type: &str) -> bool {
+    temporal_column_kind(Some(data_type)).is_some()
+}
+
+fn temporal_column_kind(data_type: Option<&str>) -> Option<&'static str> {
+    let normalized = data_type.unwrap_or("").trim().to_ascii_lowercase();
+    let base = normalized
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or("");
+    match base {
+        "date" => Some("date"),
+        "time" => Some("time"),
+        "datetime" | "timestamp" => Some("datetime"),
+        _ => None,
+    }
+}
+
+fn format_mysql_temporal_literal_text(text: &str, data_type: Option<&str>) -> String {
+    let Some(parts) = parse_rfc3339_like_timestamp(text) else {
+        return text.to_string();
+    };
+    match temporal_column_kind(data_type) {
+        Some("date") => parts.date,
+        Some("time") => format!(
+            "{}{}",
+            parts.time,
+            normalize_mysql_fractional_seconds(parts.fraction.as_deref())
+        ),
         _ => format!(
-            "'{}'",
-            serde_json::to_string(&value)
-                .unwrap_or_else(|_| "NULL".to_string())
-                .replace('\'', "''")
+            "{} {}{}",
+            parts.date,
+            parts.time,
+            normalize_mysql_fractional_seconds(parts.fraction.as_deref())
         ),
     }
+}
+
+struct Rfc3339TimestampParts {
+    date: String,
+    time: String,
+    fraction: Option<String>,
+}
+
+fn parse_rfc3339_like_timestamp(text: &str) -> Option<Rfc3339TimestampParts> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 20 || bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
+        return None;
+    }
+    let separator = *bytes.get(10)?;
+    if separator != b'T' && separator != b' ' {
+        return None;
+    }
+    if bytes.get(13) != Some(&b':') || bytes.get(16) != Some(&b':') {
+        return None;
+    }
+    let date = text.get(0..10)?.to_string();
+    let time = text.get(11..19)?.to_string();
+    let rest = text.get(19..)?;
+    let (fraction, zone) = if let Some(rest) = rest.strip_prefix('.') {
+        let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
+        if digit_count == 0 || digit_count > 9 {
+            return None;
+        }
+        (
+            Some(format!(".{}", &rest[..digit_count])),
+            rest.get(digit_count..)?,
+        )
+    } else {
+        (None, rest)
+    };
+    if zone == "Z" || zone == "z" || is_timezone_offset(zone) {
+        Some(Rfc3339TimestampParts {
+            date,
+            time,
+            fraction,
+        })
+    } else {
+        None
+    }
+}
+
+fn is_timezone_offset(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 6
+        && matches!(bytes[0], b'+' | b'-')
+        && bytes[3] == b':'
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[4].is_ascii_digit()
+        && bytes[5].is_ascii_digit()
+}
+
+fn normalize_mysql_fractional_seconds(fraction: Option<&str>) -> String {
+    match fraction {
+        Some(fraction) if fraction.len() > 7 => fraction[..7].to_string(),
+        Some(fraction) => fraction.to_string(),
+        None => String::new(),
+    }
+}
+
+fn format_pg_array_sql_literal(array: &[CellValue]) -> String {
+    if array.is_empty() {
+        return "'{}'".to_string();
+    }
+    let elements = array
+        .iter()
+        .map(format_pg_array_element)
+        .collect::<Vec<_>>();
+    let inner = format!("{{{}}}", elements.join(","));
+    format!("'{}'", inner.replace('\\', "\\\\").replace('\'', "''"))
+}
+
+fn format_pg_array_element(value: &CellValue) -> String {
+    match value {
+        CellValue::Null => "NULL".to_string(),
+        CellValue::Array(array) => {
+            if array.is_empty() {
+                return "{}".to_string();
+            }
+            let elements = array
+                .iter()
+                .map(format_pg_array_element)
+                .collect::<Vec<_>>();
+            format!("{{{}}}", elements.join(","))
+        }
+        CellValue::String(text) => {
+            format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+        CellValue::Number(number) => number.to_string(),
+        CellValue::Bool(value) => {
+            if *value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        CellValue::Object(object) => {
+            let json = serde_json::to_string(object).unwrap_or_default();
+            format!("\"{}\"", json.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+    }
+}
+
+fn format_ch_array_sql_literal(array: &[CellValue]) -> String {
+    if array.is_empty() {
+        return "[]".to_string();
+    }
+    let elements = array
+        .iter()
+        .map(format_ch_array_element)
+        .collect::<Vec<_>>();
+    format!("[{}]", elements.join(","))
+}
+
+fn format_ch_array_element(value: &CellValue) -> String {
+    match value {
+        CellValue::Null => "NULL".to_string(),
+        CellValue::Array(array) => {
+            if array.is_empty() {
+                return "[]".to_string();
+            }
+            let elements = array
+                .iter()
+                .map(format_ch_array_element)
+                .collect::<Vec<_>>();
+            format!("[{}]", elements.join(","))
+        }
+        CellValue::String(text) => {
+            format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+        }
+        CellValue::Number(number) => number.to_string(),
+        CellValue::Bool(value) => {
+            if *value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        CellValue::Object(object) => {
+            let json = serde_json::to_string(object).unwrap_or_default();
+            format!("'{}'", json.replace('\\', "\\\\").replace('\'', "''"))
+        }
+    }
+}
+
+fn column_type_for<'a>(column: &str, column_types: &'a HashMap<String, String>) -> Option<&'a str> {
+    if let Some(data_type) = column_types.get(column) {
+        return Some(data_type);
+    }
+    column_types
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(column))
+        .map(|(_, data_type)| data_type.as_str())
+}
+
+fn ordered_change_columns<'a>(
+    changes: &'a HashMap<String, (CellValue, CellValue)>,
+    column_order: &[String],
+) -> Vec<&'a String> {
+    let order = column_order
+        .iter()
+        .enumerate()
+        .map(|(index, column)| (column.to_ascii_lowercase(), index))
+        .collect::<HashMap<_, _>>();
+    let mut columns = changes.keys().collect::<Vec<_>>();
+    columns.sort_by(|left, right| {
+        let left_order = order.get(&left.to_ascii_lowercase());
+        let right_order = order.get(&right.to_ascii_lowercase());
+        match (left_order, right_order) {
+            (Some(left), Some(right)) => left.cmp(right),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left.cmp(right),
+        }
+    });
+    columns
 }
 
 fn sorted_key_values(
@@ -820,12 +1694,21 @@ fn sorted_key_values(
     values
 }
 
-fn format_where_condition(column: &str, value: &CellValue, dialect: &dyn SyncSqlDialect) -> String {
-    let column = dialect.quote_identifier(column);
+fn format_where_condition(
+    column: &str,
+    value: &CellValue,
+    column_types: &HashMap<String, String>,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let quoted_column = dialect.quote_identifier(column);
     if value.is_null() {
-        format!("{column} IS NULL")
+        format!("{quoted_column} IS NULL")
     } else {
-        format!("{} = {}", column, format_value(value.clone()))
+        format!(
+            "{} = {}",
+            quoted_column,
+            dialect.format_literal(value, column_type_for(column, column_types))
+        )
     }
 }
 
@@ -882,7 +1765,7 @@ pub fn build_schema_sync_plan_with_plugin_options(
     plugin: &dyn DatabasePlugin,
     options: SchemaSyncPlanOptions,
 ) -> SyncPlan {
-    let target_db_type = format!("{:?}", plugin.name()).to_lowercase();
+    let target_db_type = plugin.name();
     build_schema_sync_plan_with_dialect(
         result,
         target_database,
@@ -897,25 +1780,57 @@ fn build_schema_sync_plan_with_dialect(
     result: &SchemaCompareResult,
     target_database: &str,
     target_schema: Option<&str>,
-    target_db_type: &str,
+    target_db_type: &DatabaseType,
     dialect: &dyn SyncSqlDialect,
     options: SchemaSyncPlanOptions,
 ) -> SyncPlan {
+    if result.has_failed_tables() {
+        return blocked_schema_sync_plan(result);
+    }
+
     let mut foreign_key_drops = Vec::new();
     let mut statements = Vec::new();
     let mut deferred_foreign_key_adds = Vec::new();
+    let mut warnings = Vec::new();
     let plan_id = uuid::Uuid::new_v4().to_string();
 
+    if !result.routine_diffs.is_empty() {
+        warnings.push(format!(
+            "Skipped {} function/procedure changes: routine synchronization is not implemented.",
+            result.routine_diffs.len()
+        ));
+    }
+    if !result.trigger_diffs.is_empty() {
+        warnings.push(format!(
+            "Skipped {} trigger changes: trigger synchronization is not implemented.",
+            result.trigger_diffs.len()
+        ));
+    }
+
     for table_diff in &result.table_diffs {
+        if table_diff_involves_view(table_diff) {
+            warnings.push(format!(
+                "Skipped view `{}`: view synchronization is not implemented.",
+                table_diff.name
+            ));
+            continue;
+        }
+
         match table_diff.status {
             DiffStatus::Added => {
                 if let Some(source_table) = &table_diff.source {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
                     let mut design = table_schema_to_design(target_database, source_table);
                     design.foreign_keys.clear();
+                    let table_ref = compare_table_reference(
+                        dialect,
+                        target_database,
+                        target_schema,
+                        &source_table.name,
+                    );
                     statements.push(SyncStatement {
                         id: stmt_id,
-                        sql: dialect.build_create_table_sql(&design),
+                        sql: dialect.build_create_table_sql_with_reference(&design, &table_ref),
                         kind: SyncStatementKind::CreateTable,
                         object_name: Some(table_diff.name.clone()),
                         row_key: None,
@@ -1169,9 +2084,7 @@ fn build_schema_sync_plan_with_dialect(
                                         }
                                         continue;
                                     }
-                                    let sql = if target_db_type == "mysql"
-                                        || target_db_type == "mariadb"
-                                    {
+                                    let sql = if is_mysql_family(target_db_type) {
                                         let column = column_schema_to_definition(src);
                                         format!(
                                             "ALTER TABLE {} MODIFY COLUMN {};",
@@ -1499,9 +2412,43 @@ fn build_schema_sync_plan_with_dialect(
             ddl_count,
             total_count: ddl_count,
         },
-        warnings: vec![],
+        warnings,
         sql_text,
     }
+}
+
+pub(super) fn blocked_schema_sync_plan(result: &SchemaCompareResult) -> SyncPlan {
+    let warnings = std::iter::once(
+        "Schema compare result is incomplete; sync SQL generation is disabled.".to_string(),
+    )
+    .chain(result.table_failures.iter().map(|failure| {
+        format!(
+            "{:?} table `{}` failed to compare and was excluded: {}",
+            failure.side, failure.table, failure.error
+        )
+    }))
+    .collect();
+
+    SyncPlan {
+        id: uuid::Uuid::new_v4().to_string(),
+        target_table: String::new(),
+        statements: vec![],
+        summary: empty_sync_plan_summary(),
+        warnings,
+        sql_text: String::new(),
+    }
+}
+
+fn table_diff_involves_view(table_diff: &super::TableDiff) -> bool {
+    table_diff.object_type == SchemaObjectType::View
+        || table_diff
+            .source
+            .as_ref()
+            .is_some_and(|table| table.object_type == SchemaObjectType::View)
+        || table_diff
+            .target
+            .as_ref()
+            .is_some_and(|table| table.object_type == SchemaObjectType::View)
 }
 
 fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
@@ -1543,6 +2490,7 @@ fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
             name: foreign_key.name.clone(),
             columns: foreign_key.columns.clone(),
             ref_table: foreign_key.ref_table.clone(),
+            ref_schema: foreign_key.ref_schema.clone(),
             ref_columns: foreign_key.ref_columns.clone(),
             on_delete: foreign_key.on_delete.clone().unwrap_or_default(),
             on_update: foreign_key.on_update.clone().unwrap_or_default(),
@@ -1694,6 +2642,22 @@ mod tests {
             .collect()
     }
 
+    fn data_result_with_insert_and_delete(
+        table: &str,
+        insert_id: i64,
+        delete_id: i64,
+    ) -> DataCompareResult {
+        DataCompareResult {
+            source_table: table.to_string(),
+            target_table: table.to_string(),
+            key_columns: vec!["id".to_string()],
+            columns: vec!["id".to_string()],
+            added: vec![create_row(&[("id", json!(insert_id))])],
+            removed: vec![create_row(&[("id", json!(delete_id))])],
+            ..Default::default()
+        }
+    }
+
     fn postgres_schema_plan(result: &SchemaCompareResult) -> SyncPlan {
         let plugin = crate::postgresql::PostgresPlugin::new();
         build_schema_sync_plan_with_plugin(result, "", None, &plugin)
@@ -1721,8 +2685,7 @@ mod tests {
                 target_values: create_row(&[("id", json!(1)), ("name", json!("Alicia"))]),
                 changes,
             }],
-            source_truncated: false,
-            target_truncated: false,
+            ..Default::default()
         };
 
         let plan = build_data_sync_plan(&result);
@@ -1755,6 +2718,230 @@ mod tests {
     }
 
     #[test]
+    fn data_sync_batch_plan_orders_parent_before_child_and_deletes_in_reverse() {
+        let result = DataCompareBatchResult {
+            // Deliberately put the child first so dependency ordering, rather
+            // than input order, determines the generated plan.
+            table_results: vec![
+                data_result_with_insert_and_delete("order_items", 11, 12),
+                data_result_with_insert_and_delete("orders", 1, 2),
+            ],
+            table_dependencies: vec![
+                DataCompareTableDependency {
+                    table: "order_items".to_string(),
+                    referenced_table: "orders".to_string(),
+                },
+                // Duplicate metadata rows must not corrupt indegree counts.
+                DataCompareTableDependency {
+                    table: "order_items".to_string(),
+                    referenced_table: "orders".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let plan = build_data_sync_batch_plan(&result);
+        let operations = plan
+            .statements
+            .iter()
+            .map(|statement| {
+                (
+                    statement_kind_code_for_test(&statement.kind),
+                    statement.object_name.as_deref().unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            operations,
+            vec![
+                ("insert", "orders"),
+                ("insert", "order_items"),
+                ("delete", "order_items"),
+                ("delete", "orders"),
+            ]
+        );
+        assert_eq!(plan.summary.insert_count, 2);
+        assert_eq!(plan.summary.delete_count, 2);
+        assert_eq!(plan.summary.total_count, 4);
+    }
+
+    #[test]
+    fn data_sync_batch_plan_marks_external_fk_writes_unselected() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "order_items".to_string(),
+                target_table: "order_items".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![create_row(&[("id", json!(1))])],
+                ..Default::default()
+            }],
+            table_dependencies: vec![DataCompareTableDependency {
+                table: "order_items".to_string(),
+                referenced_table: "orders".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let plan = build_data_sync_batch_plan(&result);
+        let insert = plan
+            .statements
+            .iter()
+            .find(|statement| matches!(statement.kind, SyncStatementKind::Insert))
+            .unwrap();
+
+        assert!(!insert.selected_by_default);
+        assert!(
+            insert
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("not included"))
+        );
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("not included"))
+        );
+    }
+
+    #[test]
+    fn data_sync_batch_plan_blocks_foreign_key_dependency_cycles() {
+        let result = DataCompareBatchResult {
+            table_results: vec![
+                data_result_with_insert_and_delete("a", 1, 0),
+                data_result_with_insert_and_delete("b", 2, 0),
+            ],
+            table_dependencies: vec![
+                DataCompareTableDependency {
+                    table: "a".to_string(),
+                    referenced_table: "b".to_string(),
+                },
+                DataCompareTableDependency {
+                    table: "b".to_string(),
+                    referenced_table: "a".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let plan = build_data_sync_batch_plan(&result);
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("dependency cycle"))
+        );
+    }
+
+    #[test]
+    fn data_sync_batch_plan_keeps_successful_tables_when_another_table_failed() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![create_row(&[("id", json!(1))])],
+                ..Default::default()
+            }],
+            table_failures: vec![super::super::DataCompareTableFailure {
+                table: "audit_log".to_string(),
+                error: "permission denied".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let plan = build_data_sync_batch_plan(&result);
+
+        assert_eq!(plan.summary.insert_count, 1);
+        assert_eq!(plan.statements.len(), 1);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("audit_log")
+                    && warning.contains("permission denied"))
+        );
+    }
+
+    #[test]
+    fn data_sync_batch_plan_blocks_sql_when_dependency_metadata_is_incomplete() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![create_row(&[("id", json!(1))])],
+                ..Default::default()
+            }],
+            batch_warnings: vec![super::super::DataCompareBatchWarning {
+                table: None,
+                kind: DataCompareBatchWarningKind::TargetTableMetadataUnavailable,
+                error: "metadata timeout".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let plan = build_data_sync_batch_plan(&result);
+
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("metadata timeout"))
+        );
+    }
+
+    #[test]
+    fn data_sync_batch_plan_blocks_sql_without_a_consistent_snapshot() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![create_row(&[("id", json!(1))])],
+                ..Default::default()
+            }],
+            batch_warnings: vec![super::super::DataCompareBatchWarning {
+                table: None,
+                kind: DataCompareBatchWarningKind::ConsistentSnapshotUnavailable,
+                error: "external driver has no snapshot contract".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let plan = build_data_sync_batch_plan(&result);
+
+        assert!(result.has_inconsistent_snapshot_risk());
+        assert!(result.is_sync_sql_blocked());
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(plan.warnings.iter().any(|warning| {
+            warning.contains("consistent read snapshot")
+                || warning.contains("Consistent read snapshot")
+        }));
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("external driver has no snapshot contract"))
+        );
+    }
+
+    fn statement_kind_code_for_test(kind: &SyncStatementKind) -> &'static str {
+        match kind {
+            SyncStatementKind::Insert => "insert",
+            SyncStatementKind::Delete => "delete",
+            _ => "other",
+        }
+    }
+
+    #[test]
     fn test_format_value_handles_sql_injection() {
         let value = CellValue::String("'; DROP TABLE users; --".to_string());
         let formatted = format_value(value);
@@ -1763,12 +2950,261 @@ mod tests {
     }
 
     #[test]
+    fn test_data_sync_plan_prepends_create_table_for_missing_target() {
+        use super::super::{IndexSchema, TableSchema};
+
+        let schema = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "int".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                    ..Default::default()
+                },
+                ColumnSchema {
+                    name: "name".to_string(),
+                    data_type: "text".to_string(),
+                    nullable: true,
+                    default_value: None,
+                    comment: None,
+                    ..Default::default()
+                },
+            ],
+            indexes: vec![IndexSchema {
+                name: "PRIMARY".to_string(),
+                columns: vec!["id".to_string()],
+                unique: true,
+            }],
+            foreign_keys: vec![],
+            comment: None,
+            ..Default::default()
+        };
+        let result = DataCompareResult {
+            source_table: "users".to_string(),
+            target_table: "users".to_string(),
+            key_columns: vec!["id".to_string()],
+            columns: vec!["id".to_string(), "name".to_string()],
+            added: vec![create_row(&[("id", json!(1)), ("name", json!("Ada"))])],
+            removed: vec![],
+            modified: vec![],
+            target_table_missing: true,
+            missing_target_schema: Some(schema),
+            ..Default::default()
+        };
+        let plugin = crate::postgresql::PostgresPlugin::new();
+
+        let plan = build_data_sync_plan_with_plugin(&result, "app", Some("public"), &plugin);
+
+        assert_eq!(plan.summary.ddl_count, 1);
+        assert_eq!(plan.summary.total_count, 2);
+        assert!(
+            matches!(
+                plan.statements.first().map(|statement| &statement.kind),
+                Some(SyncStatementKind::CreateTable)
+            ),
+            "missing-target 同步计划的第一条语句必须是 CREATE TABLE"
+        );
+        let create_table = plan.statements.first().unwrap();
+        assert!(
+            create_table
+                .sql
+                .starts_with("CREATE TABLE \"public\".\"users\""),
+            "missing-target CREATE TABLE must use the same qualified target reference as DML: {}",
+            create_table.sql
+        );
+        assert!(create_table.selected_by_default);
+        assert!(!create_table.destructive);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("CREATE TABLE"))
+        );
+        assert!(plan.sql_text.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn test_format_value_for_database_is_type_and_dialect_aware() {
+        // MySQL BIT 列不能写成带引号的字符串
+        assert_eq!(
+            format_value_for_database(&json!(true), Some("bit(1)"), Some(DatabaseType::MySQL)),
+            "1"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!("10101010"),
+                Some("bit(8)"),
+                Some(DatabaseType::MySQL)
+            ),
+            "b'10101010'"
+        );
+        assert_eq!(
+            format_value_for_database(&json!("0"), Some("bit(1)"), Some(DatabaseType::PostgreSQL)),
+            "'0'"
+        );
+
+        // PostgreSQL / ClickHouse 数组
+        assert_eq!(
+            format_value_for_database(
+                &json!([1, "a"]),
+                Some("integer[]"),
+                Some(DatabaseType::PostgreSQL)
+            ),
+            "'{1,\"a\"}'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!([1, "a"]),
+                Some("Array(Int64)"),
+                Some(DatabaseType::ClickHouse)
+            ),
+            "[1,'a']"
+        );
+
+        // MySQL 时间列把 RFC3339 归一化；SQL Server 使用 N 前缀并转义单引号
+        assert_eq!(
+            format_value_for_database(
+                &json!("2026-05-12T00:00:00Z"),
+                Some("datetime"),
+                Some(DatabaseType::MySQL)
+            ),
+            "'2026-05-12 00:00:00'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!("O'Brien"),
+                Some("nvarchar(64)"),
+                Some(DatabaseType::MSSQL)
+            ),
+            "N'O''Brien'"
+        );
+        assert_eq!(
+            format_value_for_database(&CellValue::Null, None, None),
+            "NULL"
+        );
+        assert_eq!(
+            format_value_for_database(&json!(r"a\b"), None, Some(DatabaseType::PostgreSQL)),
+            r"'a\b'"
+        );
+        assert_eq!(
+            format_value_for_database(&json!(r"a\b"), None, Some(DatabaseType::SQLite)),
+            r"'a\b'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!(r"a\b"),
+                Some("nvarchar(64)"),
+                Some(DatabaseType::MSSQL)
+            ),
+            r"N'a\b'"
+        );
+        assert_eq!(
+            format_value_for_database(&json!(r"a\b"), None, Some(DatabaseType::Oracle)),
+            r"'a\b'"
+        );
+        assert_eq!(
+            format_value_for_database(&json!(r"a\b"), None, Some(DatabaseType::MySQL)),
+            r"'a\\b'"
+        );
+        assert_eq!(
+            format_value_for_database(&json!(r"a\b"), None, Some(DatabaseType::ClickHouse)),
+            r"'a\\b'"
+        );
+        assert_eq!(
+            format_value_for_database(&json!(r"a\b"), None, None),
+            r"'a\b'"
+        );
+
+        // External drivers must share the same family-specific literal behavior.
+        assert_eq!(
+            format_value_for_database(
+                &json!("10101010"),
+                Some("bit(8)"),
+                Some(DatabaseType::External {
+                    driver_id: "mariadb".to_string(),
+                })
+            ),
+            "b'10101010'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!("2026-05-12T00:00:00Z"),
+                Some("datetime"),
+                Some(DatabaseType::External {
+                    driver_id: "mariadb".to_string(),
+                })
+            ),
+            "'2026-05-12 00:00:00'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!("O'Brien"),
+                Some("nvarchar(64)"),
+                Some(DatabaseType::External {
+                    driver_id: "mssql".to_string(),
+                })
+            ),
+            "N'O''Brien'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!([1, "a"]),
+                Some("Array(Int64)"),
+                Some(DatabaseType::External {
+                    driver_id: "clickhouse".to_string(),
+                })
+            ),
+            "[1,'a']"
+        );
+    }
+
+    #[test]
+    fn test_generate_update_sql_uses_result_column_order() {
+        let source_values = create_row(&[
+            ("id", json!(1)),
+            ("name", json!("Alice")),
+            ("email", json!("alice@example.com")),
+        ]);
+        let mut key_values = HashMap::new();
+        key_values.insert("id".to_string(), json!(1));
+        let mut changes = HashMap::new();
+        changes.insert(
+            "email".to_string(),
+            (json!("new@example.com"), json!("old@example.com")),
+        );
+        changes.insert("name".to_string(), (json!("Alicia"), json!("Alice")));
+        let columns = vec!["id".to_string(), "name".to_string(), "email".to_string()];
+        let column_types = HashMap::new();
+        let dialect = RawSyncSqlDialect;
+
+        let sql = generate_update_sql(
+            "users",
+            &source_values,
+            &key_values,
+            &changes,
+            &columns,
+            &column_types,
+            &dialect,
+        );
+
+        let name_index = sql.find("name =").expect("SET 应包含 name 列");
+        let email_index = sql.find("email =").expect("SET 应包含 email 列");
+        assert!(
+            name_index < email_index,
+            "SET 子句应遵循 result.columns 顺序: {sql}"
+        );
+    }
+
+    #[test]
     fn test_generate_insert_sql() {
         let row = create_row(&[("id", json!(1)), ("name", json!("Alice"))]);
         let columns = vec!["id".to_string(), "name".to_string()];
+        let column_types = HashMap::new();
         let dialect = RawSyncSqlDialect;
 
-        let sql = generate_insert_sql("users", &row, &columns, &dialect);
+        let sql = generate_insert_sql("users", &row, &columns, &column_types, &dialect);
 
         assert!(sql.contains("INSERT INTO users"));
         assert!(sql.contains("id, name"));
@@ -1782,9 +3218,19 @@ mod tests {
         key_values.insert("id".to_string(), json!(1));
         let mut changes = HashMap::new();
         changes.insert("name".to_string(), (json!("Alicia"), json!("Alice")));
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let column_types = HashMap::new();
         let dialect = RawSyncSqlDialect;
 
-        let sql = generate_update_sql("users", &source_values, &key_values, &changes, &dialect);
+        let sql = generate_update_sql(
+            "users",
+            &source_values,
+            &key_values,
+            &changes,
+            &columns,
+            &column_types,
+            &dialect,
+        );
 
         assert!(sql.contains("UPDATE users"));
         assert!(sql.contains("SET"));
@@ -1796,9 +3242,10 @@ mod tests {
     fn test_generate_delete_sql() {
         let mut key_values = HashMap::new();
         key_values.insert("id".to_string(), json!(1));
+        let column_types = HashMap::new();
         let dialect = RawSyncSqlDialect;
 
-        let sql = generate_delete_sql("users", &key_values, &dialect);
+        let sql = generate_delete_sql("users", &key_values, &column_types, &dialect);
 
         assert!(sql.contains("DELETE FROM users"));
         assert!(sql.contains("WHERE id = 1"));
@@ -1825,6 +3272,9 @@ mod tests {
         };
 
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![
                 TableDiff {
                     name: "users".to_string(),
@@ -1844,6 +3294,7 @@ mod tests {
                                 ..Default::default()
                             }),
                             target: None,
+                            changes: vec![],
                         },
                         super::super::ColumnDiff {
                             name: "legacy".to_string(),
@@ -1857,11 +3308,15 @@ mod tests {
                                 comment: None,
                                 ..Default::default()
                             }),
+                            changes: vec![],
                         },
                     ],
                     index_diffs: vec![],
                     foreign_key_diffs: vec![],
                     comment_changed: false,
+                    object_type: Default::default(),
+                    changes: vec![],
+                    table_options_changed: false,
                 },
                 TableDiff {
                     name: "audit".to_string(),
@@ -1879,6 +3334,9 @@ mod tests {
                     index_diffs: vec![],
                     foreign_key_diffs: vec![],
                     comment_changed: false,
+                    object_type: Default::default(),
+                    changes: vec![],
+                    table_options_changed: false,
                 },
             ],
             added_count: 0,
@@ -1938,6 +3396,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Added,
@@ -1947,6 +3408,9 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 1,
             removed_count: 0,
@@ -1986,6 +3450,9 @@ mod tests {
             ..target_column.clone()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2010,10 +3477,14 @@ mod tests {
                     status: DiffStatus::Modified,
                     source: Some(source_column),
                     target: Some(target_column),
+                    changes: vec![],
                 }],
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: true,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2066,6 +3537,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Added,
@@ -2075,22 +3549,78 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 1,
             removed_count: 0,
             modified_count: 0,
         };
 
-        let plan = postgres_schema_plan(&result);
+        let plugin = crate::postgresql::PostgresPlugin::new();
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", Some("audit"), &plugin);
 
         let statement = plan.statements.first().unwrap();
         assert!(matches!(statement.kind, SyncStatementKind::CreateTable));
         assert_eq!(
             statement.sql,
-            "CREATE TABLE \"users\" (\n  \"id\" int NOT NULL,\n  \"name\" varchar(64) DEFAULT 'anonymous'\n);"
+            "CREATE TABLE \"audit\".\"users\" (\n  \"id\" int NOT NULL,\n  \"name\" varchar(64) DEFAULT 'anonymous'\n);"
         );
         assert!(statement.selected_by_default);
         assert!(!statement.destructive);
+    }
+
+    #[test]
+    fn test_mssql_schema_sync_plan_qualifies_added_table_create() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Added,
+                source: Some(TableSchema {
+                    name: "users".to_string(),
+                    columns: vec![ColumnSchema {
+                        name: "id".to_string(),
+                        data_type: "bigint".to_string(),
+                        nullable: false,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+        let plugin = crate::mssql::MsSqlPlugin::new();
+
+        let with_schema =
+            build_schema_sync_plan_with_plugin(&result, "app", Some("sales"), &plugin);
+        assert!(
+            with_schema.statements[0]
+                .sql
+                .starts_with("CREATE TABLE [app].[sales].[users]")
+        );
+
+        let without_schema = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        assert!(
+            without_schema.statements[0]
+                .sql
+                .starts_with("CREATE TABLE [app]..[users]")
+        );
     }
 
     #[test]
@@ -2098,9 +3628,10 @@ mod tests {
         let mut key_values = HashMap::new();
         key_values.insert("tenant_id".to_string(), CellValue::Null);
         key_values.insert("id".to_string(), json!(1));
+        let column_types = HashMap::new();
         let dialect = RawSyncSqlDialect;
 
-        let sql = generate_delete_sql("users", &key_values, &dialect);
+        let sql = generate_delete_sql("users", &key_values, &column_types, &dialect);
 
         assert!(sql.contains("id = 1"));
         assert!(sql.contains("tenant_id IS NULL"));
@@ -2130,8 +3661,7 @@ mod tests {
                     changes
                 },
             }],
-            source_truncated: false,
-            target_truncated: false,
+            ..Default::default()
         };
         let plugin = crate::mysql::MySqlPlugin::new();
 
@@ -2159,6 +3689,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2174,9 +3707,13 @@ mod tests {
                         unique: true,
                     }),
                     target: None,
+                    changes: vec![],
                 }],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2209,6 +3746,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2224,9 +3764,13 @@ mod tests {
                         columns: vec!["email".to_string()],
                         unique: true,
                     }),
+                    changes: vec![],
                 }],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2239,6 +3783,65 @@ mod tests {
         assert_eq!(
             plan.statements.first().unwrap().sql,
             "ALTER TABLE `app`.`users` DROP INDEX `UK89mj1edq3g8hfxqea6pts53lr`;"
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_uses_foreign_key_referenced_schema() {
+        use super::super::{
+            DiffStatus, ForeignKeyDiff, ForeignKeySchema, SchemaCompareResult, TableDiff,
+            TableSchema,
+        };
+
+        let source_fk = ForeignKeySchema {
+            name: "fk_order_items_order".to_string(),
+            columns: vec!["order_id".to_string()],
+            ref_table: "orders".to_string(),
+            ref_schema: Some("audit".to_string()),
+            ref_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        };
+        let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
+            table_diffs: vec![TableDiff {
+                name: "order_items".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(TableSchema {
+                    name: "order_items".to_string(),
+                    foreign_keys: vec![source_fk.clone()],
+                    ..Default::default()
+                }),
+                target: Some(TableSchema {
+                    name: "order_items".to_string(),
+                    ..Default::default()
+                }),
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![ForeignKeyDiff {
+                    name: source_fk.name.clone(),
+                    status: DiffStatus::Added,
+                    changes: vec![],
+                    source: Some(source_fk),
+                    target: None,
+                }],
+                comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", Some("public"), &plugin);
+        assert!(
+            plan.statements
+                .iter()
+                .any(|statement| { statement.sql.contains("REFERENCES `audit`.`orders`") })
         );
     }
 
@@ -2257,6 +3860,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2276,9 +3882,13 @@ mod tests {
                         columns: vec!["legacy_email".to_string()],
                         unique: false,
                     }),
+                    changes: vec![],
                 }],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2322,6 +3932,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2341,9 +3954,13 @@ mod tests {
                         columns: vec!["id".to_string()],
                         unique: true,
                     }),
+                    changes: vec![],
                 }],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2419,6 +4036,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2436,10 +4056,14 @@ mod tests {
                         ..Default::default()
                     }),
                     target: None,
+                    changes: vec![],
                 }],
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2489,6 +4113,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2498,6 +4125,9 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: true,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2549,6 +4179,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2558,6 +4191,9 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2625,6 +4261,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2634,6 +4273,9 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2694,6 +4336,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2711,10 +4356,14 @@ mod tests {
                         comment: None,
                         ..Default::default()
                     }),
+                    changes: vec![],
                 }],
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2785,6 +4434,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "users".to_string(),
                 status: DiffStatus::Modified,
@@ -2802,10 +4454,14 @@ mod tests {
                         ..Default::default()
                     }),
                     target: None,
+                    changes: vec![],
                 }],
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2840,6 +4496,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: None,
                 on_update: None,
@@ -2855,6 +4512,7 @@ mod tests {
                 name: "fk_order_items_legacy".to_string(),
                 columns: vec!["legacy_order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: None,
                 on_update: None,
@@ -2863,6 +4521,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "order_items".to_string(),
                 status: DiffStatus::Modified,
@@ -2878,11 +4539,13 @@ mod tests {
                             name: "fk_order_items_order".to_string(),
                             columns: vec!["order_id".to_string()],
                             ref_table: "orders".to_string(),
+                            ref_schema: None,
                             ref_columns: vec!["id".to_string()],
                             on_delete: None,
                             on_update: None,
                         }),
                         target: None,
+                        changes: vec![],
                     },
                     ForeignKeyDiff {
                         name: "fk_order_items_legacy".to_string(),
@@ -2892,13 +4555,18 @@ mod tests {
                             name: "fk_order_items_legacy".to_string(),
                             columns: vec!["legacy_order_id".to_string()],
                             ref_table: "orders".to_string(),
+                            ref_schema: None,
                             ref_columns: vec!["id".to_string()],
                             on_delete: None,
                             on_update: None,
                         }),
+                        changes: vec![],
                     },
                 ],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 0,
             removed_count: 0,
@@ -2945,6 +4613,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![
                 TableDiff {
                     name: "orders".to_string(),
@@ -2955,6 +4626,9 @@ mod tests {
                     index_diffs: vec![],
                     foreign_key_diffs: vec![],
                     comment_changed: false,
+                    object_type: Default::default(),
+                    changes: vec![],
+                    table_options_changed: false,
                 },
                 TableDiff {
                     name: "order_items".to_string(),
@@ -2971,12 +4645,17 @@ mod tests {
                             name: "fk_order_items_order".to_string(),
                             columns: vec!["order_id".to_string()],
                             ref_table: "orders".to_string(),
+                            ref_schema: None,
                             ref_columns: vec!["id".to_string()],
                             on_delete: None,
                             on_update: None,
                         }),
+                        changes: vec![],
                     }],
                     comment_changed: false,
+                    object_type: Default::default(),
+                    changes: vec![],
+                    table_options_changed: false,
                 },
             ],
             added_count: 0,
@@ -3037,6 +4716,7 @@ mod tests {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: Some("CASCADE".to_string()),
                 on_update: Some("RESTRICT".to_string()),
@@ -3045,6 +4725,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "order_items".to_string(),
                 status: DiffStatus::Added,
@@ -3054,6 +4737,9 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 1,
             removed_count: 0,
@@ -3069,13 +4755,219 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(2, sql.len());
-        assert!(sql[0].starts_with("CREATE TABLE `order_items`"));
+        assert!(sql[0].starts_with("CREATE TABLE `app`.`order_items`"));
         assert!(sql[0].contains("PRIMARY KEY (`id`)"));
         assert!(!sql[0].contains("UNIQUE INDEX `PRIMARY`"));
         assert_eq!(
             sql[1],
             "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
         );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_defers_all_foreign_keys_until_all_added_tables_exist() {
+        use super::super::{
+            ColumnSchema, DiffStatus, ForeignKeySchema, IndexSchema, SchemaCompareResult,
+            TableDiff, TableSchema,
+        };
+
+        let table =
+            |name: &str, reference_column: &str, foreign_key_name: &str, reference_table: &str| {
+                TableSchema {
+                    name: name.to_string(),
+                    columns: vec![
+                        ColumnSchema {
+                            name: "id".to_string(),
+                            data_type: "bigint".to_string(),
+                            nullable: false,
+                            ..Default::default()
+                        },
+                        ColumnSchema {
+                            name: reference_column.to_string(),
+                            data_type: "bigint".to_string(),
+                            nullable: false,
+                            ..Default::default()
+                        },
+                    ],
+                    indexes: vec![IndexSchema {
+                        name: "PRIMARY".to_string(),
+                        columns: vec!["id".to_string()],
+                        unique: true,
+                    }],
+                    foreign_keys: vec![ForeignKeySchema {
+                        name: foreign_key_name.to_string(),
+                        columns: vec![reference_column.to_string()],
+                        ref_table: reference_table.to_string(),
+                        ref_schema: None,
+                        ref_columns: vec!["id".to_string()],
+                        on_delete: None,
+                        on_update: None,
+                    }],
+                    ..Default::default()
+                }
+            };
+        let added_diff = |source: TableSchema| TableDiff {
+            name: source.name.clone(),
+            status: DiffStatus::Added,
+            source: Some(source),
+            target: None,
+            column_diffs: Vec::new(),
+            index_diffs: Vec::new(),
+            foreign_key_diffs: Vec::new(),
+            comment_changed: false,
+            object_type: Default::default(),
+            changes: Vec::new(),
+            table_options_changed: false,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![
+                added_diff(table("alpha", "beta_id", "fk_alpha_beta", "beta")),
+                added_diff(table("beta", "alpha_id", "fk_beta_alpha", "alpha")),
+            ],
+            added_count: 2,
+            ..Default::default()
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let create_positions = plan
+            .statements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, statement)| {
+                matches!(statement.kind, SyncStatementKind::CreateTable).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let foreign_key_positions = plan
+            .statements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, statement)| {
+                statement.sql.contains(" ADD CONSTRAINT ").then_some(index)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(create_positions.len(), 2);
+        assert_eq!(foreign_key_positions.len(), 2);
+        assert!(
+            create_positions.iter().max().unwrap() < foreign_key_positions.iter().min().unwrap()
+        );
+        for position in create_positions {
+            assert!(!plan.statements[position].sql.contains("FOREIGN KEY"));
+        }
+        assert!(plan.sql_text.contains("fk_alpha_beta"));
+        assert!(plan.sql_text.contains("fk_beta_alpha"));
+    }
+
+    #[test]
+    fn schema_sync_plan_skips_routines_and_triggers_without_ddl() {
+        use super::super::{
+            DiffStatus, RoutineDiff, RoutineKind, RoutineSchema, SchemaCompareResult, TriggerDiff,
+            TriggerSchema,
+        };
+
+        let result = SchemaCompareResult {
+            routine_diffs: vec![RoutineDiff {
+                name: "calculate_total".to_string(),
+                kind: RoutineKind::Function,
+                status: DiffStatus::Added,
+                changes: Vec::new(),
+                source: Some(RoutineSchema {
+                    kind: RoutineKind::Function,
+                    name: "calculate_total".to_string(),
+                    schema: Some("public".to_string()),
+                    ..Default::default()
+                }),
+                target: None,
+            }],
+            trigger_diffs: vec![TriggerDiff {
+                name: "audit_orders".to_string(),
+                status: DiffStatus::Added,
+                changes: Vec::new(),
+                source: Some(TriggerSchema {
+                    name: "audit_orders".to_string(),
+                    schema: Some("public".to_string()),
+                    table_name: "orders".to_string(),
+                    event: "INSERT".to_string(),
+                    timing: "AFTER".to_string(),
+                    definition: None,
+                }),
+                target: None,
+            }],
+            added_count: 2,
+            ..Default::default()
+        };
+
+        let plan = postgres_schema_plan(&result);
+
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert_eq!(plan.summary.ddl_count, 0);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("function/procedure"))
+        );
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("trigger"))
+        );
+    }
+
+    #[test]
+    fn test_sync_database_kind_maps_external_driver_aliases() {
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "mariadb".to_string()
+            }),
+            SyncDatabaseKind::MySql
+        );
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "SQL Server".to_string()
+            }),
+            SyncDatabaseKind::SqlServer
+        );
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "oceanbase".to_string()
+            }),
+            SyncDatabaseKind::MySql
+        );
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "kingbase".to_string()
+            }),
+            SyncDatabaseKind::PostgreSql
+        );
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "openGauss".to_string()
+            }),
+            SyncDatabaseKind::PostgreSql
+        );
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "dm".to_string()
+            }),
+            SyncDatabaseKind::Oracle
+        );
+        assert_eq!(
+            sync_database_kind(&DatabaseType::External {
+                driver_id: "oracle-go".to_string()
+            }),
+            SyncDatabaseKind::Oracle
+        );
+        assert!(is_mysql_family(&DatabaseType::External {
+            driver_id: "mysql".to_string()
+        }));
+        assert!(is_sqlserver_family(&DatabaseType::External {
+            driver_id: "mssql".to_string()
+        }));
+        assert!(is_clickhouse_family(&DatabaseType::External {
+            driver_id: "clickhouse".to_string()
+        }));
     }
 
     #[test]
@@ -3109,6 +5001,7 @@ mod tests {
                 name: "fk_events_order".to_string(),
                 columns: vec!["order_id".to_string()],
                 ref_table: "orders".to_string(),
+                ref_schema: None,
                 ref_columns: vec!["id".to_string()],
                 on_delete: Some("CASCADE".to_string()),
                 on_update: None,
@@ -3117,6 +5010,9 @@ mod tests {
             ..Default::default()
         };
         let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
             table_diffs: vec![TableDiff {
                 name: "events".to_string(),
                 status: DiffStatus::Added,
@@ -3126,6 +5022,9 @@ mod tests {
                 index_diffs: vec![],
                 foreign_key_diffs: vec![],
                 comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
             }],
             added_count: 1,
             removed_count: 0,
@@ -3141,8 +5040,137 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(1, sql.len());
-        assert!(sql[0].contains("CREATE TABLE `events`"));
+        assert!(sql[0].contains("CREATE TABLE `analytics`.`events`"));
         assert!(!plan.sql_text.contains("FOREIGN KEY"));
         assert!(!plan.sql_text.contains("fk_events_order"));
+    }
+
+    #[test]
+    fn schema_sync_plan_skips_views_without_table_ddl() {
+        use super::super::{
+            DiffStatus, SchemaCompareResult, SchemaObjectType, TableDiff, TableSchema,
+        };
+
+        let mut added_view = TableSchema {
+            name: "active_users".to_string(),
+            object_type: SchemaObjectType::View,
+            ..Default::default()
+        };
+        let removed_view = TableSchema {
+            name: "legacy_users".to_string(),
+            object_type: SchemaObjectType::View,
+            ..Default::default()
+        };
+        let mut source_table = TableSchema {
+            name: "kind_changed".to_string(),
+            object_type: SchemaObjectType::View,
+            ..Default::default()
+        };
+        let target_table = TableSchema {
+            name: "kind_changed".to_string(),
+            object_type: SchemaObjectType::Table,
+            ..Default::default()
+        };
+        // Keep the fixture explicit: an added view must be recognized from both
+        // the diff and the source model, not merely from a default enum value.
+        added_view.object_type = SchemaObjectType::View;
+        source_table.object_type = SchemaObjectType::View;
+
+        let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
+            table_diffs: vec![
+                TableDiff {
+                    name: "active_users".to_string(),
+                    status: DiffStatus::Added,
+                    object_type: SchemaObjectType::View,
+                    changes: vec![],
+                    source: Some(added_view),
+                    target: None,
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                    table_options_changed: false,
+                },
+                TableDiff {
+                    name: "legacy_users".to_string(),
+                    status: DiffStatus::Removed,
+                    object_type: SchemaObjectType::View,
+                    changes: vec![],
+                    source: None,
+                    target: Some(removed_view),
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                    table_options_changed: false,
+                },
+                TableDiff {
+                    name: "kind_changed".to_string(),
+                    status: DiffStatus::Modified,
+                    object_type: SchemaObjectType::Table,
+                    changes: vec!["object_type: view → table".to_string()],
+                    source: Some(source_table),
+                    target: Some(target_table),
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                    table_options_changed: false,
+                },
+            ],
+            added_count: 1,
+            removed_count: 1,
+            modified_count: 1,
+        };
+
+        let plan = postgres_schema_plan(&result);
+
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert_eq!(plan.summary.ddl_count, 0);
+        assert_eq!(plan.warnings.len(), 3);
+        assert!(
+            plan.warnings
+                .iter()
+                .all(|warning| warning.contains("view synchronization is not implemented"))
+        );
+    }
+
+    #[test]
+    fn schema_sync_plan_is_blocked_when_table_metadata_failed() {
+        use super::super::{CompareSchemaSide, SchemaCompareResult, SchemaCompareTableFailure};
+
+        let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_diffs: vec![],
+            table_failures: vec![SchemaCompareTableFailure {
+                side: CompareSchemaSide::Target,
+                table: "orders".to_string(),
+                error: "permission denied".to_string(),
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 0,
+        };
+
+        let plan = postgres_schema_plan(&result);
+
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("incomplete"))
+        );
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("orders") && warning.contains("permission denied"))
+        );
     }
 }

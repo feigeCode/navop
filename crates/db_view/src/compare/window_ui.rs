@@ -29,6 +29,7 @@ use one_core::storage::{
 use rust_i18n::t;
 use tokio::sync::mpsc;
 
+use crate::compare::sync_statement_picker::SyncExecutionSnapshot;
 use crate::compare::{
     CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, execute_sync_sql,
 };
@@ -421,7 +422,7 @@ pub(super) fn compare_progress_view(progress: &CompareProgress, cx: &App) -> imp
 
 pub(super) fn start_sync_sql_execution<T: 'static>(
     target: Option<CompareTargetScope>,
-    sql: String,
+    snapshot: SyncExecutionSnapshot,
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
     is_executing: Entity<bool>,
@@ -441,7 +442,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
         );
         return;
     };
-    if sql.trim().is_empty() {
+    if snapshot.is_empty() {
         let message = t!("Compare.sync_sql_empty").to_string();
         set_sync_sql_execution_status(&status, message.clone(), cx);
         append_sync_sql_execution_log(
@@ -453,10 +454,10 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
         return;
     }
 
-    if contains_destructive_sync_sql(&sql) {
+    if snapshot.is_destructive() {
         open_destructive_sync_sql_dialog(
             target,
-            sql,
+            snapshot,
             options,
             status,
             is_executing,
@@ -470,7 +471,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
 
     execute_sync_sql_now(
         target,
-        sql,
+        snapshot,
         options,
         status,
         is_executing,
@@ -482,7 +483,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
 
 fn open_destructive_sync_sql_dialog<T: 'static>(
     target: CompareTargetScope,
-    sql: String,
+    snapshot: SyncExecutionSnapshot,
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
     is_executing: Entity<bool>,
@@ -494,7 +495,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
     let view = cx.entity().clone();
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let target = target.clone();
-        let sql = sql.clone();
+        let snapshot = snapshot.clone();
         let options = options;
         let status = status.clone();
         let is_executing = is_executing.clone();
@@ -520,7 +521,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
             )
             .on_ok(move |_, _, cx| {
                 let target = target.clone();
-                let sql = sql.clone();
+                let snapshot = snapshot.clone();
                 let options = options;
                 let status = status.clone();
                 let is_executing = is_executing.clone();
@@ -529,7 +530,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
                 view.update(cx, |_, cx| {
                     execute_sync_sql_now(
                         target,
-                        sql,
+                        snapshot,
                         options,
                         status,
                         is_executing,
@@ -545,7 +546,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
 
 fn execute_sync_sql_now<T: 'static>(
     target: CompareTargetScope,
-    sql: String,
+    snapshot: SyncExecutionSnapshot,
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
     is_executing: Entity<bool>,
@@ -568,6 +569,7 @@ fn execute_sync_sql_now<T: 'static>(
     );
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
+        let sql = snapshot.sql;
         let runtime = SyncSqlExecutionRuntime {
             options,
             status,
@@ -746,48 +748,6 @@ fn sync_sql_statement_count(sql: &str) -> usize {
         .map(str::trim)
         .filter(|statement| !statement.is_empty())
         .count()
-}
-
-fn contains_destructive_sync_sql(sql: &str) -> bool {
-    let normalized_sql = strip_single_quoted_literals(sql)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("--"))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_uppercase();
-    [
-        "DELETE FROM",
-        "TRUNCATE TABLE",
-        "DROP TABLE",
-        "DROP INDEX",
-        "DROP COLUMN",
-        "DROP CONSTRAINT",
-        "DROP DATABASE",
-        "DROP SCHEMA",
-        "DROP VIEW",
-    ]
-    .iter()
-    .any(|keyword| normalized_sql.contains(keyword))
-}
-
-fn strip_single_quoted_literals(sql: &str) -> String {
-    let mut output = String::with_capacity(sql.len());
-    let mut chars = sql.chars().peekable();
-    let mut in_string = false;
-    while let Some(ch) = chars.next() {
-        if ch == '\'' {
-            if in_string && chars.peek() == Some(&'\'') {
-                let _ = chars.next();
-                continue;
-            }
-            in_string = !in_string;
-            output.push(' ');
-        } else if !in_string {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 pub(crate) fn section_title(title: impl IntoElement) -> impl IntoElement {
@@ -1078,6 +1038,7 @@ mod tests {
         start_sync_sql_execution, sync_sql_execution_summary_log_entry,
         sync_sql_progress_error_log_entry,
     };
+    use crate::compare::sync_statement_picker::SyncExecutionSnapshot;
 
     struct ConnectionSelectTestRoot {
         select: Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
@@ -1149,7 +1110,11 @@ mod tests {
         root.update_in(cx, |root, window, cx| {
             start_sync_sql_execution(
                 None,
-                "SELECT 1;".to_string(),
+                SyncExecutionSnapshot {
+                    plan_id: "plan-1".to_string(),
+                    statements: Vec::new(),
+                    sql: "SELECT 1;".to_string(),
+                },
                 CompareSyncExecutionOptions::default(),
                 root.status.clone(),
                 root.is_executing.clone(),
@@ -1206,24 +1171,5 @@ mod tests {
         assert!(entry.is_error);
         assert!(entry.message.contains("session failed"));
         assert!(!entry.message.contains(" 0 "));
-    }
-
-    #[test]
-    fn destructive_sync_sql_detection_catches_dangerous_statements() {
-        assert!(super::contains_destructive_sync_sql(
-            "DELETE FROM users WHERE id = 1;"
-        ));
-        assert!(super::contains_destructive_sync_sql("TRUNCATE TABLE logs;"));
-        assert!(super::contains_destructive_sync_sql("DROP TABLE users;"));
-    }
-
-    #[test]
-    fn destructive_sync_sql_detection_ignores_comments_and_safe_sql() {
-        assert!(!super::contains_destructive_sync_sql(
-            "-- DELETE FROM users;\nINSERT INTO users (id) VALUES (1);"
-        ));
-        assert!(!super::contains_destructive_sync_sql(
-            "UPDATE users SET name = 'drop table note' WHERE id = 1;"
-        ));
     }
 }

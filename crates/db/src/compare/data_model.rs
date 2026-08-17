@@ -11,7 +11,7 @@ pub type RowData = HashMap<String, CellValue>;
 pub type KeyValues = HashMap<String, CellValue>;
 
 /// 数据比较结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DataCompareResult {
     /// 源表名
     pub source_table: String,
@@ -31,6 +31,15 @@ pub struct DataCompareResult {
     pub source_truncated: bool,
     /// 目标端是否被截断（未全量比较）
     pub target_truncated: bool,
+    /// 目标表是否不存在（缺失目标表时，同步计划需前置 CREATE TABLE）
+    #[serde(default)]
+    pub target_table_missing: bool,
+    /// 目标表的列类型映射（列名 -> 数据库类型，用于生成类型感知的字面量）
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub column_types: HashMap<String, String>,
+    /// 缺失目标表时的源表结构（用于按目标方言生成建表语句）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_target_schema: Option<super::TableSchema>,
 }
 
 /// 修改行的详细信息

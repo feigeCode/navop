@@ -9,6 +9,9 @@
 - 识别新增、删除、修改的行
 - 生成 INSERT、UPDATE、DELETE 语句
 - DELETE 默认不选中（P0 安全保护）
+- 目标表缺失时自动前置 CREATE TABLE 语句
+- 按列类型和目标方言格式化 SQL 字面量（MySQL BIT/时间、数组、NULL、SQL Server N 前缀）
+- UPDATE SET 子句按比较列顺序稳定输出
 - SQL 注入防护
 
 ### 结构比较
@@ -17,6 +20,7 @@
 - 生成 DDL 语句
 - DROP TABLE/COLUMN 默认不选中（P0 安全保护）
 - 列类型修改默认不选中
+- 方言分支按 `DatabaseType` 枚举归一化（外部驱动按 `driver_id` 归类）
 
 ## 快速开始
 

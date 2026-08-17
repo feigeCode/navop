@@ -1,440 +1,140 @@
-use db::compare::{
-    ColumnSchema, DataCompareOptions, DataCompareResult, ForeignKeySchema, IndexSchema, RowData,
-    SchemaCompareOptions, SchemaCompareResult, SchemaSyncPlanOptions, SyncPlan, SyncPlanSummary,
-    SyncStatement, TableSchema, build_data_sync_plan, compare_data_rows, compare_schemas,
-};
-use db::{
-    ColumnInfo, FieldType, ForeignKeyDefinition, GlobalDbState, IndexInfo, QueryColumnMeta,
-    QueryResult, TableDataRequest, TableDataResponse, TableInfo, plugin::DatabasePlugin,
+use db::GlobalDbState;
+use db::compare::{CompareSchemaSide, CompareTaskEvent, SchemaCompareResult, SyncPlan};
+pub use db::compare::{
+    DataCompareBatchResult, DataCompareBatchWarning, DataCompareBatchWarningKind,
+    DataCompareLimits, DataCompareParams, DataCompareTableDependency, DataCompareTableFailure,
+    DataCompareTablePair, SchemaCompareParams,
 };
 use gpui::AsyncApp;
 use rust_i18n::t;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::compare::CompareProgress;
 
-const DATA_COMPARE_PAGE_SIZE: usize = 10_000;
-
-/// 数据比较的阶段总数(加载源列、目标列、源数据、目标数据、比较)
-const DATA_COMPARE_TOTAL_STEPS: usize = 5;
+#[cfg(test)]
+use db::TableDataResponse;
+#[cfg(test)]
+use db::compare::{
+    DataCompareResult, RowData, append_table_data_page, build_data_compare_result,
+    build_missing_target_table_result, quoted_order_by_clause, record_data_compare_pair_result,
+    record_dependency_metadata_failure, resolve_key_columns, resolve_key_columns_for_table,
+    strip_internal_compare_columns,
+};
 
 fn report(progress_tx: &mpsc::UnboundedSender<CompareProgress>, progress: CompareProgress) {
     // 接收端可能因取消而提前关闭,忽略发送错误
     let _ = progress_tx.send(progress);
 }
 
-/// 数据比较任务参数
-#[derive(Debug, Clone)]
-pub struct DataCompareParams {
-    pub source_connection_id: String,
-    pub source_database: String,
-    pub source_schema: Option<String>,
-    pub target_connection_id: String,
-    pub target_database: String,
-    pub target_schema: Option<String>,
-    pub table_pairs: Vec<DataCompareTablePair>,
-    pub key_columns: Vec<String>,
-    pub case_sensitive_identifiers: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DataCompareTablePair {
-    pub source_table: String,
-    pub target_table: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct DataCompareBatchResult {
-    pub table_results: Vec<DataCompareResult>,
-    pub table_dependencies: Vec<DataCompareTableDependency>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DataCompareTableDependency {
-    pub table: String,
-    pub referenced_table: String,
-}
-
-impl DataCompareBatchResult {
-    pub fn has_truncated_tables(&self) -> bool {
-        self.table_results
-            .iter()
-            .any(|table| table.source_truncated || table.target_truncated)
-    }
-}
-
-/// 结构比较任务参数
-#[derive(Debug, Clone)]
-pub struct SchemaCompareParams {
-    pub source_connection_id: String,
-    pub source_database: String,
-    pub source_schema: Option<String>,
-    pub source_tables: Vec<String>,
-    pub target_connection_id: String,
-    pub target_database: String,
-    pub target_schema: Option<String>,
-    pub target_tables: Vec<String>,
-    pub case_sensitive_identifiers: bool,
-    pub compare_indexes: bool,
-    pub compare_foreign_keys: bool,
-    pub ignore_comments: bool,
-    pub ignore_auto_increment: bool,
-    pub ignore_charset_collation: bool,
-    pub ignore_table_options: bool,
-    pub compare_column_order: bool,
-}
-
-/// 执行数据比较任务（简化版本）
+/// 执行数据比较任务。
+///
+/// 数据库连接、分页、类型转换和依赖加载全部由 `crates/db` 的核心编排负责；
+/// 这一层只把结构化事件转换成 UI 进度消息。
 pub async fn execute_data_compare(
     params: DataCompareParams,
     db_state: Arc<GlobalDbState>,
     progress_tx: mpsc::UnboundedSender<CompareProgress>,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<DataCompareBatchResult> {
-    let total_steps = params.table_pairs.len() * DATA_COMPARE_TOTAL_STEPS;
-    let mut table_results = Vec::with_capacity(params.table_pairs.len());
-    for (index, pair) in params.table_pairs.iter().cloned().enumerate() {
-        let step_offset = index * DATA_COMPARE_TOTAL_STEPS;
-        table_results.push(
-            execute_data_compare_pair(
-                &params,
-                pair,
-                &db_state,
-                step_offset,
-                total_steps,
-                &progress_tx,
-                cx,
-            )
-            .await?,
-        );
-    }
-    let table_dependencies = load_data_compare_table_dependencies(&params, &db_state, cx).await?;
-    Ok(DataCompareBatchResult {
-        table_results,
-        table_dependencies,
-    })
-}
-
-async fn execute_data_compare_pair(
-    params: &DataCompareParams,
-    pair: DataCompareTablePair,
-    db_state: &Arc<GlobalDbState>,
-    step_offset: usize,
-    total_steps: usize,
-    progress_tx: &mpsc::UnboundedSender<CompareProgress>,
-    cx: &mut AsyncApp,
-) -> anyhow::Result<DataCompareResult> {
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.reading_source_table_schema").to_string(),
-            step_offset + 1,
-            total_steps,
-        ),
-    );
-    let source_columns = load_table_columns(
-        db_state,
-        cx,
-        &params.source_connection_id,
-        &params.source_database,
-        params.source_schema.clone(),
-        &pair.source_table,
-    )
-    .await?;
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.reading_target_table_schema").to_string(),
-            step_offset + 2,
-            total_steps,
-        ),
-    );
-    let target_exists = target_table_exists(
-        db_state,
-        cx,
-        &params.target_connection_id,
-        &params.target_database,
-        params.target_schema.clone(),
-        &pair.target_table,
-        params.case_sensitive_identifiers,
-    )
-    .await?;
-    if !target_exists {
-        return execute_data_compare_missing_target_pair(
-            params,
-            pair,
-            source_columns,
-            db_state,
-            step_offset,
-            total_steps,
-            progress_tx,
-            cx,
-        )
-        .await;
-    }
-    let target_columns = load_table_columns(
-        db_state,
-        cx,
-        &params.target_connection_id,
-        &params.target_database,
-        params.target_schema.clone(),
-        &pair.target_table,
-    )
-    .await?;
-    let key_columns = resolve_key_columns_for_table(
-        &params.key_columns,
-        &source_columns,
-        &target_columns,
-        params.case_sensitive_identifiers,
-        params.table_pairs.len() > 1,
-        &pair,
-    )?;
-    let target_key_columns = matching_target_columns(
-        &key_columns,
-        &target_columns,
-        params.case_sensitive_identifiers,
-    );
-
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.loading_source_table_data").to_string(),
-            step_offset + 3,
-            total_steps,
-        ),
-    );
-    let source_response = load_table_data(
-        db_state,
-        cx,
-        &params.source_connection_id,
-        &params.source_database,
-        params.source_schema.clone(),
-        &pair.source_table,
-        &key_columns,
-    )
-    .await?;
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.loading_target_table_data").to_string(),
-            step_offset + 4,
-            total_steps,
-        ),
-    );
-    let target_response = load_table_data(
-        db_state,
-        cx,
-        &params.target_connection_id,
-        &params.target_database,
-        params.target_schema.clone(),
-        &pair.target_table,
-        &target_key_columns,
-    )
-    .await?;
-
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.comparing_data").to_string(),
-            step_offset + 5,
-            total_steps,
-        ),
-    );
-    build_data_compare_result(
-        pair,
-        key_columns,
-        source_response,
-        target_response,
-        params.case_sensitive_identifiers,
-    )
-}
-
-async fn execute_data_compare_missing_target_pair(
-    params: &DataCompareParams,
-    pair: DataCompareTablePair,
-    source_columns: Vec<ColumnInfo>,
-    db_state: &Arc<GlobalDbState>,
-    step_offset: usize,
-    total_steps: usize,
-    progress_tx: &mpsc::UnboundedSender<CompareProgress>,
-    cx: &mut AsyncApp,
-) -> anyhow::Result<DataCompareResult> {
-    let key_columns = resolve_key_columns_for_table(
-        &params.key_columns,
-        &source_columns,
-        &source_columns,
-        params.case_sensitive_identifiers,
-        params.table_pairs.len() > 1,
-        &pair,
-    )?;
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.loading_source_table_data").to_string(),
-            step_offset + 3,
-            total_steps,
-        ),
-    );
-    let source_response = load_table_data(
-        db_state,
-        cx,
-        &params.source_connection_id,
-        &params.source_database,
-        params.source_schema.clone(),
-        &pair.source_table,
-        &key_columns,
-    )
-    .await?;
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.loading_target_table_data").to_string(),
-            step_offset + 4,
-            total_steps,
-        ),
-    );
-    report(
-        progress_tx,
-        CompareProgress::steps(
-            t!("Compare.comparing_data").to_string(),
-            step_offset + 5,
-            total_steps,
-        ),
-    );
-    build_missing_target_table_result(
-        pair,
-        key_columns,
-        &source_columns,
-        source_response,
-        params.case_sensitive_identifiers,
-    )
-}
-
-async fn load_data_compare_table_dependencies(
-    params: &DataCompareParams,
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-) -> anyhow::Result<Vec<DataCompareTableDependency>> {
-    let existing_target_tables = load_target_table_lookup(params, db_state, cx).await?;
-    let selected_target_tables = target_table_lookup(params);
-    let mut dependencies = Vec::new();
-    let mut seen = HashSet::new();
-    for pair in &params.table_pairs {
-        let table_key = table_lookup_key(&pair.target_table, params.case_sensitive_identifiers);
-        if !existing_target_tables.contains_key(&table_key) {
-            continue;
-        }
-        let foreign_keys =
-            load_target_foreign_keys(params, db_state, cx, &pair.target_table).await?;
-        collect_table_dependencies(
-            &mut dependencies,
-            &mut seen,
-            &selected_target_tables,
-            &pair.target_table,
-            foreign_keys,
-            params.case_sensitive_identifiers,
-        );
-    }
-    Ok(dependencies)
-}
-
-async fn load_target_table_lookup(
-    params: &DataCompareParams,
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-) -> anyhow::Result<HashMap<String, String>> {
-    let tables = db_state
-        .list_tables(
-            cx,
-            params.target_connection_id.clone(),
-            params.target_database.clone(),
-            params.target_schema.clone(),
-        )
-        .await?;
-    Ok(tables
-        .into_iter()
-        .map(|table| {
-            (
-                table_lookup_key(&table.name, params.case_sensitive_identifiers),
-                table.name,
-            )
-        })
-        .collect())
-}
-
-async fn load_target_foreign_keys(
-    params: &DataCompareParams,
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-    table: &str,
-) -> anyhow::Result<Vec<ForeignKeyDefinition>> {
     db_state
-        .list_foreign_keys(
-            cx,
-            params.target_connection_id.clone(),
-            params.target_database.clone(),
-            params.target_schema.clone(),
-            table.to_string(),
-        )
+        .prepare_data_compare_from_tables(cx, params, |event| {
+            report_data_compare_event(&progress_tx, event);
+        })
         .await
 }
 
-fn target_table_lookup(params: &DataCompareParams) -> HashMap<String, String> {
-    params
-        .table_pairs
-        .iter()
-        .map(|pair| {
-            (
-                table_lookup_key(&pair.target_table, params.case_sensitive_identifiers),
-                pair.target_table.clone(),
-            )
-        })
-        .collect()
-}
-
-fn collect_table_dependencies(
-    dependencies: &mut Vec<DataCompareTableDependency>,
-    seen: &mut HashSet<(String, String)>,
-    target_tables: &HashMap<String, String>,
-    table: &str,
-    foreign_keys: Vec<ForeignKeyDefinition>,
-    case_sensitive_identifiers: bool,
+fn report_data_compare_event(
+    progress_tx: &mpsc::UnboundedSender<CompareProgress>,
+    event: CompareTaskEvent,
 ) {
-    for foreign_key in foreign_keys {
-        let parent_key = table_lookup_key(&foreign_key.ref_table, case_sensitive_identifiers);
-        let parent_table = target_tables
-            .get(&parent_key)
-            .cloned()
-            .unwrap_or(foreign_key.ref_table);
-        if table_lookup_key(table, case_sensitive_identifiers) == parent_key {
-            continue;
+    match event {
+        CompareTaskEvent::TableStarted {
+            table_index,
+            total_tables,
+            ..
+        } => report(
+            progress_tx,
+            CompareProgress::steps(
+                t!("Compare.comparing_data").to_string(),
+                table_index,
+                total_tables,
+            ),
+        ),
+        CompareTaskEvent::LoadingMetadata { table } => {
+            let phase = match table {
+                Some(table) => t!("Compare.loading_metadata_for_table", table = table).to_string(),
+                None => t!("Compare.loading_metadata").to_string(),
+            };
+            report(progress_tx, CompareProgress::phase(phase));
         }
-        let edge = (table.to_string(), parent_table);
-        if seen.insert(edge.clone()) {
-            dependencies.push(DataCompareTableDependency {
-                table: edge.0,
-                referenced_table: edge.1,
-            });
+        CompareTaskEvent::LoadingDependencyMetadata { table } => {
+            let phase = match table {
+                Some(table) => t!(
+                    "Compare.loading_dependency_metadata_for_table",
+                    table = table
+                )
+                .to_string(),
+                None => t!("Compare.loading_dependency_metadata").to_string(),
+            };
+            report(progress_tx, CompareProgress::phase(phase));
         }
+        CompareTaskEvent::CountingRows { side, .. } => {
+            let label = match side {
+                db::compare::CompareRowSide::Source => {
+                    t!("Compare.loading_source_table_data").to_string()
+                }
+                db::compare::CompareRowSide::Target => {
+                    t!("Compare.loading_target_table_data").to_string()
+                }
+            };
+            report(progress_tx, CompareProgress::phase(label));
+        }
+        CompareTaskEvent::FetchingRows {
+            side,
+            fetched_rows,
+            total_rows,
+            ..
+        } => {
+            let label = match side {
+                db::compare::CompareRowSide::Source => {
+                    t!("Compare.loading_source_table_data").to_string()
+                }
+                db::compare::CompareRowSide::Target => {
+                    t!("Compare.loading_target_table_data").to_string()
+                }
+            };
+            match total_rows {
+                Some(total) if total > 0 => report(
+                    progress_tx,
+                    CompareProgress::steps(label, fetched_rows, total),
+                ),
+                _ => report(progress_tx, CompareProgress::phase(label)),
+            }
+        }
+        CompareTaskEvent::ComparingRows { .. } => report(
+            progress_tx,
+            CompareProgress::phase(t!("Compare.comparing_data").to_string()),
+        ),
+        CompareTaskEvent::Error { table, message } => {
+            report(
+                progress_tx,
+                compare_error_progress(table.as_deref(), &message),
+            );
+        }
+        CompareTaskEvent::Started { .. }
+        | CompareTaskEvent::TableFinished { .. }
+        | CompareTaskEvent::Finished { .. }
+        | CompareTaskEvent::LoadingTableList { .. }
+        | CompareTaskEvent::LoadingTableSchema { .. }
+        | CompareTaskEvent::ComparingSchema
+        | CompareTaskEvent::PlanningSql { .. } => {}
     }
 }
 
-/// 生成数据同步计划
+/// 执行数据比较任务（简化版本）
 pub fn generate_data_sync_plan(result: &DataCompareBatchResult) -> SyncPlan {
-    if result.has_truncated_tables() {
-        return truncated_data_sync_plan(result);
-    }
-
-    combine_sync_plans(
-        result
-            .table_results
-            .iter()
-            .map(build_data_sync_plan)
-            .collect(),
-        &result.table_dependencies,
-    )
+    db::compare::build_data_sync_batch_plan(result)
 }
 
 pub fn generate_data_sync_plan_for_target(
@@ -444,370 +144,96 @@ pub fn generate_data_sync_plan_for_target(
     target_database: &str,
     target_schema: Option<&str>,
 ) -> anyhow::Result<SyncPlan> {
-    if result.has_truncated_tables() {
-        return Ok(truncated_data_sync_plan(result));
-    }
-
-    let config = db_state
-        .get_config(target_connection_id)
-        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", target_connection_id))?;
-    let plugin = db_state.get_plugin(&config.database_type)?;
-    Ok(combine_sync_plans(
-        result
-            .table_results
-            .iter()
-            .map(|table_result| {
-                db::compare::build_data_sync_plan_with_plugin(
-                    table_result,
-                    target_database,
-                    target_schema,
-                    plugin.as_ref(),
-                )
-            })
-            .collect(),
-        &result.table_dependencies,
-    ))
-}
-
-fn truncated_data_sync_plan(result: &DataCompareBatchResult) -> SyncPlan {
-    let target_table = match result.table_results.as_slice() {
-        [] => String::new(),
-        [table_result] => table_result.target_table.clone(),
-        _ => format!("{} tables", result.table_results.len()),
-    };
-    SyncPlan {
-        id: uuid::Uuid::new_v4().to_string(),
-        target_table,
-        statements: vec![],
-        summary: SyncPlanSummary {
-            insert_count: 0,
-            update_count: 0,
-            delete_count: 0,
-            ddl_count: 0,
-            total_count: 0,
-        },
-        warnings: vec![
-            "Data compare result is truncated; sync SQL generation is disabled.".to_string(),
-        ],
-        sql_text: String::new(),
-    }
-}
-
-fn combine_sync_plans(
-    plans: Vec<SyncPlan>,
-    dependencies: &[DataCompareTableDependency],
-) -> SyncPlan {
-    let plan_tables = plans
-        .iter()
-        .map(|plan| plan.target_table.clone())
-        .collect::<HashSet<_>>();
-    let external_dependency_warnings =
-        external_dependency_warnings_by_table(&plan_tables, dependencies);
-    let target_table = match plans.as_slice() {
-        [] => String::new(),
-        [plan] => plan.target_table.clone(),
-        _ => format!("{} tables", plans.len()),
-    };
-    let summary = plans.iter().fold(
-        SyncPlanSummary {
-            insert_count: 0,
-            update_count: 0,
-            delete_count: 0,
-            ddl_count: 0,
-            total_count: 0,
-        },
-        |mut summary, plan| {
-            summary.insert_count += plan.summary.insert_count;
-            summary.update_count += plan.summary.update_count;
-            summary.delete_count += plan.summary.delete_count;
-            summary.ddl_count += plan.summary.ddl_count;
-            summary.total_count += plan.summary.total_count;
-            summary
-        },
-    );
-    let warnings = plans
-        .iter()
-        .flat_map(|plan| plan.warnings.iter().cloned())
-        .collect::<Vec<_>>();
-    let mut warnings = warnings;
-    warnings.extend(
-        external_dependency_warnings
-            .values()
-            .flat_map(|warnings| warnings.iter().cloned()),
-    );
-    let mut statements = ordered_sync_statements(plans, dependencies);
-    apply_external_dependency_warnings(&mut statements, &external_dependency_warnings);
-    let sql_text = statements
-        .iter()
-        .map(|statement| statement.sql.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    SyncPlan {
-        id: uuid::Uuid::new_v4().to_string(),
-        target_table,
-        statements,
-        summary,
-        warnings,
-        sql_text,
-    }
-}
-
-fn external_dependency_warnings_by_table(
-    plan_tables: &HashSet<String>,
-    dependencies: &[DataCompareTableDependency],
-) -> HashMap<String, Vec<String>> {
-    let mut warnings_by_table: HashMap<String, Vec<String>> = HashMap::new();
-    let mut seen = HashSet::new();
-    for dependency in dependencies {
-        if !plan_tables.contains(&dependency.table)
-            || plan_tables.contains(&dependency.referenced_table)
-        {
-            continue;
-        }
-        let warning = external_dependency_warning(dependency);
-        if seen.insert((dependency.table.clone(), warning.clone())) {
-            warnings_by_table
-                .entry(dependency.table.clone())
-                .or_default()
-                .push(warning);
-        }
-    }
-    warnings_by_table
-}
-
-fn external_dependency_warning(dependency: &DataCompareTableDependency) -> String {
-    format!(
-        "Table `{}` has a foreign key to `{}`, but `{}` is not included in this data compare. Insert/update SQL is skipped by default to avoid foreign key failures.",
-        dependency.table, dependency.referenced_table, dependency.referenced_table
+    db_state.prepare_data_sync_plan_for_target(
+        result,
+        target_connection_id,
+        target_database,
+        target_schema,
     )
 }
 
-fn apply_external_dependency_warnings(
-    statements: &mut [SyncStatement],
-    warnings_by_table: &HashMap<String, Vec<String>>,
-) {
-    for statement in statements {
-        let Some(table) = statement.object_name.as_ref() else {
-            continue;
-        };
-        let Some(warnings) = warnings_by_table.get(table) else {
-            continue;
-        };
-        if matches!(
-            statement.kind,
-            db::compare::SyncStatementKind::Insert | db::compare::SyncStatementKind::Update
-        ) {
-            statement.selected_by_default = false;
-            statement.warnings.extend(warnings.iter().cloned());
-        }
-    }
-}
-
-fn ordered_sync_statements(
-    plans: Vec<SyncPlan>,
-    dependencies: &[DataCompareTableDependency],
-) -> Vec<SyncStatement> {
-    let table_order = dependency_ordered_tables(&plans, dependencies);
-    let table_rank = table_order
-        .iter()
-        .enumerate()
-        .map(|(index, table)| (table.clone(), index))
-        .collect::<HashMap<_, _>>();
-    let mut statements = plans
-        .into_iter()
-        .flat_map(|plan| plan.statements.into_iter())
-        .enumerate()
-        .collect::<Vec<_>>();
-    statements.sort_by(|(left_index, left), (right_index, right)| {
-        sync_statement_sort_key(left, &table_rank, table_order.len(), *left_index).cmp(
-            &sync_statement_sort_key(right, &table_rank, table_order.len(), *right_index),
-        )
-    });
-    statements
-        .into_iter()
-        .map(|(_index, statement)| statement)
-        .collect()
-}
-
-fn sync_statement_sort_key(
-    statement: &SyncStatement,
-    table_rank: &HashMap<String, usize>,
-    fallback_rank: usize,
-    original_index: usize,
-) -> (usize, usize, usize) {
-    let group = sync_statement_group(statement);
-    let rank = statement
-        .object_name
-        .as_ref()
-        .and_then(|table| table_rank.get(table))
-        .copied()
-        .unwrap_or(fallback_rank);
-    let rank = if group == 2 && rank < fallback_rank {
-        fallback_rank - rank
-    } else {
-        rank
-    };
-    (group, rank, original_index)
-}
-
-fn sync_statement_group(statement: &SyncStatement) -> usize {
-    match &statement.kind {
-        db::compare::SyncStatementKind::Insert => 0,
-        db::compare::SyncStatementKind::Update => 1,
-        db::compare::SyncStatementKind::Delete => 2,
-        _ => 3,
-    }
-}
-
-fn dependency_ordered_tables(
-    plans: &[SyncPlan],
-    dependencies: &[DataCompareTableDependency],
-) -> Vec<String> {
-    let tables = plans
-        .iter()
-        .map(|plan| plan.target_table.clone())
-        .collect::<Vec<_>>();
-    let table_set = tables.iter().cloned().collect::<HashSet<_>>();
-    let mut indegree: HashMap<String, usize> =
-        tables.iter().map(|table| (table.clone(), 0)).collect();
-    let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
-
-    for dependency in dependencies {
-        if !table_set.contains(&dependency.table)
-            || !table_set.contains(&dependency.referenced_table)
-        {
-            continue;
-        }
-        children_by_parent
-            .entry(dependency.referenced_table.clone())
-            .or_default()
-            .push(dependency.table.clone());
-        *indegree.entry(dependency.table.clone()).or_insert(0) += 1;
-    }
-
-    topological_table_order(&tables, children_by_parent, indegree)
-}
-
-fn topological_table_order(
-    tables: &[String],
-    children_by_parent: HashMap<String, Vec<String>>,
-    mut indegree: HashMap<String, usize>,
-) -> Vec<String> {
-    let mut ready = tables_with_zero_indegree(tables, &indegree);
-    let mut ordered = Vec::with_capacity(tables.len());
-    while let Some(table) = ready.first().cloned() {
-        ready.remove(0);
-        ordered.push(table.clone());
-        if let Some(children) = children_by_parent.get(&table) {
-            release_children(children, &mut indegree, &mut ready);
-        }
-    }
-    append_unordered_tables(tables, &mut ordered);
-    ordered
-}
-
-fn tables_with_zero_indegree(tables: &[String], indegree: &HashMap<String, usize>) -> Vec<String> {
-    tables
-        .iter()
-        .filter(|table| indegree.get(*table).copied().unwrap_or(0) == 0)
-        .cloned()
-        .collect()
-}
-
-fn release_children(
-    children: &[String],
-    indegree: &mut HashMap<String, usize>,
-    ready: &mut Vec<String>,
-) {
-    for child in children {
-        let Some(value) = indegree.get_mut(child) else {
-            continue;
-        };
-        *value = value.saturating_sub(1);
-        if *value == 0 {
-            ready.push(child.clone());
-        }
-    }
-}
-
-fn append_unordered_tables(tables: &[String], ordered: &mut Vec<String>) {
-    let ordered_set = ordered.iter().cloned().collect::<HashSet<_>>();
-    ordered.extend(
-        tables
-            .iter()
-            .filter(|table| !ordered_set.contains(*table))
-            .cloned(),
-    );
-}
-
-async fn target_table_exists(
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-    connection_id: &str,
-    database: &str,
-    schema: Option<String>,
-    table: &str,
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<bool> {
-    let tables = db_state
-        .list_tables(cx, connection_id.to_string(), database.to_string(), schema)
-        .await?;
-    let expected = table_lookup_key(table, case_sensitive_identifiers);
-    Ok(tables
-        .iter()
-        .any(|candidate| table_lookup_key(&candidate.name, case_sensitive_identifiers) == expected))
-}
-
-/// 执行结构比较任务（简化版本）
 pub async fn execute_schema_compare(
     params: SchemaCompareParams,
     db_state: Arc<GlobalDbState>,
     progress_tx: mpsc::UnboundedSender<CompareProgress>,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<SchemaCompareResult> {
-    let options = SchemaCompareOptions {
-        case_sensitive_identifiers: params.case_sensitive_identifiers,
-        compare_indexes: params.compare_indexes,
-        compare_foreign_keys: params.compare_foreign_keys,
-        ignore_comments: params.ignore_comments,
-        ignore_auto_increment: params.ignore_auto_increment,
-        ignore_charset_collation: params.ignore_charset_collation,
-        ignore_table_options: params.ignore_table_options,
-        ..SchemaCompareOptions::default()
+    db_state
+        .prepare_schema_compare_from_targets(cx, params, |event| {
+            report_schema_compare_event(&progress_tx, event);
+        })
+        .await
+}
+
+fn report_schema_compare_event(
+    progress_tx: &mpsc::UnboundedSender<CompareProgress>,
+    event: CompareTaskEvent,
+) {
+    match event {
+        CompareTaskEvent::LoadingTableList { side } => report(
+            progress_tx,
+            CompareProgress::phase(
+                t!("Compare.loading_table_list", side = schema_side_label(side)).to_string(),
+            ),
+        ),
+        CompareTaskEvent::LoadingTableSchema {
+            side,
+            table_index,
+            total_tables,
+            ..
+        } => report(
+            progress_tx,
+            CompareProgress::steps(
+                t!(
+                    "Compare.reading_table_schema",
+                    side = schema_side_label(side)
+                )
+                .to_string(),
+                table_index,
+                total_tables,
+            ),
+        ),
+        CompareTaskEvent::ComparingSchema => report(
+            progress_tx,
+            CompareProgress::phase(t!("Compare.comparing_schema").to_string()),
+        ),
+        CompareTaskEvent::Error { table, message } => {
+            report(
+                progress_tx,
+                compare_error_progress(table.as_deref(), &message),
+            );
+        }
+        CompareTaskEvent::Started { .. }
+        | CompareTaskEvent::TableStarted { .. }
+        | CompareTaskEvent::LoadingMetadata { .. }
+        | CompareTaskEvent::LoadingDependencyMetadata { .. }
+        | CompareTaskEvent::CountingRows { .. }
+        | CompareTaskEvent::FetchingRows { .. }
+        | CompareTaskEvent::ComparingRows { .. }
+        | CompareTaskEvent::PlanningSql { .. }
+        | CompareTaskEvent::TableFinished { .. }
+        | CompareTaskEvent::Finished { .. } => {}
+    }
+}
+
+fn compare_error_progress(table: Option<&str>, message: &str) -> CompareProgress {
+    let phase = match table {
+        Some(table) if !table.is_empty() => t!(
+            "Compare.table_compare_failed",
+            table = table,
+            error = message
+        )
+        .to_string(),
+        _ => t!("Compare.compare_failed", error = message).to_string(),
     };
-    let source_label = t!("Compare.source").to_string();
-    let target_label = t!("Compare.target").to_string();
-    let source_tables = load_schema_tables(
-        &db_state,
-        cx,
-        params.source_connection_id,
-        params.source_database,
-        params.source_schema,
-        &params.source_tables,
-        params.case_sensitive_identifiers,
-        &progress_tx,
-        &source_label,
-    )
-    .await?;
-    let target_tables = load_schema_tables(
-        &db_state,
-        cx,
-        params.target_connection_id,
-        params.target_database,
-        params.target_schema,
-        &params.target_tables,
-        params.case_sensitive_identifiers,
-        &progress_tx,
-        &target_label,
-    )
-    .await?;
-    report(
-        &progress_tx,
-        CompareProgress::phase(t!("Compare.comparing_schema").to_string()),
-    );
-    let result = compare_schemas(source_tables, target_tables, options)?;
-    Ok(result)
+    CompareProgress::phase(phase)
+}
+
+fn schema_side_label(side: CompareSchemaSide) -> String {
+    match side {
+        CompareSchemaSide::Source => t!("Compare.source").to_string(),
+        CompareSchemaSide::Target => t!("Compare.target").to_string(),
+    }
 }
 
 pub fn generate_schema_sync_plan_for_target(
@@ -818,873 +244,146 @@ pub fn generate_schema_sync_plan_for_target(
     target_schema: Option<&str>,
     compare_column_order: bool,
 ) -> anyhow::Result<SyncPlan> {
-    let config = db_state
-        .get_config(target_connection_id)
-        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", target_connection_id))?;
-    let plugin = db_state.get_plugin(&config.database_type)?;
-    Ok(db::compare::build_schema_sync_plan_with_plugin_options(
+    db_state.prepare_schema_sync_plan_for_target(
         result,
+        target_connection_id,
         target_database,
         target_schema,
-        plugin.as_ref(),
-        SchemaSyncPlanOptions {
-            compare_column_order,
-        },
-    ))
-}
-
-async fn load_table_columns(
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-    connection_id: &str,
-    database: &str,
-    schema: Option<String>,
-    table: &str,
-) -> anyhow::Result<Vec<ColumnInfo>> {
-    db_state
-        .list_columns(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema,
-            table.to_string(),
-        )
-        .await
-}
-
-async fn load_table_data(
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-    connection_id: &str,
-    database: &str,
-    schema: Option<String>,
-    table: &str,
-    key_columns: &[String],
-) -> anyhow::Result<TableDataResponse> {
-    let order_by_clause = order_by_clause_for_connection(db_state, connection_id, key_columns)?;
-    db_state
-        .query_table_data(
-            cx,
-            connection_id.to_string(),
-            table_data_request(
-                database.to_string(),
-                schema,
-                table.to_string(),
-                order_by_clause.as_deref(),
-            ),
-        )
-        .await
-}
-
-fn build_data_compare_result(
-    pair: DataCompareTablePair,
-    key_columns: Vec<String>,
-    source_response: TableDataResponse,
-    target_response: TableDataResponse,
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<DataCompareResult> {
-    validate_unique_query_columns(
-        &source_response.query_result.columns,
-        "source result columns",
-        case_sensitive_identifiers,
-    )?;
-    validate_unique_query_columns(
-        &target_response.query_result.columns,
-        "target result columns",
-        case_sensitive_identifiers,
-    )?;
-    let columns = common_column_mappings(
-        &source_response.query_result.columns,
-        &target_response.query_result.columns,
-        case_sensitive_identifiers,
-    );
-    if columns.is_empty() {
-        anyhow::bail!("No common columns to compare");
-    }
-    let compare_columns = columns
-        .iter()
-        .map(|column| column.source.clone())
-        .collect::<Vec<_>>();
-
-    let mut result = compare_data_rows(
-        rows_from_query_result_with_mappings(
-            &source_response.query_result,
-            &columns
-                .iter()
-                .map(|column| ColumnMapping {
-                    source: column.source.clone(),
-                    target: column.source.clone(),
-                })
-                .collect::<Vec<_>>(),
-            case_sensitive_identifiers,
-        ),
-        rows_from_query_result_with_mappings(
-            &target_response.query_result,
-            &columns,
-            case_sensitive_identifiers,
-        ),
-        DataCompareOptions {
-            source_table: pair.source_table,
-            target_table: pair.target_table,
-            key_columns,
-            columns: compare_columns,
-        },
-    )?;
-    result.source_truncated = source_response.query_result.rows.len() < source_response.total_count;
-    result.target_truncated = target_response.query_result.rows.len() < target_response.total_count;
-    Ok(remap_data_compare_result_to_target_columns(
-        result, &columns,
-    ))
-}
-
-fn build_missing_target_table_result(
-    pair: DataCompareTablePair,
-    key_columns: Vec<String>,
-    source_columns: &[ColumnInfo],
-    source_response: TableDataResponse,
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<DataCompareResult> {
-    build_data_compare_result(
-        pair,
-        key_columns,
-        source_response,
-        empty_target_response_from_columns(source_columns),
-        case_sensitive_identifiers,
+        compare_column_order,
     )
-}
-
-fn empty_target_response_from_columns(columns: &[ColumnInfo]) -> TableDataResponse {
-    TableDataResponse {
-        total_count: 0,
-        page: 1,
-        page_size: DATA_COMPARE_PAGE_SIZE,
-        duration: 0,
-        query_result: QueryResult {
-            sql: String::new(),
-            columns: columns.iter().map(|column| column.name.clone()).collect(),
-            column_meta: columns
-                .iter()
-                .map(|column| QueryColumnMeta::new(&column.name, &column.data_type))
-                .collect(),
-            rows: Vec::new(),
-            binary_cells: Vec::new(),
-            elapsed_ms: 0,
-        },
-    }
-}
-
-async fn load_schema_tables(
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-    connection_id: String,
-    database: String,
-    schema: Option<String>,
-    selected_tables: &[String],
-    case_sensitive_identifiers: bool,
-    progress_tx: &mpsc::UnboundedSender<CompareProgress>,
-    side_label: &str,
-) -> anyhow::Result<Vec<TableSchema>> {
-    report(
-        progress_tx,
-        CompareProgress::phase(
-            t!("Compare.loading_table_list", side = side_label.to_string()).to_string(),
-        ),
-    );
-    let tables = db_state
-        .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
-        .await?;
-    let tables = filter_schema_tables(tables, selected_tables, case_sensitive_identifiers);
-    let total = tables.len();
-    let mut schemas = Vec::with_capacity(total);
-
-    for (index, table) in tables.into_iter().enumerate() {
-        report(
-            progress_tx,
-            CompareProgress::steps(
-                t!(
-                    "Compare.reading_table_schema",
-                    side = side_label.to_string()
-                )
-                .to_string(),
-                index + 1,
-                total,
-            ),
-        );
-        schemas.push(
-            load_single_table_schema(
-                db_state,
-                cx,
-                &connection_id,
-                &database,
-                schema.clone(),
-                table,
-            )
-            .await?,
-        );
-    }
-
-    Ok(schemas)
-}
-
-fn filter_schema_tables(
-    tables: Vec<TableInfo>,
-    selected_tables: &[String],
-    case_sensitive_identifiers: bool,
-) -> Vec<TableInfo> {
-    if selected_tables.is_empty() {
-        return tables;
-    }
-    let selected = selected_tables
-        .iter()
-        .map(|table| identifier_key(table, case_sensitive_identifiers))
-        .collect::<HashSet<_>>();
-    tables
-        .into_iter()
-        .filter(|table| selected.contains(&identifier_key(&table.name, case_sensitive_identifiers)))
-        .collect()
-}
-
-async fn load_single_table_schema(
-    db_state: &Arc<GlobalDbState>,
-    cx: &mut AsyncApp,
-    connection_id: &str,
-    database: &str,
-    schema: Option<String>,
-    table: TableInfo,
-) -> anyhow::Result<TableSchema> {
-    let table_name = table.name.clone();
-    let columns = load_table_columns(
-        db_state,
-        cx,
-        connection_id,
-        database,
-        schema.clone(),
-        &table_name,
-    )
-    .await?;
-    let indexes = db_state
-        .list_indexes(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema.clone(),
-            table_name.clone(),
-        )
-        .await?;
-    let foreign_keys = db_state
-        .list_foreign_keys(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema,
-            table_name,
-        )
-        .await?;
-
-    Ok(table_schema_from_metadata(
-        table,
-        columns,
-        indexes,
-        foreign_keys,
-    ))
-}
-
-fn table_schema_from_metadata(
-    table: TableInfo,
-    columns: Vec<ColumnInfo>,
-    indexes: Vec<IndexInfo>,
-    foreign_keys: Vec<ForeignKeyDefinition>,
-) -> TableSchema {
-    let primary_columns = columns
-        .iter()
-        .filter(|column| column.is_primary_key)
-        .map(|column| column.name.clone())
-        .collect::<Vec<_>>();
-    let mut indexes = indexes
-        .into_iter()
-        .map(|index| IndexSchema {
-            name: index.name,
-            columns: index.columns,
-            unique: index.is_unique,
-        })
-        .collect::<Vec<_>>();
-    if !primary_columns.is_empty()
-        && !indexes
-            .iter()
-            .any(|index| index.name.eq_ignore_ascii_case("PRIMARY"))
-    {
-        indexes.push(IndexSchema {
-            name: "PRIMARY".to_string(),
-            columns: primary_columns,
-            unique: true,
-        });
-    }
-
-    TableSchema {
-        name: table.name,
-        columns: columns
-            .into_iter()
-            .map(|column| ColumnSchema {
-                name: column.name,
-                data_type: column.data_type,
-                nullable: column.is_nullable,
-                default_value: column.default_value,
-                comment: column.comment,
-                charset: column.charset,
-                collation: column.collation,
-            })
-            .collect(),
-        indexes,
-        foreign_keys: foreign_keys
-            .into_iter()
-            .map(|foreign_key| ForeignKeySchema {
-                name: foreign_key.name,
-                columns: foreign_key.columns,
-                ref_table: foreign_key.ref_table,
-                ref_columns: foreign_key.ref_columns,
-                on_delete: non_empty_string(foreign_key.on_delete),
-                on_update: non_empty_string(foreign_key.on_update),
-            })
-            .collect(),
-        comment: table.comment,
-        engine: table.engine,
-        charset: table.charset,
-        collation: table.collation,
-    }
-}
-
-fn non_empty_string(value: String) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
-
-fn resolve_key_columns(
-    requested: &[String],
-    source_columns: &[ColumnInfo],
-    target_columns: &[ColumnInfo],
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<Vec<String>> {
-    validate_unique_column_infos(
-        source_columns,
-        "source table columns",
-        case_sensitive_identifiers,
-    )?;
-    validate_unique_column_infos(
-        target_columns,
-        "target table columns",
-        case_sensitive_identifiers,
-    )?;
-    let source_names = column_map_by_identifier_key(source_columns, case_sensitive_identifiers);
-    let target_names = column_map_by_identifier_key(target_columns, case_sensitive_identifiers);
-
-    if !requested.is_empty() {
-        let mut resolved = Vec::with_capacity(requested.len());
-        for key_column in requested {
-            let key = identifier_key(key_column, case_sensitive_identifiers);
-            let Some(source_name) = source_names.get(&key) else {
-                anyhow::bail!("Key column `{}` does not exist on source table", key_column);
-            };
-            if !target_names.contains_key(&key) {
-                anyhow::bail!("Key column `{}` does not exist on target table", key_column);
-            }
-            resolved.push(source_name.clone());
-        }
-        return Ok(resolved);
-    }
-
-    let target_primary_names = target_columns
-        .iter()
-        .filter(|column| column.is_primary_key)
-        .map(|column| identifier_key(&column.name, case_sensitive_identifiers))
-        .collect::<HashSet<_>>();
-    let key_columns = source_columns
-        .iter()
-        .filter(|column| {
-            column.is_primary_key
-                && target_primary_names
-                    .contains(&identifier_key(&column.name, case_sensitive_identifiers))
-        })
-        .map(|column| column.name.clone())
-        .collect::<Vec<_>>();
-
-    if key_columns.is_empty() {
-        anyhow::bail!("Key columns are required when no common primary key can be inferred");
-    }
-
-    Ok(key_columns)
-}
-
-fn resolve_key_columns_for_table(
-    requested: &[String],
-    source_columns: &[ColumnInfo],
-    target_columns: &[ColumnInfo],
-    case_sensitive_identifiers: bool,
-    allow_inferred_fallback: bool,
-    pair: &DataCompareTablePair,
-) -> anyhow::Result<Vec<String>> {
-    let result = resolve_key_columns(
-        requested,
-        source_columns,
-        target_columns,
-        case_sensitive_identifiers,
-    );
-    match result {
-        Ok(columns) => Ok(columns),
-        Err(error) if allow_inferred_fallback && !requested.is_empty() => resolve_key_columns(
-            &[],
-            source_columns,
-            target_columns,
-            case_sensitive_identifiers,
-        )
-        .map_err(|fallback_error| key_resolution_error(pair, error, fallback_error)),
-        Err(error) => Err(anyhow::anyhow!(
-            "Key columns for `{}` -> `{}`: {error}",
-            pair.source_table,
-            pair.target_table
-        )),
-    }
-}
-
-fn key_resolution_error(
-    pair: &DataCompareTablePair,
-    requested_error: anyhow::Error,
-    fallback_error: anyhow::Error,
-) -> anyhow::Error {
-    anyhow::anyhow!(
-        "Key columns for `{}` -> `{}` could not use requested keys ({requested_error}) or infer primary keys ({fallback_error})",
-        pair.source_table,
-        pair.target_table
-    )
-}
-
-fn matching_target_columns(
-    source_names: &[String],
-    target_columns: &[ColumnInfo],
-    case_sensitive_identifiers: bool,
-) -> Vec<String> {
-    let target_names = column_map_by_identifier_key(target_columns, case_sensitive_identifiers);
-    source_names
-        .iter()
-        .filter_map(|name| {
-            target_names
-                .get(&identifier_key(name, case_sensitive_identifiers))
-                .cloned()
-        })
-        .collect()
-}
-
-fn column_map_by_identifier_key(
-    columns: &[ColumnInfo],
-    case_sensitive_identifiers: bool,
-) -> HashMap<String, String> {
-    columns
-        .iter()
-        .map(|column| {
-            (
-                identifier_key(&column.name, case_sensitive_identifiers),
-                column.name.clone(),
-            )
-        })
-        .collect()
-}
-
-fn validate_unique_column_infos(
-    columns: &[ColumnInfo],
-    scope: &str,
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<()> {
-    validate_unique_identifier_names(
-        columns.iter().map(|column| column.name.as_str()),
-        scope,
-        case_sensitive_identifiers,
-    )
-}
-
-fn validate_unique_query_columns(
-    columns: &[String],
-    scope: &str,
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<()> {
-    validate_unique_identifier_names(
-        columns.iter().map(String::as_str),
-        scope,
-        case_sensitive_identifiers,
-    )
-}
-
-fn validate_unique_identifier_names<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-    scope: &str,
-    case_sensitive_identifiers: bool,
-) -> anyhow::Result<()> {
-    let mut seen = HashMap::new();
-    for name in names {
-        let key = identifier_key(name, case_sensitive_identifiers);
-        if let Some(previous) = seen.insert(key, name.to_string()) {
-            anyhow::bail!(
-                "Duplicate case-insensitive column names in {}: `{}` and `{}`",
-                scope,
-                previous,
-                name
-            );
-        }
-    }
-    Ok(())
-}
-
-fn table_data_request(
-    database: String,
-    schema: Option<String>,
-    table: String,
-    order_by_clause: Option<&str>,
-) -> TableDataRequest {
-    let mut request = TableDataRequest::new(database, table).with_page(1, DATA_COMPARE_PAGE_SIZE);
-    if let Some(schema) = schema {
-        request = request.with_schema(schema);
-    }
-    if let Some(order_by_clause) = order_by_clause {
-        request = request.with_order_by_clause(order_by_clause);
-    }
-    request
-}
-
-fn order_by_clause_for_connection(
-    db_state: &GlobalDbState,
-    connection_id: &str,
-    key_columns: &[String],
-) -> anyhow::Result<Option<String>> {
-    if key_columns.is_empty() {
-        return Ok(None);
-    }
-    let config = db_state
-        .get_config(connection_id)
-        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
-    let plugin = db_state.get_plugin(&config.database_type)?;
-    Ok(quoted_order_by_clause(plugin.as_ref(), key_columns))
-}
-
-fn quoted_order_by_clause(plugin: &dyn DatabasePlugin, key_columns: &[String]) -> Option<String> {
-    if key_columns.is_empty() {
-        return None;
-    }
-    Some(
-        key_columns
-            .iter()
-            .map(|column| plugin.quote_identifier(column))
-            .collect::<Vec<_>>()
-            .join(", "),
-    )
-}
-
-#[derive(Clone)]
-struct ColumnMapping {
-    source: String,
-    target: String,
-}
-
-fn common_column_mappings(
-    source_columns: &[String],
-    target_columns: &[String],
-    case_sensitive_identifiers: bool,
-) -> Vec<ColumnMapping> {
-    let target = target_columns
-        .iter()
-        .map(|column| {
-            (
-                identifier_key(column, case_sensitive_identifiers),
-                column.clone(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    source_columns
-        .iter()
-        .filter_map(|source| {
-            target
-                .get(&identifier_key(source, case_sensitive_identifiers))
-                .map(|target| ColumnMapping {
-                    source: source.clone(),
-                    target: target.clone(),
-                })
-        })
-        .collect()
-}
-
-#[cfg(test)]
-fn rows_from_query_result(result: &QueryResult) -> Vec<RowData> {
-    let mappings = result
-        .columns
-        .iter()
-        .map(|column| ColumnMapping {
-            source: column.clone(),
-            target: column.clone(),
-        })
-        .collect::<Vec<_>>();
-    rows_from_query_result_with_mappings(result, &mappings, false)
-}
-
-fn rows_from_query_result_with_mappings(
-    result: &QueryResult,
-    mappings: &[ColumnMapping],
-    case_sensitive_identifiers: bool,
-) -> Vec<RowData> {
-    let index_by_column = result
-        .columns
-        .iter()
-        .enumerate()
-        .map(|(index, column)| (identifier_key(column, case_sensitive_identifiers), index))
-        .collect::<HashMap<_, _>>();
-    result
-        .rows
-        .iter()
-        .map(|row| {
-            mappings
-                .iter()
-                .filter_map(|mapping| {
-                    let index = *index_by_column
-                        .get(&identifier_key(&mapping.target, case_sensitive_identifiers))?;
-                    let value = row.get(index)?;
-                    let cell = value_to_cell(value.as_deref(), result.column_meta.get(index));
-                    Some((mapping.source.clone(), cell))
-                })
-                .collect()
-        })
-        .collect()
-}
-
-fn remap_data_compare_result_to_target_columns(
-    mut result: DataCompareResult,
-    mappings: &[ColumnMapping],
-) -> DataCompareResult {
-    result.key_columns = result
-        .key_columns
-        .iter()
-        .map(|column| target_column_name(column, mappings))
-        .collect();
-    result.columns = result
-        .columns
-        .iter()
-        .map(|column| target_column_name(column, mappings))
-        .collect();
-    result.added = result
-        .added
-        .into_iter()
-        .map(|row| remap_row_to_target_columns(row, mappings))
-        .collect();
-    result.removed = result
-        .removed
-        .into_iter()
-        .map(|row| remap_row_to_target_columns(row, mappings))
-        .collect();
-    result.modified = result
-        .modified
-        .into_iter()
-        .map(|row| remap_modified_row_to_target_columns(row, mappings))
-        .collect();
-    result
-}
-
-fn remap_modified_row_to_target_columns(
-    row: db::compare::DataCompareModifiedRow,
-    mappings: &[ColumnMapping],
-) -> db::compare::DataCompareModifiedRow {
-    db::compare::DataCompareModifiedRow {
-        key_values: row
-            .key_values
-            .into_iter()
-            .map(|(column, value)| (target_column_name(&column, mappings), value))
-            .collect(),
-        source_values: remap_row_to_target_columns(row.source_values, mappings),
-        target_values: remap_row_to_target_columns(row.target_values, mappings),
-        changes: row
-            .changes
-            .into_iter()
-            .map(|(column, values)| (target_column_name(&column, mappings), values))
-            .collect(),
-    }
-}
-
-fn remap_row_to_target_columns(row: RowData, mappings: &[ColumnMapping]) -> RowData {
-    mappings
-        .iter()
-        .filter_map(|mapping| {
-            row.get(&mapping.source)
-                .cloned()
-                .map(|value| (mapping.target.clone(), value))
-        })
-        .collect()
-}
-
-fn target_column_name(source_column: &str, mappings: &[ColumnMapping]) -> String {
-    mappings
-        .iter()
-        .find(|mapping| mapping.source == source_column)
-        .map(|mapping| mapping.target.clone())
-        .unwrap_or_else(|| source_column.to_string())
-}
-
-fn identifier_key(value: &str, case_sensitive_identifiers: bool) -> String {
-    if case_sensitive_identifiers {
-        value.trim().to_string()
-    } else {
-        value.trim().to_lowercase()
-    }
-}
-
-fn table_lookup_key(value: &str, case_sensitive_identifiers: bool) -> String {
-    let table = value
-        .rsplit('.')
-        .next()
-        .unwrap_or(value)
-        .trim_matches(['`', '"', '[', ']']);
-    identifier_key(table, case_sensitive_identifiers)
-}
-
-fn value_to_cell(value: Option<&str>, meta: Option<&QueryColumnMeta>) -> serde_json::Value {
-    let Some(value) = value else {
-        return serde_json::Value::Null;
-    };
-    match meta.map(|meta| meta.field_type) {
-        Some(FieldType::Integer) => parse_integer_cell(value),
-        Some(FieldType::Decimal) => parse_decimal_cell(value),
-        Some(FieldType::Boolean) => parse_boolean_cell(value),
-        Some(FieldType::Json) => parse_json_cell(value),
-        _ => serde_json::Value::String(value.to_string()),
-    }
-}
-
-fn parse_integer_cell(value: &str) -> serde_json::Value {
-    value
-        .parse::<i64>()
-        .map(serde_json::Value::from)
-        .unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
-}
-
-fn parse_decimal_cell(value: &str) -> serde_json::Value {
-    let Some(number) = canonical_decimal_literal(value) else {
-        return serde_json::Value::String(value.to_string());
-    };
-    serde_json::Value::Number(serde_json::Number::from_string_unchecked(number))
-}
-
-fn canonical_decimal_literal(value: &str) -> Option<String> {
-    let value = value.trim();
-    let (negative, digits) = match value.as_bytes().first() {
-        Some(b'-') => (true, &value[1..]),
-        Some(b'+') => (false, &value[1..]),
-        _ => (false, value),
-    };
-    let (integer, fraction) = match digits.split_once('.') {
-        Some((integer, fraction)) => (integer, fraction),
-        None => (digits, ""),
-    };
-    if integer.is_empty() && fraction.is_empty() {
-        return None;
-    }
-    if !integer.chars().all(|ch| ch.is_ascii_digit()) {
-        return None;
-    }
-    if !fraction.chars().all(|ch| ch.is_ascii_digit()) {
-        return None;
-    }
-    let integer = integer.trim_start_matches('0');
-    let integer = if integer.is_empty() { "0" } else { integer };
-    let fraction = fraction.trim_end_matches('0');
-    let mut number = if fraction.is_empty() {
-        integer.to_string()
-    } else {
-        format!("{integer}.{fraction}")
-    };
-    if negative && number != "0" {
-        number.insert(0, '-');
-    }
-    Some(number)
-}
-
-fn parse_boolean_cell(value: &str) -> serde_json::Value {
-    match value.to_ascii_lowercase().as_str() {
-        "true" | "t" | "1" | "yes" => serde_json::Value::Bool(true),
-        "false" | "f" | "0" | "no" => serde_json::Value::Bool(false),
-        _ => serde_json::Value::String(value.to_string()),
-    }
-}
-
-fn parse_json_cell(value: &str) -> serde_json::Value {
-    serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::compare::{CompareSyncExecutionOptions, CompareTargetScope, execute_sync_sql};
-    use db::compare::{DiffStatus, SyncStatementKind};
-    use db::{
-        ColumnInfo, ExecOptions, ForeignKeyDefinition, IndexInfo, QueryColumnMeta, QueryResult,
-        SqlResult, TableInfo,
+    use db::compare::{
+        DiffStatus, SchemaCompareTableFailure, SyncStatementKind, rows_from_query_result,
     };
+    use db::{BinaryCell, ColumnInfo, ExecOptions, QueryColumnMeta, QueryResult, SqlResult};
     use gpui::TestAppContext;
     use one_core::storage::{DatabaseType, DbConnectionConfig};
     use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
-    fn table_schema_from_metadata_preserves_columns_indexes_and_foreign_keys() {
-        let table = TableInfo {
-            name: "orders".to_string(),
-            schema: Some("public".to_string()),
-            comment: Some("order table".to_string()),
-            engine: None,
-            row_count: None,
-            create_time: None,
-            charset: None,
-            collation: None,
-        };
-        let columns = vec![ColumnInfo {
-            name: "id".to_string(),
-            data_type: "int".to_string(),
-            is_nullable: false,
-            is_primary_key: true,
-            default_value: None,
-            comment: None,
-            charset: None,
-            collation: None,
-        }];
-        let indexes = vec![IndexInfo {
-            name: "idx_orders_id".to_string(),
-            columns: vec!["id".to_string()],
-            is_unique: true,
-            is_primary: false,
-            index_type: None,
-        }];
-        let foreign_keys = vec![ForeignKeyDefinition {
-            name: "fk_orders_user".to_string(),
-            columns: vec!["user_id".to_string()],
-            ref_table: "users".to_string(),
-            ref_columns: vec!["id".to_string()],
-            on_delete: "CASCADE".to_string(),
-            on_update: "NO ACTION".to_string(),
-        }];
+    fn data_compare_error_event_reports_table_and_message() {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
 
-        let schema = table_schema_from_metadata(table, columns, indexes, foreign_keys);
-
-        assert_eq!(schema.name, "orders");
-        assert_eq!(schema.comment.as_deref(), Some("order table"));
-        assert_eq!(schema.columns[0].name, "id");
-        assert_eq!(schema.columns[0].nullable, false);
-        assert_eq!(schema.indexes[0].name, "idx_orders_id");
-        assert_eq!(schema.indexes[0].unique, true);
-        assert!(schema.indexes.iter().any(|index| index.name == "PRIMARY"
-            && index.columns == vec!["id".to_string()]
-            && index.unique));
-        assert_eq!(schema.foreign_keys[0].name, "fk_orders_user");
-        assert_eq!(schema.foreign_keys[0].on_delete.as_deref(), Some("CASCADE"));
-        assert_eq!(
-            schema.foreign_keys[0].on_update.as_deref(),
-            Some("NO ACTION")
+        report_data_compare_event(
+            &progress_tx,
+            CompareTaskEvent::Error {
+                table: Some("orders".to_string()),
+                message: "permission denied".to_string(),
+            },
         );
+
+        let progress = progress_rx
+            .try_recv()
+            .expect("error progress should be sent");
+        let label = progress.label();
+        assert!(label.contains("orders"));
+        assert!(label.contains("permission denied"));
+        assert_eq!(progress.percentage(), None);
+    }
+
+    #[test]
+    fn data_compare_counting_source_rows_reports_source_phase() {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+
+        report_data_compare_event(
+            &progress_tx,
+            CompareTaskEvent::CountingRows {
+                table: "users".to_string(),
+                side: db::compare::CompareRowSide::Source,
+            },
+        );
+
+        let progress = progress_rx
+            .try_recv()
+            .expect("source count progress should be sent");
+        assert_eq!(
+            progress.label(),
+            t!("Compare.loading_source_table_data").as_ref()
+        );
+        assert_eq!(progress.percentage(), None);
+    }
+
+    #[test]
+    fn data_compare_counting_target_rows_reports_target_phase() {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+
+        report_data_compare_event(
+            &progress_tx,
+            CompareTaskEvent::CountingRows {
+                table: "users".to_string(),
+                side: db::compare::CompareRowSide::Target,
+            },
+        );
+
+        let progress = progress_rx
+            .try_recv()
+            .expect("target count progress should be sent");
+        assert_eq!(
+            progress.label(),
+            t!("Compare.loading_target_table_data").as_ref()
+        );
+        assert_eq!(progress.percentage(), None);
+    }
+
+    #[test]
+    fn data_compare_dependency_metadata_reports_distinct_phase() {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+
+        report_data_compare_event(
+            &progress_tx,
+            CompareTaskEvent::LoadingDependencyMetadata { table: None },
+        );
+
+        let progress = progress_rx
+            .try_recv()
+            .expect("dependency metadata progress should be sent");
+        assert_eq!(
+            progress.label(),
+            t!("Compare.loading_dependency_metadata").as_ref()
+        );
+        assert_ne!(progress.label(), t!("Compare.loading_metadata").as_ref());
+    }
+
+    #[test]
+    fn data_compare_table_dependency_metadata_includes_table_name() {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+
+        report_data_compare_event(
+            &progress_tx,
+            CompareTaskEvent::LoadingDependencyMetadata {
+                table: Some("orders".to_string()),
+            },
+        );
+
+        let progress = progress_rx
+            .try_recv()
+            .expect("table dependency metadata progress should be sent");
+        assert!(progress.label().contains("orders"));
+    }
+
+    #[test]
+    fn schema_compare_error_event_reports_generic_message_without_table() {
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+
+        report_schema_compare_event(
+            &progress_tx,
+            CompareTaskEvent::Error {
+                table: None,
+                message: "table list unavailable".to_string(),
+            },
+        );
+
+        let progress = progress_rx
+            .try_recv()
+            .expect("error progress should be sent");
+        assert!(progress.label().contains("table list unavailable"));
+        assert_eq!(progress.percentage(), None);
     }
 
     #[test]
@@ -1765,6 +464,193 @@ mod tests {
     }
 
     #[test]
+    fn strip_internal_compare_columns_removes_rowid_and_remaps_binary_cells() {
+        let response = TableDataResponse {
+            total_count: 1,
+            page: 1,
+            page_size: 10,
+            duration: 0,
+            query_result: QueryResult {
+                sql: "select rowid as __rowid__, id, payload from users".to_string(),
+                columns: vec![
+                    "__rowid__".to_string(),
+                    "id".to_string(),
+                    "payload".to_string(),
+                ],
+                column_meta: vec![
+                    QueryColumnMeta::new("__rowid__", "bigint"),
+                    QueryColumnMeta::new("id", "bigint"),
+                    QueryColumnMeta::new("payload", "blob"),
+                ],
+                rows: vec![vec![
+                    Some("99".to_string()),
+                    Some("1".to_string()),
+                    Some("<binary>".to_string()),
+                ]],
+                binary_cells: vec![
+                    BinaryCell {
+                        row_index: 0,
+                        column_index: 0,
+                        bytes: vec![9, 9],
+                    },
+                    BinaryCell {
+                        row_index: 0,
+                        column_index: 2,
+                        bytes: vec![1, 2, 3],
+                    },
+                ],
+                elapsed_ms: 0,
+            },
+        };
+
+        let response = strip_internal_compare_columns(response);
+
+        assert_eq!(response.query_result.columns, vec!["id", "payload"]);
+        assert_eq!(
+            response.query_result.rows,
+            vec![vec![Some("1".to_string()), Some("<binary>".to_string())]]
+        );
+        assert_eq!(
+            response.query_result.binary_cells,
+            vec![BinaryCell {
+                row_index: 0,
+                column_index: 1,
+                bytes: vec![1, 2, 3],
+            }]
+        );
+    }
+
+    #[test]
+    fn append_table_data_page_merges_all_rows_and_binary_offsets() {
+        let mut first = table_data_response(
+            vec!["id", "payload"],
+            vec![
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("payload", "blob"),
+            ],
+            vec![
+                vec![Some("1".to_string()), Some("a".to_string())],
+                vec![Some("2".to_string()), Some("b".to_string())],
+            ],
+        );
+        first.total_count = 3;
+        first.page_size = 2;
+        first.query_result.binary_cells = vec![BinaryCell {
+            row_index: 1,
+            column_index: 1,
+            bytes: vec![2],
+        }];
+        let mut second = table_data_response(
+            vec!["id", "payload"],
+            vec![
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("payload", "blob"),
+            ],
+            vec![vec![Some("3".to_string()), Some("c".to_string())]],
+        );
+        second.total_count = 3;
+        second.page = 2;
+        second.page_size = 2;
+        second.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 1,
+            bytes: vec![3],
+        }];
+        let mut accumulated = None;
+
+        append_table_data_page(&mut accumulated, first).unwrap();
+        append_table_data_page(&mut accumulated, second).unwrap();
+
+        let accumulated = accumulated.unwrap();
+        assert_eq!(accumulated.query_result.rows.len(), 3);
+        assert_eq!(
+            accumulated.query_result.binary_cells,
+            vec![
+                BinaryCell {
+                    row_index: 1,
+                    column_index: 1,
+                    bytes: vec![2],
+                },
+                BinaryCell {
+                    row_index: 2,
+                    column_index: 1,
+                    bytes: vec![3],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn append_table_data_page_rejects_count_changes() {
+        let mut first = table_data_response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "int")],
+            vec![vec![Some("1".to_string())]],
+        );
+        first.total_count = 2;
+        let mut second = table_data_response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "int")],
+            vec![vec![Some("2".to_string())]],
+        );
+        second.total_count = 3;
+        let mut accumulated = None;
+
+        append_table_data_page(&mut accumulated, first).unwrap();
+        let error = append_table_data_page(&mut accumulated, second).unwrap_err();
+
+        assert!(error.to_string().contains("row count changed"));
+    }
+
+    #[test]
+    fn build_data_compare_result_never_treats_internal_rowid_as_business_data() {
+        let source = table_data_response(
+            vec!["__rowid__", "id", "name"],
+            vec![
+                QueryColumnMeta::new("__rowid__", "bigint"),
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("name", "text"),
+            ],
+            vec![vec![
+                Some("10".to_string()),
+                Some("1".to_string()),
+                Some("Ada".to_string()),
+            ]],
+        );
+        let target = table_data_response(
+            vec!["__rowid__", "id", "name"],
+            vec![
+                QueryColumnMeta::new("__rowid__", "bigint"),
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("name", "text"),
+            ],
+            vec![vec![
+                Some("999".to_string()),
+                Some("1".to_string()),
+                Some("Ada".to_string()),
+            ]],
+        );
+
+        let source = strip_internal_compare_columns(source);
+        let target = strip_internal_compare_columns(target);
+        let result = build_data_compare_result(
+            DataCompareTablePair {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+            },
+            vec!["id".to_string()],
+            source,
+            target,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.columns, vec!["id", "name"]);
+        assert!(!result.column_types.contains_key("__rowid__"));
+        assert!(result.modified.is_empty());
+    }
+
+    #[test]
     fn resolve_key_columns_rejects_requested_columns_missing_on_target() {
         let source = vec![column_info("id", true), column_info("tenant_id", false)];
         let target = vec![column_info("id", true)];
@@ -1786,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_key_columns_for_table_falls_back_to_primary_key_for_multi_table_override() {
+    fn resolve_key_columns_for_table_rejects_invalid_requested_key_in_multi_table_compare() {
         let source = vec![column_info("id", true), column_info("tenant_id", false)];
         let target = vec![column_info("id", true)];
         let requested = vec!["tenant_id".to_string()];
@@ -1796,15 +682,14 @@ mod tests {
             &source,
             &target,
             false,
-            true,
             &DataCompareTablePair {
                 source_table: "users".to_string(),
                 target_table: "users".to_string(),
             },
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(result, vec!["id".to_string()]);
+        assert!(result.to_string().contains("tenant_id"));
     }
 
     #[test]
@@ -1920,9 +805,14 @@ mod tests {
             false,
         )
         .unwrap();
+        assert_eq!(
+            table_result.column_types.get("name"),
+            Some(&"text".to_string())
+        );
         let plan = generate_data_sync_plan(&DataCompareBatchResult {
             table_results: vec![table_result],
             table_dependencies: vec![],
+            ..Default::default()
         });
 
         assert!(plan.sql_text.contains("INSERT INTO users (id, name)"));
@@ -1963,6 +853,37 @@ mod tests {
     }
 
     #[test]
+    fn record_data_compare_pair_result_isolates_table_failures() {
+        let mut results = Vec::new();
+        let mut failures = Vec::new();
+
+        record_data_compare_pair_result(
+            &mut results,
+            &mut failures,
+            "users".to_string(),
+            Ok(DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![row_data(vec![("id", json!(1))])],
+                ..Default::default()
+            }),
+        );
+        record_data_compare_pair_result(
+            &mut results,
+            &mut failures,
+            "orders".to_string(),
+            Err(anyhow::anyhow!("source query failed")),
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].table, "orders");
+        assert!(failures[0].error.contains("source query failed"));
+    }
+
+    #[test]
     fn generate_data_sync_plan_blocks_truncated_results() {
         let result = DataCompareBatchResult {
             table_results: vec![DataCompareResult {
@@ -1975,8 +896,10 @@ mod tests {
                 modified: vec![],
                 source_truncated: true,
                 target_truncated: false,
+                ..Default::default()
             }],
             table_dependencies: vec![],
+            ..Default::default()
         };
 
         let plan = generate_data_sync_plan(&result);
@@ -1992,6 +915,115 @@ mod tests {
     }
 
     #[test]
+    fn generate_data_sync_plan_blocks_truncated_missing_target_results() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![row_data(vec![("id", json!(1))])],
+                source_truncated: true,
+                target_table_missing: true,
+                missing_target_schema: Some(db::compare::TableSchema {
+                    name: "users".to_string(),
+                    columns: vec![db::compare::ColumnSchema {
+                        name: "id".to_string(),
+                        data_type: "int".to_string(),
+                        nullable: false,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let plan = generate_data_sync_plan(&result);
+
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert!(!plan.sql_text.contains("CREATE TABLE"));
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("truncated"))
+        );
+    }
+
+    #[test]
+    fn targeted_data_sync_plan_blocks_truncated_results_without_live_connection() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![row_data(vec![("id", json!(1))])],
+                target_truncated: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let plan = generate_data_sync_plan_for_target(
+            &result,
+            &GlobalDbState::new(),
+            "missing-connection",
+            "app",
+            None,
+        )
+        .expect("blocked plans must not require a live target connection");
+
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("truncated"))
+        );
+    }
+
+    #[test]
+    fn targeted_schema_sync_plan_blocks_incomplete_results_without_live_connection() {
+        let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_diffs: vec![],
+            table_failures: vec![SchemaCompareTableFailure {
+                side: CompareSchemaSide::Target,
+                table: "orders".to_string(),
+                error: "permission denied".to_string(),
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 0,
+        };
+
+        let plan = generate_schema_sync_plan_for_target(
+            &result,
+            &GlobalDbState::new(),
+            "missing-connection",
+            "app",
+            None,
+            false,
+        )
+        .expect("blocked plans must not require a live target connection");
+
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("orders") && warning.contains("permission denied"))
+        );
+    }
+
+    #[test]
     fn generate_data_sync_plan_combines_multiple_table_results() {
         let result = DataCompareBatchResult {
             table_results: vec![
@@ -2003,8 +1035,7 @@ mod tests {
                     added: vec![row_data(vec![("id", json!(1)), ("name", json!("Ada"))])],
                     removed: vec![],
                     modified: vec![],
-                    source_truncated: false,
-                    target_truncated: false,
+                    ..Default::default()
                 },
                 DataCompareResult {
                     source_table: "orders".to_string(),
@@ -2014,11 +1045,11 @@ mod tests {
                     added: vec![row_data(vec![("id", json!(7)), ("total", json!(19.5))])],
                     removed: vec![],
                     modified: vec![],
-                    source_truncated: false,
-                    target_truncated: false,
+                    ..Default::default()
                 },
             ],
             table_dependencies: vec![],
+            ..Default::default()
         };
 
         let plan = generate_data_sync_plan(&result);
@@ -2028,6 +1059,193 @@ mod tests {
         assert_eq!(plan.summary.total_count, 2);
         assert!(plan.sql_text.contains("INSERT INTO users"));
         assert!(plan.sql_text.contains("INSERT INTO orders"));
+    }
+
+    #[test]
+    fn generate_data_sync_plan_reports_failed_tables_and_keeps_successful_ones() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![row_data(vec![("id", json!(1))])],
+                removed: vec![],
+                modified: vec![],
+                ..Default::default()
+            }],
+            table_dependencies: vec![],
+            table_failures: vec![DataCompareTableFailure {
+                table: "orders".to_string(),
+                error: "source query failed".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        assert!(result.has_failed_tables());
+        let plan = generate_data_sync_plan(&result);
+
+        assert_eq!(plan.summary.insert_count, 1);
+        assert!(plan.sql_text.contains("INSERT INTO users"));
+        assert!(!plan.sql_text.contains("orders"));
+        assert!(
+            plan.warnings.iter().any(
+                |warning| warning.contains("orders") && warning.contains("source query failed")
+            )
+        );
+    }
+
+    #[test]
+    fn record_dependency_metadata_failure_preserves_context() {
+        let mut warnings = Vec::new();
+
+        record_dependency_metadata_failure(
+            &mut warnings,
+            Some("orders".to_string()),
+            DataCompareBatchWarningKind::ForeignKeyMetadataUnavailable,
+            anyhow::anyhow!("foreign key query failed"),
+        );
+
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].kind,
+            DataCompareBatchWarningKind::ForeignKeyMetadataUnavailable
+        );
+        assert_eq!(warnings[0].table.as_deref(), Some("orders"));
+        assert!(warnings[0].error.contains("foreign key query failed"));
+    }
+
+    #[test]
+    fn generate_data_sync_plan_blocks_incomplete_dependency_metadata() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![row_data(vec![("id", json!(1))])],
+                ..Default::default()
+            }],
+            batch_warnings: vec![DataCompareBatchWarning {
+                table: Some("users".to_string()),
+                kind: DataCompareBatchWarningKind::ForeignKeyMetadataUnavailable,
+                error: "fk metadata unavailable".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        assert!(result.has_incomplete_dependency_metadata());
+        assert!(result.is_sync_sql_blocked());
+        assert_eq!(result.table_results.len(), 1);
+
+        let plan = generate_data_sync_plan(&result);
+
+        assert_eq!(plan.summary.total_count, 0);
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
+        assert!(plan.warnings.iter().any(|warning| {
+            warning.contains("Dependency metadata") && warning.contains("statement ordering")
+        }));
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("fk metadata unavailable"))
+        );
+    }
+
+    #[test]
+    fn generate_data_sync_plan_blocks_when_target_table_metadata_is_unavailable() {
+        let result = DataCompareBatchResult {
+            table_results: vec![DataCompareResult {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+                added: vec![row_data(vec![("id", json!(1))])],
+                ..Default::default()
+            }],
+            batch_warnings: vec![DataCompareBatchWarning {
+                table: None,
+                kind: DataCompareBatchWarningKind::TargetTableMetadataUnavailable,
+                error: "table metadata unavailable".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let plan = generate_data_sync_plan(&result);
+        let targeted_plan = generate_data_sync_plan_for_target(
+            &result,
+            &GlobalDbState::new(),
+            "missing-connection",
+            "app",
+            None,
+        )
+        .expect("blocked plans must not require a live target connection");
+
+        for plan in [plan, targeted_plan] {
+            assert_eq!(plan.summary.total_count, 0);
+            assert!(plan.statements.is_empty());
+            assert!(plan.sql_text.is_empty());
+            assert!(
+                plan.warnings
+                    .iter()
+                    .any(|warning| warning.contains("table metadata unavailable"))
+            );
+        }
+    }
+
+    #[test]
+    fn generate_data_sync_plan_puts_missing_target_create_table_before_inserts() {
+        use db::compare::{ColumnSchema, TableSchema};
+
+        let result = DataCompareBatchResult {
+            table_results: vec![
+                DataCompareResult {
+                    source_table: "users".to_string(),
+                    target_table: "users".to_string(),
+                    key_columns: vec!["id".to_string()],
+                    columns: vec!["id".to_string()],
+                    added: vec![row_data(vec![("id", json!(1))])],
+                    removed: vec![],
+                    modified: vec![],
+                    target_table_missing: true,
+                    missing_target_schema: Some(TableSchema {
+                        name: "users".to_string(),
+                        columns: vec![ColumnSchema {
+                            name: "id".to_string(),
+                            data_type: "int".to_string(),
+                            nullable: false,
+                            ..Default::default()
+                        }],
+                        indexes: vec![],
+                        foreign_keys: vec![],
+                        comment: None,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                DataCompareResult {
+                    source_table: "orders".to_string(),
+                    target_table: "orders".to_string(),
+                    key_columns: vec!["id".to_string()],
+                    columns: vec!["id".to_string()],
+                    added: vec![row_data(vec![("id", json!(7))])],
+                    removed: vec![],
+                    modified: vec![],
+                    ..Default::default()
+                },
+            ],
+            table_dependencies: vec![],
+            ..Default::default()
+        };
+
+        let plan = generate_data_sync_plan(&result);
+
+        assert_eq!(plan.summary.ddl_count, 1);
+        assert_eq!(plan.summary.insert_count, 2);
+        assert_eq!(plan.summary.total_count, 3);
+        assert_sql_order(&plan.sql_text, "CREATE TABLE users", "INSERT INTO users");
+        assert_sql_order(&plan.sql_text, "CREATE TABLE users", "INSERT INTO orders");
     }
 
     #[test]
@@ -2048,8 +1266,7 @@ mod tests {
                         ("department_id", json!(4)),
                     ])],
                     modified: vec![],
-                    source_truncated: false,
-                    target_truncated: false,
+                    ..Default::default()
                 },
                 DataCompareResult {
                     source_table: "departments".to_string(),
@@ -2059,14 +1276,14 @@ mod tests {
                     added: vec![row_data(vec![("id", json!(3)), ("name", json!("AI"))])],
                     removed: vec![row_data(vec![("id", json!(4)), ("name", json!("Old"))])],
                     modified: vec![],
-                    source_truncated: false,
-                    target_truncated: false,
+                    ..Default::default()
                 },
             ],
             table_dependencies: vec![DataCompareTableDependency {
                 table: "users".to_string(),
                 referenced_table: "departments".to_string(),
             }],
+            ..Default::default()
         };
 
         let plan = generate_data_sync_plan(&result);
@@ -2114,7 +1331,17 @@ mod tests {
         assert_eq!(2, result.added.len());
         assert!(result.removed.is_empty());
         assert!(result.modified.is_empty());
+        assert!(result.target_table_missing);
         assert_eq!(result.columns, vec!["id".to_string(), "name".to_string()]);
+
+        let schema = result
+            .missing_target_schema
+            .as_ref()
+            .expect("missing-target 结果必须携带源表结构");
+        assert_eq!(schema.name, "users");
+        assert_eq!(schema.columns.len(), 2);
+        assert!(schema.indexes.iter().any(|index| index.name == "PRIMARY"));
+        assert_eq!(result.column_types.get("name"), Some(&"int".to_string()));
     }
 
     #[test]
@@ -2128,13 +1355,13 @@ mod tests {
                 added: vec![row_data(vec![("id", json!(1)), ("user_id", json!(42))])],
                 removed: vec![],
                 modified: vec![],
-                source_truncated: false,
-                target_truncated: false,
+                ..Default::default()
             }],
             table_dependencies: vec![DataCompareTableDependency {
                 table: "apps".to_string(),
                 referenced_table: "users".to_string(),
             }],
+            ..Default::default()
         };
 
         let plan = generate_data_sync_plan(&result);
@@ -2285,6 +1512,9 @@ mod tests {
                 target_schema: None,
                 target_tables: vec!["users".to_string()],
                 case_sensitive_identifiers: false,
+                compare_views: false,
+                compare_routines: false,
+                compare_triggers: false,
                 compare_indexes: true,
                 compare_foreign_keys: true,
                 ignore_comments: false,
@@ -2413,6 +1643,7 @@ mod tests {
                 ],
                 key_columns: vec![],
                 case_sensitive_identifiers: false,
+                limits: DataCompareLimits::default(),
             },
             db_state.clone(),
             tx,

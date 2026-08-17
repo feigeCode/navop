@@ -38,18 +38,18 @@ pub struct CompareCapabilities {
 impl Default for CompareCapabilities {
     fn default() -> Self {
         Self {
-            schema_compare: true,
-            data_compare: true,
-            metadata_cache: true,
+            schema_compare: false,
+            data_compare: false,
+            metadata_cache: false,
             table_ddl: false,
-            indexes: true,
-            foreign_keys: true,
+            indexes: false,
+            foreign_keys: false,
             triggers: false,
             checks: false,
-            comments: true,
+            comments: false,
             transactional_ddl: false,
-            transactional_dml: true,
-            streaming_query: true,
+            transactional_dml: false,
+            streaming_query: false,
             server_side_checksum: false,
             merge_sql: false,
             upsert_sql: false,
@@ -58,64 +58,125 @@ impl Default for CompareCapabilities {
 }
 
 impl CompareCapabilities {
-    /// PostgreSQL 的比较能力
+    /// PostgreSQL's compare implementation supports the complete currently
+    /// implemented table/index/FK path, including transactional DDL and DML.
     pub fn postgresql() -> Self {
         Self {
+            schema_compare: true,
+            data_compare: true,
+            metadata_cache: true,
             table_ddl: true,
-            triggers: true,
-            checks: true,
+            indexes: true,
+            foreign_keys: true,
+            comments: true,
             transactional_ddl: true,
-            upsert_sql: true,
+            transactional_dml: true,
+            streaming_query: true,
             ..Default::default()
         }
     }
 
-    /// MySQL 的比较能力
+    /// MySQL supports the compare path, but DDL is not advertised as transactional.
     pub fn mysql() -> Self {
         Self {
+            schema_compare: true,
+            data_compare: true,
+            metadata_cache: true,
             table_ddl: true,
-            triggers: true,
-            checks: true,
-            transactional_ddl: false,
+            indexes: true,
+            foreign_keys: true,
+            comments: true,
+            transactional_dml: true,
+            streaming_query: true,
             ..Default::default()
         }
     }
 
-    /// SQLite 的比较能力
     pub fn sqlite() -> Self {
         Self {
+            schema_compare: true,
+            data_compare: true,
+            metadata_cache: true,
             table_ddl: true,
+            indexes: true,
             foreign_keys: true,
-            triggers: true,
-            checks: true,
+            comments: true,
             transactional_ddl: true,
-            upsert_sql: true,
+            transactional_dml: true,
+            streaming_query: true,
             ..Default::default()
         }
     }
 
-    /// SQL Server 的比较能力
     pub fn sqlserver() -> Self {
         Self {
+            schema_compare: true,
+            data_compare: true,
+            metadata_cache: true,
             table_ddl: true,
-            triggers: true,
-            checks: true,
+            indexes: true,
+            foreign_keys: true,
+            comments: true,
             transactional_ddl: true,
-            merge_sql: true,
+            transactional_dml: true,
+            streaming_query: true,
             ..Default::default()
         }
     }
 
-    /// ClickHouse 的比较能力
     pub fn clickhouse() -> Self {
         Self {
+            schema_compare: true,
+            data_compare: true,
+            metadata_cache: true,
             table_ddl: true,
-            foreign_keys: false,
-            triggers: false,
-            checks: false,
-            transactional_ddl: false,
-            transactional_dml: false,
+            indexes: true,
+            comments: true,
+            streaming_query: true,
             ..Default::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompareCapabilities;
+
+    #[test]
+    fn unknown_profile_is_conservative() {
+        let capabilities = CompareCapabilities::default();
+        assert!(!capabilities.schema_compare);
+        assert!(!capabilities.data_compare);
+        assert!(!capabilities.indexes);
+        assert!(!capabilities.foreign_keys);
+        assert!(!capabilities.streaming_query);
+    }
+
+    #[test]
+    fn constructors_only_advertise_implemented_schema_objects() {
+        for capabilities in [
+            CompareCapabilities::postgresql(),
+            CompareCapabilities::mysql(),
+            CompareCapabilities::sqlite(),
+            CompareCapabilities::sqlserver(),
+            CompareCapabilities::clickhouse(),
+        ] {
+            assert!(
+                !capabilities.triggers,
+                "trigger comparison must stay disabled until it has a model, diff, and sync plan"
+            );
+            assert!(
+                !capabilities.checks,
+                "check comparison must stay disabled until it has a model, diff, and sync plan"
+            );
+            assert!(
+                !capabilities.merge_sql,
+                "MERGE is not emitted by the sync planner"
+            );
+            assert!(
+                !capabilities.upsert_sql,
+                "UPSERT is not emitted by the sync planner"
+            );
         }
     }
 }

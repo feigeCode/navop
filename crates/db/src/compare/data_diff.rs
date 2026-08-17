@@ -52,9 +52,17 @@ pub fn compare_data_rows(
     let mut removed = Vec::new();
     let mut modified = Vec::new();
 
+    // HashMap 的迭代顺序带随机种子；按规范化键排序，保证结果和
+    // SQL 计划/UI 展示在不同运行中保持确定。
+    let mut source_keys: Vec<_> = source_map.keys().cloned().collect();
+    source_keys.sort();
+    let mut target_keys: Vec<_> = target_map.keys().cloned().collect();
+    target_keys.sort();
+
     // 遍历源端，找新增和修改
-    for (key, source_row) in &source_map {
-        if let Some(target_row) = target_map.get(key) {
+    for key in source_keys {
+        let source_row = &source_map[&key];
+        if let Some(target_row) = target_map.get(&key) {
             // 两端都存在，比较非键列值
             if let Some(modified_row) = compare_row_values(
                 source_row,
@@ -71,8 +79,9 @@ pub fn compare_data_rows(
     }
 
     // 遍历目标端，找删除
-    for (key, target_row) in &target_map {
-        if !source_map.contains_key(key) {
+    for key in target_keys {
+        let target_row = &target_map[&key];
+        if !source_map.contains_key(&key) {
             // 源端不存在，删除行
             removed.push(target_row.clone());
         }
@@ -88,14 +97,16 @@ pub fn compare_data_rows(
         modified,
         source_truncated: false,
         target_truncated: false,
+        target_table_missing: false,
+        column_types: HashMap::new(),
+        missing_target_schema: None,
     })
 }
 
 /// 构建键 -> 行数据的映射
 ///
-/// 键的生成规则：
-/// - 单个键列：该值的 JSON 序列化
-/// - 多个键列：多个 JSON 字符串用 U+001F (Unit Separator) 拼接
+/// 键的生成规则：按键列顺序将键值组成 JSON 数组后序列化。
+/// 结构化编码避免分隔符碰撞，并保留 NULL 与缺失键列的区别。
 fn build_key_map(
     rows: &[RowData],
     key_columns: &[String],
@@ -123,21 +134,17 @@ fn build_key_map(
 
 /// 为一行数据生成唯一键
 fn generate_row_key(row: &RowData, key_columns: &[String]) -> Result<String, DataCompareError> {
-    let key_values: Vec<String> = key_columns
+    let key_values: Vec<CellValue> = key_columns
         .iter()
         .map(|col| {
             row.get(col)
-                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()))
-                .unwrap_or_else(|| "null".to_string())
+                .cloned()
+                .ok_or_else(|| DataCompareError::KeyColumnNotFound(col.clone()))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
-    if key_columns.len() == 1 {
-        Ok(key_values[0].clone())
-    } else {
-        // 多键用 U+001F 分隔
-        Ok(key_values.join("\u{001F}"))
-    }
+    serde_json::to_string(&key_values)
+        .map_err(|error| DataCompareError::ConversionError(error.to_string()))
 }
 
 /// 比较两行的非键列值，返回修改详情
@@ -363,5 +370,123 @@ mod tests {
             result,
             Err(DataCompareError::DuplicateSourceKey(_))
         ));
+    }
+
+    #[test]
+    fn test_missing_key_value_is_not_treated_as_null() {
+        let source = vec![create_row(&[("name", json!("source"))])];
+        let target = vec![create_row(&[("id", json!(1)), ("name", json!("target"))])];
+
+        let result = compare_data_rows(
+            source,
+            target,
+            DataCompareOptions {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string(), "name".to_string()],
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(DataCompareError::KeyColumnNotFound(column)) if column == "id"
+        ));
+    }
+
+    #[test]
+    fn test_target_duplicate_key_error() {
+        let source = vec![];
+        let target = vec![
+            create_row(&[("id", json!(1))]),
+            create_row(&[("id", json!(1))]),
+        ];
+
+        let result = compare_data_rows(
+            source,
+            target,
+            DataCompareOptions {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+                key_columns: vec!["id".to_string()],
+                columns: vec!["id".to_string()],
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(DataCompareError::DuplicateTargetKey(_))
+        ));
+    }
+
+    #[test]
+    fn test_diff_output_order_is_deterministic() {
+        let source = vec![
+            create_row(&[("id", json!(3)), ("name", json!("source-3"))]),
+            create_row(&[("id", json!(1)), ("name", json!("source-1"))]),
+            create_row(&[("id", json!(2)), ("name", json!("source-2"))]),
+        ];
+        let target = vec![
+            create_row(&[("id", json!(4)), ("name", json!("target-4"))]),
+            create_row(&[("id", json!(2)), ("name", json!("target-2"))]),
+        ];
+        let options = DataCompareOptions {
+            source_table: "users".to_string(),
+            target_table: "users".to_string(),
+            key_columns: vec!["id".to_string()],
+            columns: vec!["id".to_string(), "name".to_string()],
+        };
+
+        let result = compare_data_rows(source, target, options).unwrap();
+
+        let added_ids: Vec<_> = result
+            .added
+            .iter()
+            .map(|row| row.get("id").cloned().unwrap())
+            .collect();
+        let removed_ids: Vec<_> = result
+            .removed
+            .iter()
+            .map(|row| row.get("id").cloned().unwrap())
+            .collect();
+        let modified_ids: Vec<_> = result
+            .modified
+            .iter()
+            .map(|row| row.key_values.get("id").cloned().unwrap())
+            .collect();
+
+        assert_eq!(added_ids, vec![json!(1), json!(3)]);
+        assert_eq!(removed_ids, vec![json!(4)]);
+        assert_eq!(modified_ids, vec![json!(2)]);
+    }
+
+    #[test]
+    fn test_composite_key_with_unit_separator_is_unambiguous() {
+        let source = vec![
+            create_row(&[
+                ("left", json!("a\u{001f}b")),
+                ("right", json!("c")),
+                ("value", json!(1)),
+            ]),
+            create_row(&[
+                ("left", json!("a")),
+                ("right", json!("b\u{001f}c")),
+                ("value", json!(2)),
+            ]),
+        ];
+
+        let result = compare_data_rows(
+            source,
+            vec![],
+            DataCompareOptions {
+                source_table: "pairs".to_string(),
+                target_table: "pairs".to_string(),
+                key_columns: vec!["left".to_string(), "right".to_string()],
+                columns: vec!["left".to_string(), "right".to_string(), "value".to_string()],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.added.len(), 2);
     }
 }
