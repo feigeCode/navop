@@ -165,6 +165,7 @@ fn application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::AiWorkbench => IconName::AILine,
         NavigationApplication::Team => IconName::TeamLine,
         NavigationApplication::Notes => IconName::NotesLine,
+        #[cfg(feature = "api-testing")]
         NavigationApplication::ApiTesting => IconName::Globe,
         NavigationApplication::JsonFormatter => IconName::File,
         NavigationApplication::SessionLogs => IconName::Terminal,

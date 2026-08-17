@@ -2566,114 +2566,369 @@ impl ApiTestView {
             .active_environment()
             .map(|environment| environment.name.clone())
             .unwrap_or_else(|| t!("ApiTest.environment").to_string());
-        let environment_count = self.environments.len();
-        let environment_options = self
-            .environments
-            .iter()
-            .enumerate()
-            .map(|(index, environment)| {
-                let environment_id = environment.id.clone();
-                let is_active = active_id.as_deref() == Some(environment.id.as_str());
-                Button::new(format!("api-environment-option-{index}"))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .justify_start()
-                    .icon(if is_active {
-                        IconName::Check
-                    } else {
-                        IconName::Globe
-                    })
-                    .label(environment.name.clone())
-                    .when(is_active, |button| {
-                        button
-                            .bg(theme.accent.opacity(0.12))
-                            .text_color(theme.accent)
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_environment(&environment_id, window, cx);
-                    }))
-            })
-            .collect::<Vec<_>>();
-        let mut settings_card =
-            |id: &'static str, title: String, hint: String, section: KvSection| {
+
+        let switcher_theme = theme.clone();
+        let switcher_environments = self.environments.clone();
+        let switcher_active_id = active_id.clone();
+        let switcher_view = cx.entity();
+        let switcher_trigger = Button::new("api-environment-switcher-trigger")
+            .outline()
+            .small()
+            .w(px(176.))
+            .flex_shrink_0()
+            .justify_start()
+            .icon(IconName::Globe)
+            .label(active_name.clone())
+            .dropdown_caret(true)
+            .tooltip(t!("ApiTest.environment").to_string());
+        let environment_switcher = Popover::new("api-environment-switcher")
+            .anchor(Anchor::TopRight)
+            .p_0()
+            .trigger(switcher_trigger)
+            .content(move |_, _, cx| {
+                let popover = cx.entity();
+                let environment_options =
+                    switcher_environments
+                        .iter()
+                        .enumerate()
+                        .map(|(index, environment)| {
+                            let environment_id = environment.id.clone();
+                            let is_active =
+                                switcher_active_id.as_deref() == Some(environment.id.as_str());
+                            let view = switcher_view.clone();
+                            let popover = popover.clone();
+
+                            h_flex()
+                                .id(format!("api-environment-switch-option-{index}"))
+                                .w_full()
+                                .h(px(38.))
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap_2()
+                                .px_2()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .text_color(switcher_theme.popover_foreground)
+                                .when(is_active, |row| {
+                                    row.bg(switcher_theme.list_active)
+                                        .border_1()
+                                        .border_color(switcher_theme.list_active_border)
+                                })
+                                .hover(|style| style.bg(switcher_theme.list_hover))
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.select_environment(&environment_id, window, cx);
+                                    });
+                                    popover.update(cx, |state, cx| {
+                                        state.dismiss(window, cx);
+                                    });
+                                })
+                                .child(Icon::new(IconName::Globe).xsmall().text_color(
+                                    if is_active {
+                                        switcher_theme.primary
+                                    } else {
+                                        switcher_theme.muted_foreground
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_sm()
+                                        .font_weight(if is_active {
+                                            FontWeight::SEMIBOLD
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .text_color(switcher_theme.popover_foreground)
+                                        .child(environment.name.clone()),
+                                )
+                                .when(is_active, |row| {
+                                    row.child(
+                                        Icon::new(IconName::Check)
+                                            .xsmall()
+                                            .flex_shrink_0()
+                                            .text_color(switcher_theme.primary),
+                                    )
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                let new_environment_view = switcher_view.clone();
+                let new_environment_popover = popover.clone();
+
                 v_flex()
-                    .id(id)
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(205.))
-                    .min_h(px(180.))
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(8.))
-                    .bg(theme.background)
+                    .id("api-environment-switcher-content")
+                    .w(px(288.))
+                    .min_h_0()
+                    .overflow_hidden()
+                    .bg(switcher_theme.popover)
+                    .text_color(switcher_theme.popover_foreground)
                     .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground)
-                            .child(title),
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(switcher_theme.border)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(switcher_theme.muted_foreground)
+                                    .child(t!("ApiTest.environments").to_string()),
+                            )
+                            .child(
+                                Tag::secondary()
+                                    .small()
+                                    .child(switcher_environments.len().to_string()),
+                            ),
                     )
                     .child(
                         div()
-                            .flex_1()
+                            .w_full()
+                            .max_h(px(280.))
+                            .overflow_y_scrollbar()
+                            .scrollbar_show(ScrollbarShow::Always)
+                            .p_1()
+                            .child(v_flex().w_full().gap_0p5().children(environment_options)),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .p_1()
+                            .border_t_1()
+                            .border_color(switcher_theme.border)
+                            .child(
+                                Button::new("api-new-environment-quick")
+                                    .ghost()
+                                    .small()
+                                    .w_full()
+                                    .justify_start()
+                                    .icon(IconName::Plus)
+                                    .label(t!("ApiTest.new_environment").to_string())
+                                    .on_click(move |_, window, cx| {
+                                        new_environment_popover.update(cx, |state, cx| {
+                                            state.dismiss(window, cx);
+                                        });
+                                        new_environment_view.update(cx, |this, cx| {
+                                            this.prompt_new_environment(window, cx);
+                                        });
+                                    }),
+                            ),
+                    )
+            });
+
+        let manager_trigger = Button::new("api-environment-manager-trigger")
+            .outline()
+            .small()
+            .w(px(32.))
+            .px_0()
+            .flex_shrink_0()
+            .justify_center()
+            .icon(IconName::Settings2)
+            .tooltip(t!("ApiTest.manage_environments").to_string());
+        let manager_view = cx.entity();
+        let manager_trigger = manager_trigger.on_click(move |_, window, cx| {
+            let manager_view = manager_view.clone();
+            window.open_dialog(cx, move |dialog, _, cx| {
+                let manager_content =
+                    manager_view.update(cx, |this, cx| this.render_environment_manager_dialog(cx));
+                dialog
+                    .w(px(1000.))
+                    .h(px(680.))
+                    .p_0()
+                    .close_button(false)
+                    .overlay(true)
+                    .overlay_closable(true)
+                    .child(manager_content)
+            });
+        });
+
+        div()
+            .id("api-environment-select")
+            .flex_shrink_0()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(environment_switcher)
+                    .child(manager_trigger),
+            )
+            .into_any_element()
+    }
+
+    fn render_environment_manager_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let active_id = self.active_environment_id.clone();
+        let active_name = self
+            .active_environment()
+            .map(|environment| environment.name.clone())
+            .unwrap_or_else(|| t!("ApiTest.environment").to_string());
+        let environment_count = self.environments.len();
+        let manager_environment_options =
+            self.environments
+                .iter()
+                .enumerate()
+                .map(|(index, environment)| {
+                    let environment_id = environment.id.clone();
+                    let is_active = active_id.as_deref() == Some(environment.id.as_str());
+                    h_flex()
+                        .id(format!("api-environment-option-{index}"))
+                        .w_full()
+                        .h(px(42.))
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .rounded(px(7.))
+                        .cursor_pointer()
+                        .text_color(theme.sidebar_foreground)
+                        .when(is_active, |row| {
+                            row.bg(theme.sidebar_accent)
+                                .text_color(theme.sidebar_accent_foreground)
+                        })
+                        .hover(|style| {
+                            style
+                                .bg(theme.sidebar_accent)
+                                .text_color(theme.sidebar_accent_foreground)
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_environment(&environment_id, window, cx);
+                        }))
+                        .child(
+                            div()
+                                .size(px(26.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(7.))
+                                .bg(if is_active {
+                                    theme.sidebar_primary
+                                } else {
+                                    theme.muted
+                                })
+                                .child(Icon::new(IconName::Globe).xsmall().text_color(
+                                    if is_active {
+                                        theme.sidebar_primary_foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .font_weight(if is_active {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .child(environment.name.clone()),
+                        )
+                        .when(is_active, |row| {
+                            row.child(
+                                Icon::new(IconName::Check)
+                                    .xsmall()
+                                    .flex_shrink_0()
+                                    .text_color(theme.sidebar_accent_foreground),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+        let mut settings_section =
+            |id: &'static str, title: String, hint: String, section: KvSection| {
+                v_flex()
+                    .id(id)
+                    .w_full()
+                    .min_w_0()
+                    .gap_3()
+                    .p_4()
+                    .bg(theme.popover)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_lg()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .size(px(7.))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .bg(theme.primary),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.popover_foreground)
+                                    .child(title),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(220.))
                             .min_h_0()
                             .child(self.render_kv_editor(section, cx)),
                     )
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_xs()
+                            .text_sm()
                             .text_color(theme.muted_foreground)
                             .child(hint),
                     )
             };
-        let environment_variables_card = settings_card(
+        let environment_variables_section = settings_section(
             "api-environment-variables",
             t!("ApiTest.environment_variables").to_string(),
             t!("ApiTest.environment_variables_hint").to_string(),
             KvSection::Environment,
         );
-        let environment_headers_card = settings_card(
+        let environment_headers_section = settings_section(
             "api-environment-headers",
             t!("ApiTest.environment_headers").to_string(),
             t!("ApiTest.environment_headers_hint").to_string(),
             KvSection::EnvironmentHeaders,
         );
-        let environment_params_card = settings_card(
+        let environment_params_section = settings_section(
             "api-environment-params",
             t!("ApiTest.environment_params").to_string(),
             t!("ApiTest.environment_params_hint").to_string(),
             KvSection::EnvironmentParams,
         );
-        let environment_cookies_card = settings_card(
+        let environment_cookies_section = settings_section(
             "api-environment-cookies",
             t!("ApiTest.environment_cookies").to_string(),
             t!("ApiTest.environment_cookies_hint").to_string(),
             KvSection::EnvironmentCookies,
         );
-        drop(settings_card);
-        let trigger = Button::new("api-environment-manager-trigger")
-            .outline()
-            .small()
-            .w(px(188.))
-            .flex_shrink_0()
-            .justify_start()
-            .icon(IconName::Globe)
-            .label(active_name.clone())
-            .dropdown_caret(true)
-            .tooltip(t!("ApiTest.manage_environments").to_string());
-        let content = h_flex()
+        drop(settings_section);
+
+        h_flex()
             .id("api-environment-manager-content")
-            .w(px(920.))
-            .h(px(620.))
+            .w_full()
+            .h_full()
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(theme.background)
+            .bg(theme.popover)
+            .text_color(theme.popover_foreground)
             .child(
                 v_flex()
                     .w(px(232.))
@@ -2681,89 +2936,77 @@ impl ApiTestView {
                     .flex_shrink_0()
                     .min_h_0()
                     .border_r_1()
-                    .border_color(theme.border)
+                    .border_color(theme.sidebar_border)
+                    .bg(theme.sidebar)
                     .child(
-                        h_flex()
+                        v_flex()
                             .w_full()
                             .flex_shrink_0()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_2()
+                            .gap_0p5()
+                            .p_3()
                             .border_b_1()
-                            .border_color(theme.border)
+                            .border_color(theme.sidebar_border)
                             .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_0p5()
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
                                     .child(
                                         div()
+                                            .flex_1()
+                                            .min_w_0()
                                             .text_sm()
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.foreground)
-                                            .child(t!("ApiTest.environments").to_string()),
+                                            .text_color(theme.sidebar_foreground)
+                                            .child(t!("ApiTest.manage_environments").to_string()),
                                     )
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
+                                        Tag::secondary()
+                                            .small()
                                             .child(environment_count.to_string()),
                                     ),
                             )
                             .child(
-                                Button::new("api-new-environment")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Plus)
-                                    .tooltip(t!("ApiTest.new_environment").to_string())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.prompt_new_environment(window, cx);
-                                    })),
+                                div()
+                                    .w_full()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(t!("ApiTest.environments").to_string()),
                             ),
                     )
                     .child(
                         div()
+                            .id("api-environment-list-scroll")
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scrollbar()
                             .scrollbar_show(ScrollbarShow::Always)
                             .p_2()
-                            .child(v_flex().w_full().gap_1().children(environment_options)),
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .children(manager_environment_options),
+                            ),
                     )
                     .child(
-                        h_flex()
+                        div()
                             .w_full()
                             .flex_shrink_0()
-                            .gap_1()
-                            .p_2()
+                            .p_3()
                             .border_t_1()
-                            .border_color(theme.border)
+                            .border_color(theme.sidebar_border)
                             .child(
-                                Button::new("api-rename-environment")
-                                    .ghost()
-                                    .xsmall()
-                                    .flex_1()
-                                    .icon(IconName::Edit)
-                                    .label(t!("ApiTest.rename_environment").to_string())
+                                Button::new("api-new-environment")
+                                    .secondary()
+                                    .small()
+                                    .w_full()
+                                    .icon(IconName::Plus)
+                                    .label(t!("ApiTest.new_environment").to_string())
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.prompt_rename_active_environment(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("api-delete-environment")
-                                    .ghost()
-                                    .xsmall()
-                                    .flex_1()
-                                    .icon(IconName::Delete)
-                                    .label(t!("ApiTest.delete_environment").to_string())
-                                    .tooltip(if environment_count <= 1 {
-                                        t!("ApiTest.cannot_delete_last_environment").to_string()
-                                    } else {
-                                        t!("ApiTest.delete_environment").to_string()
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.delete_active_environment(window, cx);
+                                        this.prompt_new_environment(window, cx);
                                     })),
                             ),
                     ),
@@ -2777,47 +3020,39 @@ impl ApiTestView {
                     .child(
                         h_flex()
                             .w_full()
+                            .h(px(56.))
                             .flex_shrink_0()
                             .items_center()
-                            .gap_3()
-                            .px_4()
-                            .py_3()
+                            .gap_2()
+                            .px_5()
                             .border_b_1()
                             .border_color(theme.border)
+                            .bg(theme.popover)
                             .child(
                                 div()
-                                    .size(px(32.))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(8.))
-                                    .bg(theme.accent.opacity(0.12))
-                                    .child(
-                                        Icon::new(IconName::Globe).small().text_color(theme.accent),
-                                    ),
-                            )
-                            .child(
-                                v_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.foreground)
-                                            .child(active_name),
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(theme.muted_foreground).child(
-                                            t!("ApiTest.environment_settings_hint").to_string(),
-                                        ),
-                                    ),
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.popover_foreground)
+                                    .child(t!("ApiTest.environment_settings").to_string()),
+                            )
+                            .child(
+                                Button::new("api-environment-manager-close")
+                                    .ghost()
+                                    .small()
+                                    .w(px(32.))
+                                    .px_0()
+                                    .justify_center()
+                                    .icon(IconName::Close)
+                                    .on_click(|_, window, cx| {
+                                        window.close_dialog(cx);
+                                    }),
                             ),
                     )
                     .child(
                         div()
+                            .id("api-environment-settings-scroll")
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scrollbar()
@@ -2825,17 +3060,112 @@ impl ApiTestView {
                             .child(
                                 v_flex()
                                     .w_full()
-                                    .gap_3()
-                                    .p_4()
+                                    .min_w_0()
+                                    .gap_4()
+                                    .p_5()
                                     .child(
-                                        v_flex()
+                                        h_flex()
                                             .w_full()
-                                            .gap_2()
-                                            .p_3()
+                                            .items_center()
+                                            .gap_3()
+                                            .p_4()
+                                            .bg(theme.secondary)
                                             .border_1()
                                             .border_color(theme.border)
-                                            .rounded(px(8.))
-                                            .bg(theme.background)
+                                            .rounded_lg()
+                                            .child(
+                                                div()
+                                                    .size(px(36.))
+                                                    .flex_shrink_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(px(9.))
+                                                    .bg(theme.sidebar_primary)
+                                                    .child(
+                                                        Icon::new(IconName::Globe)
+                                                            .small()
+                                                            .text_color(
+                                                                theme.sidebar_primary_foreground,
+                                                            ),
+                                                    ),
+                                            )
+                                            .child(
+                                                v_flex()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_base()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(theme.secondary_foreground)
+                                                            .child(active_name),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(theme.muted_foreground)
+                                                            .child(
+                                                                t!(
+                                                                    "ApiTest.environment_settings_hint"
+                                                                )
+                                                                .to_string(),
+                                                            ),
+                                                    ),
+                                            )
+                                            .child(
+                                                Button::new("api-rename-environment")
+                                                    .outline()
+                                                    .small()
+                                                    .icon(IconName::Edit)
+                                                    .label(
+                                                        t!("ApiTest.rename_environment").to_string(),
+                                                    )
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.prompt_rename_active_environment(
+                                                                window, cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            )
+                                            .child(
+                                                Button::new("api-delete-environment")
+                                                    .ghost()
+                                                    .small()
+                                                    .w(px(32.))
+                                                    .px_0()
+                                                    .justify_center()
+                                                    .icon(IconName::Delete)
+                                                    .disabled(environment_count <= 1)
+                                                    .tooltip(if environment_count <= 1 {
+                                                        t!(
+                                                            "ApiTest.cannot_delete_last_environment"
+                                                        )
+                                                        .to_string()
+                                                    } else {
+                                                        t!("ApiTest.delete_environment").to_string()
+                                                    })
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.delete_active_environment(
+                                                                window, cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .id("api-environment-base-url")
+                                            .w_full()
+                                            .gap_3()
+                                            .p_4()
+                                            .bg(theme.popover)
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .rounded_lg()
                                             .child(
                                                 h_flex()
                                                     .w_full()
@@ -2847,7 +3177,7 @@ impl ApiTestView {
                                                             .min_w_0()
                                                             .text_sm()
                                                             .font_weight(FontWeight::SEMIBOLD)
-                                                            .text_color(theme.foreground)
+                                                            .text_color(theme.popover_foreground)
                                                             .child(
                                                                 t!("ApiTest.environment_base_url")
                                                                     .to_string(),
@@ -2864,7 +3194,7 @@ impl ApiTestView {
                                             )
                                             .child(
                                                 div()
-                                                    .text_xs()
+                                                    .text_sm()
                                                     .text_color(theme.muted_foreground)
                                                     .child(
                                                         t!("ApiTest.environment_base_url_hint")
@@ -2872,35 +3202,12 @@ impl ApiTestView {
                                                     ),
                                             ),
                                     )
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .min_w_0()
-                                            .gap_3()
-                                            .child(environment_variables_card)
-                                            .child(environment_headers_card),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .min_w_0()
-                                            .gap_3()
-                                            .child(environment_params_card)
-                                            .child(environment_cookies_card),
-                                    ),
+                                    .child(environment_variables_section)
+                                    .child(environment_headers_section)
+                                    .child(environment_params_section)
+                                    .child(environment_cookies_section),
                             ),
                     ),
-            );
-
-        div()
-            .id("api-environment-select")
-            .flex_shrink_0()
-            .child(
-                Popover::new("api-environment-manager")
-                    .anchor(Anchor::TopRight)
-                    .p_0()
-                    .trigger(trigger)
-                    .child(content),
             )
             .into_any_element()
     }
@@ -5703,7 +6010,23 @@ mod render_contract_tests {
             "the new-request popover must create the selected protocol"
         );
         assert!(
-            environment_manager.contains("Popover::new(\"api-environment-manager\")")
+            environment_manager.contains("Popover::new(\"api-environment-switcher\")")
+                && environment_manager.contains("api-environment-switcher-content")
+                && environment_manager.contains("api-new-environment-quick")
+                && environment_manager.contains("window.open_dialog")
+                && environment_manager.contains(".overlay(true)")
+                && environment_manager.contains(".overlay_closable(true)")
+                && environment_manager.contains("api-environment-manager-content")
+                && environment_manager.contains("api-environment-manager-close")
+                && environment_manager.contains("theme.sidebar_accent_foreground")
+                && environment_manager.contains("theme.popover_foreground")
+                && environment_manager.contains("api-environment-list-scroll")
+                && environment_manager.contains("api-environment-settings-scroll")
+                && environment_manager
+                    .matches(".overflow_y_scrollbar()")
+                    .count()
+                    >= 3
+                && !environment_manager.contains("Popover::new(\"api-environment-manager\")")
                 && environment_manager.contains("this.select_environment")
                 && behavior.contains("prompt_new_environment")
                 && behavior.contains("prompt_rename_active_environment")
@@ -5719,8 +6042,14 @@ mod render_contract_tests {
             "environment management must support switching, lifecycle actions, and scoped request settings"
         );
         assert!(
-            environment_manager.contains("self.render_kv_editor(section, cx)"),
-            "environment cards must mount their scoped key-value editors"
+            environment_manager.contains("settings_section")
+                && environment_manager.contains(".h(px(220.))")
+                && environment_manager.contains("self.render_kv_editor(section, cx)")
+                && environment_manager.contains(".child(environment_variables_section)")
+                && environment_manager.contains(".child(environment_headers_section)")
+                && environment_manager.contains(".child(environment_params_section)")
+                && environment_manager.contains(".child(environment_cookies_section)"),
+            "environment settings must use full-width stacked key-value editors"
         );
         for editor in [
             "\"api-environment-variables\"",
@@ -5757,9 +6086,13 @@ mod render_contract_tests {
             "api-sidebar-history",
             "api-history-list",
             "api-environment-select",
-            "api-environment-manager",
+            "api-environment-switcher",
+            "api-environment-switcher-trigger",
+            "api-environment-manager-content",
             "api-environment-manager-trigger",
+            "api-environment-manager-close",
             "api-new-environment",
+            "api-new-environment-quick",
             "api-rename-environment",
             "api-delete-environment",
             "api-import-collection",

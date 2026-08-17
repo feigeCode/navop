@@ -61,9 +61,10 @@ fn application_navigation_partition_preserves_optional_entries() {
         if show_team {
             expected.push(NavigationApplication::Team);
         }
+        expected.push(NavigationApplication::Notes);
+        #[cfg(feature = "api-testing")]
+        expected.push(NavigationApplication::ApiTesting);
         expected.extend([
-            NavigationApplication::Notes,
-            NavigationApplication::ApiTesting,
             NavigationApplication::JsonFormatter,
             NavigationApplication::SessionLogs,
             NavigationApplication::CredentialVault,

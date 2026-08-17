@@ -36,7 +36,8 @@ extension-runtime = { workspace = true, features = ["wasm-components"] }
 extension-host.workspace = true
 extension_view = { workspace = true }
 notes = { workspace = true }
-api_tools = { workspace = true }
+json_view = { workspace = true }
+api_tools = { workspace = true, optional = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
 agent_runtime = { workspace = true }
@@ -81,6 +82,7 @@ tempfile = "3"
 
 [features]
 default = ["wasm-components", "embedded-webview"]
+api-testing = ["dep:api_tools"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]

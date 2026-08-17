@@ -1,8 +1,7 @@
-//! 接口工具：接口测试 + JSON 格式化（参考 verve 的实现移植，按 notes crate 方式集成）。
+//! 接口测试工具（参考 verve 的实现移植，按 notes crate 方式集成）。
 //!
 //! - [`ApiTestView`]：目录/请求树，参数、路径变量、请求头、请求体、鉴权、Cookie、
 //!   预执行脚本、Tests 脚本，以及响应体/响应头/Cookies 面板
-//! - [`JsonFormatterView`]：可折叠树形 JSON 格式化器
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -13,7 +12,6 @@ mod grpc_web;
 mod grpc_web_tests;
 mod history;
 mod http;
-mod json_view;
 mod mock;
 mod mock_server;
 mod multipart;
@@ -46,7 +44,6 @@ mod websocket_transport_tests;
 
 pub use api_test_view::ApiTestView;
 pub use http::{HttpResponse, KeyValue, RequestMethod};
-pub use json_view::JsonFormatterView;
 pub use mock::{CompiledMockRule, MockRequestLike, MockRule, MockRuleSet, PathPattern, url_decode};
 pub use mock_server::{MockRequestLog, MockServer, MockServerState};
 pub use protocol::Protocol;

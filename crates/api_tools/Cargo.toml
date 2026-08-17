@@ -3,7 +3,7 @@ name = "api_tools"
 version = "0.1.0"
 publish.workspace = true
 edition.workspace = true
-description = "接口测试与 JSON 格式化工具（参考 verve 的实现移植）"
+description = "接口测试工具（参考 verve 的实现移植）"
 
 [dependencies]
 anyhow.workspace = true

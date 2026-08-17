@@ -25,6 +25,7 @@ pub(crate) enum NavigationApplication {
     AiWorkbench,
     Team,
     Notes,
+    #[cfg(feature = "api-testing")]
     ApiTesting,
     JsonFormatter,
     SessionLogs,
@@ -99,6 +100,7 @@ pub(crate) fn leading_navigation_applications(
         applications.push(NavigationApplication::Team);
     }
     applications.push(NavigationApplication::Notes);
+    #[cfg(feature = "api-testing")]
     applications.push(NavigationApplication::ApiTesting);
     applications.push(NavigationApplication::JsonFormatter);
     applications
@@ -124,6 +126,7 @@ impl NavigationApplication {
             }
             Self::Team => t!("TeamManagement.title").to_string(),
             Self::Notes => t!("Home.notes").to_string(),
+            #[cfg(feature = "api-testing")]
             Self::ApiTesting => t!("Home.api_testing").to_string(),
             Self::JsonFormatter => t!("Home.json_formatter").to_string(),
             Self::SessionLogs => t!("Home.session_logs").to_string(),

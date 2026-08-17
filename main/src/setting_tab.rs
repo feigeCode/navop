@@ -497,9 +497,10 @@ impl SettingsPanel {
                                     },
                                     |val: SharedString, cx: &mut App| {
                                         let locale = val.to_string();
-                                        gpui_component::set_locale(effective_locale_for_setting(
-                                            &locale,
-                                        ));
+                                        let effective_locale =
+                                            effective_locale_for_setting(&locale);
+                                        gpui_component::set_locale(effective_locale);
+                                        notes::set_markdown_editor_locale(effective_locale, cx);
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.locale = locale;
                                         });

@@ -6269,6 +6269,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "json_view"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "one-core",
+ "rust-i18n",
+ "serde_json",
+]
+
+[[package]]
 name = "jsonrpcmsg"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6948,6 +6959,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "interprocess",
+ "json_view",
  "mongodb-runtime",
  "mongodb_view",
  "notes",
@@ -7045,6 +7057,7 @@ dependencies = [
  "ratex-parser",
  "ratex-svg",
  "ropey",
+ "rust-i18n",
  "serde",
  "serde_json",
  "toml 1.1.2+spec-1.1.0",

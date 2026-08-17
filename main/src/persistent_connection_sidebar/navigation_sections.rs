@@ -233,6 +233,7 @@ fn persistent_application_id(application: NavigationApplication) -> &'static str
         NavigationApplication::AiWorkbench => "persistent-open-ai-workbench",
         NavigationApplication::Team => "persistent-open-team",
         NavigationApplication::Notes => "persistent-open-notes",
+        #[cfg(feature = "api-testing")]
         NavigationApplication::ApiTesting => "persistent-open-api-testing",
         NavigationApplication::JsonFormatter => "persistent-open-json-formatter",
         NavigationApplication::SessionLogs => "persistent-open-session-logs",
@@ -247,6 +248,7 @@ fn persistent_application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::AiWorkbench => IconName::AILine,
         NavigationApplication::Team => IconName::TeamLine,
         NavigationApplication::Notes => IconName::NotesLine,
+        #[cfg(feature = "api-testing")]
         NavigationApplication::ApiTesting => IconName::Network,
         NavigationApplication::JsonFormatter => IconName::Schema,
         NavigationApplication::SessionLogs => IconName::Terminal,
