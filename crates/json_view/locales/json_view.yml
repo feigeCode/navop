@@ -1,0 +1,49 @@
+_version: 2
+
+JsonView:
+  json_formatter:
+    en: JSON Formatter
+    zh-CN: JSON 格式化
+    zh-HK: JSON 格式化
+
+JsonFormatter:
+  input_placeholder:
+    en: "Paste JSON here…"
+    zh-CN: "在此粘贴 JSON…"
+    zh-HK: "在此粘貼 JSON…"
+  formatted:
+    en: Formatted Result
+    zh-CN: 格式化结果
+    zh-HK: 格式化結果
+  expand_all:
+    en: Expand All
+    zh-CN: 全部展开
+    zh-HK: 全部展開
+  collapse_all:
+    en: Collapse All
+    zh-CN: 全部折叠
+    zh-HK: 全部摺疊
+  copy_result:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  copy_success:
+    en: Copied
+    zh-CN: 已复制
+    zh-HK: 已複製
+  compact:
+    en: Compact
+    zh-CN: 精简
+    zh-HK: 精簡
+  invalid_json:
+    en: "Invalid JSON: %{error}"
+    zh-CN: "JSON 格式无效：%{error}"
+    zh-HK: "JSON 格式無效：%{error}"
+  parsing:
+    en: Parsing…
+    zh-CN: 解析中…
+    zh-HK: 解析中…
+  copy_value:
+    en: Click to copy value
+    zh-CN: 点击复制值
+    zh-HK: 點擊複製值
