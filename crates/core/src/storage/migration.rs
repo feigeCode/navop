@@ -98,6 +98,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260817000001",
         include_str!("../../migrations/20260817000001_quick_command_shortcut.sql"),
     ),
+    (
+        "20260817000002",
+        include_str!("../../migrations/20260817000002_sql_execution_history.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

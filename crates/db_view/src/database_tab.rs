@@ -193,7 +193,10 @@ impl DatabaseTabView {
             .iter()
             .filter_map(|connection| connection.id.map(|id| id.to_string()))
             .collect::<Vec<_>>();
-        let execution_history = cx.new(ExecutionHistoryPanel::new);
+        let execution_history = cx.new({
+            let connection_ids = connection_ids.clone();
+            move |cx| ExecutionHistoryPanel::new(connection_ids, cx)
+        });
 
         let event_handler = cx.new(|cx| {
             DatabaseEventHandler::new(

@@ -9,6 +9,7 @@ use crate::storage::models::has_decrypt_failure_in_sensitive_fields;
 use crate::storage::quick_command::QuickCommandRepository;
 use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::sftp_favorite_path::SftpFavoritePathRepository;
+use crate::storage::sql_execution_history::SqlExecutionHistoryRepository;
 use crate::storage::team_key_cache::TeamKeyCacheRepository;
 use crate::storage::team_membership_cache::TeamMembershipCacheRepository;
 use crate::storage::terminal_command_history::TerminalCommandHistoryRepository;
@@ -1590,6 +1591,7 @@ pub fn init(cx: &mut App) {
     let workspace_repo = WorkspaceRepository::new(conn.clone());
     let quick_cmd_repo = QuickCommandRepository::new(conn.clone());
     let sftp_favorite_path_repo = SftpFavoritePathRepository::new(conn.clone());
+    let sql_execution_history_repo = SqlExecutionHistoryRepository::new(conn.clone());
     let terminal_command_history_repo = TerminalCommandHistoryRepository::new(conn.clone());
     let pending_deletion_repo = PendingCloudDeletionRepository::new(conn.clone());
     let team_key_cache_repo = TeamKeyCacheRepository::new(conn.clone());
@@ -1604,6 +1606,7 @@ pub fn init(cx: &mut App) {
     storage.register(credential_repo);
     storage.register(quick_cmd_repo);
     storage.register(sftp_favorite_path_repo);
+    storage.register(sql_execution_history_repo);
     storage.register(terminal_command_history_repo);
     storage.register(pending_deletion_repo);
     storage.register(team_key_cache_repo);

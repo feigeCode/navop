@@ -1,4 +1,5 @@
 use db::{ExecResult, QueryResult, SqlErrorInfo, SqlResult};
+use one_core::storage::{SqlExecutionHistoryEntry, SqlExecutionStatus, now as storage_now};
 use rust_i18n::t;
 
 pub const MAX_EXECUTION_RECORDS: usize = 1000;
@@ -26,6 +27,7 @@ pub struct ExecutionRecord {
     pub affected_rows: u64,
     pub returned_rows: Option<usize>,
     pub elapsed_ms: u128,
+    pub executed_at: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,6 +36,10 @@ pub struct ExecutionHistory {
 }
 
 impl ExecutionHistory {
+    pub fn from_records(records: Vec<ExecutionRecord>) -> Self {
+        Self { records }
+    }
+
     pub fn records(&self) -> &[ExecutionRecord] {
         &self.records
     }
@@ -42,9 +48,14 @@ impl ExecutionHistory {
         self.records.clear();
     }
 
-    pub fn record_result(&mut self, context: ExecutionContext, result: &SqlResult) {
+    pub fn record_result(
+        &mut self,
+        context: ExecutionContext,
+        result: &SqlResult,
+    ) -> ExecutionRecord {
         let record = ExecutionRecord::from_result(context, result);
-        self.push(record);
+        self.push(record.clone());
+        record
     }
 
     pub fn record_results(
@@ -54,20 +65,23 @@ impl ExecutionHistory {
         sql: Option<String>,
         success_summary: impl Into<String>,
         failure_summary: impl Fn(&str) -> String,
-    ) {
+    ) -> Vec<ExecutionRecord> {
         let Some(sql) = sql else {
+            let mut records = Vec::with_capacity(results.len());
             for result in results {
-                self.record_result(context.clone(), result);
+                records.push(self.record_result(context.clone(), result));
             }
-            return;
+            return records;
         };
-        self.push(ExecutionRecord::from_results(
+        let record = ExecutionRecord::from_results(
             context,
             results,
             sql,
             success_summary.into(),
             failure_summary,
-        ));
+        );
+        self.push(record.clone());
+        vec![record]
     }
 
     pub fn record_transport_error(
@@ -75,8 +89,8 @@ impl ExecutionHistory {
         context: ExecutionContext,
         sql: String,
         error: String,
-    ) {
-        self.push(ExecutionRecord {
+    ) -> ExecutionRecord {
+        let record = ExecutionRecord {
             context,
             status: ExecutionStatus::Error,
             sql,
@@ -85,7 +99,10 @@ impl ExecutionHistory {
             affected_rows: 0,
             returned_rows: None,
             elapsed_ms: 0,
-        });
+            executed_at: storage_now(),
+        };
+        self.push(record.clone());
+        record
     }
 
     fn push(&mut self, record: ExecutionRecord) {
@@ -114,6 +131,7 @@ impl ExecutionRecord {
                 affected_rows: 0,
                 returned_rows: Some(rows.len()),
                 elapsed_ms: *elapsed_ms,
+                executed_at: storage_now(),
             },
             SqlResult::Exec(ExecResult {
                 sql,
@@ -132,6 +150,7 @@ impl ExecutionRecord {
                 affected_rows: *rows_affected,
                 returned_rows: None,
                 elapsed_ms: *elapsed_ms,
+                executed_at: storage_now(),
             },
             SqlResult::Error(SqlErrorInfo { sql, message }) => Self {
                 context,
@@ -142,6 +161,7 @@ impl ExecutionRecord {
                 affected_rows: 0,
                 returned_rows: None,
                 elapsed_ms: 0,
+                executed_at: storage_now(),
             },
         }
     }
@@ -199,6 +219,48 @@ impl ExecutionRecord {
             affected_rows,
             returned_rows,
             elapsed_ms,
+            executed_at: storage_now(),
+        }
+    }
+
+    pub fn to_storage_entry(&self) -> SqlExecutionHistoryEntry {
+        SqlExecutionHistoryEntry {
+            id: None,
+            connection_id: self.context.connection_id.clone(),
+            database: self.context.database.clone(),
+            schema: self.context.schema.clone(),
+            status: match self.status {
+                ExecutionStatus::Success => SqlExecutionStatus::Success,
+                ExecutionStatus::Error => SqlExecutionStatus::Error,
+            },
+            sql: self.sql.clone(),
+            summary: self.summary.clone(),
+            details: self.details.clone(),
+            affected_rows: self.affected_rows,
+            returned_rows: self.returned_rows,
+            elapsed_ms: self.elapsed_ms,
+            executed_at: self.executed_at,
+        }
+    }
+
+    pub fn from_storage_entry(entry: SqlExecutionHistoryEntry) -> Self {
+        Self {
+            context: ExecutionContext {
+                connection_id: entry.connection_id,
+                database: entry.database,
+                schema: entry.schema,
+            },
+            status: match entry.status {
+                SqlExecutionStatus::Success => ExecutionStatus::Success,
+                SqlExecutionStatus::Error => ExecutionStatus::Error,
+            },
+            sql: entry.sql,
+            summary: entry.summary,
+            details: entry.details,
+            affected_rows: entry.affected_rows,
+            returned_rows: entry.returned_rows,
+            elapsed_ms: entry.elapsed_ms,
+            executed_at: entry.executed_at,
         }
     }
 }

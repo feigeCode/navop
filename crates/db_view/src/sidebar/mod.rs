@@ -124,6 +124,11 @@ impl DatabaseSidebar {
     pub fn set_active_panel(&mut self, panel: Option<SidebarPanel>, cx: &mut Context<Self>) {
         if self.active_panel != panel {
             self.active_panel = panel;
+            if panel == Some(SidebarPanel::ExecutionHistory) {
+                self.execution_history.update(cx, |history, cx| {
+                    history.reload(cx);
+                });
+            }
             cx.emit(DatabaseSidebarEvent::PanelChanged);
             cx.notify();
         }
