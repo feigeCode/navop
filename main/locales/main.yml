@@ -2812,13 +2812,13 @@ Settings:
         zh-CN: 日志
         zh-HK: 日誌
       file_path:
-        en: Log File Path
-        zh-CN: 日志保存路径
-        zh-HK: 日誌保存路徑
+        en: Log Directory or File
+        zh-CN: 日志目录或文件
+        zh-HK: 日誌目錄或文件
       file_path_desc:
-        en: Leave empty to write logs to the default config directory logs folder. Restart the app after changing this path.
-        zh-CN: 留空时写入默认配置目录下的 logs 文件夹，修改后重启应用生效。
-        zh-HK: 留空時寫入默認配置目錄下的 logs 文件夾，修改後重啟應用生效。
+        en: Enter a directory to write onetcli.log, or a full log file path. Leave empty to use the default config directory logs folder. Restart the app after changing this path.
+        zh-CN: 可填写日志目录（文件名为 onetcli.log）或完整日志文件路径；留空时使用默认配置目录下的 logs 文件夹。修改后重启应用生效。
+        zh-HK: 可填寫日誌目錄（文件名為 onetcli.log）或完整日誌文件路徑；留空時使用默認配置目錄下的 logs 文件夾。修改後重啟應用生效。
 
     Update:
       group_title:
@@ -3123,6 +3123,118 @@ Settings:
       en: Select All
       zh-CN: 全选
       zh-HK: 全選
+    notes_newline:
+      en: Insert Newline
+      zh-CN: 插入换行
+      zh-HK: 插入換行
+    notes_delete_backward:
+      en: Delete Backward
+      zh-CN: 向前删除
+      zh-HK: 向前刪除
+    notes_delete_forward:
+      en: Delete Forward
+      zh-CN: 向后删除
+      zh-HK: 向後刪除
+    notes_delete_word_backward:
+      en: Delete Word Backward
+      zh-CN: 向前删除单词
+      zh-HK: 向前刪除單字
+    notes_delete_word_forward:
+      en: Delete Word Forward
+      zh-CN: 向后删除单词
+      zh-HK: 向後刪除單字
+    notes_copy:
+      en: Copy
+      zh-CN: 复制
+      zh-HK: 複製
+    notes_cut:
+      en: Cut
+      zh-CN: 剪切
+      zh-HK: 剪下
+    notes_paste:
+      en: Paste
+      zh-CN: 粘贴
+      zh-HK: 貼上
+    notes_focus_previous:
+      en: Focus Previous Line
+      zh-CN: 聚焦上一行
+      zh-HK: 聚焦上一行
+    notes_focus_next:
+      en: Focus Next Line
+      zh-CN: 聚焦下一行
+      zh-HK: 聚焦下一行
+    notes_move_left:
+      en: Move Left
+      zh-CN: 向左移动
+      zh-HK: 向左移動
+    notes_move_right:
+      en: Move Right
+      zh-CN: 向右移动
+      zh-HK: 向右移動
+    notes_move_word_left:
+      en: Move Word Left
+      zh-CN: 按单词向左移动
+      zh-HK: 按單字向左移動
+    notes_move_word_right:
+      en: Move Word Right
+      zh-CN: 按单词向右移动
+      zh-HK: 按單字向右移動
+    notes_move_line_start:
+      en: Move to Line Start
+      zh-CN: 移动到行首
+      zh-HK: 移動到行首
+    notes_move_line_end:
+      en: Move to Line End
+      zh-CN: 移动到行尾
+      zh-HK: 移動到行尾
+    notes_focus_previous_block:
+      en: Focus Previous Block
+      zh-CN: 聚焦上一个块
+      zh-HK: 聚焦上一個區塊
+    notes_focus_next_block:
+      en: Focus Next Block
+      zh-CN: 聚焦下一个块
+      zh-HK: 聚焦下一個區塊
+    notes_page_up:
+      en: Page Up
+      zh-CN: 向上翻页
+      zh-HK: 向上翻頁
+    notes_page_down:
+      en: Page Down
+      zh-CN: 向下翻页
+      zh-HK: 向下翻頁
+    notes_jump_to_top:
+      en: Jump to Top
+      zh-CN: 跳转到顶部
+      zh-HK: 跳轉到頂部
+    notes_jump_to_bottom:
+      en: Jump to Bottom
+      zh-CN: 跳转到底部
+      zh-HK: 跳轉到底部
+    notes_extend_selection_left:
+      en: Extend Selection Left
+      zh-CN: 向左扩展选择
+      zh-HK: 向左擴展選取
+    notes_extend_selection_right:
+      en: Extend Selection Right
+      zh-CN: 向右扩展选择
+      zh-HK: 向右擴展選取
+    notes_extend_selection_word_left:
+      en: Extend Selection by Word Left
+      zh-CN: 按单词向左扩展选择
+      zh-HK: 按單字向左擴展選取
+    notes_extend_selection_word_right:
+      en: Extend Selection by Word Right
+      zh-CN: 按单词向右扩展选择
+      zh-HK: 按單字向右擴展選取
+    notes_extend_selection_home:
+      en: Extend Selection to Line Start
+      zh-CN: 扩展选择到行首
+      zh-HK: 將選取擴展到行首
+    notes_extend_selection_end:
+      en: Extend Selection to Line End
+      zh-CN: 扩展选择到行尾
+      zh-HK: 將選取擴展到行尾
     notes_delete_selection:
       en: Delete Selection
       zh-CN: 删除选中内容
@@ -3227,6 +3339,18 @@ Settings:
       en: Outdent Block
       zh-CN: 减少块缩进
       zh-HK: 減少區塊縮排
+    notes_exit_code_block:
+      en: Exit Code Block
+      zh-CN: 退出代码块
+      zh-HK: 退出程式碼區塊
+    notes_dismiss_transient_ui:
+      en: Dismiss Transient UI
+      zh-CN: 关闭临时界面
+      zh-HK: 關閉暫時介面
+    notes_toggle_source_mode:
+      en: Toggle Source Mode
+      zh-CN: 切换源码模式
+      zh-HK: 切換原始碼模式
     notes_delete_block:
       en: Delete Current Block
       zh-CN: 删除当前块
@@ -3239,6 +3363,14 @@ Settings:
       en: Duplicate Selected Blocks
       zh-CN: 复制选中的块
       zh-HK: 複製選取的區塊
+    notes_move_block_up:
+      en: Move Block Up
+      zh-CN: 上移块
+      zh-HK: 上移區塊
+    notes_move_block_down:
+      en: Move Block Down
+      zh-CN: 下移块
+      zh-HK: 下移區塊
     notes_fold_heading:
       en: Fold Heading
       zh-CN: 折叠标题
@@ -4175,30 +4307,6 @@ CredentialForm:
     en: e.g. Production account
     zh-CN: 例如：生产环境账号
     zh-HK: 例如：正式環境帳號
-  applicable_types:
-    en: Applicable Types
-    zh-CN: 适用类型
-    zh-HK: 適用類型
-  select_types:
-    en: Select types
-    zh-CN: 请选择类型
-    zh-HK: 請選擇類型
-  selected_two_types:
-    en: "%{first}, %{second}"
-    zh-CN: "%{first}、%{second}"
-    zh-HK: "%{first}、%{second}"
-  selected_many_types:
-    en: "%{first}, %{second}, and %{count} total"
-    zh-CN: "%{first}、%{second} 等 %{count} 项"
-    zh-HK: "%{first}、%{second} 等 %{count} 項"
-  select_applicable_types:
-    en: Select applicable types
-    zh-CN: 选择适用类型
-    zh-HK: 選擇適用類型
-  selected_type_count:
-    en: "%{count} selected"
-    zh-CN: "已选择 %{count} 项"
-    zh-HK: "已選擇 %{count} 項"
   clear:
     en: Clear
     zh-CN: 清空
@@ -4299,74 +4407,6 @@ CredentialForm:
     en: Include this credential in end-to-end encrypted sync.
     zh-CN: 将此凭据加入端到端加密同步。
     zh-HK: 將此憑證加入端對端加密同步。
-  kind_general:
-    en: General
-    zh-CN: 通用
-    zh-HK: 通用
-  kind_ssh:
-    en: SSH
-    zh-CN: SSH
-    zh-HK: SSH
-  kind_database:
-    en: Database
-    zh-CN: 数据库
-    zh-HK: 資料庫
-  kind_redis:
-    en: Redis
-    zh-CN: Redis
-    zh-HK: Redis
-  kind_mongodb:
-    en: MongoDB
-    zh-CN: MongoDB
-    zh-HK: MongoDB
-  kind_remote_desktop:
-    en: RDP/VNC
-    zh-CN: RDP/VNC
-    zh-HK: RDP/VNC
-  kind_proxy:
-    en: Proxy
-    zh-CN: 代理
-    zh-HK: Proxy
-  kind_jump_server:
-    en: Jump Server
-    zh-CN: 跳板机
-    zh-HK: 跳板機
-  kind_general_description:
-    en: Available to any connection that supports credential references
-    zh-CN: 可用于任意支持凭据引用的连接
-    zh-HK: 可用於任何支援憑證引用的連線
-  kind_ssh_description:
-    en: SSH, SFTP, and terminal connections
-    zh-CN: SSH、SFTP 和终端连接
-    zh-HK: SSH、SFTP 及終端機連線
-  kind_database_description:
-    en: MySQL, PostgreSQL, SQLite, and other database connections
-    zh-CN: MySQL、PostgreSQL、SQLite 等数据库连接
-    zh-HK: MySQL、PostgreSQL、SQLite 等資料庫連線
-  kind_redis_description:
-    en: Redis and compatible protocol connections
-    zh-CN: Redis 与兼容协议连接
-    zh-HK: Redis 及相容協定連線
-  kind_mongodb_description:
-    en: MongoDB database connections
-    zh-CN: MongoDB 数据库连接
-    zh-HK: MongoDB 資料庫連線
-  kind_remote_desktop_description:
-    en: Remote desktop connections
-    zh-CN: 远程桌面连接
-    zh-HK: 遠端桌面連線
-  kind_proxy_description:
-    en: Proxy server authentication
-    zh-CN: 代理服务器认证
-    zh-HK: Proxy 伺服器驗證
-  kind_jump_server_description:
-    en: Bastion and jump server authentication
-    zh-CN: 堡垒机与跳板机认证
-    zh-HK: 堡壘機及跳板機驗證
-  kind_custom_description:
-    en: Custom type from an existing credential
-    zh-CN: 现有凭据中的自定义类型
-    zh-HK: 現有憑證中的自訂類型
   error_name_required:
     en: Credential name is required
     zh-CN: 凭据名称不能为空

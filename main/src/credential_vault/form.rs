@@ -1,26 +1,12 @@
-use std::collections::BTreeSet;
-
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedString, Window};
 use gpui_component::input::InputState;
 use one_core::storage::{CredentialEntry, SshAccountExpect, TerminalExpectSend};
 use regex::Regex;
 use rust_i18n::t;
 
-pub(super) const CREDENTIAL_KIND_OPTIONS: [&str; 8] = [
-    "通用",
-    "SSH",
-    "数据库",
-    "Redis",
-    "MongoDB",
-    "RDP/VNC",
-    "代理",
-    "跳板机",
-];
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CredentialFormValues {
     pub name: String,
-    pub kinds: Vec<String>,
     pub username: String,
     pub password: String,
     pub private_key_path: String,
@@ -35,8 +21,6 @@ pub(crate) struct CredentialForm {
     existing: Option<CredentialEntry>,
     pub(super) active_tab: usize,
     pub(super) name_input: Entity<InputState>,
-    pub(super) selected_kinds: BTreeSet<String>,
-    pub(super) kind_picker_open: bool,
     pub(super) username_input: Entity<InputState>,
     pub(super) password_input: Entity<InputState>,
     pub(super) private_key_path_input: Entity<InputState>,
@@ -62,10 +46,6 @@ impl CredentialForm {
             window,
             cx,
         );
-        let selected_kinds = existing
-            .as_ref()
-            .map(|entry| parse_credential_kinds(&entry.kind))
-            .unwrap_or_else(|| BTreeSet::from(["通用".to_string()]));
         let username_input = text_input(
             existing
                 .as_ref()
@@ -158,8 +138,6 @@ impl CredentialForm {
             existing,
             active_tab: 0,
             name_input,
-            selected_kinds,
-            kind_picker_open: false,
             username_input,
             password_input,
             private_key_path_input,
@@ -184,7 +162,6 @@ impl CredentialForm {
     fn values(&self, cx: &App) -> CredentialFormValues {
         CredentialFormValues {
             name: input_value(&self.name_input, cx),
-            kinds: ordered_credential_kinds(&self.selected_kinds),
             username: input_value(&self.username_input, cx),
             password: input_value(&self.password_input, cx),
             private_key_path: input_value(&self.private_key_path_input, cx),
@@ -241,10 +218,8 @@ pub(super) fn build_entry(
     if name.is_empty() {
         return Err(t!("CredentialForm.error_name_required").to_string());
     }
-    let kind = serialize_credential_kinds(values.kinds);
-    let mut entry = existing.unwrap_or_else(|| CredentialEntry::new(&name, &kind));
+    let mut entry = existing.unwrap_or_else(|| CredentialEntry::new(&name));
     entry.name = name;
-    entry.kind = kind;
     entry.username = optional_trimmed(values.username);
     entry.password = optional_trimmed(values.password);
     entry.private_key_path = optional_trimmed(values.private_key_path);
@@ -317,78 +292,6 @@ pub(super) fn credential_kind_values(value: &str) -> Vec<String> {
     values
 }
 
-fn parse_credential_kinds(value: &str) -> BTreeSet<String> {
-    let values = credential_kind_values(value);
-    if values.is_empty() {
-        BTreeSet::from(["通用".to_string()])
-    } else {
-        values.into_iter().collect()
-    }
-}
-
-pub(super) fn ordered_credential_kinds(selected: &BTreeSet<String>) -> Vec<String> {
-    let mut values = CREDENTIAL_KIND_OPTIONS
-        .iter()
-        .copied()
-        .filter(|kind| selected.contains(*kind))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    values.extend(
-        selected
-            .iter()
-            .filter(|kind| {
-                !CREDENTIAL_KIND_OPTIONS
-                    .iter()
-                    .any(|option| *option == kind.as_str())
-            })
-            .cloned(),
-    );
-    values
-}
-
-pub(super) fn credential_kind_label(kind: &str) -> String {
-    match kind {
-        "通用" => t!("CredentialForm.kind_general").to_string(),
-        "SSH" => t!("CredentialForm.kind_ssh").to_string(),
-        "数据库" => t!("CredentialForm.kind_database").to_string(),
-        "Redis" => t!("CredentialForm.kind_redis").to_string(),
-        "MongoDB" => t!("CredentialForm.kind_mongodb").to_string(),
-        "RDP/VNC" => t!("CredentialForm.kind_remote_desktop").to_string(),
-        "代理" => t!("CredentialForm.kind_proxy").to_string(),
-        "跳板机" => t!("CredentialForm.kind_jump_server").to_string(),
-        _ => kind.to_string(),
-    }
-}
-
-pub(super) fn credential_kind_description(kind: &str) -> String {
-    match kind {
-        "通用" => t!("CredentialForm.kind_general_description").to_string(),
-        "SSH" => t!("CredentialForm.kind_ssh_description").to_string(),
-        "数据库" => t!("CredentialForm.kind_database_description").to_string(),
-        "Redis" => t!("CredentialForm.kind_redis_description").to_string(),
-        "MongoDB" => t!("CredentialForm.kind_mongodb_description").to_string(),
-        "RDP/VNC" => t!("CredentialForm.kind_remote_desktop_description").to_string(),
-        "代理" => t!("CredentialForm.kind_proxy_description").to_string(),
-        "跳板机" => t!("CredentialForm.kind_jump_server_description").to_string(),
-        _ => t!("CredentialForm.kind_custom_description").to_string(),
-    }
-}
-
-fn serialize_credential_kinds(kinds: Vec<String>) -> String {
-    let mut selected = BTreeSet::new();
-    for kind in kinds {
-        let kind = kind.trim();
-        if !kind.is_empty() {
-            selected.insert(kind.to_string());
-        }
-    }
-    let kinds = ordered_credential_kinds(&selected);
-    if kinds.is_empty() {
-        "通用".to_string()
-    } else {
-        kinds.join("、")
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -397,7 +300,6 @@ mod tests {
     fn values() -> CredentialFormValues {
         CredentialFormValues {
             name: "  Production  ".into(),
-            kinds: vec![" 数据库 ".into(), " SSH ".into(), "SSH".into()],
             username: " root ".into(),
             password: " secret ".into(),
             private_key_path: "   ".into(),
@@ -431,7 +333,6 @@ mod tests {
     fn normalizes_optional_values() {
         let entry = build_entry(None, values()).unwrap();
         assert_eq!(entry.name, "Production");
-        assert_eq!(entry.kind, "SSH、数据库");
         assert_eq!(entry.username.as_deref(), Some("root"));
         assert_eq!(entry.private_key_path, None);
         assert_eq!(entry.private_key_content.as_deref(), Some("key"));
@@ -485,24 +386,8 @@ mod tests {
     }
 
     #[test]
-    fn credential_kinds_support_multiple_values_and_legacy_strings() {
-        assert_eq!(
-            credential_kind_values("SSH、数据库, Redis；SSH"),
-            vec!["SSH", "数据库", "Redis"]
-        );
-        assert_eq!(
-            ordered_credential_kinds(&parse_credential_kinds("Redis、SSH、自定义")),
-            vec!["SSH", "Redis", "自定义"]
-        );
-
-        let mut values = values();
-        values.kinds.clear();
-        assert_eq!(build_entry(None, values).unwrap().kind, "通用");
-    }
-
-    #[test]
     fn editing_preserves_repository_metadata_and_can_clear_secrets() {
-        let mut existing = CredentialEntry::new("old", "database");
+        let mut existing = CredentialEntry::new("old");
         existing.id = Some(7);
         existing.password = Some("old-secret".into());
         existing.cloud_id = Some("cloud-1".into());

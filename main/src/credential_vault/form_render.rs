@@ -1,25 +1,22 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    div, px, ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::Input,
-    popover::Popover,
-    scroll::ScrollableElement,
+    button::ButtonVariants as _, h_flex, input::Input,
+    scroll::ScrollableElement
+    ,
     switch::Switch,
-    tab::{Tab, TabBar},
+    tab::{Tab, TabBar}
+    ,
     v_flex,
+    ActiveTheme,
+    Sizable,
+    Size,
 };
 use rust_i18n::t;
 
-use super::form::{
-    CREDENTIAL_KIND_OPTIONS, CredentialForm, credential_kind_description, credential_kind_label,
-    ordered_credential_kinds,
-};
+use super::form::CredentialForm;
 
 impl Render for CredentialForm {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -81,12 +78,6 @@ impl CredentialForm {
                 t!("CredentialForm.name").to_string(),
                 Input::new(&self.name_input).w_full(),
             ))
-            .when(self.is_editing(), |this| {
-                this.child(form_field(
-                    t!("CredentialForm.applicable_types").to_string(),
-                    self.render_kind_picker(cx),
-                ))
-            })
             .child(form_field(
                 t!("CredentialForm.username").to_string(),
                 Input::new(&self.username_input).w_full(),
@@ -96,168 +87,6 @@ impl CredentialForm {
                 Input::new(&self.password_input).w_full().mask_toggle(),
             ))
             .child(self.render_sync_settings(cx))
-    }
-
-    fn render_kind_picker(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
-        let selected_kinds = self.selected_kinds.clone();
-        let ordered_selected = ordered_credential_kinds(&selected_kinds);
-        let trigger_label = match ordered_selected.as_slice() {
-            [] => t!("CredentialForm.select_types").to_string(),
-            [kind] => credential_kind_label(kind),
-            [first, second] => t!(
-                "CredentialForm.selected_two_types",
-                first = credential_kind_label(first),
-                second = credential_kind_label(second)
-            )
-            .to_string(),
-            [first, second, ..] => t!(
-                "CredentialForm.selected_many_types",
-                first = credential_kind_label(first),
-                second = credential_kind_label(second),
-                count = ordered_selected.len()
-            )
-            .to_string(),
-        };
-        let mut options = CREDENTIAL_KIND_OPTIONS
-            .iter()
-            .map(|kind| {
-                (
-                    (*kind).to_string(),
-                    credential_kind_label(kind),
-                    credential_kind_description(kind),
-                )
-            })
-            .collect::<Vec<_>>();
-        options.extend(
-            ordered_selected
-                .iter()
-                .filter(|kind| {
-                    !CREDENTIAL_KIND_OPTIONS
-                        .iter()
-                        .any(|option| *option == kind.as_str())
-                })
-                .map(|kind| {
-                    (
-                        kind.clone(),
-                        kind.clone(),
-                        credential_kind_description(kind),
-                    )
-                }),
-        );
-
-        let form = cx.entity();
-        Popover::new("credential-kind-picker")
-            .open(self.kind_picker_open)
-            .on_open_change(cx.listener(|form, open, _, cx| {
-                form.kind_picker_open = *open;
-                cx.notify();
-            }))
-            .trigger(
-                Button::new("credential-kind-picker-trigger")
-                    .label(trigger_label)
-                    .dropdown_caret(true)
-                    .w_full(),
-            )
-            .content(move |_, window, cx| {
-                let selected_count = selected_kinds.len();
-                let content_width =
-                    px((window.viewport_size().width.as_f32() - 32.0).clamp(0.0, 360.0));
-                v_flex()
-                    .w(content_width)
-                    .max_h(px(440.0))
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .justify_between()
-                            .gap_3()
-                            .child(
-                                v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(
-                                                t!("CredentialForm.select_applicable_types")
-                                                    .to_string(),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                t!(
-                                                    "CredentialForm.selected_type_count",
-                                                    count = selected_count
-                                                )
-                                                .to_string(),
-                                            ),
-                                    ),
-                            )
-                            .child({
-                                let form = form.clone();
-                                Button::new("credential-kind-clear")
-                                    .small()
-                                    .ghost()
-                                    .label(t!("CredentialForm.clear").to_string())
-                                    .on_click(move |_, _, cx| {
-                                        form.update(cx, |form, cx| {
-                                            form.selected_kinds.clear();
-                                            cx.notify();
-                                        });
-                                    })
-                            }),
-                    )
-                    .child(div().border_t_1().border_color(cx.theme().border))
-                    .child(
-                        div()
-                            .w_full()
-                            .max_h(px(340.0))
-                            .overflow_y_scrollbar()
-                            .child(v_flex().w_full().gap_1().children(options.iter().map(
-                                |(kind, label, description)| {
-                                    let checked = selected_kinds.contains(kind);
-                                    let kind_for_click = kind.clone();
-                                    let form = form.clone();
-                                    v_flex()
-                                        .w_full()
-                                        .gap_0p5()
-                                        .rounded_md()
-                                        .px_2()
-                                        .py_1p5()
-                                        .hover(|this| this.bg(cx.theme().muted.opacity(0.4)))
-                                        .child(
-                                            Checkbox::new(format!("credential-kind-option-{kind}"))
-                                                .checked(checked)
-                                                .label(label.clone())
-                                                .on_click(move |checked, _, cx| {
-                                                    form.update(cx, |form, cx| {
-                                                        if *checked {
-                                                            form.selected_kinds
-                                                                .insert(kind_for_click.clone());
-                                                        } else {
-                                                            form.selected_kinds
-                                                                .remove(&kind_for_click);
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .ml_6()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(description.clone()),
-                                        )
-                                },
-                            ))),
-                    )
-            })
-            .into_any_element()
     }
 
     fn render_ssh_key_tab(&self, cx: &gpui::App) -> impl IntoElement {

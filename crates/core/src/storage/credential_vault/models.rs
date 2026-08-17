@@ -11,7 +11,6 @@ use crate::storage::SshAccountExpect;
 pub struct CredentialEntry {
     pub id: Option<i64>,
     pub name: String,
-    pub kind: String,
     pub username: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
@@ -46,7 +45,6 @@ impl Serialize for CredentialEntry {
         let mut state = serializer.serialize_struct("CredentialEntry", 11)?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field("name", &self.name)?;
-        state.serialize_field("kind", &self.kind)?;
         state.serialize_field("username", &self.username)?;
         state.serialize_field("sync_enabled", &self.sync_enabled)?;
         state.serialize_field("cloud_id", &self.cloud_id)?;
@@ -65,7 +63,6 @@ impl std::fmt::Debug for CredentialEntry {
             .debug_struct("CredentialEntry")
             .field("id", &self.id)
             .field("name", &self.name)
-            .field("kind", &self.kind)
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field(
@@ -96,11 +93,10 @@ impl std::fmt::Debug for CredentialEntry {
 }
 
 impl CredentialEntry {
-    pub fn new(name: impl Into<String>, kind: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         Self {
             id: None,
             name: name.into(),
-            kind: kind.into(),
             username: None,
             password: None,
             private_key_path: None,
