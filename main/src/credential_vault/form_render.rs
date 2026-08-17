@@ -1,9 +1,8 @@
-use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    button::ButtonVariants as _, h_flex, input::Input,
+    h_flex, input::Input,
     scroll::ScrollableElement
     ,
     switch::Switch,

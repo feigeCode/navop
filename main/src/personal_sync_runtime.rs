@@ -344,7 +344,6 @@ fn remote_conflict_display(
                 .map(|credential| {
                     credential_record_display(
                         &credential.name,
-                        &credential.kind,
                         credential.username.as_deref(),
                         credential.cloud_id.as_deref(),
                     )
@@ -378,7 +377,6 @@ fn workspace_record_display(workspace: &Workspace) -> PersonalSyncRecordDisplay 
 fn credential_summary_record_display(credential: &CredentialSummary) -> PersonalSyncRecordDisplay {
     credential_record_display(
         &credential.name,
-        &credential.kind,
         credential.username.as_deref(),
         credential.cloud_id.as_deref(),
     )
@@ -386,14 +384,12 @@ fn credential_summary_record_display(credential: &CredentialSummary) -> Personal
 
 fn credential_record_display(
     name: &str,
-    kind: &str,
     username: Option<&str>,
     cloud_id: Option<&str>,
 ) -> PersonalSyncRecordDisplay {
     PersonalSyncRecordDisplay {
         name: fallback_name(name, cloud_id, "credential"),
         info: record_info([
-            (!kind.is_empty()).then(|| kind.to_string()),
             username
                 .filter(|username| !username.is_empty())
                 .map(ToString::to_string),
@@ -646,7 +642,7 @@ pub(crate) fn personal_sync_event_from_connection_event(
         | ConnectionDataEvent::ConnectionUpdated { connection } => {
             let local_id = format!("connection:{}", connection.id?);
             Some(PersonalSyncEvent::LocalChanged {
-                data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
+                data_type: data_type::CONNECTION.to_string(),
                 local_id,
             })
         }
@@ -661,14 +657,14 @@ pub(crate) fn personal_sync_event_from_connection_event(
             cloud_id: Some(cloud_id),
             ..
         } => Some(PersonalSyncEvent::LocalDeleted {
-            data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
+            data_type: data_type::CONNECTION.to_string(),
             cloud_id: cloud_id.clone(),
         }),
         ConnectionDataEvent::WorkspaceDeleted {
             cloud_id: Some(cloud_id),
             ..
         } => Some(PersonalSyncEvent::LocalDeleted {
-            data_type: one_core::cloud_sync::data_type::WORKSPACE.to_string(),
+            data_type: data_type::WORKSPACE.to_string(),
             cloud_id: cloud_id.clone(),
         }),
         ConnectionDataEvent::CredentialDeleted {

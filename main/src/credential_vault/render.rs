@@ -13,7 +13,6 @@ use gpui_component::{
 use one_core::storage::CredentialSummary;
 use rust_i18n::t;
 
-use super::form::{credential_kind_label, credential_kind_values};
 use super::{CredentialVaultView, button_id, vault_unlocked};
 
 impl Render for CredentialVaultView {
@@ -333,10 +332,6 @@ fn credential_row(
         .username
         .clone()
         .unwrap_or_else(|| t!("CredentialVault.username_not_set").to_string());
-    let kind_chips = credential_kind_values(&summary.kind)
-        .into_iter()
-        .map(|kind| chip(credential_kind_label(&kind), cx).into_any_element())
-        .collect::<Vec<_>>();
     let chips = capability_chips(&summary);
     v_flex()
         .w_full()
@@ -366,7 +361,6 @@ fn credential_row(
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .child(summary.name),
                                 )
-                                .children(kind_chips)
                                 .child(chip(
                                     if summary.sync_enabled {
                                         t!("CredentialVault.sync_enabled").to_string()
