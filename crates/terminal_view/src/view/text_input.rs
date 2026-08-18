@@ -86,6 +86,21 @@ impl TerminalView {
             return;
         }
 
+        // Xshell 风格：会话未激活（未连接/已断开）时 Ctrl+D 关闭当前窗口；
+        // 会话存活时 Ctrl+D 照常透传为 EOF（\x04）退出 shell。
+        if !self.accepts_live_terminal_input(cx) {
+            let modifiers = event.keystroke.modifiers;
+            if modifiers.control
+                && !modifiers.alt
+                && !modifiers.shift
+                && !modifiers.platform
+                && event.keystroke.key == "d"
+            {
+                one_core::window_close::request_close_window(_window.window_handle(), cx);
+            }
+            return;
+        }
+
         if !self.accepts_live_terminal_input(cx) {
             return;
         }

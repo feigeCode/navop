@@ -2987,8 +2987,8 @@ const WINDOW_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["ctrl-w"],
-        keys_other: &["ctrl-w"],
+        keys_macos: &["ctrl-d"],
+        keys_other: &["ctrl-d"],
         label_key: "Settings.Shortcuts.close_panel",
         action_id: Some(action_id::WINDOW_CLOSE_ACTIVE_WINDOW),
         system_hotkey: false,

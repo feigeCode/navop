@@ -114,7 +114,7 @@ The startup sequence in `main/src/main.rs` and `main/src/onetcli_app.rs` is orde
   - Auth init → license init → AI provider state setup
   - `db::init_cache(cx)` + disk cache cleanup task
   - `terminal_view::init(cx)`, `redis_view::init(cx)`, `mongodb_view::init(cx)`
-  - Key bindings (`shift-escape` → ToggleZoom, `ctrl-w` → ClosePanel)
+  - Key bindings (`shift-escape` → ToggleZoom, `cmd-w`/`ctrl-d` → ClosePanel)
   - `TabContentRegistry` global setup
 5. `setting_tab::init_settings(cx)` — settings system
 6. `GlobalDbState::new()` + cleanup task → `cx.set_global()`

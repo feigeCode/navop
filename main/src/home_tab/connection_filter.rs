@@ -187,6 +187,9 @@ mod tests {
             TelnetParams {
                 host: "Switch.EXAMPLE.com".to_string(),
                 port: 2323,
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
                 login_script: Vec::new(),
             },
             None,

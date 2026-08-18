@@ -300,6 +300,9 @@ fn full_info_redacts_telnet_login_script_send_values() {
         TelnetParams {
             host: "switch.example.test".to_string(),
             port: 23,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
             login_script: vec![
                 TelnetLoginStep {
                     expect: "Username:".to_string(),

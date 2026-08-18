@@ -731,7 +731,7 @@ fn default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
 }
 
 fn close_active_window_default_shortcut() -> &'static str {
-    default_shortcut("cmd-w", "ctrl-w")
+    default_shortcut("cmd-w", "ctrl-d")
 }
 
 const LOG_FILE_NAME: &str = "onetcli.log";
@@ -1870,13 +1870,13 @@ mod tests {
         assert!(keybindings.contains("CloseActiveWindow"));
         assert!(keybindings.contains("close_active_window_default_shortcut()"));
         assert!(refreshable_keybindings.contains("close_active_window_default_shortcut()"));
-        assert!(source.contains(r#"default_shortcut("cmd-w", "ctrl-w")"#));
+        assert!(source.contains(r#"default_shortcut("cmd-w", "ctrl-d")"#));
         assert_eq!(
             close_active_window_default_shortcut(),
             if cfg!(target_os = "macos") {
                 "cmd-w"
             } else {
-                "ctrl-w"
+                "ctrl-d"
             }
         );
         assert!(!keybindings.contains("ClosePanel"));
