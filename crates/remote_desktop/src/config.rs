@@ -331,6 +331,7 @@ mod tests {
                 port: 3389,
                 username: Some("alice".to_string()),
                 password: Some("secret".to_string()),
+                credential_reference: None,
                 domain: Some("CORP".to_string()),
                 read_only: false,
                 audio_playback: true,

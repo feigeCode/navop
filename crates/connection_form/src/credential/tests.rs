@@ -9,7 +9,6 @@ fn summary() -> CredentialSummary {
     CredentialSummary {
         id: 42,
         name: "Production".to_string(),
-        kind: "SSH".to_string(),
         username: Some("root".to_string()),
         has_password: true,
         has_private_key_path: true,

@@ -710,7 +710,7 @@ fn presentation_initialization_precedes_and_gates_canvas_runtime_start() {
         .find("self.ensure_presentation(window, cx);")
         .expect("presentation initialization");
     let flush = render
-        .find("self.flush_pending_start();")
+        .find("self.flush_pending_start(cx);")
         .expect("pending Canvas start");
     assert!(
         ensure < flush,
@@ -948,7 +948,7 @@ fn rdp_presentation_status_stays_outside_the_native_child_bounds() {
         .expect("remote desktop root")..];
     assert!(root.contains(".flex()\n            .flex_col()"));
     assert!(source.contains(".on_prepaint(move |bounds, window, cx|"));
-    assert!(source.contains("view.update_content_bounds(bounds, window.scale_factor())"));
+    assert!(source.contains("view.update_content_bounds(bounds, window.scale_factor(), view_cx)"));
     assert!(!root.contains(".on_children_prepainted("));
     let status = root
         .find(".when(show_presentation_status")
@@ -1096,7 +1096,7 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
         assert!(root.contains(constraint));
     }
     assert!(content.contains(".on_prepaint(move |bounds, window, cx|"));
-    assert!(content.contains("view.update_content_bounds(bounds, window.scale_factor())"));
+    assert!(content.contains("view.update_content_bounds(bounds, window.scale_factor(), view_cx)"));
     assert!(!root.contains(".on_children_prepainted("));
 }
 

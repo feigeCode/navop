@@ -163,6 +163,7 @@ pub(super) fn remote_desktop_connection(id: i64) -> StoredConnection {
             audio_playback: false,
             proxy: Some(proxy(id)),
             backend_preference: RemoteDesktopBackendPreference::Canvas,
+            rdp: None,
         },
         None,
     )

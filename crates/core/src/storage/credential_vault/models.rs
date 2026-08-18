@@ -42,7 +42,7 @@ impl Serialize for CredentialEntry {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("CredentialEntry", 11)?;
+        let mut state = serializer.serialize_struct("CredentialEntry", 10)?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("username", &self.username)?;
@@ -155,7 +155,6 @@ impl crate::storage::traits::Entity for CredentialEntry {
 pub struct CredentialSummary {
     pub id: i64,
     pub name: String,
-    pub kind: String,
     pub username: Option<String>,
     pub has_password: bool,
     pub has_private_key_path: bool,

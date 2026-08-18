@@ -154,6 +154,7 @@ fn resolver_applies_shared_login_to_all_primary_connection_types() {
                 audio_playback: false,
                 proxy: None,
                 backend_preference: RemoteDesktopBackendPreference::Canvas,
+                rdp: None,
             })
             .expect("resolve remote desktop");
         assert_eq!(Some("vault-user"), remote.username.as_deref());

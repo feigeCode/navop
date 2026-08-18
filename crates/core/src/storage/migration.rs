@@ -102,6 +102,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260817000002",
         include_str!("../../migrations/20260817000002_sql_execution_history.sql"),
     ),
+    (
+        "20260818000001",
+        include_str!("../../migrations/20260818000001_remove_credential_kind.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

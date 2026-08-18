@@ -240,10 +240,6 @@ fn has_applicable_field(summary: &CredentialSummary, capabilities: CredentialCap
 fn summary_item(summary: &CredentialSummary) -> CredentialSelectItem {
     CredentialSelectItem::new(
         CredentialSelectValue::Credential(summary.id),
-        t!(
-            "Credential.item_label",
-            name = summary.name,
-            kind = summary.kind
-        ),
+        t!("Credential.item_label", name = summary.name),
     )
 }

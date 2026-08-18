@@ -90,14 +90,14 @@ impl CredentialRepository {
     }
 
     fn select_sql() -> &'static str {
-        "SELECT id, name, kind, username, password, private_key_path,
+        "SELECT id, name, username, password, private_key_path,
                 private_key_content, passphrase, ssh_expect, sync_enabled, cloud_id,
                 last_synced_at, team_id, owner_id, created_at, updated_at
          FROM credential_entries"
     }
 
     fn summary_select_sql() -> &'static str {
-        "SELECT id, name, kind, username,
+        "SELECT id, name, username,
                 password IS NOT NULL AND password != '' AS has_password,
                 private_key_path IS NOT NULL AND private_key_path != ''
                     AS has_private_key_path,
@@ -143,7 +143,6 @@ impl CredentialRepository {
         Ok(CredentialSummary {
             id: row.get("id")?,
             name: row.get("name")?,
-            kind: row.get("kind")?,
             username: row.get("username")?,
             has_password: row.get::<_, i64>("has_password")? != 0,
             has_private_key_path: row.get::<_, i64>("has_private_key_path")? != 0,
@@ -250,10 +249,10 @@ impl Repository for CredentialRepository {
         let id = self.conn.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO credential_entries
-                 (name, kind, username, password, private_key_path, private_key_content,
+                 (name, username, password, private_key_path, private_key_content,
                   passphrase, ssh_expect, sync_enabled, cloud_id, last_synced_at, team_id,
                   owner_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 rusqlite::params![
                     item.name,
                     item.username,
@@ -286,11 +285,11 @@ impl Repository for CredentialRepository {
         self.conn.with_connection(|conn| {
             let updated = conn.execute(
                 "UPDATE credential_entries
-                 SET name = ?1, kind = ?2, username = ?3, password = ?4,
-                     private_key_path = ?5, private_key_content = ?6, passphrase = ?7,
-                     ssh_expect = ?8, sync_enabled = ?9, cloud_id = ?10,
-                     last_synced_at = ?11, team_id = ?12, owner_id = ?13,
-                     updated_at = ?14 WHERE id = ?15",
+                 SET name = ?1, username = ?2, password = ?3,
+                     private_key_path = ?4, private_key_content = ?5, passphrase = ?6,
+                     ssh_expect = ?7, sync_enabled = ?8, cloud_id = ?9,
+                     last_synced_at = ?10, team_id = ?11, owner_id = ?12,
+                     updated_at = ?13 WHERE id = ?14",
                 rusqlite::params![
                     item.name,
                     item.username,

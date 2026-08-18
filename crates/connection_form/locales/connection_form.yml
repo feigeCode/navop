@@ -60,9 +60,9 @@ Credential:
     zh-CN: "不可用的钥匙串条目 #%{id}"
     zh-HK: "不可用的鑰匙圈項目 #%{id}"
   item_label:
-    en: "%{name} (%{kind})"
-    zh-CN: "%{name}（%{kind}）"
-    zh-HK: "%{name}（%{kind}）"
+    en: "%{name}"
+    zh-CN: "%{name}"
+    zh-HK: "%{name}"
   load_failed:
     en: Unable to load the keychain. Try again later.
     zh-CN: 无法加载钥匙串列表，请稍后重试。

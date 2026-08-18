@@ -116,7 +116,6 @@ impl TabContent for CredentialVaultView {
 
 fn summary_matches(summary: &CredentialSummary, query: &str) -> bool {
     summary.name.to_lowercase().contains(query)
-        || summary.kind.to_lowercase().contains(query)
         || summary
             .username
             .as_deref()
