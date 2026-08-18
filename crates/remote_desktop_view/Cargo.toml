@@ -23,6 +23,14 @@ rust-i18n = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "=0.26.0"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+] }
+
 [dev-dependencies]
 futures = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }

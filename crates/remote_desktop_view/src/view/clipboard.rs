@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use gpui::ExternalPaths;
 use gpui::{ClipboardEntry, ClipboardItem, Context, Window};
 use remote_desktop::{RemoteDesktopInput, RemoteDesktopProtocol};
@@ -76,7 +76,17 @@ fn write_remote_clipboard_files(
     super::clipboard_macos::write_files_to_system_clipboard(paths)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn write_remote_clipboard_files(
+    paths: &[PathBuf],
+    _cx: &mut Context<RemoteDesktopView>,
+) -> anyhow::Result<()> {
+    // GPUI's Windows backend currently ignores ExternalPaths, so publish the
+    // downloaded files as a native CF_HDROP payload here.
+    super::clipboard_windows::write_files_to_system_clipboard(paths)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn write_remote_clipboard_files(
     paths: &[PathBuf],
     cx: &mut Context<RemoteDesktopView>,

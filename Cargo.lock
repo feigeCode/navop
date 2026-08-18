@@ -10649,6 +10649,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "windows 0.61.3",
  "windows_rdp_host",
 ]
 

@@ -28,6 +28,8 @@ use crate::view::frame_lifecycle::RenderedFrameLifecycle;
 mod clipboard;
 #[cfg(target_os = "macos")]
 mod clipboard_macos;
+#[cfg(any(target_os = "windows", test))]
+mod clipboard_windows;
 mod cursor;
 mod frame_lifecycle;
 mod frame_sync;
