@@ -250,7 +250,7 @@ fn persistent_application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::Notes => IconName::NotesLine,
         #[cfg(feature = "api-testing")]
         NavigationApplication::ApiTesting => IconName::Network,
-        NavigationApplication::JsonFormatter => IconName::Schema,
+        NavigationApplication::JsonFormatter => IconName::Json,
         NavigationApplication::SessionLogs => IconName::Terminal,
         NavigationApplication::CredentialVault => IconName::Key,
         NavigationApplication::Extensions => IconName::ExtensionsLine,

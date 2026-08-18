@@ -277,7 +277,7 @@ fn legacy_application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::Notes => IconName::NotesColor,
         #[cfg(feature = "api-testing")]
         NavigationApplication::ApiTesting => IconName::Network,
-        NavigationApplication::JsonFormatter => IconName::Schema,
+        NavigationApplication::JsonFormatter => IconName::Json,
         NavigationApplication::SessionLogs => IconName::Terminal,
         NavigationApplication::CredentialVault => IconName::Key,
         NavigationApplication::Extensions => IconName::ExtensionsColor,

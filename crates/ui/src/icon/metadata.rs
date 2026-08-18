@@ -93,6 +93,7 @@ impl IconName {
             Self::NotesColor
             | Self::TeamColor
             | Self::File
+            | Self::Json
             | Self::MarkdownColor
             | Self::RichTextColor
             | Self::Folder
