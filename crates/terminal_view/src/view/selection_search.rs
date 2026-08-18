@@ -51,10 +51,12 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // 如果侧边栏有激活的面板且焦点不在终端上（例如焦点在面板输入框中），按 Escape 关闭它。
+        // 如果侧边栏有激活的面板且焦点在侧边栏上（例如面板输入框），按 Escape 关闭它。
         // 终端聚焦时 Escape 属于终端本身，必须继续往下走并发送给 PTY，
         // 否则面板打开期间 vim 等程序永远收不到 Escape。
-        if self.sidebar.read(cx).active_panel().is_some() && !self.focus_handle.is_focused(window) {
+        if self.sidebar.read(cx).active_panel().is_some()
+            && self.sidebar.read(cx).focus_handle(cx).is_focused(window)
+        {
             self.sidebar.update(cx, |sidebar, cx| {
                 sidebar.set_active_panel(None, cx);
             });
