@@ -95,6 +95,10 @@ pub struct AgentTranscript {
     terminal_event_order: VecDeque<TerminalEventKey>,
     /// UI transcript 的逻辑内存预算。
     budget: TranscriptBudget,
+    /// 批量归约事件时延迟预算扫描，避免对同一批历史反复遍历和序列化卡片。
+    budget_deferred: bool,
+    #[cfg(test)]
+    budget_enforcement_count: usize,
 }
 
 impl AgentTranscript {
@@ -112,6 +116,22 @@ impl AgentTranscript {
             },
             ..Self::default()
         }
+    }
+
+    pub(crate) fn set_budget_deferred(&mut self, deferred: bool) {
+        self.budget_deferred = deferred;
+    }
+
+    pub(crate) fn flush_deferred_budget(&mut self) {
+        if !std::mem::take(&mut self.budget_deferred) {
+            return;
+        }
+        self.enforce_budget();
+    }
+
+    #[cfg(test)]
+    fn budget_enforcement_count(&self) -> usize {
+        self.budget_enforcement_count
     }
 
     /// 更新当前会话资源池快照,供后续工具 observation 展示目标资源。
@@ -900,6 +920,13 @@ impl AgentTranscript {
     }
 
     fn enforce_budget(&mut self) {
+        if self.budget_deferred {
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.budget_enforcement_count += 1;
+        }
         for message in &mut self.messages {
             truncate_message_fields(message, self.budget.max_field_bytes);
         }
@@ -1350,6 +1377,62 @@ mod tests {
         assert_eq!(3, tr.messages.len());
         assert_eq!(
             vec!["second", "third", "fourth"],
+            tr.messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn deferred_budget_is_enforced_once_after_batch_flush() {
+        let mut tr = AgentTranscript::with_limits(2, usize::MAX, usize::MAX);
+        tr.set_budget_deferred(true);
+
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "first".into(),
+        });
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "second".into(),
+        });
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "third".into(),
+        });
+
+        assert_eq!(0, tr.budget_enforcement_count());
+        assert_eq!(3, tr.messages.len());
+
+        tr.flush_deferred_budget();
+
+        assert_eq!(1, tr.budget_enforcement_count());
+        assert_eq!(
+            vec!["second", "third"],
+            tr.messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        tr.flush_deferred_budget();
+        assert_eq!(1, tr.budget_enforcement_count());
+
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "fourth".into(),
+        });
+        assert!(
+            tr.budget_enforcement_count() > 1,
+            "immediate budget enforcement must resume after the batch is flushed"
+        );
+        assert_eq!(
+            vec!["third", "fourth"],
             tr.messages
                 .iter()
                 .map(|message| message.content.as_str())

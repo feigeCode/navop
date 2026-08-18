@@ -42,7 +42,7 @@ use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConf
 use one_core::settings::{AiChatToolExecutionMode, AppSettings};
 use one_core::sidebar_contribution::SidebarPlacement;
 use rust_i18n::t;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::acp::{
     AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
@@ -95,6 +95,36 @@ pub type AgentRuntimeFactory =
     Arc<dyn Fn(&ComposerModelOption) -> anyhow::Result<Arc<Runtime>> + Send + Sync + 'static>;
 
 const MAX_CACHED_SESSION_TRANSCRIPTS: usize = 32;
+const MAX_RUNTIME_EVENT_BATCH_SIZE: usize = 64;
+
+fn runtime_event_matches_session(event: &RuntimeEvent, session_filter: Option<&SessionId>) -> bool {
+    session_filter.is_none_or(|session_id| event.session_id() == session_id)
+}
+
+fn collect_ready_runtime_events(
+    rx: &mut RuntimeEventReceiver,
+    first: RuntimeEvent,
+    session_filter: Option<&SessionId>,
+) -> Vec<RuntimeEvent> {
+    let mut events = Vec::new();
+    if runtime_event_matches_session(&first, session_filter) {
+        events.push(first);
+    }
+
+    for _ in events.len()..MAX_RUNTIME_EVENT_BATCH_SIZE {
+        match rx.try_recv() {
+            Ok(event) if runtime_event_matches_session(&event, session_filter) => {
+                if events.len() == 1 {
+                    events.reserve(MAX_RUNTIME_EVENT_BATCH_SIZE - 1);
+                }
+                events.push(event);
+            }
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+        }
+    }
+    events
+}
 
 /// 当前驱动后端:自研内核(One_Agent)或外部 ACP agent。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1330,24 +1360,34 @@ impl AgentChatView {
         cx.spawn(async move |this, cx| {
             loop {
                 match rx.recv().await {
-                    Ok(event)
-                        if session_filter
-                            .as_ref()
-                            .map_or(true, |session_id| event.session_id() == session_id) =>
-                    {
+                    Ok(event) => {
+                        let events =
+                            collect_ready_runtime_events(&mut rx, event, session_filter.as_ref());
+                        if events.is_empty() {
+                            continue;
+                        }
                         if this
-                            .update(cx, |this, cx| this.apply_runtime_event(event, cx))
+                            .update(cx, |this, cx| this.apply_runtime_events(events, cx))
                             .is_err()
                         {
                             break;
                         }
                     }
-                    Ok(_) => {}
                     Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => break,
                 }
             }
         })
+    }
+
+    fn apply_runtime_events(&mut self, events: Vec<RuntimeEvent>, cx: &mut Context<Self>) {
+        for event in events {
+            self.apply_runtime_event_with_deferred_budget(event, cx);
+        }
+        self.transcript.flush_deferred_budget();
+        for transcript in self.session_transcripts.values_mut() {
+            transcript.flush_deferred_budget();
+        }
     }
 
     fn on_input_event(
@@ -2046,7 +2086,25 @@ impl AgentChatView {
         cx.notify();
     }
 
+    #[cfg(test)]
     fn apply_runtime_event(&mut self, event: RuntimeEvent, cx: &mut Context<Self>) {
+        self.apply_runtime_event_inner(event, false, cx);
+    }
+
+    fn apply_runtime_event_with_deferred_budget(
+        &mut self,
+        event: RuntimeEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_runtime_event_inner(event, true, cx);
+    }
+
+    fn apply_runtime_event_inner(
+        &mut self,
+        event: RuntimeEvent,
+        defer_budget: bool,
+        cx: &mut Context<Self>,
+    ) {
         let backend = self.backend;
         if backend == Backend::Local {
             let turn_id = runtime_event_turn_id(&event).clone();
@@ -2128,6 +2186,7 @@ impl AgentChatView {
         };
         let resources = self.resources.clone();
         let applied = if is_current_session {
+            self.transcript.set_budget_deferred(defer_budget);
             if let Some(error) = acp_error.as_ref() {
                 self.transcript.apply_acp_failure(&event, error)
             } else {
@@ -2143,6 +2202,7 @@ impl AgentChatView {
                         transcript.set_resource_context(&resources);
                         transcript
                     });
+                transcript.set_budget_deferred(defer_budget);
                 if let Some(error) = acp_error.as_ref() {
                     transcript.apply_acp_failure(&event, error)
                 } else {
@@ -2230,6 +2290,11 @@ impl AgentChatView {
 
     fn request_scroll_to_bottom(&mut self) {
         self.auto_scroll.request();
+        self.scroll_handle.scroll_to_bottom();
+    }
+
+    fn request_scroll_to_bottom_until_layout_settles(&mut self) {
+        self.auto_scroll.request_settle();
         self.scroll_handle.scroll_to_bottom();
     }
 
@@ -3252,7 +3317,11 @@ impl AgentChatView {
             input.set_target_options(target_options, cx);
             input.set_context(ctx, cx);
         });
-        self.request_scroll_to_bottom();
+        if self.sidebar_mode {
+            self.request_scroll_to_bottom_until_layout_settles();
+        } else {
+            self.request_scroll_to_bottom();
+        }
         cx.notify();
     }
 
@@ -4786,6 +4855,66 @@ mod tests {
     }
 
     #[test]
+    fn runtime_event_batch_drains_only_the_bounded_ready_prefix() {
+        let (tx, mut rx) =
+            tokio::sync::broadcast::channel(MAX_RUNTIME_EVENT_BATCH_SIZE.saturating_add(2));
+        let session_id = SessionId::from_string("batch-session");
+        let turn_id = TurnId::from_string("batch-turn");
+
+        for index in 0..=MAX_RUNTIME_EVENT_BATCH_SIZE {
+            tx.send(RuntimeEvent::AssistantMessageDelta {
+                session_id: session_id.clone(),
+                turn_id: turn_id.clone(),
+                delta: index.to_string(),
+            })
+            .unwrap();
+        }
+
+        let first = rx.try_recv().unwrap();
+        let events = collect_ready_runtime_events(&mut rx, first, None);
+
+        assert_eq!(MAX_RUNTIME_EVENT_BATCH_SIZE, events.len());
+        assert!(
+            rx.try_recv().is_ok(),
+            "batch must leave the overflow queued"
+        );
+    }
+
+    #[test]
+    fn runtime_event_batch_filters_other_sessions_without_reordering_matches() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let target_session = SessionId::from_string("target-session");
+        let other_session = SessionId::from_string("other-session");
+        let turn_id = TurnId::from_string("batch-turn");
+
+        for (session_id, delta) in [
+            (target_session.clone(), "first"),
+            (other_session, "ignored"),
+            (target_session.clone(), "second"),
+        ] {
+            tx.send(RuntimeEvent::AssistantMessageDelta {
+                session_id,
+                turn_id: turn_id.clone(),
+                delta: delta.into(),
+            })
+            .unwrap();
+        }
+
+        let first = rx.try_recv().unwrap();
+        let events = collect_ready_runtime_events(&mut rx, first, Some(&target_session));
+        let deltas = events
+            .into_iter()
+            .map(|event| match event {
+                RuntimeEvent::AssistantMessageDelta { delta, .. } => delta,
+                _ => unreachable!("test only sends assistant deltas"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec!["first", "second"], deltas);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
     fn acp_prompt_blocks_preserve_text_mentions_and_images_in_order() {
         let mentions = vec![
             MentionItem::new("db-1", "prod-db", "mysql primary", "mysql")
@@ -5270,7 +5399,25 @@ mod tests {
 
             assert_eq!(0, view.auto_scroll.pending_bottom_scroll_frames);
             view.set_resource_context_with_catalog(resources, Vec::new(), vec![resource], cx);
-            assert!(view.auto_scroll.take_pending_for_render());
+            assert_eq!(2, view.auto_scroll.pending_bottom_scroll_frames);
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_resource_context_change_scrolls_until_layout_settles(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let resource = ResourceRef::new("db-b", ResourceKind::Mysql, "secondary-db");
+            let resources = ResourceContext::new().with_resource(resource.clone());
+
+            assert_eq!(0, view.auto_scroll.pending_bottom_scroll_frames);
+            view.set_resource_context_with_catalog(resources, Vec::new(), vec![resource], cx);
+            assert_eq!(5, view.auto_scroll.pending_bottom_scroll_frames);
         });
     }
 
