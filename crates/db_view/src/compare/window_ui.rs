@@ -2,6 +2,10 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::compare::sync_statement_picker::SyncExecutionSnapshot;
+use crate::compare::{
+    CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, execute_sync_sql,
+};
 use db::{GlobalDbState, SqlResult, StreamingProgress, compare::SyncPlan};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, Hsla, InteractiveElement, IntoElement,
@@ -28,11 +32,6 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 use tokio::sync::mpsc;
-
-use crate::compare::sync_statement_picker::SyncExecutionSnapshot;
-use crate::compare::{
-    CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, execute_sync_sql,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompareStep {
@@ -251,7 +250,7 @@ impl ConnectionSelectItem {
 
 pub(super) fn connection_select_state(
     current_connection_id: &str,
-    window: &mut gpui::Window,
+    window: &mut Window,
     cx: &mut App,
 ) -> Entity<SelectState<SearchableVec<ConnectionSelectItem>>> {
     let mut items = connection_select_items(cx);

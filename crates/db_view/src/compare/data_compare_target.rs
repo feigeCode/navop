@@ -207,6 +207,7 @@ impl DataCompareWindow {
     pub(super) fn render_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .flex_1()
             .min_h_0()
             .gap_2()
             .child(db_object_selector_panel(
@@ -271,6 +272,7 @@ impl DataCompareWindow {
 
         v_flex()
             .size_full()
+            .flex_1()
             .min_h_0()
             .gap_2()
             .child(section_title(t!("Compare.result").to_string()))
@@ -303,6 +305,15 @@ impl DataCompareWindow {
             .when_some(sync_summary, |this, sync_summary| {
                 this.child(div().text_sm().child(sync_summary))
             })
+    }
+
+    pub(super) fn render_sync_statement_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let plan = self.sync_plan.read(cx).clone();
+
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_2()
             .when_some(plan, |this, plan| {
                 this.child(sync_statement_picker(
                     plan,

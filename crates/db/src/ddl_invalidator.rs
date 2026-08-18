@@ -982,6 +982,11 @@ impl DdlInvalidator {
                 // 失效视图列表缓存
                 let key = CacheKey::views(connection_id, database, schema.as_deref());
                 cache.invalidate(&key).await;
+                // 部分数据库（例如 MySQL）的表列表会同时返回表和视图。
+                // 创建、替换或删除视图后必须同步失效，否则结构比较可能继续使用旧对象列表。
+                cache
+                    .invalidate_table_list(connection_id, database, schema.as_deref())
+                    .await;
             }
 
             DdlEvent::CreateFunction { database, .. } | DdlEvent::DropFunction { database, .. } => {
@@ -1042,6 +1047,46 @@ impl DdlInvalidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata_cache::{CacheLevel, MetadataCacheConfig, MetadataEntry};
+
+    fn memory_only_cache() -> Arc<MetadataCacheManager> {
+        let cache_dir = tempfile::tempdir().unwrap().keep();
+        let config = MetadataCacheConfig {
+            enable_file_cache: false,
+            ..MetadataCacheConfig::default()
+        };
+        Arc::new(MetadataCacheManager::with_config(cache_dir, config).unwrap())
+    }
+
+    async fn assert_view_event_invalidates_view_and_table_lists(event: DdlEvent) {
+        let cache = memory_only_cache();
+        let invalidator = DdlInvalidator::new(cache.clone());
+        let tables_key = CacheKey::tables("connection", "database", Some("public"));
+        let views_key = CacheKey::views("connection", "database", Some("public"));
+
+        cache
+            .set(
+                &tables_key,
+                MetadataEntry::Tables(Vec::new()),
+                CacheLevel::Database,
+            )
+            .await;
+        cache
+            .set(
+                &views_key,
+                MetadataEntry::Views(Vec::new()),
+                CacheLevel::Database,
+            )
+            .await;
+
+        assert!(cache.get(&tables_key).await.is_some());
+        assert!(cache.get(&views_key).await.is_some());
+
+        invalidator.invalidate("connection", &event).await;
+
+        assert!(cache.get(&tables_key).await.is_none());
+        assert!(cache.get(&views_key).await.is_none());
+    }
 
     #[test]
     fn test_parse_create_table() {
@@ -1126,6 +1171,26 @@ mod tests {
             None,
         );
         assert!(matches!(event, Some(DdlEvent::CreateView { view, .. }) if view == "active_users"));
+    }
+
+    #[tokio::test]
+    async fn create_view_invalidates_view_and_table_lists() {
+        assert_view_event_invalidates_view_and_table_lists(DdlEvent::CreateView {
+            database: "database".to_string(),
+            schema: Some("public".to_string()),
+            view: "active_users".to_string(),
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn drop_view_invalidates_view_and_table_lists() {
+        assert_view_event_invalidates_view_and_table_lists(DdlEvent::DropView {
+            database: "database".to_string(),
+            schema: Some("public".to_string()),
+            view: "active_users".to_string(),
+        })
+        .await;
     }
 
     #[test]

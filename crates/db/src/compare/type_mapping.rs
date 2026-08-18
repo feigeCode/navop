@@ -9,15 +9,18 @@ mod tests;
 use one_core::storage::DatabaseType;
 
 pub(crate) use family::{DatabaseFamily, database_family};
+mod type_mapping_override;
 use mapping::{map_canonical_type, unsupported_mapping};
 pub use model::{MappedColumnType, TypeCompatibility};
 use parser::{normalized_type_declaration, parse_canonical_type};
+pub use type_mapping_override::{TypeMappingOverride, TypeMappingOverrides};
 
 /// Database context used while comparing source and target schemas.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SchemaTypeMappingContext<'a> {
     pub source_database_type: &'a DatabaseType,
     pub target_database_type: &'a DatabaseType,
+    pub overrides: Option<&'a TypeMappingOverrides>,
 }
 
 impl<'a> SchemaTypeMappingContext<'a> {
@@ -28,6 +31,19 @@ impl<'a> SchemaTypeMappingContext<'a> {
         Self {
             source_database_type,
             target_database_type,
+            overrides: None,
+        }
+    }
+
+    pub fn with_overrides(
+        source_database_type: &'a DatabaseType,
+        target_database_type: &'a DatabaseType,
+        overrides: &'a TypeMappingOverrides,
+    ) -> Self {
+        Self {
+            source_database_type,
+            target_database_type,
+            overrides: Some(overrides),
         }
     }
 }
@@ -46,6 +62,20 @@ pub fn column_types_equivalent(
     let declarations_match = normalized_type_declaration(source_type)
         .eq_ignore_ascii_case(&normalized_type_declaration(target_type));
 
+    // User overrides: if the source type has a user-defined override for the
+    // target database, compare against the override's target type.
+    if let Some(overrides) = context.overrides {
+        if let Some(override_entry) = overrides.find(
+            source_type,
+            context.target_database_type.storage_key().as_str(),
+        ) {
+            let mapped = TypeMappingOverrides::apply_override(override_entry);
+            return mapped.compatibility.is_safe_for_automatic_sync()
+                && normalized_type_declaration(&mapped.target_type)
+                    .eq_ignore_ascii_case(&normalized_type_declaration(target_type));
+        }
+    }
+
     if context.source_database_type == context.target_database_type {
         return declarations_match;
     }
@@ -61,10 +91,11 @@ fn mapped_type_matches_target(
     target_type: &str,
     context: SchemaTypeMappingContext<'_>,
 ) -> bool {
-    let mapped = map_column_type(
+    let mapped = map_column_type_with_overrides(
         source_type,
         context.source_database_type,
         context.target_database_type,
+        context.overrides,
     );
     if !mapped.compatibility.is_safe_for_automatic_sync() {
         return false;
@@ -96,6 +127,31 @@ pub fn map_column_type(
     source_database_type: &DatabaseType,
     target_database_type: &DatabaseType,
 ) -> MappedColumnType {
+    map_column_type_with_overrides(
+        source_type,
+        source_database_type,
+        target_database_type,
+        None,
+    )
+}
+
+/// Maps a source column declaration into a valid target database type,
+/// consulting user-defined overrides first.
+pub fn map_column_type_with_overrides(
+    source_type: &str,
+    source_database_type: &DatabaseType,
+    target_database_type: &DatabaseType,
+    overrides: Option<&TypeMappingOverrides>,
+) -> MappedColumnType {
+    // Check user overrides first.
+    if let Some(overrides) = overrides {
+        if let Some(override_entry) =
+            overrides.find(source_type, target_database_type.storage_key().as_str())
+        {
+            return TypeMappingOverrides::apply_override(override_entry);
+        }
+    }
+
     let source_declaration = normalized_type_declaration(source_type);
     let source_family = database_family(source_database_type);
     let target_family = database_family(target_database_type);

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use db::{DbNode, DbNodeType, GlobalDbState};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName,
@@ -918,16 +918,37 @@ impl Render for DataCompareWindow {
                                 .child(
                                     div()
                                         .flex_1()
+                                        .min_w_0()
                                         .h_full()
                                         .min_h_0()
+                                        .overflow_hidden()
                                         .child(self.render_result_meta(cx)),
                                 )
-                                .child(div().flex_1().h_full().min_h_0().child(sql_editor_panel(
-                                    "data-compare-copy-sql",
-                                    &self.sync_sql_editor,
-                                    editor_sql,
-                                    cx,
-                                ))),
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .h_full()
+                                        .min_h_0()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .h(px(240.0))
+                                                .min_h(px(160.0))
+                                                .min_w_0()
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .child(self.render_sync_statement_picker(cx)),
+                                        )
+                                        .child(div().flex_1().min_w_0().min_h_0().child(
+                                            sql_editor_panel(
+                                                "data-compare-copy-sql",
+                                                &self.sync_sql_editor,
+                                                editor_sql,
+                                                cx,
+                                            ),
+                                        )),
+                                ),
                         )
                     })
                     .when(self.current_step == CompareStep::SqlExecute, |this| {

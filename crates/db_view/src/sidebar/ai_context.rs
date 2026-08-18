@@ -156,6 +156,7 @@ mod tests {
     fn table(name: &str, comment: Option<&str>) -> TableInfo {
         TableInfo {
             name: name.to_string(),
+            object_type: db::TableObjectType::Table,
             schema: None,
             comment: comment.map(ToString::to_string),
             engine: None,

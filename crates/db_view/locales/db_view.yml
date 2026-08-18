@@ -3405,6 +3405,34 @@ Compare:
     en: Preserve source column order in generated SQL
     zh-CN: 生成 SQL 时保持源表列顺序
     zh-HK: 產生 SQL 時保持來源表欄位順序
+  type_mapping_overrides:
+    en: Type Mapping Overrides
+    zh-CN: 类型映射覆盖
+    zh-HK: 類型映射覆蓋
+  add_type_mapping:
+    en: Add Type Mapping
+    zh-CN: 添加类型映射
+    zh-HK: 新增類型映射
+  source_type_placeholder:
+    en: Source Type
+    zh-CN: 源类型
+    zh-HK: 來源類型
+  target_database_placeholder:
+    en: Target Database
+    zh-CN: 目标数据库
+    zh-HK: 目標資料庫
+  target_type_placeholder:
+    en: Target Type
+    zh-CN: 目标类型
+    zh-HK: 目標類型
+  type_mapping_required_fields:
+    en: Source type and target type are required
+    zh-CN: 源类型和目标类型不能为空
+    zh-HK: 來源類型和目標類型不能為空
+  type_mapping_saved:
+    en: Type mapping saved
+    zh-CN: 类型映射已保存
+    zh-HK: 類型映射已保存
   swap_source_target:
     en: Swap source and target
     zh-CN: 交换源和目标

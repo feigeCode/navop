@@ -160,6 +160,9 @@ pub struct SchemaCompareParams {
     pub ignore_charset_collation: bool,
     pub ignore_table_options: bool,
     pub compare_column_order: bool,
+    /// User-defined type mapping overrides. When present, these take
+    /// precedence over built-in canonical type mappings.
+    pub type_mapping_overrides: super::TypeMappingOverrides,
 }
 
 #[cfg(test)]

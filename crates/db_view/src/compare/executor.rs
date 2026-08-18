@@ -244,6 +244,7 @@ pub fn generate_schema_sync_plan_for_target(
     target_database: &str,
     target_schema: Option<&str>,
     compare_column_order: bool,
+    type_mapping_overrides: db::compare::TypeMappingOverrides,
 ) -> anyhow::Result<SyncPlan> {
     db_state.prepare_schema_sync_plan_for_target(
         result,
@@ -252,6 +253,7 @@ pub fn generate_schema_sync_plan_for_target(
         target_database,
         target_schema,
         compare_column_order,
+        type_mapping_overrides,
     )
 }
 
@@ -1525,6 +1527,7 @@ mod tests {
                 ignore_charset_collation: false,
                 ignore_table_options: false,
                 compare_column_order: false,
+                type_mapping_overrides: db::compare::TypeMappingOverrides::default(),
             },
             db_state.clone(),
             tx,
@@ -1562,6 +1565,7 @@ mod tests {
             "onetcli_compare_dst",
             None,
             false,
+            db::compare::TypeMappingOverrides::default(),
         )?;
         assert_no_display_charset_labels(&plan.sql_text);
         let schema_results = run_sync_sql_and_collect(

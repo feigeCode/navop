@@ -649,6 +649,31 @@ mod test {
     }
 
     #[test]
+    fn test_data_compare_snapshot_statements_remain_single_commands() {
+        for (database_type, sql) in [
+            (
+                DatabaseType::PostgreSQL,
+                "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+            ),
+            (
+                DatabaseType::MySQL,
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            ),
+            (DatabaseType::MySQL, "START TRANSACTION READ ONLY"),
+            (DatabaseType::SQLite, "BEGIN"),
+            (DatabaseType::PostgreSQL, "ROLLBACK"),
+            (DatabaseType::MySQL, "ROLLBACK"),
+            (DatabaseType::SQLite, "ROLLBACK"),
+        ] {
+            assert_eq!(
+                vec![sql.to_string()],
+                parse_all(SqlSource::Script(sql.to_string()), database_type),
+                "snapshot command must pass through the script splitter unchanged"
+            );
+        }
+    }
+
+    #[test]
     fn test_string_with_backslash_escape() {
         let sql =
             "INSERT INTO t VALUES ('it\\'s good');\nINSERT INTO t VALUES ('path\\\\to\\\\file');";

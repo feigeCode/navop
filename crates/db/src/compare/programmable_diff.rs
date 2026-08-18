@@ -159,10 +159,7 @@ fn trigger_map(
     Ok(map)
 }
 
-fn routine_identity(
-    routine: &RoutineSchema,
-    options: &SchemaCompareOptions,
-) -> RoutineIdentityKey {
+fn routine_identity(routine: &RoutineSchema, options: &SchemaCompareOptions) -> RoutineIdentityKey {
     RoutineIdentityKey {
         kind: routine.kind,
         schema: identifier_component(routine.schema.as_deref().unwrap_or_default(), options),
@@ -173,10 +170,7 @@ fn routine_identity(
     }
 }
 
-fn trigger_identity(
-    trigger: &TriggerSchema,
-    options: &SchemaCompareOptions,
-) -> TriggerIdentityKey {
+fn trigger_identity(trigger: &TriggerSchema, options: &SchemaCompareOptions) -> TriggerIdentityKey {
     TriggerIdentityKey {
         schema: identifier_component(trigger.schema.as_deref().unwrap_or_default(), options),
         table_name: identifier_component(&trigger.table_name, options),
@@ -307,10 +301,7 @@ fn routine_identity_label(identity: &RoutineIdentityKey) -> String {
     } else {
         format!("{}.{}", identity.schema, identity.name)
     };
-    format!(
-        "{kind} {qualified_name}({})",
-        identity.identity_arguments
-    )
+    format!("{kind} {qualified_name}({})", identity.identity_arguments)
 }
 
 fn trigger_identity_label(identity: &TriggerIdentityKey) -> String {
@@ -354,29 +345,30 @@ mod tests {
         modified_target.return_type = Some("integer".to_string());
 
         let diffs = compare_routines(
-            vec![
-                routine(RoutineKind::Function, "added"),
-                modified_source,
-            ],
-            vec![
-                routine(RoutineKind::Function, "removed"),
-                modified_target,
-            ],
+            vec![routine(RoutineKind::Function, "added"), modified_source],
+            vec![routine(RoutineKind::Function, "removed"), modified_target],
             &SchemaCompareOptions::default(),
         )
         .unwrap();
 
         assert_eq!(diffs.len(), 3);
-        assert!(diffs.iter().any(|diff| {
-            diff.name == "added" && diff.status == DiffStatus::Added
-        }));
-        assert!(diffs.iter().any(|diff| {
-            diff.name == "removed" && diff.status == DiffStatus::Removed
-        }));
+        assert!(
+            diffs
+                .iter()
+                .any(|diff| { diff.name == "added" && diff.status == DiffStatus::Added })
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|diff| { diff.name == "removed" && diff.status == DiffStatus::Removed })
+        );
         assert!(diffs.iter().any(|diff| {
             diff.name == "modified"
                 && diff.status == DiffStatus::Modified
-                && diff.changes.iter().any(|change| change.contains("return type"))
+                && diff
+                    .changes
+                    .iter()
+                    .any(|change| change.contains("return type"))
         }));
     }
 
@@ -424,12 +416,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(diffs.len(), 3);
-        assert!(diffs.iter().any(|diff| {
-            diff.name == "added" && diff.status == DiffStatus::Added
-        }));
-        assert!(diffs.iter().any(|diff| {
-            diff.name == "removed" && diff.status == DiffStatus::Removed
-        }));
+        assert!(
+            diffs
+                .iter()
+                .any(|diff| { diff.name == "added" && diff.status == DiffStatus::Added })
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|diff| { diff.name == "removed" && diff.status == DiffStatus::Removed })
+        );
         assert!(diffs.iter().any(|diff| {
             diff.name == "modified"
                 && diff.status == DiffStatus::Modified

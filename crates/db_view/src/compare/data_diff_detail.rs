@@ -3,7 +3,7 @@ use db::compare::{
 };
 use gpui::{
     App, ColorExt, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Sizable, StyledExt, checkbox::Checkbox, h_flex, scroll::ScrollableElement,
@@ -31,6 +31,8 @@ pub(super) fn data_diff_detail_panel(
     });
 
     v_flex()
+        .flex_1()
+        .min_h_0()
         .gap_1()
         .child(
             h_flex()
@@ -60,7 +62,8 @@ pub(super) fn data_diff_detail_panel(
         .when(has_changes, |this| {
             this.child(
                 v_flex()
-                    .max_h(px(360.0))
+                    .flex_1()
+                    .min_h_0()
                     .gap_2()
                     .overflow_y_scrollbar()
                     .children(

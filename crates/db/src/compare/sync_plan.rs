@@ -2,7 +2,8 @@ use super::{
     CellValue, ColumnSchema, DataCompareBatchResult, DataCompareBatchWarningKind,
     DataCompareResult, DataCompareTableDependency, DatabaseFamily, DiffStatus, RowData,
     SchemaCompareResult, SchemaObjectType, SchemaTypeMappingContext, TableSchema,
-    TypeCompatibility, column_types_equivalent, database_family, map_column_type,
+    TypeCompatibility, binary_cell_bytes, column_types_equivalent, database_family,
+    map_column_type_with_overrides,
 };
 use crate::plugin::DatabasePlugin;
 use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
@@ -81,9 +82,11 @@ pub struct SyncPlan {
     pub sql_text: String,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SchemaSyncPlanOptions {
     pub compare_column_order: bool,
+    /// User-defined type mapping overrides for sync plan generation.
+    pub type_mapping_overrides: super::TypeMappingOverrides,
 }
 
 trait SyncSqlDialect {
@@ -1231,11 +1234,17 @@ fn raw_column_definition_changed(
     target: &ColumnSchema,
     source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
+    overrides: Option<&super::TypeMappingOverrides>,
 ) -> bool {
     !column_types_equivalent(
         &source.data_type,
         &target.data_type,
-        SchemaTypeMappingContext::new(source_db_type, target_db_type),
+        match overrides {
+            Some(ov) => {
+                SchemaTypeMappingContext::with_overrides(source_db_type, target_db_type, ov)
+            }
+            None => SchemaTypeMappingContext::new(source_db_type, target_db_type),
+        },
     ) || source.nullable != target.nullable
         || source.default_value != target.default_value
         || source.charset != target.charset
@@ -1253,7 +1262,8 @@ fn table_designer_sync_statement(
     source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
     dialect: &dyn SyncSqlDialect,
-    options: SchemaSyncPlanOptions,
+    compare_column_order: bool,
+    overrides: Option<&super::TypeMappingOverrides>,
 ) -> TableDesignerSyncOutcome {
     let Some(source) = table_diff.source.as_ref() else {
         return TableDesignerSyncOutcome {
@@ -1274,6 +1284,7 @@ fn table_designer_sync_statement(
         Some(target),
         source_db_type,
         target_db_type,
+        overrides,
     ) {
         Ok(mapped) => mapped,
         Err(warnings) => {
@@ -1284,7 +1295,7 @@ fn table_designer_sync_statement(
         }
     };
     let mut new = mapped.design;
-    if !options.compare_column_order {
+    if !compare_column_order {
         new.columns = compare_sync_columns_ignoring_order(new.columns, target);
     }
     let Some(sql) = dialect.build_alter_table_sql(&original, &new) else {
@@ -1299,7 +1310,8 @@ fn table_designer_sync_statement(
             warnings: vec![],
         };
     }
-    let safety = table_designer_statement_safety(table_diff, source_db_type, target_db_type);
+    let safety =
+        table_designer_statement_safety(table_diff, source_db_type, target_db_type, overrides);
     let mut statement_warnings = safety.warnings;
     statement_warnings.extend(mapped.warnings);
     TableDesignerSyncOutcome {
@@ -1333,6 +1345,7 @@ fn table_designer_statement_safety(
     table_diff: &super::TableDiff,
     source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
+    overrides: Option<&super::TypeMappingOverrides>,
 ) -> SyncStatementSafety {
     let destructive_column_diff = table_diff
         .column_diffs
@@ -1341,9 +1354,13 @@ fn table_designer_statement_safety(
             DiffStatus::Removed => true,
             DiffStatus::Added => false,
             DiffStatus::Modified => match (&diff.source, &diff.target) {
-                (Some(source), Some(target)) => {
-                    raw_column_definition_changed(source, target, source_db_type, target_db_type)
-                }
+                (Some(source), Some(target)) => raw_column_definition_changed(
+                    source,
+                    target,
+                    source_db_type,
+                    target_db_type,
+                    overrides,
+                ),
                 _ => true,
             },
         });
@@ -1395,6 +1412,9 @@ pub(super) fn format_value_for_database(
 ) -> String {
     if value.is_null() {
         return "NULL".to_string();
+    }
+    if let Some(bytes) = binary_cell_bytes(value) {
+        return format_binary_literal_for_database(&bytes, database_type.as_ref());
     }
     if is_mysql_bit_literal_column(database_type.as_ref(), data_type) {
         if let Some(value) = value.as_bool() {
@@ -1450,6 +1470,30 @@ pub(super) fn format_value_for_database(
     } else {
         escaped
     }
+}
+
+fn format_binary_literal_for_database(
+    bytes: &[u8],
+    database_type: Option<&DatabaseType>,
+) -> String {
+    let hex = encode_hex(bytes);
+    if database_type.is_some_and(is_postgres_family) {
+        format!("decode('{hex}', 'hex')")
+    } else if database_type.is_some_and(is_sqlserver_family) {
+        format!("0x{hex}")
+    } else if database_type.is_some_and(is_oracle_family) {
+        format!("hextoraw('{hex}')")
+    } else if database_type.is_some_and(is_clickhouse_family) {
+        format!("unhex('{hex}')")
+    } else {
+        // MySQL, SQLite, DuckDB, unknown external drivers, and the
+        // type-less compatibility path all accept the SQL hex literal form.
+        format!("X'{hex}'")
+    }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn is_mysql_bit_literal_column(
@@ -1613,6 +1657,11 @@ fn format_pg_array_sql_literal(array: &[CellValue]) -> String {
 fn format_pg_array_element(value: &CellValue) -> String {
     match value {
         CellValue::Null => "NULL".to_string(),
+        CellValue::Object(_) if binary_cell_bytes(value).is_some() => {
+            let bytes = binary_cell_bytes(value).expect("binary tag checked above");
+            let hex = encode_hex(&bytes);
+            format!(r"\x{hex}")
+        }
         CellValue::Array(array) => {
             if array.is_empty() {
                 return "{}".to_string();
@@ -1655,6 +1704,11 @@ fn format_ch_array_sql_literal(array: &[CellValue]) -> String {
 fn format_ch_array_element(value: &CellValue) -> String {
     match value {
         CellValue::Null => "NULL".to_string(),
+        CellValue::Object(_) if binary_cell_bytes(value).is_some() => {
+            let bytes = binary_cell_bytes(value).expect("binary tag checked above");
+            let hex = encode_hex(&bytes);
+            format!("unhex('{hex}')")
+        }
         CellValue::Array(array) => {
             if array.is_empty() {
                 return "[]".to_string();
@@ -1861,6 +1915,11 @@ fn build_schema_sync_plan_with_dialect(
         return blocked_schema_sync_plan(result);
     }
 
+    let overrides = if options.type_mapping_overrides.overrides.is_empty() {
+        None
+    } else {
+        Some(&options.type_mapping_overrides)
+    };
     let mut foreign_key_drops = Vec::new();
     let mut statements = Vec::new();
     let mut deferred_foreign_key_adds = Vec::new();
@@ -1899,6 +1958,7 @@ fn build_schema_sync_plan_with_dialect(
                         None,
                         source_db_type,
                         target_db_type,
+                        overrides,
                     ) {
                         Ok(mapped) => mapped,
                         Err(mapping_warnings) => {
@@ -1960,6 +2020,7 @@ fn build_schema_sync_plan_with_dialect(
                                 None,
                                 source_db_type,
                                 target_db_type,
+                                overrides,
                             ) {
                                 Ok(mapped_column) => mapped_column,
                                 Err(mapping_warning) => {
@@ -2051,7 +2112,8 @@ fn build_schema_sync_plan_with_dialect(
                     source_db_type,
                     target_db_type,
                     dialect,
-                    options,
+                    options.compare_column_order,
+                    overrides,
                 );
                 warnings.extend(table_designer_outcome.warnings);
                 let table_designer_statement = table_designer_outcome.statement;
@@ -2107,6 +2169,7 @@ fn build_schema_sync_plan_with_dialect(
                                         None,
                                         source_db_type,
                                         target_db_type,
+                                        overrides,
                                     ) {
                                         Ok(mapped_column) => mapped_column,
                                         Err(mapping_warning) => {
@@ -2184,6 +2247,7 @@ fn build_schema_sync_plan_with_dialect(
                                         Some(target),
                                         source_db_type,
                                         target_db_type,
+                                        overrides,
                                     ) {
                                         Ok(mapped_column) => mapped_column,
                                         Err(mapping_warning) => {
@@ -2196,6 +2260,7 @@ fn build_schema_sync_plan_with_dialect(
                                         target,
                                         source_db_type,
                                         target_db_type,
+                                        overrides,
                                     ) {
                                         if dialect.needs_raw_comment_statements() {
                                             if let Some(sql) = raw_column_comment_sql(
@@ -2662,8 +2727,14 @@ fn mapped_column_schema_to_definition(
     target: Option<&ColumnSchema>,
     source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
+    overrides: Option<&super::TypeMappingOverrides>,
 ) -> Result<MappedColumnDefinition, String> {
-    let mapping = map_column_type(&source.data_type, source_db_type, target_db_type);
+    let mapping = map_column_type_with_overrides(
+        &source.data_type,
+        source_db_type,
+        target_db_type,
+        overrides,
+    );
     let mapping_warning = mapping.warning.as_deref().map(|warning| {
         format!(
             "字段 `{}.{}`：{}",
@@ -2685,13 +2756,19 @@ fn mapped_column_schema_to_definition(
     }
 
     let mut definition = column_schema_to_definition(source);
+    let mapping_context = match overrides {
+        Some(overrides) => {
+            SchemaTypeMappingContext::with_overrides(source_db_type, target_db_type, overrides)
+        }
+        None => SchemaTypeMappingContext::new(source_db_type, target_db_type),
+    };
     definition.data_type = if mapping.compatibility == TypeCompatibility::Exact {
         source.data_type.clone()
     } else if target.is_some_and(|target| {
         column_types_equivalent(
             &source.data_type,
             &target.data_type,
-            SchemaTypeMappingContext::new(source_db_type, target_db_type),
+            mapping_context.clone(),
         )
     }) {
         target
@@ -2714,6 +2791,7 @@ fn mapped_table_schema_to_design(
     target: Option<&TableSchema>,
     source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
+    overrides: Option<&super::TypeMappingOverrides>,
 ) -> Result<MappedTableDesign, Vec<String>> {
     let mut design = table_schema_to_design(database, source);
     let mut selected_by_default = true;
@@ -2739,6 +2817,7 @@ fn mapped_table_schema_to_design(
             target_column,
             source_db_type,
             target_db_type,
+            overrides,
         ) {
             Ok(mapped) => {
                 definition.data_type = mapped.definition.data_type;
@@ -3086,11 +3165,88 @@ mod tests {
             Some(&target),
             &DatabaseType::PostgreSQL,
             &DatabaseType::MySQL,
+            None,
         )
         .expect("equivalent cross-database type should be mapped");
 
         assert_eq!("INTEGER", mapped.design.columns[0].data_type);
         assert!(mapped.selected_by_default);
+    }
+
+    #[test]
+    fn schema_sync_override_does_not_alter_an_already_equivalent_target_column() {
+        use super::super::{
+            ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
+            TypeMappingOverride, TypeMappingOverrides,
+        };
+
+        let source_column = ColumnSchema {
+            name: "display_name".to_string(),
+            data_type: "VARCHAR(255)".to_string(),
+            nullable: true,
+            ..Default::default()
+        };
+        let target_column = ColumnSchema {
+            name: "display_name".to_string(),
+            data_type: "TEXT".to_string(),
+            nullable: true,
+            ..Default::default()
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(TableSchema {
+                    name: "users".to_string(),
+                    columns: vec![source_column.clone()],
+                    ..Default::default()
+                }),
+                target: Some(TableSchema {
+                    name: "users".to_string(),
+                    columns: vec![target_column.clone()],
+                    ..Default::default()
+                }),
+                column_diffs: vec![ColumnDiff {
+                    name: "display_name".to_string(),
+                    status: DiffStatus::Modified,
+                    changes: vec!["type changed".to_string()],
+                    source: Some(source_column),
+                    target: Some(target_column),
+                }],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
+            }],
+            modified_count: 1,
+            ..Default::default()
+        };
+        let mut overrides = TypeMappingOverrides::new();
+        overrides.upsert(TypeMappingOverride {
+            source_type: "varchar(255)".to_string(),
+            target_database: "PostgreSQL".to_string(),
+            target_type: "TEXT".to_string(),
+            enabled: true,
+            note: None,
+        });
+        let plugin = crate::postgresql::PostgresPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin_options_for_source(
+            &result,
+            "app",
+            Some("public"),
+            &DatabaseType::MySQL,
+            &plugin,
+            SchemaSyncPlanOptions {
+                compare_column_order: false,
+                type_mapping_overrides: overrides,
+            },
+        );
+
+        assert!(plan.statements.is_empty());
+        assert!(plan.sql_text.is_empty());
     }
 
     #[test]
@@ -3513,6 +3669,84 @@ mod tests {
         assert_eq!(
             format_value_for_database(&CellValue::Null, None, None),
             "NULL"
+        );
+        let binary = super::super::binary_cell_value(&[0x01, 0x02, 0xab]);
+        assert_eq!(
+            format_value_for_database(&binary, Some("blob"), Some(DatabaseType::MySQL)),
+            "X'0102ab'"
+        );
+        assert_eq!(
+            format_value_for_database(&binary, Some("bytea"), Some(DatabaseType::PostgreSQL)),
+            "decode('0102ab', 'hex')"
+        );
+        assert_eq!(
+            format_value_for_database(&binary, Some("varbinary"), Some(DatabaseType::MSSQL)),
+            "0x0102ab"
+        );
+        assert_eq!(
+            format_value_for_database(&binary, Some("raw"), Some(DatabaseType::Oracle)),
+            "hextoraw('0102ab')"
+        );
+        assert_eq!(
+            format_value_for_database(&binary, Some("String"), Some(DatabaseType::ClickHouse)),
+            "unhex('0102ab')"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &binary,
+                Some("blob"),
+                Some(DatabaseType::External {
+                    driver_id: "postgresql".to_string(),
+                })
+            ),
+            "decode('0102ab', 'hex')"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &binary,
+                Some("blob"),
+                Some(DatabaseType::External {
+                    driver_id: "mssql".to_string(),
+                })
+            ),
+            "0x0102ab"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &binary,
+                Some("blob"),
+                Some(DatabaseType::External {
+                    driver_id: "clickhouse".to_string(),
+                })
+            ),
+            "unhex('0102ab')"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &binary,
+                Some("blob"),
+                Some(DatabaseType::External {
+                    driver_id: "mariadb".to_string(),
+                })
+            ),
+            "X'0102ab'"
+        );
+
+        assert_eq!(
+            format_value_for_database(
+                &json!([super::super::binary_cell_value(&[0xab, 0xcd])]),
+                Some("bytea[]"),
+                Some(DatabaseType::PostgreSQL)
+            ),
+            r"'{\\xabcd}'"
+        );
+        assert_eq!(
+            format_value_for_database(
+                &json!([super::super::binary_cell_value(&[0xab, 0xcd])]),
+                Some("Array(String)"),
+                Some(DatabaseType::ClickHouse)
+            ),
+            "[unhex('abcd')]"
         );
         assert_eq!(
             format_value_for_database(&json!(r"a\b"), None, Some(DatabaseType::PostgreSQL)),
@@ -4638,6 +4872,7 @@ mod tests {
             &plugin,
             SchemaSyncPlanOptions {
                 compare_column_order: true,
+                ..Default::default()
             },
         );
 

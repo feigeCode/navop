@@ -91,7 +91,9 @@ pub fn compare_schemas_with_type_mapping(
         let source_table = &source_map[name];
         let target_table = &target_map[name];
 
-        if let Some(diff) = compare_table(source_table, target_table, &options, type_mapping) {
+        if let Some(diff) =
+            compare_table(source_table, target_table, &options, type_mapping.clone())
+        {
             table_diffs.push(diff);
         }
     }
@@ -287,11 +289,11 @@ fn compare_columns_with_options(
         let src = source_map[name];
         let tgt = target_map[name];
 
-        if !column_eq(src, tgt, options, type_mapping) {
+        if !column_eq(src, tgt, options, type_mapping.clone()) {
             diffs.push(ColumnDiff {
                 name: src.name.clone(),
                 status: DiffStatus::Modified,
-                changes: column_changes(src, tgt, options, type_mapping),
+                changes: column_changes(src, tgt, options, type_mapping.clone()),
                 source: Some((*src).clone()),
                 target: Some((*tgt).clone()),
             });

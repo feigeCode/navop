@@ -28,6 +28,6 @@ pub use sync_plan::*;
 pub use task::*;
 pub(crate) use type_mapping::{DatabaseFamily, database_family};
 pub use type_mapping::{
-    MappedColumnType, SchemaTypeMappingContext, TypeCompatibility, column_types_equivalent,
-    map_column_type,
+    MappedColumnType, SchemaTypeMappingContext, TypeCompatibility, TypeMappingOverride,
+    TypeMappingOverrides, column_types_equivalent, map_column_type, map_column_type_with_overrides,
 };

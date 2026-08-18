@@ -490,49 +490,9 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         DatabaseType::external(self.driver.id.clone())
     }
 
-    fn supports_rowid(&self) -> bool {
-        self.driver
-            .dialect
-            .row_id_column
-            .as_deref()
-            .is_some_and(|column| !column.trim().is_empty())
-    }
-
-    fn rowid_column_alias(&self) -> &str {
-        self.driver
-            .dialect
-            .row_id_alias
-            .as_deref()
-            .filter(|alias| !alias.trim().is_empty())
-            .unwrap_or("__rowid__")
-    }
-
     fn quote_identifier(&self, identifier: &str) -> String {
         let (left, right) = self.driver.dialect.identifier_quote_pair();
         quote_identifier_with(left, right, identifier)
-    }
-
-    fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
-        let capabilities = self.driver.effective_capabilities();
-        if matches!(
-            self.driver.dialect.table_reference_schema_mode,
-            TableReferenceSchemaMode::PreferSchema
-        ) || (capabilities.supports_schema && !capabilities.uses_schema_as_database)
-        {
-            if let Some(schema) = schema.filter(|schema| !schema.trim().is_empty()) {
-                return format!(
-                    "{}.{}",
-                    self.quote_identifier(schema),
-                    self.quote_identifier(table)
-                );
-            }
-        }
-
-        format!(
-            "{}.{}",
-            self.quote_identifier(database),
-            self.quote_identifier(table)
-        )
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {
@@ -594,99 +554,6 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         Ok(infos.into_iter().map(|database| database.name).collect())
     }
 
-    async fn query_table_data(
-        &self,
-        connection: &dyn DbConnection,
-        request: TableDataRequest,
-    ) -> Result<TableDataResponse> {
-        let start_time = std::time::Instant::now();
-
-        let where_clause = match request.where_clause {
-            Some(ref clause) if !clause.trim().is_empty() => format!(" WHERE {}", clause.trim()),
-            _ => String::new(),
-        };
-        let mut order_clause = match request.order_by_clause {
-            Some(ref clause) if !clause.trim().is_empty() => format!(" ORDER BY {}", clause.trim()),
-            _ => String::new(),
-        };
-
-        if order_clause.is_empty() {
-            if let Some(default_order_by) = self
-                .driver
-                .dialect
-                .default_order_by
-                .as_deref()
-                .filter(|order_by| !order_by.trim().is_empty())
-            {
-                order_clause = format!(" ORDER BY {}", default_order_by.trim());
-            }
-        }
-
-        let offset = request.effective_offset();
-        let table_ref = self.format_table_reference(
-            &request.database,
-            request.schema.as_deref(),
-            &request.table,
-        );
-
-        let total_count = match request.known_total_count {
-            Some(total_count) => total_count,
-            None => {
-                let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
-                parse_table_data_total_count(connection.query(&count_sql).await?)?
-            }
-        };
-
-        let base_sql = if let Some(row_id_column) = self
-            .driver
-            .dialect
-            .row_id_column
-            .as_deref()
-            .filter(|column| !column.trim().is_empty())
-        {
-            let row_id_alias = self
-                .driver
-                .dialect
-                .row_id_alias
-                .as_deref()
-                .filter(|alias| !alias.trim().is_empty())
-                .unwrap_or("__rowid__");
-            format!(
-                "SELECT {} AS {}, t.* FROM {} t{}{}",
-                row_id_column.trim(),
-                self.quote_identifier(row_id_alias.trim()),
-                table_ref,
-                where_clause,
-                order_clause
-            )
-        } else {
-            format!(
-                "SELECT * FROM {}{}{}",
-                table_ref, where_clause, order_clause
-            )
-        };
-        let paginated_query =
-            self.build_paginated_query(&base_sql, request.page_size, offset, &order_clause);
-
-        let sql_result = connection.query(&paginated_query.sql).await?;
-        let duration = start_time.elapsed().as_millis();
-
-        let mut query_result = match sql_result {
-            SqlResult::Query(query_result) => Ok::<QueryResult, anyhow::Error>(query_result),
-            SqlResult::Exec(_) => anyhow::bail!(t!("Error.query_type_error")),
-            SqlResult::Error(sql_error_info) => anyhow::bail!(sql_error_info.message),
-        }?;
-        paginated_query.strip_hidden_result_columns(&mut query_result)?;
-
-        Ok(TableDataResponse {
-            query_result,
-            total_count,
-            page: request.page,
-            page_size: request.page_size,
-            duration,
-        })
-    }
-
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
         if let Some(view) = self
             .custom_object_view(
@@ -738,12 +605,58 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         }
     }
 
-    fn capabilities(&self) -> DatabaseCapabilities {
-        self.driver.effective_capabilities()
+    fn supports_rowid(&self) -> bool {
+        self.driver
+            .dialect
+            .row_id_column
+            .as_deref()
+            .is_some_and(|column| !column.trim().is_empty())
+    }
+
+    fn rowid_column_alias(&self) -> &str {
+        self.driver
+            .dialect
+            .row_id_alias
+            .as_deref()
+            .filter(|alias| !alias.trim().is_empty())
+            .unwrap_or("__rowid__")
     }
 
     fn sql_dialect(&self) -> Box<dyn Dialect> {
         Box::new(GenericDialect {})
+    }
+
+    fn split_sql_statements(&self, sql: &str) -> Vec<String> {
+        let trimmed = sql.trim();
+        if trimmed.starts_with(WIRE_PREFIX) {
+            return split_wire_script(trimmed);
+        }
+        split_sql_with_parser(trimmed, self.name())
+    }
+
+    fn build_explain_statement(&self, sql: &str) -> String {
+        self.driver
+            .dialect
+            .format_explain_sql(sql)
+            .unwrap_or_default()
+    }
+
+    fn build_explain_sql(&self, sql: &str) -> Option<String> {
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let statements = self
+            .split_sql_statements(trimmed)
+            .into_iter()
+            .filter_map(|statement| self.build_external_explain_statement(&statement))
+            .collect::<Vec<_>>();
+        if statements.is_empty() {
+            None
+        } else {
+            Some(statements.join("\n"))
+        }
     }
 
     async fn list_schemas(
@@ -986,61 +899,6 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         ))
     }
 
-    async fn list_views(
-        &self,
-        connection: &dyn DbConnection,
-        database: &str,
-        schema: Option<String>,
-    ) -> Result<Vec<ViewInfo>> {
-        let views: Vec<wire_schema::ViewInfo> = self
-            .optional_metadata(
-                connection,
-                wire_method::SCHEMA_VIEWS,
-                serde_json::json!({
-                    "database": database,
-                    "schema": schema,
-                }),
-            )
-            .await?
-            .unwrap_or_default();
-        Ok(views.into_iter().map(view_info_from_wire).collect())
-    }
-
-    async fn list_views_view(
-        &self,
-        connection: &dyn DbConnection,
-        database: &str,
-    ) -> Result<ObjectView> {
-        if let Some(view) = self
-            .custom_object_view(
-                connection,
-                wire_schema::ObjectViewKind::Views,
-                DbNodeType::View,
-                "Views",
-                ObjectViewScope {
-                    database: Some(database),
-                    ..Default::default()
-                },
-            )
-            .await?
-        {
-            return Ok(view);
-        }
-
-        let rows = self
-            .list_views(connection, database, None)
-            .await?
-            .into_iter()
-            .map(|view| vec![view.name, view.comment.unwrap_or_default()])
-            .collect();
-        Ok(object_view(
-            DbNodeType::View,
-            "Views",
-            vec!["Name", "Comment"],
-            rows,
-        ))
-    }
-
     async fn list_foreign_keys(
         &self,
         connection: &dyn DbConnection,
@@ -1113,6 +971,61 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             .collect())
     }
 
+    async fn list_views(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<ViewInfo>> {
+        let views: Vec<wire_schema::ViewInfo> = self
+            .optional_metadata(
+                connection,
+                wire_method::SCHEMA_VIEWS,
+                serde_json::json!({
+                    "database": database,
+                    "schema": schema,
+                }),
+            )
+            .await?
+            .unwrap_or_default();
+        Ok(views.into_iter().map(view_info_from_wire).collect())
+    }
+
+    async fn list_views_view(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+    ) -> Result<ObjectView> {
+        if let Some(view) = self
+            .custom_object_view(
+                connection,
+                wire_schema::ObjectViewKind::Views,
+                DbNodeType::View,
+                "Views",
+                ObjectViewScope {
+                    database: Some(database),
+                    ..Default::default()
+                },
+            )
+            .await?
+        {
+            return Ok(view);
+        }
+
+        let rows = self
+            .list_views(connection, database, None)
+            .await?
+            .into_iter()
+            .map(|view| vec![view.name, view.comment.unwrap_or_default()])
+            .collect();
+        Ok(object_view(
+            DbNodeType::View,
+            "Views",
+            vec!["Name", "Comment"],
+            rows,
+        ))
+    }
+
     async fn list_functions(
         &self,
         connection: &dyn DbConnection,
@@ -1175,6 +1088,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             vec!["Name", "Return Type"],
             rows,
         ))
+    }
+
+    fn capabilities(&self) -> DatabaseCapabilities {
+        self.driver.effective_capabilities()
     }
 
     fn ui_manifest(&self) -> DatabaseUiManifest {
@@ -1471,17 +1388,6 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         fallback
     }
 
-    async fn drop_database_async(&self, database: &str) -> Result<String> {
-        self.build_drop_database_sql_async(database).await
-    }
-
-    fn build_limit_clause(&self) -> String {
-        match self.driver.dialect.limit_style {
-            LimitStyle::LimitOffset => "LIMIT".to_string(),
-            LimitStyle::OffsetFetch => String::new(),
-        }
-    }
-
     fn format_pagination(&self, limit: usize, offset: usize, order_clause: &str) -> String {
         match self.driver.dialect.limit_style {
             LimitStyle::LimitOffset => format!(" LIMIT {limit} OFFSET {offset}"),
@@ -1526,65 +1432,120 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         ))
     }
 
-    fn format_boolean_value(&self, v: &str) -> String {
-        if v == "1" || v.eq_ignore_ascii_case("true") {
-            self.driver.dialect.bool_true.clone()
-        } else {
-            self.driver.dialect.bool_false.clone()
-        }
-    }
-
-    fn format_binary_literal(&self, bytes: &[u8]) -> String {
-        self.driver
-            .dialect
-            .compatible_database_type
-            .as_ref()
-            .map(|database_type| format_binary_literal_for_database(database_type, bytes))
-            .unwrap_or_else(|| format_binary_literal_for_database(&self.name(), bytes))
-    }
-
-    fn build_explain_statement(&self, sql: &str) -> String {
-        self.driver
-            .dialect
-            .format_explain_sql(sql)
-            .unwrap_or_default()
-    }
-
-    fn build_explain_sql(&self, sql: &str) -> Option<String> {
-        let trimmed = sql.trim();
-        if trimmed.is_empty() {
-            return None;
+    fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        let capabilities = self.driver.effective_capabilities();
+        if matches!(
+            self.driver.dialect.table_reference_schema_mode,
+            TableReferenceSchemaMode::PreferSchema
+        ) || (capabilities.supports_schema && !capabilities.uses_schema_as_database)
+        {
+            if let Some(schema) = schema.filter(|schema| !schema.trim().is_empty()) {
+                return format!(
+                    "{}.{}",
+                    self.quote_identifier(schema),
+                    self.quote_identifier(table)
+                );
+            }
         }
 
-        let statements = self
-            .split_sql_statements(trimmed)
-            .into_iter()
-            .filter_map(|statement| self.build_external_explain_statement(&statement))
-            .collect::<Vec<_>>();
-        if statements.is_empty() {
-            None
-        } else {
-            Some(statements.join("\n"))
-        }
-    }
-
-    fn split_sql_statements(&self, sql: &str) -> Vec<String> {
-        let trimmed = sql.trim();
-        if trimmed.starts_with(WIRE_PREFIX) {
-            return split_wire_script(trimmed);
-        }
-        split_sql_with_parser(trimmed, self.name())
-    }
-
-    fn build_where_and_limit_clause(
-        &self,
-        request: &TableSaveRequest,
-        original_data: &[TableCellValue],
-    ) -> (String, String) {
-        (
-            self.build_table_change_where_clause(request, original_data),
-            String::new(),
+        format!(
+            "{}.{}",
+            self.quote_identifier(database),
+            self.quote_identifier(table)
         )
+    }
+
+    async fn query_table_data(
+        &self,
+        connection: &dyn DbConnection,
+        request: TableDataRequest,
+    ) -> Result<TableDataResponse> {
+        let start_time = std::time::Instant::now();
+
+        let where_clause = match request.where_clause {
+            Some(ref clause) if !clause.trim().is_empty() => format!(" WHERE {}", clause.trim()),
+            _ => String::new(),
+        };
+        let mut order_clause = match request.order_by_clause {
+            Some(ref clause) if !clause.trim().is_empty() => format!(" ORDER BY {}", clause.trim()),
+            _ => String::new(),
+        };
+
+        if order_clause.is_empty() {
+            if let Some(default_order_by) = self
+                .driver
+                .dialect
+                .default_order_by
+                .as_deref()
+                .filter(|order_by| !order_by.trim().is_empty())
+            {
+                order_clause = format!(" ORDER BY {}", default_order_by.trim());
+            }
+        }
+
+        let offset = request.effective_offset();
+        let table_ref = self.format_table_reference(
+            &request.database,
+            request.schema.as_deref(),
+            &request.table,
+        );
+
+        let total_count = match request.known_total_count {
+            Some(total_count) => total_count,
+            None => {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
+                parse_table_data_total_count(connection.query(&count_sql).await?)?
+            }
+        };
+
+        let base_sql = if let Some(row_id_column) = self
+            .driver
+            .dialect
+            .row_id_column
+            .as_deref()
+            .filter(|column| !column.trim().is_empty())
+        {
+            let row_id_alias = self
+                .driver
+                .dialect
+                .row_id_alias
+                .as_deref()
+                .filter(|alias| !alias.trim().is_empty())
+                .unwrap_or("__rowid__");
+            format!(
+                "SELECT {} AS {}, t.* FROM {} t{}{}",
+                row_id_column.trim(),
+                self.quote_identifier(row_id_alias.trim()),
+                table_ref,
+                where_clause,
+                order_clause
+            )
+        } else {
+            format!(
+                "SELECT * FROM {}{}{}",
+                table_ref, where_clause, order_clause
+            )
+        };
+        let paginated_query =
+            self.build_paginated_query(&base_sql, request.page_size, offset, &order_clause);
+
+        let sql_result = connection.query(&paginated_query.sql).await?;
+        let duration = start_time.elapsed().as_millis();
+
+        let mut query_result = match sql_result {
+            SqlResult::Query(query_result) => Ok::<QueryResult, anyhow::Error>(query_result),
+            SqlResult::Exec(_) => anyhow::bail!(t!("Error.query_type_error")),
+            SqlResult::Error(sql_error_info) => anyhow::bail!(sql_error_info.message),
+        }?;
+        paginated_query.strip_hidden_result_columns(&mut query_result)?;
+
+        Ok(TableDataResponse {
+            query_result,
+            total_count,
+            page: request.page,
+            page_size: request.page_size,
+            duration,
+        })
     }
 
     fn generate_table_changes_sql(&self, request: &TableSaveRequest) -> String {
@@ -1607,6 +1568,45 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         } else {
             sql_statements.join(";\n\n") + ";"
         }
+    }
+
+    fn format_boolean_value(&self, v: &str) -> String {
+        if v == "1" || v.eq_ignore_ascii_case("true") {
+            self.driver.dialect.bool_true.clone()
+        } else {
+            self.driver.dialect.bool_false.clone()
+        }
+    }
+
+    fn format_binary_literal(&self, bytes: &[u8]) -> String {
+        self.driver
+            .dialect
+            .compatible_database_type
+            .as_ref()
+            .map(|database_type| format_binary_literal_for_database(database_type, bytes))
+            .unwrap_or_else(|| format_binary_literal_for_database(&self.name(), bytes))
+    }
+
+    fn build_limit_clause(&self) -> String {
+        match self.driver.dialect.limit_style {
+            LimitStyle::LimitOffset => "LIMIT".to_string(),
+            LimitStyle::OffsetFetch => String::new(),
+        }
+    }
+
+    fn build_where_and_limit_clause(
+        &self,
+        request: &TableSaveRequest,
+        original_data: &[TableCellValue],
+    ) -> (String, String) {
+        (
+            self.build_table_change_where_clause(request, original_data),
+            String::new(),
+        )
+    }
+
+    async fn drop_database_async(&self, database: &str) -> Result<String> {
+        self.build_drop_database_sql_async(database).await
     }
 
     fn rename_table(&self, _database: &str, old_name: &str, new_name: &str) -> String {
@@ -1648,6 +1648,34 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             self.quote_identifier(&design.table_name),
             definitions.join(", ")
         )
+    }
+
+    async fn build_create_table_sql_async(
+        &self,
+        connection: &dyn DbConnection,
+        design: &TableDesign,
+    ) -> Result<String> {
+        let params = wire_ddl::BuildCreateTableParams {
+            conn_id: None,
+            spec: table_spec_from_design(design),
+            options: wire_ddl::CreateTableOptions::default(),
+        };
+        let value = serde_json::to_value(params)?;
+        match self
+            .metadata::<wire_ddl::BuildCreateTableResult>(
+                connection,
+                wire_method::DDL_BUILD_CREATE_TABLE,
+                value,
+            )
+            .await
+        {
+            Ok(result) => Ok(join_ddl_statements(result.statements, Some(result.sql))),
+            Err(error) if is_not_supported(&error) => Ok(self
+                .compatible_plugin()
+                .map(|plugin| plugin.build_create_table_sql(design))
+                .unwrap_or_else(|| self.build_create_table_sql(design))),
+            Err(error) => Err(error),
+        }
     }
 
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> String {
@@ -1718,34 +1746,6 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             "-- No changes detected".to_string()
         } else {
             statements.join("\n")
-        }
-    }
-
-    async fn build_create_table_sql_async(
-        &self,
-        connection: &dyn DbConnection,
-        design: &TableDesign,
-    ) -> Result<String> {
-        let params = wire_ddl::BuildCreateTableParams {
-            conn_id: None,
-            spec: table_spec_from_design(design),
-            options: wire_ddl::CreateTableOptions::default(),
-        };
-        let value = serde_json::to_value(params)?;
-        match self
-            .metadata::<wire_ddl::BuildCreateTableResult>(
-                connection,
-                wire_method::DDL_BUILD_CREATE_TABLE,
-                value,
-            )
-            .await
-        {
-            Ok(result) => Ok(join_ddl_statements(result.statements, Some(result.sql))),
-            Err(error) if is_not_supported(&error) => Ok(self
-                .compatible_plugin()
-                .map(|plugin| plugin.build_create_table_sql(design))
-                .unwrap_or_else(|| self.build_create_table_sql(design))),
-            Err(error) => Err(error),
         }
     }
 
@@ -1978,9 +1978,9 @@ fn table_info_from_wire(object: wire_schema::ObjectInfo) -> TableInfo {
         name: object.name,
         object_type: match object.kind {
             wire_schema::ObjectKind::View | wire_schema::ObjectKind::MaterializedView => {
-                crate::TableObjectType::View
+                TableObjectType::View
             }
-            _ => crate::TableObjectType::Table,
+            _ => TableObjectType::Table,
         },
         schema: None,
         comment: empty_to_none(object.comment),
@@ -2917,7 +2917,7 @@ mod tests {
         let driver = driver_manifest("duckdb", true, "duckdb.connection");
         let plugin = ExternalDatabasePlugin::with_registry_reloader(
             IpcDriverRegistry::empty(),
-            std::sync::Arc::new(move || IpcDriverRegistry::from_drivers(vec![driver.clone()])),
+            Arc::new(move || IpcDriverRegistry::from_drivers(vec![driver.clone()])),
         );
         let mut config = DbConnectionConfig {
             id: "duckdb-conn".into(),
@@ -2959,7 +2959,7 @@ mod tests {
 
         let plugin = ExternalDatabasePlugin::with_registry_reloader(
             IpcDriverRegistry::from_drivers(vec![stale]),
-            std::sync::Arc::new(move || IpcDriverRegistry::from_drivers(vec![fresh.clone()])),
+            Arc::new(move || IpcDriverRegistry::from_drivers(vec![fresh.clone()])),
         );
         let config = DbConnectionConfig {
             id: "duckdb-conn".into(),

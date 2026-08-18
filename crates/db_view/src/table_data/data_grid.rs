@@ -497,7 +497,6 @@ impl DataGrid {
                 .clean_on_escape()
         });
         let table_data_info = cx.new(|_| TableDataInfo::default());
-
         let mut result = Self {
             config,
             table,
@@ -2133,14 +2132,10 @@ impl DataGrid {
                     Ok(infos) => infos,
                     Err(err) => {
                         cx.update(|cx| {
-                            notification(
-                                cx,
-                                t!(
-                                    "TableDataGrid.get_table_keys_failed",
-                                    error = err.to_string()
-                                )
-                                .to_string(),
-                            );
+                            let error = err.to_string();
+                            let summary = t!("TableDataGrid.get_table_keys_failed", error = error)
+                                .to_string();
+                            notification(cx, summary);
                         });
                         return;
                     }
@@ -2173,7 +2168,9 @@ impl DataGrid {
             let (sql_content, change_count) = match save_result {
                 Ok((sql, count)) => (sql, count),
                 Err(msg) => {
-                    cx.update(|cx| notification(cx, msg));
+                    cx.update(|cx| {
+                        notification(cx, msg);
+                    });
                     return;
                 }
             };
@@ -2268,14 +2265,10 @@ impl DataGrid {
                     Ok(infos) => infos,
                     Err(err) => {
                         cx.update(|cx| {
-                            notification(
-                                cx,
-                                t!(
-                                    "TableDataGrid.get_table_keys_failed",
-                                    error = err.to_string()
-                                )
-                                .to_string(),
-                            );
+                            let error = err.to_string();
+                            let summary = t!("TableDataGrid.get_table_keys_failed", error = error)
+                                .to_string();
+                            notification(cx, summary);
                         });
                         return;
                     }
@@ -2308,7 +2301,9 @@ impl DataGrid {
             let (sql_content, change_count) = match save_result {
                 Ok((sql, count)) => (sql, count),
                 Err(msg) => {
-                    cx.update(|cx| notification(cx, msg));
+                    cx.update(|cx| {
+                        notification(cx, msg);
+                    });
                     return;
                 }
             };
@@ -2398,14 +2393,10 @@ impl DataGrid {
                     Ok(index_infos) => index_infos,
                     Err(err) => {
                         cx.update(|cx| {
-                            notification(
-                                cx,
-                                t!(
-                                    "TableDataGrid.get_table_keys_failed",
-                                    error = err.to_string()
-                                )
-                                .to_string(),
-                            );
+                            let error = err.to_string();
+                            let summary = t!("TableDataGrid.get_table_keys_failed", error = error)
+                                .to_string();
+                            notification(cx, summary);
                         });
                         return;
                     }
@@ -3023,6 +3014,7 @@ impl Render for DataGrid {
                 div()
                     .flex_1()
                     .w_full()
+                    .h_full()
                     .overflow_hidden()
                     .child(self.render_table_area(window, cx)),
             )

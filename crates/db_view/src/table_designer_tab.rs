@@ -3788,6 +3788,7 @@ mod tests {
     fn test_build_table_design_from_metadata_preserves_table_comment() {
         let table_info = TableInfo {
             name: "users".to_string(),
+            object_type: db::TableObjectType::Table,
             schema: Some("public".to_string()),
             comment: Some("User table".to_string()),
             engine: None,

@@ -55,6 +55,7 @@ impl GlobalDbState {
         target_database: &str,
         target_schema: Option<&str>,
         compare_column_order: bool,
+        type_mapping_overrides: super::TypeMappingOverrides,
     ) -> anyhow::Result<SyncPlan> {
         if result.has_failed_tables() {
             return Ok(super::blocked_schema_sync_plan(result));
@@ -77,6 +78,7 @@ impl GlobalDbState {
                 plugin.as_ref(),
                 SchemaSyncPlanOptions {
                     compare_column_order,
+                    type_mapping_overrides,
                 },
             ),
         )
@@ -113,6 +115,7 @@ impl GlobalDbState {
             ignore_charset_collation,
             ignore_table_options,
             compare_column_order,
+            type_mapping_overrides,
         } = params;
         let options = SchemaCompareOptions {
             case_sensitive_identifiers,
@@ -168,10 +171,15 @@ impl GlobalDbState {
             source.schemas,
             target.schemas,
             options.clone(),
-            Some(SchemaTypeMappingContext::new(
-                &source_database_type,
-                &target_database_type,
-            )),
+            Some(if type_mapping_overrides.overrides.is_empty() {
+                SchemaTypeMappingContext::new(&source_database_type, &target_database_type)
+            } else {
+                SchemaTypeMappingContext::with_overrides(
+                    &source_database_type,
+                    &target_database_type,
+                    &type_mapping_overrides,
+                )
+            }),
         )?;
         if compare_routines_enabled {
             let source_routines = load_schema_routines(

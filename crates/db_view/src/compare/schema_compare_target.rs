@@ -11,7 +11,7 @@ use gpui::{
     App, AsyncApp, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, StyledExt, h_flex, v_flex};
+use gpui_component::{ActiveTheme, StyledExt, h_flex, scroll::ScrollableElement, v_flex};
 use rust_i18n::t;
 use std::collections::HashSet;
 
@@ -189,6 +189,13 @@ impl SchemaCompareWindow {
                 self.target_controls(cx),
                 cx,
             ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(self.render_type_mapping_overrides(cx)),
+            )
     }
 
     pub(super) fn render_result_meta(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -197,7 +204,6 @@ impl SchemaCompareWindow {
             .read(cx)
             .as_ref()
             .map(|r| (r.added_count, r.removed_count, r.modified_count));
-        let diff_result = self.result.read(cx).clone();
         let failed_tables = self
             .result
             .read(cx)
@@ -219,6 +225,7 @@ impl SchemaCompareWindow {
 
         v_flex()
             .size_full()
+            .flex_1()
             .min_h_0()
             .gap_2()
             .child(section_title(t!("Compare.result").to_string()))
@@ -228,8 +235,8 @@ impl SchemaCompareWindow {
             .when_some(stats, |this, (added, removed, modified)| {
                 this.child(stat_cards_row(added, removed, modified, cx))
             })
-            .when_some(diff_result, |this, result| {
-                this.child(schema_diff_panel(&result, cx))
+            .when_some(self.result.read(cx).as_ref(), |this, result| {
+                this.child(schema_diff_panel(result, cx))
             })
             .when_some(failed_tables, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))
@@ -237,6 +244,15 @@ impl SchemaCompareWindow {
             .when_some(sync_summary, |this, sync_summary| {
                 this.child(div().text_sm().child(sync_summary))
             })
+    }
+
+    pub(super) fn render_sync_statement_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let plan = self.sync_plan.read(cx).clone();
+
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_2()
             .when_some(plan, |this, plan| {
                 this.child(sync_statement_picker(
                     plan,
@@ -392,11 +408,13 @@ impl SchemaCompareWindow {
     }
 }
 
-fn schema_diff_panel(result: &SchemaCompareResult, cx: &App) -> impl IntoElement {
+pub(crate) fn schema_diff_panel(result: &SchemaCompareResult, cx: &App) -> impl IntoElement {
     let diff_count = result.total_diff_count();
     let has_diffs = diff_count > 0;
 
     v_flex()
+        .flex_1()
+        .min_h_0()
         .gap_1()
         .child(
             h_flex()
@@ -425,7 +443,8 @@ fn schema_diff_panel(result: &SchemaCompareResult, cx: &App) -> impl IntoElement
         .child(
             div()
                 .id("schema-compare-diff-scroll")
-                .h(px(240.0))
+                .flex_1()
+                .min_h_0()
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_md()

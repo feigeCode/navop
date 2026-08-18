@@ -19,7 +19,7 @@ use super::{
     DataCompareTableDependency, DataCompareTableFailure, DataCompareTablePair, RowData, SyncPlan,
     TableSchema, append_table_data_page, build_table_data_request, common_column_mappings,
     compare_data_rows, data_compare_next_page_size, data_compare_paging_decision, identifier_key,
-    rows_from_query_result_with_mappings, strip_internal_compare_columns_if,
+    map_column_type, rows_from_query_result_with_mappings, strip_internal_compare_columns_if,
     table_data_terminal_probe_required, table_schema_from_columns,
 };
 
@@ -314,6 +314,18 @@ async fn execute_data_compare_missing_target_pair(
     source_columns: Vec<ColumnInfo>,
     report: &mut impl FnMut(CompareTaskEvent),
 ) -> anyhow::Result<DataCompareResult> {
+    let source_db_type = db_state
+        .get_config(&params.source_connection_id)
+        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", params.source_connection_id))?
+        .database_type
+        .clone();
+    let target_db_type = db_state
+        .get_config(&params.target_connection_id)
+        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", params.target_connection_id))?
+        .database_type
+        .clone();
+    let target_columns =
+        map_missing_target_columns(&source_columns, &source_db_type, &target_db_type)?;
     let key_columns = resolve_key_columns_for_table(
         &params.key_columns,
         &source_columns,
@@ -347,10 +359,38 @@ async fn execute_data_compare_missing_target_pair(
     build_missing_target_table_result(
         pair,
         key_columns,
-        &source_columns,
+        &target_columns,
         source_response,
         params.case_sensitive_identifiers,
     )
+}
+
+fn map_missing_target_columns(
+    source_columns: &[ColumnInfo],
+    source_db_type: &DatabaseType,
+    target_db_type: &DatabaseType,
+) -> anyhow::Result<Vec<ColumnInfo>> {
+    source_columns
+        .iter()
+        .map(|column| {
+            let mapping = map_column_type(&column.data_type, source_db_type, target_db_type);
+            if !mapping.compatibility.is_safe_for_automatic_sync() {
+                let warning = mapping.warning.as_deref().unwrap_or(
+                    "目标数据库无法在不损失字段语义或精度的情况下表示该类型",
+                );
+                anyhow::bail!(
+                    "字段 `{}` 的类型 `{}` 无法安全映射到目标数据库类型 `{}`，无法为缺失目标表生成 CREATE TABLE：{}",
+                    column.name,
+                    column.data_type,
+                    mapping.target_type,
+                    warning
+                );
+            }
+            let mut mapped = column.clone();
+            mapped.data_type = mapping.target_type;
+            Ok(mapped)
+        })
+        .collect()
 }
 
 async fn load_table_columns(
@@ -1521,5 +1561,82 @@ mod tests {
                 DataCompareSnapshotStrategy::BestEffort(_)
             ));
         }
+    }
+
+    #[test]
+    fn missing_target_columns_are_mapped_to_the_target_database_and_keep_metadata() {
+        let source_columns = vec![ColumnInfo {
+            name: "amount".to_string(),
+            data_type: "INT".to_string(),
+            is_nullable: false,
+            is_primary_key: true,
+            default_value: Some("7".to_string()),
+            comment: Some("important amount".to_string()),
+            charset: Some("utf8mb4".to_string()),
+            collation: Some("utf8mb4_bin".to_string()),
+        }];
+
+        let mapped = map_missing_target_columns(
+            &source_columns,
+            &DatabaseType::MySQL,
+            &DatabaseType::PostgreSQL,
+        )
+        .unwrap();
+
+        assert_eq!(mapped[0].data_type, "INTEGER");
+        assert_eq!(mapped[0].name, source_columns[0].name);
+        assert_eq!(mapped[0].is_nullable, source_columns[0].is_nullable);
+        assert_eq!(mapped[0].is_primary_key, source_columns[0].is_primary_key);
+        assert_eq!(mapped[0].default_value, source_columns[0].default_value);
+        assert_eq!(mapped[0].comment, source_columns[0].comment);
+        assert_eq!(mapped[0].charset, source_columns[0].charset);
+        assert_eq!(mapped[0].collation, source_columns[0].collation);
+    }
+
+    #[test]
+    fn missing_target_columns_reject_unsupported_cross_database_types() {
+        let error = map_missing_target_columns(
+            &[ColumnInfo {
+                name: "tags".to_string(),
+                data_type: "Array(Int32)".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            }],
+            &DatabaseType::ClickHouse,
+            &DatabaseType::PostgreSQL,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("tags"));
+        assert!(error.to_string().contains("Array(Int32)"));
+        assert!(error.to_string().contains("无法安全映射"));
+    }
+
+    #[test]
+    fn missing_target_columns_reject_lossy_cross_database_types() {
+        let error = map_missing_target_columns(
+            &[ColumnInfo {
+                name: "occurred_at".to_string(),
+                data_type: "TIMESTAMPTZ(9)".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            }],
+            &DatabaseType::PostgreSQL,
+            &DatabaseType::MySQL,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("occurred_at"));
+        assert!(error.to_string().contains("TIMESTAMPTZ(9)"));
+        assert!(error.to_string().contains("无法安全映射"));
+        assert!(error.to_string().contains("精度"));
     }
 }

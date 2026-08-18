@@ -6,7 +6,7 @@ use crate::{
 };
 use one_core::storage::DatabaseType;
 
-use super::{DataCompareLimits, RowData, sync_plan::format_value_for_database};
+use super::{DataCompareLimits, RowData, binary_cell_value, sync_plan::format_value_for_database};
 
 pub const DEFAULT_DATA_COMPARE_PAGE_SIZE: usize = 10_000;
 
@@ -205,7 +205,14 @@ fn field_type_supports_compare_keyset(data_type: &str) -> bool {
 
 fn compare_keyset_cell_value(value: &str, data_type: &str) -> anyhow::Result<serde_json::Value> {
     match FieldType::from_db_type(data_type) {
-        FieldType::Integer | FieldType::Decimal => {
+        FieldType::Integer => {
+            let number = canonical_integer_literal(value)
+                .ok_or_else(|| anyhow::anyhow!("`{value}` is not a plain integer literal"))?;
+            Ok(serde_json::Value::Number(
+                serde_json::Number::from_string_unchecked(number),
+            ))
+        }
+        FieldType::Decimal => {
             let number = canonical_decimal_literal(value)
                 .ok_or_else(|| anyhow::anyhow!("`{value}` is not a plain numeric literal"))?;
             Ok(serde_json::Value::Number(
@@ -216,9 +223,10 @@ fn compare_keyset_cell_value(value: &str, data_type: &str) -> anyhow::Result<ser
             serde_json::Value::Bool(value) => Ok(serde_json::Value::Bool(value)),
             _ => anyhow::bail!("`{value}` is not a boolean literal"),
         },
-        FieldType::Text | FieldType::Date | FieldType::Time | FieldType::DateTime => {
-            Ok(serde_json::Value::String(value.to_string()))
-        }
+        FieldType::Text => Ok(serde_json::Value::String(value.to_string())),
+        field_type @ (FieldType::Date | FieldType::Time | FieldType::DateTime) => Ok(
+            serde_json::Value::String(normalize_temporal_cell_text(value, field_type)),
+        ),
         _ => anyhow::bail!("type `{data_type}` is not supported for keyset pagination"),
     }
 }
@@ -281,17 +289,27 @@ pub fn rows_from_query_result_with_mappings(
         .enumerate()
         .map(|(index, column)| (identifier_key(column, case_sensitive_identifiers), index))
         .collect::<HashMap<_, _>>();
+    let binary_by_cell = result
+        .binary_cells
+        .iter()
+        .map(|cell| ((cell.row_index, cell.column_index), cell.bytes.as_slice()))
+        .collect::<HashMap<_, _>>();
     result
         .rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(row_index, row)| {
             mappings
                 .iter()
                 .filter_map(|mapping| {
                     let index = *index_by_column
                         .get(&identifier_key(&mapping.target, case_sensitive_identifiers))?;
                     let value = row.get(index)?;
-                    let cell = value_to_cell(value.as_deref(), result.column_meta.get(index));
+                    let cell = value_to_cell(
+                        value.as_deref(),
+                        result.column_meta.get(index),
+                        binary_by_cell.get(&(row_index, index)).copied(),
+                    );
                     Some((mapping.source.clone(), cell))
                 })
                 .collect()
@@ -593,7 +611,14 @@ fn query_column_meta_eq(left: &[QueryColumnMeta], right: &[QueryColumnMeta]) -> 
         })
 }
 
-fn value_to_cell(value: Option<&str>, meta: Option<&QueryColumnMeta>) -> serde_json::Value {
+fn value_to_cell(
+    value: Option<&str>,
+    meta: Option<&QueryColumnMeta>,
+    binary: Option<&[u8]>,
+) -> serde_json::Value {
+    if let Some(bytes) = binary {
+        return binary_cell_value(bytes);
+    }
     let Some(value) = value else {
         return serde_json::Value::Null;
     };
@@ -602,15 +627,37 @@ fn value_to_cell(value: Option<&str>, meta: Option<&QueryColumnMeta>) -> serde_j
         Some(FieldType::Decimal) => parse_decimal_cell(value),
         Some(FieldType::Boolean) => parse_boolean_cell(value),
         Some(FieldType::Json) => parse_json_cell(value),
+        Some(field_type @ (FieldType::Date | FieldType::Time | FieldType::DateTime)) => {
+            serde_json::Value::String(normalize_temporal_cell_text(value, field_type))
+        }
         _ => serde_json::Value::String(value.to_string()),
     }
 }
 
 fn parse_integer_cell(value: &str) -> serde_json::Value {
-    value
-        .parse::<i64>()
-        .map(serde_json::Value::from)
-        .unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
+    let Some(number) = canonical_integer_literal(value) else {
+        return serde_json::Value::String(value.to_string());
+    };
+    serde_json::Value::Number(serde_json::Number::from_string_unchecked(number))
+}
+
+fn canonical_integer_literal(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (negative, digits) = match value.as_bytes().first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let digits = digits.trim_start_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    if negative && digits != "0" {
+        Some(format!("-{digits}"))
+    } else {
+        Some(digits.to_string())
+    }
 }
 
 fn parse_decimal_cell(value: &str) -> serde_json::Value {
@@ -664,6 +711,22 @@ fn parse_boolean_cell(value: &str) -> serde_json::Value {
 
 fn parse_json_cell(value: &str) -> serde_json::Value {
     serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
+}
+
+fn normalize_temporal_cell_text(value: &str, field_type: FieldType) -> String {
+    let value = value.trim();
+    if !matches!(field_type, FieldType::DateTime) {
+        return value.to_string();
+    }
+    let Some(separator) = value.as_bytes().get(10).copied() else {
+        return value.to_string();
+    };
+    if !matches!(separator, b'T' | b't') {
+        return value.to_string();
+    }
+    let mut normalized = value.to_string();
+    normalized.replace_range(10..11, " ");
+    normalized
 }
 
 #[cfg(test)]
@@ -743,6 +806,101 @@ mod tests {
             Some("12345678901234567890.12345")
         );
         assert_eq!(rows[0].get("enabled"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn rows_preserve_binary_sidecar_cells_even_when_text_value_is_null() {
+        let mut result = response(
+            vec!["payload"],
+            vec![QueryColumnMeta::new("payload", "blob")],
+            vec![vec![None]],
+        );
+        result.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 0,
+            bytes: vec![0, 1, 2, 255],
+        }];
+
+        let rows = rows_from_query_result(&result.query_result);
+        assert_eq!(
+            rows[0].get("payload"),
+            Some(&binary_cell_value(&[0, 1, 2, 255]))
+        );
+        assert_eq!(
+            super::super::binary_cell_bytes(rows[0].get("payload").unwrap()),
+            Some(vec![0, 1, 2, 255])
+        );
+    }
+
+    #[test]
+    fn integer_cells_keep_large_values_as_json_numbers_and_canonicalize_signs() {
+        let result = response(
+            vec!["large", "positive", "negative_zero"],
+            vec![
+                QueryColumnMeta::new("large", "bigint"),
+                QueryColumnMeta::new("positive", "bigint"),
+                QueryColumnMeta::new("negative_zero", "integer"),
+            ],
+            vec![vec![
+                Some("18446744073709551615"),
+                Some("+00042"),
+                Some("-0"),
+            ]],
+        );
+
+        let rows = rows_from_query_result(&result.query_result);
+        assert!(rows[0]["large"].is_number());
+        assert_eq!(rows[0]["large"].to_string(), "18446744073709551615");
+        assert_eq!(rows[0]["positive"].to_string(), "42");
+        assert_eq!(rows[0]["negative_zero"].to_string(), "0");
+    }
+
+    #[test]
+    fn temporal_cells_trim_and_normalize_datetime_separator_without_changing_offsets() {
+        let result = response(
+            vec!["date", "time", "with_t", "with_space"],
+            vec![
+                QueryColumnMeta::new("date", "date"),
+                QueryColumnMeta::new("time", "time"),
+                QueryColumnMeta::new("with_t", "timestamp with time zone"),
+                QueryColumnMeta::new("with_space", "timestamp with time zone"),
+            ],
+            vec![vec![
+                Some(" 2024-01-01 "),
+                Some(" 12:34:56 "),
+                Some("2024-01-01T00:00:00+05:30"),
+                Some(" 2024-01-01 00:00:00+05:30 "),
+            ]],
+        );
+
+        let rows = rows_from_query_result(&result.query_result);
+        assert_eq!(rows[0]["date"], serde_json::json!("2024-01-01"));
+        assert_eq!(rows[0]["time"], serde_json::json!("12:34:56"));
+        assert_eq!(rows[0]["with_t"], rows[0]["with_space"]);
+        assert_eq!(
+            rows[0]["with_t"],
+            serde_json::json!("2024-01-01 00:00:00+05:30")
+        );
+    }
+
+    #[test]
+    fn keyset_integer_cursor_rejects_decimal_literals() {
+        let plugin = crate::mysql::MySqlPlugin::new();
+        let result = response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "bigint")],
+            vec![vec![Some("1.5")]],
+        );
+
+        let error = build_keyset_where_clause(
+            &plugin,
+            &["id".to_string()],
+            &[keyset_column("id", "bigint")],
+            &result.query_result,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("plain integer literal"));
     }
 
     #[test]

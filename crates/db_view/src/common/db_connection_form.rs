@@ -2666,7 +2666,7 @@ impl DbConnectionForm {
                                             })
                                             .when(!is_checking, |div| match &oracle_client_status {
                                                 Some(Ok(version)) => div
-                                                    .text_color(cx.theme().success_foreground)
+                                                    .text_color(cx.theme().primary_foreground)
                                                     .child(
                                                         t!(
                                                             "ConnectionForm.oracle_client_available",

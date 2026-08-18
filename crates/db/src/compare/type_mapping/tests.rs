@@ -61,16 +61,20 @@ fn maps_common_cross_database_types() {
 fn compares_mapped_types_without_hiding_size_changes() {
     let mysql_to_postgres =
         SchemaTypeMappingContext::new(&DatabaseType::MySQL, &DatabaseType::PostgreSQL);
-    assert!(column_types_equivalent("INT", "INTEGER", mysql_to_postgres));
+    assert!(column_types_equivalent(
+        "INT",
+        "INTEGER",
+        mysql_to_postgres.clone()
+    ));
     assert!(column_types_equivalent(
         "DECIMAL(10,2)",
         "NUMERIC(10,2)",
-        mysql_to_postgres
+        mysql_to_postgres.clone()
     ));
     assert!(column_types_equivalent(
         "VARCHAR(255)",
         "CHARACTER VARYING(255)",
-        mysql_to_postgres
+        mysql_to_postgres.clone()
     ));
     assert!(!column_types_equivalent(
         "DECIMAL(10,2)",
@@ -83,7 +87,7 @@ fn compares_mapped_types_without_hiding_size_changes() {
     assert!(column_types_equivalent(
         "BYTEA",
         "LONGBLOB",
-        postgres_to_mysql
+        postgres_to_mysql.clone()
     ));
     assert!(!column_types_equivalent("BYTEA", "BLOB", postgres_to_mysql));
 }
@@ -269,7 +273,7 @@ fn known_external_families_are_mapped_between_concrete_drivers() {
     assert_eq!(TypeCompatibility::Equivalent, mapped.compatibility);
 
     let context = SchemaTypeMappingContext::new(&mariadb, &DatabaseType::MySQL);
-    assert!(column_types_equivalent("INT(11)", "INT", context));
+    assert!(column_types_equivalent("INT(11)", "INT", context.clone()));
     assert!(!column_types_equivalent(
         "ENUM('draft','published')",
         "ENUM('draft','published')",

@@ -4,15 +4,16 @@ use std::sync::Arc;
 use db::{DbNode, DbNodeType, GlobalDbState};
 use extension_component::DbSelectorKind;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled,
+    Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::{InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     select::{SearchableVec, SelectEvent, SelectState},
     switch::Switch,
     v_flex,
@@ -81,6 +82,11 @@ pub struct SchemaCompareWindow {
     ignore_charset_collation: Entity<bool>,
     ignore_table_options: Entity<bool>,
     compare_column_order: Entity<bool>,
+    type_mapping_overrides: Entity<db::compare::TypeMappingOverrides>,
+    type_mapping_panel_expanded: Entity<bool>,
+    new_override_source_type: Entity<InputState>,
+    new_override_target_type: Entity<InputState>,
+    editing_override_index: Option<usize>,
     pub(super) result: Entity<Option<SchemaCompareResult>>,
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
@@ -157,6 +163,16 @@ impl SchemaCompareWindow {
         let ignore_charset_collation = cx.new(|_| false);
         let ignore_table_options = cx.new(|_| false);
         let compare_column_order = cx.new(|_| false);
+        let type_mapping_overrides = cx.new(|_| db::compare::TypeMappingOverrides::default());
+        let type_mapping_panel_expanded = cx.new(|_| false);
+        let new_override_source_type = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("Compare.source_type_placeholder").to_string())
+        });
+        let new_override_target_type = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("Compare.target_type_placeholder").to_string())
+        });
         let sync_sql_editor = sync_sql_editor_state(window, cx);
         let execution_log_scroll = ScrollHandle::new();
 
@@ -197,6 +213,11 @@ impl SchemaCompareWindow {
                 ignore_charset_collation,
                 ignore_table_options,
                 compare_column_order,
+                type_mapping_overrides,
+                type_mapping_panel_expanded,
+                new_override_source_type,
+                new_override_target_type,
+                editing_override_index: None,
                 sync_sql_editor,
                 result: cx.new(|_| None),
                 sync_plan: cx.new(|_| None),
@@ -347,6 +368,7 @@ impl SchemaCompareWindow {
         let target_database = params.target_database.clone();
         let target_schema = params.target_schema.clone();
         let compare_column_order = params.compare_column_order;
+        let type_mapping_overrides = params.type_mapping_overrides.clone();
         let db_state = Arc::new(cx.global::<GlobalDbState>().clone());
         self.is_running.update(cx, |running, cx| {
             *running = true;
@@ -400,6 +422,7 @@ impl SchemaCompareWindow {
                             &target_database,
                             target_schema.as_deref(),
                             compare_column_order,
+                            type_mapping_overrides.clone(),
                         ) {
                             Ok(plan) => {
                                 let selected_ids = default_selected_statement_ids(&plan);
@@ -580,6 +603,7 @@ impl SchemaCompareWindow {
             ignore_charset_collation: *self.ignore_charset_collation.read(cx),
             ignore_table_options: *self.ignore_table_options.read(cx),
             compare_column_order: *self.compare_column_order.read(cx),
+            type_mapping_overrides: self.type_mapping_overrides.read(cx).clone(),
         }
     }
 
@@ -854,6 +878,274 @@ impl SchemaCompareWindow {
             )
     }
 
+    pub(super) fn render_type_mapping_overrides(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let expanded = *self.type_mapping_panel_expanded.read(cx);
+        let overrides = self.type_mapping_overrides.read(cx);
+        let editing_index = self.editing_override_index;
+        let target_database = self.selected_target_database_storage_key(cx);
+
+        v_flex()
+            .gap_2()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("toggle-type-mapping-panel")
+                            .icon(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.type_mapping_panel_expanded.update(cx, |expanded, cx| {
+                                    *expanded = !*expanded;
+                                    cx.notify();
+                                });
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(t!("Compare.type_mapping_overrides").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("({})", overrides.overrides.len())),
+                    ),
+            )
+            .when(expanded, |this| {
+                let mut rows = v_flex().gap_1();
+
+                for (index, entry) in overrides.overrides.iter().enumerate() {
+                    let idx = index;
+                    let is_editing = editing_index == Some(index);
+                    let source_type = entry.source_type.clone();
+                    let target_database = entry.target_database.clone();
+                    let target_type = entry.target_type.clone();
+                    let enabled = entry.enabled;
+                    let is_active = enabled;
+
+                    rows = rows.child(
+                        h_flex()
+                            .id(("type-mapping-override", idx))
+                            .gap_2()
+                            .items_center()
+                            .rounded_sm()
+                            .px_1()
+                            .when(is_editing, |this| this.bg(cx.theme().accent))
+                            .when(!is_editing, |this| {
+                                this.hover(|style| style.bg(cx.theme().accent))
+                            })
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                let entry = view
+                                    .type_mapping_overrides
+                                    .read(cx)
+                                    .overrides
+                                    .get(idx)
+                                    .cloned();
+                                if let Some(entry) = entry {
+                                    view.new_override_source_type.update(cx, |input, cx| {
+                                        input.set_value(entry.source_type.clone(), window, cx);
+                                    });
+                                    view.new_override_target_type.update(cx, |input, cx| {
+                                        input.set_value(entry.target_type.clone(), window, cx);
+                                    });
+                                    view.editing_override_index = Some(idx);
+                                    cx.notify();
+                                }
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .when(!is_active, |this| {
+                                        this.text_color(cx.theme().muted_foreground)
+                                    })
+                                    .child(source_type),
+                            )
+                            .child(
+                                div()
+                                    .w(px(72.0))
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(target_database),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .when(!is_active, |this| {
+                                        this.text_color(cx.theme().muted_foreground)
+                                    })
+                                    .child(target_type),
+                            )
+                            .child(
+                                Checkbox::new(("override-enabled", idx))
+                                    .checked(enabled)
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.type_mapping_overrides.update(cx, |overrides, cx| {
+                                            if let Some(entry) = overrides.overrides.get_mut(idx) {
+                                                entry.enabled = !entry.enabled;
+                                            }
+                                            cx.notify();
+                                        });
+                                    })),
+                            )
+                            .child(
+                                Button::new(("remove-override", idx))
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::Delete)
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.type_mapping_overrides.update(cx, |overrides, cx| {
+                                            if idx < overrides.overrides.len() {
+                                                overrides.overrides.remove(idx);
+                                            }
+                                            cx.notify();
+                                        });
+                                        if view.editing_override_index == Some(idx) {
+                                            view.editing_override_index = None;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    );
+                }
+
+                rows =
+                    rows.child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .pt_1()
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.new_override_source_type).small().w_full(),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(72.0))
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .px_1()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .truncate()
+                                    .child(target_database),
+                            )
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.new_override_target_type).small().w_full(),
+                                ),
+                            )
+                            .child(
+                                Button::new("add-type-mapping-override")
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::Plus)
+                                    .tooltip(t!("Compare.add_type_mapping").to_string())
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.upsert_type_mapping_override(window, cx);
+                                    })),
+                            )
+                            .when_some(editing_index, |this, _| {
+                                this.child(
+                                    Button::new("cancel-edit-type-mapping-override")
+                                        .small()
+                                        .ghost()
+                                        .child(t!("Common.cancel").to_string())
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            view.reset_type_mapping_form(window, cx);
+                                        })),
+                                )
+                            }),
+                    );
+
+                this.child(rows)
+            })
+    }
+
+    fn selected_target_database_storage_key(&self, cx: &App) -> String {
+        let connection_id = selected_connection_id(
+            &self.target_connection_select,
+            &self.target_connection_id,
+            cx,
+        );
+        cx.try_global::<GlobalDbState>()
+            .and_then(|state| state.get_config(&connection_id))
+            .map(|config| config.database_type.storage_key())
+            .unwrap_or_else(|| t!("Compare.target_database_placeholder").to_string())
+    }
+
+    fn upsert_type_mapping_override(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source_type = self
+            .new_override_source_type
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let target_type = self
+            .new_override_target_type
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if source_type.is_empty() || target_type.is_empty() {
+            self.set_status(t!("Compare.type_mapping_required_fields").to_string(), cx);
+            return;
+        }
+
+        let target_database = self.selected_target_database_storage_key(cx);
+        let editing_idx = self.editing_override_index;
+        let enabled = editing_idx
+            .and_then(|idx| self.type_mapping_overrides.read(cx).overrides.get(idx))
+            .map(|entry| entry.enabled)
+            .unwrap_or(true);
+        let entry = db::compare::TypeMappingOverride {
+            source_type,
+            target_database,
+            target_type,
+            enabled,
+            note: None,
+        };
+        self.type_mapping_overrides.update(cx, |overrides, cx| {
+            if let Some(idx) = editing_idx {
+                if idx < overrides.overrides.len() {
+                    overrides.overrides.remove(idx);
+                }
+            }
+            overrides.upsert(entry);
+            cx.notify();
+        });
+        self.reset_type_mapping_form(window, cx);
+        self.set_status(t!("Compare.type_mapping_saved").to_string(), cx);
+    }
+
+    fn reset_type_mapping_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_override_source_type.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        self.new_override_target_type.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        self.editing_override_index = None;
+        cx.notify();
+    }
+
     fn source_selection(&self, cx: &Context<Self>) -> SchemaCompareSelection {
         let database = selected_string(&self.source_database_select, &self.source_database, cx);
         let schema = selected_string(&self.source_schema_select, &self.source_schema, cx);
@@ -1079,15 +1371,36 @@ impl Render for SchemaCompareWindow {
                                     div()
                                         .flex_1()
                                         .h_full()
+                                        .min_w_0()
                                         .min_h_0()
+                                        .overflow_hidden()
                                         .child(self.render_result_meta(cx)),
                                 )
-                                .child(div().flex_1().h_full().min_h_0().child(sql_editor_panel(
-                                    "schema-compare-copy-sql",
-                                    &self.sync_sql_editor,
-                                    editor_sql,
-                                    cx,
-                                ))),
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .h_full()
+                                        .min_h_0()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .h(px(240.0))
+                                                .min_h(px(160.0))
+                                                .min_w_0()
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .child(self.render_sync_statement_picker(cx)),
+                                        )
+                                        .child(div().flex_1().min_w_0().min_h_0().child(
+                                            sql_editor_panel(
+                                                "schema-compare-copy-sql",
+                                                &self.sync_sql_editor,
+                                                editor_sql,
+                                                cx,
+                                            ),
+                                        )),
+                                ),
                         )
                     })
                     .when(self.current_step == CompareStep::SqlExecute, |this| {

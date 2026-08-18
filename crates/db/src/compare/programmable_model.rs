@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::DiffStatus;
 
 /// Stored routine kind exposed by database metadata.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutineKind {
     #[default]

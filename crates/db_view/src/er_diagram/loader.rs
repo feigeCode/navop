@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use db::{ColumnInfo, ForeignKeyDefinition, GlobalDbState, TableInfo};
+use db::{ColumnInfo, ForeignKeyDefinition, GlobalDbState, TableInfo, TableObjectType};
 use gpui::AsyncApp;
 
 use er_flow::{ErDiagram, ErEntity, ErField, ErRelationship, ErRelationshipKind};
@@ -12,9 +12,11 @@ pub(crate) async fn load_er_diagram(
     database: String,
     schema: Option<String>,
 ) -> anyhow::Result<ErDiagram> {
-    let tables = global_state
-        .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
-        .await?;
+    let tables = physical_tables(
+        global_state
+            .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
+            .await?,
+    );
     let mut entities = Vec::with_capacity(tables.len());
     let mut relationships = Vec::new();
 
@@ -38,6 +40,13 @@ pub(crate) async fn load_er_diagram(
         entities,
         relationships,
     })
+}
+
+fn physical_tables(tables: Vec<TableInfo>) -> Vec<TableInfo> {
+    tables
+        .into_iter()
+        .filter(|table| table.object_type == TableObjectType::Table)
+        .collect()
 }
 
 async fn load_entity(
@@ -270,5 +279,41 @@ fn entity_id(schema: Option<&str>, table: &str) -> String {
     match schema {
         Some(schema) if !schema.is_empty() => format!("{schema}.{table}"),
         _ => table.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::physical_tables;
+    use db::{TableInfo, TableObjectType};
+
+    fn table_info(name: &str, object_type: TableObjectType) -> TableInfo {
+        TableInfo {
+            name: name.to_string(),
+            object_type,
+            schema: None,
+            comment: None,
+            engine: None,
+            row_count: None,
+            create_time: None,
+            charset: None,
+            collation: None,
+        }
+    }
+
+    #[test]
+    fn er_diagram_excludes_views() {
+        let tables = physical_tables(vec![
+            table_info("users", TableObjectType::Table),
+            table_info("active_users", TableObjectType::View),
+        ]);
+
+        assert_eq!(
+            tables
+                .into_iter()
+                .map(|table| table.name)
+                .collect::<Vec<_>>(),
+            vec!["users"]
+        );
     }
 }
