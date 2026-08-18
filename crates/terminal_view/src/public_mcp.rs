@@ -4,7 +4,8 @@ use public_mcp::registry::{
     ConnectionState as McpConnectionState, PublicMcpRegistry, TerminalConnectionKind as McpKind,
     TerminalControlCancellation, TerminalControlFuture, TerminalControlSessionHandle,
     TerminalExecCancellation, TerminalExecFuture, TerminalExecSessionHandle,
-    TerminalReadSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
+    TerminalInputSessionHandle, TerminalReadSessionHandle, TerminalSessionHandle,
+    TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::RemoteCommandStatus;
 use public_mcp::terminal_control::{
@@ -12,6 +13,7 @@ use public_mcp::terminal_control::{
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use public_mcp::terminal_read::{TerminalReadRequest, TerminalReadResult};
+use public_mcp::terminal_write_keys::{TerminalWriteKeysRequest, TerminalWriteKeysResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,7 +23,8 @@ use terminal::{
     TerminalControlReadiness as CoreTerminalControlReadiness,
     TerminalControlRequest as CoreTerminalControlRequest,
     TerminalExecCompletion as CoreTerminalExecCompletion, TerminalExecHandle, TerminalExecObserver,
-    TerminalExecProgress, TerminalExecRequest as CoreTerminalExecRequest, TerminalScrollProxy,
+    TerminalExecProgress, TerminalExecRequest as CoreTerminalExecRequest, TerminalInputHandle,
+    TerminalScrollProxy,
 };
 use uuid::Uuid;
 
@@ -49,8 +52,10 @@ pub struct TerminalPublicMcpRegistration {
     registry: PublicMcpRegistry,
     exec: Arc<Mutex<Option<TerminalExecHandle>>>,
     control: Arc<Mutex<Option<TerminalControlHandle>>>,
+    input: Arc<Mutex<Option<TerminalInputHandle>>>,
     terminal_exec_registered: AtomicBool,
     terminal_control_registered: AtomicBool,
+    terminal_input_registered: AtomicBool,
 }
 
 fn live_terminal_session_id(
@@ -113,6 +118,7 @@ impl TerminalPublicMcpRegistration {
             snapshot_for_terminal(self.session_id.clone(), terminal),
             terminal.external_exec_handle(),
             terminal.external_control_handle(),
+            terminal.external_input_handle(),
         );
     }
 
@@ -121,6 +127,7 @@ impl TerminalPublicMcpRegistration {
         snapshot: TerminalSessionSnapshot,
         exec: Option<TerminalExecHandle>,
         control: Option<TerminalControlHandle>,
+        input: Option<TerminalInputHandle>,
     ) {
         {
             let mut exec_slot = self.exec.lock().expect("public MCP exec lock poisoned");
@@ -133,11 +140,16 @@ impl TerminalPublicMcpRegistration {
                 .expect("public MCP control lock poisoned");
             *control_slot = control;
         }
+        {
+            let mut input_slot = self.input.lock().expect("public MCP input lock poisoned");
+            *input_slot = input;
+        }
         let mut state = self.state.lock().expect("public MCP state lock poisoned");
         *state = snapshot;
         drop(state);
         self.ensure_terminal_exec_registered();
         self.ensure_terminal_control_registered();
+        self.ensure_terminal_input_registered();
     }
 
     fn ensure_terminal_exec_registered(&self) {
@@ -177,6 +189,22 @@ impl TerminalPublicMcpRegistration {
             });
     }
 
+    fn ensure_terminal_input_registered(&self) {
+        let has_input = self
+            .input
+            .lock()
+            .expect("public MCP input lock poisoned")
+            .is_some();
+        if !has_input || self.terminal_input_registered.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.registry
+            .register_terminal_input(ThreadSafeTerminalInputHandle {
+                state: self.state.clone(),
+                input: self.input.clone(),
+            });
+    }
+
     pub fn unregister(&self, cx: &App) {
         if let Some(registry) = registry(cx) {
             registry.unregister(&self.session_id);
@@ -184,6 +212,7 @@ impl TerminalPublicMcpRegistration {
             registry.unregister_terminal_exec(&self.session_id);
             registry.unregister_terminal_read(&self.session_id);
             registry.unregister_terminal_control(&self.session_id);
+            registry.unregister_terminal_input(&self.session_id);
         }
     }
 }
@@ -209,6 +238,7 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
     });
     let exec = Arc::new(Mutex::new(terminal.external_exec_handle()));
     let control = Arc::new(Mutex::new(terminal.external_control_handle()));
+    let input = Arc::new(Mutex::new(terminal.external_input_handle()));
 
     // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
     if let Some(session_manager) = terminal.ssh_session_manager() {
@@ -227,11 +257,14 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
         registry: target_registry,
         exec,
         control,
+        input,
         terminal_exec_registered: AtomicBool::new(false),
         terminal_control_registered: AtomicBool::new(false),
+        terminal_input_registered: AtomicBool::new(false),
     };
     registration.ensure_terminal_exec_registered();
     registration.ensure_terminal_control_registered();
+    registration.ensure_terminal_input_registered();
     Some(registration)
 }
 
@@ -262,6 +295,39 @@ struct ThreadSafeTerminalReadHandle {
 struct ThreadSafeTerminalControlHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
     control: Arc<Mutex<Option<TerminalControlHandle>>>,
+}
+
+struct ThreadSafeTerminalInputHandle {
+    state: Arc<Mutex<TerminalSessionSnapshot>>,
+    input: Arc<Mutex<Option<TerminalInputHandle>>>,
+}
+
+impl TerminalInputSessionHandle for ThreadSafeTerminalInputHandle {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        self.state
+            .lock()
+            .expect("public MCP state lock poisoned")
+            .clone()
+    }
+
+    fn write_keys(
+        &self,
+        request: TerminalWriteKeysRequest,
+    ) -> anyhow::Result<TerminalWriteKeysResult> {
+        let input_handle = self
+            .input
+            .lock()
+            .expect("public MCP input lock poisoned")
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("terminal input handle is not ready"))?;
+        let bytes_written = request.bytes.len();
+        input_handle.write(request.bytes);
+        Ok(TerminalWriteKeysResult {
+            target: request.target,
+            sent: true,
+            bytes_written,
+        })
+    }
 }
 
 impl TerminalControlSessionHandle for ThreadSafeTerminalControlHandle {
@@ -544,10 +610,13 @@ fn map_state(state: &ConnectionState) -> McpConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use public_mcp::registry::{TerminalControlCancellation, TerminalControlSessionHandle};
+    use public_mcp::registry::{
+        TerminalControlCancellation, TerminalControlSessionHandle, TerminalInputSessionHandle,
+    };
     use public_mcp::terminal_control::{
         TerminalControlAction, TerminalControlReadiness, TerminalControlRequest,
     };
+    use public_mcp::terminal_write_keys::TerminalWriteKeysRequest;
     use std::sync::{Arc, Mutex};
     use terminal::{
         TerminalControlAction as CoreTerminalControlAction, TerminalControlHandle,
@@ -681,6 +750,32 @@ mod tests {
         assert_eq!(
             TerminalControlReadiness::CommandRunning,
             result.readiness_before
+        );
+    }
+
+    #[test]
+    fn terminal_input_handle_writes_raw_bytes_to_backend_input_handle() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = written.clone();
+        let handle = ThreadSafeTerminalInputHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            input: Arc::new(Mutex::new(Some(TerminalInputHandle::new(move |bytes| {
+                sink.lock().expect("written lock").push(bytes);
+            })))),
+        };
+
+        let result = handle
+            .write_keys(TerminalWriteKeysRequest {
+                target: "terminal-1".to_string(),
+                bytes: vec![0x1b, b':', b'w', b'q', b'\r'],
+            })
+            .expect("terminal input should call backend handle");
+
+        assert!(result.sent);
+        assert_eq!(5, result.bytes_written);
+        assert_eq!(
+            vec![vec![0x1b, b':', b'w', b'q', b'\r']],
+            *written.lock().unwrap()
         );
     }
 
@@ -944,8 +1039,10 @@ mod tests {
             registry: registry.clone(),
             exec: Arc::new(Mutex::new(None)),
             control: Arc::new(Mutex::new(None)),
+            input: Arc::new(Mutex::new(None)),
             terminal_exec_registered: std::sync::atomic::AtomicBool::new(false),
             terminal_control_registered: std::sync::atomic::AtomicBool::new(false),
+            terminal_input_registered: std::sync::atomic::AtomicBool::new(false),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
 
@@ -963,6 +1060,7 @@ mod tests {
                     duration_ms: 0,
                 },
             )),
+            None,
             None,
         );
 

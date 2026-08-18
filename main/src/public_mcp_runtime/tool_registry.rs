@@ -5,7 +5,7 @@ use one_core::tab_container::TabOpenMode;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
     internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
-    terminal_exec_tool_registry, terminal_read_tool_registry,
+    terminal_exec_tool_registry, terminal_read_tool_registry, terminal_write_keys_tool_registry,
 };
 use std::sync::Arc;
 
@@ -53,7 +53,8 @@ fn build_tool_registry_for_surface(
             if toolsets.terminal_exec {
                 runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
                 runtime_registries.push(terminal_read_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_control_tool_registry(registry));
+                runtime_registries.push(terminal_control_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_write_keys_tool_registry(registry));
             }
         } else {
             tracing::warn!("Public MCP terminal registry is not initialized");

@@ -8,6 +8,7 @@ use crate::remote_ops::{
 use crate::terminal_control::{TerminalControlRequest, TerminalControlResult};
 use crate::terminal_exec::{TerminalExecRequest, TerminalExecResult};
 use crate::terminal_read::{TerminalReadRequest, TerminalReadResult};
+use crate::terminal_write_keys::{TerminalWriteKeysRequest, TerminalWriteKeysResult};
 use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -95,6 +96,11 @@ pub trait TerminalReadSessionHandle: Send + Sync + 'static {
     fn read_terminal(&self, request: TerminalReadRequest) -> Result<TerminalReadResult>;
 }
 
+pub trait TerminalInputSessionHandle: Send + Sync + 'static {
+    fn snapshot(&self) -> TerminalSessionSnapshot;
+    fn write_keys(&self, request: TerminalWriteKeysRequest) -> Result<TerminalWriteKeysResult>;
+}
+
 pub type TerminalExecFuture =
     Pin<Box<dyn Future<Output = Result<TerminalExecResult>> + Send + 'static>>;
 pub type TerminalExecCancellation = CancellationToken;
@@ -119,6 +125,7 @@ pub struct PublicMcpRegistry {
     terminal_exec_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalExecSessionHandle>>>>,
     terminal_read_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalReadSessionHandle>>>>,
     terminal_control_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalControlSessionHandle>>>>,
+    terminal_input_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalInputSessionHandle>>>>,
     command_store: RemoteCommandStore,
 }
 
@@ -155,6 +162,7 @@ impl PublicMcpRegistry {
             .collect::<Vec<_>>();
         let terminal_exec_ids = self.terminal_exec_session_ids();
         let terminal_control_ids = self.terminal_control_session_ids();
+        let terminal_input_ids = self.terminal_input_session_ids();
         let remote_ops_ids = self.remote_ops_session_ids();
 
         sessions
@@ -165,6 +173,7 @@ impl PublicMcpRegistry {
                     &snapshot.session_id,
                     &terminal_exec_ids,
                     &terminal_control_ids,
+                    &terminal_input_ids,
                     &remote_ops_ids,
                 );
                 listed_session_info(snapshot, capabilities, kind)
@@ -233,6 +242,21 @@ impl PublicMcpRegistry {
             .remove(session_id);
     }
 
+    pub fn register_terminal_input(&self, handle: impl TerminalInputSessionHandle) {
+        let snapshot = handle.snapshot();
+        self.terminal_input_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .insert(snapshot.session_id, Arc::new(handle));
+    }
+
+    pub fn unregister_terminal_input(&self, session_id: &str) {
+        self.terminal_input_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .remove(session_id);
+    }
+
     pub fn remote_exec(
         &self,
         session_id: &str,
@@ -283,6 +307,16 @@ impl PublicMcpRegistry {
         let handle = self.terminal_control_handle(target)?;
         ensure_visible_terminal_session(&handle.snapshot())?;
         handle.control_terminal(request, cancellation).await
+    }
+
+    pub fn terminal_write_keys(
+        &self,
+        target: &str,
+        request: TerminalWriteKeysRequest,
+    ) -> Result<TerminalWriteKeysResult> {
+        let handle = self.terminal_input_handle(target)?;
+        ensure_visible_terminal_session(&handle.snapshot())?;
+        handle.write_keys(request)
     }
 
     /// background 命令存储。执行桥用它注册命令，MCP 工具用它 poll/output/cancel。
@@ -364,6 +398,15 @@ impl PublicMcpRegistry {
             .ok_or_else(|| anyhow!(unknown_session_error(target)))
     }
 
+    fn terminal_input_handle(&self, target: &str) -> Result<Arc<dyn TerminalInputSessionHandle>> {
+        self.terminal_input_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .get(target)
+            .cloned()
+            .ok_or_else(|| anyhow!(unknown_session_error(target)))
+    }
+
     fn handle(&self, session_id: &str) -> Result<Arc<dyn TerminalSessionHandle>> {
         self.sessions
             .lock()
@@ -384,6 +427,15 @@ impl PublicMcpRegistry {
 
     fn terminal_control_session_ids(&self) -> HashSet<String> {
         self.terminal_control_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn terminal_input_session_ids(&self) -> HashSet<String> {
+        self.terminal_input_sessions
             .lock()
             .expect("public MCP registry lock poisoned")
             .keys()
@@ -440,6 +492,7 @@ fn session_capabilities(
     session_id: &str,
     terminal_exec_ids: &HashSet<String>,
     terminal_control_ids: &HashSet<String>,
+    terminal_input_ids: &HashSet<String>,
     remote_ops_ids: &HashSet<String>,
 ) -> Vec<ResourceCapability> {
     let has_terminal_exec = terminal_exec_ids.contains(session_id);
@@ -453,6 +506,9 @@ fn session_capabilities(
     }
     if terminal_control_ids.contains(session_id) {
         capabilities.push(ResourceCapability::TerminalControl);
+    }
+    if terminal_input_ids.contains(session_id) {
+        capabilities.push(ResourceCapability::TerminalInput);
     }
     if has_remote_exec {
         capabilities.push(ResourceCapability::RemoteExec);

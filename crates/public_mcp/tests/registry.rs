@@ -1,8 +1,8 @@
 use public_mcp::registry::{
     ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
     TerminalControlFuture, TerminalControlSessionHandle, TerminalExecFuture,
-    TerminalExecSessionHandle, TerminalReadSessionHandle, TerminalSessionHandle,
-    TerminalSessionSnapshot,
+    TerminalExecSessionHandle, TerminalInputSessionHandle, TerminalReadSessionHandle,
+    TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
     RemoteCommandMode, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
@@ -13,6 +13,7 @@ use public_mcp::terminal_control::{
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use public_mcp::terminal_read::{TerminalReadRequest, TerminalReadResult};
+use public_mcp::terminal_write_keys::{TerminalWriteKeysRequest, TerminalWriteKeysResult};
 use std::collections::BTreeMap;
 use tool_runtime::ResourceCapability;
 
@@ -110,6 +111,23 @@ impl TerminalReadSessionHandle for FakeTerminal {
     }
 }
 
+impl TerminalInputSessionHandle for FakeTerminal {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        <Self as TerminalSessionHandle>::snapshot(self)
+    }
+
+    fn write_keys(
+        &self,
+        request: TerminalWriteKeysRequest,
+    ) -> anyhow::Result<TerminalWriteKeysResult> {
+        Ok(TerminalWriteKeysResult {
+            target: request.target,
+            sent: true,
+            bytes_written: request.bytes.len(),
+        })
+    }
+}
+
 #[test]
 fn list_sessions_exposes_connected_terminal_sessions() {
     let registry = PublicMcpRegistry::default();
@@ -192,6 +210,7 @@ fn list_sessions_reports_registered_execution_capabilities() {
 
     registry.register_terminal_exec(terminal.clone());
     registry.register_terminal_control(terminal.clone());
+    registry.register_terminal_input(terminal.clone());
     registry.register_remote_ops(FakeRemoteOps { terminal });
 
     let sessions = registry.list_sessions();
@@ -205,6 +224,11 @@ fn list_sessions_reports_registered_execution_capabilities() {
         sessions[0]
             .capabilities
             .contains(&ResourceCapability::TerminalControl)
+    );
+    assert!(
+        sessions[0]
+            .capabilities
+            .contains(&ResourceCapability::TerminalInput)
     );
     assert!(
         sessions[0]

@@ -1,6 +1,7 @@
 use super::{
     PublicMcpToolContext, PublicMcpToolProvider, ToolRuntimeMcpProvider, remote_ops_tool_registry,
     terminal_control_tool_registry, terminal_exec_tool_registry, terminal_read_tool_registry,
+    terminal_write_keys_tool_registry,
 };
 use crate::registry::PublicMcpRegistry;
 use rmcp::{
@@ -84,7 +85,8 @@ impl PublicMcpToolRegistry {
             remote_ops_tool_registry(registry.clone()),
             terminal_read_tool_registry(registry.clone()),
             terminal_exec_tool_registry(registry.clone()),
-            terminal_control_tool_registry(registry),
+            terminal_control_tool_registry(registry.clone()),
+            terminal_write_keys_tool_registry(registry),
         ])
     }
 

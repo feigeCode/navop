@@ -13,4 +13,5 @@ pub mod server;
 pub mod terminal_control;
 pub mod terminal_exec;
 pub mod terminal_read;
+pub mod terminal_write_keys;
 pub mod tools;

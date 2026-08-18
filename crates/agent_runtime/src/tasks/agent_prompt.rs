@@ -58,10 +58,13 @@ fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec])
     let terminal_exec = find_tool_name(tools, &["terminal_exec", "terminal.exec"]);
     let terminal_read = find_tool_name(tools, &["terminal_read", "terminal.read"]);
     let terminal_control = find_tool_name(tools, &["terminal_control", "terminal.control"]);
+    let terminal_write_keys =
+        find_tool_name(tools, &["terminal_write_keys", "terminal.write_keys"]);
     let ssh_exec = find_tool_name(tools, &["ssh_exec", "ssh.exec", "ssh_remote_exec"]);
     if terminal_exec.is_none()
         && terminal_read.is_none()
         && terminal_control.is_none()
+        && terminal_write_keys.is_none()
         && ssh_exec.is_none()
     {
         return;
@@ -87,6 +90,13 @@ fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec])
     if let Some(name) = terminal_control {
         prompt.push_str(&format!(
             " 当用户明确要求停止、打断当前可见终端的前台任务或发送 Ctrl+C 时，调用 `{name}` 并设置 `action=interrupt`；只有工具结果明确返回 `sent=true` 后才能声称已发送 Ctrl+C。不要把 `\\u0003` 作为 `terminal_exec` 的 command；Agent 取消对话不会中断终端任务。"
+        ));
+    }
+    if let Some(name) = terminal_write_keys {
+        prompt.push_str(&format!(
+            " 当用户明确要求向当前可见终端中正在运行的前台 TUI/交互程序注入原始按键时，调用 `{name}`；它绕过 `terminal.exec` 的 shell readiness/busy 检查，向目标 PTY 写入 `bytes` 数组而不是执行 shell 命令。例如在用户明确要求保存退出当前 vim 时，`:wq` 加回车是 `bytes=[58,119,113,13]`；ESC 或 Ctrl-[ 可写入字节 27。不要用它执行普通 shell 命令，也不要用它替代 `{control_name}` 的 Ctrl+C interrupt。写入成功只表示字节已进入 PTY 后端队列，随后必须调用 `{read_name}`（若可用）确认 vim 已退出并回到 shell 提示符，不能仅凭 `sent=true` 声称文件已保存。",
+            control_name = terminal_control.unwrap_or("terminal.control"),
+            read_name = terminal_read.unwrap_or("terminal.read"),
         ));
     }
 }
