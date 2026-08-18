@@ -24,6 +24,7 @@ fn connection_navigation_partition_is_complete_and_stable() {
         overflow,
         vec![
             ConnectionType::Serial,
+            ConnectionType::Telnet,
             ConnectionType::PortForwarding,
             ConnectionType::Rdp,
             ConnectionType::Vnc,

@@ -292,7 +292,6 @@ pub(super) fn credential_kind_values(value: &str) -> Vec<String> {
     values
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

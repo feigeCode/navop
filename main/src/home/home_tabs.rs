@@ -762,16 +762,25 @@ mod tests {
     #[test]
     fn remote_desktop_tab_resolves_credentials_before_building_options() {
         let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let method_start = source
+        let implementation = source
+            .split_once("\nimpl HomePage {\n")
+            .expect("HomePage implementation")
+            .1;
+        let method_start = implementation
             .find("pub(crate) fn open_remote_desktop_with_mode")
             .expect("remote desktop open method");
-        let method_end = source[method_start..]
+        let method_end = implementation[method_start..]
             .find("pub(crate) fn open_redis_tab_with_mode")
             .map(|offset| method_start + offset)
             .expect("next method");
-        let method = &source[method_start..method_end];
+        let method = &implementation[method_start..method_end];
         let resolve = method
-            .find("resolve_connection_credentials(&conn, window, cx)")
+            .find("resolve_connection_credentials(")
+            .and_then(|offset| {
+                method[offset..]
+                    .find("window, cx)")
+                    .map(|next| offset + next + "window, cx)".len())
+            })
             .expect("credential resolution");
         let options = method
             .find("remote_desktop_options(&conn, protocol)")

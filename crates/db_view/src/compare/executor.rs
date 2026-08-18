@@ -958,7 +958,8 @@ mod tests {
     }
 
     #[test]
-    fn targeted_data_sync_plan_blocks_truncated_results_without_live_connection() {
+    fn targeted_data_sync_plan_blocks_truncated_results_without_live_connection()
+    -> anyhow::Result<()> {
         let result = DataCompareBatchResult {
             table_results: vec![DataCompareResult {
                 source_table: "users".to_string(),
@@ -978,8 +979,7 @@ mod tests {
             "missing-connection",
             "app",
             None,
-        )
-        .expect("blocked plans must not require a live target connection");
+        )?;
 
         assert_eq!(plan.summary.total_count, 0);
         assert!(plan.statements.is_empty());
@@ -989,10 +989,12 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("truncated"))
         );
+        Ok(())
     }
 
     #[test]
-    fn targeted_schema_sync_plan_blocks_incomplete_results_without_live_connection() {
+    fn targeted_schema_sync_plan_blocks_incomplete_results_without_live_connection()
+    -> anyhow::Result<()> {
         let result = SchemaCompareResult {
             routine_diffs: vec![],
             trigger_diffs: vec![],
@@ -1015,8 +1017,8 @@ mod tests {
             "app",
             None,
             false,
-        )
-        .expect("blocked plans must not require a live target connection");
+            db::compare::TypeMappingOverrides::default(),
+        )?;
 
         assert_eq!(plan.summary.total_count, 0);
         assert!(plan.statements.is_empty());
@@ -1026,6 +1028,7 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("orders") && warning.contains("permission denied"))
         );
+        Ok(())
     }
 
     #[test]
@@ -1159,7 +1162,8 @@ mod tests {
     }
 
     #[test]
-    fn generate_data_sync_plan_blocks_when_target_table_metadata_is_unavailable() {
+    fn generate_data_sync_plan_blocks_when_target_table_metadata_is_unavailable()
+    -> anyhow::Result<()> {
         let result = DataCompareBatchResult {
             table_results: vec![DataCompareResult {
                 source_table: "users".to_string(),
@@ -1184,8 +1188,7 @@ mod tests {
             "missing-connection",
             "app",
             None,
-        )
-        .expect("blocked plans must not require a live target connection");
+        )?;
 
         for plan in [plan, targeted_plan] {
             assert_eq!(plan.summary.total_count, 0);
@@ -1197,6 +1200,7 @@ mod tests {
                     .any(|warning| warning.contains("table metadata unavailable"))
             );
         }
+        Ok(())
     }
 
     #[test]

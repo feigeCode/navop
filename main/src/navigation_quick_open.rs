@@ -83,6 +83,7 @@ pub(crate) fn is_overflow_connection_type(connection_type: ConnectionType) -> bo
     matches!(
         connection_type,
         ConnectionType::Serial
+            | ConnectionType::Telnet
             | ConnectionType::PortForwarding
             | ConnectionType::Rdp
             | ConnectionType::Vnc

@@ -1,17 +1,13 @@
 use gpui::{
-    div, px, ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
+    ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::{
-    h_flex, input::Input,
-    scroll::ScrollableElement
-    ,
+    ActiveTheme, Sizable, Size, h_flex,
+    input::Input,
+    scroll::ScrollableElement,
     switch::Switch,
-    tab::{Tab, TabBar}
-    ,
+    tab::{Tab, TabBar},
     v_flex,
-    ActiveTheme,
-    Sizable,
-    Size,
 };
 use rust_i18n::t;
 
@@ -241,6 +237,10 @@ mod tests {
     #[test]
     fn credential_fields_are_grouped_across_basic_and_ssh_tabs() {
         let source = include_str!("form_render.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production render source");
         let basic = source
             .split("fn render_basic_tab")
             .nth(1)
@@ -264,20 +264,17 @@ mod tests {
 
         for field in [
             "self.name_input",
-            "self.render_kind_picker",
             "self.username_input",
             "self.password_input",
         ] {
             assert!(basic.contains(field));
         }
-        assert!(basic.contains(".when(self.is_editing(),"));
         assert!(basic.contains("self.render_sync_settings(cx)"));
-        assert!(source.contains("Popover::new(\"credential-kind-picker\")"));
-        assert!(source.contains("Checkbox::new(format!("));
-        assert!(source.contains(".dropdown_caret(true)"));
-        assert!(source.contains("window.viewport_size().width.as_f32()"));
         assert!(source.contains(".overflow_y_scrollbar()"));
         assert!(!basic.contains("self.private_key_content_input"));
+        assert!(!production.contains("Popover::new(\"credential-kind-picker\")"));
+        assert!(!production.contains("Checkbox::new(format!("));
+        assert!(!production.contains(".dropdown_caret(true)"));
 
         for field in [
             "self.private_key_path_input",

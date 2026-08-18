@@ -389,11 +389,9 @@ fn credential_record_display(
 ) -> PersonalSyncRecordDisplay {
     PersonalSyncRecordDisplay {
         name: fallback_name(name, cloud_id, "credential"),
-        info: record_info([
-            username
-                .filter(|username| !username.is_empty())
-                .map(ToString::to_string),
-        ]),
+        info: record_info([username
+            .filter(|username| !username.is_empty())
+            .map(ToString::to_string)]),
     }
 }
 
