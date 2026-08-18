@@ -1,3 +1,4 @@
+use super::input_handler::TerminalInputHandler;
 use super::*;
 
 struct TerminalViewportState {
@@ -189,7 +190,7 @@ impl TerminalView {
             let focus_handle = focus_handle.clone();
             move |bounds, _state, window, cx| {
                 if let Some(entity) = entity.upgrade() {
-                    let input_handler = ElementInputHandler::new(bounds, entity);
+                    let input_handler = TerminalInputHandler::new(bounds, entity);
                     window.handle_input(&focus_handle, input_handler, cx);
                 }
             }
