@@ -67,7 +67,22 @@ pub(crate) fn strict_numeric_literal(value: &str) -> Option<&str> {
 }
 
 pub(crate) fn decode_base64_binary(value: &str) -> Option<Vec<u8>> {
-    base64::engine::general_purpose::STANDARD.decode(value).ok()
+    base64::engine::general_purpose::STANDARD
+        .decode(value.trim())
+        .ok()
+}
+
+pub(crate) fn decode_hex_binary(value: &str) -> Option<Vec<u8>> {
+    let value = value.trim();
+    let hex = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))?;
+
+    if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    hex::decode(hex).ok()
 }
 
 pub(crate) fn format_binary_literal_for_database(

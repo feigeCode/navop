@@ -1679,16 +1679,7 @@ impl DataGrid {
         let col_ix = selected_col_ix.checked_sub(1)?;
         let delegate = table.delegate();
         let actual_row_ix = delegate.resolve_display_row(display_row_ix)?;
-        if delegate.is_binary_cell(actual_row_ix, col_ix) {
-            return None;
-        }
-        let value = delegate
-            .rows
-            .get(actual_row_ix)
-            .and_then(|row| row.get(col_ix))
-            .cloned()
-            .flatten()
-            .unwrap_or_default();
+        let value = delegate.editable_cell_text(actual_row_ix, col_ix);
         let column_name = delegate
             .columns
             .get(col_ix)

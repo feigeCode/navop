@@ -47,6 +47,10 @@ fn formats_mysql_typed_values() {
         "X'deadbeef'",
         format(DatabaseType::MySQL, "BLOB", "3q2+7w==")
     );
+    assert_eq!(
+        "X'deadbeef'",
+        format(DatabaseType::MySQL, "BLOB", "0xDEADBEEF")
+    );
     assert_eq!("'1'", format(DatabaseType::MySQL, "VARCHAR(20)", "1"));
     assert_eq!(
         "'1'' OR 1=1'",
@@ -66,6 +70,10 @@ fn formats_postgres_typed_values() {
         format(DatabaseType::PostgreSQL, "bytea", "3q2+7w==")
     );
     assert_eq!(
+        "decode('deadbeef', 'hex')",
+        format(DatabaseType::PostgreSQL, "bytea", "0Xdeadbeef")
+    );
+    assert_eq!(
         "12.50",
         format(DatabaseType::PostgreSQL, "numeric(10,2)", "12.50")
     );
@@ -83,6 +91,10 @@ fn formats_mssql_typed_values() {
         "0xdeadbeef",
         format(DatabaseType::MSSQL, "varbinary(max)", "3q2+7w==")
     );
+    assert_eq!(
+        "0xdeadbeef",
+        format(DatabaseType::MSSQL, "varbinary(max)", "0xDEADBEEF")
+    );
     assert_eq!("42", format(DatabaseType::MSSQL, "int", "42"));
     assert_eq!("'1'", format(DatabaseType::MSSQL, "varchar(10)", "1"));
 }
@@ -93,6 +105,10 @@ fn formats_sqlite_typed_values() {
     assert_eq!(
         "X'deadbeef'",
         format(DatabaseType::SQLite, "blob", "3q2+7w==")
+    );
+    assert_eq!(
+        "X'deadbeef'",
+        format(DatabaseType::SQLite, "blob", "0xDEADBEEF")
     );
     assert_eq!("12.5", format(DatabaseType::SQLite, "decimal(5,2)", "12.5"));
     assert_eq!("'001'", format(DatabaseType::SQLite, "text", "001"));
@@ -105,6 +121,10 @@ fn formats_duckdb_typed_values() {
         "from_hex('deadbeef')",
         format(DatabaseType::DuckDB, "blob", "3q2+7w==")
     );
+    assert_eq!(
+        "from_hex('deadbeef')",
+        format(DatabaseType::DuckDB, "blob", "0xDEADBEEF")
+    );
     assert_eq!("42", format(DatabaseType::DuckDB, "int8", "42"));
     assert_eq!("'001'", format(DatabaseType::DuckDB, "varchar", "001"));
 }
@@ -116,6 +136,10 @@ fn formats_oracle_typed_values() {
     assert_eq!(
         "HEXTORAW('deadbeef')",
         format(DatabaseType::Oracle, "raw(16)", "3q2+7w==")
+    );
+    assert_eq!(
+        "HEXTORAW('deadbeef')",
+        format(DatabaseType::Oracle, "raw(16)", "0xDEADBEEF")
     );
     assert_eq!(
         "12.50",
@@ -167,6 +191,11 @@ fn invalid_special_values_fall_back_to_escaped_strings() {
     assert_eq!(
         "'not-base64!''x'",
         format(DatabaseType::SQLite, "blob", "not-base64!'x")
+    );
+    assert_eq!("'0xABC'", format(DatabaseType::SQLite, "blob", "0xABC"));
+    assert_eq!(
+        "'0xnothex'",
+        format(DatabaseType::MySQL, "blob", "0xnothex")
     );
 }
 

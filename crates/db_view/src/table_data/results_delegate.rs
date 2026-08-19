@@ -325,6 +325,59 @@ impl EditorTableDelegate {
         }
     }
 
+    fn cell_values_equal(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+        a: &Option<String>,
+        b: &Option<String>,
+    ) -> bool {
+        if self.is_binary_cell(row_ix, col_ix) {
+            binary_edit_values_equal(a, b)
+        } else if self.get_field_type(col_ix) == FieldType::DateTime {
+            Self::datetime_values_equal(a, b)
+        } else {
+            Self::values_equal(a, b)
+        }
+    }
+
+    fn binary_value_matches_original(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+        value: &Option<String>,
+    ) -> bool {
+        self.binary_cells
+            .get(&(row_ix, col_ix))
+            .zip(value.as_deref().and_then(decode_binary_edit_value))
+            .is_some_and(|(original_bytes, value_bytes)| {
+                original_bytes.as_slice() == value_bytes.as_slice()
+            })
+    }
+
+    pub fn editable_cell_text(&self, row_ix: usize, col_ix: usize) -> String {
+        if self.modified_cells.contains(&(row_ix, col_ix)) {
+            return self
+                .rows
+                .get(row_ix)
+                .and_then(|row| row.get(col_ix))
+                .cloned()
+                .flatten()
+                .unwrap_or_default();
+        }
+
+        if let Some(bytes) = self.binary_cells.get(&(row_ix, col_ix)) {
+            return binary_cell_copy_text(bytes.as_slice());
+        }
+
+        self.rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .flatten()
+            .unwrap_or_default()
+    }
+
     /// Set column metadata
     pub fn set_column_meta(&mut self, meta: Vec<ColumnInfo>) {
         // 自动检测主键列
@@ -403,25 +456,63 @@ impl EditorTableDelegate {
         col_ix: usize,
         new_opt_value: Option<String>,
     ) -> bool {
-        if self.binary_cells.contains_key(&(row_ix, col_ix)) {
-            return false;
+        if !self.is_new_row(row_ix) {
+            if let Some(original_value) = self
+                .original_rows
+                .get(row_ix)
+                .and_then(|row| row.get(col_ix))
+                .cloned()
+                && if self.is_binary_cell(row_ix, col_ix) {
+                    self.binary_value_matches_original(row_ix, col_ix, &new_opt_value)
+                } else {
+                    self.cell_values_equal(row_ix, col_ix, &original_value, &new_opt_value)
+                }
+            {
+                let was_modified = self.modified_cells.remove(&(row_ix, col_ix));
+                let had_change = self.cell_changes.remove(&(row_ix, col_ix)).is_some();
+                if !was_modified && !had_change {
+                    return false;
+                }
+
+                if let Some(cell) = self
+                    .rows
+                    .get_mut(row_ix)
+                    .and_then(|row| row.get_mut(col_ix))
+                {
+                    *cell = original_value;
+                }
+
+                let row_has_changes =
+                    (0..self.columns.len()).any(|c| self.modified_cells.contains(&(row_ix, c)));
+                if !row_has_changes {
+                    self.row_status.insert(row_ix, RowStatus::Original);
+                }
+                return true;
+            }
         }
 
         // Get old value from current rows
-        let Some(row) = self.rows.get_mut(row_ix) else {
-            return false;
-        };
-        let Some(cell) = row.get_mut(col_ix) else {
+        let Some(current_value) = self
+            .rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+        else {
             return false;
         };
 
         // If value hasn't changed, don't record
-        if Self::values_equal(cell, &new_opt_value) {
-            self.modified_cells
-                .retain(|&(r, c)| r != row_ix || c != col_ix);
+        if self.cell_values_equal(row_ix, col_ix, &current_value, &new_opt_value) {
             return false;
         }
 
+        let Some(cell) = self
+            .rows
+            .get_mut(row_ix)
+            .and_then(|row| row.get_mut(col_ix))
+        else {
+            return false;
+        };
         let old_value = cell.clone();
         *cell = new_opt_value.clone();
 
@@ -1466,7 +1557,9 @@ impl EditTableDelegate for EditorTableDelegate {
 
         let font = self.preview_font(cx);
 
-        if let Some(bytes) = self.binary_cells.get(&(actual_row, col)).cloned() {
+        if !self.modified_cells.contains(&(actual_row, col))
+            && let Some(bytes) = self.binary_cells.get(&(actual_row, col)).cloned()
+        {
             let byte_len = bytes.len();
             let image_format = binary_cell_image_format(bytes.as_slice());
             let data_grid = self.data_grid.clone();
@@ -1617,18 +1710,8 @@ impl EditTableDelegate for EditorTableDelegate {
         if self.is_deleted_row(actual_row) {
             return None;
         }
-        if self.binary_cells.contains_key(&(actual_row, col_ix)) {
-            return None;
-        }
-
-        let value = self
-            .rows
-            .get(actual_row)
-            .and_then(|r| r.get(col_ix))
-            .cloned()
-            .unwrap_or(None);
         // NULL 值编辑时显示为空
-        let edit_value = value.unwrap_or_default();
+        let edit_value = self.editable_cell_text(actual_row, col_ix);
 
         // 根据字段类型创建不同配置的输入组件
         let field_type = self.get_field_type(col_ix);
@@ -2020,13 +2103,6 @@ impl EditTableDelegate for EditorTableDelegate {
             new_opt_value
         );
 
-        // 根据字段类型选择比较方法
-        let field_type = self.get_field_type(col_ix);
-        let values_eq: fn(&Option<String>, &Option<String>) -> bool = match field_type {
-            FieldType::DateTime => Self::datetime_values_equal,
-            _ => Self::values_equal,
-        };
-
         // Check if cell is already modified
         if self.is_cell_modified(row_ix, col_ix, cx) {
             tracing::debug!(
@@ -2045,7 +2121,17 @@ impl EditTableDelegate for EditorTableDelegate {
                 if let Some(row) = self.original_rows.get(actual_row) {
                     if let Some(original_cell) = row.get(col_ix) {
                         tracing::debug!("on_cell_edited: original_cell={:?}", original_cell);
-                        if values_eq(original_cell, &new_opt_value) {
+                        let matches_original = if self.is_binary_cell(actual_row, col_ix) {
+                            self.binary_value_matches_original(actual_row, col_ix, &new_opt_value)
+                        } else {
+                            self.cell_values_equal(
+                                actual_row,
+                                col_ix,
+                                original_cell,
+                                &new_opt_value,
+                            )
+                        };
+                        if matches_original {
                             tracing::debug!(
                                 "on_cell_edited: user reverted to original value, clearing modification"
                             );
@@ -2077,15 +2163,28 @@ impl EditTableDelegate for EditorTableDelegate {
 
             // Cell is modified and new value is different from original
             // Update the cell value
+            let Some(current_value) = self
+                .rows
+                .get(actual_row)
+                .and_then(|row| row.get(col_ix))
+                .cloned()
+            else {
+                return false;
+            };
+            let matches_current = if self.is_binary_cell(actual_row, col_ix) {
+                binary_edit_values_equal(&current_value, &new_opt_value)
+            } else {
+                self.cell_values_equal(actual_row, col_ix, &current_value, &new_opt_value)
+            };
+            if matches_current {
+                // No actual change
+                tracing::debug!("on_cell_edited: no actual change from current value");
+                return false;
+            }
+
             if let Some(current_row) = self.rows.get_mut(actual_row) {
                 if let Some(cell) = current_row.get_mut(col_ix) {
                     tracing::debug!("on_cell_edited: current cell={:?}", cell);
-                    if values_eq(cell, &new_opt_value) {
-                        // No actual change
-                        tracing::debug!("on_cell_edited: no actual change from current value");
-                        return false;
-                    }
-
                     let old_value = cell.clone();
                     *cell = new_opt_value.clone();
                     tracing::debug!(
@@ -2132,13 +2231,25 @@ impl EditTableDelegate for EditorTableDelegate {
 
         tracing::debug!("on_cell_edited: cell is not modified yet (initial edit)");
         // Cell not yet modified - initial edit
+        let Some(current_value) = self
+            .rows
+            .get(actual_row)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+        else {
+            return false;
+        };
+        let matches_current = if self.is_binary_cell(actual_row, col_ix) {
+            self.binary_value_matches_original(actual_row, col_ix, &new_opt_value)
+        } else {
+            self.cell_values_equal(actual_row, col_ix, &current_value, &new_opt_value)
+        };
+        if matches_current {
+            return false;
+        }
+
         if let Some(row) = self.rows.get_mut(actual_row) {
             if let Some(cell) = row.get_mut(col_ix) {
-                // Only mark as modified if value actually changed
-                if values_eq(cell, &new_opt_value) {
-                    return false;
-                }
-
                 let old_value = cell.clone();
                 *cell = new_opt_value.clone();
 
@@ -2338,6 +2449,15 @@ impl EditTableDelegate for EditorTableDelegate {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
 
+        if self.modified_cells.contains(&(actual_row, col_ix)) {
+            return self
+                .rows
+                .get(actual_row)
+                .and_then(|r| r.get(col_ix))
+                .and_then(|opt| opt.clone())
+                .unwrap_or_else(|| "NULL".to_string());
+        }
+
         if let Some(bytes) = self.binary_cells.get(&(actual_row, col_ix)) {
             return binary_cell_copy_text(bytes.as_slice());
         }
@@ -2351,6 +2471,15 @@ impl EditTableDelegate for EditorTableDelegate {
 
     fn get_optional_cell_value(&self, row_ix: usize, col_ix: usize, _cx: &App) -> Option<String> {
         let actual_row = self.map_display_to_actual_row(row_ix);
+
+        if self.modified_cells.contains(&(actual_row, col_ix)) {
+            return self
+                .rows
+                .get(actual_row)
+                .and_then(|row| row.get(col_ix))
+                .cloned()
+                .flatten();
+        }
 
         if let Some(bytes) = self.binary_cells.get(&(actual_row, col_ix)) {
             return Some(binary_cell_copy_text(bytes.as_slice()));
@@ -2425,6 +2554,49 @@ impl EditTableDelegate for EditorTableDelegate {
 
 fn binary_cell_copy_text(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn decode_binary_edit_value(value: &str) -> Option<Vec<u8>> {
+    let value = value.trim();
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return None;
+        }
+
+        let mut bytes = Vec::with_capacity(hex.len() / 2);
+        for pair in hex.as_bytes().chunks_exact(2) {
+            let high = hex_digit(pair[0])?;
+            let low = hex_digit(pair[1])?;
+            bytes.push((high << 4) | low);
+        }
+        return Some(bytes);
+    }
+
+    base64::engine::general_purpose::STANDARD.decode(value).ok()
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn binary_edit_values_equal(a: &Option<String>, b: &Option<String>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => match (decode_binary_edit_value(a), decode_binary_edit_value(b)) {
+            (Some(a), Some(b)) => a == b,
+            _ => a == b,
+        },
+        _ => false,
+    }
 }
 
 fn binary_download_file_name(column_name: &str, zero_based_row: usize) -> String {
@@ -2581,8 +2753,9 @@ impl EditorTableDelegate {
 mod tests {
     use super::{
         EditorTableDelegate, binary_cell_copy_text, binary_cell_image_format,
-        binary_download_file_name, normalize_row_search_query, normalize_sort_identifier,
-        parse_primary_order_by_clause, row_matches_search_query,
+        binary_download_file_name, binary_edit_values_equal, decode_binary_edit_value,
+        normalize_row_search_query, normalize_sort_identifier, parse_primary_order_by_clause,
+        row_matches_search_query,
     };
     use db::ColumnInfo;
     use gpui::SharedString;
@@ -2766,15 +2939,34 @@ mod tests {
     }
 
     #[test]
-    fn binary_cell_cannot_be_changed_through_text_writeback() {
-        let mut delegate = test_delegate(vec![vec![Some("0x010203".to_string())]]);
+    fn binary_cell_accepts_base64_and_hex_edits() {
+        let mut delegate = test_delegate(vec![vec![Some("binary display value".to_string())]]);
         delegate
             .binary_cells
             .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
 
-        assert!(!delegate.record_cell_change(0, 0, "replacement".to_string()));
-        assert_eq!(delegate.rows[0][0].as_deref(), Some("0x010203"));
+        assert!(!delegate.record_cell_change(0, 0, "AQID".to_string()));
+        assert!(delegate.record_cell_change(0, 0, "3q2+7w==".to_string()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some("3q2+7w=="));
+        assert!(delegate.cell_changes.contains_key(&(0, 0)));
+
+        assert!(delegate.record_cell_change(0, 0, "0x010203".to_string()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some("binary display value"));
         assert!(delegate.cell_changes.is_empty());
+        assert!(delegate.modified_cells.is_empty());
+        assert_eq!(delegate.editable_cell_text(0, 0), "AQID");
+    }
+
+    #[test]
+    fn binary_edit_values_decode_explicit_hex_before_base64() {
+        assert_eq!(decode_binary_edit_value("0xABCD"), Some(vec![0xab, 0xcd]));
+        assert_eq!(decode_binary_edit_value("0Xabcd"), Some(vec![0xab, 0xcd]));
+        assert_eq!(decode_binary_edit_value("0xABC"), None);
+        assert_eq!(decode_binary_edit_value("0x"), None);
+        assert!(binary_edit_values_equal(
+            &Some("q80=".to_string()),
+            &Some("0xABCD".to_string())
+        ));
     }
 
     #[test]
