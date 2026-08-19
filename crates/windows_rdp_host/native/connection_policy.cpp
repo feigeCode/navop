@@ -145,7 +145,8 @@ NavopRdpResult set_required_dispatch_utf16(
     return required_dispatch_result(owner, target, result);
 }
 
-void set_best_effort_dispatch_bool(
+NavopRdpResult set_optional_dispatch_bool_if_supported(
+    NativeRdpHost* owner,
     const NativeRdpDispatchTarget& target,
     bool value) noexcept {
     trace_native_stage(target.trace_stage);
@@ -154,6 +155,19 @@ void set_best_effort_dispatch_bool(
         target.property_name,
         value);
     trace_native_hresult(target.trace_stage, static_cast<int32_t>(result));
+    // Display enhancements are version-dependent across mstscax.dll builds.
+    // Treat only an absent property as unsupported; preserve every other COM
+    // failure so connection diagnostics remain fail-fast.
+    if (result == DISP_E_UNKNOWNNAME) {
+        return NAVOP_RDP_RESULT_OK;
+    }
+    if (FAILED(result)) {
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
+    }
+    return NAVOP_RDP_RESULT_OK;
 }
 
 NavopRdpResult configure_active_x_connection_policy(

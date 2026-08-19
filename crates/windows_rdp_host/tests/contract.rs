@@ -2739,6 +2739,8 @@ fn active_x_policy_sections_run_explicitly_in_frozen_order() {
 fn native_dispatch_helpers_own_variant_and_bstr_lifecycles() {
     let dispatch_source = &format!("{HOST_CRATE}/native/dispatch_property.cpp");
     let internal_header = &format!("{HOST_CRATE}/native/host_internal.h");
+    let policy_source = &format!("{HOST_CRATE}/native/connection_policy.cpp");
+    let display_source = &format!("{HOST_CRATE}/native/connection_policy_display.cpp");
 
     // bool conversion must use an independent converted VARIANT, never an
     // in-place VariantChangeType on the source value.
@@ -2789,6 +2791,69 @@ fn native_dispatch_helpers_own_variant_and_bstr_lifecycles() {
             "HRESULT set_dispatch_bool(",
             "HRESULT set_dispatch_long(",
             "HRESULT set_dispatch_utf16(",
+        ],
+    );
+    // Version-dependent display enhancements may be absent from an older
+    // mstscax.dll. Only DISP_E_UNKNOWNNAME is treated as unsupported; every
+    // other COM failure remains fatal.
+    assert_tokens_in_scope(
+        policy_source,
+        "NavopRdpResult set_optional_dispatch_bool_if_supported(",
+        "\n}\n\nNavopRdpResult configure_active_x_connection_policy(",
+        &[
+            "set_dispatch_bool(",
+            "trace_native_hresult(",
+            "result == DISP_E_UNKNOWNNAME",
+            "return NAVOP_RDP_RESULT_OK;",
+            "if (FAILED(result))",
+            "record_last_hresult(",
+            "static_cast<int32_t>(result)",
+            "return NAVOP_RDP_RESULT_OK;",
+        ],
+    );
+    assert_tokens_in_scope(
+        policy_source,
+        "NavopRdpResult set_required_dispatch_bool(",
+        "NavopRdpResult set_required_dispatch_long(",
+        &[
+            "set_dispatch_bool(",
+            "return required_dispatch_result(owner, target, result);",
+        ],
+    );
+    assert_tokens_in_scope(
+        display_source,
+        "NavopRdpResult optional_extended_property_result(",
+        "NavopRdpResult configure_extended_scale_factors(",
+        &[
+            "result == DISP_E_UNKNOWNNAME",
+            "return NAVOP_RDP_RESULT_OK;",
+            "if (FAILED(result))",
+            "record_last_hresult(",
+            "static_cast<int32_t>(result)",
+            "return NAVOP_RDP_RESULT_OK;",
+        ],
+    );
+    assert_tokens_in_scope(
+        display_source,
+        "NavopRdpResult configure_extended_scale_factors(",
+        "\nNavopRdpResult configure_display_policy(",
+        &[
+            "L\"DesktopScaleFactor\"",
+            "optional_extended_property_result(",
+            "L\"DeviceScaleFactor\"",
+            "optional_extended_property_result(owner, result)",
+        ],
+    );
+    assert_tokens_in_scope(
+        display_source,
+        "NavopRdpResult configure_display_policy(",
+        "return configure_extended_scale_factors(",
+        &[
+            "L\"SmartSizing\"",
+            "set_optional_dispatch_bool_if_supported(",
+            "non_scriptable5->put_UseMultimon(",
+            "L\"ContainerHandledFullScreen\"",
+            "set_optional_dispatch_bool_if_supported(",
         ],
     );
 }

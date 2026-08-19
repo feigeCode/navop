@@ -45,7 +45,8 @@ NavopRdpResult set_required_dispatch_utf16(
     const NativeRdpDispatchTarget& target,
     NavopRdpBorrowedUtf16 value) noexcept;
 
-void set_best_effort_dispatch_bool(
+NavopRdpResult set_optional_dispatch_bool_if_supported(
+    NativeRdpHost* owner,
     const NativeRdpDispatchTarget& target,
     bool value) noexcept;
 
