@@ -15,7 +15,7 @@ Set-StrictMode -Version Latest
 
 $nativeDesktop = "Microsoft.VisualStudio.Workload.NativeDesktop"
 $atlComponent = "Microsoft.VisualStudio.Component.VC.ATL"
-$vs2022VersionRange = "[17.0,18.0)"
+$supportedVisualStudioVersionRange = "[17.0,19.0)"
 $vswhere = Join-Path ${env:ProgramFiles(x86)} `
     "Microsoft Visual Studio\Installer\vswhere.exe"
 
@@ -29,7 +29,7 @@ function Get-VisualStudioInstallation {
         "-products",
         "*",
         "-version",
-        $vs2022VersionRange,
+        $supportedVisualStudioVersionRange,
         "-requires",
         $nativeDesktop,
         $atlComponent,

@@ -2573,6 +2573,7 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     assert_contains_all(
         script_path,
         &[
+            "$supportedVisualStudioVersionRange = \"[17.0,19.0)\"",
             "cargo build --locked -p windows-rdp-probe --target $RustTarget",
             HOST_TEST,
             "cargo test --locked -p remote_desktop_view ",
