@@ -136,7 +136,10 @@ NavopRdpResult apply_active_x_credentials(
     NativeRdpActiveXResources* resources,
     NavopRdpBorrowedUtf16 username,
     NavopRdpBorrowedUtf16 domain,
-    NavopRdpBorrowedSecret server_password) noexcept;
+    NavopRdpBorrowedSecret server_password,
+    NavopRdpBorrowedUtf16 gateway_username,
+    NavopRdpBorrowedUtf16 gateway_domain,
+    NavopRdpBorrowedSecret gateway_password) noexcept;
 
 NavopRdpResult get_active_x_connection_state(
     NativeRdpHost* owner,

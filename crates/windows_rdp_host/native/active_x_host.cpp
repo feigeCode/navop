@@ -1206,7 +1206,10 @@ NavopRdpResult apply_active_x_credentials(
     NativeRdpActiveXResources* resources,
     NavopRdpBorrowedUtf16 username,
     NavopRdpBorrowedUtf16 domain,
-    NavopRdpBorrowedSecret server_password) noexcept {
+    NavopRdpBorrowedSecret server_password,
+    NavopRdpBorrowedUtf16 gateway_username,
+    NavopRdpBorrowedUtf16 gateway_domain,
+    NavopRdpBorrowedSecret gateway_password) noexcept {
     const NavopRdpResult resource_result = validate_resources(resources);
     if (resource_result != NAVOP_RDP_RESULT_OK) {
         return record_last_error(owner, resource_result);
@@ -1225,7 +1228,11 @@ NavopRdpResult apply_active_x_credentials(
     }
 
     if (username.len > static_cast<uint32_t>((std::numeric_limits<int>::max)()) ||
-        domain.len > static_cast<uint32_t>((std::numeric_limits<int>::max)())) {
+        domain.len > static_cast<uint32_t>((std::numeric_limits<int>::max)()) ||
+        gateway_username.len >
+            static_cast<uint32_t>((std::numeric_limits<int>::max)()) ||
+        gateway_domain.len >
+            static_cast<uint32_t>((std::numeric_limits<int>::max)())) {
         return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
     }
 
@@ -1284,6 +1291,101 @@ NavopRdpResult apply_active_x_credentials(
                 owner,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
                 static_cast<int32_t>(result));
+        }
+    }
+
+    if (gateway_username.len != UINT32_C(0) ||
+        gateway_domain.len != UINT32_C(0) ||
+        gateway_password.len != UINT32_C(0)) {
+        CComQIPtr<IMsRdpClient7> client7(resources->state.client);
+        if (client7 == nullptr) {
+            return record_last_error(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        }
+
+        CComPtr<IMsRdpClientTransportSettings2> transport;
+        trace_native_stage("credentials.gateway.get_transport_settings2.before");
+        result = client7->get_TransportSettings2(&transport);
+        trace_native_hresult(
+            "credentials.gateway.get_transport_settings2.after",
+            static_cast<int32_t>(result));
+        if (FAILED(result) || transport == nullptr) {
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    owner,
+                    NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                    static_cast<int32_t>(result));
+            }
+            return record_last_error(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        }
+
+        if (gateway_username.len != UINT32_C(0)) {
+            CComBSTR gateway_username_bstr(
+                static_cast<int>(gateway_username.len),
+                reinterpret_cast<LPCOLESTR>(gateway_username.data));
+            if (gateway_username_bstr.m_str == nullptr) {
+                return record_last_error(
+                    owner,
+                    NAVOP_RDP_RESULT_ALLOCATION_FAILED);
+            }
+            trace_native_stage("credentials.gateway.username.before");
+            result = transport->put_GatewayUserName(gateway_username_bstr);
+            trace_native_hresult(
+                "credentials.gateway.username.after",
+                static_cast<int32_t>(result));
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    owner,
+                    NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                    static_cast<int32_t>(result));
+            }
+        }
+
+        if (gateway_domain.len != UINT32_C(0)) {
+            CComBSTR gateway_domain_bstr(
+                static_cast<int>(gateway_domain.len),
+                reinterpret_cast<LPCOLESTR>(gateway_domain.data));
+            if (gateway_domain_bstr.m_str == nullptr) {
+                return record_last_error(
+                    owner,
+                    NAVOP_RDP_RESULT_ALLOCATION_FAILED);
+            }
+            trace_native_stage("credentials.gateway.domain.before");
+            result = transport->put_GatewayDomain(gateway_domain_bstr);
+            trace_native_hresult(
+                "credentials.gateway.domain.after",
+                static_cast<int32_t>(result));
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    owner,
+                    NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                    static_cast<int32_t>(result));
+            }
+        }
+
+        if (gateway_password.len != UINT32_C(0)) {
+            SensitiveBstr gateway_password_bstr;
+            const NavopRdpResult gateway_password_result =
+                gateway_password_bstr.assign(gateway_password);
+            if (gateway_password_result != NAVOP_RDP_RESULT_OK) {
+                return record_last_error(owner, gateway_password_result);
+            }
+
+            trace_native_stage("credentials.gateway.password.before");
+            result = transport->put_GatewayPassword(
+                gateway_password_bstr.get());
+            trace_native_hresult(
+                "credentials.gateway.password.after",
+                static_cast<int32_t>(result));
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    owner,
+                    NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                    static_cast<int32_t>(result));
+            }
         }
     }
 

@@ -212,6 +212,32 @@ extern "C" NavopRdpResult navop_rdp_apply_credentials(
             }
         }
 
+        NavopRdpBorrowedUtf16 gateway_username{};
+        if (credential_field_available<NavopRdpBorrowedUtf16>(
+                credentials->struct_size,
+                offsetof(NavopRdpCredentialBundle, gateway_username))) {
+            gateway_username = read_credential_field<NavopRdpBorrowedUtf16>(
+                credentials,
+                offsetof(NavopRdpCredentialBundle, gateway_username));
+            result = validate_borrowed_utf16(gateway_username);
+            if (result != NAVOP_RDP_RESULT_OK) {
+                return record_last_error(host, result);
+            }
+        }
+
+        NavopRdpBorrowedUtf16 gateway_domain{};
+        if (credential_field_available<NavopRdpBorrowedUtf16>(
+                credentials->struct_size,
+                offsetof(NavopRdpCredentialBundle, gateway_domain))) {
+            gateway_domain = read_credential_field<NavopRdpBorrowedUtf16>(
+                credentials,
+                offsetof(NavopRdpCredentialBundle, gateway_domain));
+            result = validate_borrowed_utf16(gateway_domain);
+            if (result != NAVOP_RDP_RESULT_OK) {
+                return record_last_error(host, result);
+            }
+        }
+
         SensitiveUtf16Buffer server_password;
         SensitiveUtf16Buffer gateway_password;
         result = server_password.copy_from(credentials->server_password);
@@ -229,7 +255,10 @@ extern "C" NavopRdpResult navop_rdp_apply_credentials(
                 host->active_x_resources,
                 username,
                 domain,
-                server_password.borrowed());
+                server_password.borrowed(),
+                gateway_username,
+                gateway_domain,
+                gateway_password.borrowed());
             if (result != NAVOP_RDP_RESULT_OK) {
                 return result;
             }

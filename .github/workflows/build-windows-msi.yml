@@ -125,6 +125,10 @@ jobs:
         with:
           arch: ${{ env.WINDOWS_WIX_ARCH }}
 
+      - name: Verify native Windows RDP integration
+        shell: pwsh
+        run: ./script/build-windows-rdp-probe.ps1 -Target "$env:WINDOWS_TARGET"
+
       - name: Build release binary
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

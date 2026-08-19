@@ -1601,19 +1601,33 @@ fn native_credentials_accept_identity_and_separate_server_gateway_secrets() {
         0x006f, 0x0070, 0x0065, 0x0072, 0x0061, 0x0074, 0x006f, 0x0072,
     ];
     let domain = [0x0045, 0x0058, 0x0041, 0x004d, 0x0050, 0x004c, 0x0045];
+    let gateway_username = [
+        0x0067, 0x0061, 0x0074, 0x0065, 0x0077, 0x0061, 0x0079, 0x002d, 0x0075, 0x0073, 0x0065,
+        0x0072,
+    ];
+    let gateway_domain = [0x0047, 0x0041, 0x0054, 0x0045, 0x0057, 0x0041, 0x0059];
     let server = [0x0073, 0x0065, 0x0072, 0x0076, 0x0065, 0x0072];
     let gateway = [0x0067, 0x0061, 0x0074, 0x0065];
     let mut host = unsafe { create_host(42) };
+    let mut all_credentials = credential_bundle(
+        Some(&username),
+        Some(&domain),
+        Some(&server),
+        Some(&gateway),
+    );
+    all_credentials.gateway_username = NavopRdpBorrowedUtf16 {
+        data: gateway_username.as_ptr(),
+        len: gateway_username.len() as u32,
+    };
+    all_credentials.gateway_domain = NavopRdpBorrowedUtf16 {
+        data: gateway_domain.as_ptr(),
+        len: gateway_domain.len() as u32,
+    };
     let cases = [
         credential_bundle(None, None, None, None),
         credential_bundle(Some(&username), Some(&domain), Some(&server), None),
         credential_bundle(None, None, None, Some(&gateway)),
-        credential_bundle(
-            Some(&username),
-            Some(&domain),
-            Some(&server),
-            Some(&gateway),
-        ),
+        all_credentials,
     ];
 
     for credentials in &cases {
@@ -1708,6 +1722,28 @@ fn native_credentials_reject_invalid_layout_and_borrowed_secrets() {
     };
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &null_domain) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_gateway_username =
+        credential_bundle(Some(&username), Some(&domain), Some(&server), None);
+    null_gateway_username.gateway_username = NavopRdpBorrowedUtf16 {
+        data: ptr::null(),
+        len: 1,
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &null_gateway_username) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_gateway_domain =
+        credential_bundle(Some(&username), Some(&domain), Some(&server), None);
+    null_gateway_domain.gateway_domain = NavopRdpBorrowedUtf16 {
+        data: ptr::null(),
+        len: 1,
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &null_gateway_domain) },
         RESULT_INVALID_ARGUMENT
     );
 
