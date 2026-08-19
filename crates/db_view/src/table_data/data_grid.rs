@@ -26,13 +26,14 @@ use crate::search_shortcut::{
 use crate::sidebar::execution_history::ExecutionContext;
 use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::SqlEditor;
-use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
+use crate::table_data::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
 use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
-    BinaryCell, ColumnInfo, DbManager, ExecOptions, GlobalDbState, IndexInfo, QueryResult,
-    SqlResult, TableCellChange, TableCellValue, TableDataRequest, TableRowChange, TableSaveRequest,
+    BinaryCell, ColumnInfo, DatabasePlugin, DbManager, ExecOptions, GlobalDbState, IndexInfo,
+    QueryResult, SqlResult, TableCellChange, TableCellValue, TableDataRequest, TableRowChange,
+    TableSaveRequest,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
@@ -382,12 +383,23 @@ impl ExportFormat {
     }
 }
 
-fn build_export_bytes(
-    format: ExportFormat,
+struct ExportBuildInput {
     rows: Vec<Vec<Option<String>>>,
     columns: Vec<SharedString>,
-    mut metadata: TableMetadata,
+    metadata: TableMetadata,
+    plugin: Option<Arc<dyn DatabasePlugin>>,
+}
+
+fn build_export_bytes(
+    format: ExportFormat,
+    input: ExportBuildInput,
 ) -> Result<Option<Vec<u8>>, String> {
+    let ExportBuildInput {
+        rows,
+        columns,
+        metadata,
+        plugin,
+    } = input;
     if rows.is_empty() {
         return Ok(None);
     }
@@ -402,14 +414,19 @@ fn build_export_bytes(
         export_rows.insert(0, header);
     }
 
-    metadata.column_names = columns.clone();
+    let metadata = metadata.for_columns(&columns);
 
     match format {
         ExportFormat::Xlsx => build_xlsx_bytes(&export_rows).map(Some),
-        _ => Ok(Some(
-            CopyFormatter::format(format.copy_format(), &export_rows, &columns, &metadata)
-                .into_bytes(),
-        )),
+        _ => {
+            let context = CopyFormatContext::new(&export_rows, &columns, &metadata);
+            let context = plugin
+                .as_deref()
+                .map_or(context, |plugin| context.with_plugin(plugin));
+            Ok(Some(
+                CopyFormatter::format(format.copy_format(), context).into_bytes(),
+            ))
+        }
     }
 }
 
@@ -1159,6 +1176,7 @@ impl DataGrid {
         let metadata = self.table.read(cx).delegate().get_table_metadata();
         let window_id = cx.active_window();
         let global_state = cx.global::<GlobalDbState>().clone();
+        let plugin = global_state.get_plugin(&self.config.database_type).ok();
         let prompt_future = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             multiple: false,
@@ -1241,7 +1259,13 @@ impl DataGrid {
                 return;
             };
 
-            let bytes = match build_export_bytes(format, rows, columns.clone(), metadata.clone()) {
+            let input = ExportBuildInput {
+                rows,
+                columns: columns.clone(),
+                metadata: metadata.clone(),
+                plugin: plugin.clone(),
+            };
+            let bytes = match build_export_bytes(format, input) {
                 Ok(Some(bytes)) => bytes,
                 Ok(None) => {
                     let _ = cx.update(|cx| {
@@ -3068,7 +3092,8 @@ mod tests {
     };
     use crate::table_data::results_delegate::{CellChange, RowChange};
     use db::{
-        DbManager, ExecResult, QueryResult, SqlErrorInfo, SqlResult, TableCellValue, TableRowChange,
+        ColumnInfo, DbManager, ExecResult, QueryResult, SqlErrorInfo, SqlResult, TableCellValue,
+        TableRowChange,
     };
     use gpui::SharedString;
     use one_core::settings::LargeTextCellEditorOpenMode;
@@ -3367,9 +3392,17 @@ mod tests {
     fn build_export_bytes_creates_zip_based_xlsx_payload() {
         let (rows, columns, metadata) = sample_export_input();
 
-        let bytes = super::build_export_bytes(ExportFormat::Xlsx, rows, columns, metadata)
-            .expect("xlsx export should build successfully")
-            .expect("xlsx export should produce bytes");
+        let bytes = super::build_export_bytes(
+            ExportFormat::Xlsx,
+            super::ExportBuildInput {
+                rows,
+                columns,
+                metadata,
+                plugin: None,
+            },
+        )
+        .expect("xlsx export should build successfully")
+        .expect("xlsx export should produce bytes");
 
         assert!(bytes.starts_with(b"PK"));
         let sheet_xml = read_xlsx_entry(&bytes, "xl/worksheets/sheet1.xml");
@@ -3380,9 +3413,17 @@ mod tests {
     fn build_export_bytes_preserves_newlines_in_xlsx_cells() {
         let (rows, columns, metadata) = sample_export_input();
 
-        let bytes = super::build_export_bytes(ExportFormat::Xlsx, rows, columns, metadata)
-            .expect("xlsx export should build successfully")
-            .expect("xlsx export should produce bytes");
+        let bytes = super::build_export_bytes(
+            ExportFormat::Xlsx,
+            super::ExportBuildInput {
+                rows,
+                columns,
+                metadata,
+                plugin: None,
+            },
+        )
+        .expect("xlsx export should build successfully")
+        .expect("xlsx export should produce bytes");
 
         let shared_strings = read_xlsx_entry(&bytes, "xl/sharedStrings.xml");
         assert!(
@@ -3400,9 +3441,12 @@ mod tests {
 
         let csv = super::build_export_bytes(
             ExportFormat::Csv,
-            rows.clone(),
-            columns.clone(),
-            metadata.clone(),
+            super::ExportBuildInput {
+                rows: rows.clone(),
+                columns: columns.clone(),
+                metadata: metadata.clone(),
+                plugin: None,
+            },
         )
         .expect("CSV export should build")
         .expect("CSV export should produce bytes");
@@ -3411,13 +3455,71 @@ mod tests {
             "nullable,empty,literal\n\\N,\"\",NULL"
         );
 
-        let sql = super::build_export_bytes(ExportFormat::InsertSql, rows, columns, metadata)
-            .expect("SQL export should build")
-            .expect("SQL export should produce bytes");
+        let sql = super::build_export_bytes(
+            ExportFormat::InsertSql,
+            super::ExportBuildInput {
+                rows,
+                columns,
+                metadata,
+                plugin: None,
+            },
+        )
+        .expect("SQL export should build")
+        .expect("SQL export should produce bytes");
         assert!(
             String::from_utf8(sql)
                 .expect("SQL is UTF-8")
                 .contains("(NULL, '', 'NULL')")
+        );
+    }
+
+    #[test]
+    fn build_export_bytes_uses_mysql_bit_literal() {
+        let plugin = DbManager::default()
+            .get_plugin(&DatabaseType::MySQL)
+            .expect("MySQL plugin should exist");
+        let rows = vec![vec![Some("1".to_string()), Some("1".to_string())]];
+        let columns = vec!["id".into(), "bit_name".into()];
+        let metadata = TableMetadata::new("test_bit")
+            .with_columns(columns.clone())
+            .with_column_meta(vec![
+                ColumnInfo {
+                    name: "id".to_string(),
+                    data_type: "INT".to_string(),
+                    is_nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "bit_name".to_string(),
+                    data_type: "BIT(1)".to_string(),
+                    is_nullable: false,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ]);
+
+        let sql = super::build_export_bytes(
+            ExportFormat::InsertSql,
+            super::ExportBuildInput {
+                rows,
+                columns,
+                metadata,
+                plugin: Some(plugin),
+            },
+        )
+        .expect("SQL export should build")
+        .expect("SQL export should produce bytes");
+
+        assert_eq!(
+            String::from_utf8(sql).expect("SQL is UTF-8"),
+            "INSERT INTO `test_bit` (`id`, `bit_name`) VALUES\n(1, 1);"
         );
     }
 }

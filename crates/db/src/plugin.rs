@@ -2195,26 +2195,8 @@ pub trait DatabasePlugin: Send + Sync {
     fn format_copy_value(&self, value: &Option<String>, col_info: Option<&ColumnInfo>) -> String {
         match value {
             None => "NULL".to_string(),
-            Some(v) => {
-                if let Some(info) = col_info {
-                    let data_type = info.data_type.to_uppercase();
-                    // Numeric types don't need quotes
-                    if self.is_numeric_type(&data_type) {
-                        if v.parse::<f64>().is_ok() || v.parse::<i64>().is_ok() {
-                            return v.clone();
-                        }
-                    }
-                    // Boolean types
-                    if self.is_boolean_type(&data_type) {
-                        return self.format_boolean_value(v);
-                    }
-                    // Binary types
-                    if self.is_binary_type(&data_type) {
-                        return self.format_binary_value(v);
-                    }
-                }
-                // Default: escape as string
-                self.escape_copy_string(v)
+            Some(value) => {
+                self.format_table_change_value(&TableCellValue::Text(value.clone()), col_info)
             }
         }
     }
@@ -2488,12 +2470,9 @@ pub trait DatabasePlugin: Send + Sync {
     fn format_table_change_value(
         &self,
         value: &TableCellValue,
-        _column: Option<&ColumnInfo>,
+        column: Option<&ColumnInfo>,
     ) -> String {
-        match value {
-            TableCellValue::Null => "NULL".to_string(),
-            TableCellValue::Text(value) => format!("'{}'", value.replace('\'', "''")),
-        }
+        crate::sql_literal::format_table_value_for_database(&self.name(), value, column)
     }
 
     fn build_table_change_where_clause(
@@ -2589,62 +2568,30 @@ pub trait DatabasePlugin: Send + Sync {
         limit: Option<usize>,
     ) -> Result<String> {
         let table_ref = self.format_table_reference(database, schema, table);
-        let mut base_sql = format!("SELECT * FROM {}", table_ref);
-        if let Some(where_c) = where_clause {
-            base_sql.push_str(" WHERE ");
-            base_sql.push_str(where_c);
+        let mut sql = format!("SELECT * FROM {table_ref}");
+        if let Some(where_clause) = where_clause {
+            sql.push_str(" WHERE ");
+            sql.push_str(where_clause);
         }
-        let paginated_query =
-            limit.map(|limit| self.build_paginated_query(&base_sql, limit, 0, ""));
-        let select_sql = paginated_query
-            .as_ref()
-            .map(|query| query.sql.as_str())
-            .unwrap_or(base_sql.as_str());
-
+        let query = limit
+            .map(|limit| self.build_paginated_query(&sql, limit, 0, ""))
+            .unwrap_or_else(|| PaginatedQuery::new(sql));
         let result = connection
-            .query(select_sql)
+            .query(&query.sql)
             .await
-            .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?;
-
-        let mut output = String::new();
-        if let SqlResult::Query(mut query_result) = result {
-            if let Some(paginated_query) = &paginated_query {
-                paginated_query.strip_hidden_result_columns(&mut query_result)?;
-            }
-            if !query_result.rows.is_empty() {
-                let table_ident = self.format_export_table_reference(database, schema, table);
-                for row in &query_result.rows {
-                    output.push_str("INSERT INTO ");
-                    output.push_str(&table_ident);
-                    output.push_str(" (");
-                    for (i, col) in query_result.columns.iter().enumerate() {
-                        if i > 0 {
-                            output.push_str(", ");
-                        }
-                        output.push_str(&self.quote_identifier(col));
-                    }
-                    output.push_str(") VALUES (");
-
-                    for (i, value) in row.iter().enumerate() {
-                        if i > 0 {
-                            output.push_str(", ");
-                        }
-                        match value {
-                            Some(v) => {
-                                output.push('\'');
-                                output.push_str(&v.replace('\'', "''"));
-                                output.push('\'');
-                            }
-                            None => output.push_str("NULL"),
-                        }
-                    }
-
-                    output.push_str(");\n");
-                }
-            }
-        }
-
-        Ok(output)
+            .map_err(|error| anyhow::anyhow!("Query failed: {error}"))?;
+        let SqlResult::Query(mut query_result) = result else {
+            return Ok(String::new());
+        };
+        query.strip_hidden_result_columns(&mut query_result)?;
+        let table_ident = self.format_export_table_reference(database, schema, table);
+        Ok(
+            crate::import_export::formats::sql_export::render_insert_statements(
+                self,
+                &table_ident,
+                &query_result,
+            ),
+        )
     }
 
     // === Charset and Collation ===
@@ -3079,17 +3026,7 @@ pub(crate) fn format_binary_literal_for_database(
     database_type: &DatabaseType,
     bytes: &[u8],
 ) -> String {
-    let hex = hex::encode(bytes);
-    match database_type {
-        DatabaseType::PostgreSQL => format!("decode('{hex}', 'hex')"),
-        DatabaseType::MSSQL => format!("0x{hex}"),
-        DatabaseType::Oracle => format!("HEXTORAW('{hex}')"),
-        DatabaseType::DuckDB => format!("from_hex('{hex}')"),
-        DatabaseType::ClickHouse => format!("unhex('{hex}')"),
-        DatabaseType::MySQL | DatabaseType::SQLite | DatabaseType::External { .. } => {
-            format!("X'{hex}'")
-        }
-    }
+    crate::sql_literal::format_binary_literal_for_database(database_type, bytes)
 }
 
 /// 将 design 中被重命名的列名回退为旧名，以便与 original 做 diff 时不会产生误删/误增。
@@ -3599,6 +3536,40 @@ mod tests {
         assert_eq!(
             plugin.generate_copy_delete_sql(&request),
             "DELETE FROM `states` WHERE `nullable` IS NULL AND `empty` = '' AND `literal` = 'NULL';"
+        );
+    }
+
+    #[test]
+    fn copy_sql_uses_database_typed_literals() {
+        let plugin = MySqlPlugin::new();
+        let columns = vec![
+            ColumnInfo {
+                name: "id".to_string(),
+                data_type: "INT".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+            ColumnInfo {
+                name: "enabled".to_string(),
+                data_type: "BIT(1)".to_string(),
+                is_nullable: false,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+        ];
+        let request = CopySqlRequest::new("features", columns)
+            .with_rows(vec![vec![Some("1".to_string()), Some("0".to_string())]]);
+
+        assert_eq!(
+            plugin.generate_copy_insert_sql(&request),
+            "INSERT INTO `features` (`id`, `enabled`) VALUES (1, 0);"
         );
     }
 

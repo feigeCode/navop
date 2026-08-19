@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
+use super::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use super::data_grid::DataGrid;
 use base64::Engine as _;
-use db::{BinaryCell, ColumnInfo, FieldType};
+use db::{BinaryCell, ColumnInfo, FieldType, GlobalDbState};
 use gpui::{
     App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement, Styled,
@@ -1004,8 +1004,20 @@ impl EditTableDelegate for EditorTableDelegate {
                     return;
                 };
                 let columns = state.get_selection_columns(cx);
-                let metadata = state.delegate().get_table_metadata();
-                let text = CopyFormatter::format(format, &data, &columns, &metadata);
+                let indices = state.get_selection_column_indices(cx);
+                let (metadata, database_type) = {
+                    let delegate = state.delegate();
+                    (
+                        delegate.get_table_metadata().select_columns(&indices),
+                        delegate.database_type(),
+                    )
+                };
+                let plugin = cx.global::<GlobalDbState>().get_plugin(&database_type).ok();
+                let context = CopyFormatContext::new(&data, &columns, &metadata);
+                let context = plugin
+                    .as_deref()
+                    .map_or(context, |plugin| context.with_plugin(plugin));
+                let text = CopyFormatter::format(format, context);
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 window.push_notification(
                     Notification::success(t!("TableData.copy_success").to_string()),
@@ -2457,6 +2469,9 @@ impl EditorTableDelegate {
         TableMetadata {
             table_name: self.table_name.clone(),
             column_names: self.columns.iter().map(|c| c.name.clone()).collect(),
+            column_meta: (0..self.columns.len())
+                .map(|index| self.column_meta.get(index).cloned())
+                .collect(),
             primary_key_indices: self.primary_key_indices.clone(),
         }
     }

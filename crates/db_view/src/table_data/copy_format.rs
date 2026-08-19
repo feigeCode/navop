@@ -1,4 +1,8 @@
+use db::{ColumnInfo, DatabasePlugin};
 use gpui::SharedString;
+
+#[path = "copy_sql_format.rs"]
+mod copy_sql_format;
 
 /// 复制格式枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +32,8 @@ pub struct TableMetadata {
     pub table_name: SharedString,
     /// 列名列表
     pub column_names: Vec<SharedString>,
+    /// 与列名按索引对齐的数据库列元数据
+    pub column_meta: Vec<Option<ColumnInfo>>,
     /// 主键列索引（可能有多个复合主键）
     pub primary_key_indices: Vec<usize>,
 }
@@ -36,18 +42,118 @@ impl TableMetadata {
     pub fn new(table_name: impl Into<SharedString>) -> Self {
         Self {
             table_name: table_name.into(),
-            column_names: Vec::new(),
-            primary_key_indices: Vec::new(),
+            ..Self::default()
         }
     }
 
     pub fn with_columns(mut self, columns: Vec<impl Into<SharedString>>) -> Self {
-        self.column_names = columns.into_iter().map(|c| c.into()).collect();
+        self.column_names = columns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_column_meta(mut self, columns: Vec<ColumnInfo>) -> Self {
+        self.column_meta = columns.into_iter().map(Some).collect();
         self
     }
 
     pub fn with_primary_keys(mut self, indices: Vec<usize>) -> Self {
         self.primary_key_indices = indices;
+        self
+    }
+
+    pub fn select_columns(&self, indices: &[usize]) -> Self {
+        let primary_key_indices = indices
+            .iter()
+            .enumerate()
+            .filter_map(|(local, original)| {
+                self.primary_key_indices.contains(original).then_some(local)
+            })
+            .collect();
+        Self {
+            table_name: self.table_name.clone(),
+            column_names: select_items(&self.column_names, indices),
+            column_meta: select_items(&self.column_meta, indices),
+            primary_key_indices,
+        }
+    }
+
+    pub fn for_columns(&self, columns: &[SharedString]) -> Self {
+        let mut used = vec![false; self.column_names.len()];
+        let indices = columns
+            .iter()
+            .map(|column| find_column_index(&self.column_names, column, &mut used))
+            .collect::<Vec<_>>();
+        let column_meta = indices
+            .iter()
+            .map(|index| index.and_then(|index| self.column_meta.get(index).cloned().flatten()))
+            .collect();
+        let primary_key_indices = indices
+            .iter()
+            .enumerate()
+            .filter_map(|(local, original)| {
+                original
+                    .filter(|index| self.primary_key_indices.contains(index))
+                    .map(|_| local)
+            })
+            .collect();
+        Self {
+            table_name: self.table_name.clone(),
+            column_names: columns.to_vec(),
+            column_meta,
+            primary_key_indices,
+        }
+    }
+}
+
+fn select_items<T: Clone>(items: &[T], indices: &[usize]) -> Vec<T> {
+    indices
+        .iter()
+        .filter_map(|index| items.get(*index).cloned())
+        .collect()
+}
+
+fn find_column_index(
+    source: &[SharedString],
+    target: &SharedString,
+    used: &mut [bool],
+) -> Option<usize> {
+    let exact = source
+        .iter()
+        .enumerate()
+        .position(|(index, name)| !used[index] && name == target);
+    let index = exact.or_else(|| {
+        source.iter().enumerate().position(|(index, name)| {
+            !used[index] && name.as_ref().eq_ignore_ascii_case(target.as_ref())
+        })
+    })?;
+    used[index] = true;
+    Some(index)
+}
+
+#[derive(Clone, Copy)]
+pub struct CopyFormatContext<'a> {
+    pub data: &'a [Vec<Option<String>>],
+    pub columns: &'a [SharedString],
+    pub metadata: &'a TableMetadata,
+    pub plugin: Option<&'a dyn DatabasePlugin>,
+}
+
+impl<'a> CopyFormatContext<'a> {
+    pub fn new(
+        data: &'a [Vec<Option<String>>],
+        columns: &'a [SharedString],
+        metadata: &'a TableMetadata,
+    ) -> Self {
+        Self {
+            data,
+            columns,
+            metadata,
+            plugin: None,
+        }
+    }
+
+    pub fn with_plugin(mut self, plugin: &'a dyn DatabasePlugin) -> Self {
+        self.plugin = Some(plugin);
         self
     }
 }
@@ -57,25 +163,16 @@ pub struct CopyFormatter;
 
 impl CopyFormatter {
     /// 格式化数据为指定格式
-    pub fn format(
-        format: CopyFormat,
-        data: &[Vec<Option<String>>],
-        columns: &[SharedString],
-        metadata: &TableMetadata,
-    ) -> String {
+    pub fn format(format: CopyFormat, context: CopyFormatContext<'_>) -> String {
         match format {
-            CopyFormat::Tsv => Self::format_tsv(data),
-            CopyFormat::Csv => Self::format_csv(data),
-            CopyFormat::Json => Self::format_json(data, columns),
-            CopyFormat::Markdown => Self::format_markdown(data, columns),
-            CopyFormat::SqlInsert => Self::format_sql_insert(data, columns, metadata),
-            CopyFormat::SqlUpdate => Self::format_sql_update(data, columns, metadata),
-            CopyFormat::SqlDelete => Self::format_sql_delete(data, columns, metadata),
-            CopyFormat::SqlIn => Self::format_sql_in(data, columns),
+            CopyFormat::Tsv => Self::format_tsv(context.data),
+            CopyFormat::Csv => Self::format_csv(context.data),
+            CopyFormat::Json => Self::format_json(context.data, context.columns),
+            CopyFormat::Markdown => Self::format_markdown(context.data, context.columns),
+            _ => copy_sql_format::format(format, context),
         }
     }
 
-    /// TSV 格式（Tab 分隔）
     fn format_tsv(data: &[Vec<Option<String>>]) -> String {
         data.iter()
             .map(|row| {
@@ -88,7 +185,6 @@ impl CopyFormatter {
             .join("\n")
     }
 
-    /// CSV 格式
     fn format_csv(data: &[Vec<Option<String>>]) -> String {
         data.iter()
             .map(|row| {
@@ -104,387 +200,74 @@ impl CopyFormatter {
             .join("\n")
     }
 
-    /// JSON 格式
     fn format_json(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
-        let rows: Vec<String> = data
+        let rows = data
             .iter()
             .map(|row| {
-                let fields: Vec<String> = row
+                let fields = row
                     .iter()
                     .enumerate()
-                    .map(|(i, value)| {
-                        let col_name = columns.get(i).map(|s| s.as_ref()).unwrap_or("_");
-                        format!("    \"{}\": {}", col_name, Self::to_json_value(value))
+                    .map(|(index, value)| {
+                        let name = columns.get(index).map_or("_", SharedString::as_ref);
+                        format!("    \"{}\": {}", name, Self::to_json_value(value))
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
                 format!("  {{\n{}\n  }}", fields.join(",\n"))
             })
-            .collect();
+            .collect::<Vec<_>>();
         format!("[\n{}\n]", rows.join(",\n"))
     }
 
-    /// Markdown 表格格式
     fn format_markdown(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
-        if data.is_empty() {
+        let Some(first_row) = data.first() else {
             return String::new();
-        }
-
-        let col_count = data.first().map(|r| r.len()).unwrap_or(0);
-
-        // 表头
-        let header: Vec<&str> = (0..col_count)
-            .map(|i| columns.get(i).map(|s| s.as_ref()).unwrap_or("-"))
-            .collect();
-
-        let mut result = format!("| {} |", header.join(" | "));
-        result.push('\n');
-
-        // 分隔线
-        let separator: Vec<&str> = (0..col_count).map(|_| "---").collect();
-        result.push_str(&format!("| {} |", separator.join(" | ")));
-        result.push('\n');
-
-        // 数据行
-        for row in data {
-            let escaped: Vec<String> = row
+        };
+        let header = (0..first_row.len())
+            .map(|index| columns.get(index).map_or("-", SharedString::as_ref))
+            .collect::<Vec<_>>();
+        let separator = vec!["---"; first_row.len()];
+        let mut lines = vec![
+            format!("| {} |", header.join(" | ")),
+            format!("| {} |", separator.join(" | ")),
+        ];
+        lines.extend(data.iter().map(|row| {
+            let values = row
                 .iter()
                 .map(|cell| cell.as_deref().unwrap_or("\\N").replace('|', "\\|"))
-                .collect();
-            result.push_str(&format!("| {} |", escaped.join(" | ")));
-            result.push('\n');
-        }
-
-        result.trim_end().to_string()
+                .collect::<Vec<_>>();
+            format!("| {} |", values.join(" | "))
+        }));
+        lines.join("\n")
     }
 
-    /// SQL INSERT 语句
-    fn format_sql_insert(
-        data: &[Vec<Option<String>>],
-        columns: &[SharedString],
-        metadata: &TableMetadata,
-    ) -> String {
-        if data.is_empty() {
-            return String::new();
-        }
-
-        let table_name = if metadata.table_name.is_empty() {
-            "table_name"
-        } else {
-            metadata.table_name.as_ref()
-        };
-
-        let col_count = data.first().map(|r| r.len()).unwrap_or(0);
-        let col_names: Vec<&str> = (0..col_count)
-            .map(|i| columns.get(i).map(|s| s.as_ref()).unwrap_or("col"))
-            .collect();
-
-        let values: Vec<String> = data
-            .iter()
-            .map(|row| {
-                let vals: Vec<String> = row.iter().map(|v| Self::to_sql_value(v)).collect();
-                format!("({})", vals.join(", "))
-            })
-            .collect();
-
-        format!(
-            "INSERT INTO {} ({}) VALUES\n{};",
-            table_name,
-            col_names.join(", "),
-            values.join(",\n")
-        )
-    }
-
-    /// SQL UPDATE 语句
-    fn format_sql_update(
-        data: &[Vec<Option<String>>],
-        columns: &[SharedString],
-        metadata: &TableMetadata,
-    ) -> String {
-        if data.is_empty() {
-            return String::new();
-        }
-
-        let table_name = if metadata.table_name.is_empty() {
-            "table_name"
-        } else {
-            metadata.table_name.as_ref()
-        };
-
-        let pk_indices = if metadata.primary_key_indices.is_empty() {
-            vec![0] // 默认第一列为主键
-        } else {
-            metadata.primary_key_indices.clone()
-        };
-
-        let statements: Vec<String> = data
-            .iter()
-            .map(|row| {
-                // SET 子句（非主键列）
-                let set_parts: Vec<String> = row
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| !pk_indices.contains(i))
-                    .map(|(i, v)| {
-                        let col_name = columns.get(i).map(|s| s.as_ref()).unwrap_or("col");
-                        format!("{} = {}", col_name, Self::to_sql_value(v))
-                    })
-                    .collect();
-
-                // WHERE 子句（主键列）
-                let where_parts: Vec<String> = pk_indices
-                    .iter()
-                    .filter_map(|&i| {
-                        let col_name = columns.get(i).map(|s| s.as_ref())?;
-                        let value = row.get(i)?;
-                        Some(match value {
-                            None => format!("{} IS NULL", col_name),
-                            Some(_) => {
-                                format!("{} = {}", col_name, Self::to_sql_value(value))
-                            }
-                        })
-                    })
-                    .collect();
-
-                if set_parts.is_empty() || where_parts.is_empty() {
-                    return String::new();
-                }
-
-                format!(
-                    "UPDATE {} SET {} WHERE {};",
-                    table_name,
-                    set_parts.join(", "),
-                    where_parts.join(" AND ")
-                )
-            })
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        statements.join("\n")
-    }
-
-    /// SQL DELETE 语句
-    fn format_sql_delete(
-        data: &[Vec<Option<String>>],
-        columns: &[SharedString],
-        metadata: &TableMetadata,
-    ) -> String {
-        if data.is_empty() {
-            return String::new();
-        }
-
-        let table_name = if metadata.table_name.is_empty() {
-            "table_name"
-        } else {
-            metadata.table_name.as_ref()
-        };
-
-        let pk_indices = if metadata.primary_key_indices.is_empty() {
-            vec![0] // 默认第一列为主键
-        } else {
-            metadata.primary_key_indices.clone()
-        };
-
-        let statements: Vec<String> = data
-            .iter()
-            .map(|row| {
-                let where_parts: Vec<String> = pk_indices
-                    .iter()
-                    .filter_map(|&i| {
-                        let col_name = columns.get(i).map(|s| s.as_ref())?;
-                        let value = row.get(i)?;
-                        Some(match value {
-                            None => format!("{} IS NULL", col_name),
-                            Some(_) => {
-                                format!("{} = {}", col_name, Self::to_sql_value(value))
-                            }
-                        })
-                    })
-                    .collect();
-
-                if where_parts.is_empty() {
-                    return String::new();
-                }
-
-                format!(
-                    "DELETE FROM {} WHERE {};",
-                    table_name,
-                    where_parts.join(" AND ")
-                )
-            })
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        statements.join("\n")
-    }
-
-    /// SQL IN 子句（适用于单列）
-    fn format_sql_in(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
-        if data.is_empty() {
-            return String::new();
-        }
-
-        // 如果是单列，生成 IN 子句
-        if data.first().map(|r| r.len()).unwrap_or(0) == 1 {
-            let col_name = columns.first().map(|s| s.as_ref()).unwrap_or("column");
-            let values: Vec<String> = data
-                .iter()
-                .filter_map(|row| row.first())
-                .filter(|value| value.is_some())
-                .map(|v| Self::to_sql_value(v))
-                .collect();
-            let has_null = data
-                .iter()
-                .filter_map(|row| row.first())
-                .any(Option::is_none);
-            return match (values.is_empty(), has_null) {
-                (false, true) => format!(
-                    "({} IN ({}) OR {} IS NULL)",
-                    col_name,
-                    values.join(", "),
-                    col_name
-                ),
-                (false, false) => format!("{} IN ({})", col_name, values.join(", ")),
-                (true, true) => format!("{} IS NULL", col_name),
-                (true, false) => String::new(),
-            };
-        }
-
-        // 多列时生成 OR 条件
-        let conditions: Vec<String> = data
-            .iter()
-            .map(|row| {
-                let parts: Vec<String> = row
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        let col_name = columns.get(i).map(|s| s.as_ref()).unwrap_or("col");
-                        match v {
-                            None => format!("{} IS NULL", col_name),
-                            Some(_) => format!("{} = {}", col_name, Self::to_sql_value(v)),
-                        }
-                    })
-                    .collect();
-                format!("({})", parts.join(" AND "))
-            })
-            .collect();
-
-        conditions.join(" OR\n")
-    }
-
-    // === 辅助方法 ===
-
-    /// 转义 CSV 字段
     fn escape_csv_field(field: &str) -> String {
-        // 空字符串和与 NULL marker 相同的文本必须强制加引号，才能与 SQL NULL 区分。
-        if field.is_empty()
-            || field == "\\N"
-            || field.contains(',')
-            || field.contains('"')
-            || field.contains('\n')
-            || field.contains('\r')
-        {
+        if field.is_empty() || field == "\\N" || field.contains([',', '"', '\n', '\r']) {
             format!("\"{}\"", field.replace('"', "\"\""))
         } else {
             field.to_string()
         }
     }
 
-    /// 转换为 JSON 值
     fn to_json_value(value: &Option<String>) -> String {
         let Some(value) = value else {
             return "null".to_string();
         };
-        // 尝试解析为数字
         if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
             return value.to_string();
         }
-        // 布尔值
-        if value == "true" || value == "false" {
+        if matches!(value.as_str(), "true" | "false") {
             return value.to_string();
         }
-        // 字符串（转义）
         let escaped = value
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
             .replace('\n', "\\n")
             .replace('\r', "\\r")
             .replace('\t', "\\t");
-        format!("\"{}\"", escaped)
-    }
-
-    /// 转换为 SQL 值
-    fn to_sql_value(value: &Option<String>) -> String {
-        let Some(value) = value else {
-            return "NULL".to_string();
-        };
-        // 数字
-        if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
-            return value.to_string();
-        }
-        // 字符串（转义单引号）
-        format!("'{}'", value.replace('\'', "''"))
+        format!("\"{escaped}\"")
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_csv() {
-        let data = vec![
-            vec![Some("a".to_string()), Some("b,c".to_string())],
-            vec![Some("d".to_string()), Some("e\"f".to_string())],
-        ];
-        let result = CopyFormatter::format_csv(&data);
-        assert_eq!(result, "a,\"b,c\"\nd,\"e\"\"f\"");
-    }
-
-    #[test]
-    fn test_format_sql_insert() {
-        let data = vec![
-            vec![Some("1".to_string()), Some("Alice".to_string())],
-            vec![Some("2".to_string()), Some("Bob".to_string())],
-        ];
-        let columns = vec!["id".into(), "name".into()];
-        let metadata = TableMetadata::new("users");
-        let result = CopyFormatter::format_sql_insert(&data, &columns, &metadata);
-        assert!(result.contains("INSERT INTO users"));
-        assert!(result.contains("(1, 'Alice')"));
-    }
-
-    #[test]
-    fn test_to_sql_value() {
-        assert_eq!(CopyFormatter::to_sql_value(&Some("123".into())), "123");
-        assert_eq!(
-            CopyFormatter::to_sql_value(&Some("hello".into())),
-            "'hello'"
-        );
-        assert_eq!(CopyFormatter::to_sql_value(&Some("it's".into())), "'it''s'");
-        assert_eq!(CopyFormatter::to_sql_value(&Some(String::new())), "''");
-        assert_eq!(CopyFormatter::to_sql_value(&Some("NULL".into())), "'NULL'");
-        assert_eq!(CopyFormatter::to_sql_value(&None), "NULL");
-    }
-
-    #[test]
-    fn structured_formats_preserve_null_empty_and_literal_null_text() {
-        let data = vec![vec![None, Some(String::new()), Some("NULL".into())]];
-        let columns = vec!["nullable".into(), "empty".into(), "literal".into()];
-        let metadata = TableMetadata::new("values_table");
-
-        assert_eq!(CopyFormatter::format_csv(&data), "\\N,\"\",NULL");
-        assert_eq!(
-            CopyFormatter::format_csv(&[vec![Some("\\N".into())]]),
-            "\"\\N\""
-        );
-        assert_eq!(CopyFormatter::format_tsv(&data), "\\N\t\tNULL");
-        assert_eq!(
-            CopyFormatter::format_json(&data, &columns),
-            "[\n  {\n    \"nullable\": null,\n    \"empty\": \"\",\n    \"literal\": \"NULL\"\n  }\n]"
-        );
-        assert!(
-            CopyFormatter::format_sql_insert(&data, &columns, &metadata)
-                .contains("(NULL, '', 'NULL')")
-        );
-    }
-}
+#[path = "copy_format_tests.rs"]
+mod tests;

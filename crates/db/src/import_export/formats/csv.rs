@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use super::import_execution::{ImportStatement, execute_import_statements};
-use super::{format_import_table_reference, format_import_text_value, load_mysql_import_columns};
+use super::{format_import_table_reference, format_import_text_value, load_import_columns};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
 use crate::executor::SqlResult;
@@ -121,17 +121,6 @@ impl CsvFormatHandler {
             Ok(field.to_string())
         }
     }
-
-    pub(crate) fn append_sql_value(insert_sql: &mut String, value: &Option<String>) {
-        match value {
-            None => insert_sql.push_str("NULL"),
-            Some(v) => {
-                insert_sql.push('\'');
-                insert_sql.push_str(&v.replace('\'', "''"));
-                insert_sql.push('\'');
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -193,7 +182,7 @@ impl FormatHandler for CsvFormatHandler {
         if columns.iter().any(|column| column.trim().is_empty()) {
             return Err(anyhow!("CSV header contains empty column names"));
         }
-        let table_columns = load_mysql_import_columns(plugin, connection, config, table).await?;
+        let table_columns = load_import_columns(plugin, connection, config, table).await?;
 
         let mut statements = Vec::new();
         if config.truncate_before_import {
@@ -412,25 +401,6 @@ impl FormatHandler for CsvFormatHandler {
 #[cfg(test)]
 mod tests {
     use super::CsvFormatHandler;
-
-    #[test]
-    fn test_append_sql_value_formats_option_string_correctly() {
-        let mut sql = String::new();
-        CsvFormatHandler::append_sql_value(&mut sql, &None);
-        assert_eq!(sql, "NULL");
-
-        sql.clear();
-        CsvFormatHandler::append_sql_value(&mut sql, &Some(String::new()));
-        assert_eq!(sql, "''");
-
-        sql.clear();
-        CsvFormatHandler::append_sql_value(&mut sql, &Some("null".to_string()));
-        assert_eq!(sql, "'null'");
-
-        sql.clear();
-        CsvFormatHandler::append_sql_value(&mut sql, &Some("O'Reilly".to_string()));
-        assert_eq!(sql, "'O''Reilly'");
-    }
 
     #[test]
     fn test_parse_csv_data_supports_multiline_quoted_field() {

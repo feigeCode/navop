@@ -143,6 +143,14 @@ impl OraclePlugin {
             return "NULL".to_string();
         }
 
+        if let Some(expr) = crate::sql_literal::format_special_table_value_for_database(
+            &DatabaseType::Oracle,
+            value,
+            column,
+        ) {
+            return expr;
+        }
+
         if let Some(expr) = oracle_temporal_value_expr(value, column) {
             return expr;
         }
@@ -3249,7 +3257,7 @@ mod tests {
         let sql = plugin.generate_table_changes_sql(&request);
 
         assert_eq!(
-            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"STARTED_AT\") VALUES ('1', TO_DATE('2026-06-21 14:05:06', 'YYYY-MM-DD HH24:MI:SS'));",
+            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"STARTED_AT\") VALUES (1, TO_DATE('2026-06-21 14:05:06', 'YYYY-MM-DD HH24:MI:SS'));",
             sql
         );
     }
@@ -3306,8 +3314,33 @@ mod tests {
         let sql = plugin.generate_table_changes_sql(&request);
 
         assert_eq!(
-            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"UPDATED_AT\") VALUES ('1', TO_TIMESTAMP_TZ('2026-06-21 14:05:06 +08:00', 'YYYY-MM-DD HH24:MI:SS TZH:TZM'));",
+            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"UPDATED_AT\") VALUES (1, TO_TIMESTAMP_TZ('2026-06-21 14:05:06 +08:00', 'YYYY-MM-DD HH24:MI:SS TZH:TZM'));",
             sql
+        );
+    }
+
+    #[test]
+    fn table_change_sql_formats_oracle_scalar_and_binary_literals() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "TYPED_VALUES".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("ENABLED", "BOOLEAN", false),
+                column_info("PAYLOAD", "RAW(16)", false),
+                column_info("LABEL", "VARCHAR2(20)", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Added {
+                data: vec!["12.50".into(), "true".into(), "3q2+7w==".into(), "1".into()],
+            }],
+        };
+
+        assert_eq!(
+            "INSERT INTO \"APP\".\"TYPED_VALUES\" (\"ID\", \"ENABLED\", \"PAYLOAD\", \"LABEL\") VALUES (12.50, TRUE, HEXTORAW('deadbeef'), '1');",
+            plugin.generate_table_changes_sql(&request)
         );
     }
 

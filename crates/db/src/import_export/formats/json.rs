@@ -4,8 +4,6 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::import_execution::{ImportStatement, execute_import_statements};
-use super::{format_import_table_reference, format_import_text_value, load_mysql_import_columns};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
 use crate::executor::SqlResult;
@@ -25,111 +23,13 @@ impl FormatHandler for JsonFormatHandler {
         config: &ImportConfig,
         data: &str,
     ) -> Result<ImportResult> {
-        let start = Instant::now();
-        let mut errors = Vec::new();
-
-        let table = config
-            .table
-            .as_ref()
-            .ok_or_else(|| anyhow!("Table name required for JSON import"))?;
-        let table_ref = format_import_table_reference(plugin, config, table);
-
-        // 解析JSON
-        let json_value: Value = serde_json::from_str(data)?;
-        let rows = match json_value {
-            Value::Array(arr) => arr,
-            Value::Object(_) => vec![json_value],
-            _ => return Err(anyhow!("JSON must be array or object")),
-        };
-
-        if rows.is_empty() {
-            return Ok(ImportResult {
-                success: true,
-                rows_imported: 0,
-                errors,
-                elapsed_ms: start.elapsed().as_millis(),
-            });
-        }
-
-        let mut statements = Vec::new();
-        if config.truncate_before_import {
-            statements.push(ImportStatement::truncate(format!(
-                "TRUNCATE TABLE {table_ref}"
-            )));
-        }
-
-        // 获取第一行的字段
-        let first_obj = rows[0]
-            .as_object()
-            .ok_or_else(|| anyhow!("JSON array must contain objects"))?;
-        let columns: Vec<String> = first_obj.keys().cloned().collect();
-        let table_columns = load_mysql_import_columns(plugin, connection, config, table).await?;
-
-        // 批量插入
-        for row_obj in rows {
-            let obj = match row_obj.as_object() {
-                Some(o) => o,
-                None => {
-                    errors.push("Row is not an object".to_string());
-                    if config.stop_on_error {
-                        break;
-                    }
-                    continue;
-                }
-            };
-
-            let mut insert_sql = format!("INSERT INTO {} (", table_ref);
-            for (i, col) in columns.iter().enumerate() {
-                if i > 0 {
-                    insert_sql.push_str(", ");
-                }
-                insert_sql.push_str(&plugin.quote_identifier(col));
-            }
-            insert_sql.push_str(") VALUES (");
-
-            for (i, col) in columns.iter().enumerate() {
-                if i > 0 {
-                    insert_sql.push_str(", ");
-                }
-                match obj.get(col) {
-                    Some(Value::Null) | None => insert_sql.push_str("NULL"),
-                    Some(Value::String(s)) => {
-                        insert_sql.push_str(&format_import_text_value(
-                            plugin,
-                            &Some(s.clone()),
-                            col,
-                            &table_columns,
-                        ));
-                    }
-                    Some(Value::Number(n)) => insert_sql.push_str(&n.to_string()),
-                    Some(Value::Bool(b)) => insert_sql.push_str(if *b { "1" } else { "0" }),
-                    Some(v) => {
-                        insert_sql.push_str(&plugin.escape_sql_value(&v.to_string()));
-                    }
-                }
-            }
-            insert_sql.push(')');
-            statements.push(ImportStatement::row(insert_sql, "Insert failed"));
-        }
-
-        if config.use_transaction && !errors.is_empty() {
-            return Ok(ImportResult {
-                success: false,
-                rows_imported: 0,
-                errors,
-                elapsed_ms: start.elapsed().as_millis(),
-            });
-        }
-        let (total_rows, execution_errors) =
-            execute_import_statements(plugin, connection, config, statements).await;
-        errors.extend(execution_errors);
-
-        Ok(ImportResult {
-            success: errors.is_empty(),
-            rows_imported: total_rows,
-            errors,
-            elapsed_ms: start.elapsed().as_millis(),
+        super::json_import::import_json(super::json_import::JsonImportRequest {
+            plugin,
+            connection,
+            config,
+            data,
         })
+        .await
     }
 
     async fn export(

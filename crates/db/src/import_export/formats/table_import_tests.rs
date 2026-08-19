@@ -233,8 +233,8 @@ async fn csv_import_executes_truncate_and_rows_as_one_transactional_script() {
         &connection,
         "users",
         &[
-            "INSERT INTO `app`.`users` (`id`, `name`) VALUES ('1', 'Alice')",
-            "INSERT INTO `app`.`users` (`id`, `name`) VALUES ('2', 'Bob')",
+            "INSERT INTO `app`.`users` (`id`, `name`) VALUES (1, 'Alice')",
+            "INSERT INTO `app`.`users` (`id`, `name`) VALUES (2, 'Bob')",
         ],
     );
 }
@@ -281,8 +281,8 @@ async fn txt_import_executes_truncate_and_rows_as_one_transactional_script() {
         &connection,
         "users",
         &[
-            "INSERT INTO `app`.`users` (`id`, `name`) VALUES ('1', 'Alice')",
-            "INSERT INTO `app`.`users` (`id`, `name`) VALUES ('2', 'Bob')",
+            "INSERT INTO `app`.`users` (`id`, `name`) VALUES (1, 'Alice')",
+            "INSERT INTO `app`.`users` (`id`, `name`) VALUES (2, 'Bob')",
         ],
     );
 }
@@ -325,8 +325,8 @@ async fn csv_import_formats_mysql_bit_values_as_unquoted_literals() {
         &connection,
         "test_bit",
         &[
-            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES ('1', 1, 5, '1')",
-            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES ('2', 0, 0x0F, '0x0F')",
+            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES (1, 1, 5, '1')",
+            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES (2, 0, 0x0F, '0x0F')",
         ],
     );
 }
@@ -349,8 +349,8 @@ async fn txt_import_formats_mysql_bit_values_as_unquoted_literals() {
         &connection,
         "test_bit",
         &[
-            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES ('1', 1, 5, '1')",
-            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES ('2', 0, 0x0F, '0x0F')",
+            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES (1, 1, 5, '1')",
+            "INSERT INTO `app`.`test_bit` (`id`, `bit_name`, `bit_mask`, `text_value`) VALUES (2, 0, 0x0F, '0x0F')",
         ],
     );
 }

@@ -1,17 +1,18 @@
 use crate::DatabasePlugin;
-use crate::connection::DbConnection;
+use crate::connection::{DbConnection, DbError};
 use crate::import_export::ImportConfig;
-use crate::types::ColumnInfo;
-use one_core::storage::DatabaseType;
+use crate::types::{ColumnInfo, TableCellValue};
 
 pub mod csv;
 mod import_execution;
 pub mod json;
+mod json_import;
 pub mod sql;
-mod sql_export;
+pub(crate) mod sql_export;
 pub mod txt;
 pub mod xml;
 mod xml_codec;
+mod xml_import;
 
 pub use csv::CsvFormatHandler;
 pub use json::JsonFormatHandler;
@@ -27,19 +28,20 @@ pub(super) fn format_import_table_reference(
     plugin.format_table_reference(&config.database, config.schema.as_deref(), table)
 }
 
-pub(super) async fn load_mysql_import_columns(
+pub(super) async fn load_import_columns(
     plugin: &dyn DatabasePlugin,
     connection: &dyn DbConnection,
     config: &ImportConfig,
     table: &str,
 ) -> anyhow::Result<Vec<ColumnInfo>> {
-    if plugin.name() != DatabaseType::MySQL {
-        return Ok(Vec::new());
-    }
-
-    plugin
+    match plugin
         .list_columns(connection, &config.database, config.schema.clone(), table)
         .await
+    {
+        Ok(columns) => Ok(columns),
+        Err(error) if is_not_supported(&error) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn format_import_text_value(
@@ -48,10 +50,7 @@ pub(super) fn format_import_text_value(
     column_name: &str,
     table_columns: &[ColumnInfo],
 ) -> String {
-    let Some(value) = value else {
-        return "NULL".to_string();
-    };
-    let column_info = table_columns
+    let column = table_columns
         .iter()
         .find(|column| column.name == column_name)
         .or_else(|| {
@@ -59,41 +58,19 @@ pub(super) fn format_import_text_value(
                 .iter()
                 .find(|column| column.name.eq_ignore_ascii_case(column_name))
         });
-    if column_info.is_some_and(|column| is_mysql_bit_type(&column.data_type)) {
-        if let Some(literal) = format_mysql_bit_literal(value) {
-            return literal;
-        }
-    }
-
-    plugin.escape_sql_value(value)
+    let value = value.as_ref().map_or(TableCellValue::Null, |value| {
+        TableCellValue::Text(value.clone())
+    });
+    plugin.format_table_change_value(&value, column)
 }
 
-fn is_mysql_bit_type(data_type: &str) -> bool {
-    let data_type = data_type.trim().to_ascii_uppercase();
-    data_type == "BIT" || data_type.starts_with("BIT(") || data_type.starts_with("BIT ")
-}
-
-fn format_mysql_bit_literal(value: &str) -> Option<String> {
-    let value = value.trim();
-
-    if value.eq_ignore_ascii_case("true") {
-        return Some("1".to_string());
-    }
-    if value.eq_ignore_ascii_case("false") {
-        return Some("0".to_string());
-    }
-    if value.parse::<u64>().is_ok() {
-        return Some(value.to_string());
-    }
-
-    let hex = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))?;
-    if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-
-    Some(format!("0x{hex}"))
+fn is_not_supported(error: &anyhow::Error) -> bool {
+    error.to_string().contains("operation not supported:")
+        || error.chain().any(|cause| {
+            cause
+                .downcast_ref::<DbError>()
+                .is_some_and(|error| matches!(error, DbError::NotSupported(_)))
+        })
 }
 
 #[cfg(test)]

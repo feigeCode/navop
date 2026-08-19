@@ -1578,6 +1578,26 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         }
     }
 
+    fn format_table_change_value(
+        &self,
+        value: &TableCellValue,
+        column: Option<&ColumnInfo>,
+    ) -> String {
+        let Some(database_type) = self.driver.dialect.compatible_database_type.as_ref() else {
+            return crate::sql_literal::format_table_value_for_database(
+                &self.name(),
+                value,
+                column,
+            );
+        };
+
+        if let Some(plugin) = compatible_plugin_for(database_type.clone()) {
+            plugin.format_table_change_value(value, column)
+        } else {
+            crate::sql_literal::format_table_value_for_database(database_type, value, column)
+        }
+    }
+
     fn format_binary_literal(&self, bytes: &[u8]) -> String {
         self.driver
             .dialect
@@ -2564,6 +2584,41 @@ mod tests {
     }
 
     #[test]
+    fn compatible_external_driver_formats_table_change_literals() {
+        let mut postgres = driver_manifest("postgres-compatible", true, "postgres.connection");
+        postgres.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let postgres = ExternalDatabasePlugin::for_driver(postgres);
+        assert_eq!(
+            "TRUE",
+            postgres.format_table_change_value(
+                &TableCellValue::Text("1".to_string()),
+                Some(&column_info("enabled", "boolean", false)),
+            )
+        );
+
+        let mut duckdb = driver_manifest("duckdb-compatible", false, "duckdb.connection");
+        duckdb.dialect.compatible_database_type = Some(DatabaseType::DuckDB);
+        let duckdb = ExternalDatabasePlugin::for_driver(duckdb);
+        assert_eq!(
+            "from_hex('deadbeef')",
+            duckdb.format_table_change_value(
+                &TableCellValue::Text("3q2+7w==".to_string()),
+                Some(&column_info("payload", "blob", false)),
+            )
+        );
+
+        let unknown =
+            ExternalDatabasePlugin::for_driver(driver_manifest("unknown", false, "unknown"));
+        assert_eq!(
+            "'1'' OR 1=1'",
+            unknown.format_table_change_value(
+                &TableCellValue::Text("1' OR 1=1".to_string()),
+                Some(&column_info("payload", "blob", false)),
+            )
+        );
+    }
+
+    #[test]
     fn fixed_driver_plugin_uses_manifest_connection_lifecycle() {
         let mut driver = driver_manifest("singlefile", false, "singlefile.connection");
         driver.connection.single_file = true;
@@ -2708,7 +2763,7 @@ mod tests {
         let sql = plugin.generate_table_changes_sql(&request);
 
         assert_eq!(
-            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"STARTED_AT\") VALUES ('1', TO_DATE('2026-06-21 14:05:06', 'YYYY-MM-DD HH24:MI:SS'));",
+            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"STARTED_AT\") VALUES (1, TO_DATE('2026-06-21 14:05:06', 'YYYY-MM-DD HH24:MI:SS'));",
             sql
         );
     }

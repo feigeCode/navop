@@ -5,8 +5,7 @@ use async_trait::async_trait;
 
 use super::import_execution::{ImportStatement, execute_import_statements};
 use super::{
-    CsvFormatHandler, format_import_table_reference, format_import_text_value,
-    load_mysql_import_columns,
+    CsvFormatHandler, format_import_table_reference, format_import_text_value, load_import_columns,
 };
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
@@ -115,7 +114,7 @@ impl FormatHandler for TxtFormatHandler {
         if columns.iter().any(|column| column.trim().is_empty()) {
             return Err(anyhow!("TXT header contains empty column names"));
         }
-        let table_columns = load_mysql_import_columns(plugin, connection, config, table).await?;
+        let table_columns = load_import_columns(plugin, connection, config, table).await?;
 
         let mut statements = Vec::new();
         if config.truncate_before_import {

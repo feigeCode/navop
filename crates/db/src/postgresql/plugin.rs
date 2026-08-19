@@ -4471,7 +4471,7 @@ mod tests {
 
         let sql = plugin.generate_table_changes_sql(&request);
 
-        assert_eq!("DELETE FROM \"public\".\"users\" WHERE \"id\" = '42';", sql);
+        assert_eq!("DELETE FROM \"public\".\"users\" WHERE \"id\" = 42;", sql);
     }
 
     #[test]
@@ -4519,7 +4519,7 @@ mod tests {
         let sql = plugin.generate_table_changes_sql(&request);
 
         assert_eq!(
-            "UPDATE \"public\".\"users\" SET \"score\" = NULL WHERE \"id\" = '42';",
+            "UPDATE \"public\".\"users\" SET \"score\" = NULL WHERE \"id\" = 42;",
             sql
         );
     }
@@ -4637,7 +4637,7 @@ mod tests {
         let sql = plugin.generate_table_changes_sql(&request);
 
         assert_eq!(
-            "UPDATE \"public\".\"messages\" SET \"body\" = '', \"note\" = 'NULL' WHERE \"id\" = '42';",
+            "UPDATE \"public\".\"messages\" SET \"body\" = '', \"note\" = 'NULL' WHERE \"id\" = 42;",
             sql
         );
     }
@@ -4746,6 +4746,72 @@ mod tests {
         assert_eq!(
             "DELETE FROM \"public\".\"messages\" WHERE \"nullable_value\" IS NULL AND \"empty_value\" = '' AND \"literal_null\" = 'NULL';",
             sql
+        );
+    }
+
+    #[test]
+    fn test_generate_table_changes_sql_formats_postgres_typed_literals() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "typed_values".to_string(),
+            columns: vec![
+                ColumnInfo {
+                    name: "flag".to_string(),
+                    data_type: "BOOLEAN".to_string(),
+                    is_nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "bits".to_string(),
+                    data_type: "BIT(4)".to_string(),
+                    is_nullable: false,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "payload".to_string(),
+                    data_type: "BYTEA".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["true".into(), "0011".into(), "AQI=".into()],
+                changes: vec![
+                    TableCellChange {
+                        column_index: 1,
+                        column_name: "bits".to_string(),
+                        old_value: "0011".into(),
+                        new_value: "1010".into(),
+                    },
+                    TableCellChange {
+                        column_index: 2,
+                        column_name: "payload".to_string(),
+                        old_value: "AQI=".into(),
+                        new_value: "3q2+7w==".into(),
+                    },
+                ],
+                rowid: None,
+            }],
+        };
+
+        assert_eq!(
+            "UPDATE \"public\".\"typed_values\" SET \"bits\" = B'1010', \"payload\" = decode('deadbeef', 'hex') WHERE \"flag\" = TRUE;",
+            plugin.generate_table_changes_sql(&request)
         );
     }
 

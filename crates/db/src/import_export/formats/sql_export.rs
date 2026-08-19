@@ -120,66 +120,105 @@ fn sql_dump_page(
         output.push('\n');
         *wrote_header = true;
     }
+    output.push_str(&render_insert_statements(plugin, table_ident, query_result));
+    output
+}
+
+pub(crate) fn render_insert_statements<P>(
+    plugin: &P,
+    table_ident: &str,
+    query_result: &QueryResult,
+) -> String
+where
+    P: DatabasePlugin + ?Sized,
+{
     let binary_cells = query_result
         .binary_cells
         .iter()
         .map(|cell| ((cell.row_index, cell.column_index), cell.bytes.as_slice()))
         .collect::<HashMap<_, _>>();
-    for (row_index, row) in query_result.rows.iter().enumerate() {
-        push_insert_statement(
-            plugin,
-            &mut output,
-            table_ident,
-            &query_result.columns,
-            row_index,
-            row,
-            &binary_cells,
-        );
+    let context = InsertRenderContext {
+        plugin,
+        table_ident,
+        columns: &query_result.columns,
+        column_meta: &query_result.column_meta,
+        binary_cells: &binary_cells,
+    };
+    let mut output = String::new();
+    for (index, values) in query_result.rows.iter().enumerate() {
+        push_insert_statement(&mut output, &context, RowRenderContext { index, values });
     }
     output
 }
 
-fn push_insert_statement(
-    plugin: &dyn DatabasePlugin,
+struct InsertRenderContext<'a, P: DatabasePlugin + ?Sized> {
+    plugin: &'a P,
+    table_ident: &'a str,
+    columns: &'a [String],
+    column_meta: &'a [crate::executor::QueryColumnMeta],
+    binary_cells: &'a HashMap<(usize, usize), &'a [u8]>,
+}
+
+struct RowRenderContext<'a> {
+    index: usize,
+    values: &'a [Option<String>],
+}
+
+fn push_insert_statement<P>(
     output: &mut String,
-    table_ident: &str,
-    columns: &[String],
-    row_index: usize,
-    row: &[Option<String>],
-    binary_cells: &HashMap<(usize, usize), &[u8]>,
-) {
+    context: &InsertRenderContext<'_, P>,
+    row: RowRenderContext<'_>,
+) where
+    P: DatabasePlugin + ?Sized,
+{
     output.push_str("INSERT INTO ");
-    output.push_str(table_ident);
+    output.push_str(context.table_ident);
     output.push_str(" (");
     output.push_str(
-        &columns
+        &context
+            .columns
             .iter()
-            .map(|column| plugin.quote_identifier(column))
+            .map(|column| context.plugin.quote_identifier(column))
             .collect::<Vec<_>>()
             .join(", "),
     );
     output.push_str(") VALUES (");
-    for (index, value) in row.iter().enumerate() {
+    for (index, value) in row.values.iter().enumerate() {
         if index > 0 {
             output.push_str(", ");
         }
-        if let Some(bytes) = binary_cells.get(&(row_index, index)) {
-            output.push_str(&plugin.format_binary_literal(bytes));
-        } else {
-            push_sql_value(output, value.as_deref());
-        }
+        output.push_str(&format_export_value(
+            context,
+            row.index,
+            index,
+            value.as_deref(),
+        ));
     }
     output.push_str(");\n");
 }
 
-fn push_sql_value(output: &mut String, value: Option<&str>) {
+fn format_export_value<P>(
+    context: &InsertRenderContext<'_, P>,
+    row_index: usize,
+    column_index: usize,
+    value: Option<&str>,
+) -> String
+where
+    P: DatabasePlugin + ?Sized,
+{
     match value {
-        Some(value) => {
-            output.push('\'');
-            output.push_str(&value.replace('\'', "''"));
-            output.push('\'');
-        }
-        None => output.push_str("NULL"),
+        None => "NULL".to_string(),
+        Some(_) => context
+            .binary_cells
+            .get(&(row_index, column_index))
+            .map(|bytes| context.plugin.format_binary_literal(bytes))
+            .unwrap_or_else(|| {
+                crate::sql_literal::format_query_text_value(
+                    context.plugin,
+                    value,
+                    context.column_meta.get(column_index),
+                )
+            }),
     }
 }
 

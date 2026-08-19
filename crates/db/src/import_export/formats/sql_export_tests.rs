@@ -253,6 +253,34 @@ fn sql_dump_prefers_binary_sidecar_without_guessing_from_display_text() {
 }
 
 #[test]
+fn mysql_sql_dump_formats_bit_values_as_unquoted_literals() {
+    let query_result = QueryResult {
+        sql: "SELECT id, bit_name FROM test_bit".to_string(),
+        columns: vec!["id".to_string(), "bit_name".to_string()],
+        column_meta: vec![
+            QueryColumnMeta::new("id", "INT"),
+            QueryColumnMeta::new("bit_name", "BIT(1)"),
+        ],
+        rows: vec![
+            vec![Some("1".to_string()), Some("1".to_string())],
+            vec![Some("2".to_string()), Some("0".to_string())],
+        ],
+        binary_cells: vec![],
+        elapsed_ms: 1,
+    };
+
+    let output = render_insert_statements(&MySqlPlugin::new(), "`test_bit`", &query_result);
+
+    assert_eq!(
+        concat!(
+            "INSERT INTO `test_bit` (`id`, `bit_name`) VALUES (1, 1);\n",
+            "INSERT INTO `test_bit` (`id`, `bit_name`) VALUES (2, 0);\n",
+        ),
+        output
+    );
+}
+
+#[test]
 fn binary_literals_follow_database_dialects() {
     let bytes = [0x00, 0x01, 0xff];
 
