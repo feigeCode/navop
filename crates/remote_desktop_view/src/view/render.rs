@@ -148,20 +148,6 @@ fn remote_cursor_bounds(
     ))
 }
 
-fn localized_presentation_backend(
-    initialization: presentation::RemoteDesktopPresentationInitialization,
-) -> String {
-    match initialization.presentation() {
-        None => t!("RemoteDesktop.backend_selecting").to_string(),
-        Some(presentation::RemoteDesktopPresentation::Canvas) => {
-            t!("RemoteDesktop.backend_ironrdp").to_string()
-        }
-        Some(presentation::RemoteDesktopPresentation::NativeWindows) => {
-            t!("RemoteDesktop.backend_windows_native").to_string()
-        }
-    }
-}
-
 fn localized_fallback_reason(reason: presentation::WindowsNativeRdpUnavailableReason) -> String {
     match reason {
         presentation::WindowsNativeRdpUnavailableReason::FeatureDisabled => {
@@ -453,7 +439,6 @@ impl Render for RemoteDesktopView {
         let show_failure_detail = failure_detail.is_some();
         let show_presentation_status = self.options.protocol == RemoteDesktopProtocol::Rdp;
         let presentation_initialization = self.presentation_initialization;
-        let presentation_backend = localized_presentation_backend(presentation_initialization);
         let fallback_reason = presentation_initialization
             .fallback_reason()
             .map(localized_fallback_reason);
@@ -632,15 +617,6 @@ impl Render for RemoteDesktopView {
                         .bg(cx.theme().background)
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(
-                            div().flex_none().whitespace_nowrap().child(
-                                t!(
-                                    "RemoteDesktop.presentation_backend",
-                                    backend = presentation_backend
-                                )
-                                .to_string(),
-                            ),
-                        )
                         .when_some(fallback_reason, |this, reason| {
                             this.child(div().min_w_0().flex_1().truncate().child(
                                 t!("RemoteDesktop.fallback_reason", reason = reason).to_string(),
