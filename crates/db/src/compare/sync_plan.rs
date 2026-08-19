@@ -10,7 +10,6 @@ use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, Tabl
 use one_core::storage::DatabaseType;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use tracing::info;
 
 /// 同步计划类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -489,14 +488,6 @@ fn external_dependency_warnings_by_table(
     for dependency in dependencies {
         let child_in_plan = plan_tables.contains(&dependency.table);
         let parent_in_plan = plan_tables.contains(&dependency.referenced_table);
-        info!(
-            "[DataCompare] sync dependency check: child_table={}, referenced_table={}, child_in_plan={}, parent_in_plan={}, plan_tables={:?}",
-            dependency.table,
-            dependency.referenced_table,
-            child_in_plan,
-            parent_in_plan,
-            plan_tables,
-        );
         if !child_in_plan || parent_in_plan {
             continue;
         }

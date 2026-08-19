@@ -5,7 +5,6 @@ use std::{
 
 use gpui::AsyncApp;
 use one_core::storage::DatabaseType;
-use tracing::info;
 
 use crate::{
     ColumnInfo, ForeignKeyDefinition, GlobalDbState, QueryColumnMeta, QueryResult, SqlResult,
@@ -854,18 +853,6 @@ async fn load_data_compare_table_dependencies(
     report: &mut impl FnMut(CompareTaskEvent),
 ) -> DataCompareDependencyLoadResult {
     let mut result = DataCompareDependencyLoadResult::default();
-    info!(
-        "[DataCompare] loading target dependencies: source_database={}, source_schema={:?}, target_connection_id={}, target_database={}, target_schema={:?}, selected_pairs={}, case_sensitive_identifiers={}, successful_target_tables={}, missing_target_tables={}",
-        params.source_database,
-        params.source_schema,
-        params.target_connection_id,
-        params.target_database,
-        params.target_schema,
-        params.table_pairs.len(),
-        params.case_sensitive_identifiers,
-        successful_target_tables.len(),
-        missing_target_tables.len(),
-    );
     report(CompareTaskEvent::LoadingDependencyMetadata { table: None });
     let existing_target_tables = match load_target_table_lookup(db_state, cx, params).await {
         Ok(tables) => tables,
@@ -880,25 +867,11 @@ async fn load_data_compare_table_dependencies(
         }
     };
     let selected_target_tables = target_table_lookup(params);
-    info!(
-        "[DataCompare] target dependency lookup loaded: existing_tables={}, selected_tables={:?}",
-        existing_target_tables.len(),
-        selected_target_tables.values().collect::<Vec<_>>(),
-    );
     let mut seen = HashSet::new();
     for pair in &params.table_pairs {
         let table_key = table_lookup_key(&pair.target_table, params.case_sensitive_identifiers);
         let successful = successful_target_tables.contains(&table_key);
         let existing_name = existing_target_tables.get(&table_key);
-        info!(
-            "[DataCompare] dependency table candidate: source_table={}, target_table={}, target_key={}, successful={}, existing_target_table={:?}, selected_target_table={:?}",
-            pair.source_table,
-            pair.target_table,
-            table_key,
-            successful,
-            existing_name,
-            selected_target_tables.get(&table_key),
-        );
         if !successful {
             continue;
         }
@@ -932,21 +905,6 @@ async fn load_data_compare_table_dependencies(
                     continue;
                 }
             };
-        info!(
-            "[DataCompare] foreign-key metadata loaded: table={}, foreign_key_count={}, foreign_keys={:?}",
-            pair.target_table,
-            foreign_keys.len(),
-            foreign_keys
-                .iter()
-                .map(|foreign_key| {
-                    (
-                        foreign_key.name.as_str(),
-                        foreign_key.ref_schema.as_deref(),
-                        foreign_key.ref_table.as_str(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
         collect_table_dependencies(
             &mut result.dependencies,
             &mut seen,
@@ -1049,31 +1007,12 @@ fn collect_table_dependencies(
     scope: DataCompareDependencyScope<'_>,
 ) {
     for foreign_key in foreign_keys {
-        let (parent_name, source_namespace_matches, target_namespace_matches) =
-            resolve_dependency_parent_name(&foreign_key, scope);
+        let (parent_name, _, _) = resolve_dependency_parent_name(&foreign_key, scope);
         let parent_key = table_lookup_key(&parent_name, scope.case_sensitive_identifiers);
         let parent_table = target_tables
             .get(&parent_key)
             .cloned()
             .unwrap_or(parent_name);
-        info!(
-            "[DataCompare] foreign-key dependency resolved: child_table={}, foreign_key={}, ref_schema={:?}, ref_table={}, source_database={}, source_schema={:?}, target_database={}, target_schema={:?}, source_namespace_matches={}, target_namespace_matches={}, namespace_matches={}, lookup_parent_key={}, selected_parent_table={:?}, resolved_parent_table={}, selected_parent={}",
-            table,
-            foreign_key.name,
-            foreign_key.ref_schema,
-            foreign_key.ref_table,
-            scope.source_database,
-            scope.source_schema,
-            scope.target_database,
-            scope.target_schema,
-            source_namespace_matches,
-            target_namespace_matches,
-            source_namespace_matches || target_namespace_matches,
-            parent_key,
-            target_tables.get(&parent_key),
-            parent_table,
-            target_tables.contains_key(&parent_key),
-        );
         if table_lookup_key(table, scope.case_sensitive_identifiers) == parent_key {
             continue;
         }
