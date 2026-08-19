@@ -18,16 +18,24 @@ constexpr bool kContainerHandledFullScreen = true;
 
 NavopRdpResult optional_extended_property_result(
     NativeRdpHost* owner,
+    uint32_t stage,
     HRESULT result) noexcept {
-    // Extended display properties are not exposed by every mstscax.dll.
-    // Ignore only an absent property, never a general invocation failure.
-    if (result == DISP_E_UNKNOWNNAME) {
+    // Extended display properties are optional and differ across Windows
+    // mstscax.dll builds. Some builds expose IMsRdpExtendedSettings but
+    // return E_FAIL rather than DISP_E_UNKNOWNNAME for an unsupported
+    // property. Do not let that optional DPI enhancement block RDP itself.
+    if (result == S_OK || result == DISP_E_UNKNOWNNAME ||
+        result == E_NOTIMPL || result == E_NOINTERFACE || result == E_FAIL) {
+        if (result != S_OK) {
+            trace_native_stage("connect.display.extended_property.unsupported");
+        }
         return NAVOP_RDP_RESULT_OK;
     }
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            stage,
             static_cast<int32_t>(result));
     }
     return NAVOP_RDP_RESULT_OK;
@@ -56,7 +64,7 @@ NavopRdpResult configure_extended_scale_factors(
     }
 
     CComVariant desktop_scale_factor(
-        static_cast<long>(options.desktop_scale_factor));
+        static_cast<ULONG>(options.desktop_scale_factor));
     trace_native_stage("connect.display.desktop_scale_factor.before");
     result = extended_settings->put_Property(
         CComBSTR(L"DesktopScaleFactor"),
@@ -66,13 +74,14 @@ NavopRdpResult configure_extended_scale_factors(
         static_cast<int32_t>(result));
     NavopRdpResult property_result = optional_extended_property_result(
         owner,
+        NAVOP_RDP_STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR,
         result);
     if (property_result != NAVOP_RDP_RESULT_OK) {
         return property_result;
     }
 
     CComVariant device_scale_factor(
-        static_cast<long>(options.device_scale_factor));
+        static_cast<ULONG>(options.device_scale_factor));
     trace_native_stage("connect.display.device_scale_factor.before");
     result = extended_settings->put_Property(
         CComBSTR(L"DeviceScaleFactor"),
@@ -80,7 +89,10 @@ NavopRdpResult configure_extended_scale_factors(
     trace_native_hresult(
         "connect.display.device_scale_factor.after",
         static_cast<int32_t>(result));
-    return optional_extended_property_result(owner, result);
+    return optional_extended_property_result(
+        owner,
+        NAVOP_RDP_STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR,
+        result);
 }
 
 }  // namespace

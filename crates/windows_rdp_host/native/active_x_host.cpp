@@ -1106,9 +1106,10 @@ NavopRdpResult connect_active_x(
         "connect.get_connected.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_GET_CONNECTED,
             static_cast<int32_t>(result));
     }
     if (connected != 0) {
@@ -1128,9 +1129,10 @@ NavopRdpResult connect_active_x(
         "connect.server.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_SERVER,
             static_cast<int32_t>(result));
     }
 
@@ -1143,9 +1145,10 @@ NavopRdpResult connect_active_x(
         static_cast<int32_t>(result));
     if (FAILED(result) || advanced_settings == nullptr) {
         if (FAILED(result)) {
-            return record_last_hresult(
+            return record_last_stage_hresult(
                 owner,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_STAGE_CONNECT_GET_ADVANCED_SETTINGS,
                 static_cast<int32_t>(result));
         }
         return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
@@ -1158,9 +1161,10 @@ NavopRdpResult connect_active_x(
         "connect.rdp_port.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_RDP_PORT,
             static_cast<int32_t>(result));
     }
 
@@ -1187,9 +1191,10 @@ NavopRdpResult connect_active_x(
         "connect.desktop_width.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_WIDTH,
             static_cast<int32_t>(result));
     }
     trace_native_stage("connect.desktop_height.before");
@@ -1199,9 +1204,10 @@ NavopRdpResult connect_active_x(
         "connect.desktop_height.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_HEIGHT,
             static_cast<int32_t>(result));
     }
     trace_native_stage("connect.color_depth.before");
@@ -1210,9 +1216,10 @@ NavopRdpResult connect_active_x(
         "connect.color_depth.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_COLOR_DEPTH,
             static_cast<int32_t>(result));
     }
     trace_native_stage("connect.invoke.before");
@@ -1221,9 +1228,10 @@ NavopRdpResult connect_active_x(
         "connect.invoke.after",
         static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_INVOKE,
             static_cast<int32_t>(result));
     }
     return NAVOP_RDP_RESULT_OK;

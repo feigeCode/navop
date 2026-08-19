@@ -372,7 +372,7 @@ impl WindowsRdpHostError {
         }
     }
 
-    /// Returns the native host-creation stage when one was supplied.
+    /// Returns the native operation stage when one was supplied.
     pub const fn stage(self) -> Option<u32> {
         match self {
             Self::NativeDiagnostic { stage, .. } if stage != ffi::CREATE_STAGE_NONE => Some(stage),
@@ -390,7 +390,7 @@ impl WindowsRdpHostError {
     }
 }
 
-const fn native_create_stage_name(stage: u32) -> &'static str {
+const fn native_stage_name(stage: u32) -> &'static str {
     match stage {
         ffi::CREATE_STAGE_NONE => "NONE",
         ffi::CREATE_STAGE_OLE_INITIALIZE => "OLE_INITIALIZE",
@@ -402,6 +402,17 @@ const fn native_create_stage_name(stage: u32) -> &'static str {
         ffi::CREATE_STAGE_SET_PARENT => "SET_PARENT",
         ffi::CREATE_STAGE_EVENT_SUBSCRIPTION => "EVENT_SUBSCRIPTION",
         ffi::CREATE_STAGE_EXCEPTION => "EXCEPTION",
+        ffi::STAGE_CONNECT_GET_CONNECTED => "CONNECT_GET_CONNECTED",
+        ffi::STAGE_CONNECT_SET_SERVER => "CONNECT_SET_SERVER",
+        ffi::STAGE_CONNECT_GET_ADVANCED_SETTINGS => "CONNECT_GET_ADVANCED_SETTINGS",
+        ffi::STAGE_CONNECT_SET_RDP_PORT => "CONNECT_SET_RDP_PORT",
+        ffi::STAGE_CONNECT_POLICY => "CONNECT_POLICY",
+        ffi::STAGE_CONNECT_SET_DESKTOP_WIDTH => "CONNECT_SET_DESKTOP_WIDTH",
+        ffi::STAGE_CONNECT_SET_DESKTOP_HEIGHT => "CONNECT_SET_DESKTOP_HEIGHT",
+        ffi::STAGE_CONNECT_SET_COLOR_DEPTH => "CONNECT_SET_COLOR_DEPTH",
+        ffi::STAGE_CONNECT_INVOKE => "CONNECT_INVOKE",
+        ffi::STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR => "CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR",
+        ffi::STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR => "CONNECT_DISPLAY_DEVICE_SCALE_FACTOR",
         _ => "UNKNOWN",
     }
 }
@@ -450,7 +461,7 @@ impl fmt::Display for WindowsRdpHostError {
                 write!(
                     formatter,
                     "Windows RDP host result {result} at native stage {stage} ({})",
-                    native_create_stage_name(*stage)
+                    native_stage_name(*stage)
                 )?;
                 if let Some(hresult) = hresult {
                     write!(formatter, " with HRESULT {:#010X}", hresult.code() as u32)?;
@@ -562,6 +573,25 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Windows RDP host result 4 at native stage 4 (CREATE_CONTROL) with HRESULT 0x80000000 with Win32 code 0x0000057F (1407)"
+        );
+    }
+
+    #[test]
+    fn native_connect_diagnostic_formats_the_operation_stage() {
+        let error = WindowsRdpHostError::NativeDiagnostic {
+            result: ffi::RESULT_INTERNAL_ERROR,
+            stage: ffi::STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR,
+            hresult: Some(WindowsRdpHresult::from_code(0x8000_4005_u32 as i32)),
+            win32_code: None,
+        };
+
+        assert_eq!(
+            error.stage(),
+            Some(ffi::STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR)
+        );
+        assert_eq!(
+            error.to_string(),
+            "Windows RDP host result 4 at native stage 19 (CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR) with HRESULT 0x80004005"
         );
     }
 

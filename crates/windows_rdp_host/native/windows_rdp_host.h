@@ -52,6 +52,22 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_CREATE_STAGE_EXCEPTION UINT32_C(9)
 
 /*
+ * Append-only native operation stages. Keep the creation-stage values above
+ * stable because they are already part of the diagnostic ABI.
+ */
+#define NAVOP_RDP_STAGE_CONNECT_GET_CONNECTED UINT32_C(10)
+#define NAVOP_RDP_STAGE_CONNECT_SET_SERVER UINT32_C(11)
+#define NAVOP_RDP_STAGE_CONNECT_GET_ADVANCED_SETTINGS UINT32_C(12)
+#define NAVOP_RDP_STAGE_CONNECT_SET_RDP_PORT UINT32_C(13)
+#define NAVOP_RDP_STAGE_CONNECT_POLICY UINT32_C(14)
+#define NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_WIDTH UINT32_C(15)
+#define NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_HEIGHT UINT32_C(16)
+#define NAVOP_RDP_STAGE_CONNECT_SET_COLOR_DEPTH UINT32_C(17)
+#define NAVOP_RDP_STAGE_CONNECT_INVOKE UINT32_C(18)
+#define NAVOP_RDP_STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR UINT32_C(19)
+#define NAVOP_RDP_STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR UINT32_C(20)
+
+/*
  * Versioned structs accept struct_size values greater than or equal to the
  * current layout. Implementations access only the known prefix, preserve an
  * output struct's caller-provided size, and leave unknown trailing fields
@@ -71,7 +87,7 @@ typedef struct NavopRdpProbeResult {
 
 /*
  * Synchronous native diagnostics preserve the stable NavopRdpResult together
- * with an optional raw signed HRESULT, a numeric creation stage, and an
+ * with an optional raw signed HRESULT, a numeric native operation stage, and an
  * optional raw Win32 error code. No native text or connection secrets cross
  * this ABI. has_hresult and has_win32_code are exactly 0 or 1, and reserved is
  * always zero.
