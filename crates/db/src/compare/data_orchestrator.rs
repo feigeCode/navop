@@ -5,6 +5,7 @@ use std::{
 
 use gpui::AsyncApp;
 use one_core::storage::DatabaseType;
+use tracing::info;
 
 use crate::{
     ColumnInfo, ForeignKeyDefinition, GlobalDbState, QueryColumnMeta, QueryResult, SqlResult,
@@ -835,6 +836,15 @@ struct DataCompareDependencyLoadResult {
     warnings: Vec<DataCompareBatchWarning>,
 }
 
+#[derive(Clone, Copy)]
+struct DataCompareDependencyScope<'a> {
+    source_database: &'a str,
+    source_schema: Option<&'a str>,
+    target_database: &'a str,
+    target_schema: Option<&'a str>,
+    case_sensitive_identifiers: bool,
+}
+
 async fn load_data_compare_table_dependencies(
     db_state: &GlobalDbState,
     cx: &mut AsyncApp,
@@ -844,6 +854,18 @@ async fn load_data_compare_table_dependencies(
     report: &mut impl FnMut(CompareTaskEvent),
 ) -> DataCompareDependencyLoadResult {
     let mut result = DataCompareDependencyLoadResult::default();
+    info!(
+        "[DataCompare] loading target dependencies: source_database={}, source_schema={:?}, target_connection_id={}, target_database={}, target_schema={:?}, selected_pairs={}, case_sensitive_identifiers={}, successful_target_tables={}, missing_target_tables={}",
+        params.source_database,
+        params.source_schema,
+        params.target_connection_id,
+        params.target_database,
+        params.target_schema,
+        params.table_pairs.len(),
+        params.case_sensitive_identifiers,
+        successful_target_tables.len(),
+        missing_target_tables.len(),
+    );
     report(CompareTaskEvent::LoadingDependencyMetadata { table: None });
     let existing_target_tables = match load_target_table_lookup(db_state, cx, params).await {
         Ok(tables) => tables,
@@ -858,13 +880,29 @@ async fn load_data_compare_table_dependencies(
         }
     };
     let selected_target_tables = target_table_lookup(params);
+    info!(
+        "[DataCompare] target dependency lookup loaded: existing_tables={}, selected_tables={:?}",
+        existing_target_tables.len(),
+        selected_target_tables.values().collect::<Vec<_>>(),
+    );
     let mut seen = HashSet::new();
     for pair in &params.table_pairs {
         let table_key = table_lookup_key(&pair.target_table, params.case_sensitive_identifiers);
-        if !successful_target_tables.contains(&table_key) {
+        let successful = successful_target_tables.contains(&table_key);
+        let existing_name = existing_target_tables.get(&table_key);
+        info!(
+            "[DataCompare] dependency table candidate: source_table={}, target_table={}, target_key={}, successful={}, existing_target_table={:?}, selected_target_table={:?}",
+            pair.source_table,
+            pair.target_table,
+            table_key,
+            successful,
+            existing_name,
+            selected_target_tables.get(&table_key),
+        );
+        if !successful {
             continue;
         }
-        if !existing_target_tables.contains_key(&table_key) {
+        if existing_name.is_none() {
             if !missing_target_tables.contains(&table_key) {
                 record_dependency_metadata_failure(
                     &mut result.warnings,
@@ -894,15 +932,34 @@ async fn load_data_compare_table_dependencies(
                     continue;
                 }
             };
+        info!(
+            "[DataCompare] foreign-key metadata loaded: table={}, foreign_key_count={}, foreign_keys={:?}",
+            pair.target_table,
+            foreign_keys.len(),
+            foreign_keys
+                .iter()
+                .map(|foreign_key| {
+                    (
+                        foreign_key.name.as_str(),
+                        foreign_key.ref_schema.as_deref(),
+                        foreign_key.ref_table.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
         collect_table_dependencies(
             &mut result.dependencies,
             &mut seen,
             &selected_target_tables,
             &pair.target_table,
             foreign_keys,
-            params.target_database.as_str(),
-            params.target_schema.as_deref(),
-            params.case_sensitive_identifiers,
+            DataCompareDependencyScope {
+                source_database: params.source_database.as_str(),
+                source_schema: params.source_schema.as_deref(),
+                target_database: params.target_database.as_str(),
+                target_schema: params.target_schema.as_deref(),
+                case_sensitive_identifiers: params.case_sensitive_identifiers,
+            },
         );
     }
     result
@@ -989,37 +1046,35 @@ fn collect_table_dependencies(
     target_tables: &HashMap<String, String>,
     table: &str,
     foreign_keys: Vec<ForeignKeyDefinition>,
-    target_database: &str,
-    target_schema: Option<&str>,
-    case_sensitive_identifiers: bool,
+    scope: DataCompareDependencyScope<'_>,
 ) {
     for foreign_key in foreign_keys {
-        let referenced_namespace_matches = foreign_key
-            .ref_schema
-            .as_deref()
-            .map(|schema| {
-                target_schema
-                    .map(|target| identifiers_equal(schema, target, case_sensitive_identifiers))
-                    .unwrap_or_else(|| {
-                        identifiers_equal(schema, target_database, case_sensitive_identifiers)
-                    })
-            })
-            .unwrap_or(true);
-        let parent_name = if referenced_namespace_matches {
-            foreign_key.ref_table.clone()
-        } else {
-            format!(
-                "{}.{}",
-                foreign_key.ref_schema.as_deref().unwrap_or_default(),
-                foreign_key.ref_table
-            )
-        };
-        let parent_key = table_lookup_key(&parent_name, case_sensitive_identifiers);
+        let (parent_name, source_namespace_matches, target_namespace_matches) =
+            resolve_dependency_parent_name(&foreign_key, scope);
+        let parent_key = table_lookup_key(&parent_name, scope.case_sensitive_identifiers);
         let parent_table = target_tables
             .get(&parent_key)
             .cloned()
             .unwrap_or(parent_name);
-        if table_lookup_key(table, case_sensitive_identifiers) == parent_key {
+        info!(
+            "[DataCompare] foreign-key dependency resolved: child_table={}, foreign_key={}, ref_schema={:?}, ref_table={}, source_database={}, source_schema={:?}, target_database={}, target_schema={:?}, source_namespace_matches={}, target_namespace_matches={}, namespace_matches={}, lookup_parent_key={}, selected_parent_table={:?}, resolved_parent_table={}, selected_parent={}",
+            table,
+            foreign_key.name,
+            foreign_key.ref_schema,
+            foreign_key.ref_table,
+            scope.source_database,
+            scope.source_schema,
+            scope.target_database,
+            scope.target_schema,
+            source_namespace_matches,
+            target_namespace_matches,
+            source_namespace_matches || target_namespace_matches,
+            parent_key,
+            target_tables.get(&parent_key),
+            parent_table,
+            target_tables.contains_key(&parent_key),
+        );
+        if table_lookup_key(table, scope.case_sensitive_identifiers) == parent_key {
             continue;
         }
         let edge = (table.to_string(), parent_table);
@@ -1030,6 +1085,43 @@ fn collect_table_dependencies(
             });
         }
     }
+}
+
+fn resolve_dependency_parent_name(
+    foreign_key: &ForeignKeyDefinition,
+    scope: DataCompareDependencyScope<'_>,
+) -> (String, bool, bool) {
+    let Some(namespace) = foreign_key.ref_schema.as_deref() else {
+        return (foreign_key.ref_table.clone(), false, true);
+    };
+    let source_matches = namespace_matches_scope(
+        namespace,
+        scope.source_database,
+        scope.source_schema,
+        scope.case_sensitive_identifiers,
+    );
+    let target_matches = namespace_matches_scope(
+        namespace,
+        scope.target_database,
+        scope.target_schema,
+        scope.case_sensitive_identifiers,
+    );
+    let parent_name = if source_matches || target_matches {
+        foreign_key.ref_table.clone()
+    } else {
+        format!("{namespace}.{}", foreign_key.ref_table)
+    };
+    (parent_name, source_matches, target_matches)
+}
+
+fn namespace_matches_scope(
+    namespace: &str,
+    database: &str,
+    schema: Option<&str>,
+    case_sensitive: bool,
+) -> bool {
+    identifiers_equal(namespace, database, case_sensitive)
+        || schema.is_some_and(|schema| identifiers_equal(namespace, schema, case_sensitive))
 }
 
 pub fn build_data_compare_result(
@@ -1492,9 +1584,13 @@ mod tests {
                 on_delete: String::new(),
                 on_update: String::new(),
             }],
-            "app",
-            Some("public"),
-            false,
+            DataCompareDependencyScope {
+                source_database: "source_app",
+                source_schema: Some("source_public"),
+                target_database: "app",
+                target_schema: Some("public"),
+                case_sensitive_identifiers: false,
+            },
         );
 
         assert_eq!(
@@ -1502,6 +1598,88 @@ mod tests {
             vec![DataCompareTableDependency {
                 table: "orders".to_string(),
                 referenced_table: "audit.users".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreign_keys_using_target_database_namespace_match_selected_tables() {
+        let target_tables = HashMap::from([(
+            table_lookup_key("QRTZ_TRIGGERS", false),
+            "QRTZ_TRIGGERS".to_string(),
+        )]);
+        let mut dependencies = Vec::new();
+        let mut seen = HashSet::new();
+
+        collect_table_dependencies(
+            &mut dependencies,
+            &mut seen,
+            &target_tables,
+            "QRTZ_BLOB_TRIGGERS",
+            vec![ForeignKeyDefinition {
+                name: "FK_BLOB_TRIGGER".to_string(),
+                columns: vec!["TRIGGER_NAME".to_string()],
+                ref_table: "QRTZ_TRIGGERS".to_string(),
+                ref_schema: Some("comi_app_test".to_string()),
+                ref_columns: vec!["TRIGGER_NAME".to_string()],
+                on_delete: String::new(),
+                on_update: String::new(),
+            }],
+            DataCompareDependencyScope {
+                source_database: "source_app",
+                source_schema: Some("source_public"),
+                target_database: "comi_app_test",
+                target_schema: Some("public"),
+                case_sensitive_identifiers: false,
+            },
+        );
+
+        assert_eq!(
+            dependencies,
+            vec![DataCompareTableDependency {
+                table: "QRTZ_BLOB_TRIGGERS".to_string(),
+                referenced_table: "QRTZ_TRIGGERS".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreign_keys_using_source_database_namespace_match_selected_target_tables() {
+        let target_tables = HashMap::from([(
+            table_lookup_key("QRTZ_TRIGGERS", false),
+            "QRTZ_TRIGGERS".to_string(),
+        )]);
+        let mut dependencies = Vec::new();
+        let mut seen = HashSet::new();
+
+        collect_table_dependencies(
+            &mut dependencies,
+            &mut seen,
+            &target_tables,
+            "QRTZ_BLOB_TRIGGERS",
+            vec![ForeignKeyDefinition {
+                name: "FK_BLOB_TRIGGER".to_string(),
+                columns: vec!["TRIGGER_NAME".to_string()],
+                ref_table: "QRTZ_TRIGGERS".to_string(),
+                ref_schema: Some("comi_app_test".to_string()),
+                ref_columns: vec!["TRIGGER_NAME".to_string()],
+                on_delete: String::new(),
+                on_update: String::new(),
+            }],
+            DataCompareDependencyScope {
+                source_database: "comi_app_test",
+                source_schema: None,
+                target_database: "sync_test",
+                target_schema: None,
+                case_sensitive_identifiers: false,
+            },
+        );
+
+        assert_eq!(
+            dependencies,
+            vec![DataCompareTableDependency {
+                table: "QRTZ_BLOB_TRIGGERS".to_string(),
+                referenced_table: "QRTZ_TRIGGERS".to_string(),
             }]
         );
     }

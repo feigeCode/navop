@@ -57,6 +57,33 @@ impl GlobalDbState {
         compare_column_order: bool,
         type_mapping_overrides: super::TypeMappingOverrides,
     ) -> anyhow::Result<SyncPlan> {
+        self.prepare_schema_sync_plan_for_target_with_source_namespace(
+            result,
+            source_connection_id,
+            target_connection_id,
+            target_database,
+            target_schema,
+            None,
+            None,
+            compare_column_order,
+            type_mapping_overrides,
+        )
+    }
+
+    /// Builds a schema synchronization plan while preserving the source
+    /// database/schema context needed to remap source-qualified foreign keys.
+    pub fn prepare_schema_sync_plan_for_target_with_source_namespace(
+        &self,
+        result: &SchemaCompareResult,
+        source_connection_id: &str,
+        target_connection_id: &str,
+        target_database: &str,
+        target_schema: Option<&str>,
+        source_database: Option<&str>,
+        source_schema: Option<&str>,
+        compare_column_order: bool,
+        type_mapping_overrides: super::TypeMappingOverrides,
+    ) -> anyhow::Result<SyncPlan> {
         if result.has_failed_tables() {
             return Ok(super::blocked_schema_sync_plan(result));
         }
@@ -70,10 +97,12 @@ impl GlobalDbState {
         let plugin = self.get_plugin(&target_config.database_type)?;
 
         Ok(
-            super::build_schema_sync_plan_with_plugin_options_for_source(
+            super::build_schema_sync_plan_with_plugin_options_for_source_namespace(
                 result,
                 target_database,
                 target_schema,
+                source_database,
+                source_schema,
                 &source_config.database_type,
                 plugin.as_ref(),
                 SchemaSyncPlanOptions {

@@ -10,6 +10,7 @@ use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, Tabl
 use one_core::storage::DatabaseType;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use tracing::info;
 
 /// 同步计划类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -486,9 +487,17 @@ fn external_dependency_warnings_by_table(
     let mut warnings_by_table = HashMap::new();
     let mut seen = HashSet::new();
     for dependency in dependencies {
-        if !plan_tables.contains(&dependency.table)
-            || plan_tables.contains(&dependency.referenced_table)
-        {
+        let child_in_plan = plan_tables.contains(&dependency.table);
+        let parent_in_plan = plan_tables.contains(&dependency.referenced_table);
+        info!(
+            "[DataCompare] sync dependency check: child_table={}, referenced_table={}, child_in_plan={}, parent_in_plan={}, plan_tables={:?}",
+            dependency.table,
+            dependency.referenced_table,
+            child_in_plan,
+            parent_in_plan,
+            plan_tables,
+        );
+        if !child_in_plan || parent_in_plan {
             continue;
         }
         let warning = format!(
@@ -994,6 +1003,8 @@ fn generate_add_foreign_key_sql(
     foreign_key: &super::ForeignKeySchema,
     target_database: &str,
     target_schema: Option<&str>,
+    source_database: Option<&str>,
+    source_schema: Option<&str>,
     dialect: &dyn SyncSqlDialect,
 ) -> String {
     let columns = foreign_key
@@ -1002,11 +1013,14 @@ fn generate_add_foreign_key_sql(
         .map(|column| dialect.quote_identifier(column))
         .collect::<Vec<_>>()
         .join(", ");
-    let ref_table = dialect.format_table_reference(
-        target_database,
-        foreign_key.ref_schema.as_deref().or(target_schema),
-        &foreign_key.ref_table,
+    let referenced_schema = map_foreign_key_reference_schema(
+        foreign_key.ref_schema.as_deref(),
+        source_database,
+        source_schema,
+        target_schema,
     );
+    let ref_table =
+        dialect.format_table_reference(target_database, referenced_schema, &foreign_key.ref_table);
     let ref_columns = foreign_key
         .ref_columns
         .iter()
@@ -1030,6 +1044,26 @@ fn generate_add_foreign_key_sql(
     }
     sql.push(';');
     sql
+}
+
+fn map_foreign_key_reference_schema<'a>(
+    referenced_schema: Option<&'a str>,
+    source_database: Option<&str>,
+    source_schema: Option<&str>,
+    target_schema: Option<&'a str>,
+) -> Option<&'a str> {
+    let Some(referenced_schema) = referenced_schema else {
+        return target_schema;
+    };
+
+    let is_source_namespace = source_database
+        .is_some_and(|source| referenced_schema.eq_ignore_ascii_case(source))
+        || source_schema.is_some_and(|source| referenced_schema.eq_ignore_ascii_case(source));
+    if is_source_namespace {
+        target_schema
+    } else {
+        Some(referenced_schema)
+    }
 }
 
 fn foreign_key_action_sql(value: Option<&str>) -> Option<String> {
@@ -1854,6 +1888,8 @@ pub fn build_schema_sync_plan_with_plugin_options(
         result,
         target_database,
         target_schema,
+        None,
+        None,
         &target_db_type,
         &target_db_type,
         &PluginSyncSqlDialect(plugin),
@@ -1895,6 +1931,34 @@ pub fn build_schema_sync_plan_with_plugin_options_for_source(
         result,
         target_database,
         target_schema,
+        None,
+        None,
+        source_db_type,
+        &target_db_type,
+        &PluginSyncSqlDialect(plugin),
+        options,
+    )
+}
+
+/// Option-aware schema sync plan builder that also maps source-qualified
+/// foreign-key references into the target database/schema namespace.
+pub fn build_schema_sync_plan_with_plugin_options_for_source_namespace(
+    result: &SchemaCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    source_database: Option<&str>,
+    source_schema: Option<&str>,
+    source_db_type: &DatabaseType,
+    plugin: &dyn DatabasePlugin,
+    options: SchemaSyncPlanOptions,
+) -> SyncPlan {
+    let target_db_type = plugin.name();
+    build_schema_sync_plan_with_dialect(
+        result,
+        target_database,
+        target_schema,
+        source_database,
+        source_schema,
         source_db_type,
         &target_db_type,
         &PluginSyncSqlDialect(plugin),
@@ -1906,6 +1970,8 @@ fn build_schema_sync_plan_with_dialect(
     result: &SchemaCompareResult,
     target_database: &str,
     target_schema: Option<&str>,
+    source_database: Option<&str>,
+    source_schema: Option<&str>,
     source_db_type: &DatabaseType,
     target_db_type: &DatabaseType,
     dialect: &dyn SyncSqlDialect,
@@ -2066,6 +2132,8 @@ fn build_schema_sync_plan_with_dialect(
                                     foreign_key,
                                     target_database,
                                     target_schema,
+                                    source_database,
+                                    source_schema,
                                     dialect,
                                 ),
                                 kind: SyncStatementKind::AlterTable,
@@ -2568,6 +2636,8 @@ fn build_schema_sync_plan_with_dialect(
                                         foreign_key,
                                         target_database,
                                         target_schema,
+                                        source_database,
+                                        source_schema,
                                         dialect,
                                     ),
                                     kind: SyncStatementKind::AlterTable,
@@ -4506,6 +4576,70 @@ mod tests {
             plan.statements
                 .iter()
                 .any(|statement| { statement.sql.contains("REFERENCES `audit`.`orders`") })
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_maps_source_database_foreign_key_to_target_database() {
+        use super::super::{
+            DiffStatus, ForeignKeySchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let source_fk = ForeignKeySchema {
+            name: "qrtz_blob_triggers_ibfk_1".to_string(),
+            columns: vec!["TRIGGER_NAME".to_string()],
+            ref_table: "QRTZ_TRIGGERS".to_string(),
+            ref_schema: Some("comi_app_test".to_string()),
+            ref_columns: vec!["TRIGGER_NAME".to_string()],
+            on_delete: None,
+            on_update: None,
+        };
+        let result = SchemaCompareResult {
+            routine_diffs: vec![],
+            trigger_diffs: vec![],
+            table_failures: vec![],
+            table_diffs: vec![TableDiff {
+                name: "QRTZ_BLOB_TRIGGERS".to_string(),
+                status: DiffStatus::Added,
+                source: Some(TableSchema {
+                    name: "QRTZ_BLOB_TRIGGERS".to_string(),
+                    foreign_keys: vec![source_fk],
+                    ..Default::default()
+                }),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+                object_type: Default::default(),
+                changes: vec![],
+                table_options_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+        let plan = build_schema_sync_plan_with_plugin_options_for_source_namespace(
+            &result,
+            "sync_test",
+            None,
+            Some("comi_app_test"),
+            None,
+            &DatabaseType::MySQL,
+            &plugin,
+            SchemaSyncPlanOptions::default(),
+        );
+
+        assert!(plan.statements.iter().any(|statement| {
+            statement
+                .sql
+                .contains("REFERENCES `sync_test`.`QRTZ_TRIGGERS`")
+        }));
+        assert!(
+            plan.statements
+                .iter()
+                .all(|statement| !statement.sql.contains("REFERENCES `comi_app_test`."))
         );
     }
 

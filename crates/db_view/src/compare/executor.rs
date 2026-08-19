@@ -246,12 +246,40 @@ pub fn generate_schema_sync_plan_for_target(
     compare_column_order: bool,
     type_mapping_overrides: db::compare::TypeMappingOverrides,
 ) -> anyhow::Result<SyncPlan> {
-    db_state.prepare_schema_sync_plan_for_target(
+    generate_schema_sync_plan_for_target_with_source_namespace(
+        result,
+        db_state,
+        source_connection_id,
+        target_connection_id,
+        target_database,
+        target_schema,
+        None,
+        None,
+        compare_column_order,
+        type_mapping_overrides,
+    )
+}
+
+pub fn generate_schema_sync_plan_for_target_with_source_namespace(
+    result: &SchemaCompareResult,
+    db_state: &GlobalDbState,
+    source_connection_id: &str,
+    target_connection_id: &str,
+    target_database: &str,
+    target_schema: Option<&str>,
+    source_database: Option<&str>,
+    source_schema: Option<&str>,
+    compare_column_order: bool,
+    type_mapping_overrides: db::compare::TypeMappingOverrides,
+) -> anyhow::Result<SyncPlan> {
+    db_state.prepare_schema_sync_plan_for_target_with_source_namespace(
         result,
         source_connection_id,
         target_connection_id,
         target_database,
         target_schema,
+        source_database,
+        source_schema,
         compare_column_order,
         type_mapping_overrides,
     )

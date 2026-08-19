@@ -46,7 +46,7 @@ use crate::compare::window_ui::{
 };
 use crate::compare::{
     CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, SchemaCompareParams,
-    execute_schema_compare, generate_schema_sync_plan_for_target,
+    execute_schema_compare, generate_schema_sync_plan_for_target_with_source_namespace,
 };
 use crate::db_object_selector::{
     DbObjectSelectorPolicy, db_object_selector_panel, effective_database_schema,
@@ -364,6 +364,8 @@ impl SchemaCompareWindow {
         register_connection_for_compare(&params.source_connection_id, cx);
         register_connection_for_compare(&params.target_connection_id, cx);
         let source_connection_id = params.source_connection_id.clone();
+        let source_database = params.source_database.clone();
+        let source_schema = params.source_schema.clone();
         let target_connection_id = params.target_connection_id.clone();
         let target_database = params.target_database.clone();
         let target_schema = params.target_schema.clone();
@@ -414,13 +416,15 @@ impl SchemaCompareWindow {
                 view.set_progress(None, cx);
                 match result {
                     Ok(result) => {
-                        match generate_schema_sync_plan_for_target(
+                        match generate_schema_sync_plan_for_target_with_source_namespace(
                             &result,
                             &db_state,
                             &source_connection_id,
                             &target_connection_id,
                             &target_database,
                             target_schema.as_deref(),
+                            Some(&source_database),
+                            source_schema.as_deref(),
                             compare_column_order,
                             type_mapping_overrides.clone(),
                         ) {
