@@ -172,6 +172,47 @@ NavopRdpResult configure_resource_policy(
 NavopRdpResult configure_input_policy(
     const NativeRdpConnectionPolicyContext& context,
     const NavopRdpConnectionOptions& options) noexcept {
+    CComQIPtr<IMsRdpClient7> client7(context.client);
+    if (client7 == nullptr) {
+        return record_last_error(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    // KeyboardHookMode belongs to IMsRdpClientSecuredSettings. Setting it
+    // through AdvancedSettings9 via IDispatch fails with DISP_E_UNKNOWNNAME on
+    // current MSTSC controls.
+    CComPtr<IMsRdpClientSecuredSettings2> secured_settings3;
+    trace_native_stage("connect.input.get_secured_settings3.before");
+    HRESULT hresult = client7->get_SecuredSettings3(&secured_settings3);
+    trace_native_hresult(
+        "connect.input.get_secured_settings3.after",
+        static_cast<int32_t>(hresult));
+    if (FAILED(hresult) || secured_settings3 == nullptr) {
+        if (FAILED(hresult)) {
+            return record_last_hresult(
+                context.owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(hresult));
+        }
+        return record_last_error(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR);
+    }
+
+    trace_native_stage("connect.input.keyboard_hook_mode.before");
+    hresult = secured_settings3->put_KeyboardHookMode(
+        static_cast<LONG>(options.keyboard_hook_mode));
+    trace_native_hresult(
+        "connect.input.keyboard_hook_mode.after",
+        static_cast<int32_t>(hresult));
+    if (FAILED(hresult)) {
+        return record_last_hresult(
+            context.owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(hresult));
+    }
+
     CComPtr<IMsRdpClientAdvancedSettings8> advanced;
     NavopRdpResult result = get_advanced_settings8(
         context.owner,
@@ -181,18 +222,6 @@ NavopRdpResult configure_input_policy(
         return result;
     }
 
-    const NativeRdpDispatchTarget keyboard_hook{
-        advanced,
-        L"KeyboardHookMode",
-        "connect.input.keyboard_hook_mode",
-    };
-    result = set_required_dispatch_long(
-        context.owner,
-        keyboard_hook,
-        static_cast<LONG>(options.keyboard_hook_mode));
-    if (result != NAVOP_RDP_RESULT_OK) {
-        return result;
-    }
     result = configure_redirect_bool(
         context.owner,
         advanced,

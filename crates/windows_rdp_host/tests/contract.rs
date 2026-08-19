@@ -2380,6 +2380,47 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
 }
 
 #[test]
+fn native_input_policy_sets_keyboard_hook_mode_through_secured_settings() {
+    let runtime_policy = &format!("{HOST_CRATE}/native/connection_policy_runtime.cpp");
+    assert_tokens_in_scope(
+        runtime_policy,
+        "NavopRdpResult configure_input_policy(",
+        "NavopRdpResult configure_performance_policy(",
+        &[
+            "CComQIPtr<IMsRdpClient7> client7(context.client);",
+            "CComPtr<IMsRdpClientSecuredSettings2> secured_settings3;",
+            "connect.input.get_secured_settings3.before",
+            "client7->get_SecuredSettings3(&secured_settings3)",
+            "connect.input.get_secured_settings3.after",
+            "connect.input.keyboard_hook_mode.before",
+            "secured_settings3->put_KeyboardHookMode(",
+            "options.keyboard_hook_mode",
+            "connect.input.keyboard_hook_mode.after",
+            "get_advanced_settings8(",
+            "L\"EnableWindowsKey\"",
+            "L\"GrabFocusOnConnect\"",
+        ],
+    );
+
+    let contents = read(runtime_policy);
+    let (_, input_policy) = contents
+        .split_once("NavopRdpResult configure_input_policy(")
+        .unwrap_or_else(|| panic!("{runtime_policy} must define configure_input_policy"));
+    let (input_policy, _) = input_policy
+        .split_once("NavopRdpResult configure_performance_policy(")
+        .unwrap_or_else(|| panic!("{runtime_policy} must define configure_performance_policy"));
+    for forbidden in [
+        "L\"KeyboardHookMode\"",
+        "NativeRdpDispatchTarget keyboard_hook",
+    ] {
+        assert!(
+            !input_policy.contains(forbidden),
+            "{runtime_policy} input policy must not contain `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn native_connection_sources_are_registered_in_the_windows_build() {
     assert_contains_all(
         &format!("{HOST_CRATE}/build.rs"),
