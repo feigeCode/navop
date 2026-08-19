@@ -50,9 +50,9 @@ RemoteDesktop:
     zh-CN: 远程桌面连接失败，请检查连接配置后重试。
     zh-HK: 遠端桌面連線失敗，請檢查連線設定後重試。
   native_proxy_unsupported:
-    en: Windows native RDP does not support the configured SOCKS/HTTP proxy yet. Use the Canvas backend instead.
-    zh-CN: Windows 原生 RDP 暂不支持已配置的 SOCKS/HTTP 代理，请改用 Canvas 后端。
-    zh-HK: Windows 原生 RDP 暫不支援已設定的 SOCKS/HTTP 代理，請改用 Canvas 後端。
+    en: Windows native RDP does not support the configured SOCKS/HTTP proxy yet. Use the IronRDP backend instead.
+    zh-CN: Windows 原生 RDP 暂不支持已配置的 SOCKS/HTTP 代理，请改用 IronRDP 后端。
+    zh-HK: Windows 原生 RDP 暫不支援已設定的 SOCKS/HTTP 代理，請改用 IronRDP 後端。
   presentation_backend:
     en: "Backend: %{backend}"
     zh-CN: "后端：%{backend}"
@@ -61,14 +61,14 @@ RemoteDesktop:
     en: Selecting
     zh-CN: 正在选择
     zh-HK: 正在選擇
-  backend_canvas:
-    en: Canvas
-    zh-CN: Canvas
-    zh-HK: Canvas
+  backend_ironrdp:
+    en: IronRDP
+    zh-CN: IronRDP
+    zh-HK: IronRDP
   backend_windows_native:
-    en: Windows native RDP
-    zh-CN: Windows 原生 RDP
-    zh-HK: Windows 原生 RDP
+    en: Windows native RDP (MSTSC)
+    zh-CN: Windows 原生 RDP（MSTSC）
+    zh-HK: Windows 原生 RDP（MSTSC）
   fallback_reason:
     en: "Fallback reason: %{reason}"
     zh-CN: "回退原因：%{reason}"
@@ -94,9 +94,9 @@ RemoteDesktop:
     zh-CN: Windows RDP 组件缺少必需接口
     zh-HK: Windows RDP 元件缺少必要介面
   use_canvas:
-    en: Retry with Canvas
-    zh-CN: 使用 Canvas 重试
-    zh-HK: 使用 Canvas 重試
+    en: Retry with IronRDP
+    zh-CN: 使用 IronRDP 重试
+    zh-HK: 使用 IronRDP 重試
   copy_diagnostic:
     en: Copy diagnostics
     zh-CN: 复制诊断
@@ -214,13 +214,13 @@ RemoteDesktopForm:
     zh-CN: 自动
     zh-HK: 自動
   backend_windows_native:
-    en: Windows native RDP
-    zh-CN: Windows 原生 RDP
-    zh-HK: Windows 原生 RDP
-  backend_canvas:
-    en: Canvas
-    zh-CN: Canvas
-    zh-HK: Canvas
+    en: Windows native RDP (MSTSC)
+    zh-CN: Windows 原生 RDP（MSTSC）
+    zh-HK: Windows 原生 RDP（MSTSC）
+  backend_ironrdp:
+    en: IronRDP
+    zh-CN: IronRDP
+    zh-HK: IronRDP
   placeholder_name:
     en: Windows Server
     zh-CN: Windows 服务器

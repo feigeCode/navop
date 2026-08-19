@@ -154,7 +154,7 @@ fn localized_presentation_backend(
     match initialization.presentation() {
         None => t!("RemoteDesktop.backend_selecting").to_string(),
         Some(presentation::RemoteDesktopPresentation::Canvas) => {
-            t!("RemoteDesktop.backend_canvas").to_string()
+            t!("RemoteDesktop.backend_ironrdp").to_string()
         }
         Some(presentation::RemoteDesktopPresentation::NativeWindows) => {
             t!("RemoteDesktop.backend_windows_native").to_string()

@@ -29,10 +29,7 @@ use rust_i18n::t;
 use self::connection_test::ConnectionTestState;
 use self::inputs::{create_inputs, input_text, non_empty_text, parse_u16};
 use self::persistence::{emit_saved_connection, persist_connection};
-use self::selects::{
-    BackendPreferenceSelectItem, WorkspaceSelectItem, create_backend_preference_select,
-    create_workspace_select,
-};
+use self::selects::{WorkspaceSelectItem, create_workspace_select};
 
 pub struct RemoteDesktopFormWindowConfig {
     pub protocol: RemoteDesktopProtocol,
@@ -63,7 +60,7 @@ pub struct RemoteDesktopFormWindow {
     proxy_credential_picker: Entity<CredentialReferencePicker>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
-    backend_preference_select: Entity<SelectState<Vec<BackendPreferenceSelectItem>>>,
+    backend_preference: one_core::storage::RemoteDesktopBackendPreference,
     read_only: bool,
     audio_playback: bool,
     // Persisted RDP settings from the edited connection. Kept verbatim unless
@@ -167,7 +164,7 @@ impl RemoteDesktopFormWindow {
             proxy_credential_picker,
             workspace_select: create_workspace_select(&config, window, cx),
             team_select: create_team_select(&config.teams, None, window, cx),
-            backend_preference_select: create_backend_preference_select(window, cx),
+            backend_preference: Default::default(),
             read_only: false,
             audio_playback: false,
             rdp_settings: None,
@@ -238,9 +235,7 @@ impl RemoteDesktopFormWindow {
             }
             _ => audio_playback_for_protocol(self.protocol, params.audio_playback),
         };
-        self.backend_preference_select.update(cx, |state, cx| {
-            state.set_selected_value(&params.backend_preference, window, cx)
-        });
+        self.backend_preference = params.backend_preference;
         self.apply_proxy(params.proxy, window, cx);
     }
 
@@ -279,12 +274,7 @@ impl RemoteDesktopFormWindow {
             audio_playback,
             proxy,
             credential_reference: self.credential_picker.read(cx).selected_reference(),
-            backend_preference: self
-                .backend_preference_select
-                .read(cx)
-                .selected_value()
-                .copied()
-                .unwrap_or_default(),
+            backend_preference: self.backend_preference,
             // Preserve loaded RDP settings (including non-binary audio modes)
             // unless the corresponding form control changed them. Switching
             // to VNC clears them.
