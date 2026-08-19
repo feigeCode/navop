@@ -40,23 +40,27 @@ pub fn compare_schemas_with_type_mapping(
 
     // 源端独有的表（新增）
     for name in source_names.difference(&target_names) {
-        let source = source_map.get(name).cloned();
+        let source = source_map[name].clone();
+        let index_diffs = if options.compare_indexes {
+            compare_indexes_with_options(&source.indexes, &[], &options)
+        } else {
+            Vec::new()
+        };
+        let foreign_key_diffs = if options.compare_foreign_keys {
+            compare_foreign_keys_with_options(&source.foreign_keys, &[], &options)
+        } else {
+            Vec::new()
+        };
         table_diffs.push(TableDiff {
-            name: source
-                .as_ref()
-                .map(|table| table.name.clone())
-                .unwrap_or_default(),
+            name: source.name.clone(),
             status: DiffStatus::Added,
-            object_type: source
-                .as_ref()
-                .map(|table| table.object_type)
-                .unwrap_or_default(),
+            object_type: source.object_type,
             changes: vec![],
-            source,
+            source: Some(source),
             target: None,
             column_diffs: vec![],
-            index_diffs: vec![],
-            foreign_key_diffs: vec![],
+            index_diffs,
+            foreign_key_diffs,
             comment_changed: false,
             table_options_changed: false,
         });
@@ -1158,6 +1162,96 @@ mod tests {
             "id".to_string()
         );
         assert!(diff.target.is_none());
+    }
+
+    #[test]
+    fn test_added_table_diff_includes_indexes_and_foreign_keys() {
+        let mut added_table = table(
+            "orders",
+            vec![
+                column("id", "bigint", false),
+                column("user_id", "bigint", false),
+            ],
+        );
+        added_table.indexes = vec![
+            IndexSchema {
+                name: "PRIMARY".to_string(),
+                columns: vec!["id".to_string()],
+                unique: true,
+            },
+            IndexSchema {
+                name: "idx_orders_user".to_string(),
+                columns: vec!["user_id".to_string()],
+                unique: false,
+            },
+        ];
+        added_table.foreign_keys = vec![ForeignKeySchema {
+            name: "fk_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            ref_table: "users".to_string(),
+            ref_schema: None,
+            ref_columns: vec!["id".to_string()],
+            on_delete: Some("CASCADE".to_string()),
+            on_update: None,
+        }];
+
+        let result =
+            compare_schemas(vec![added_table], vec![], SchemaCompareOptions::default()).unwrap();
+
+        let diff = result
+            .table_diffs
+            .iter()
+            .find(|diff| diff.name == "orders")
+            .unwrap();
+        assert_eq!(diff.status, DiffStatus::Added);
+        assert_eq!(diff.index_diffs.len(), 2);
+        assert!(diff.index_diffs.iter().all(|index_diff| {
+            index_diff.status == DiffStatus::Added
+                && index_diff.source.is_some()
+                && index_diff.target.is_none()
+        }));
+        assert_eq!(diff.foreign_key_diffs.len(), 1);
+        assert_eq!(diff.foreign_key_diffs[0].name, "fk_orders_user");
+        assert_eq!(diff.foreign_key_diffs[0].status, DiffStatus::Added);
+        assert!(diff.foreign_key_diffs[0].source.is_some());
+        assert!(diff.foreign_key_diffs[0].target.is_none());
+    }
+
+    #[test]
+    fn test_added_table_diff_respects_index_and_foreign_key_options() {
+        let mut added_table = table(
+            "orders",
+            vec![
+                column("id", "bigint", false),
+                column("user_id", "bigint", false),
+            ],
+        );
+        added_table.indexes = vec![IndexSchema {
+            name: "idx_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            unique: false,
+        }];
+        added_table.foreign_keys = vec![ForeignKeySchema {
+            name: "fk_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            ref_table: "users".to_string(),
+            ref_schema: None,
+            ref_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        }];
+        let options = SchemaCompareOptions {
+            compare_indexes: false,
+            compare_foreign_keys: false,
+            ..Default::default()
+        };
+
+        let result = compare_schemas(vec![added_table], vec![], options).unwrap();
+
+        let diff = &result.table_diffs[0];
+        assert_eq!(diff.status, DiffStatus::Added);
+        assert!(diff.index_diffs.is_empty());
+        assert!(diff.foreign_key_diffs.is_empty());
     }
 
     #[test]

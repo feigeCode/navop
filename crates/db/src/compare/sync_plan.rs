@@ -5348,8 +5348,8 @@ mod tests {
     #[test]
     fn test_mysql_schema_sync_plan_adds_foreign_keys_after_added_table() {
         use super::super::{
-            ColumnSchema, DiffStatus, ForeignKeySchema, IndexSchema, SchemaCompareResult,
-            TableDiff, TableSchema,
+            ColumnSchema, DiffStatus, ForeignKeySchema, IndexSchema, SchemaCompareOptions,
+            TableSchema, compare_schemas,
         };
 
         let source = TableSchema {
@@ -5372,11 +5372,18 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            indexes: vec![IndexSchema {
-                name: "PRIMARY".to_string(),
-                columns: vec!["id".to_string()],
-                unique: true,
-            }],
+            indexes: vec![
+                IndexSchema {
+                    name: "PRIMARY".to_string(),
+                    columns: vec!["id".to_string()],
+                    unique: true,
+                },
+                IndexSchema {
+                    name: "idx_order_items_order".to_string(),
+                    columns: vec!["order_id".to_string()],
+                    unique: false,
+                },
+            ],
             foreign_keys: vec![ForeignKeySchema {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
@@ -5389,27 +5396,12 @@ mod tests {
             comment: None,
             ..Default::default()
         };
-        let result = SchemaCompareResult {
-            routine_diffs: vec![],
-            trigger_diffs: vec![],
-            table_failures: vec![],
-            table_diffs: vec![TableDiff {
-                name: "order_items".to_string(),
-                status: DiffStatus::Added,
-                source: Some(source),
-                target: None,
-                column_diffs: vec![],
-                index_diffs: vec![],
-                foreign_key_diffs: vec![],
-                comment_changed: false,
-                object_type: Default::default(),
-                changes: vec![],
-                table_options_changed: false,
-            }],
-            added_count: 1,
-            removed_count: 0,
-            modified_count: 0,
-        };
+        let result =
+            compare_schemas(vec![source], vec![], SchemaCompareOptions::default()).unwrap();
+        let table_diff = &result.table_diffs[0];
+        assert_eq!(table_diff.status, DiffStatus::Added);
+        assert_eq!(table_diff.index_diffs.len(), 2);
+        assert_eq!(table_diff.foreign_key_diffs.len(), 1);
         let plugin = crate::mysql::MySqlPlugin::new();
 
         let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
@@ -5423,6 +5415,7 @@ mod tests {
         assert!(sql[0].starts_with("CREATE TABLE `app`.`order_items`"));
         assert!(sql[0].contains("PRIMARY KEY (`id`)"));
         assert!(!sql[0].contains("UNIQUE INDEX `PRIMARY`"));
+        assert!(sql[0].contains("INDEX `idx_order_items_order` (`order_id`)"));
         assert_eq!(
             sql[1],
             "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
