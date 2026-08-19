@@ -181,6 +181,38 @@ impl MysqlDbConnection {
         }
     }
 
+    fn format_bit_bytes(bytes: &[u8], bit_length: u32) -> String {
+        let bits_per_byte = u8::BITS as usize;
+        let available_bits = bytes.len().saturating_mul(bits_per_byte);
+        if available_bits == 0 {
+            return String::new();
+        }
+
+        let requested_bits = usize::try_from(bit_length)
+            .ok()
+            .filter(|bits| *bits > 0)
+            .unwrap_or(available_bits);
+        let display_bits = requested_bits.min(available_bits);
+        let first_bit = available_bits - display_bits;
+
+        (first_bit..available_bits)
+            .map(|bit_index| {
+                let byte = bytes[bit_index / bits_per_byte];
+                let shift = bits_per_byte - 1 - (bit_index % bits_per_byte);
+                if byte & (1u8 << shift) == 0 { '0' } else { '1' }
+            })
+            .collect()
+    }
+
+    fn extract_column_value(value: &Value, column: &mysql_async::Column) -> Option<String> {
+        match value {
+            Value::Bytes(bytes) if column.column_type() == ColumnType::MYSQL_TYPE_BIT => {
+                Some(Self::format_bit_bytes(bytes, column.column_length()))
+            }
+            _ => Self::extract_value(value),
+        }
+    }
+
     fn is_valid_utf8_text(bytes: &[u8]) -> bool {
         match std::str::from_utf8(bytes) {
             Ok(s) => s
@@ -206,21 +238,20 @@ impl MysqlDbConnection {
     }
 
     fn is_binary_column(column_type: ColumnType, flags: ColumnFlags, collation_id: u16) -> bool {
-        column_type == ColumnType::MYSQL_TYPE_BIT
-            || (flags.contains(ColumnFlags::BINARY_FLAG)
-                && collation_id == Self::MYSQL_BINARY_COLLATION_ID
-                && matches!(
-                    column_type,
-                    ColumnType::MYSQL_TYPE_STRING
-                        | ColumnType::MYSQL_TYPE_VAR_STRING
-                        | ColumnType::MYSQL_TYPE_VARCHAR
-                        | ColumnType::MYSQL_TYPE_TINY_BLOB
-                        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-                        | ColumnType::MYSQL_TYPE_LONG_BLOB
-                        | ColumnType::MYSQL_TYPE_BLOB
-                        | ColumnType::MYSQL_TYPE_GEOMETRY
-                        | ColumnType::MYSQL_TYPE_VECTOR
-                ))
+        flags.contains(ColumnFlags::BINARY_FLAG)
+            && collation_id == Self::MYSQL_BINARY_COLLATION_ID
+            && matches!(
+                column_type,
+                ColumnType::MYSQL_TYPE_STRING
+                    | ColumnType::MYSQL_TYPE_VAR_STRING
+                    | ColumnType::MYSQL_TYPE_VARCHAR
+                    | ColumnType::MYSQL_TYPE_TINY_BLOB
+                    | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+                    | ColumnType::MYSQL_TYPE_LONG_BLOB
+                    | ColumnType::MYSQL_TYPE_BLOB
+                    | ColumnType::MYSQL_TYPE_GEOMETRY
+                    | ColumnType::MYSQL_TYPE_VECTOR
+            )
     }
 
     fn format_datetime(
@@ -327,13 +358,14 @@ impl MysqlDbConnection {
             let row_index = all_rows.len();
             let row_data: Vec<Option<String>> = (0..row.len())
                 .map(|i| {
-                    if columns_arc.get(i).is_some_and(|column| {
-                        Self::is_binary_column(
-                            column.column_type(),
-                            column.flags(),
-                            column.character_set(),
-                        )
-                    }) {
+                    let Some(column) = columns_arc.get(i) else {
+                        return Self::extract_value(&row[i]);
+                    };
+                    if Self::is_binary_column(
+                        column.column_type(),
+                        column.flags(),
+                        column.character_set(),
+                    ) {
                         if let Value::Bytes(bytes) = &row[i] {
                             binary_cells.push(BinaryCell {
                                 row_index,
@@ -342,7 +374,7 @@ impl MysqlDbConnection {
                             });
                         }
                     }
-                    Self::extract_value(&row[i])
+                    Self::extract_column_value(&row[i], column)
                 })
                 .collect();
             all_rows.push(row_data);
@@ -1210,12 +1242,12 @@ mod tests {
     }
 
     #[test]
-    fn binary_column_detection_handles_bit_and_requires_binary_collation_for_byte_columns() {
+    fn binary_column_detection_excludes_bit_and_requires_binary_collation_for_byte_columns() {
         use mysql_async::consts::{ColumnFlags, ColumnType};
 
         const UTF8MB4_BIN_COLLATION_ID: u16 = 46;
 
-        assert!(MysqlDbConnection::is_binary_column(
+        assert!(!MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_BIT,
             ColumnFlags::empty(),
             0,
@@ -1244,6 +1276,38 @@ mod tests {
             ColumnType::MYSQL_TYPE_LONG,
             ColumnFlags::BINARY_FLAG,
             MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+        ));
+    }
+
+    #[test]
+    fn bit_values_are_formatted_as_editable_fixed_width_bit_strings() {
+        assert_eq!("0", MysqlDbConnection::format_bit_bytes(&[0], 1));
+        assert_eq!("1", MysqlDbConnection::format_bit_bytes(&[1], 1));
+        assert_eq!("0010", MysqlDbConnection::format_bit_bytes(&[0b0010], 4));
+        assert_eq!("1010", MysqlDbConnection::format_bit_bytes(&[0b1010], 4));
+        assert_eq!(
+            "100000010",
+            MysqlDbConnection::format_bit_bytes(&[0b0000_0001, 0b0000_0010], 9)
+        );
+        assert_eq!(
+            "00000010",
+            MysqlDbConnection::format_bit_bytes(&[0b0000_0010], 0)
+        );
+        assert_eq!("", MysqlDbConnection::format_bit_bytes(&[], 1));
+    }
+
+    #[test]
+    fn bit_column_values_use_bit_text_instead_of_binary_hex() {
+        let column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_BIT).with_column_length(4);
+
+        assert_eq!(
+            Some("0010".to_string()),
+            MysqlDbConnection::extract_column_value(&Value::Bytes(vec![0b0010]), &column)
+        );
+        assert!(!MysqlDbConnection::is_binary_column(
+            column.column_type(),
+            column.flags(),
+            column.character_set(),
         ));
     }
 }
