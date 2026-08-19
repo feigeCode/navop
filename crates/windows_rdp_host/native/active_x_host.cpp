@@ -1332,7 +1332,7 @@ NavopRdpResult apply_active_x_credentials(
                     NAVOP_RDP_RESULT_ALLOCATION_FAILED);
             }
             trace_native_stage("credentials.gateway.username.before");
-            result = transport->put_GatewayUserName(gateway_username_bstr);
+            result = transport->put_GatewayUsername(gateway_username_bstr);
             trace_native_hresult(
                 "credentials.gateway.username.after",
                 static_cast<int32_t>(result));
