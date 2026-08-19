@@ -8,7 +8,7 @@ use one_core::storage::{ConnectionType, DatabaseType};
 use rust_i18n::t;
 use std::path::PathBuf;
 
-const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb"];
+const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb", "oracle-go"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NewConnectionCategory {
@@ -222,9 +222,10 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn external_database_kinds_skip_builtin_duckdb_external_driver() {
+    fn external_database_kinds_skip_builtin_external_drivers() {
         let registry = IpcDriverRegistry::from_drivers(vec![
             manifest("duckdb", "DuckDB"),
+            manifest("oracle-go", "Oracle Go"),
             manifest("custom", "Custom"),
         ]);
 

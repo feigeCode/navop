@@ -31,7 +31,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     popover::Popover,
-    radio::{Radio, RadioGroup},
+    radio::Radio,
     scroll::ScrollableElement,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     tab::{Tab, TabBar},
@@ -2688,59 +2688,118 @@ impl DbConnectionForm {
                     )
                 })
                 .when(is_builtin_oracle, |form| {
-                    let selected_index = Some(match self.oracle_driver_mode {
-                        OracleDriverMode::Native => 0,
-                        OracleDriverMode::Go => 1,
-                    });
+                    let is_native = self.oracle_driver_mode == OracleDriverMode::Native;
+                    let is_go = self.oracle_driver_mode == OracleDriverMode::Go;
 
                     form.child(
                         field()
                             .label(t!("ConnectionForm.oracle_driver_mode").to_string())
-                            .items_start()
+                            .items_center()
                             .label_justify_end()
                             .child(
-                                RadioGroup::horizontal("oracle-driver-mode")
-                                    .selected_index(selected_index)
-                                    .on_click(cx.listener(|this, index, _window, cx| {
-                                        this.oracle_driver_mode = if *index == 0 {
-                                            OracleDriverMode::Native
-                                        } else {
-                                            OracleDriverMode::Go
-                                        };
-                                        this.refresh_oracle_client_status(cx);
-                                        cx.notify();
-                                    }))
-                                    .children([
-                                        Radio::new("oracle-driver-mode-native")
-                                            .label(
-                                                t!("ConnectionForm.oracle_driver_native")
-                                                    .to_string(),
-                                            )
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .flex_wrap()
+                                    .gap_3()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .flex_shrink_0()
                                             .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(
+                                                Radio::new("oracle-driver-mode-native")
+                                                    .label(
                                                         t!(
-                                                            "ConnectionForm.oracle_driver_native_desc"
+                                                            "ConnectionForm.oracle_driver_native"
                                                         )
                                                         .to_string(),
-                                                    ),
-                                            ),
-                                        Radio::new("oracle-driver-mode-go")
-                                            .label(
-                                                t!("ConnectionForm.oracle_driver_go").to_string(),
+                                                    )
+                                                    .checked(is_native)
+                                                    .on_click(cx.listener(
+                                                        |this, _, _window, cx| {
+                                                            this.oracle_driver_mode =
+                                                                OracleDriverMode::Native;
+                                                            this.refresh_oracle_client_status(cx);
+                                                            cx.notify();
+                                                        },
+                                                    )),
                                             )
                                             .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(
-                                                        t!("ConnectionForm.oracle_driver_go_desc")
-                                                            .to_string(),
-                                                    ),
+                                                Popover::new("oracle-driver-native-help")
+                                                    .trigger(
+                                                        Button::new("oracle-driver-native-help-btn")
+                                                            .icon(IconName::Info)
+                                                            .ghost()
+                                                            .xsmall()
+                                                            .tooltip(
+                                                                t!(
+                                                                    "ConnectionForm.oracle_driver_native_desc"
+                                                                )
+                                                                .to_string(),
+                                                            ),
+                                                    )
+                                                    .content(|_, _, _| {
+                                                        div()
+                                                            .text_sm()
+                                                            .max_w(px(320.))
+                                                            .child(
+                                                                t!(
+                                                                    "ConnectionForm.oracle_driver_native_desc"
+                                                                )
+                                                                .to_string(),
+                                                            )
+                                                    }),
                                             ),
-                                    ]),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .flex_shrink_0()
+                                            .child(
+                                                Radio::new("oracle-driver-mode-go")
+                                                    .label(
+                                                        t!("ConnectionForm.oracle_driver_go")
+                                                            .to_string(),
+                                                    )
+                                                    .checked(is_go)
+                                                    .on_click(cx.listener(
+                                                        |this, _, _window, cx| {
+                                                            this.oracle_driver_mode =
+                                                                OracleDriverMode::Go;
+                                                            this.refresh_oracle_client_status(cx);
+                                                            cx.notify();
+                                                        },
+                                                    )),
+                                            )
+                                            .child(
+                                                Popover::new("oracle-driver-go-help")
+                                                    .trigger(
+                                                        Button::new("oracle-driver-go-help-btn")
+                                                            .icon(IconName::Info)
+                                                            .ghost()
+                                                            .xsmall()
+                                                            .tooltip(
+                                                                t!(
+                                                                    "ConnectionForm.oracle_driver_go_desc"
+                                                                )
+                                                                .to_string(),
+                                                            ),
+                                                    )
+                                                    .content(|_, _, _| {
+                                                        div()
+                                                            .text_sm()
+                                                            .max_w(px(320.))
+                                                            .child(
+                                                                t!(
+                                                                    "ConnectionForm.oracle_driver_go_desc"
+                                                                )
+                                                                .to_string(),
+                                                            )
+                                                    }),
+                                            ),
+                                    ),
                             ),
                     )
                 })
