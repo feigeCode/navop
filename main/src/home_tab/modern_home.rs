@@ -11,11 +11,15 @@ use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
 use super::{
-    HomePage,
+    HomePage, HomeSyncButtonContext, HomeSyncButtonState, home_sync_button_state,
     modern_home_shortcuts::{new_connection_shortcut, quick_open_shortcut, terminal_shortcut},
+    sync_route,
 };
 use crate::connection_visuals::ConnectionVisualSize;
 use crate::home::connection_import_window::show_connection_import_window;
+use crate::license::is_feature_enabled;
+use one_core::license::Feature;
+use one_core::settings::AppSettings;
 
 const START_CENTER_MAX_WIDTH: gpui::Pixels = px(1040.0);
 const START_CENTER_MAIN_COLUMN_WIDTH: gpui::Pixels = px(580.0);
@@ -28,6 +32,21 @@ impl HomePage {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
+        let route = sync_route(cx);
+        let personal_syncing = matches!(
+            crate::personal_sync_runtime::runtime_status(cx),
+            crate::personal_sync_status::PersonalSyncRuntimeStatus::Syncing
+        );
+        let sync_button_state = home_sync_button_state(HomeSyncButtonContext {
+            route,
+            sync_enabled: AppSettings::global(cx).sync_enabled,
+            is_logged_in: self.current_user.is_some(),
+            has_sync_license: is_feature_enabled(Feature::CloudSync, cx),
+            onet_syncing: self.syncing,
+            personal_sync_ready: crate::personal_sync_runtime::actions_enabled(cx),
+            personal_syncing,
+        });
+        let syncing = self.syncing || personal_syncing;
 
         div()
             .id("modern-home-start-center")
@@ -66,7 +85,8 @@ impl HomePage {
                                         .child(render_create_panel(cx.entity(), window, cx))
                                         .child(render_workspace_tools(cx.entity(), window, cx))
                                         .child(render_status_panel(
-                                            self.syncing,
+                                            syncing,
+                                            sync_button_state,
                                             cx.entity(),
                                             window,
                                             cx,
@@ -400,6 +420,7 @@ fn render_workspace_tools(
 
 fn render_status_panel(
     syncing: bool,
+    sync_button_state: HomeSyncButtonState,
     view: gpui::Entity<HomePage>,
     window: &mut Window,
     cx: &gpui::App,
@@ -429,12 +450,12 @@ fn render_status_panel(
                             t!("Home.sync").to_string()
                         },
                         t!("Home.StartCenter.sync_description").to_string(),
-                        !syncing,
+                        !sync_button_state.is_disabled(),
                         cx,
                     )
-                    .when(!syncing, |this| {
-                        this.on_click(window.listener_for(&sync_view, |home, _, _, cx| {
-                            home.trigger_sync(cx);
+                    .when(!sync_button_state.is_disabled(), |this| {
+                        this.on_click(window.listener_for(&sync_view, |home, _, window, cx| {
+                            home.handle_sync_click(window, cx);
                         }))
                     }),
                 )

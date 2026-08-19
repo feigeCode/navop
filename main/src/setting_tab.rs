@@ -62,6 +62,7 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::GlobalStorageState;
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
+const SYNC_SETTINGS_PAGE_INDEX: usize = 1;
 const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 
 use gpui_component::input::InputEvent;
@@ -417,6 +418,10 @@ impl SettingsPanel {
 
     pub fn new_team_keys(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::new_with_initial_page(TEAM_KEYS_SETTINGS_PAGE_INDEX, cx)
+    }
+
+    pub fn new_sync(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(SYNC_SETTINGS_PAGE_INDEX, cx)
     }
 
     fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
@@ -2243,10 +2248,10 @@ impl Render for SettingsPanel {
         } else {
             self.initial_page_index
         };
-        let settings_id = if initial_page_index == TEAM_KEYS_SETTINGS_PAGE_INDEX {
-            "main-app-settings-team-keys"
-        } else {
-            "main-app-settings"
+        let settings_id = match initial_page_index {
+            SYNC_SETTINGS_PAGE_INDEX => "main-app-settings-sync",
+            TEAM_KEYS_SETTINGS_PAGE_INDEX => "main-app-settings-team-keys",
+            _ => "main-app-settings",
         };
 
         div().track_focus(&self.focus_handle).size_full().child(

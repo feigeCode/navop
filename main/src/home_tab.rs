@@ -255,8 +255,9 @@ pub(super) use keybindings::{
 pub use keybindings::{init, refresh_keybindings};
 pub(crate) use sync_route::should_show_team_management_entry;
 use sync_route::{
-    HomeSyncRoute, refreshed_pending_conflicts, should_auto_onet_cloud_sync,
-    should_show_team_key_menu_item, sync_route,
+    HomeSyncButtonContext, HomeSyncButtonState, HomeSyncRoute, home_sync_button_state,
+    refreshed_pending_conflicts, should_auto_onet_cloud_sync, should_show_team_key_menu_item,
+    sync_route,
 };
 pub(crate) use team_permissions::TeamPermissionSnapshot;
 

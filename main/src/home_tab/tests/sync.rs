@@ -34,6 +34,121 @@ fn sync_route_uses_selected_provider() {
 }
 
 #[test]
+fn disabled_global_sync_keeps_home_sync_actionable_for_settings_prompt() {
+    let state = home_sync_button_state(HomeSyncButtonContext {
+        route: HomeSyncRoute::OnetCloud,
+        sync_enabled: false,
+        is_logged_in: true,
+        has_sync_license: true,
+        onet_syncing: false,
+        personal_sync_ready: false,
+        personal_syncing: false,
+    });
+
+    assert_eq!(HomeSyncButtonState::NeedsSettings, state);
+    assert!(!state.is_disabled());
+}
+
+#[test]
+fn home_sync_remains_disabled_for_busy_and_unavailable_states() {
+    assert!(
+        home_sync_button_state(HomeSyncButtonContext {
+            route: HomeSyncRoute::OnetCloud,
+            sync_enabled: false,
+            is_logged_in: true,
+            has_sync_license: true,
+            onet_syncing: true,
+            personal_sync_ready: false,
+            personal_syncing: false,
+        })
+        .is_disabled()
+    );
+    assert!(
+        home_sync_button_state(HomeSyncButtonContext {
+            route: HomeSyncRoute::OnetCloud,
+            sync_enabled: true,
+            is_logged_in: false,
+            has_sync_license: true,
+            onet_syncing: false,
+            personal_sync_ready: false,
+            personal_syncing: false,
+        })
+        .is_disabled()
+    );
+    assert!(
+        home_sync_button_state(HomeSyncButtonContext {
+            route: HomeSyncRoute::Personal,
+            sync_enabled: true,
+            is_logged_in: true,
+            has_sync_license: true,
+            onet_syncing: false,
+            personal_sync_ready: false,
+            personal_syncing: false,
+        })
+        .is_disabled()
+    );
+    assert!(
+        home_sync_button_state(HomeSyncButtonContext {
+            route: HomeSyncRoute::Personal,
+            sync_enabled: false,
+            is_logged_in: true,
+            has_sync_license: true,
+            onet_syncing: false,
+            personal_sync_ready: true,
+            personal_syncing: true,
+        })
+        .is_disabled()
+    );
+}
+
+#[test]
+fn configured_home_sync_action_is_ready() {
+    assert_eq!(
+        HomeSyncButtonState::Ready,
+        home_sync_button_state(HomeSyncButtonContext {
+            route: HomeSyncRoute::OnetCloud,
+            sync_enabled: true,
+            is_logged_in: true,
+            has_sync_license: true,
+            onet_syncing: false,
+            personal_sync_ready: false,
+            personal_syncing: false,
+        })
+    );
+    assert_eq!(
+        HomeSyncButtonState::Ready,
+        home_sync_button_state(HomeSyncButtonContext {
+            route: HomeSyncRoute::Personal,
+            sync_enabled: true,
+            is_logged_in: true,
+            has_sync_license: true,
+            onet_syncing: false,
+            personal_sync_ready: true,
+            personal_syncing: false,
+        })
+    );
+}
+
+#[test]
+fn every_home_sync_entry_uses_the_guarded_click_handler() {
+    let toolbar = include_str!("../toolbar.rs");
+    let modern_home = include_str!("../modern_home.rs");
+
+    assert!(toolbar.contains("this.handle_sync_click(window, cx);"));
+    assert!(modern_home.contains("home.handle_sync_click(window, cx);"));
+}
+
+#[test]
+fn disabled_sync_dialog_opens_the_sync_settings_page() {
+    let cloud_sync = include_str!("../cloud_sync.rs");
+    let home_tabs = include_str!("../../home/home_tabs.rs");
+
+    assert!(cloud_sync.contains("Home.sync_disabled_title"));
+    assert!(cloud_sync.contains("home.add_sync_settings_tab(window, cx);"));
+    assert!(home_tabs.contains("SettingsPanel::new_sync(win, cx)"));
+}
+
+#[test]
 fn team_key_menu_item_is_visible_only_for_onetcloud_with_cached_teams() {
     assert!(should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 1));
     assert!(should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 3));

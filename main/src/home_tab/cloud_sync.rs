@@ -1,6 +1,40 @@
 use super::*;
 
 impl HomePage {
+    pub(super) fn handle_sync_click(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !AppSettings::global(cx).sync_enabled {
+            self.show_sync_disabled_dialog(window, cx);
+        } else if sync_route(cx) == HomeSyncRoute::OnetCloud
+            && !is_feature_enabled(Feature::CloudSync, cx)
+        {
+            show_upgrade_dialog(window, cx);
+        } else {
+            self.trigger_sync(cx);
+        }
+    }
+
+    fn show_sync_disabled_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view = view.clone();
+            dialog
+                .title(t!("Home.sync_disabled_title").to_string())
+                .child(t!("Home.sync_disabled_message").to_string())
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Home.open_sync_settings").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_, window, cx| {
+                    view.update(cx, |home, cx| {
+                        home.add_sync_settings_tab(window, cx);
+                    });
+                    true
+                })
+        });
+    }
+
     pub(super) fn trigger_sync(&mut self, cx: &mut Context<Self>) {
         if !AppSettings::global(cx).sync_enabled {
             tracing::debug!("同步总开关已关闭，跳过同步请求");

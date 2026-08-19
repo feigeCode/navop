@@ -499,6 +499,18 @@ Home:
     en: Enable sync in Settings before syncing data
     zh-CN: 请先在设置中启用同步
     zh-HK: 請先在設定中啟用同步
+  sync_disabled_title:
+    en: Sync is not enabled
+    zh-CN: 同步尚未开启
+    zh-HK: 同步尚未開啟
+  sync_disabled_message:
+    en: Enable sync in Settings before syncing data.
+    zh-CN: 请前往设置开启同步后再进行同步。
+    zh-HK: 請前往設定開啟同步後再進行同步。
+  open_sync_settings:
+    en: Open Sync Settings
+    zh-CN: 前往同步设置
+    zh-HK: 前往同步設定
   mcp_enable:
     en: MCP
     zh-CN: MCP

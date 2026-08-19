@@ -22,12 +22,15 @@ impl HomePage {
             crate::personal_sync_status::PersonalSyncRuntimeStatus::Syncing
         );
         let personal_sync_ready = crate::personal_sync_runtime::actions_enabled(cx);
-        let sync_disabled = match route {
-            HomeSyncRoute::OnetCloud => {
-                !sync_enabled || (!is_logged_in && has_sync_license) || is_syncing
-            }
-            HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
-        };
+        let sync_button_state = home_sync_button_state(HomeSyncButtonContext {
+            route,
+            sync_enabled,
+            is_logged_in,
+            has_sync_license,
+            onet_syncing: is_syncing,
+            personal_sync_ready,
+            personal_syncing,
+        });
         let has_master_key = crypto::has_master_key();
         let show_team_key_menu_item = is_feature_enabled(Feature::TeamManagement, cx)
             && should_show_team_key_menu_item(route, self.team_permissions.teams().len());
@@ -117,7 +120,7 @@ impl HomePage {
                                 t!("Home.sync").to_string()
                             })
                             .ghost()
-                            .disabled(sync_disabled)
+                            .disabled(sync_button_state.is_disabled())
                             .tooltip(
                                 if !sync_enabled {
                                     t!("Home.sync_disabled_tooltip")
@@ -135,11 +138,7 @@ impl HomePage {
                                 },
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                if sync_route(cx) == HomeSyncRoute::OnetCloud && !has_sync_license {
-                                    show_upgrade_dialog(window, cx);
-                                } else {
-                                    this.trigger_sync(cx);
-                                }
+                                this.handle_sync_click(window, cx);
                             })),
                     )
                     // 冲突指示器
