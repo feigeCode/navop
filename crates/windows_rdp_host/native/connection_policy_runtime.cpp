@@ -206,7 +206,13 @@ NavopRdpResult configure_input_policy(
     trace_native_hresult(
         "connect.input.keyboard_hook_mode.after",
         static_cast<int32_t>(hresult));
-    if (FAILED(hresult)) {
+    // KeyboardHookMode is not implemented by every mstscax.dll build even
+    // though the interface is present in the type library. The default
+    // control behavior is still usable, so treat an unknown property as an
+    // optional capability instead of aborting the entire connection.
+    if (hresult == DISP_E_UNKNOWNNAME) {
+        trace_native_stage("connect.input.keyboard_hook_mode.unsupported");
+    } else if (FAILED(hresult)) {
         return record_last_hresult(
             context.owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,

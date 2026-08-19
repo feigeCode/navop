@@ -2396,6 +2396,8 @@ fn native_input_policy_sets_keyboard_hook_mode_through_secured_settings() {
             "secured_settings3->put_KeyboardHookMode(",
             "options.keyboard_hook_mode",
             "connect.input.keyboard_hook_mode.after",
+            "hresult == DISP_E_UNKNOWNNAME",
+            "connect.input.keyboard_hook_mode.unsupported",
             "get_advanced_settings8(",
             "L\"EnableWindowsKey\"",
             "L\"GrabFocusOnConnect\"",
