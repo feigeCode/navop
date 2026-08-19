@@ -2351,11 +2351,9 @@ pub trait DatabasePlugin: Send + Sync {
                     .collect();
                 let values: Vec<String> = data
                     .iter()
-                    .map(|value| match value {
-                        TableCellValue::Null => "NULL".to_string(),
-                        TableCellValue::Text(value) => {
-                            format!("'{}'", value.replace('\'', "''"))
-                        }
+                    .enumerate()
+                    .map(|(column_index, value)| {
+                        self.format_table_change_value(value, request.columns.get(column_index))
                     })
                     .collect();
 
@@ -2388,12 +2386,10 @@ pub trait DatabasePlugin: Send + Sync {
                             change.column_name.clone()
                         };
                         let ident = self.quote_identifier(&column_name);
-                        let value = match &change.new_value {
-                            TableCellValue::Null => "NULL".to_string(),
-                            TableCellValue::Text(value) => {
-                                format!("'{}'", value.replace('\'', "''"))
-                            }
-                        };
+                        let value = self.format_table_change_value(
+                            &change.new_value,
+                            request.columns.get(change.column_index),
+                        );
                         format!("{} = {}", ident, value)
                     })
                     .collect();
@@ -2484,6 +2480,22 @@ pub trait DatabasePlugin: Send + Sync {
         original_data: &[TableCellValue],
     ) -> (String, String);
 
+    /// Format a value used by table-editor INSERT/UPDATE/DELETE statements.
+    ///
+    /// The default keeps the historical behavior of treating text as a quoted
+    /// SQL string. Database implementations can override this when a column's
+    /// display value has a database-specific literal representation.
+    fn format_table_change_value(
+        &self,
+        value: &TableCellValue,
+        _column: Option<&ColumnInfo>,
+    ) -> String {
+        match value {
+            TableCellValue::Null => "NULL".to_string(),
+            TableCellValue::Text(value) => format!("'{}'", value.replace('\'', "''")),
+        }
+    }
+
     fn build_table_change_where_clause(
         &self,
         request: &TableSaveRequest,
@@ -2525,8 +2537,10 @@ pub trait DatabasePlugin: Send + Sync {
                 let ident = self.quote_identifier(column);
                 match value {
                     TableCellValue::Null => parts.push(format!("{} IS NULL", ident)),
-                    TableCellValue::Text(value) => {
-                        parts.push(format!("{} = '{}'", ident, value.replace('\'', "''")));
+                    TableCellValue::Text(_) => {
+                        let formatted =
+                            self.format_table_change_value(value, request.columns.get(index));
+                        parts.push(format!("{} = {}", ident, formatted));
                     }
                 }
             }
