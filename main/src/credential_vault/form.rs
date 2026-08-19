@@ -155,10 +155,6 @@ impl CredentialForm {
         build_entry(self.existing.clone(), self.values(cx))
     }
 
-    pub(super) fn is_editing(&self) -> bool {
-        self.existing.is_some()
-    }
-
     fn values(&self, cx: &App) -> CredentialFormValues {
         CredentialFormValues {
             name: input_value(&self.name_input, cx),
@@ -279,17 +275,6 @@ fn normalize_expect_step(
 fn optional_trimmed(value: String) -> Option<String> {
     let value = value.trim().to_string();
     (!value.is_empty()).then_some(value)
-}
-
-pub(super) fn credential_kind_values(value: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    for value in value.split(['、', ',', '，', ';', '；']) {
-        let value = value.trim();
-        if !value.is_empty() && !values.iter().any(|current| current == value) {
-            values.push(value.to_string());
-        }
-    }
-    values
 }
 
 #[cfg(test)]

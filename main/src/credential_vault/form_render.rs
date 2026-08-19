@@ -297,15 +297,16 @@ mod tests {
     }
 
     #[test]
-    fn new_credentials_hide_applicable_type_and_keep_sync_in_basic_info() {
+    fn credential_type_picker_is_removed_and_sync_stays_in_basic_info() {
         let render = include_str!("form_render.rs");
         let production = render
             .split("#[cfg(test)]")
             .next()
             .expect("production render source");
 
-        assert!(render.contains(".when(self.is_editing(),"));
-        assert!(render.contains("self.render_sync_settings(cx)"));
+        assert!(!production.contains("render_kind_picker"));
+        assert!(!production.contains(".when(self.is_editing(),"));
+        assert!(production.contains("self.render_sync_settings(cx)"));
         assert!(!production.contains("CredentialForm.tab_sync"));
     }
 }

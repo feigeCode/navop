@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Apple ld emits an advisory when the very large test binary exceeds its compact
+// unwind encoding limit. Keep normal linker diagnostics but silence this known
+// test-only advisory.
+#![cfg_attr(test, allow(linker_messages))]
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -306,7 +310,7 @@ fn main() {
                     tracing::error!(error = %error, "failed to open the Navop main window");
                     eprintln!("Failed to open the Navop main window: {error:#}");
                     let _ = cx.update(|cx| {
-                        onetcli_app::shutdown_ssh_sessions_and_quit(
+                        onetcli_app::shutdown_application_resources_and_quit(
                             cx,
                             "main window initialization failed",
                         );
@@ -471,7 +475,7 @@ mod embedded_cli_removal_tests {
 
         assert!(error_path.contains("failed to open the Navop main window"));
         assert!(error_path.contains("Failed to open the Navop main window: {error:#}"));
-        assert!(error_path.contains("shutdown_ssh_sessions_and_quit"));
+        assert!(error_path.contains("shutdown_application_resources_and_quit"));
     }
 
     #[test]
