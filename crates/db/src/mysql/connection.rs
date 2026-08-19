@@ -206,20 +206,21 @@ impl MysqlDbConnection {
     }
 
     fn is_binary_column(column_type: ColumnType, flags: ColumnFlags, collation_id: u16) -> bool {
-        flags.contains(ColumnFlags::BINARY_FLAG)
-            && collation_id == Self::MYSQL_BINARY_COLLATION_ID
-            && matches!(
-                column_type,
-                ColumnType::MYSQL_TYPE_STRING
-                    | ColumnType::MYSQL_TYPE_VAR_STRING
-                    | ColumnType::MYSQL_TYPE_VARCHAR
-                    | ColumnType::MYSQL_TYPE_TINY_BLOB
-                    | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-                    | ColumnType::MYSQL_TYPE_LONG_BLOB
-                    | ColumnType::MYSQL_TYPE_BLOB
-                    | ColumnType::MYSQL_TYPE_GEOMETRY
-                    | ColumnType::MYSQL_TYPE_VECTOR
-            )
+        column_type == ColumnType::MYSQL_TYPE_BIT
+            || (flags.contains(ColumnFlags::BINARY_FLAG)
+                && collation_id == Self::MYSQL_BINARY_COLLATION_ID
+                && matches!(
+                    column_type,
+                    ColumnType::MYSQL_TYPE_STRING
+                        | ColumnType::MYSQL_TYPE_VAR_STRING
+                        | ColumnType::MYSQL_TYPE_VARCHAR
+                        | ColumnType::MYSQL_TYPE_TINY_BLOB
+                        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+                        | ColumnType::MYSQL_TYPE_LONG_BLOB
+                        | ColumnType::MYSQL_TYPE_BLOB
+                        | ColumnType::MYSQL_TYPE_GEOMETRY
+                        | ColumnType::MYSQL_TYPE_VECTOR
+                ))
     }
 
     fn format_datetime(
@@ -1209,11 +1210,16 @@ mod tests {
     }
 
     #[test]
-    fn binary_column_detection_requires_the_binary_collation() {
+    fn binary_column_detection_handles_bit_and_requires_binary_collation_for_byte_columns() {
         use mysql_async::consts::{ColumnFlags, ColumnType};
 
         const UTF8MB4_BIN_COLLATION_ID: u16 = 46;
 
+        assert!(MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_BIT,
+            ColumnFlags::empty(),
+            0,
+        ));
         assert!(MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_BLOB,
             ColumnFlags::BLOB_FLAG | ColumnFlags::BINARY_FLAG,
