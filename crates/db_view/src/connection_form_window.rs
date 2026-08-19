@@ -21,6 +21,8 @@ use crate::database_view_plugin::{
     create_connection_form_for_with_registry, create_external_connection_form_for_with_registry,
 };
 
+const ORACLE_GO_DRIVER_ID: &str = "oracle-go";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionFormPostSaveAction {
     Close,
@@ -123,8 +125,10 @@ impl ConnectionFormWindow {
             config.external_driver_id.as_deref(),
             connection_to_load,
         );
+        let use_builtin_oracle_form = external_driver_id.as_deref() == Some(ORACLE_GO_DRIVER_ID);
         let form = external_driver_id
             .as_deref()
+            .filter(|driver_id| *driver_id != ORACLE_GO_DRIVER_ID)
             .and_then(|driver_id| {
                 create_external_connection_form_for_with_registry(
                     driver_id,
@@ -135,7 +139,11 @@ impl ConnectionFormWindow {
             })
             .unwrap_or_else(|| {
                 create_connection_form_for_with_registry(
-                    db_type,
+                    if use_builtin_oracle_form {
+                        DatabaseType::Oracle
+                    } else {
+                        db_type
+                    },
                     &config.external_driver_registry,
                     window,
                     cx,

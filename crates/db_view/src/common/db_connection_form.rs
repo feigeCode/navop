@@ -65,10 +65,26 @@ fn database_type_for_oracle_driver_mode(
     match (current, mode) {
         (DatabaseType::Oracle, OracleDriverMode::Go) => DatabaseType::external(ORACLE_GO_DRIVER_ID),
         (DatabaseType::Oracle, OracleDriverMode::Native) => DatabaseType::Oracle,
-        (DatabaseType::External { driver_id }, _) if driver_id == ORACLE_GO_DRIVER_ID => {
+        (DatabaseType::External { driver_id }, OracleDriverMode::Native)
+            if driver_id == ORACLE_GO_DRIVER_ID =>
+        {
+            DatabaseType::Oracle
+        }
+        (DatabaseType::External { driver_id }, OracleDriverMode::Go)
+            if driver_id == ORACLE_GO_DRIVER_ID =>
+        {
             current.clone()
         }
         _ => current.clone(),
+    }
+}
+
+fn oracle_driver_mode_for_database_type(database_type: &DatabaseType) -> OracleDriverMode {
+    match database_type {
+        DatabaseType::External { driver_id } if driver_id == ORACLE_GO_DRIVER_ID => {
+            OracleDriverMode::Go
+        }
+        _ => OracleDriverMode::Native,
     }
 }
 
@@ -1324,12 +1340,7 @@ impl DbConnectionForm {
         let config = connection_proxy::with_proxy_tab(config);
         let focus_handle = cx.focus_handle();
         let current_db_type = cx.new(|_| config.db_type.clone());
-        let oracle_driver_mode = match &config.db_type {
-            DatabaseType::External { driver_id } if driver_id == ORACLE_GO_DRIVER_ID => {
-                OracleDriverMode::Go
-            }
-            _ => OracleDriverMode::Native,
-        };
+        let oracle_driver_mode = oracle_driver_mode_for_database_type(&config.db_type);
 
         // Initialize field values, inputs, and selects
         let mut field_values = Vec::new();
@@ -1661,6 +1672,9 @@ impl DbConnectionForm {
         });
 
         if let Ok(params) = connection.to_db_connection() {
+            self.oracle_driver_mode = oracle_driver_mode_for_database_type(&params.database_type);
+            self.refresh_oracle_client_status(cx);
+
             self.credential_picker.update(cx, |picker, cx| {
                 picker.set_reference(params.credential_reference.clone(), window, cx)
             });
@@ -2760,7 +2774,7 @@ impl DbConnectionForm {
                                             })
                                             .when(!is_checking, |div| match &oracle_client_status {
                                                 Some(Ok(version)) => div
-                                                    .text_color(cx.theme().primary_foreground)
+                                                    .text_color(cx.theme().success)
                                                     .child(
                                                         t!(
                                                             "ConnectionForm.oracle_client_available",
@@ -2769,7 +2783,7 @@ impl DbConnectionForm {
                                                         .to_string(),
                                                     ),
                                                 Some(Err(error)) => div
-                                                    .text_color(cx.theme().danger_foreground)
+                                                    .text_color(cx.theme().danger)
                                                     .child(
                                                         t!(
                                                             "ConnectionForm.oracle_client_unavailable",
@@ -3413,11 +3427,27 @@ mod tests {
             database_type_for_oracle_driver_mode(&DatabaseType::MySQL, OracleDriverMode::Go)
         );
         assert_eq!(
-            DatabaseType::external(ORACLE_GO_DRIVER_ID),
+            DatabaseType::Oracle,
             database_type_for_oracle_driver_mode(
                 &DatabaseType::external(ORACLE_GO_DRIVER_ID),
                 OracleDriverMode::Native
             )
+        );
+    }
+
+    #[test]
+    fn oracle_driver_mode_restores_from_database_type() {
+        assert_eq!(
+            OracleDriverMode::Native,
+            oracle_driver_mode_for_database_type(&DatabaseType::Oracle)
+        );
+        assert_eq!(
+            OracleDriverMode::Go,
+            oracle_driver_mode_for_database_type(&DatabaseType::external(ORACLE_GO_DRIVER_ID))
+        );
+        assert_eq!(
+            OracleDriverMode::Native,
+            oracle_driver_mode_for_database_type(&DatabaseType::MySQL)
         );
     }
 
