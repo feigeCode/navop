@@ -617,6 +617,26 @@ ConnectionForm:
     en: Test connection failed
     zh-CN: 测试连接失败
     zh-HK: 測試連線失敗
+  oracle_driver_mode:
+    en: Oracle driver
+    zh-CN: Oracle 驱动
+    zh-HK: Oracle 驅動
+  oracle_driver_native:
+    en: Native Oracle Client
+    zh-CN: 原生 Oracle 客户端
+    zh-HK: 原生 Oracle 客戶端
+  oracle_driver_native_desc:
+    en: Requires Oracle Instant Client to be downloaded and installed.
+    zh-CN: 需要下载并安装 Oracle Instant Client。
+    zh-HK: 需要下載並安裝 Oracle Instant Client。
+  oracle_driver_go:
+    en: Pure Go Oracle driver
+    zh-CN: 纯 Go Oracle 驱动
+    zh-HK: 純 Go Oracle 驅動
+  oracle_driver_go_desc:
+    en: Does not require Oracle Instant Client, but requires the Oracle Go driver extension.
+    zh-CN: 无需 Oracle Instant Client，但需要安装 Oracle Go 驱动扩展。
+    zh-HK: 無需 Oracle Instant Client，但需要安裝 Oracle Go 驅動擴充套件。
   oracle_client_required:
     en: "Oracle Client is not available: %{error}"
     zh-CN: "未检测到可用的 Oracle Client：%{error}"
