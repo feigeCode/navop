@@ -4,8 +4,8 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::format_import_table_reference;
 use super::import_execution::{ImportStatement, execute_import_statements};
+use super::{format_import_table_reference, format_import_text_value, load_mysql_import_columns};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
 use crate::executor::SqlResult;
@@ -63,6 +63,7 @@ impl FormatHandler for JsonFormatHandler {
             .as_object()
             .ok_or_else(|| anyhow!("JSON array must contain objects"))?;
         let columns: Vec<String> = first_obj.keys().cloned().collect();
+        let table_columns = load_mysql_import_columns(plugin, connection, config, table).await?;
 
         // 批量插入
         for row_obj in rows {
@@ -93,7 +94,12 @@ impl FormatHandler for JsonFormatHandler {
                 match obj.get(col) {
                     Some(Value::Null) | None => insert_sql.push_str("NULL"),
                     Some(Value::String(s)) => {
-                        insert_sql.push_str(&plugin.escape_sql_value(s));
+                        insert_sql.push_str(&format_import_text_value(
+                            plugin,
+                            &Some(s.clone()),
+                            col,
+                            &table_columns,
+                        ));
                     }
                     Some(Value::Number(n)) => insert_sql.push_str(&n.to_string()),
                     Some(Value::Bool(b)) => insert_sql.push_str(if *b { "1" } else { "0" }),

@@ -3,8 +3,8 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
-use super::format_import_table_reference;
 use super::import_execution::{ImportStatement, execute_import_statements};
+use super::{format_import_table_reference, format_import_text_value, load_mysql_import_columns};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
 use crate::executor::SqlResult;
@@ -193,6 +193,7 @@ impl FormatHandler for CsvFormatHandler {
         if columns.iter().any(|column| column.trim().is_empty()) {
             return Err(anyhow!("CSV header contains empty column names"));
         }
+        let table_columns = load_mysql_import_columns(plugin, connection, config, table).await?;
 
         let mut statements = Vec::new();
         if config.truncate_before_import {
@@ -220,11 +221,16 @@ impl FormatHandler for CsvFormatHandler {
             }
             insert_sql.push_str(") VALUES (");
 
-            for (i, val) in values.iter().enumerate() {
+            for (i, (column, val)) in columns.iter().zip(values).enumerate() {
                 if i > 0 {
                     insert_sql.push_str(", ");
                 }
-                Self::append_sql_value(&mut insert_sql, val);
+                insert_sql.push_str(&format_import_text_value(
+                    plugin,
+                    val,
+                    column,
+                    &table_columns,
+                ));
             }
             insert_sql.push(')');
             statements.push(ImportStatement::row(
