@@ -6,8 +6,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, StyledExt, checkbox::Checkbox, h_flex, scroll::ScrollableElement,
-    tag::Tag, v_flex,
+    ActiveTheme, ContentState, IconName, Sizable, StyledExt, checkbox::Checkbox, h_flex,
+    scroll::ScrollableElement, tag::Tag, v_flex,
 };
 use rust_i18n::t;
 use serde_json::{Map, Value};
@@ -50,37 +50,53 @@ pub(super) fn data_diff_detail_panel(
                         .child(t!("Compare.data_diff_direction").to_string()),
                 ),
         )
-        .when(!has_changes, |this| {
-            this.child(
-                div()
-                    .p_2()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("Compare.data_diff_no_changes").to_string()),
-            )
-        })
-        .when(has_changes, |this| {
-            this.child(
-                v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap_2()
-                    .overflow_y_scrollbar()
-                    .children(
-                        result
-                            .table_results
-                            .iter()
-                            .filter(|table| {
-                                !table.added.is_empty()
-                                    || !table.removed.is_empty()
-                                    || !table.modified.is_empty()
-                            })
-                            .map(|table| {
-                                table_diff_panel(table, &statement_index, selected_ids.clone(), cx)
-                            }),
-                    ),
-            )
-        })
+        .child(
+            div()
+                .id("data-compare-diff-scroll")
+                .flex_1()
+                .h_full()
+                .min_h_0()
+                .min_w_0()
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_md()
+                .bg(cx.theme().background)
+                .overflow_hidden()
+                .when(!has_changes, |this| {
+                    this.child(
+                        ContentState::empty(t!("Compare.data_diff_no_changes").to_string())
+                            .icon(IconName::CircleCheck)
+                            .compact(),
+                    )
+                })
+                .when(has_changes, |this| {
+                    this.child(
+                        v_flex()
+                            .size_full()
+                            .p_2()
+                            .gap_2()
+                            .overflow_y_scrollbar()
+                            .children(
+                                result
+                                    .table_results
+                                    .iter()
+                                    .filter(|table| {
+                                        !table.added.is_empty()
+                                            || !table.removed.is_empty()
+                                            || !table.modified.is_empty()
+                                    })
+                                    .map(|table| {
+                                        table_diff_panel(
+                                            table,
+                                            &statement_index,
+                                            selected_ids.clone(),
+                                            cx,
+                                        )
+                                    }),
+                            ),
+                    )
+                }),
+        )
 }
 
 fn table_diff_panel(

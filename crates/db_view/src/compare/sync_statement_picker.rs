@@ -6,7 +6,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath, Sizable, StyledExt,
+    ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
@@ -19,6 +19,36 @@ use rust_i18n::t;
 pub(super) type SyncStatementListState = Entity<ListState<SyncStatementListDelegate>>;
 
 const SYNC_STATEMENT_ROW_HEIGHT: f32 = 74.0;
+
+pub(super) fn sync_statement_empty_picker(cx: &App) -> impl IntoElement {
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .gap_1()
+        .child(
+            div()
+                .text_sm()
+                .font_semibold()
+                .child(t!("Compare.sync_statements").to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .min_h_0()
+                .min_w_0()
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_md()
+                .overflow_hidden()
+                .child(
+                    ContentState::empty(t!("Compare.no_sync_statements").to_string())
+                        .icon(IconName::File)
+                        .detail(t!("Compare.sync_statements_empty_detail").to_string())
+                        .compact(),
+                ),
+        )
+}
 
 /// Immutable execution input derived from a sync plan and the selected statement ids.
 ///
@@ -303,14 +333,11 @@ impl ListDelegate for SyncStatementListDelegate {
     fn render_empty(
         &mut self,
         _window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
+        _cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        div()
-            .size_full()
-            .p_3()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child(t!("Compare.no_sync_statements").to_string())
+        ContentState::empty(t!("Compare.no_sync_statements").to_string())
+            .icon(IconName::File)
+            .compact()
     }
 
     fn perform_search(

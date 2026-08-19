@@ -8,16 +8,18 @@ use db::{
 };
 use extension_component::DbSelectorKind;
 use gpui::{
-    App, AsyncApp, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
+    App, AsyncApp, ColorExt, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Styled, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, StyledExt, h_flex, scroll::ScrollableElement, v_flex};
+use gpui_component::{
+    ActiveTheme, ContentState, IconName, StyledExt, h_flex, scroll::ScrollableElement, v_flex,
+};
 use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::compare::schema_compare_window::SchemaCompareWindow;
 use crate::compare::sync_statement_picker::{
-    selected_sync_sql_summary_for_ids, sync_statement_picker,
+    selected_sync_sql_summary_for_ids, sync_statement_empty_picker, sync_statement_picker,
 };
 use crate::compare::table_picker::{
     TableSelectionListState, clear_table_selection_list, refresh_table_selection_list_app,
@@ -217,6 +219,7 @@ impl SchemaCompareWindow {
                 .to_string()
             });
         let progress = self.progress.read(cx).clone();
+        let show_empty = self.result.read(cx).is_none() && progress.is_none();
         let plan = self.sync_plan.read(cx).clone();
         let selected_ids = self.selected_statement_ids.read(cx).clone();
         let sync_summary = plan
@@ -231,6 +234,28 @@ impl SchemaCompareWindow {
             .child(section_title(t!("Compare.result").to_string()))
             .when_some(progress, |this, progress| {
                 this.child(compare_progress_view(&progress, cx))
+            })
+            .when(show_empty, |this| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_h_0()
+                        .min_w_0()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded_md()
+                        .bg(cx.theme().muted.opacity(0.28))
+                        .overflow_hidden()
+                        .child(
+                            ContentState::empty(
+                                t!("Compare.schema_compare_empty_title").to_string(),
+                            )
+                            .icon(IconName::SchemaCompare)
+                            .detail(t!("Compare.schema_compare_empty_detail").to_string())
+                            .detail_max_width(px(360.0)),
+                        ),
+                )
             })
             .when_some(stats, |this, (added, removed, modified)| {
                 this.child(stat_cards_row(added, removed, modified, cx))
@@ -248,11 +273,15 @@ impl SchemaCompareWindow {
 
     pub(super) fn render_sync_statement_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let plan = self.sync_plan.read(cx).clone();
+        let show_empty = plan.is_none();
 
         v_flex()
             .size_full()
             .min_h_0()
             .gap_2()
+            .when(show_empty, |this| {
+                this.child(sync_statement_empty_picker(cx))
+            })
             .when_some(plan, |this, plan| {
                 this.child(sync_statement_picker(
                     plan,
@@ -444,27 +473,28 @@ pub(crate) fn schema_diff_panel(result: &SchemaCompareResult, cx: &App) -> impl 
             div()
                 .id("schema-compare-diff-scroll")
                 .flex_1()
+                .h_full()
                 .min_h_0()
+                .min_w_0()
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_md()
                 .bg(cx.theme().background)
-                .overflow_y_scroll()
+                .overflow_hidden()
                 .when(!has_diffs, |this| {
                     this.child(
-                        div()
-                            .p_3()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("Compare.schema_diff_no_changes").to_string()),
+                        ContentState::empty(t!("Compare.schema_diff_no_changes").to_string())
+                            .icon(IconName::CircleCheck)
+                            .compact(),
                     )
                 })
                 .when(has_diffs, |this| {
                     this.child(
                         v_flex()
-                            .w_full()
+                            .size_full()
                             .p_2()
                             .gap_2()
+                            .overflow_y_scrollbar()
                             .children(
                                 result
                                     .table_diffs

@@ -1,16 +1,17 @@
 use db::{GlobalDbState, TableObjectType};
 use extension_component::DbSelectorKind;
 use gpui::{
-    AsyncApp, Context, Entity, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder,
+    AsyncApp, ColorExt, Context, Entity, IntoElement, ParentElement, Styled, div,
+    prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::{ActiveTheme, ContentState, IconName, v_flex};
 use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::compare::data_compare_window::DataCompareWindow;
 use crate::compare::data_diff_detail::data_diff_detail_panel;
 use crate::compare::sync_statement_picker::{
-    selected_sync_sql_summary_for_ids, sync_statement_picker,
+    selected_sync_sql_summary_for_ids, sync_statement_empty_picker, sync_statement_picker,
 };
 use crate::compare::table_picker::{
     TableSelectionListState, clear_table_selection_list, refresh_table_selection_list_app,
@@ -264,6 +265,7 @@ impl DataCompareWindow {
             .filter(|result| result.has_incomplete_dependency_metadata())
             .map(|_| t!("Compare.data_compare_dependency_metadata_failed_note").to_string());
         let progress = self.progress.read(cx).clone();
+        let show_empty = self.result.read(cx).is_none() && progress.is_none();
         let plan = self.sync_plan.read(cx).clone();
         let selected_ids = self.selected_statement_ids.read(cx).clone();
         let sync_summary = plan
@@ -278,6 +280,26 @@ impl DataCompareWindow {
             .child(section_title(t!("Compare.result").to_string()))
             .when_some(progress, |this, progress| {
                 this.child(compare_progress_view(&progress, cx))
+            })
+            .when(show_empty, |this| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_h_0()
+                        .min_w_0()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded_md()
+                        .bg(cx.theme().muted.opacity(0.28))
+                        .overflow_hidden()
+                        .child(
+                            ContentState::empty(t!("Compare.data_compare_empty_title").to_string())
+                                .icon(IconName::TableData)
+                                .detail(t!("Compare.data_compare_empty_detail").to_string())
+                                .detail_max_width(px(360.0)),
+                        ),
+                )
             })
             .when_some(stats, |this, (added, removed, modified)| {
                 this.child(stat_cards_row(added, removed, modified, cx))
@@ -309,11 +331,15 @@ impl DataCompareWindow {
 
     pub(super) fn render_sync_statement_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let plan = self.sync_plan.read(cx).clone();
+        let show_empty = plan.is_none();
 
         v_flex()
             .size_full()
             .min_h_0()
             .gap_2()
+            .when(show_empty, |this| {
+                this.child(sync_statement_empty_picker(cx))
+            })
             .when_some(plan, |this, plan| {
                 this.child(sync_statement_picker(
                     plan,

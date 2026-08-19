@@ -3453,6 +3453,22 @@ Compare:
     en: Ready
     zh-CN: 就绪
     zh-HK: 就緒
+  data_compare_empty_title:
+    en: Ready to compare data
+    zh-CN: 等待数据比较
+    zh-HK: 等待資料比較
+  data_compare_empty_detail:
+    en: Configure the source and target, then start the comparison. Difference statistics and changed rows will appear here.
+    zh-CN: 配置源端与目标端后点击“开始比较”，差异统计和变更明细将显示在这里。
+    zh-HK: 設定來源與目標後點擊「開始比較」，差異統計和變更明細將顯示在這裡。
+  schema_compare_empty_title:
+    en: Ready to compare schemas
+    zh-CN: 等待结构比较
+    zh-HK: 等待結構比較
+  schema_compare_empty_detail:
+    en: Configure the source and target, then start the comparison. Object differences and the sync plan will appear here.
+    zh-CN: 配置源端与目标端后点击“开始比较”，对象差异和同步计划将显示在这里。
+    zh-HK: 設定來源與目標後點擊「開始比較」，物件差異和同步計劃將顯示在這裡。
   preparing_compare:
     en: Preparing compare...
     zh-CN: 正在准备比较…
@@ -3641,6 +3657,10 @@ Compare:
     en: No sync statements
     zh-CN: 暂无同步语句
     zh-HK: 暫無同步語句
+  sync_statements_empty_detail:
+    en: Start a comparison to generate selectable sync statements.
+    zh-CN: 开始比较后，将在这里生成可选择的同步语句。
+    zh-HK: 開始比較後，將在這裡產生可選擇的同步語句。
   destructive:
     en: Destructive
     zh-CN: 破坏性
