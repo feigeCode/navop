@@ -29,7 +29,9 @@ use crate::compare::table_picker::{
 use crate::compare::target_picker::{
     StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
 };
-use crate::compare::window_params::{DataCompareSelection, data_compare_params};
+use crate::compare::window_params::{
+    DataCompareSelection, data_compare_params, data_compare_target_tables_for_selection,
+};
 use crate::compare::window_ui::{
     CompareStep, ConnectionSelectItem, SyncSqlExecutionLogEntry, clear_sync_sql_execution_log,
     close_button, connection_select_state, ignore_identifier_case_option,
@@ -264,6 +266,25 @@ impl DataCompareWindow {
                 &window_state.target_schema_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
                     this.load_target_after_schema_change(cx);
+                },
+            ));
+            window_state._subscriptions.push(cx.subscribe_in(
+                &window_state.target_table_select,
+                window,
+                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                    let SelectEvent::Confirm(value) = event;
+                    this.target_table.update(cx, |input, cx| {
+                        input.set_value(value.clone().unwrap_or_default(), window, cx);
+                    });
+                    cx.notify();
+                },
+            ));
+            window_state._subscriptions.push(cx.observe_in(
+                &window_state.selected_source_tables,
+                window,
+                |this, _, window, cx| {
+                    this.sync_single_target_table_to_source(window, cx);
+                    cx.notify();
                 },
             ));
             window_state
@@ -532,8 +553,14 @@ impl DataCompareWindow {
         replace_table_selection_list(
             &self.target_table_list,
             &self.selected_target_tables,
-            source_list_tables,
+            source_list_tables.clone(),
             source_tables.iter().cloned().collect(),
+            cx,
+        );
+        self.replace_target_table_select_options(
+            source_list_tables,
+            first_table_name(&source_tables),
+            window,
             cx,
         );
 
@@ -762,12 +789,7 @@ impl DataCompareWindow {
             ),
             database,
             schema,
-            tables: ordered_selected_table_names(
-                &self.source_table_list,
-                &self.selected_source_tables,
-                &self.source_table,
-                cx,
-            ),
+            tables: self.selected_source_table_names(cx),
         }
     }
 
@@ -779,6 +801,10 @@ impl DataCompareWindow {
             schema,
             policy_for_connection(&self.connection_controls(), cx),
         );
+        let source_tables = self.selected_source_table_names(cx);
+        let available_target_tables = table_selection_list_tables(&self.target_table_list, cx);
+        let selected_target_table =
+            selected_string(&self.target_table_select, &self.target_table, cx);
         DataCompareSelection {
             connection_id: selected_connection_id(
                 &self.target_connection_select,
@@ -787,13 +813,21 @@ impl DataCompareWindow {
             ),
             database,
             schema,
-            tables: ordered_selected_table_names(
-                &self.target_table_list,
-                &self.selected_target_tables,
-                &self.target_table,
-                cx,
+            tables: data_compare_target_tables_for_selection(
+                &source_tables,
+                &available_target_tables,
+                &selected_target_table,
             ),
         }
+    }
+
+    pub(super) fn selected_source_table_names(&self, cx: &Context<Self>) -> Vec<String> {
+        ordered_selected_table_names(
+            &self.source_table_list,
+            &self.selected_source_tables,
+            &self.source_table,
+            cx,
+        )
     }
 }
 

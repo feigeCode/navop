@@ -3333,6 +3333,22 @@ Compare:
     en: Target Tables
     zh-CN: 目标表
     zh-HK: 目標表
+  select_target_table:
+    en: Select target table
+    zh-CN: 选择目标表
+    zh-HK: 選擇目標表
+  auto_match_target_tables:
+    en: Multiple source tables are automatically matched to target tables by name
+    zh-CN: 多表模式会按同名表自动匹配目标表
+    zh-HK: 多表模式會按同名表自動匹配目標表
+  matched_target_tables:
+    en: "Matched %{matched}/%{total} tables"
+    zh-CN: "已匹配 %{matched}/%{total} 张表"
+    zh-HK: "已匹配 %{matched}/%{total} 張表"
+  missing_target_tables:
+    en: "Missing same-name target tables: %{tables}"
+    zh-CN: "目标端缺少同名表：%{tables}"
+    zh-HK: "目標端缺少同名表：%{tables}"
   no_tables:
     en: No tables
     zh-CN: 暂无表

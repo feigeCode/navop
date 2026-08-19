@@ -13,6 +13,13 @@ pub(super) struct DataCompareSelection {
     pub tables: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DataCompareTableMapping {
+    pub source_table: String,
+    pub target_table: String,
+    pub matched: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct SchemaCompareSelection {
     pub connection_id: String,
@@ -126,6 +133,51 @@ fn data_compare_table_pairs(
             }
         })
         .collect())
+}
+
+pub(super) fn data_compare_target_tables_for_selection(
+    source_tables: &[String],
+    available_target_tables: &[String],
+    selected_target_table: &str,
+) -> Vec<String> {
+    if source_tables.len() == 1 {
+        let selected_target_table = selected_target_table.trim();
+        return available_target_tables
+            .iter()
+            .any(|table| table == selected_target_table)
+            .then(|| vec![selected_target_table.to_string()])
+            .unwrap_or_default();
+    }
+    available_target_tables.to_vec()
+}
+
+pub(super) fn data_compare_same_name_mappings(
+    source_tables: &[String],
+    available_target_tables: &[String],
+    case_sensitive_identifiers: bool,
+) -> Vec<DataCompareTableMapping> {
+    let target_by_normalized = available_target_tables
+        .iter()
+        .map(|target| {
+            (
+                identifier_key(target, case_sensitive_identifiers),
+                target.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    source_tables
+        .iter()
+        .map(|source| {
+            let target =
+                target_by_normalized.get(&identifier_key(source, case_sensitive_identifiers));
+            DataCompareTableMapping {
+                source_table: source.clone(),
+                target_table: target.cloned().unwrap_or_else(|| source.clone()),
+                matched: target.is_some(),
+            }
+        })
+        .collect()
 }
 
 fn normalized_table_list(

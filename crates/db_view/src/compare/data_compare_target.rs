@@ -1,10 +1,15 @@
 use db::{GlobalDbState, TableObjectType};
 use extension_component::DbSelectorKind;
 use gpui::{
-    AsyncApp, ColorExt, Context, Entity, IntoElement, ParentElement, Styled, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, AsyncApp, ColorExt, Context, Entity, IntoElement, ParentElement, Styled,
+    Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, ContentState, IconName, v_flex};
+use gpui_component::{
+    ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt, h_flex,
+    scroll::ScrollableElement,
+    select::{SearchableVec, Select},
+    v_flex,
+};
 use rust_i18n::t;
 use std::collections::HashSet;
 
@@ -15,13 +20,14 @@ use crate::compare::sync_statement_picker::{
 };
 use crate::compare::table_picker::{
     TableSelectionListState, clear_table_selection_list, refresh_table_selection_list_app,
-    table_selection_panel,
+    table_selection_list_tables, table_selection_panel,
 };
 use crate::compare::target_picker::{
-    CompareTargetCascadeAction, TargetConnectionControls, TargetStringControls,
+    CompareTargetCascadeAction, StringSelect, TargetConnectionControls, TargetStringControls,
     clear_string_select, database_change_cascade_actions, initial_compare_target_cascade_actions,
     load_databases_then, load_schemas_then, schema_change_cascade_actions, selected_string,
 };
+use crate::compare::window_params::data_compare_same_name_mappings;
 use crate::compare::window_ui::{
     compare_progress_view, input_row, register_connection_for_compare, section_title,
     selected_connection_id, stat_cards_row,
@@ -123,6 +129,7 @@ impl DataCompareWindow {
             self.source_table.clone(),
             self.source_table_list.clone(),
             self.selected_source_tables.clone(),
+            None,
             self.status.clone(),
             cx,
         );
@@ -130,6 +137,7 @@ impl DataCompareWindow {
 
     pub(super) fn load_target_databases(&mut self, cx: &mut Context<Self>) {
         clear_string_select(&self.target_schema_select, cx);
+        clear_string_select(&self.target_table_select, cx);
         clear_table_selection_list(&self.target_table_list, &self.selected_target_tables, cx);
         load_databases_then(
             self.connection_controls(),
@@ -181,6 +189,7 @@ impl DataCompareWindow {
     }
 
     pub(super) fn load_target_schemas(&mut self, cx: &mut Context<Self>) {
+        clear_string_select(&self.target_table_select, cx);
         clear_table_selection_list(&self.target_table_list, &self.selected_target_tables, cx);
         load_schemas_then(
             self.connection_controls(),
@@ -200,12 +209,17 @@ impl DataCompareWindow {
             self.target_table.clone(),
             self.target_table_list.clone(),
             self.selected_target_tables.clone(),
+            Some(self.target_table_select.clone()),
             self.status.clone(),
             cx,
         );
     }
 
     pub(super) fn render_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let source_tables = self.selected_source_table_names(cx);
+        let available_target_tables = table_selection_list_tables(&self.target_table_list, cx);
+        let is_single_table = source_tables.len() <= 1;
+
         v_flex()
             .size_full()
             .flex_1()
@@ -217,16 +231,148 @@ impl DataCompareWindow {
                 self.target_controls(cx),
                 cx,
             ))
-            .child(table_selection_panel(
-                t!("Compare.target_tables").to_string(),
-                self.target_table_list.clone(),
-                self.selected_target_tables.clone(),
-                cx,
-            ))
+            .child(if is_single_table {
+                self.render_single_target_table().into_any_element()
+            } else {
+                self.render_target_table_mappings(&source_tables, &available_target_tables, cx)
+                    .into_any_element()
+            })
             .child(input_row(
                 t!("Compare.key_columns").to_string(),
                 &self.key_columns,
             ))
+    }
+
+    fn render_single_target_table(&self) -> impl IntoElement {
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .child(t!("Compare.target_tables").to_string()),
+            )
+            .child(
+                Select::new(&self.target_table_select)
+                    .small()
+                    .search_placeholder(t!("Compare.select_target_table").to_string())
+                    .w_full(),
+            )
+    }
+
+    fn render_target_table_mappings(
+        &self,
+        source_tables: &[String],
+        available_target_tables: &[String],
+        cx: &App,
+    ) -> impl IntoElement {
+        let case_sensitive_identifiers = !*self.ignore_identifier_case.read(cx);
+        let mappings = data_compare_same_name_mappings(
+            source_tables,
+            available_target_tables,
+            case_sensitive_identifiers,
+        );
+        let matched_count = mappings.iter().filter(|mapping| mapping.matched).count();
+        let missing_tables = mappings
+            .iter()
+            .filter(|mapping| !mapping.matched)
+            .map(|mapping| mapping.source_table.clone())
+            .collect::<Vec<_>>();
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_2()
+            .p_3()
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded_md()
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .child(t!("Compare.auto_match_target_tables").to_string()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        t!(
+                            "Compare.matched_target_tables",
+                            matched = matched_count,
+                            total = mappings.len()
+                        )
+                        .to_string(),
+                    ),
+            )
+            .when(!missing_tables.is_empty(), |this| {
+                this.child(
+                    div().text_sm().text_color(cx.theme().danger).child(
+                        t!(
+                            "Compare.missing_target_tables",
+                            tables = missing_tables.join(", ")
+                        )
+                        .to_string(),
+                    ),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(
+                        v_flex()
+                            .size_full()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .rounded_md()
+                            .overflow_y_scrollbar()
+                            .children(mappings.into_iter().enumerate().map(|(index, mapping)| {
+                                h_flex()
+                                    .min_h(px(34.0))
+                                    .px_3()
+                                    .gap_2()
+                                    .border_b_1()
+                                    .border_color(cx.theme().border)
+                                    .when(index % 2 == 1, |row| {
+                                        row.bg(cx.theme().muted.opacity(0.18))
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_sm()
+                                            .child(mapping.source_table),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("→"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_sm()
+                                            .text_color(if mapping.matched {
+                                                cx.theme().foreground
+                                            } else {
+                                                cx.theme().danger
+                                            })
+                                            .child(mapping.target_table),
+                                    )
+                            })),
+                    ),
+            )
     }
 
     pub(super) fn render_result_meta(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -426,6 +572,7 @@ impl DataCompareWindow {
         preferred_table: Entity<gpui_component::input::InputState>,
         list_state: TableSelectionListState,
         selected_tables: Entity<HashSet<String>>,
+        table_select: Option<StringSelect>,
         status: Entity<String>,
         cx: &mut Context<Self>,
     ) {
@@ -474,10 +621,19 @@ impl DataCompareWindow {
                     refresh_table_selection_list_app(
                         &list_state,
                         &selected_tables,
-                        tables,
-                        preferred,
+                        tables.clone(),
+                        preferred.clone(),
                         cx,
                     );
+                    if let Some(table_select) = table_select {
+                        update_target_table_select_app(
+                            &table_select,
+                            &preferred_table,
+                            tables,
+                            preferred,
+                            cx,
+                        );
+                    }
                     set_status_app(
                         &status,
                         t!("DbObjectSelector.loaded_count", count = count).to_string(),
@@ -493,6 +649,109 @@ impl DataCompareWindow {
         })
         .detach();
     }
+
+    pub(super) fn replace_target_table_select_options(
+        &self,
+        tables: Vec<String>,
+        preferred: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        replace_string_select_options(
+            &self.target_table_select,
+            &self.target_table,
+            tables,
+            preferred,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn sync_single_target_table_to_source(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let source_tables = self.selected_source_table_names(cx);
+        if source_tables.len() != 1 {
+            return;
+        }
+        let target_tables = table_selection_list_tables(&self.target_table_list, cx);
+        if target_tables.is_empty() {
+            return;
+        }
+        let case_sensitive_identifiers = !*self.ignore_identifier_case.read(cx);
+        let preferred = target_tables
+            .iter()
+            .find(|table| {
+                if case_sensitive_identifiers {
+                    *table == &source_tables[0]
+                } else {
+                    table.eq_ignore_ascii_case(&source_tables[0])
+                }
+            })
+            .cloned()
+            .unwrap_or_else(|| target_tables[0].clone());
+        replace_string_select_options(
+            &self.target_table_select,
+            &self.target_table,
+            target_tables,
+            preferred,
+            window,
+            cx,
+        );
+    }
+}
+
+fn update_target_table_select_app(
+    select: &StringSelect,
+    fallback: &Entity<gpui_component::input::InputState>,
+    tables: Vec<String>,
+    preferred: String,
+    cx: &mut App,
+) {
+    let Some(window_id) = cx.active_window() else {
+        return;
+    };
+    let _ = cx.update_window(window_id, |_, window, cx| {
+        replace_string_select_options(select, fallback, tables, preferred, window, cx);
+    });
+}
+
+fn replace_string_select_options<C: AppContext>(
+    select: &StringSelect,
+    fallback: &Entity<gpui_component::input::InputState>,
+    tables: Vec<String>,
+    preferred: String,
+    window: &mut Window,
+    cx: &mut C,
+) {
+    let (selected_index, selected_value) = preferred_table_selection(&tables, &preferred);
+    fallback.update(cx, |input, cx| {
+        input.set_value(selected_value, window, cx);
+    });
+    select.update(cx, |state, cx| {
+        state.set_items(SearchableVec::new(tables), window, cx);
+        state.set_selected_index(selected_index, window, cx);
+    });
+}
+
+fn preferred_table_selection(tables: &[String], preferred: &str) -> (Option<IndexPath>, String) {
+    let selected_row = tables
+        .iter()
+        .position(|table| table == preferred)
+        .or_else(|| {
+            tables
+                .iter()
+                .position(|table| table.eq_ignore_ascii_case(preferred))
+        })
+        .or((!tables.is_empty()).then_some(0));
+    (
+        selected_row.map(IndexPath::new),
+        selected_row
+            .and_then(|row| tables.get(row).cloned())
+            .unwrap_or_default(),
+    )
 }
 
 fn set_status<T>(status: &Entity<String>, message: String, cx: &mut Context<T>) {

@@ -10,6 +10,7 @@ use crate::compare::sync_statement_picker::{
 };
 use crate::compare::window_params::{
     DataCompareSelection, SchemaCompareSelection, SchemaCompareSettings, data_compare_params,
+    data_compare_same_name_mappings, data_compare_target_tables_for_selection,
     schema_compare_params, split_columns,
 };
 use crate::compare::window_ui::{
@@ -300,6 +301,71 @@ fn data_compare_params_use_editable_source_selection() {
     assert_eq!(params.table_pairs[0].source_table, "source_table");
     assert_eq!(params.table_pairs[0].target_table, "target_table");
     assert_eq!(params.key_columns, vec!["id", "tenant_id"]);
+}
+
+#[test]
+fn data_compare_single_source_uses_selected_different_target_table() {
+    assert_eq!(
+        data_compare_target_tables_for_selection(
+            &["users".to_string()],
+            &["users".to_string(), "archived_users".to_string()],
+            "archived_users",
+        ),
+        vec!["archived_users".to_string()]
+    );
+}
+
+#[test]
+fn data_compare_single_source_ignores_stale_target_table_selection() {
+    assert!(
+        data_compare_target_tables_for_selection(
+            &["users".to_string()],
+            &["users".to_string(), "archived_users".to_string()],
+            "deleted_table",
+        )
+        .is_empty()
+    );
+    assert!(
+        data_compare_target_tables_for_selection(&["users".to_string()], &[], "archived_users",)
+            .is_empty()
+    );
+}
+
+#[test]
+fn data_compare_multiple_sources_use_available_targets_for_same_name_matching() {
+    assert_eq!(
+        data_compare_target_tables_for_selection(
+            &["users".to_string(), "orders".to_string()],
+            &[
+                "users".to_string(),
+                "purchase_orders".to_string(),
+                "audit_log".to_string(),
+            ],
+            "purchase_orders",
+        ),
+        vec![
+            "users".to_string(),
+            "purchase_orders".to_string(),
+            "audit_log".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn data_compare_same_name_mappings_report_missing_targets() {
+    let mappings = data_compare_same_name_mappings(
+        &["Users".to_string(), "orders".to_string()],
+        &["users".to_string(), "purchase_orders".to_string()],
+        false,
+    );
+
+    assert_eq!(mappings.len(), 2);
+    assert_eq!(mappings[0].source_table, "Users");
+    assert_eq!(mappings[0].target_table, "users");
+    assert!(mappings[0].matched);
+    assert_eq!(mappings[1].source_table, "orders");
+    assert_eq!(mappings[1].target_table, "orders");
+    assert!(!mappings[1].matched);
 }
 
 #[test]
