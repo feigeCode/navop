@@ -5,7 +5,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior};
 
 use crate::storage::{
     ConnectionType, CredentialReference, DbConnectionConfig, MongoDBParams, RedisParams,
-    RemoteDesktopParams, SshParams,
+    RemoteDesktopParams, SshParams, TelnetParams,
 };
 
 use super::tunnel_reference_scanner::append_tunnel_hits;
@@ -182,6 +182,7 @@ fn direct_locations(
         ConnectionType::Database => database_locations(connection, identity)?,
         ConnectionType::Redis => redis_locations(connection, identity)?,
         ConnectionType::MongoDB => mongodb_locations(connection, identity)?,
+        ConnectionType::Telnet => telnet_locations(connection, identity)?,
         ConnectionType::Rdp | ConnectionType::Vnc => {
             remote_desktop_locations(connection, identity)?
         }
@@ -216,6 +217,20 @@ pub(super) fn ssh_locations(
         ),
     ];
     Ok(matching_locations(references, identity))
+}
+
+fn telnet_locations(
+    connection: &ScannedConnection,
+    identity: &CredentialIdentity,
+) -> Result<Vec<CredentialReferenceLocation>> {
+    let params: TelnetParams = parse_params(connection)?;
+    Ok(matching_locations(
+        [(
+            CredentialReferenceLocation::Primary,
+            params.credential_reference.as_ref(),
+        )],
+        identity,
+    ))
 }
 
 fn database_locations(

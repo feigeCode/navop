@@ -2,6 +2,7 @@ pub mod connection;
 pub mod credential_vault;
 pub mod demo_database;
 pub mod manager;
+pub mod master_key_rotation;
 pub mod migration;
 pub mod models;
 pub mod query_directory;
@@ -28,9 +29,14 @@ mod quick_command_defaults_tests;
 #[path = "rdp_settings_tests.rs"]
 mod rdp_settings_tests;
 
+#[cfg(test)]
+#[path = "master_key_rotation_tests.rs"]
+mod master_key_rotation_tests;
+
 pub use credential_vault::*;
 use gpui::App;
 pub use manager::*;
+pub use master_key_rotation::*;
 pub use models::*;
 pub use query_directory::*;
 pub use quick_command::*;

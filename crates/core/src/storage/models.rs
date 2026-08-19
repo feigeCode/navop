@@ -2563,6 +2563,16 @@ fn decrypt_json_passwords(json_str: &str) -> String {
     }
 }
 
+pub(crate) fn re_encrypt_sensitive_json(
+    json_str: &str,
+    old_key: &str,
+    new_key: &str,
+) -> anyhow::Result<String> {
+    let mut value: Value = serde_json::from_str(json_str)?;
+    re_encrypt_value(&mut value, old_key, new_key)?;
+    Ok(serde_json::to_string(&value)?)
+}
+
 /// 判断字段名是否为敏感字段
 fn is_sensitive_field(key: &str) -> bool {
     key == "password"
@@ -2575,6 +2585,45 @@ fn is_sensitive_field(key: &str) -> bool {
         || key.ends_with("_passphrase")
         || key.ends_with("_private_key")
         || key.ends_with("_private_key_content")
+}
+
+fn re_encrypt_value(
+    value: &mut Value,
+    old_key: &str,
+    new_key: &str,
+) -> Result<(), crypto::CryptoError> {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if is_sensitive_field(key) {
+                    re_encrypt_string(value, old_key, new_key)?;
+                } else {
+                    re_encrypt_value(value, old_key, new_key)?;
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                re_encrypt_value(value, old_key, new_key)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn re_encrypt_string(
+    value: &mut Value,
+    old_key: &str,
+    new_key: &str,
+) -> Result<(), crypto::CryptoError> {
+    let Value::String(secret) = value else {
+        return Ok(());
+    };
+    if !secret.is_empty() {
+        *secret = crypto::re_encrypt_data(secret, old_key, new_key)?;
+    }
+    Ok(())
 }
 
 /// 递归遍历 JSON Value，加密敏感字段

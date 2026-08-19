@@ -59,6 +59,10 @@ Credential:
     en: "Unavailable keychain item #%{id}"
     zh-CN: "不可用的钥匙串条目 #%{id}"
     zh-HK: "不可用的鑰匙圈項目 #%{id}"
+  reference_unavailable:
+    en: The referenced keychain item is no longer available.
+    zh-CN: 引用的钥匙串条目已不可用。
+    zh-HK: 引用的鑰匙圈項目已不可用。
   item_label:
     en: "%{name}"
     zh-CN: "%{name}"

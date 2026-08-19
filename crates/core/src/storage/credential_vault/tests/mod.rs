@@ -37,7 +37,8 @@ pub(super) fn test_repository() -> (TempDir, SqliteConnection, CredentialReposit
 
 pub(super) fn with_master_key<T>(operation: impl FnOnce() -> T) -> T {
     let _guard = crypto_guard();
-    crypto::set_master_key_for_session("credential-vault-test-key");
+    crypto::set_master_key_for_session("credential-vault-test-key")
+        .expect("configure credential vault test master key");
     let result = operation();
     crypto::clear_master_key();
     result

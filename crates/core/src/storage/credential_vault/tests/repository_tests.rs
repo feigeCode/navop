@@ -153,7 +153,8 @@ fn repository_update_encrypts_replaces_and_clears_secrets() {
 #[test]
 fn repository_rejects_ciphertext_encrypted_with_another_master_key() {
     let _guard = crypto_guard();
-    crypto::set_master_key_for_session("credential-vault-first-key");
+    crypto::set_master_key_for_session("credential-vault-first-key")
+        .expect("configure first credential vault test key");
     let (_temp, _connection, repository) = test_repository();
     let mut credential = CredentialEntry::new("Wrong key");
     credential.password = Some("secret".to_string());
@@ -161,7 +162,8 @@ fn repository_rejects_ciphertext_encrypted_with_another_master_key() {
         .insert(&mut credential)
         .expect("insert credential");
 
-    crypto::set_master_key_for_session("credential-vault-second-key");
+    crypto::set_master_key_for_session("credential-vault-second-key")
+        .expect("configure second credential vault test key");
     let error = repository
         .get(id)
         .expect_err("wrong master key must fail closed");
@@ -173,7 +175,8 @@ fn repository_rejects_ciphertext_encrypted_with_another_master_key() {
 #[test]
 fn repository_summary_reads_capabilities_while_vault_is_locked() {
     let _guard = crypto_guard();
-    crypto::set_master_key_for_session("credential-vault-summary-key");
+    crypto::set_master_key_for_session("credential-vault-summary-key")
+        .expect("configure credential vault summary test key");
     let (_temp, _connection, repository) = test_repository();
     let mut credential = CredentialEntry::new("Production SSH");
     credential.username = Some("deploy".to_string());

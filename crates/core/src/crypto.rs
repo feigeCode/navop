@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use zeroize::Zeroizing;
 
 use crate::key_storage;
 
@@ -39,6 +40,10 @@ pub enum CryptoError {
     NoPasswordSet,
     /// 保存验证数据失败
     SaveVerificationFailed,
+    /// 读取验证数据失败
+    LoadVerificationFailed,
+    /// 更新自动解锁密钥存储失败
+    KeyStorageFailed(String),
     /// 解密失败
     DecryptionFailed,
     /// 编码失败
@@ -55,6 +60,8 @@ impl std::fmt::Display for CryptoError {
             CryptoError::PasswordMismatch => write!(f, "两次输入的新密码不一致"),
             CryptoError::NoPasswordSet => write!(f, "未设置过主密码"),
             CryptoError::SaveVerificationFailed => write!(f, "保存验证数据失败"),
+            CryptoError::LoadVerificationFailed => write!(f, "读取验证数据失败"),
+            CryptoError::KeyStorageFailed(error) => write!(f, "更新密钥存储失败: {error}"),
             CryptoError::DecryptionFailed => write!(f, "解密失败"),
             CryptoError::EncodingFailed => write!(f, "编码失败"),
             CryptoError::InvalidDataFormat => write!(f, "数据格式错误"),
@@ -66,6 +73,9 @@ impl std::error::Error for CryptoError {}
 
 /// 加密前缀标识，用于识别已加密的密码
 const ENCRYPTED_PREFIX: &str = "ENC:";
+const NONCE_LENGTH: usize = 12;
+const AUTH_TAG_LENGTH: usize = 16;
+const MIN_ENCRYPTED_LENGTH: usize = NONCE_LENGTH + AUTH_TAG_LENGTH;
 
 /// 验证数据的魔术字符串，用于验证密钥是否正确
 const VERIFICATION_MAGIC: &str = "ONEHUB_KEY_VERIFY_V1";
@@ -79,11 +89,17 @@ enum MasterKeyPersistence {
     SessionOnly,
 }
 
+struct MasterKeySetup<'a> {
+    master_key: &'a str,
+    persistence: MasterKeyPersistence,
+    create_verification: bool,
+}
+
 /// 全局加密密钥存储（派生后的密钥）
 static ENCRYPTION_KEY: RwLock<Option<[u8; 32]>> = RwLock::new(None);
 
 /// 全局原始主密钥存储（用于云同步等需要原始密钥的场景）
-static RAW_MASTER_KEY: RwLock<Option<String>> = RwLock::new(None);
+static RAW_MASTER_KEY: RwLock<Option<Zeroizing<String>>> = RwLock::new(None);
 
 /// 获取数据目录路径
 fn get_data_dir() -> Option<PathBuf> {
@@ -105,10 +121,7 @@ pub fn has_repo_password_set() -> bool {
 /// 保存密钥验证数据到文件
 fn save_verification_data(data: &str) -> bool {
     if let Some(path) = get_verification_file_path() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        fs::write(path, data).is_ok()
+        key_storage::atomic_write_file(&path, data.as_bytes()).is_ok()
     } else {
         false
     }
@@ -170,12 +183,12 @@ pub fn verify_master_key(master_key: &str, verification_data: &str) -> bool {
         Err(_) => return false,
     };
 
-    if combined.len() < 12 {
+    if combined.len() < MIN_ENCRYPTED_LENGTH {
         return false;
     }
 
-    let nonce = Nonce::from_slice(&combined[..12]);
-    let ciphertext = &combined[12..];
+    let nonce = Nonce::from_slice(&combined[..NONCE_LENGTH]);
+    let ciphertext = &combined[NONCE_LENGTH..];
 
     match cipher.decrypt(nonce, ciphertext) {
         Ok(plaintext) => String::from_utf8(plaintext)
@@ -190,68 +203,86 @@ pub fn verify_master_key(master_key: &str, verification_data: &str) -> bool {
 /// 用户提供的主密钥将被哈希后存储在内存中，用于后续的加密/解密操作。
 /// 如果是首次设置，会生成并保存验证数据。
 /// 同时会将密钥保存到存储后端，以便应用重启后自动恢复。
-pub fn set_master_key(master_key: &str) {
-    set_master_key_with_persistence(master_key, MasterKeyPersistence::Persistent);
+pub fn set_master_key(master_key: &str) -> Result<(), CryptoError> {
+    set_master_key_with_persistence(master_key, MasterKeyPersistence::Persistent)
 }
 
 /// 仅为当前应用会话设置主密钥。
 ///
 /// 该模式会删除存储后端中的主密钥，确保下次启动仍需手动解锁。
-pub fn set_master_key_for_session(master_key: &str) {
-    set_master_key_with_persistence(master_key, MasterKeyPersistence::SessionOnly);
+pub fn set_master_key_for_session(master_key: &str) -> Result<(), CryptoError> {
+    set_master_key_with_persistence(master_key, MasterKeyPersistence::SessionOnly)
 }
 
-fn set_master_key_with_persistence(master_key: &str, persistence: MasterKeyPersistence) {
-    let key = derive_key(master_key);
-    if let Ok(mut guard) = ENCRYPTION_KEY.write() {
-        *guard = Some(key);
-    }
-
-    // 同时保存原始主密钥（用于云同步等场景）
-    if let Ok(mut guard) = RAW_MASTER_KEY.write() {
-        *guard = Some(master_key.to_string());
-    }
-
-    // 如果尚未设置过密码，生成并保存验证数据
-    if !has_repo_password_set() {
-        let verification = generate_key_verification(master_key);
-        save_verification_data(&verification);
-    }
-
-    // 按启动解锁策略更新存储后端
+fn set_master_key_with_persistence(
+    master_key: &str,
+    persistence: MasterKeyPersistence,
+) -> Result<(), CryptoError> {
     let storage = key_storage::get_key_storage();
-    if let Err(e) = update_key_storage(storage.as_ref(), master_key, persistence) {
-        tracing::warn!("[{}] 更新密钥存储失败: {}", storage.name(), e);
+    let setup = MasterKeySetup {
+        master_key,
+        persistence,
+        create_verification: !has_repo_password_set(),
+    };
+    set_master_key_with_storage(setup, storage.as_ref(), save_verification_data)
+}
+
+fn set_master_key_with_storage(
+    setup: MasterKeySetup<'_>,
+    storage: &dyn key_storage::KeyStorage,
+    save_verification: impl FnOnce(&str) -> bool,
+) -> Result<(), CryptoError> {
+    let previous = storage.load();
+    if let Err(error) = update_key_storage(storage, setup.master_key, setup.persistence) {
+        restore_key_storage(storage, previous)?;
+        return Err(CryptoError::KeyStorageFailed(error));
     }
+    if setup.create_verification {
+        let verification = generate_key_verification(setup.master_key);
+        if !save_verification(&verification) {
+            restore_key_storage(storage, previous)?;
+            return Err(CryptoError::SaveVerificationFailed);
+        }
+    }
+    publish_master_key(setup.master_key);
+    Ok(())
 }
 
 /// 验证并设置主密钥
 ///
 /// 如果已设置过密码，需要先验证密钥是否正确。
 /// 返回 Ok(()) 表示设置成功，Err 表示密码错误。
-pub fn verify_and_set_master_key(master_key: &str) -> Result<(), &'static str> {
+pub fn verify_and_set_master_key(master_key: &str) -> Result<(), CryptoError> {
     verify_and_set_master_key_with_persistence(master_key, MasterKeyPersistence::Persistent)
 }
 
 /// 验证主密钥并仅在当前应用会话中解锁。
-pub fn verify_and_set_master_key_for_session(master_key: &str) -> Result<(), &'static str> {
+pub fn verify_and_set_master_key_for_session(master_key: &str) -> Result<(), CryptoError> {
     verify_and_set_master_key_with_persistence(master_key, MasterKeyPersistence::SessionOnly)
 }
 
 fn verify_and_set_master_key_with_persistence(
     master_key: &str,
     persistence: MasterKeyPersistence,
-) -> Result<(), &'static str> {
-    if has_repo_password_set()
-        && let Some(verification_data) = load_verification_data()
-        && !verify_master_key(master_key, &verification_data)
-    {
-        return Err("密码错误");
+) -> Result<(), CryptoError> {
+    if has_repo_password_set() {
+        let verification_data = load_verification_data();
+        verify_existing_master_key(master_key, verification_data.as_deref())?;
     }
 
-    // 验证通过或首次设置，设置密钥
-    set_master_key_with_persistence(master_key, persistence);
-    Ok(())
+    set_master_key_with_persistence(master_key, persistence)
+}
+
+fn verify_existing_master_key(
+    master_key: &str,
+    verification_data: Option<&str>,
+) -> Result<(), CryptoError> {
+    let verification_data = verification_data.ok_or(CryptoError::LoadVerificationFailed)?;
+    if verify_master_key(master_key, verification_data) {
+        Ok(())
+    } else {
+        Err(CryptoError::InvalidOldPassword)
+    }
 }
 
 fn update_key_storage(
@@ -302,7 +333,10 @@ pub fn has_master_key() -> bool {
 /// 返回设置的原始主密钥字符串，用于云同步等需要原始密钥的场景。
 /// 如果未设置主密钥，返回 None。
 pub fn get_raw_master_key() -> Option<String> {
-    RAW_MASTER_KEY.read().ok().and_then(|guard| guard.clone())
+    RAW_MASTER_KEY
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|key| key.to_string()))
 }
 
 /// 加密密码
@@ -377,13 +411,13 @@ pub fn decrypt_password(encrypted: &str) -> String {
         Err(_) => return String::new(),
     };
 
-    if combined.len() < 12 {
+    if combined.len() < MIN_ENCRYPTED_LENGTH {
         return String::new();
     }
 
     // 分离 nonce 和密文
-    let nonce = Nonce::from_slice(&combined[..12]);
-    let ciphertext = &combined[12..];
+    let nonce = Nonce::from_slice(&combined[..NONCE_LENGTH]);
+    let ciphertext = &combined[NONCE_LENGTH..];
 
     match cipher.decrypt(nonce, ciphertext) {
         Ok(plaintext) => String::from_utf8(plaintext).unwrap_or_default(),
@@ -454,12 +488,12 @@ pub fn decrypt_with_key(encrypted: &str, master_key: &str) -> Result<String, Cry
         .decode(encoded)
         .map_err(|_| CryptoError::EncodingFailed)?;
 
-    if combined.len() < 12 {
+    if combined.len() < MIN_ENCRYPTED_LENGTH {
         return Err(CryptoError::InvalidDataFormat);
     }
 
-    let nonce = Nonce::from_slice(&combined[..12]);
-    let ciphertext = &combined[12..];
+    let nonce = Nonce::from_slice(&combined[..NONCE_LENGTH]);
+    let ciphertext = &combined[NONCE_LENGTH..];
 
     match cipher.decrypt(nonce, ciphertext) {
         Ok(plaintext) => String::from_utf8(plaintext).map_err(|_| CryptoError::EncodingFailed),
@@ -537,12 +571,26 @@ fn change_master_key_with_persistence(
     confirm_new_key: &str,
     persistence: MasterKeyPersistence,
 ) -> Result<(), CryptoError> {
-    // 检查是否已设置过密码
+    validate_master_key_change(old_key, new_key, confirm_new_key)?;
+
+    let new_verification = generate_key_verification(new_key);
+    let storage = key_storage::get_key_storage();
+    persist_master_key_change(storage.as_ref(), new_key, persistence, || {
+        save_verification_data(&new_verification)
+    })?;
+    publish_master_key(new_key);
+    Ok(())
+}
+
+pub fn validate_master_key_change(
+    old_key: &str,
+    new_key: &str,
+    confirm_new_key: &str,
+) -> Result<(), CryptoError> {
     if !has_repo_password_set() {
         return Err(CryptoError::NoPasswordSet);
     }
 
-    // 验证旧密钥
     if let Some(verification_data) = load_verification_data() {
         if !verify_master_key(old_key, &verification_data) {
             return Err(CryptoError::InvalidOldPassword);
@@ -551,40 +599,54 @@ fn change_master_key_with_persistence(
         return Err(CryptoError::NoPasswordSet);
     }
 
-    // 验证新密钥不为空
     if new_key.is_empty() {
         return Err(CryptoError::EmptyNewPassword);
     }
 
-    // 验证两次新密钥一致
     if new_key != confirm_new_key {
         return Err(CryptoError::PasswordMismatch);
     }
+    Ok(())
+}
 
-    // 生成新的验证数据
-    let new_verification = generate_key_verification(new_key);
-    if !save_verification_data(&new_verification) {
-        return Err(CryptoError::SaveVerificationFailed);
+fn persist_master_key_change(
+    storage: &dyn key_storage::KeyStorage,
+    new_key: &str,
+    persistence: MasterKeyPersistence,
+    save_verification: impl FnOnce() -> bool,
+) -> Result<(), CryptoError> {
+    let previous = storage.load();
+    if let Err(error) = update_key_storage(storage, new_key, persistence) {
+        restore_key_storage(storage, previous)?;
+        return Err(CryptoError::KeyStorageFailed(error));
     }
+    if save_verification() {
+        return Ok(());
+    }
+    restore_key_storage(storage, previous)?;
+    Err(CryptoError::SaveVerificationFailed)
+}
 
-    // 更新内存中的密钥
-    let key = derive_key(new_key);
+fn restore_key_storage(
+    storage: &dyn key_storage::KeyStorage,
+    previous: Option<String>,
+) -> Result<(), CryptoError> {
+    let result = match previous {
+        Some(key) => storage.save(&key),
+        None => storage.delete(),
+    };
+    result.map_err(|error| CryptoError::KeyStorageFailed(format!("恢复旧密钥失败: {error}")))
+}
+
+fn publish_master_key(master_key: &str) {
+    let key = derive_key(master_key);
     if let Ok(mut guard) = ENCRYPTION_KEY.write() {
         *guard = Some(key);
     }
 
-    // 同时更新原始主密钥
     if let Ok(mut guard) = RAW_MASTER_KEY.write() {
-        *guard = Some(new_key.to_string());
+        *guard = Some(Zeroizing::new(master_key.to_string()));
     }
-
-    // 按启动解锁策略更新存储后端中的密钥
-    let storage = key_storage::get_key_storage();
-    if let Err(e) = update_key_storage(storage.as_ref(), new_key, persistence) {
-        tracing::warn!("[{}] 更新密钥失败: {}", storage.name(), e);
-    }
-
-    Ok(())
 }
 
 /// 重置主密钥
@@ -653,7 +715,7 @@ pub fn try_restore_master_key() -> bool {
         *guard = Some(key);
     }
     if let Ok(mut guard) = RAW_MASTER_KEY.write() {
-        *guard = Some(master_key);
+        *guard = Some(Zeroizing::new(master_key));
     }
 
     tracing::info!("[密钥恢复] 主密钥恢复成功");
@@ -669,6 +731,30 @@ mod tests {
     #[derive(Default)]
     struct MemoryKeyStorage {
         key: Mutex<Option<String>>,
+    }
+
+    struct FailOnceKeyStorage {
+        key: Mutex<Option<String>>,
+        fail_next_save: Mutex<bool>,
+        fail_next_delete: Mutex<bool>,
+    }
+
+    impl FailOnceKeyStorage {
+        fn fail_save(key: &str) -> Self {
+            Self {
+                key: Mutex::new(Some(key.to_string())),
+                fail_next_save: Mutex::new(true),
+                fail_next_delete: Mutex::new(false),
+            }
+        }
+
+        fn fail_delete(key: &str) -> Self {
+            Self {
+                key: Mutex::new(Some(key.to_string())),
+                fail_next_save: Mutex::new(false),
+                fail_next_delete: Mutex::new(true),
+            }
+        }
     }
 
     impl KeyStorage for MemoryKeyStorage {
@@ -695,6 +781,43 @@ mod tests {
         }
     }
 
+    impl KeyStorage for FailOnceKeyStorage {
+        fn name(&self) -> &'static str {
+            "test-fail-once"
+        }
+
+        fn save(&self, master_key: &str) -> Result<(), String> {
+            *self.key.lock().expect("test key storage lock") = Some(master_key.to_string());
+            let mut fail = self.fail_next_save.lock().expect("test failure state lock");
+            if *fail {
+                *fail = false;
+                return Err("injected save failure".to_string());
+            }
+            Ok(())
+        }
+
+        fn load(&self) -> Option<String> {
+            self.key.lock().expect("test key storage lock").clone()
+        }
+
+        fn delete(&self) -> Result<(), String> {
+            *self.key.lock().expect("test key storage lock") = None;
+            let mut fail = self
+                .fail_next_delete
+                .lock()
+                .expect("test failure state lock");
+            if *fail {
+                *fail = false;
+                return Err("injected delete failure".to_string());
+            }
+            Ok(())
+        }
+
+        fn exists(&self) -> bool {
+            self.key.lock().expect("test key storage lock").is_some()
+        }
+    }
+
     fn test_mutex() -> &'static Mutex<()> {
         static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
         MUTEX.get_or_init(|| Mutex::new(()))
@@ -703,7 +826,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt() {
         let _guard = test_mutex().lock().unwrap();
-        set_master_key("test_key_123");
+        set_master_key("test_key_123").expect("configure test master key");
 
         let original = "my_secret_password";
         let encrypted = encrypt_password(original);
@@ -730,7 +853,7 @@ mod tests {
     #[test]
     fn test_empty_password() {
         let _guard = test_mutex().lock().unwrap();
-        set_master_key("test_key");
+        set_master_key("test_key").expect("configure test master key");
 
         let encrypted = encrypt_password("");
         assert_eq!(encrypted, "");
@@ -759,7 +882,7 @@ mod tests {
     #[test]
     fn test_already_encrypted() {
         let _guard = test_mutex().lock().unwrap();
-        set_master_key("test_key");
+        set_master_key("test_key").expect("configure test master key");
 
         let original = "password";
         let encrypted = encrypt_password(original);
@@ -790,5 +913,145 @@ mod tests {
             .expect("persistent policy");
 
         assert_eq!(Some("remembered-key".to_string()), storage.load());
+    }
+
+    #[test]
+    fn decrypt_with_key_rejects_data_without_a_complete_authentication_tag() {
+        for length in [12, 27] {
+            let encrypted = format!("{}{}", ENCRYPTED_PREFIX, BASE64.encode(vec![0_u8; length]));
+            assert_eq!(
+                Err(CryptoError::InvalidDataFormat),
+                decrypt_with_key(&encrypted, "test-key")
+            );
+        }
+    }
+
+    #[test]
+    fn master_key_change_restores_persisted_key_when_verification_save_fails() {
+        let storage = MemoryKeyStorage::default();
+        storage.save("old-key").expect("seed old key");
+
+        let result = persist_master_key_change(
+            &storage,
+            "new-key",
+            MasterKeyPersistence::Persistent,
+            || false,
+        );
+
+        assert_eq!(Err(CryptoError::SaveVerificationFailed), result);
+        assert_eq!(Some("old-key".to_string()), storage.load());
+    }
+
+    #[test]
+    fn master_key_change_restores_persisted_key_after_partial_storage_failure() {
+        let storage = FailOnceKeyStorage::fail_save("old-key");
+
+        let result = persist_master_key_change(
+            &storage,
+            "new-key",
+            MasterKeyPersistence::Persistent,
+            || true,
+        );
+
+        assert!(matches!(result, Err(CryptoError::KeyStorageFailed(_))));
+        assert_eq!(Some("old-key".to_string()), storage.load());
+    }
+
+    #[test]
+    fn first_setup_does_not_publish_when_verification_save_fails() {
+        let _guard = test_mutex().lock().unwrap();
+        let storage = MemoryKeyStorage::default();
+        clear_in_memory_master_key();
+
+        let result = set_master_key_with_storage(
+            MasterKeySetup {
+                master_key: "new-key",
+                persistence: MasterKeyPersistence::Persistent,
+                create_verification: true,
+            },
+            &storage,
+            |_| false,
+        );
+
+        assert_eq!(Err(CryptoError::SaveVerificationFailed), result);
+        assert_eq!(None, storage.load());
+        assert!(!has_master_key());
+    }
+
+    #[test]
+    fn unlock_does_not_publish_after_partial_storage_failure() {
+        let _guard = test_mutex().lock().unwrap();
+        let storage = FailOnceKeyStorage::fail_save("old-key");
+        clear_in_memory_master_key();
+
+        let result = set_master_key_with_storage(
+            MasterKeySetup {
+                master_key: "new-key",
+                persistence: MasterKeyPersistence::Persistent,
+                create_verification: false,
+            },
+            &storage,
+            |_| true,
+        );
+
+        assert!(matches!(result, Err(CryptoError::KeyStorageFailed(_))));
+        assert_eq!(Some("old-key".to_string()), storage.load());
+        assert!(!has_master_key());
+    }
+
+    #[test]
+    fn session_only_unlock_does_not_publish_after_partial_delete_failure() {
+        let _guard = test_mutex().lock().unwrap();
+        let storage = FailOnceKeyStorage::fail_delete("old-key");
+        clear_in_memory_master_key();
+
+        let result = set_master_key_with_storage(
+            MasterKeySetup {
+                master_key: "new-key",
+                persistence: MasterKeyPersistence::SessionOnly,
+                create_verification: false,
+            },
+            &storage,
+            |_| true,
+        );
+
+        assert!(matches!(result, Err(CryptoError::KeyStorageFailed(_))));
+        assert_eq!(Some("old-key".to_string()), storage.load());
+        assert!(!has_master_key());
+    }
+
+    #[test]
+    fn successful_setup_publishes_after_persistence() {
+        let _guard = test_mutex().lock().unwrap();
+        let storage = MemoryKeyStorage::default();
+        clear_in_memory_master_key();
+
+        let result = set_master_key_with_storage(
+            MasterKeySetup {
+                master_key: "new-key",
+                persistence: MasterKeyPersistence::Persistent,
+                create_verification: true,
+            },
+            &storage,
+            |_| true,
+        );
+
+        assert_eq!(Ok(()), result);
+        assert_eq!(Some("new-key".to_string()), storage.load());
+        assert!(has_master_key());
+        clear_in_memory_master_key();
+    }
+
+    #[test]
+    fn unlock_rejects_an_unreadable_verification_file() {
+        assert_eq!(
+            Err(CryptoError::LoadVerificationFailed),
+            verify_existing_master_key("test-key", None)
+        );
+    }
+
+    fn clear_in_memory_master_key() {
+        *ENCRYPTION_KEY.write().expect("test encryption key lock") = None;
+        *RAW_MASTER_KEY.write().expect("test raw master key lock") = None;
     }
 }

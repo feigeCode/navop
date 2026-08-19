@@ -1,7 +1,9 @@
 use crate::storage::DeleteCredentialOutcome;
 use crate::storage::traits::Repository;
 
-use super::reference_scan_tests::{insert_credential, repositories, ssh_connection};
+use super::reference_scan_tests::{
+    insert_credential, repositories, ssh_connection, telnet_connection,
+};
 
 #[test]
 fn protected_delete_reports_references_and_fails_closed_on_malformed_json() {
@@ -67,4 +69,38 @@ fn repository_delete_cannot_bypass_reference_protection() {
 
     assert!(error.to_string().contains("still referenced"));
     assert!(credentials.exists(credential_id).unwrap());
+}
+
+#[test]
+fn protected_delete_blocks_telnet_credential_reference() {
+    let (_temp, _connection, repository) = repositories();
+    let credential_id = insert_credential(&repository);
+    let mut connection = telnet_connection(credential_id);
+    repository
+        .insert(&mut connection)
+        .expect("insert Telnet connection");
+
+    let outcome = repository
+        .credential_repository()
+        .delete_checked(credential_id)
+        .expect("protected Telnet delete");
+
+    let DeleteCredentialOutcome::Referenced(hits) = outcome else {
+        panic!("Telnet reference must protect credential deletion");
+    };
+    assert_eq!(1, hits.len());
+    assert_eq!(
+        crate::storage::ConnectionType::Telnet,
+        hits[0].connection_type
+    );
+    assert_eq!(
+        crate::storage::CredentialReferenceLocation::Primary,
+        hits[0].location
+    );
+    assert!(
+        repository
+            .credential_repository()
+            .exists(credential_id)
+            .expect("credential still exists")
+    );
 }

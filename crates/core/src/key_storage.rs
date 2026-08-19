@@ -10,13 +10,18 @@ use aes_gcm::{
 };
 use rand::RngCore;
 use rand::rngs::OsRng;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// 本地加密密钥文件名
 const KEY_STORAGE_FILE: &str = "key_storage";
 const NONCE_LENGTH: usize = 12;
+const AUTH_TAG_LENGTH: usize = 16;
+const MIN_ENCRYPTED_LENGTH: usize = NONCE_LENGTH + AUTH_TAG_LENGTH;
 
 /// 本地文件存储使用的固定加密密钥（用于加密本地保存的主密钥）
 const LOCAL_STORAGE_FIXED_KEY: &[u8; 32] = b"onehub-local-dev-key-2025-fixed!";
@@ -146,29 +151,123 @@ fn save_master_key_to_path(path: &Path, master_key: &str) -> Result<(), String> 
         .map_err(|e| format!("加密密钥失败: {e}"))?;
     let data = [nonce_bytes.as_slice(), ciphertext.as_slice()].concat();
 
-    fs::write(path, data).map_err(|e| format!("写入密钥文件失败: {e}"))?;
+    atomic_write_file(path, &data).map_err(|e| format!("写入密钥文件失败: {e}"))?;
     tracing::info!("[本地文件] 主密钥已保存");
     Ok(())
 }
 
 fn load_master_key_from_path(path: &Path) -> Option<String> {
     let data = fs::read(path).ok()?;
-    if data.len() < NONCE_LENGTH {
+    if data.len() < MIN_ENCRYPTED_LENGTH {
         tracing::warn!("[本地文件] 密钥文件格式无效");
         return None;
     }
 
     let cipher = Aes256Gcm::new_from_slice(LOCAL_STORAGE_FIXED_KEY).ok()?;
-    let plaintext = cipher
-        .decrypt(
-            Nonce::from_slice(&data[..NONCE_LENGTH]),
-            &data[NONCE_LENGTH..],
-        )
-        .ok()?;
-    let master_key = String::from_utf8(plaintext).ok()?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                Nonce::from_slice(&data[..NONCE_LENGTH]),
+                &data[NONCE_LENGTH..],
+            )
+            .ok()?,
+    );
+    let master_key = String::from_utf8(plaintext.to_vec()).ok()?;
 
     tracing::info!("[本地文件] 成功读取密钥");
     Some(master_key)
+}
+
+pub(crate) fn atomic_write_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = temporary_path(path);
+    let result = write_and_replace(path, &temporary, data);
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("secret");
+    path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::new_v4()))
+}
+
+fn write_and_replace(path: &Path, temporary: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(temporary)?;
+    file.write_all(data)?;
+    file.flush()?;
+    file.sync_all()?;
+    replace_file(temporary, path)?;
+    set_owner_only_permissions(path)?;
+    sync_parent_directory(path)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, destination)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        MOVE_FILE_FLAGS, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+
+    let source = wide_path(temporary);
+    let destination = wide_path(destination);
+    let flags = MOVE_FILE_FLAGS(MOVEFILE_REPLACE_EXISTING.0 | MOVEFILE_WRITE_THROUGH.0);
+    unsafe {
+        MoveFileExW(PCWSTR(source.as_ptr()), PCWSTR(destination.as_ptr()), flags)
+            .map_err(std::io::Error::other)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wide_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(unix)]
+fn set_owner_only_permissions(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_permissions(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn delete_master_key_at_path(path: &Path) -> Result<(), String> {
@@ -213,6 +312,53 @@ mod tests {
         std::fs::write(&path, b"corrupted").expect("写入损坏数据");
 
         assert_eq!(None, load_master_key_from_path(&path));
+    }
+
+    #[test]
+    fn local_file_storage_rejects_nonce_only_and_truncated_tag() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("key_storage");
+
+        for length in [12, 27] {
+            std::fs::write(&path, vec![0_u8; length]).expect("写入截断数据");
+            assert_eq!(None, load_master_key_from_path(&path));
+        }
+    }
+
+    #[test]
+    fn local_file_storage_atomically_replaces_an_existing_key() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("key_storage");
+        save_master_key_to_path(&path, "old-key").expect("保存旧主密钥");
+
+        save_master_key_to_path(&path, "new-key").expect("覆盖主密钥");
+
+        assert_eq!(
+            Some("new-key".to_string()),
+            load_master_key_from_path(&path)
+        );
+        let entries = std::fs::read_dir(temp.path())
+            .expect("读取临时目录")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("读取目录项");
+        assert_eq!(entries.len(), 1, "不应遗留临时密钥文件");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_file_storage_uses_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("key_storage");
+        save_master_key_to_path(&path, "portable-master-key").expect("保存主密钥");
+
+        let mode = std::fs::metadata(path)
+            .expect("读取密钥文件元数据")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

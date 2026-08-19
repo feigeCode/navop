@@ -8659,6 +8659,8 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
+ "windows 0.61.3",
+ "zeroize",
 ]
 
 [[package]]

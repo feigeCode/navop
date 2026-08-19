@@ -1173,6 +1173,10 @@ Encryption:
     en: "Incorrect master key"
     zh-CN: "主密钥错误"
     zh-HK: "主密鑰錯誤"
+  master_key_persistence_failed:
+    en: "Unable to securely save or load the master key. Your data remains locked."
+    zh-CN: "无法安全保存或读取主密钥，数据仍保持锁定。"
+    zh-HK: "無法安全儲存或讀取主密鑰，資料仍保持鎖定。"
   confirm_password_placeholder:
     en: Confirm your master key
     zh-CN: 确认您的主密钥

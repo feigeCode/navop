@@ -449,6 +449,56 @@ async fn local_source_uses_stable_credential_cloud_ids_in_exported_connections()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn local_source_maps_downloaded_credential_cloud_id_to_local_id() {
+    let fixture = CredentialFixture::new();
+    let mut credential = credential("target credential", true);
+    credential.cloud_id = Some("credential-cloud-target".to_string());
+    let local_credential_id = fixture.insert_credential(credential);
+    let record = fixture.remote_connection_record(
+        "connection-cloud-mapped",
+        99_999,
+        "credential-cloud-target",
+    );
+
+    fixture
+        .source
+        .apply_remote(&record, None)
+        .await
+        .expect("remote connection applied");
+
+    let reference = fixture.downloaded_reference("connection-cloud-mapped");
+    assert_eq!(local_credential_id, reference.credential_id);
+    assert_eq!(
+        Some("credential-cloud-target".to_string()),
+        reference.credential_cloud_id
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn local_source_clears_foreign_credential_id_when_cloud_id_is_missing_locally() {
+    let fixture = CredentialFixture::new();
+    let foreign_id = fixture.insert_credential(credential("same numeric id", true));
+    let record = fixture.remote_connection_record(
+        "connection-cloud-unresolved",
+        foreign_id,
+        "credential-cloud-missing",
+    );
+
+    fixture
+        .source
+        .apply_remote(&record, None)
+        .await
+        .expect("remote connection applied");
+
+    let reference = fixture.downloaded_reference("connection-cloud-unresolved");
+    assert_eq!(0, reference.credential_id);
+    assert_eq!(
+        Some("credential-cloud-missing".to_string()),
+        reference.credential_cloud_id
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn local_source_replaces_stale_credential_cloud_id_during_connection_export() {
     let fixture = CredentialFixture::new();
     let mut credential = credential("synced credential", true);
@@ -660,11 +710,59 @@ impl CredentialFixture {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         crypto::clear_master_key();
-        crypto::set_master_key_for_session("personal-sync-local-source-test-key");
+        crypto::set_master_key_for_session("personal-sync-local-source-test-key")
+            .expect("configure personal sync test master key");
         Self {
             fixture: Fixture::new(),
             _crypto_guard: crypto_guard,
         }
+    }
+
+    fn remote_connection_record(
+        &self,
+        cloud_id: &str,
+        credential_id: i64,
+        credential_cloud_id: &str,
+    ) -> crate::cloud_sync::models::CloudSyncData {
+        let mut reference = CredentialReference::all(credential_id);
+        reference.credential_cloud_id = Some(credential_cloud_id.to_string());
+        let config = DbConnectionConfig {
+            id: String::new(),
+            database_type: DatabaseType::SQLite,
+            name: "remote connection".to_string(),
+            host: ":memory:".to_string(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: Some(":memory:".to_string()),
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            proxy: None,
+            extra_params: Default::default(),
+            credential_reference: Some(reference),
+        };
+        let connection =
+            StoredConnection::new_database("remote connection".to_string(), config, None);
+        let mut record = self
+            .service
+            .read()
+            .expect("service read lock")
+            .prepare_sync_data_upload_with_workspace_cloud_id(&connection, None, &[], None)
+            .expect("remote connection record");
+        record.id = cloud_id.to_string();
+        record
+    }
+
+    fn downloaded_reference(&self, cloud_id: &str) -> CredentialReference {
+        self.connections
+            .get_by_cloud_id(cloud_id)
+            .expect("connection query")
+            .expect("downloaded connection exists")
+            .to_db_connection()
+            .expect("connection params parse")
+            .credential_reference
+            .expect("credential reference exists")
     }
 }
 

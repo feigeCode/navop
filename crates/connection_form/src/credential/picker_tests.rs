@@ -7,6 +7,7 @@ use one_core::storage::{CredentialReference, CredentialSummary};
 use super::{
     CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialReferencePicker,
     CredentialSelectValue, create_credential_picker, create_credential_picker_with_summaries,
+    reference_is_unavailable,
 };
 
 struct PickerTestRoot {
@@ -160,4 +161,56 @@ fn picker_source_never_reads_plaintext_credentials() {
 
     assert!(source.contains("list_summaries"));
     assert!(!source.contains("get_plaintext"));
+}
+
+#[test]
+fn missing_local_reference_is_reported_as_unavailable() {
+    let reference = CredentialReference {
+        credential_id: 99,
+        credential_cloud_id: None,
+        username: true,
+        password: true,
+        private_key: false,
+        passphrase: false,
+    };
+
+    assert!(reference_is_unavailable(&reference, &[summary()]));
+}
+
+#[test]
+fn missing_cloud_reference_does_not_match_a_colliding_local_id() {
+    let reference = CredentialReference {
+        credential_id: 42,
+        credential_cloud_id: Some("missing-cloud-id".to_string()),
+        username: true,
+        password: true,
+        private_key: false,
+        passphrase: false,
+    };
+
+    assert!(reference_is_unavailable(&reference, &[summary()]));
+}
+
+#[test]
+fn matching_cloud_reference_is_available() {
+    let mut matching = summary();
+    matching.cloud_id = Some("credential-cloud-id".to_string());
+    let reference = CredentialReference {
+        credential_id: 900,
+        credential_cloud_id: matching.cloud_id.clone(),
+        username: true,
+        password: true,
+        private_key: false,
+        passphrase: false,
+    };
+
+    assert!(!reference_is_unavailable(&reference, &[matching]));
+}
+
+#[test]
+fn picker_render_warns_when_the_referenced_keychain_item_is_unavailable() {
+    let source = include_str!("render.rs");
+
+    assert!(source.contains("reference_is_unavailable"));
+    assert!(source.contains("Credential.reference_unavailable"));
 }

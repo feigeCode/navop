@@ -4,6 +4,7 @@ mod render;
 mod repository;
 mod runtime;
 
+pub(crate) use model::reference_is_unavailable;
 use model::summary_matches_reference;
 pub use model::{
     CredentialCapabilities, CredentialField, CredentialSelectItem, CredentialSelectValue,

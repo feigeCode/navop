@@ -27,6 +27,7 @@ gpui.workspace = true
 gpui-component.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 dashmap.workspace = true
 llm-connector.workspace = true
 futures-util = "0.3"
@@ -45,6 +46,11 @@ gpui = { workspace = true, features = ["test-support"] }
 image.workspace = true
 smallvec.workspace = true
 tempfile = "3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Storage_FileSystem",
+] }
 
 [build-dependencies]
 dotenvy = "0.15"

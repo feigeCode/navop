@@ -6,7 +6,7 @@ use crate::storage::{
     DatabaseType, DbConnectionConfig, JumpServerConfig, MongoDBParams, MongoDriverVariant,
     PortForwardingKind, PortForwardingParams, ProxyConfig, ProxyType, RedisMode, RedisParams,
     RedisSentinelConfig, RemoteDesktopBackendPreference, RemoteDesktopParams,
-    RemoteDesktopProtocol, SshAuthMethod, SshParams, StoredConnection,
+    RemoteDesktopProtocol, SshAuthMethod, SshParams, StoredConnection, TelnetParams,
 };
 
 fn reference(id: i64) -> CredentialReference {
@@ -169,6 +169,21 @@ pub(super) fn remote_desktop_connection(id: i64) -> StoredConnection {
     )
 }
 
+pub(super) fn telnet_connection(id: i64) -> StoredConnection {
+    StoredConnection::new_telnet(
+        "Telnet".to_string(),
+        TelnetParams {
+            host: "telnet.example.com".to_string(),
+            port: 23,
+            credential_reference: Some(reference(id)),
+            prompt_username: None,
+            prompt_password: None,
+            login_script: Vec::new(),
+        },
+        None,
+    )
+}
+
 pub(super) fn tunnel_connection(kind: &str, ssh_id: i64) -> StoredConnection {
     let tunnel = connection_tunnel::SshTunnelConfig {
         enabled: true,
@@ -287,4 +302,28 @@ fn reference_scanner_finds_all_direct_and_tunnel_locations() {
             .filter(|hit| hit.via_ssh_connection_id.is_some())
             .count()
     );
+}
+
+#[test]
+fn reference_scanner_finds_telnet_primary_reference() {
+    let (_temp, _connection, repository) = repositories();
+    let credential_id = insert_credential(&repository);
+    let mut connection = telnet_connection(credential_id);
+    let connection_id = repository
+        .insert(&mut connection)
+        .expect("insert Telnet connection");
+
+    let hits = repository
+        .credential_repository()
+        .referencing_connections(credential_id)
+        .expect("scan Telnet references");
+
+    assert_eq!(1, hits.len());
+    assert_eq!(connection_id, hits[0].connection_id);
+    assert_eq!(
+        crate::storage::ConnectionType::Telnet,
+        hits[0].connection_type
+    );
+    assert_eq!(CredentialReferenceLocation::Primary, hits[0].location);
+    assert_eq!(None, hits[0].via_ssh_connection_id);
 }

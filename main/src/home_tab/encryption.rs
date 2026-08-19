@@ -129,12 +129,22 @@ impl HomePage {
                     }
 
                     if is_first_setup {
-                        if require_master_key_on_startup {
-                            crypto::set_master_key_for_session(&input_key);
+                        let result = if require_master_key_on_startup {
+                            crypto::set_master_key_for_session(&input_key)
                         } else {
-                            crypto::set_master_key(&input_key);
-                        }
-                        return true;
+                            crypto::set_master_key(&input_key)
+                        };
+                        return match result {
+                            Ok(()) => true,
+                            Err(error) => {
+                                tracing::error!("设置主密钥失败: {error}");
+                                error_msg_ok.update(cx, |msg, cx| {
+                                    *msg = Some(master_key_error_message(&error));
+                                    cx.notify();
+                                });
+                                false
+                            }
+                        };
                     }
 
                     if is_change_mode {
@@ -150,36 +160,24 @@ impl HomePage {
                         };
 
                         if input_key != old_key {
-                            let result = if require_master_key_on_startup {
-                                crypto::change_master_key_for_session(
-                                    &old_key, &input_key, &input_key,
-                                )
-                            } else {
-                                crypto::change_master_key(&old_key, &input_key, &input_key)
-                            };
-                            match result {
-                                Ok(()) => {
-                                    let storage = cx.global::<GlobalStorageState>().storage.clone();
-                                    match re_encrypt_all_connections(&storage) {
-                                        Ok(count) => {
-                                            tracing::info!(
-                                                "主密钥修改成功，已重新加密 {} 个本地连接",
-                                                count
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("重新加密本地连接失败: {}", e);
-                                            error_msg_ok.update(cx, |msg, cx| {
-                                                *msg = Some(e.to_string());
-                                                cx.notify();
-                                            });
-                                            return false;
-                                        }
-                                    }
+                            let storage = cx.global::<GlobalStorageState>().storage.clone();
+                            match rotate_master_key(
+                                &storage,
+                                &old_key,
+                                &input_key,
+                                require_master_key_on_startup,
+                            ) {
+                                Ok(stats) => {
+                                    tracing::info!(
+                                        "主密钥修改成功，已重新加密 {} 个连接和 {} 个钥匙串条目",
+                                        stats.connections,
+                                        stats.credentials
+                                    );
                                 }
-                                Err(e) => {
+                                Err(error) => {
+                                    tracing::error!("修改主密钥失败: {}", error);
                                     error_msg_ok.update(cx, |msg, cx| {
-                                        *msg = Some(e.to_string());
+                                        *msg = Some(error.to_string());
                                         cx.notify();
                                     });
                                     return false;
@@ -197,9 +195,10 @@ impl HomePage {
                     };
                     match result {
                         Ok(()) => true,
-                        Err(_) => {
+                        Err(error) => {
+                            tracing::error!("解锁主密钥失败: {error}");
                             error_msg_ok.update(cx, |msg, cx| {
-                                *msg = Some(t!("Encryption.password_incorrect").to_string());
+                                *msg = Some(master_key_error_message(&error));
                                 cx.notify();
                             });
                             false
@@ -326,23 +325,36 @@ impl HomePage {
     }
 }
 
-/// 使用当前主密钥重新加密并保存所有连接。
-pub(super) fn re_encrypt_all_connections(
-    storage: &one_core::storage::StorageManager,
-) -> anyhow::Result<usize> {
-    let conn_repo = storage
-        .get::<ConnectionRepository>()
-        .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-
-    let connections = conn_repo.list()?;
-    let mut count = 0;
-
-    for conn in connections {
-        conn_repo.update(&conn)?;
-        count += 1;
+fn master_key_error_message(error: &crypto::CryptoError) -> String {
+    match error {
+        crypto::CryptoError::InvalidOldPassword => t!("Encryption.password_incorrect").to_string(),
+        _ => t!("Encryption.master_key_persistence_failed").to_string(),
     }
+}
 
-    Ok(count)
+fn rotate_master_key(
+    storage: &one_core::storage::StorageManager,
+    old_key: &str,
+    new_key: &str,
+    session_only: bool,
+) -> anyhow::Result<one_core::storage::MasterKeyRotationStats> {
+    crypto::validate_master_key_change(old_key, new_key, new_key)?;
+    let connection = storage.connection();
+    let stats = one_core::storage::re_encrypt_secrets(&connection, old_key, new_key)?;
+    let result = if session_only {
+        crypto::change_master_key_for_session(old_key, new_key, new_key)
+    } else {
+        crypto::change_master_key(old_key, new_key, new_key)
+    };
+    if let Err(error) = result {
+        return match one_core::storage::re_encrypt_secrets(&connection, new_key, old_key) {
+            Ok(_) => Err(error.into()),
+            Err(rollback_error) => Err(anyhow::anyhow!(
+                "{error}; 数据库密钥回滚也失败: {rollback_error}"
+            )),
+        };
+    }
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -374,6 +386,34 @@ mod tests {
 
         assert!(dialog.contains("crypto::set_master_key_for_session"));
         assert!(dialog.contains("crypto::verify_and_set_master_key_for_session"));
-        assert!(dialog.contains("crypto::change_master_key_for_session"));
+        assert!(dialog.contains("rotate_master_key("));
+        assert!(source.contains("crypto::change_master_key_for_session"));
+    }
+
+    #[test]
+    fn master_key_change_rotates_connections_and_keychain_entries_together() {
+        let source = include_str!("encryption.rs");
+        let implementation = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("encryption implementation source");
+
+        assert!(implementation.contains("one_core::storage::re_encrypt_secrets("));
+        assert!(implementation.contains("stats.connections"));
+        assert!(implementation.contains("stats.credentials"));
+        assert!(!implementation.contains("fn re_encrypt_all_connections("));
+    }
+
+    #[test]
+    fn master_key_setup_and_unlock_surface_persistence_failures() {
+        let source = include_str!("encryption.rs");
+        let dialog = source
+            .split("pub(super) fn show_encryption_key_dialog(")
+            .nth(1)
+            .and_then(|source| source.split("pub(super) fn team_management_url").next())
+            .expect("show_encryption_key_dialog source");
+
+        assert!(dialog.contains("master_key_error_message(&error)"));
+        assert!(source.contains("Encryption.master_key_persistence_failed"));
     }
 }

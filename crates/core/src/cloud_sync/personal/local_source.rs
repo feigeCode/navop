@@ -144,6 +144,16 @@ impl PersonalSyncLocalRepositorySource {
         serde_json::to_string(&params).map_err(|error| SyncStoreError::Parse(error.to_string()))
     }
 
+    fn connection_params_with_local_credential_references(
+        &self,
+        params: &str,
+    ) -> Result<String, SyncStoreError> {
+        let mut params = serde_json::from_str::<serde_json::Value>(params)
+            .map_err(|error| SyncStoreError::Parse(error.to_string()))?;
+        resolve_credential_references(&mut params, &self.credentials)?;
+        serde_json::to_string(&params).map_err(|error| SyncStoreError::Parse(error.to_string()))
+    }
+
     fn workspace_cloud_id(
         &self,
         workspace_id: Option<i64>,
@@ -197,6 +207,7 @@ impl PersonalSyncLocalRepositorySource {
             .map_err(lock_error)?
             .decrypt_sync_data_connection_with_workspace_cloud_id(record)
             .map_err(sync_error)?;
+        conn.params = self.connection_params_with_local_credential_references(&conn.params)?;
         conn.id = local.and_then(|item| parse_prefixed_id(&item.local_id, CONNECTION_PREFIX).ok());
         conn.workspace_id = self.workspace_id_by_cloud_id(workspace_cloud_id.as_deref())?;
         conn.cloud_id = Some(record.id.clone());
@@ -511,6 +522,50 @@ fn enrich_credential_references(
         }
         _ => {}
     }
+    Ok(())
+}
+
+fn resolve_credential_references(
+    value: &mut serde_json::Value,
+    repository: &CredentialRepository,
+) -> Result<(), SyncStoreError> {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                resolve_credential_references(value, repository)?;
+            }
+        }
+        serde_json::Value::Object(object) => {
+            resolve_object_credential_reference(object, repository)?;
+            for nested in object.values_mut() {
+                resolve_credential_references(nested, repository)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn resolve_object_credential_reference(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    repository: &CredentialRepository,
+) -> Result<(), SyncStoreError> {
+    let cloud_id = object
+        .get("credential_cloud_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|cloud_id| !cloud_id.is_empty());
+    let Some(cloud_id) = cloud_id else {
+        return Ok(());
+    };
+    let local_id = repository
+        .get_by_cloud_id(cloud_id)
+        .map_err(repository_error)?
+        .and_then(|credential| credential.id)
+        .unwrap_or_default();
+    object.insert(
+        "credential_id".to_string(),
+        serde_json::Value::Number(local_id.into()),
+    );
     Ok(())
 }
 

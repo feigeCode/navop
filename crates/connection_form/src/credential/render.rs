@@ -42,6 +42,12 @@ impl CredentialReferencePicker {
             return messages;
         }
         let Some(summary) = summary else {
+            if self.reference.as_ref().is_some_and(|reference| {
+                super::reference_is_unavailable(reference, &self.summaries)
+            }) {
+                messages.push(message(t!("Credential.reference_unavailable"), false, cx));
+                return messages;
+            }
             if self.summaries.is_empty() {
                 messages.push(message(t!("Credential.empty"), true, cx));
             }

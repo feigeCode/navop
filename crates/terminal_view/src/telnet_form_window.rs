@@ -1,3 +1,4 @@
+use connection_form::credential::resolve_connection_for_runtime;
 use connection_form::credential::{
     CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
     CredentialReferencePicker, create_credential_picker,
@@ -392,6 +393,14 @@ impl TelnetFormWindow {
             cx.notify();
             return;
         };
+        let params = match resolve_telnet_test_params(params, cx) {
+            Ok(params) => params,
+            Err(error) => {
+                self.test_result = Some(Err(error));
+                cx.notify();
+                return;
+            }
+        };
 
         self.is_testing = true;
         self.test_result = None;
@@ -535,6 +544,16 @@ impl TelnetFormWindow {
     }
 }
 
+fn resolve_telnet_test_params(params: TelnetParams, cx: &App) -> Result<TelnetParams, String> {
+    let connection =
+        StoredConnection::new_telnet("Telnet connection test".to_string(), params, None);
+    resolve_connection_for_runtime(connection, cx).and_then(|connection| {
+        connection
+            .to_telnet_params()
+            .map_err(|error| error.to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +612,26 @@ mod tests {
             collect_login_script_steps(vec![("a*".to_string(), "admin".to_string())]),
             None
         );
+    }
+
+    #[test]
+    fn connection_test_resolves_keychain_reference_before_opening_tcp_socket() {
+        let source = include_str!("telnet_form_window.rs");
+        let on_test = source
+            .split("fn on_test(")
+            .nth(1)
+            .and_then(|source| source.split("fn on_save(").next())
+            .expect("Telnet on_test source");
+
+        let resolve = on_test
+            .find("resolve_telnet_test_params")
+            .expect("runtime credential resolution");
+        let connect = on_test
+            .find("TcpStream::connect")
+            .expect("Telnet TCP connection");
+        assert!(resolve < connect);
+        assert!(source.contains("resolve_connection_for_runtime(connection, cx)"));
+        assert!(source.contains(".to_telnet_params()"));
     }
 }
 

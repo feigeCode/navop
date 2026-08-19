@@ -220,6 +220,15 @@ pub(super) fn summary_matches_reference(
     }
 }
 
+pub(crate) fn reference_is_unavailable(
+    reference: &CredentialReference,
+    summaries: &[CredentialSummary],
+) -> bool {
+    !summaries
+        .iter()
+        .any(|summary| summary_matches_reference(summary, reference))
+}
+
 fn normalize_auth_fields(reference: &mut CredentialReference) {
     if reference.password && reference.private_key {
         reference.private_key = false;
