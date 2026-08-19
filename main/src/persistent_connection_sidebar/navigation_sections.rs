@@ -113,6 +113,7 @@ fn render_filter_overflow_button(
     IconButton::new(
         "persistent-more-connection-types",
         Icon::new(IconName::Ellipsis)
+            .mono()
             .text_color(if selected {
                 visuals.palette.foreground
             } else {

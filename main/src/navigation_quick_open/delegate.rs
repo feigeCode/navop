@@ -1,16 +1,19 @@
 use gpui::{
-    App, Context, FontWeight, IntoElement as _, ParentElement as _, SharedString, Styled as _,
-    Task, Window, div, px,
+    App, ColorExt as _, Context, FontWeight, IntoElement as _, ParentElement as _, SharedString,
+    Styled as _, Task, Window, div, px,
 };
 use gpui_component::{
-    Icon, IconName, IconSize, IndexPath, Sizable as _, WindowExt as _, h_flex,
+    ActiveTheme as _, Icon, IconName, IconSize, IndexPath, Sizable as _, WindowExt as _, h_flex,
     list::{ListDelegate, ListItem, ListState},
 };
 
 use super::{NavigationActivate, NavigationApplication, NavigationQuickOpenItem, NavigationTarget};
+use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
 
-const ITEM_HEIGHT: gpui::Pixels = px(44.0);
+const ITEM_HEIGHT: gpui::Pixels = px(40.0);
 const ITEM_RADIUS: gpui::Pixels = px(6.0);
+const ICON_CONTAINER_SIZE: gpui::Pixels = px(32.0);
+const ICON_CONTAINER_RADIUS: gpui::Pixels = px(8.0);
 
 pub(super) struct NavigationQuickOpenDelegate {
     items: Vec<NavigationQuickOpenItem>,
@@ -81,7 +84,7 @@ impl ListDelegate for NavigationQuickOpenDelegate {
         &mut self,
         ix: IndexPath,
         _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
+        cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let item = self.filtered_items.get(ix.row)?.clone();
         let target = item.target;
@@ -102,8 +105,8 @@ impl ListDelegate for NavigationQuickOpenDelegate {
                     h_flex()
                         .w_full()
                         .items_center()
-                        .gap_3()
-                        .child(render_target_icon(target))
+                        .gap_2()
+                        .child(render_target_icon(target, cx))
                         .child(
                             div()
                                 .flex_1()
@@ -147,16 +150,24 @@ impl ListDelegate for NavigationQuickOpenDelegate {
     }
 }
 
-fn render_target_icon(target: NavigationTarget) -> gpui::AnyElement {
+fn render_target_icon(target: NavigationTarget, cx: &App) -> gpui::AnyElement {
     let icon = match target {
-        NavigationTarget::Connection(connection_type) => connection_type.icon(),
-        NavigationTarget::Application(application) => application_icon(application),
+        NavigationTarget::Connection(connection_type) => {
+            connection_type_navigation_icon(connection_type, ConnectionVisualSize::Inline)
+        }
+        NavigationTarget::Application(application) => Icon::new(application_icon(application))
+            .mono()
+            .with_size(IconSize::Medium),
     };
     div()
+        .size(ICON_CONTAINER_SIZE)
+        .rounded(ICON_CONTAINER_RADIUS)
+        .bg(cx.theme().muted.opacity(0.45))
         .flex_shrink_0()
         .flex()
         .items_center()
-        .child(Icon::new(icon).color().with_size(IconSize::Medium))
+        .justify_center()
+        .child(icon)
         .into_any_element()
 }
 

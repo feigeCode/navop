@@ -18,13 +18,13 @@ fn connection_navigation_partition_is_complete_and_stable() {
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
+            ConnectionType::Serial,
+            ConnectionType::Telnet,
         ]
     );
     assert_eq!(
         overflow,
         vec![
-            ConnectionType::Serial,
-            ConnectionType::Telnet,
             ConnectionType::PortForwarding,
             ConnectionType::Rdp,
             ConnectionType::Vnc,
@@ -66,15 +66,41 @@ fn application_navigation_partition_preserves_optional_entries() {
         #[cfg(feature = "api-testing")]
         expected.push(NavigationApplication::ApiTesting);
         expected.extend([
-            NavigationApplication::JsonFormatter,
+            NavigationApplication::Extensions,
             NavigationApplication::SessionLogs,
             NavigationApplication::CredentialVault,
-            NavigationApplication::Extensions,
+            NavigationApplication::JsonFormatter,
             NavigationApplication::Settings,
         ]);
 
         assert_eq!(combined, expected);
     }
+}
+
+#[test]
+fn extensions_stays_visible_while_json_formatter_moves_to_more_applications() {
+    let availability = NavigationAvailability {
+        show_ai_workbench: false,
+        show_team: false,
+    };
+
+    assert_eq!(
+        leading_navigation_applications(availability),
+        vec![
+            NavigationApplication::Notes,
+            #[cfg(feature = "api-testing")]
+            NavigationApplication::ApiTesting,
+            NavigationApplication::Extensions,
+        ]
+    );
+    assert_eq!(
+        overflow_navigation_applications(),
+        vec![
+            NavigationApplication::SessionLogs,
+            NavigationApplication::CredentialVault,
+            NavigationApplication::JsonFormatter,
+        ]
+    );
 }
 
 #[test]
@@ -108,4 +134,47 @@ fn quick_open_renders_business_selection_separately_from_keyboard_selection() {
 
     assert!(delegate.contains(".confirmed(item.selected)"));
     assert!(delegate.contains(".check_icon(IconName::Check)"));
+}
+
+#[test]
+fn quick_open_uses_monochrome_navigation_icons_without_recoloring_color_assets() {
+    let delegate = include_str!("delegate.rs");
+    let legacy_sidebar = include_str!("../home_tab/sidebar_navigation.rs");
+    let persistent_rail = include_str!("../persistent_connection_sidebar/rail.rs");
+    let persistent_sections =
+        include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+
+    assert!(delegate.contains("connection_type_navigation_icon("));
+    assert!(delegate.contains("ConnectionVisualSize::Inline"));
+    assert!(!delegate.contains("connection_type.icon()"));
+    assert!(delegate.contains("Icon::new(application_icon(application))"));
+    assert!(delegate.contains(".mono()"));
+    assert!(!delegate.contains(".color()"));
+    assert!(legacy_sidebar.contains("Icon::new(icon).mono()"));
+    assert!(!legacy_sidebar.contains("Icon::new(icon).color()"));
+    assert!(persistent_rail.contains("Icon::new(icon)\n            .mono()"));
+    assert!(persistent_sections.contains("Icon::new(IconName::Ellipsis)\n            .mono()"));
+    for color_icon in [
+        "IconName::AI,",
+        "IconName::TeamColor",
+        "IconName::NotesColor",
+        "IconName::ExtensionsColor",
+        "IconName::SettingColor",
+    ] {
+        assert!(!legacy_sidebar.contains(color_icon));
+    }
+}
+
+#[test]
+fn quick_open_layout_is_compact_and_gives_icons_a_consistent_container() {
+    let dialog = include_str!("../navigation_quick_open.rs");
+    let delegate = include_str!("delegate.rs");
+
+    assert!(dialog.contains("const DIALOG_WIDTH: gpui::Pixels = px(440.0);"));
+    assert!(dialog.contains(".id(\"navigation-quick-open-dialog\")"));
+    assert!(dialog.contains(".pb_2()"));
+    assert!(delegate.contains("const ICON_CONTAINER_SIZE: gpui::Pixels = px(32.0);"));
+    assert!(delegate.contains(".size(ICON_CONTAINER_SIZE)"));
+    assert!(delegate.contains(".justify_center()"));
+    assert!(delegate.contains(".bg(cx.theme().muted.opacity(0.45))"));
 }

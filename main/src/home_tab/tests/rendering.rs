@@ -299,6 +299,11 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(!sidebar_navigation.contains("ObjectIcon::new(IconName::User)"));
     assert!(sidebar_navigation.contains("\"legacy-more-connection-types\""));
     assert!(sidebar_navigation.contains("\"legacy-more-applications\""));
+    assert_eq!(
+        sidebar_navigation.matches("show_label: false").count(),
+        2,
+        "the two legacy overflow buttons should render only their ellipsis icon"
+    );
     assert!(persistent_navigation.contains("\"persistent-more-connection-types\""));
     assert!(persistent_navigation.contains("\"persistent-more-applications\""));
     assert!(sidebar_navigation.contains("show_legacy_connection_navigation_quick_open"));
@@ -308,12 +313,12 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
 }
 
 #[test]
-fn legacy_ai_workbench_uses_the_original_color_icon() {
+fn legacy_ai_workbench_uses_the_monochrome_line_icon() {
     let sidebar = include_str!("../sidebar_navigation.rs");
 
     assert!(sidebar.contains("\"legacy-open-ai-workbench\""));
-    assert!(sidebar.contains("NavigationApplication::AiWorkbench => IconName::AI,"));
-    assert!(!sidebar.contains("NavigationApplication::AiWorkbench => IconName::AILine"));
+    assert!(sidebar.contains("NavigationApplication::AiWorkbench => IconName::AILine"));
+    assert!(!sidebar.contains("NavigationApplication::AiWorkbench => IconName::AI,"));
 }
 
 #[test]

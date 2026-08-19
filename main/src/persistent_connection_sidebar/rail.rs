@@ -167,6 +167,7 @@ pub(super) fn selectable_rail_button(
     IconButton::new(
         id,
         Icon::new(icon)
+            .mono()
             .text_color(if selected {
                 palette.foreground
             } else {

@@ -459,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_places_credential_vault_between_notes_and_extensions() {
+    fn more_applications_places_json_formatter_after_credential_vault() {
         use crate::navigation_quick_open::{
             NavigationApplication, overflow_navigation_applications,
         };
@@ -469,7 +469,7 @@ mod tests {
             vec![
                 NavigationApplication::SessionLogs,
                 NavigationApplication::CredentialVault,
-                NavigationApplication::Extensions,
+                NavigationApplication::JsonFormatter,
             ]
         );
     }

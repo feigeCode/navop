@@ -16,7 +16,7 @@ use rust_i18n::t;
 
 use delegate::NavigationQuickOpenDelegate;
 
-const DIALOG_WIDTH: gpui::Pixels = px(520.0);
+const DIALOG_WIDTH: gpui::Pixels = px(440.0);
 const DIALOG_MARGIN_TOP: gpui::Pixels = px(72.0);
 const DIALOG_LIST_MAX_HEIGHT: gpui::Pixels = px(420.0);
 
@@ -69,6 +69,8 @@ pub(crate) fn visible_connection_types() -> Vec<ConnectionType> {
         ConnectionType::Database,
         ConnectionType::Redis,
         ConnectionType::MongoDB,
+        ConnectionType::Serial,
+        ConnectionType::Telnet,
     ]
 }
 
@@ -82,11 +84,7 @@ pub(crate) fn overflow_connection_types() -> Vec<ConnectionType> {
 pub(crate) fn is_overflow_connection_type(connection_type: ConnectionType) -> bool {
     matches!(
         connection_type,
-        ConnectionType::Serial
-            | ConnectionType::Telnet
-            | ConnectionType::PortForwarding
-            | ConnectionType::Rdp
-            | ConnectionType::Vnc
+        ConnectionType::PortForwarding | ConnectionType::Rdp | ConnectionType::Vnc
     )
 }
 
@@ -103,7 +101,7 @@ pub(crate) fn leading_navigation_applications(
     applications.push(NavigationApplication::Notes);
     #[cfg(feature = "api-testing")]
     applications.push(NavigationApplication::ApiTesting);
-    applications.push(NavigationApplication::JsonFormatter);
+    applications.push(NavigationApplication::Extensions);
     applications
 }
 
@@ -111,7 +109,7 @@ pub(crate) fn overflow_navigation_applications() -> Vec<NavigationApplication> {
     vec![
         NavigationApplication::SessionLogs,
         NavigationApplication::CredentialVault,
-        NavigationApplication::Extensions,
+        NavigationApplication::JsonFormatter,
     ]
 }
 
@@ -208,7 +206,7 @@ pub(crate) fn show_navigation_quick_open(
                 let search_placeholder = search_placeholder.clone();
                 move |content, _window, _cx| {
                     content.p_0().child(
-                        div().id("navigation-quick-open-dialog").child(
+                        div().id("navigation-quick-open-dialog").pb_2().child(
                             List::new(&list)
                                 .search_placeholder(search_placeholder.clone())
                                 .with_size(Size::Large)
