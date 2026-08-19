@@ -213,6 +213,10 @@ RemoteDesktopForm:
     en: Windows native RDP (MSTSC)
     zh-CN: Windows 原生 RDP（MSTSC）
     zh-HK: Windows 原生 RDP（MSTSC）
+  backend_windows_native_status:
+    en: In progress
+    zh-CN: 正在实现中
+    zh-HK: 正在實現中
   backend_ironrdp:
     en: IronRDP
     zh-CN: IronRDP

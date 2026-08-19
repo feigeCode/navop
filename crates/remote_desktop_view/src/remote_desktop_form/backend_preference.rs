@@ -1,5 +1,7 @@
+#[cfg(windows)]
 use one_core::storage::RemoteDesktopBackendPreference;
 
+#[cfg(windows)]
 pub(super) const fn backend_preferences() -> [RemoteDesktopBackendPreference; 3] {
     [
         RemoteDesktopBackendPreference::Auto,
@@ -8,7 +10,7 @@ pub(super) const fn backend_preferences() -> [RemoteDesktopBackendPreference; 3]
     ]
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use one_core::storage::RemoteDesktopBackendPreference;
 

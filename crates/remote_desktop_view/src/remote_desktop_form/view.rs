@@ -6,13 +6,15 @@ use gpui::{
     App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div,
     px,
 };
+#[cfg(windows)]
+use gpui_component::radio::RadioGroup;
 use gpui_component::{
     ActiveTheme, IconName,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     input::Input,
-    radio::{Radio, RadioGroup},
+    radio::Radio,
     scroll::ScrollableElement,
     select::Select,
     v_flex,
@@ -96,8 +98,10 @@ impl RemoteDesktopFormWindow {
             )
             .child(self.render_read_only_row(cx))
             .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
-                form.child(self.render_audio_playback_row(cx))
-                    .child(self.render_backend_preference_row(cx))
+                let form = form.child(self.render_audio_playback_row(cx));
+                #[cfg(windows)]
+                let form = form.child(self.render_backend_preference_row(cx));
+                form
             })
             .when(connection_sync_controls_visible_in(cx), |form| {
                 form.child(self.render_sync_row(cx))
@@ -211,6 +215,7 @@ impl RemoteDesktopFormWindow {
         )
     }
 
+    #[cfg(windows)]
     fn render_backend_preference_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_index = super::backend_preference::backend_preferences()
             .iter()
@@ -232,7 +237,12 @@ impl RemoteDesktopFormWindow {
                     Radio::new("remote-desktop-backend-auto")
                         .label(t!("RemoteDesktopForm.backend_auto").to_string()),
                     Radio::new("remote-desktop-backend-windows-native")
-                        .label(t!("RemoteDesktopForm.backend_windows_native").to_string()),
+                        .label(format!(
+                            "{} ({})",
+                            t!("RemoteDesktopForm.backend_windows_native"),
+                            t!("RemoteDesktopForm.backend_windows_native_status")
+                        ))
+                        .disabled(true),
                     Radio::new("remote-desktop-backend-ironrdp")
                         .label(t!("RemoteDesktopForm.backend_ironrdp").to_string()),
                 ]),
@@ -334,9 +344,14 @@ mod tests {
         assert!(render_source.contains("remote-desktop-audio-playback"));
         assert!(render_source.contains("RemoteDesktopForm.label_audio_playback"));
         assert!(render_source.contains("self.render_backend_preference_row(cx)"));
+        assert!(render_source.contains(
+            "#[cfg(windows)]\n                let form = form.child(self.render_backend_preference_row(cx));"
+        ));
         assert!(render_source.contains("RemoteDesktopForm.label_backend_preference"));
         assert!(render_source.contains("RadioGroup::horizontal"));
         assert!(render_source.contains("remote-desktop-backend-windows-native"));
+        assert!(render_source.contains(".disabled(true)"));
+        assert!(render_source.contains("RemoteDesktopForm.backend_windows_native_status"));
         assert!(render_source.contains("remote-desktop-backend-ironrdp"));
         assert!(!render_source.contains("Select::new(&self.backend_preference_select)"));
     }

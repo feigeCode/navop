@@ -358,9 +358,10 @@ impl RenderOnce for RadioGroup {
             base.gap_3()
                 .children(self.radios.into_iter().enumerate().map(|(ix, mut radio)| {
                     let checked = selected_ix == Some(ix);
+                    let radio_disabled = disabled || radio.disabled;
 
                     radio.id = ix.into();
-                    radio.disabled(disabled).checked(checked).when_some(
+                    radio.disabled(radio_disabled).checked(checked).when_some(
                         on_click.clone(),
                         |this, on_click| {
                             this.on_click(move |_, window, cx| {
