@@ -617,6 +617,11 @@ pub struct TerminalSidebar {
 }
 
 impl TerminalSidebar {
+    pub(crate) fn refresh_quick_commands(&mut self, cx: &mut Context<Self>) {
+        self.quick_command_panel
+            .update(cx, |panel, cx| panel.load_commands(cx));
+    }
+
     pub(crate) fn new(
         connection_id: Option<i64>,
         connection_kind: TerminalConnectionKind,

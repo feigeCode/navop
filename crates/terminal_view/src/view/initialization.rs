@@ -176,6 +176,15 @@ impl TerminalView {
             );
             subscriptions.push(settings_subscription);
         }
+        if let Some(quick_command_sync) = crate::quick_command_sync::quick_command_sync_notifier(cx)
+        {
+            let quick_command_subscription = cx.subscribe_in(
+                &quick_command_sync,
+                window,
+                Self::handle_quick_command_sync_event,
+            );
+            subscriptions.push(quick_command_subscription);
+        }
         subscriptions
             .push(cx.observe_global_in::<AppSettings>(window, Self::handle_app_settings_changed));
         subscriptions.push(

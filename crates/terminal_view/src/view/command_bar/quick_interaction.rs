@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::command_bar_model::{
-    SelectionDirection, bounded_selection, selected_quick_command,
+    SelectionDirection, bounded_selection, quick_command_executes_on_click, selected_quick_command,
 };
 use gpui::{AppContext, Context, KeyDownEvent, Window};
 use gpui_component::input::InputEvent;
@@ -71,6 +71,13 @@ impl TerminalCommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if quick_command_executes_on_click(&command) {
+            self.reset_overlays(cx);
+            cx.emit(TerminalCommandBarEvent::Submit(command));
+            cx.notify();
+            return;
+        }
+
         if self.collapsed {
             self.reset_overlays(cx);
             cx.emit(TerminalCommandBarEvent::InputToPty(command));

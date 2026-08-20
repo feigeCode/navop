@@ -40,6 +40,7 @@ pub fn init(cx: &mut App) {
     crate::settings::init_settings(cx);
     crate::public_mcp::init(cx);
     init_broadcast_input_registry(cx);
+    crate::quick_command_sync::init_quick_command_sync(cx);
     workspace_explorer::init(cx);
     cx.bind_keys(init_keybindings(cx));
 }

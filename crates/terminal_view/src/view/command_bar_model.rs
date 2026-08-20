@@ -217,6 +217,10 @@ pub(super) fn command_submission_bytes(command: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+pub(crate) fn quick_command_executes_on_click(command: &str) -> bool {
+    command.ends_with(['\r', '\n'])
+}
+
 /// Split a possibly multi-line command into individual statements so batch
 /// input can be executed line by line.
 pub(super) fn command_batch_lines(command: &str) -> Vec<String> {

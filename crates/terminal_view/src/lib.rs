@@ -10,6 +10,7 @@ mod host_key_dialog;
 pub mod keys;
 pub mod public_mcp;
 pub mod public_mcp_remote_ops;
+mod quick_command_sync;
 pub mod serial_form_window;
 pub mod settings;
 pub mod sidebar;

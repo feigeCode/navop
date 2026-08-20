@@ -30,6 +30,7 @@ use palette::IntoColor;
 use rust_i18n::t;
 use std::{ops::Range, sync::Arc};
 
+use crate::quick_command_sync::emit_quick_commands_changed;
 use crate::theme::TerminalColors;
 
 /// 快捷命令面板事件
@@ -41,6 +42,11 @@ pub enum QuickCommandPanelEvent {
     ExecuteCommand(String),
     /// 快捷命令数据已变更
     QuickCommandsChanged,
+}
+
+fn notify_quick_commands_changed(cx: &mut Context<QuickCommandPanel>) {
+    cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+    emit_quick_commands_changed(cx);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +69,18 @@ fn connection_id_for_scope(
     match (panel_connection_id, scope) {
         (Some(connection_id), QuickCommandScope::CurrentConnection) => Some(connection_id),
         _ => None,
+    }
+}
+
+fn normalize_quick_command_value(value: &str) -> String {
+    let command = value.trim();
+    if command.is_empty() {
+        return String::new();
+    }
+    if value.ends_with(['\r', '\n']) {
+        format!("{command}\n")
+    } else {
+        command.to_string()
     }
 }
 
@@ -640,7 +658,7 @@ impl QuickCommandPanel {
         command.sort_order = repo.next_sort_order(command.connection_id).unwrap_or(0);
         repo.insert(&mut command)?;
         self.load_commands(cx);
-        cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+        notify_quick_commands_changed(cx);
         Ok(())
     }
 
@@ -655,7 +673,7 @@ impl QuickCommandPanel {
             .ok_or_else(|| anyhow::anyhow!("QuickCommandRepository not found"))?;
         repo.update(&command)?;
         self.load_commands(cx);
-        cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+        notify_quick_commands_changed(cx);
         Ok(())
     }
 
@@ -912,7 +930,7 @@ impl QuickCommandPanel {
                         .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, window, cx| {
-                    let command = command_ok.read(cx).value().trim().to_string();
+                    let command = normalize_quick_command_value(&command_ok.read(cx).value());
                     if command.is_empty() {
                         window.push_notification(
                             Notification::error(t!("QuickCommand.command_required").to_string())
@@ -1002,7 +1020,7 @@ impl QuickCommandPanel {
                 self.commands.retain(|command| command.id != Some(id));
                 self.filter_commands();
                 cx.notify();
-                cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+                notify_quick_commands_changed(cx);
             }
             Err(error) => tracing::error!(%error, "Failed to delete command"),
         }
@@ -1027,7 +1045,7 @@ impl QuickCommandPanel {
                 self.sort_commands();
                 self.filter_commands();
                 cx.notify();
-                cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+                notify_quick_commands_changed(cx);
             }
             Err(error) => tracing::error!(%error, "Failed to toggle pin"),
         }
@@ -1080,7 +1098,7 @@ impl QuickCommandPanel {
                     _ => QuickCommandGroupFilter::Ungrouped,
                 };
                 self.load_commands(cx);
-                cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+                notify_quick_commands_changed(cx);
             }
             Err(error) => {
                 tracing::error!(%error, %old_name, "Failed to rename quick command group")
@@ -1095,7 +1113,7 @@ impl QuickCommandPanel {
         match repo.recolor_group(&group_name, color.as_deref()) {
             Ok(()) => {
                 self.load_commands(cx);
-                cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+                notify_quick_commands_changed(cx);
             }
             Err(error) => {
                 tracing::error!(%error, %group_name, "Failed to recolor quick command group")
@@ -1111,7 +1129,7 @@ impl QuickCommandPanel {
             Ok(()) => {
                 self.group_filter = QuickCommandGroupFilter::Ungrouped;
                 self.load_commands(cx);
-                cx.emit(QuickCommandPanelEvent::QuickCommandsChanged);
+                notify_quick_commands_changed(cx);
             }
             Err(error) => {
                 tracing::error!(%error, %group_name, "Failed to clear quick command group")
@@ -1790,9 +1808,10 @@ mod tests {
     use super::{
         QuickCommandGroupFilter, QuickCommandScope, ShortcutCapture, ShortcutCaptureLabel,
         capture_quick_command_shortcut, command_matches_group_filter, connection_id_for_scope,
-        new_command_group_defaults, normalize_group_fields, quick_command_dialog_input_style,
-        quick_command_group_chip_label, quick_command_group_color_items, quick_command_groups,
-        shortcut_capture_label, validated_quick_command_shortcut,
+        new_command_group_defaults, normalize_group_fields, normalize_quick_command_value,
+        quick_command_dialog_input_style, quick_command_group_chip_label,
+        quick_command_group_color_items, quick_command_groups, shortcut_capture_label,
+        validated_quick_command_shortcut,
     };
     use crate::theme::TerminalColors;
     use gpui::{Keystroke, rgb};
@@ -2090,6 +2109,15 @@ mod tests {
     }
 
     #[test]
+    fn quick_command_editor_preserves_exactly_one_explicit_trailing_enter() {
+        assert_eq!("ls -la\n", normalize_quick_command_value("  ls -la  \n"));
+        assert_eq!("ls -la\n", normalize_quick_command_value("ls -la\r\n"));
+        assert_eq!("ls -la\n", normalize_quick_command_value("ls -la\r"));
+        assert_eq!("ls -la", normalize_quick_command_value("  ls -la  "));
+        assert_eq!("", normalize_quick_command_value("  \n"));
+    }
+
+    #[test]
     fn command_editor_renders_shortcut_capture_and_scope_controls() {
         let source = include_str!("quick_command_panel.rs");
         let editor = source
@@ -2153,8 +2181,8 @@ mod tests {
                         .1
                 });
             assert!(
-                implementation.contains("QuickCommandPanelEvent::QuickCommandsChanged"),
-                "{function} must notify command bars after a successful mutation"
+                implementation.contains("notify_quick_commands_changed(cx)"),
+                "{function} must notify local and global command-bar caches after a successful mutation"
             );
         }
     }
