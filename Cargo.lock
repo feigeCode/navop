@@ -3417,6 +3417,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dsa"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c8573b60d07b5b5cecadc1f978c9b71d5504151e703cbb0439ee4ad301338f3"
+dependencies = [
+ "crypto-bigint",
+ "crypto-common 0.2.2",
+ "crypto-primes",
+ "der 0.8.0",
+ "digest 0.11.3",
+ "rfc6979",
+ "sha2 0.11.0",
+ "signature 3.0.0",
+ "zeroize",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12377,6 +12394,7 @@ dependencies = [
  "argon2 0.6.0-rc.8",
  "bcrypt-pbkdf",
  "ctutils",
+ "dsa",
  "ed25519-dalek 3.0.0",
  "hex",
  "hmac 0.13.0",

@@ -32,10 +32,10 @@ pub mod defaults {
     pub const KEEPALIVE_MAX: usize = 6;
 }
 
-/// 保留 russh 的现代算法优先级，并可在扩展标记前追加旧服务器兼容回退。
+/// 保留 russh 的现代算法优先级，并可追加旧服务器兼容回退。
 ///
-/// 兼容回退默认由调用方关闭。开启后会包含 SHA-1 KEX，仅用于连接无法升级的
-/// 旧版服务器。
+/// 兼容回退默认由调用方关闭。开启后会包含 SHA-1 KEX 和 DSA host key，
+/// 仅用于连接无法升级的旧版服务器。
 ///
 /// 已知的 host-key 算法只会稳定地移动到 russh 默认列表前部；默认算法不会被
 /// 删除，因此服务器不再提供已知算法时仍可完成协商，并由完整公钥校验拒绝变更。
@@ -44,7 +44,7 @@ pub fn build_client_preferred_algorithms(known_host_key_algorithms: &[String]) -
     build_client_preferred_algorithms_with_legacy(known_host_key_algorithms, false)
 }
 
-/// 构建 SSH 算法偏好，并按连接配置决定是否启用旧服务器兼容 KEX。
+/// 构建 SSH 算法偏好，并按连接配置决定是否启用旧服务器兼容算法。
 #[must_use]
 pub fn build_client_preferred_algorithms_with_legacy(
     known_host_key_algorithms: &[String],
@@ -52,35 +52,55 @@ pub fn build_client_preferred_algorithms_with_legacy(
 ) -> Preferred {
     let mut preferred = Preferred::default();
     if allow_legacy_algorithms {
-        let mut kex = preferred.kex.into_owned();
-        let extension_start = kex
-            .iter()
-            .position(|name| {
-                matches!(
-                    *name,
-                    kex::EXTENSION_SUPPORT_AS_CLIENT
-                        | kex::EXTENSION_SUPPORT_AS_SERVER
-                        | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
-                        | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
-                )
-            })
-            .unwrap_or(kex.len());
-
-        kex.splice(
-            extension_start..extension_start,
-            [
-                kex::ECDH_SHA2_NISTP256,
-                kex::ECDH_SHA2_NISTP384,
-                kex::ECDH_SHA2_NISTP521,
-                kex::DH_G14_SHA1,
-                kex::DH_GEX_SHA1,
-                kex::DH_G1_SHA1,
-            ],
-        );
-        preferred.kex = Cow::Owned(kex);
+        preferred.kex = with_legacy_kex(preferred.kex);
     }
 
-    let default_keys = preferred.key.into_owned();
+    preferred.key = build_host_key_algorithms(
+        preferred.key,
+        known_host_key_algorithms,
+        allow_legacy_algorithms,
+    );
+    preferred
+}
+
+fn with_legacy_kex(preferred: Cow<'static, [kex::Name]>) -> Cow<'static, [kex::Name]> {
+    let mut kex = preferred.into_owned();
+    let extension_start = kex
+        .iter()
+        .position(|name| {
+            matches!(
+                *name,
+                kex::EXTENSION_SUPPORT_AS_CLIENT
+                    | kex::EXTENSION_SUPPORT_AS_SERVER
+                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
+                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
+            )
+        })
+        .unwrap_or(kex.len());
+    kex.splice(
+        extension_start..extension_start,
+        [
+            kex::ECDH_SHA2_NISTP256,
+            kex::ECDH_SHA2_NISTP384,
+            kex::ECDH_SHA2_NISTP521,
+            kex::DH_G14_SHA1,
+            kex::DH_GEX_SHA1,
+            kex::DH_G1_SHA1,
+        ],
+    );
+    Cow::Owned(kex)
+}
+
+fn build_host_key_algorithms(
+    preferred: Cow<'static, [Algorithm]>,
+    known_host_key_algorithms: &[String],
+    allow_legacy_algorithms: bool,
+) -> Cow<'static, [Algorithm]> {
+    let mut default_keys = preferred.into_owned();
+    if allow_legacy_algorithms && !default_keys.contains(&Algorithm::Dsa) {
+        default_keys.push(Algorithm::Dsa);
+    }
+
     let mut keys = Vec::with_capacity(default_keys.len());
     for known in known_host_key_algorithms {
         for candidate in &default_keys {
@@ -94,8 +114,7 @@ pub fn build_client_preferred_algorithms_with_legacy(
             keys.push(candidate);
         }
     }
-    preferred.key = Cow::Owned(keys);
-    preferred
+    Cow::Owned(keys)
 }
 
 fn host_key_algorithm_matches(candidate: &Algorithm, known: &str) -> bool {
@@ -2026,6 +2045,14 @@ mod port_forward_tests {
             .collect()
     }
 
+    fn host_key_names_with_legacy(known: &[String], allow_legacy_algorithms: bool) -> Vec<String> {
+        build_client_preferred_algorithms_with_legacy(known, allow_legacy_algorithms)
+            .key
+            .iter()
+            .map(|algorithm| algorithm.as_str().to_owned())
+            .collect()
+    }
+
     fn identity_test_config() -> SshConnectConfig {
         SshConnectConfig {
             host: " Target.Example. ".to_owned(),
@@ -2226,6 +2253,24 @@ mod port_forward_tests {
     }
 
     #[test]
+    fn client_enables_ssh_dss_host_keys_only_for_legacy_connections() {
+        let modern = host_key_names_with_legacy(&[], false);
+        let legacy = host_key_names_with_legacy(&[], true);
+
+        assert!(!modern.iter().any(|algorithm| algorithm == "ssh-dss"));
+        assert!(legacy.iter().any(|algorithm| algorithm == "ssh-dss"));
+        assert_eq!(legacy.len(), modern.len() + 1);
+        assert_eq!(&legacy[..modern.len()], modern);
+    }
+
+    #[test]
+    fn client_promotes_known_ssh_dss_key_after_legacy_opt_in() {
+        let promoted = host_key_names_with_legacy(&["ssh-dss".to_owned()], true);
+
+        assert_eq!(promoted.first().map(String::as_str), Some("ssh-dss"));
+    }
+
+    #[test]
     fn jump_and_target_configs_use_their_own_known_host_key_algorithms() {
         let mut config = identity_test_config();
         config.jump_server = Some(JumpServerConnectConfig {
@@ -2234,6 +2279,7 @@ mod port_forward_tests {
             username: "jumper".to_owned(),
             auth: SshAuth::Agent,
         });
+        config.allow_legacy_algorithms = true;
         let target_identity = config.target_host_key_identity();
         let jump_identity = config
             .jump_host_key_identity()
@@ -2268,6 +2314,19 @@ mod port_forward_tests {
         assert_eq!(
             jump.preferred.key.first().map(Algorithm::as_str),
             Some("ssh-ed25519")
+        );
+        assert!(
+            target
+                .preferred
+                .key
+                .iter()
+                .any(|algorithm| algorithm == &Algorithm::Dsa)
+        );
+        assert!(
+            jump.preferred
+                .key
+                .iter()
+                .any(|algorithm| algorithm == &Algorithm::Dsa)
         );
     }
 
@@ -2329,6 +2388,59 @@ mod port_forward_tests {
         std::net::SocketAddr,
         tokio::task::JoinHandle<std::io::Result<()>>,
     ) {
+        spawn_host_key_test_server_with_preferred(keys, Preferred::default()).await
+    }
+
+    async fn spawn_ssh_dss_test_server(
+        key: PrivateKey,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        spawn_host_key_test_server_with_preferred(
+            vec![key],
+            Preferred {
+                key: Cow::Owned(vec![Algorithm::Dsa]),
+                ..Preferred::default()
+            },
+        )
+        .await
+    }
+
+    fn dsa_test_key() -> PrivateKey {
+        // Public test fixture generated solely for local handshake tests.
+        const PRIVATE_KEY: &str = "\
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABsgAAAAdzc2gtZH
+NzAAAAgQDxDIsyRM9b6Sd8s69/SeoAd9Vm0eDVXb1jQ3nfqw7hpcGZ2YHNmk4Nu6bosXEU
+FgcAV097wTsJkNcvNC/+o+V0u4g65eApSShKTiNrrKhXSa3KjEKsz4/F/rn42IJp/XHAeq
+97o6vhOWdJ1talKtaDDndpY+8zGtv5vuXpitzjEwAAABUA4RTE/XNs8aD3gvopANGV2lOr
+0OUAAACBAI+0IEWgkQdCvCdO1IejIUQypGYNmDs23M1/jNkrTbMG7NwihE1Juscj/y0oYt
+QOhpS+mEVkRBpBMr1slFpWyQ9QpMzATuCzkBd1r5rh1ROuU+o1l9PgvZSJ054iMn5QQd94
+lCmg9OfheosLDXSveUXouFoJ+gixv6r/X7fNa5pcAAAAgFrWGC73Qh41OqT1l3bfdkMfnm
+6gGxdg618q/RF9+D2szdrHVJpJx2DJQUl+ePlSE+O9KhRBkHl5vGg/O1gLQF+fJxThIwdN
+OPz5UV43KS3cUhdG/9o+lO7N1Xn8aAO2JB4jZc5EhxMidbLhcblhXQrvslUYQu76/dZ1fJ
+tGfqtrAAAB2Hs36Ht7N+h7AAAAB3NzaC1kc3MAAACBAPEMizJEz1vpJ3yzr39J6gB31WbR
+4NVdvWNDed+rDuGlwZnZgc2aTg27puixcRQWBwBXT3vBOwmQ1y80L/6j5XS7iDrl4ClJKE
+pOI2usqFdJrcqMQqzPj8X+ufjYgmn9ccB6r3ujq+E5Z0nW1qUq1oMOd2lj7zMa2/m+5emK
+3OMTAAAAFQDhFMT9c2zxoPeC+ikA0ZXaU6vQ5QAAAIEAj7QgRaCRB0K8J07Uh6MhRDKkZg
+2YOzbczX+M2StNswbs3CKETUm6xyP/LShi1A6GlL6YRWREGkEyvWyUWlbJD1CkzMBO4LOQ
+F3WvmuHVE65T6jWX0+C9lInTniIyflBB33iUKaD05+F6iwsNdK95Rei4Wgn6CLG/qv9ft8
+1rmlwAAACAWtYYLvdCHjU6pPWXdt92Qx+ebqAbF2DrXyr9EX34PazN2sdUmknHYMlBSX54
++VIT470qFEGQeXm8aD87WAtAX58nFOEjB004/PlRXjcpLdxSF0b/2j6U7s3VefxoA7YkHi
+NlzkSHEyJ1suFxuWFdCu+yVRhC7vr91nV8m0Z+q2sAAAAVALmxGX4UgwhddBEOZJ8sqQ/B
+zsXyAAAAAAE=
+-----END OPENSSH PRIVATE KEY-----";
+        PrivateKey::from_openssh(PRIVATE_KEY).expect("DSA test key should decode")
+    }
+
+    async fn spawn_host_key_test_server_with_preferred(
+        keys: Vec<PrivateKey>,
+        preferred: Preferred,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
         let socket = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("host-key test server should bind");
@@ -2339,6 +2451,7 @@ mod port_forward_tests {
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
             keys,
+            preferred,
             ..Default::default()
         });
         let server_task = tokio::spawn(async move {
@@ -2401,6 +2514,50 @@ mod port_forward_tests {
         server_task.abort();
 
         result.expect("client should negotiate the already trusted ECDSA host key");
+    }
+
+    #[tokio::test]
+    async fn client_negotiates_only_ssh_dss_host_key_after_legacy_opt_in() {
+        let dsa = dsa_test_key();
+        let trusted_public_key = dsa.public_key().clone();
+        let (address, server_task) = spawn_ssh_dss_test_server(dsa).await;
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let identity = HostKeyIdentity::new(
+            address.ip().to_string(),
+            address.port(),
+            HostKeyRoute::Direct,
+        );
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&identity, &trusted_public_key)
+            .expect("trusted DSA key should be seeded");
+        let mut config = host_key_test_config(
+            address,
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path),
+        );
+        config.allow_legacy_algorithms = true;
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        result.expect("client should negotiate the explicitly enabled ssh-dss host key");
+    }
+
+    #[tokio::test]
+    async fn client_rejects_ssh_dss_host_key_when_legacy_algorithms_are_disabled() {
+        let dsa = dsa_test_key();
+        let (address, server_task) = spawn_ssh_dss_test_server(dsa).await;
+
+        let result =
+            RusshClient::connect(host_key_test_config(address, HostKeyVerifier::insecure())).await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("ssh-dss must not be negotiated without explicit opt-in");
+        };
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
+        assert!(error.to_string().contains("No common Key algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
     }
 
     #[tokio::test]

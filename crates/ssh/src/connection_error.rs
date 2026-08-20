@@ -5,7 +5,7 @@ use anyhow::Error;
 use rust_i18n::t;
 
 /// A user-actionable SSH negotiation error shown when a connection has not
-/// opted in to the legacy KEX compatibility list.
+/// opted in to the legacy algorithm compatibility list.
 #[derive(Debug)]
 pub struct LegacyAlgorithmRequired {
     message: String,
@@ -19,13 +19,13 @@ impl fmt::Display for LegacyAlgorithmRequired {
 
 impl StdError for LegacyAlgorithmRequired {}
 
-/// Add an actionable hint only when russh reports that no common key-exchange
-/// algorithm exists and this connection has not enabled legacy algorithms.
+/// Add an actionable hint only when russh reports a legacy KEX or DSA host-key
+/// negotiation failure and this connection has not enabled legacy algorithms.
 ///
 /// Host-key changes, authentication failures, network errors, and failures in
 /// other SSH algorithm categories are deliberately left unchanged.
 pub fn add_legacy_algorithm_hint(error: Error, allow_legacy_algorithms: bool) -> Error {
-    if allow_legacy_algorithms || !is_no_common_kex_algorithm(&error) {
+    if allow_legacy_algorithms || !is_legacy_algorithm_negotiation_failure(&error) {
         return error;
     }
 
@@ -34,17 +34,22 @@ pub fn add_legacy_algorithm_hint(error: Error, allow_legacy_algorithms: bool) ->
     })
 }
 
-fn is_no_common_kex_algorithm(error: &Error) -> bool {
+fn is_legacy_algorithm_negotiation_failure(error: &Error) -> bool {
     error.chain().any(|cause| {
-        cause.downcast_ref::<russh::Error>().is_some_and(|error| {
-            matches!(
-                error,
+        cause
+            .downcast_ref::<russh::Error>()
+            .is_some_and(|error| match error {
                 russh::Error::NoCommonAlgo {
                     kind: russh::AlgorithmKind::Kex,
                     ..
-                }
-            )
-        })
+                } => true,
+                russh::Error::NoCommonAlgo {
+                    kind: russh::AlgorithmKind::Key,
+                    theirs,
+                    ..
+                } => theirs.iter().any(|algorithm| algorithm == "ssh-dss"),
+                _ => false,
+            })
     })
 }
 
@@ -53,10 +58,20 @@ mod tests {
     use super::{LegacyAlgorithmRequired, add_legacy_algorithm_hint};
 
     fn no_common_algorithm(kind: russh::AlgorithmKind) -> anyhow::Error {
+        no_common_algorithm_with_theirs(kind, &["theirs"])
+    }
+
+    fn no_common_algorithm_with_theirs(
+        kind: russh::AlgorithmKind,
+        theirs: &[&str],
+    ) -> anyhow::Error {
         russh::Error::NoCommonAlgo {
             kind,
             ours: vec!["ours".to_owned()],
-            theirs: vec!["theirs".to_owned()],
+            theirs: theirs
+                .iter()
+                .map(|algorithm| (*algorithm).to_owned())
+                .collect(),
         }
         .into()
     }
@@ -88,6 +103,19 @@ mod tests {
 
         assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_none());
         assert!(error.to_string().contains("No common Key algorithm"));
+    }
+
+    #[test]
+    fn disabled_legacy_algorithms_adds_hint_for_ssh_dss_host_key_failure() {
+        let error = add_legacy_algorithm_hint(
+            no_common_algorithm_with_theirs(russh::AlgorithmKind::Key, &["ssh-dss"])
+                .context("handshake failed"),
+            false,
+        );
+
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
+        assert!(error.to_string().contains("No common Key algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
     }
 
     #[test]
