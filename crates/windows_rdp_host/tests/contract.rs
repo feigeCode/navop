@@ -120,6 +120,17 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "NAVOP_RDP_CREATE_STAGE_SET_PARENT UINT32_C(7)",
             "NAVOP_RDP_CREATE_STAGE_EVENT_SUBSCRIPTION UINT32_C(8)",
             "NAVOP_RDP_CREATE_STAGE_EXCEPTION UINT32_C(9)",
+            "NAVOP_RDP_STAGE_CONNECT_GET_CONNECTED UINT32_C(10)",
+            "NAVOP_RDP_STAGE_CONNECT_SET_SERVER UINT32_C(11)",
+            "NAVOP_RDP_STAGE_CONNECT_GET_ADVANCED_SETTINGS UINT32_C(12)",
+            "NAVOP_RDP_STAGE_CONNECT_SET_RDP_PORT UINT32_C(13)",
+            "NAVOP_RDP_STAGE_CONNECT_POLICY UINT32_C(14)",
+            "NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_WIDTH UINT32_C(15)",
+            "NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_HEIGHT UINT32_C(16)",
+            "NAVOP_RDP_STAGE_CONNECT_SET_COLOR_DEPTH UINT32_C(17)",
+            "NAVOP_RDP_STAGE_CONNECT_INVOKE UINT32_C(18)",
+            "NAVOP_RDP_STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR UINT32_C(19)",
+            "NAVOP_RDP_STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR UINT32_C(20)",
             "typedef struct NavopRdpProbeOptions",
             "typedef struct NavopRdpProbeResult",
             "typedef struct NavopRdpCreateOptions",
@@ -364,6 +375,9 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "size_of::<NavopRdpLastError>()",
             "align_of::<NavopRdpLastError>()",
             "CREATE_STAGE_EXCEPTION",
+            "STAGE_CONNECT_GET_CONNECTED",
+            "STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR",
+            "STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR",
             "size_of::<NavopRdpProbeOptions>()",
             "align_of::<NavopRdpProbeOptions>()",
             "size_of::<NavopRdpProbeResult>()",
@@ -1372,7 +1386,26 @@ fn active_x_connection_policy_consumes_the_complete_normalized_options() {
         active_x_source,
         "NavopRdpResult connect_active_x(",
         "\n}\n\nNavopRdpResult apply_active_x_credentials(",
-        &["configure_active_x_connection_policy(", "Connect()"],
+        &[
+            "connect.get_connected.before",
+            "connect.get_connected.after",
+            "connect.server.before",
+            "connect.server.after",
+            "connect.get_advanced_settings.before",
+            "connect.get_advanced_settings.after",
+            "connect.rdp_port.before",
+            "connect.rdp_port.after",
+            "configure_active_x_connection_policy(",
+            "connect.desktop_width.before",
+            "connect.desktop_width.after",
+            "connect.desktop_height.before",
+            "connect.desktop_height.after",
+            "connect.color_depth.before",
+            "connect.color_depth.after",
+            "connect.invoke.before",
+            "Connect()",
+            "connect.invoke.after",
+        ],
     );
     assert_excludes_all(
         active_x_source,
@@ -2254,6 +2287,12 @@ fn active_x_connect_aligns_initial_display_properties_with_axhost() {
             "connect.display.desktop_scale_factor",
             "connect.display.device_scale_factor",
             "connect.display.span_monitors.best_effort_unsupported",
+            "static_cast<ULONG>(options.desktop_scale_factor)",
+            "static_cast<ULONG>(options.device_scale_factor)",
+            "result == E_FAIL",
+            "connect.display.extended_property.unsupported",
+            "NAVOP_RDP_STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR",
+            "NAVOP_RDP_STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR",
         ],
     );
     assert_contains_all(
@@ -2837,8 +2876,9 @@ fn native_dispatch_helpers_own_variant_and_bstr_lifecycles() {
         ],
     );
     // Version-dependent display enhancements may be absent from an older
-    // mstscax.dll. Only DISP_E_UNKNOWNNAME is treated as unsupported; every
-    // other COM failure remains fatal.
+    // mstscax.dll. Dispatch properties ignore only an absent name. Extended
+    // scale properties also tolerate the compatibility HRESULTs returned by
+    // controls that expose the interface without implementing the property.
     assert_tokens_in_scope(
         policy_source,
         "NavopRdpResult set_optional_dispatch_bool_if_supported(",
@@ -2869,9 +2909,13 @@ fn native_dispatch_helpers_own_variant_and_bstr_lifecycles() {
         "NavopRdpResult configure_extended_scale_factors(",
         &[
             "result == DISP_E_UNKNOWNNAME",
+            "result == E_NOTIMPL",
+            "result == E_NOINTERFACE",
+            "result == E_FAIL",
+            "connect.display.extended_property.unsupported",
             "return NAVOP_RDP_RESULT_OK;",
             "if (FAILED(result))",
-            "record_last_hresult(",
+            "record_last_stage_hresult(",
             "static_cast<int32_t>(result)",
             "return NAVOP_RDP_RESULT_OK;",
         ],
@@ -2883,8 +2927,9 @@ fn native_dispatch_helpers_own_variant_and_bstr_lifecycles() {
         &[
             "L\"DesktopScaleFactor\"",
             "optional_extended_property_result(",
+            "NAVOP_RDP_STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR",
             "L\"DeviceScaleFactor\"",
-            "optional_extended_property_result(owner, result)",
+            "NAVOP_RDP_STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR",
         ],
     );
     assert_tokens_in_scope(

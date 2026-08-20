@@ -1629,6 +1629,39 @@ mod tests {
     }
 
     #[test]
+    fn host_operation_connect_stage_is_preserved_without_changing_lifecycle() {
+        reset_fake_state();
+        set_fake_last_error_read_result(RESULT_OK);
+        set_fake_diagnostic(NavopRdpLastError {
+            result: RESULT_INTERNAL_ERROR,
+            hresult: 0x8000_4005_u32 as i32,
+            has_hresult: 1,
+            stage: crate::ffi::STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR,
+            ..NavopRdpLastError::current()
+        });
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .connect_results
+                .push_back(RESULT_INTERNAL_ERROR);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::NativeDiagnostic {
+                result: RESULT_INTERNAL_ERROR,
+                stage: crate::ffi::STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR,
+                hresult: Some(WindowsRdpHresult::from_code(0x8000_4005_u32 as i32)),
+                win32_code: None,
+            })
+        );
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
     fn invalid_or_mismatched_diagnostics_fall_back_to_stable_result() {
         reset_fake_state();
         set_fake_last_error_read_result(RESULT_OK);

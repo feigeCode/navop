@@ -1100,11 +1100,16 @@ NavopRdpResult connect_active_x(
     }
 
     short connected = 0;
+    trace_native_stage("connect.get_connected.before");
     HRESULT result = resources->state.client->get_Connected(&connected);
+    trace_native_hresult(
+        "connect.get_connected.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_GET_CONNECTED,
             static_cast<int32_t>(result));
     }
     if (connected != 0) {
@@ -1118,11 +1123,16 @@ NavopRdpResult connect_active_x(
         return record_last_error(owner, NAVOP_RDP_RESULT_ALLOCATION_FAILED);
     }
 
+    trace_native_stage("connect.server.before");
     result = resources->state.client->put_Server(server);
+    trace_native_hresult(
+        "connect.server.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_SERVER,
             static_cast<int32_t>(result));
     }
 
@@ -1135,20 +1145,26 @@ NavopRdpResult connect_active_x(
         static_cast<int32_t>(result));
     if (FAILED(result) || advanced_settings == nullptr) {
         if (FAILED(result)) {
-            return record_last_hresult(
+            return record_last_stage_hresult(
                 owner,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_STAGE_CONNECT_GET_ADVANCED_SETTINGS,
                 static_cast<int32_t>(result));
         }
         return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
+    trace_native_stage("connect.rdp_port.before");
     result = advanced_settings->put_RDPPort(
         static_cast<LONG>(options.port));
+    trace_native_hresult(
+        "connect.rdp_port.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_RDP_PORT,
             static_cast<int32_t>(result));
     }
 
@@ -1168,34 +1184,54 @@ NavopRdpResult connect_active_x(
         return policy_result;
     }
 
+    trace_native_stage("connect.desktop_width.before");
     result = resources->state.client->put_DesktopWidth(
         options.desktop_width);
+    trace_native_hresult(
+        "connect.desktop_width.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_WIDTH,
             static_cast<int32_t>(result));
     }
+    trace_native_stage("connect.desktop_height.before");
     result = resources->state.client->put_DesktopHeight(
         options.desktop_height);
+    trace_native_hresult(
+        "connect.desktop_height.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_DESKTOP_HEIGHT,
             static_cast<int32_t>(result));
     }
+    trace_native_stage("connect.color_depth.before");
     result = resources->state.client->put_ColorDepth(options.color_depth);
+    trace_native_hresult(
+        "connect.color_depth.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_SET_COLOR_DEPTH,
             static_cast<int32_t>(result));
     }
+    trace_native_stage("connect.invoke.before");
     result = resources->state.client->Connect();
+    trace_native_hresult(
+        "connect.invoke.after",
+        static_cast<int32_t>(result));
     if (FAILED(result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_STAGE_CONNECT_INVOKE,
             static_cast<int32_t>(result));
     }
     return NAVOP_RDP_RESULT_OK;

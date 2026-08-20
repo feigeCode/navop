@@ -130,6 +130,28 @@ pub(crate) const CREATE_STAGE_SET_PARENT: u32 = 7;
 pub(crate) const CREATE_STAGE_EVENT_SUBSCRIPTION: u32 = 8;
 #[allow(dead_code)]
 pub(crate) const CREATE_STAGE_EXCEPTION: u32 = 9;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_GET_CONNECTED: u32 = 10;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_SET_SERVER: u32 = 11;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_GET_ADVANCED_SETTINGS: u32 = 12;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_SET_RDP_PORT: u32 = 13;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_POLICY: u32 = 14;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_SET_DESKTOP_WIDTH: u32 = 15;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_SET_DESKTOP_HEIGHT: u32 = 16;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_SET_COLOR_DEPTH: u32 = 17;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_INVOKE: u32 = 18;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_DISPLAY_DESKTOP_SCALE_FACTOR: u32 = 19;
+#[allow(dead_code)]
+pub(crate) const STAGE_CONNECT_DISPLAY_DEVICE_SCALE_FACTOR: u32 = 20;
 
 pub(crate) const CONNECTION_STATE_DISCONNECTED: u32 = 0;
 pub(crate) const CONNECTION_STATE_CONNECTED: u32 = 1;
