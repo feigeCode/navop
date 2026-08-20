@@ -40,6 +40,12 @@ impl TerminalView {
         }
     }
 
+    pub(crate) fn on_host_activated(&mut self, cx: &mut Context<Self>) {
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.on_host_activated(cx);
+        });
+    }
+
     pub(crate) fn duplicate_source_snapshot(&self, cx: &App) -> Option<TerminalDuplicateSource> {
         let source = self.duplicate_source.clone()?;
         let current_working_dir = self

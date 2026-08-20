@@ -89,6 +89,7 @@ pub struct DefaultAgentChatPanel {
     )>,
     pending_resource_catalog: Option<(Vec<MentionItem>, Vec<agent_runtime::ResourceRef>)>,
     pending_code_block_actions: Vec<CodeBlockAction>,
+    pending_sidebar_shown: bool,
     connection_subscription: Option<Subscription>,
     provider_subscription: Option<Subscription>,
     agent_tool_config_subscription: Option<Subscription>,
@@ -235,6 +236,7 @@ impl DefaultAgentChatPanel {
             )),
             pending_resource_catalog: None,
             pending_code_block_actions: Vec::new(),
+            pending_sidebar_shown: false,
             connection_subscription: None,
             provider_subscription: None,
             agent_tool_config_subscription: None,
@@ -436,6 +438,18 @@ impl DefaultAgentChatPanel {
         }
     }
 
+    pub fn on_sidebar_shown(&mut self, cx: &mut Context<Self>) {
+        if self.mode != DefaultAgentChatPanelMode::Sidebar {
+            return;
+        }
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.on_sidebar_shown(cx));
+        } else {
+            self.pending_sidebar_shown = true;
+            cx.notify();
+        }
+    }
+
     pub fn set_sidebar_header_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.show_sidebar_header = visible;
         if let Some(view) = &self.view {
@@ -570,6 +584,9 @@ impl DefaultAgentChatPanel {
                                 view.update(cx, |view, cx| {
                                     view.send_external_message(message, cx);
                                 });
+                            }
+                            if std::mem::take(&mut panel.pending_sidebar_shown) {
+                                view.update(cx, |view, cx| view.on_sidebar_shown(cx));
                             }
                             panel.view = Some(view);
                             panel.view_subscription = Some(view_subscription);

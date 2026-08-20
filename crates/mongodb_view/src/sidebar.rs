@@ -91,13 +91,24 @@ impl MongoSidebar {
     }
 
     pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        let became_active = active && !self.is_active;
         self.is_active = active;
+        if became_active && self.active_panel == Some(SidebarPanel::AiChat) {
+            self.ai_chat_panel.update(cx, |panel, cx| {
+                panel.on_sidebar_shown(cx);
+            });
+        }
         cx.notify();
     }
 
     pub fn set_active_panel(&mut self, panel: Option<SidebarPanel>, cx: &mut Context<Self>) {
         if self.active_panel != panel {
             self.active_panel = panel;
+            if self.is_active && panel == Some(SidebarPanel::AiChat) {
+                self.ai_chat_panel.update(cx, |panel, cx| {
+                    panel.on_sidebar_shown(cx);
+                });
+            }
             cx.emit(MongoSidebarEvent::PanelChanged);
             cx.notify();
         }

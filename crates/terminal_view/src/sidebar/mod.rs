@@ -1003,6 +1003,14 @@ impl TerminalSidebar {
         self.tool_dock.open_panels()
     }
 
+    pub fn on_host_activated(&mut self, cx: &mut Context<Self>) {
+        if self.tool_dock.is_tool_open(SidebarPanel::AiChat) {
+            self.ai_chat_panel.update(cx, |panel, cx| {
+                panel.on_sidebar_shown(cx);
+            });
+        }
+    }
+
     pub fn panel_placement(&self, panel: SidebarPanel) -> SidebarPlacement {
         self.tool_dock.panel_placement(panel)
     }
@@ -1085,7 +1093,13 @@ impl TerminalSidebar {
     fn open_tool_internal(&mut self, panel: SidebarPanel, cx: &mut Context<Self>) -> bool {
         self.prepare_panel_open(panel, cx);
         self.update_panel_frame_placement(panel, self.panel_placement(panel), cx);
-        self.tool_dock.open_tool(panel)
+        let changed = self.tool_dock.open_tool(panel);
+        if changed && panel == SidebarPanel::AiChat {
+            self.ai_chat_panel.update(cx, |panel, cx| {
+                panel.on_sidebar_shown(cx);
+            });
+        }
+        changed
     }
 
     fn update_panel_frame_placement(

@@ -2298,6 +2298,14 @@ impl AgentChatView {
         self.scroll_handle.scroll_to_bottom();
     }
 
+    pub fn on_sidebar_shown(&mut self, cx: &mut Context<Self>) {
+        if !self.sidebar_mode {
+            return;
+        }
+        self.request_scroll_to_bottom_until_layout_settles();
+        cx.notify();
+    }
+
     fn set_running(&mut self, running: bool, cx: &mut Context<Self>) {
         let session_uid = self.current_session.clone();
         self.set_session_running(&session_uid, running, cx);
@@ -5417,6 +5425,21 @@ mod tests {
 
             assert_eq!(0, view.auto_scroll.pending_bottom_scroll_frames);
             view.set_resource_context_with_catalog(resources, Vec::new(), vec![resource], cx);
+            assert_eq!(5, view.auto_scroll.pending_bottom_scroll_frames);
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_show_scrolls_until_layout_settles(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            assert_eq!(0, view.auto_scroll.pending_bottom_scroll_frames);
+            view.on_sidebar_shown(cx);
             assert_eq!(5, view.auto_scroll.pending_bottom_scroll_frames);
         });
     }
