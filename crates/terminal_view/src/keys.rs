@@ -342,6 +342,17 @@ mod tests {
     }
 
     #[test]
+    fn escape_emits_escape_character() {
+        let escape = Keystroke::parse("escape").unwrap();
+        assert_eq!(
+            to_esc_str(&escape, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref(),
+            "\x1b"
+        );
+    }
+
+    #[test]
     fn backspace_emits_del_by_default() {
         let bs = Keystroke::parse("backspace").unwrap();
         assert_eq!(

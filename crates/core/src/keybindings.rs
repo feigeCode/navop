@@ -233,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_shortcuts_supports_custom_shortcuts_with_empty_defaults() {
+        let overrides = HashMap::from([(
+            "terminal.clear_selection".to_string(),
+            vec!["ctrl-x".to_string()],
+        )]);
+
+        assert_eq!(
+            vec!["ctrl-x".to_string()],
+            resolve_shortcuts(&overrides, "terminal.clear_selection", &[])
+        );
+        assert!(resolve_shortcuts(&HashMap::new(), "terminal.clear_selection", &[]).is_empty());
+    }
+
+    #[test]
     fn rebind_shadow_shortcuts_collects_old_default_and_current_shortcuts() {
         let current = vec!["cmd-j".to_string()];
         let active = vec![
@@ -248,6 +262,14 @@ mod tests {
                 "cmd-j".to_string(),
             ],
             rebind_shadow_shortcuts(&["cmd-f", "cmd-g"], &current, active)
+        );
+    }
+
+    #[test]
+    fn rebind_shadow_shortcuts_supports_empty_defaults_with_custom_shortcut() {
+        assert_eq!(
+            vec!["escape".to_string(), "ctrl-x".to_string()],
+            rebind_shadow_shortcuts(&[], &["ctrl-x".to_string()], ["escape".to_string()])
         );
     }
 

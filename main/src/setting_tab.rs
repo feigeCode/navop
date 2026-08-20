@@ -3127,8 +3127,8 @@ const TERMINAL_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["escape"],
-        keys_other: &["escape"],
+        keys_macos: &[],
+        keys_other: &[],
         label_key: "Settings.Shortcuts.terminal_clear_selection",
         action_id: Some(action_id::TERMINAL_CLEAR_SELECTION),
         system_hotkey: false,
