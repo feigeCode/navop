@@ -254,7 +254,10 @@ impl TerminalView {
             return;
         }
 
-        if let Some(esc_str) = crate::keys::to_esc_str(&event.keystroke, &mode, false) {
+        let backspace_code = self.terminal.read(cx).telnet_backspace_code();
+        if let Some(esc_str) =
+            crate::keys::to_esc_str_with_backspace(&event.keystroke, &mode, false, backspace_code)
+        {
             let bytes = match esc_str {
                 Cow::Borrowed(s) => s.as_bytes().to_vec(),
                 Cow::Owned(s) => s.into_bytes(),

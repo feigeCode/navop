@@ -1595,6 +1595,10 @@ Telnet:
     en: "23"
     zh-CN: "23"
     zh-HK: "23"
+  backspace_code:
+    en: Backspace Key
+    zh-CN: 退格键
+    zh-HK: 退格鍵
   keychain:
     en: Keychain
     zh-CN: 钥匙串

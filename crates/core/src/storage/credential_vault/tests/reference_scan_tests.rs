@@ -178,6 +178,7 @@ pub(super) fn telnet_connection(id: i64) -> StoredConnection {
             credential_reference: Some(reference(id)),
             prompt_username: None,
             prompt_password: None,
+            backspace_code: Default::default(),
             login_script: Vec::new(),
         },
         None,

@@ -1661,6 +1661,7 @@ mod tests {
             credential_reference: None,
             prompt_username: None,
             prompt_password: None,
+            backspace_code: Default::default(),
             login_script: Vec::new(),
         };
 

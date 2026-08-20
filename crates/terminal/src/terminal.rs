@@ -3759,6 +3759,14 @@ impl Terminal {
                 || self.telnet_params.is_some())
     }
 
+    /// 当前会话的退格键编码；非 Telnet 会话保持历史默认 DEL（0x7F）。
+    pub fn telnet_backspace_code(&self) -> one_core::storage::TelnetBackspaceCode {
+        self.telnet_params
+            .as_ref()
+            .map(|params| params.backspace_code)
+            .unwrap_or_default()
+    }
+
     /// 写入数据到终端
     pub fn write(&self, data: &[u8]) {
         if self.is_read_only() {

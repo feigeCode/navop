@@ -27,7 +27,9 @@ use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
-use one_core::storage::{StoredConnection, TelnetLoginStep, TelnetParams, Workspace};
+use one_core::storage::{
+    StoredConnection, TelnetBackspaceCode, TelnetLoginStep, TelnetParams, Workspace,
+};
 use rust_i18n::t;
 
 pub struct TelnetFormWindowConfig {
@@ -88,6 +90,23 @@ impl SelectItem for TelnetPortItem {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TelnetBackspaceSelectItem {
+    code: TelnetBackspaceCode,
+}
+
+impl SelectItem for TelnetBackspaceSelectItem {
+    type Value = TelnetBackspaceCode;
+
+    fn title(&self) -> SharedString {
+        self.code.label().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.code
+    }
+}
+
 #[derive(Clone)]
 struct TelnetLoginStepInput {
     expect_input: Entity<InputState>,
@@ -107,6 +126,7 @@ pub struct TelnetFormWindow {
     host_input: Entity<InputState>,
     port_input: Entity<InputState>,
     port_select: Entity<SelectState<Vec<TelnetPortItem>>>,
+    backspace_code_select: Entity<SelectState<Vec<TelnetBackspaceSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     remark_input: Entity<InputState>,
@@ -183,6 +203,16 @@ impl TelnetFormWindow {
             .collect();
         let port_select = cx
             .new(|cx| SelectState::new(port_items, Some(IndexPath::default().row(0)), window, cx));
+        let backspace_code_items = TelnetBackspaceCode::all()
+            .iter()
+            .copied()
+            .map(|code| TelnetBackspaceSelectItem { code })
+            .collect::<Vec<_>>();
+        let backspace_code_select = cx.new(|cx| {
+            let mut state = SelectState::new(backspace_code_items, None, window, cx);
+            state.set_selected_value(&TelnetBackspaceCode::default(), window, cx);
+            state
+        });
 
         // 工作区选择
         let mut workspace_items = vec![WorkspaceSelectItem::none()];
@@ -214,6 +244,9 @@ impl TelnetFormWindow {
                 port_input.update(cx, |s, cx| s.set_value(&port, window, cx));
                 port_select.update(cx, |s, cx| {
                     s.set_selected_value(&params.port, window, cx);
+                });
+                backspace_code_select.update(cx, |select, cx| {
+                    select.set_selected_value(&params.backspace_code, window, cx);
                 });
                 credential_reference = params.credential_reference.clone();
                 login_script_steps = params.login_script;
@@ -272,6 +305,7 @@ impl TelnetFormWindow {
             host_input,
             port_input,
             port_select,
+            backspace_code_select,
             workspace_select,
             team_select,
             remark_input,
@@ -371,6 +405,12 @@ impl TelnetFormWindow {
             credential_reference: self.credential_picker.read(cx).selected_reference(),
             prompt_username: None,
             prompt_password: None,
+            backspace_code: self
+                .backspace_code_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
             login_script,
         })
     }
@@ -701,6 +741,10 @@ impl Render for TelnetFormWindow {
                                         ),
                                 ),
                             )
+                            .child(self.render_form_row(
+                                &t!("Telnet.backspace_code"),
+                                Select::new(&self.backspace_code_select).w_full(),
+                            ))
                             .child(self.render_form_row(
                                 &t!("Telnet.keychain"),
                                 self.credential_picker.clone(),

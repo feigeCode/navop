@@ -209,6 +209,7 @@ fn resolver_applies_keychain_login_to_telnet_expect_steps() {
             credential_reference: Some(password_reference(credential_id)),
             prompt_username: None,
             prompt_password: None,
+            backspace_code: Default::default(),
             login_script: vec![
                 TelnetLoginStep {
                     expect: r"(?i)(?:login|username)\s*:".to_string(),
@@ -261,6 +262,7 @@ fn resolver_reuses_keychain_expect_for_telnet_without_connection_script() {
                 credential_reference: Some(password_reference(credential_id)),
                 prompt_username: None,
                 prompt_password: None,
+                backspace_code: Default::default(),
                 login_script: Vec::new(),
             },
             None,
