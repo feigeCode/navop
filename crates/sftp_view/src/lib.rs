@@ -103,9 +103,17 @@ pub enum SftpViewEvent {
 
 #[derive(Clone, PartialEq)]
 enum ConnectionState {
+    AwaitingCredentials,
     Connecting,
     Connected,
     Disconnected { error: Option<String> },
+}
+
+struct SftpCredentialInputs {
+    policy: ssh_config::SshCredentialPromptPolicy,
+    username: Option<Entity<InputState>>,
+    password: Option<Entity<InputState>>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1055,6 +1063,7 @@ pub struct SftpView {
     connection_state: ConnectionState,
     close_state: CloseState,
     sftp_config: SshConnectConfig,
+    credential_inputs: Option<SftpCredentialInputs>,
     sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 当前主 SFTP 连接尝试的代次；迟到的异步结果不能覆盖更新的连接。
     connection_generation: ConnectionGeneration,
@@ -1127,8 +1136,10 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let config = ssh_config::ssh_config_for(&conn)
+        let resolved = ssh_config::resolve_ssh_connection(&conn)
             .expect("StoredConnection should contain valid SSH params");
+        let config = resolved.config;
+        let credential_prompt_policy = resolved.credential_prompt_policy;
 
         let focus_handle = cx.focus_handle();
         let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -1271,6 +1282,40 @@ impl SftpView {
             },
         ));
 
+        let credential_inputs = credential_prompt_policy.requires_prompt().then(|| {
+            let username = credential_prompt_policy.username.then(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx).placeholder(t!("Credentials.username").to_string())
+                })
+            });
+            let password = credential_prompt_policy.password.then(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(t!("Credentials.password").to_string())
+                        .masked(true)
+                })
+            });
+
+            for input in username.iter().chain(password.iter()) {
+                subscriptions.push(cx.subscribe_in(
+                    input,
+                    window,
+                    |this, _, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::PressEnter { secondary: false }) {
+                            this.submit_credentials(window, cx);
+                        }
+                    },
+                ));
+            }
+
+            SftpCredentialInputs {
+                policy: credential_prompt_policy,
+                username,
+                password,
+                error: None,
+            }
+        });
+
         let transfer_client_pool = Arc::new(TransferClientPool::new(
             config.clone(),
             MAX_CONCURRENT_TRANSFERS,
@@ -1278,9 +1323,14 @@ impl SftpView {
 
         let mut view = Self {
             window_handle: window.window_handle(),
-            connection_state: ConnectionState::Disconnected { error: None },
+            connection_state: if credential_inputs.is_some() {
+                ConnectionState::AwaitingCredentials
+            } else {
+                ConnectionState::Disconnected { error: None }
+            },
             close_state: CloseState::Open,
             sftp_config: config,
+            credential_inputs,
             sftp_client: None,
             connection_generation: ConnectionGeneration::default(),
             left_connection_generation: ConnectionGeneration::default(),
@@ -1327,7 +1377,16 @@ impl SftpView {
         };
 
         view.refresh_local_dir(cx);
-        view.connect(cx);
+        if let Some(input) = view
+            .credential_inputs
+            .as_ref()
+            .and_then(|inputs| inputs.username.as_ref().or(inputs.password.as_ref()))
+            .cloned()
+        {
+            input.update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            view.connect(cx);
+        }
 
         view
     }
@@ -1384,6 +1443,7 @@ impl SftpView {
                         }
                         this.sftp_client = Some(client.clone());
                         this.connection_state = ConnectionState::Connected;
+                        this.credential_inputs = None;
                         this.set_connection_active(true, cx);
 
                         // 如果成功获取了真实路径，更新远程路径和历史记录
@@ -1438,11 +1498,7 @@ impl SftpView {
                                 {
                                     return;
                                 }
-                                this.connection_state = ConnectionState::Disconnected {
-                                    error: Some(error_msg),
-                                };
-                                this.set_connection_active(false, cx);
-                                cx.notify();
+                                this.set_connection_error(error_msg, cx);
                             });
                         }
                     }
@@ -1454,11 +1510,7 @@ impl SftpView {
                     {
                         return;
                     }
-                    this.connection_state = ConnectionState::Disconnected {
-                        error: Some(error_msg),
-                    };
-                    this.set_connection_active(false, cx);
-                    cx.notify();
+                    this.set_connection_error(error_msg, cx);
                 });
             }
             Err(e) => {
@@ -1470,11 +1522,7 @@ impl SftpView {
                     {
                         return;
                     }
-                    this.connection_state = ConnectionState::Disconnected {
-                        error: Some(error_msg),
-                    };
-                    this.set_connection_active(false, cx);
-                    cx.notify();
+                    this.set_connection_error(error_msg, cx);
                 });
             }
         })
@@ -1494,6 +1542,17 @@ impl SftpView {
         }
     }
 
+    fn set_connection_error(&mut self, error: String, cx: &mut Context<Self>) {
+        if let Some(inputs) = self.credential_inputs.as_mut() {
+            inputs.error = Some(error);
+            self.connection_state = ConnectionState::AwaitingCredentials;
+        } else {
+            self.connection_state = ConnectionState::Disconnected { error: Some(error) };
+        }
+        self.set_connection_active(false, cx);
+        cx.notify();
+    }
+
     fn reconnect(&mut self, cx: &mut Context<Self>) {
         if self.close_state.is_closing() {
             return;
@@ -1504,6 +1563,11 @@ impl SftpView {
             Tokio::spawn(cx, disconnect_sftp_client(old_client)).detach();
         }
         self.remote_loading = false;
+        self.replace_transfer_client_pool(cx);
+        self.connect(cx);
+    }
+
+    fn replace_transfer_client_pool(&mut self, cx: &mut Context<Self>) {
         let retired_pool = std::mem::replace(
             &mut self.transfer_client_pool,
             Arc::new(TransferClientPool::new(
@@ -1513,7 +1577,65 @@ impl SftpView {
         );
         retired_pool.retire();
         Tokio::spawn(cx, disconnect_transfer_pool(retired_pool)).detach();
-        self.connect(cx);
+    }
+
+    fn submit_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(inputs) = self.credential_inputs.as_ref() else {
+            return;
+        };
+        let username = inputs
+            .username
+            .as_ref()
+            .map(|input| input.read(cx).text().to_string());
+        let password = inputs
+            .password
+            .as_ref()
+            .map(|input| input.read(cx).text().to_string());
+
+        match ssh_config::ssh_config_with_runtime_credentials(
+            &self.sftp_config,
+            username.as_deref(),
+            password.as_deref(),
+        ) {
+            Ok(config) => {
+                self.sftp_config = config;
+                if let Some(inputs) = self.credential_inputs.as_mut() {
+                    inputs.error = None;
+                }
+                self.replace_transfer_client_pool(cx);
+                self.connect(cx);
+            }
+            Err(error) => {
+                let error = if inputs.policy.username
+                    && username
+                        .as_deref()
+                        .is_some_and(|value| value.trim().is_empty())
+                {
+                    t!("Credentials.username_required").to_string()
+                } else if inputs.policy.password && password.as_deref().is_some_and(str::is_empty) {
+                    t!("Credentials.password_required").to_string()
+                } else {
+                    error.to_string()
+                };
+                if let Some(inputs) = self.credential_inputs.as_mut() {
+                    inputs.error = Some(error);
+                }
+                if let Some(input) =
+                    self.credential_inputs.as_ref().and_then(|inputs| {
+                        if inputs.username.as_ref().is_some_and(|input| {
+                            input.read(cx).text().to_string().trim().is_empty()
+                        }) {
+                            inputs.username.clone()
+                        } else {
+                            inputs.password.clone()
+                        }
+                    })
+                {
+                    input.update(cx, |state, cx| state.focus(window, cx));
+                }
+                cx.notify();
+            }
+        }
     }
 
     fn refresh_local_dir(&mut self, cx: &mut Context<Self>) {
@@ -5323,7 +5445,98 @@ impl SftpView {
             .detach();
     }
 
-    fn render_connection_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_connection_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(inputs) = self.credential_inputs.as_ref() {
+            return div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(cx.theme().geometry.opacity.scrim))
+                .child(
+                    v_flex()
+                        .gap_4()
+                        .items_center()
+                        .p_6()
+                        .bg(cx.theme().background)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded_lg()
+                        .shadow_lg()
+                        .w(px(450.))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    Icon::new(IconName::Key)
+                                        .with_size(IconSize::Large)
+                                        .text_color(cx.theme().warning),
+                                )
+                                .child(
+                                    div()
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(t!("Credentials.title").to_string()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("Credentials.hint").to_string()),
+                        )
+                        .when_some(inputs.username.as_ref(), |this, input| {
+                            this.child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(t!("Credentials.username").to_string()),
+                                    )
+                                    .child(Input::new(input)),
+                            )
+                        })
+                        .when_some(inputs.password.as_ref(), |this, input| {
+                            this.child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(t!("Credentials.password").to_string()),
+                                    )
+                                    .child(Input::new(input).mask_toggle()),
+                            )
+                        })
+                        .when_some(inputs.error.clone(), |this, error| {
+                            this.child(
+                                div()
+                                    .w_full()
+                                    .text_sm()
+                                    .text_color(cx.theme().danger)
+                                    .child(error),
+                            )
+                        })
+                        .child(
+                            Button::new("submit-sftp-credentials")
+                                .label(t!("Credentials.connect").to_string())
+                                .primary()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.submit_credentials(window, cx);
+                                })),
+                        ),
+                )
+                .into_any_element();
+        }
+
         let is_connecting = matches!(self.connection_state, ConnectionState::Connecting);
         let error_msg = match &self.connection_state {
             ConnectionState::Disconnected { error } => error.clone(),
@@ -5400,6 +5613,7 @@ impl SftpView {
                         )
                     }),
             )
+            .into_any_element()
     }
 
     fn render_extract_queue_row(
@@ -6507,6 +6721,10 @@ impl SftpView {
                                 )
                             })
                             .into_any_element(),
+                        ConnectionState::AwaitingCredentials => div()
+                            .size_full()
+                            .bg(cx.theme().background)
+                            .into_any_element(),
                         ConnectionState::Connecting => h_flex()
                             .size_full()
                             .justify_center()
@@ -6838,7 +7056,10 @@ impl Focusable for SftpView {
 
 impl Render for SftpView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_disconnected = matches!(self.connection_state, ConnectionState::Disconnected { .. });
+        let shows_connection_overlay = matches!(
+            self.connection_state,
+            ConnectionState::AwaitingCredentials | ConnectionState::Disconnected { .. }
+        );
 
         v_flex()
             .size_full()
@@ -6856,7 +7077,7 @@ impl Render for SftpView {
                     .child(self.render_remote_panel(cx)),
             )
             .child(self.render_transfer_queue(cx))
-            .when(is_disconnected, |el| {
+            .when(shows_connection_overlay, |el| {
                 el.child(self.render_connection_overlay(cx))
             })
     }

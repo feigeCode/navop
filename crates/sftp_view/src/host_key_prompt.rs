@@ -223,6 +223,7 @@ impl SftpView {
         if decision == HostKeyPromptDecision::Reject {
             match target {
                 HostKeyPromptTarget::Main { .. } => {
+                    self.credential_inputs = None;
                     self.connection_state = ConnectionState::Disconnected {
                         error: Some(t!("HostKey.rejected").to_string()),
                     };
