@@ -22,6 +22,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### 修复与优化
 
+- 修复终端 Escape 被清除选区快捷键拦截的问题，Vim 等终端程序现在可正常接收 Escape。
 - 改进 MySQL BIT 和二进制值在 SQL 导入导出、表格编辑和数据网格中的保留与编辑，避免值在格式化或保存过程中丢失。
 - 改善凭据存储、SSH/Telnet 登录、终端重连、窗口快捷键和 AI Chat 侧栏滚动等稳定性问题。
 - Public MCP 终端工具支持发送原始按键输入，便于自动化处理交互式终端场景。
@@ -44,6 +45,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### Fixes and Improvements
 
+- Fixed Escape being intercepted by the terminal clear-selection shortcut, allowing Vim and other terminal applications to receive Escape normally.
 - Improved preservation and editing of MySQL BIT and binary values across SQL import/export, table editing, and data grids.
 - Improved credential storage, SSH/Telnet login, terminal reconnects, window shortcut handling, and AI Chat sidebar scrolling.
 - Public MCP terminal tools can now send raw key input for interactive automation scenarios.
