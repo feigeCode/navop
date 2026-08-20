@@ -10653,6 +10653,7 @@ dependencies = [
  "anyhow",
  "cocoa 0.26.0",
  "connection-form",
+ "dunce",
  "futures",
  "gpui",
  "gpui-component",

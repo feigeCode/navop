@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+dunce = "1.0"
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 connection-form = { workspace = true }

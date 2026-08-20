@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use dunce::canonicalize;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use gpui::ExternalPaths;
 use gpui::{ClipboardEntry, ClipboardItem, Context, Window};
@@ -50,14 +51,14 @@ fn validate_remote_clipboard_paths_in_root(
     paths: &[String],
 ) -> anyhow::Result<Vec<PathBuf>> {
     anyhow::ensure!(!paths.is_empty(), "remote clipboard file list is empty");
-    let canonical_root = std::fs::canonicalize(staging_root).map_err(|error| {
+    let canonical_root = canonicalize(staging_root).map_err(|error| {
         anyhow::anyhow!("remote clipboard staging root is unavailable: {error}")
     })?;
     let mut validated = Vec::with_capacity(paths.len());
     for raw_path in paths {
         let path = PathBuf::from(raw_path);
         anyhow::ensure!(path.is_absolute(), "remote clipboard path is not absolute");
-        let canonical_path = std::fs::canonicalize(&path)
+        let canonical_path = canonicalize(&path)
             .map_err(|error| anyhow::anyhow!("remote clipboard path is unavailable: {error}"))?;
         anyhow::ensure!(
             canonical_path != canonical_root && canonical_path.starts_with(&canonical_root),
