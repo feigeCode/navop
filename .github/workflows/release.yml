@@ -253,18 +253,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils musl-tools
 
+      - name: Configure MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.windows_arch }}
+
       - name: Build Windows RDP toolchain probe
         if: runner.os == 'Windows'
         shell: pwsh
         run: >-
           ./script/build-windows-rdp-probe.ps1
           -Target "${{ matrix.target }}"
-
-      - name: Configure MSVC environment
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.windows_arch }}
 
       - name: Set environment variables
         shell: bash
@@ -288,6 +288,7 @@ jobs:
           fi
 
       - name: Build release binary
+        if: runner.os != 'Windows'
         shell: bash
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -314,18 +315,58 @@ jobs:
               --target "${{ matrix.target }}.2.28" \
               --no-default-features \
               --features wasm-components
-          elif [ "${{ matrix.windows_native_rdp }}" = "true" ]; then
-            if [ -z "${VCToolsInstallDir:-}" ]; then
-              echo "::error::VCToolsInstallDir is not configured"
-              exit 1
-            fi
-            cargo_features=()
-            cargo_features+=(--features windows-native-rdp)
-            cargo build --release -p main "${cargo_features[@]}" --target ${{ matrix.target }}
           else
             cargo build --release -p main --target "${{ matrix.target }}"
           fi
           test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      - name: Build release binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
+          NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
+          ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:VCToolsInstallDir)) {
+            throw "VCToolsInstallDir is not configured"
+          }
+
+          $target = "${{ matrix.target }}"
+          $linkerArchitecture = if ($target -eq "i686-pc-windows-msvc") {
+            "x86"
+          } else {
+            "x64"
+          }
+          $linker = Join-Path `
+            $env:VCToolsInstallDir `
+            "bin\Hostx64\$linkerArchitecture\link.exe"
+          if (-not (Test-Path -LiteralPath $linker -PathType Leaf)) {
+            throw "MSVC linker was not found at '$linker'"
+          }
+
+          $linkerEnvironmentName = "CARGO_TARGET_$($target.Replace('-', '_').ToUpperInvariant())_LINKER"
+          [Environment]::SetEnvironmentVariable(
+            $linkerEnvironmentName,
+            $linker,
+            [EnvironmentVariableTarget]::Process
+          )
+
+          cargo --version
+          rustc --version
+          Write-Host "Using MSVC linker for ${target}: $linker"
+          cargo build `
+            --release `
+            -p main `
+            --features windows-native-rdp `
+            --target $target
+
+          $binary = "target\$target\release\${{ matrix.binary }}"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "Release binary was not created: '$binary'"
+          }
 
       - name: Verify portable Linux glibc baseline
         if: matrix.portable_linux

@@ -921,7 +921,6 @@ fn rdp_presentation_status_stays_outside_the_native_child_bounds() {
         "allows_explicit_canvas_retry()",
         "remote-desktop-presentation-status",
         "remote-desktop-use-canvas",
-        "RemoteDesktop.presentation_backend",
         "RemoteDesktop.fallback_reason",
         "RemoteDesktop.use_canvas",
     ] {

@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn rdp_specific_controls_are_only_rendered_for_rdp() {
-        let source = include_str!("view.rs");
+        let source = include_str!("view.rs").replace("\r\n", "\n");
         let render_source = source.split("#[cfg(test)]").next().unwrap();
 
         assert!(render_source.contains("self.protocol == RemoteDesktopProtocol::Rdp"));
