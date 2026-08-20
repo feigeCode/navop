@@ -4,6 +4,52 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.8] - 2026-08-20
+
+### 中文
+
+#### 更新内容
+
+- 新增 Telnet 连接支持，并支持自动登录脚本和手动凭据覆盖。
+- 新增会话日志和静态终端历史查看器，支持滚动查看、文本选择、搜索与 TXT 导出，可查看 SSH、串口和本地终端的活动日志。
+- 凭据管理新增可复用的钥匙串引用与个人钥匙串同步，改善凭据跨连接复用和跨设备同步体验。
+- 终端新增可复用的快捷命令及全局作用域，并改进快捷键捕获、历史建议、自定义串口波特率、重连和分屏交互。
+- Markdown 编辑器支持点击 Mermaid 图和数学公式放大查看，并可在源码与预览之间切换；同时优化表格操作栏和渲染内容交互。
+- 数据库工作区新增 SQL 执行历史侧栏，并持久化保存历史记录，方便快速回看和复用查询。
+- 改进数据库 Schema/Data Compare，增强跨数据库列类型映射、目标表匹配、差异浏览和同步计划安全性，并修复新增表索引与外键遗漏问题。
+- Oracle 连接配置新增 Native 与纯 Go 驱动选择，改善编辑连接时的驱动模式保留，并支持 Oracle 11g 查询分页限制。
+- Linux 发布包新增 x64 与 ARM64 便携版，并改善旧版 ARM64 运行时、Wayland 依赖和 usrmerge 环境下的兼容性。
+
+#### 修复与优化
+
+- 改进 MySQL BIT 和二进制值在 SQL 导入导出、表格编辑和数据网格中的保留与编辑，避免值在格式化或保存过程中丢失。
+- 改善凭据存储、SSH/Telnet 登录、终端重连、窗口快捷键和 AI Chat 侧栏滚动等稳定性问题。
+- Public MCP 终端工具支持发送原始按键输入，便于自动化处理交互式终端场景。
+
+---
+
+### English
+
+#### What's New
+
+- Added Telnet connections with automatic login scripts and manual credential overrides.
+- Added session logs and a static terminal history viewer with scrollback, text selection, search, and TXT export for SSH, serial, and local terminal sessions.
+- Added reusable keychain references and personal keychain sync for easier credential reuse across connections and devices.
+- Added reusable terminal quick commands with global scope, and improved shortcut capture, history suggestions, custom serial baud rates, reconnect behavior, and split-pane interaction.
+- Markdown editor previews for Mermaid diagrams and math formulas can now be enlarged and switched between source and preview, with improved table controls and rendered-content interaction.
+- Added a persistent SQL execution history sidebar to the database workspace for quickly revisiting and reusing previous queries.
+- Improved database schema and data comparison with cross-database column-type mapping, better target-table matching, clearer diff navigation, safer sync-plan execution, and fixes for missing indexes and foreign keys on new tables.
+- Added Native and pure-Go driver choices for Oracle connections, improved driver-mode preservation when editing connections, and added Oracle 11g query-limit support.
+- Added portable x64 and ARM64 Linux packages and improved compatibility with older ARM64 runtimes, Wayland dependencies, and usrmerge-based systems.
+
+#### Fixes and Improvements
+
+- Improved preservation and editing of MySQL BIT and binary values across SQL import/export, table editing, and data grids.
+- Improved credential storage, SSH/Telnet login, terminal reconnects, window shortcut handling, and AI Chat sidebar scrolling.
+- Public MCP terminal tools can now send raw key input for interactive automation scenarios.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.7...v0.10.8
+
 ## [v0.10.7] - 2026-08-13
 
 ### 中文

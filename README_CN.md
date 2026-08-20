@@ -56,12 +56,15 @@
 - 连接 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse。
 - 通过扩展安装达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB，以及无需 Instant Client 的 Oracle 驱动。
 - 浏览数据库对象，编辑和执行 SQL，查看执行计划，导入导出数据，比较 Schema/Data，并通过 ER 图查看关系。
+- 查看持久化保存的 SQL 执行历史，使用改进的跨数据库类型映射和目标表匹配进行 Schema/Data Compare，并选择 Oracle Native 或纯 Go 驱动，同时支持 Oracle 11g 查询分页限制。
 - 使用专用界面管理 Redis 与 MongoDB。
 - 通过 SOCKS5、HTTP CONNECT 代理和 SSH 隧道路由受支持的网络连接。
 
 ### 远程连接与运维
 
 - 在可拖拽分屏中使用 SSH 与本地终端，并提供快捷命令、历史记录、广播输入、Shell integration 和终端 AI。
+- 支持 Telnet 连接、自动登录脚本和手动凭据覆盖。
+- 通过静态历史查看器查看 SSH、串口和本地终端会话日志，支持滚动、文本选择、搜索与 TXT 导出。
 - 通过 SFTP 上传下载、搜索、收藏、远程编辑、拖拽传输和跨服务器复制文件。
 - 创建可复用的本地、远程（`ssh -R`）端口转发与动态 SOCKS 隧道。
 - 使用串口连接、服务器监控，以及通过扩展 provider 提供的 RDP/VNC 远程桌面。
@@ -69,6 +72,7 @@
 ### 编辑、AI 与扩展
 
 - 编辑本地 Markdown 笔记，支持语法高亮、Mermaid、数学公式、相对媒体资源，并可通过沙箱化 WASM 导出器生成 HTML、PDF 或 DOCX。
+- 编辑时可放大查看 Mermaid 图和数学公式，并在源码与预览之间切换。
 - 使用 AI 生成和解释 SQL、分析数据、生成图表、辅助终端操作、调用工具和运行 Agent 工作流。
 - 通过 ACP 扩展接入 Codex、Claude Code 和 OpenCode 等外部 Agent。
 - 使用 Agent Hub 在同一工作区查看终端 Agent、项目文件、Git 分支、变更列表和并排 Diff。
@@ -79,7 +83,7 @@
 - 基于 GPUI 的原生界面与 GPU 加速渲染。
 - 支持亮色、深色、跟随系统模式，可导入应用与终端主题，并配置强调色和窗口透明度。
 - 支持 English、简体中文和繁体中文界面。
-- 加密同步不同设备上的连接与设置。
+- 支持可复用的钥匙串引用，并加密同步不同设备上的个人连接、凭据与设置。
 
 ## Public MCP、Navop CLI 与 Agent Skill
 

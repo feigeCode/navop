@@ -56,12 +56,15 @@
 - Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse.
 - Install extension drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and Oracle without Instant Client.
 - Browse database objects, edit and run SQL, inspect execution plans, import or export data, compare schemas and data, and visualize relationships with ER diagrams.
+- Review persistent SQL execution history, compare cross-database schemas and data with improved type mapping and target matching, and choose Native or pure-Go Oracle drivers, including Oracle 11g query-limit support.
 - Work with Redis and MongoDB through dedicated interfaces.
 - Route supported network connections through SOCKS5 or HTTP CONNECT proxies and SSH tunnels.
 
 ### Remote access and operations
 
 - Use SSH and local terminals with draggable splits, quick commands, history, broadcast input, shell integration, and terminal AI.
+- Connect over Telnet with automatic login scripts and manual credential overrides.
+- Review SSH, serial, and local terminal session logs in a static history viewer with scrollback, selection, search, and TXT export.
 - Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy.
 - Create reusable local, remote (`ssh -R`), and dynamic SOCKS port-forwarding connections.
 - Open serial connections, monitor servers, and connect to remote desktops through installable RDP and VNC providers.
@@ -69,6 +72,7 @@
 ### Editing, AI, and extensibility
 
 - Edit local Markdown notes with syntax highlighting, Mermaid diagrams, math rendering, relative media, and export to HTML, PDF, or DOCX through a sandboxed WASM exporter.
+- Enlarge Mermaid diagrams and math formulas, and switch between their source and preview views while editing.
 - Use AI for SQL generation and explanation, data analysis, charts, terminal assistance, tool calling, and agent workflows.
 - Connect external agents through ACP extensions for Codex, Claude Code, and OpenCode.
 - Use Agent Hub to keep a terminal agent, project files, Git branches, changes, and side-by-side diffs in one workspace.
@@ -79,7 +83,7 @@
 - Native GPUI interface with GPU-accelerated rendering.
 - Light, dark, and system themes, importable application and terminal themes, accent colors, and window opacity controls.
 - English, Simplified Chinese, and Traditional Chinese interfaces.
-- Encrypted synchronization of connections and settings across devices.
+- Reusable keychain references and encrypted synchronization of personal connections, credentials, and settings across devices.
 
 ## Public MCP, Navop CLI, and Agent Skill
 
