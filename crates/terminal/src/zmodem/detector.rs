@@ -64,6 +64,33 @@ impl ZmodemDetector {
             }
         }
     }
+
+    /// Whether the retained bytes are only the ambiguous ordinary `*`/`**`
+    /// suffix shared with the start of a ZMODEM header.
+    ///
+    /// A complete header prefix may still need more handshake bytes and must
+    /// not be released by the short terminal-output idle timer.
+    pub(crate) fn has_plain_asterisk_prefix(&self) -> bool {
+        matches!(self.pending.as_slice(), b"*" | b"**")
+    }
+
+    /// Release an ambiguous ordinary `*`/`**` suffix as terminal output.
+    ///
+    /// ZMODEM headers start with one or two `*` bytes, so the streaming
+    /// detector must briefly retain matching suffixes across SSH channel
+    /// chunks. Without an idle flush, ordinary echoed input such as `****`
+    /// leaves the final two symbols buffered forever.
+    pub(crate) fn flush_plain_asterisk_prefix(&mut self) -> Vec<u8> {
+        if !self.has_plain_asterisk_prefix() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Release any bytes still retained when the SSH stream closes.
+    pub(crate) fn flush_pending(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +225,49 @@ mod tests {
                 transfer: None,
             }
         );
+    }
+
+    #[test]
+    fn repeated_asterisk_echo_is_released_by_idle_flush() {
+        let mut detector = ZmodemDetector::default();
+        let mut terminal = Vec::new();
+
+        for _ in 0..4 {
+            terminal.extend(detector.push(b"*").terminal);
+        }
+
+        assert_eq!(terminal, b"**");
+        assert!(detector.has_plain_asterisk_prefix());
+
+        terminal.extend(detector.flush_plain_asterisk_prefix());
+
+        assert_eq!(terminal, b"****");
+        assert!(!detector.has_plain_asterisk_prefix());
+    }
+
+    #[test]
+    fn complete_zmodem_header_prefix_is_not_idle_flushable() {
+        let wire = remote_zrinit();
+        let header_len = HEADER_PREFIXES
+            .iter()
+            .find(|prefix| wire.starts_with(**prefix))
+            .expect("wire should start with a known ZMODEM header")
+            .len();
+        let mut detector = ZmodemDetector::default();
+
+        let first = detector.push(&wire[..header_len]);
+
+        assert!(first.terminal.is_empty());
+        assert!(first.transfer.is_none());
+        assert!(!detector.has_plain_asterisk_prefix());
+        assert!(detector.flush_plain_asterisk_prefix().is_empty());
+
+        let routed = detector.push(&wire[header_len..]);
+        let detected = routed.transfer.expect("completed handshake");
+
+        assert_eq!(detected.direction, ZmodemDirection::Upload);
+        assert!(routed.terminal.is_empty());
+        assert_eq!(detected.wire, wire);
     }
 
     #[test]

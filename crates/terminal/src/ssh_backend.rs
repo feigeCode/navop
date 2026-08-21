@@ -1,11 +1,13 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
+use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
 
 use alacritty_terminal::sync::FairMutex;
@@ -42,6 +44,37 @@ const SHELL_INTEGRATION_SETUP_TIMEOUT: Duration = Duration::from_secs(3);
 const SHELL_INTEGRATION_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// 没有 OSC prompt 信号时，多行初始化命令之间留出设备处理和显示交互提示的时间。
 const PLAIN_INIT_COMMAND_DELAY: Duration = Duration::from_millis(250);
+/// ZMODEM header prefixes overlap ordinary echoed `*` input. Keep a short
+/// cross-chunk probe window, then release a retained `*`/`**` suffix.
+const ZMODEM_PROBE_FLUSH_DELAY: Duration = Duration::from_millis(20);
+
+type ZmodemProbeFlush = Pin<Box<Sleep>>;
+
+fn sync_zmodem_probe_flush(
+    detector: &ZmodemDetector,
+    pending_flush: &mut Option<ZmodemProbeFlush>,
+) {
+    if detector.has_plain_asterisk_prefix() {
+        *pending_flush = Some(Box::pin(tokio::time::sleep(ZMODEM_PROBE_FLUSH_DELAY)));
+    } else {
+        pending_flush.take();
+    }
+}
+
+async fn wait_for_zmodem_probe_flush(pending_flush: &mut Option<ZmodemProbeFlush>) {
+    pending_flush
+        .as_mut()
+        .expect("pending ZMODEM probe flush should exist when polled")
+        .as_mut()
+        .await;
+}
+
+fn should_poll_zmodem_probe_flush(
+    pending_flush: &Option<ZmodemProbeFlush>,
+    has_pending_ingress: bool,
+) -> bool {
+    pending_flush.is_some() && !has_pending_ingress
+}
 
 fn shell_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "'\"'\"'"))
@@ -301,6 +334,11 @@ enum SshCommand {
     },
     Resize(TerminalSize),
     Shutdown,
+}
+
+enum SshRuntimeInput<Command> {
+    Actor(SshActorInput<Command>),
+    FlushZmodemProbe,
 }
 
 pub struct SshBackend {
@@ -620,6 +658,7 @@ impl SshBackend {
             let mut exec_supervisor = ExecSupervisor::new();
             let mut osc_parser = OscStreamParser::default();
             let mut zmodem_detector = ZmodemDetector::default();
+            let mut zmodem_probe_flush = None;
             let mut output_decoder = TerminalOutputDecoder::new(terminal_encoding);
             let mut exec_results = HashMap::new();
             let mut shell_ready = !shell_integration_active;
@@ -627,247 +666,37 @@ impl SshBackend {
             let mut login_expect = login_expect;
 
             'actor: loop {
-                match next_ssh_actor_input(
-                    &mut channel,
-                    &mut command_rx,
-                    &mut pty_write_rx,
-                    &mut pending_ingress,
-                )
-                .await
-                {
-                    SshActorInput::Command(cmd) => match cmd {
-                        SshCommand::Write { source, data } => {
-                            let effects = encode_exec_effects(
-                                terminal_encoding,
-                                exec_supervisor.on_input(source, &data),
-                            );
-                            if let Err(error) = apply_exec_effects(
-                                effects,
-                                &mut channel,
-                                &task_command_tx,
-                                &mut exec_results,
-                            )
-                            .await
-                            {
-                                disconnect_error = Some(
-                                    error.context("failed to apply SSH terminal input effects"),
-                                );
-                                break;
-                            }
-                            if let Err(error) = send_terminal_input(
-                                &mut channel,
-                                terminal_encoding,
-                                source,
-                                &data,
-                                recording_tap.as_ref(),
-                            )
-                            .await
-                            {
-                                disconnect_error = Some(error);
-                                break;
-                            }
-                        }
-                        SshCommand::InterruptForeground {
-                            request,
-                            cancellation,
-                            result,
-                        } => {
-                            if cancellation.is_cancelled() {
-                                let _ = result.send(Err(TerminalControlError::Cancelled));
-                                continue;
-                            }
-                            let readiness = match request.action {
-                                TerminalControlAction::Interrupt => {
-                                    exec_supervisor.interrupt_foreground()
-                                }
-                            };
-                            match readiness {
-                                Ok(readiness_before) => {
-                                    match send_terminal_data(&mut channel, &[0x03])
-                                        .await
-                                        .context("failed to send Ctrl-C over SSH")
-                                    {
-                                        Ok(()) => {
-                                            let _ = result.send(Ok(TerminalControlOutput {
-                                                action: request.action,
-                                                sent: true,
-                                                readiness_before,
-                                            }));
-                                        }
-                                        Err(error) => {
-                                            let _ = result
-                                                .send(Err(TerminalControlError::Disconnected));
-                                            disconnect_error = Some(error);
-                                            break;
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    let _ = result.send(Err(error));
-                                }
-                            }
-                        }
-                        SshCommand::StartExec {
-                            id,
-                            request,
-                            result,
-                        } => {
-                            exec_results.insert(id, result);
-                            let effects = encode_exec_effects(
-                                terminal_encoding,
-                                exec_supervisor.start(id, request),
-                            );
-                            if let Err(error) = apply_exec_effects(
-                                effects,
-                                &mut channel,
-                                &task_command_tx,
-                                &mut exec_results,
-                            )
-                            .await
-                            {
-                                disconnect_error = Some(
-                                    error.context("failed to start SSH terminal exec request"),
-                                );
-                                break;
-                            }
-                        }
-                        SshCommand::CancelExec { id } => {
-                            exec_results.remove(&id);
-                            let effects =
-                                encode_exec_effects(terminal_encoding, exec_supervisor.cancel(id));
-                            if let Err(error) = apply_exec_effects(
-                                effects,
-                                &mut channel,
-                                &task_command_tx,
-                                &mut exec_results,
-                            )
-                            .await
-                            {
-                                disconnect_error = Some(
-                                    error.context("failed to cancel SSH terminal exec request"),
-                                );
-                                break;
-                            }
-                        }
-                        SshCommand::ExecTimeout { id, phase } => {
-                            let effects = encode_exec_effects(
-                                terminal_encoding,
-                                exec_supervisor.timeout(id, phase),
-                            );
-                            if let Err(error) = apply_exec_effects(
-                                effects,
-                                &mut channel,
-                                &task_command_tx,
-                                &mut exec_results,
-                            )
-                            .await
-                            {
-                                disconnect_error = Some(
-                                    error.context("failed to time out SSH terminal exec request"),
-                                );
-                                break;
-                            }
-                        }
-                        SshCommand::Resize(size) => {
-                            let _ = channel.resize_pty(size.cols as u32, size.rows as u32).await;
-                        }
-                        SshCommand::Shutdown => {
-                            shutdown = true;
-                            parser_ingress.abort();
-                            let _ = channel.close().await;
-                            break;
-                        }
-                    },
-                    SshActorInput::TerminalResponse(data) => {
-                        let _ =
-                            exec_supervisor.on_input(TerminalInputSource::TerminalResponse, &data);
-                        if let Err(error) = send_terminal_data(&mut channel, &data)
-                            .await
-                            .context("failed to send terminal response over SSH")
-                        {
-                            disconnect_error = Some(error);
-                            break;
-                        }
+                // Do not let the timer-produced bytes replace a source chunk
+                // that is still waiting for bounded parser-ingress capacity.
+                let can_flush_zmodem_probe =
+                    should_poll_zmodem_probe_flush(&zmodem_probe_flush, pending_ingress.is_some());
+                let runtime_input = tokio::select! {
+                    biased;
+                    input = next_ssh_actor_input(
+                        &mut channel,
+                        &mut command_rx,
+                        &mut pty_write_rx,
+                        &mut pending_ingress,
+                    ) => SshRuntimeInput::Actor(input),
+                    _ = wait_for_zmodem_probe_flush(&mut zmodem_probe_flush),
+                        if can_flush_zmodem_probe =>
+                    {
+                        SshRuntimeInput::FlushZmodemProbe
                     }
-                    SshActorInput::Ingress(Ok(())) => {}
-                    SshActorInput::Ingress(Err(error)) => {
-                        disconnect_error = Some(
-                            anyhow::Error::new(error)
-                                .context("SSH terminal parser ingress rejected or closed"),
-                        );
-                        break;
+                };
+                let mut raw_terminal_data = None;
+
+                match runtime_input {
+                    SshRuntimeInput::FlushZmodemProbe => {
+                        zmodem_probe_flush.take();
+                        raw_terminal_data = Some(zmodem_detector.flush_plain_asterisk_prefix());
                     }
-                    SshActorInput::Channel(event) => {
-                        match event {
-                            Some(ChannelEvent::Data(data))
-                            | Some(ChannelEvent::ExtendedData { data, .. }) => {
-                                // A zero-length SSH event carries no terminal
-                                // bytes and must not be turned into a queue
-                                // error that disconnects an otherwise valid
-                                // session.
-                                if data.is_empty() {
-                                    continue;
-                                }
-                                let routed = zmodem_detector.push(&data);
-                                let mut raw_terminal_data = routed.terminal;
-                                if let Some(detected) = routed.transfer {
-                                    match run_transfer(
-                                        &mut channel,
-                                        detected,
-                                        &zmodem_responder,
-                                        &task_transfer_cancellation,
-                                    )
-                                    .await
-                                    {
-                                        Ok(trailing) if !trailing.is_empty() => {
-                                            append_terminal_data(&mut raw_terminal_data, trailing);
-                                        }
-                                        Ok(_) => {}
-                                        Err(error) => {
-                                            let channel_closed = is_channel_closed(&error);
-                                            tracing::warn!(
-                                                target: "terminal.ssh.runtime",
-                                                error = %format!("{error:#}"),
-                                                error_debug = ?error,
-                                                "SSH ZMODEM transfer failed"
-                                            );
-                                            if channel_closed {
-                                                disconnect_error = Some(error.context(
-                                                    "SSH ZMODEM transfer stopped because the channel closed",
-                                                ));
-                                                graceful_ingress_close = true;
-                                                break 'actor;
-                                            }
-                                        }
-                                    }
-                                }
-                                if raw_terminal_data.is_empty() {
-                                    continue;
-                                }
-                                let data = output_decoder.decode(&raw_terminal_data);
-                                if data.is_empty() {
-                                    continue;
-                                }
-                                let expect_sends = login_expect.advance(&data);
-                                let expect_responded = !expect_sends.is_empty();
-                                for send in expect_sends {
-                                    if let Err(error) = send_terminal_data(&mut channel, &send)
-                                        .await
-                                        .context("failed to send SSH expect response")
-                                    {
-                                        disconnect_error = Some(error);
-                                        break 'actor;
-                                    }
-                                }
-                                // 解析所有 OSC 事件
-                                let osc_events = osc_parser.push(&data);
+                    SshRuntimeInput::Actor(input) => match input {
+                        SshActorInput::Command(cmd) => match cmd {
+                            SshCommand::Write { source, data } => {
                                 let effects = encode_exec_effects(
                                     terminal_encoding,
-                                    exec_supervisor.on_terminal_chunk(&data, &osc_events),
-                                );
-                                tracing::trace!(
-                                    readiness = ?exec_supervisor.readiness(),
-                                    "SSH terminal exec readiness updated"
+                                    exec_supervisor.on_input(source, &data),
                                 );
                                 if let Err(error) = apply_exec_effects(
                                     effects,
@@ -878,101 +707,333 @@ impl SshBackend {
                                 .await
                                 {
                                     disconnect_error = Some(
-                                        error
-                                            .context("failed to apply SSH terminal output effects"),
+                                        error.context("failed to apply SSH terminal input effects"),
                                     );
-                                    break 'actor;
+                                    break;
                                 }
-                                for osc_event in &osc_events {
-                                    match osc_event {
-                                        OscEvent::WorkingDirChanged(path) => {
-                                            let _ = event_tx.send(
-                                                TerminalEvent::WorkingDirChanged(path.clone()),
-                                            );
-                                        }
-                                        OscEvent::PromptStart => {
-                                            let _ = event_tx.send(TerminalEvent::PromptStart);
-                                        }
-                                        OscEvent::InputStart => {
-                                            let _ = event_tx.send(TerminalEvent::InputStart);
-                                            // 133;B: prompt 渲染完，用户可以输入了
-                                            // 第一次收到时发送 init_commands
-                                            if !shell_ready {
-                                                shell_ready = true;
+                                if let Err(error) = send_terminal_input(
+                                    &mut channel,
+                                    terminal_encoding,
+                                    source,
+                                    &data,
+                                    recording_tap.as_ref(),
+                                )
+                                .await
+                                {
+                                    disconnect_error = Some(error);
+                                    break;
+                                }
+                            }
+                            SshCommand::InterruptForeground {
+                                request,
+                                cancellation,
+                                result,
+                            } => {
+                                if cancellation.is_cancelled() {
+                                    let _ = result.send(Err(TerminalControlError::Cancelled));
+                                    continue;
+                                }
+                                let readiness = match request.action {
+                                    TerminalControlAction::Interrupt => {
+                                        exec_supervisor.interrupt_foreground()
+                                    }
+                                };
+                                match readiness {
+                                    Ok(readiness_before) => {
+                                        match send_terminal_data(&mut channel, &[0x03])
+                                            .await
+                                            .context("failed to send Ctrl-C over SSH")
+                                        {
+                                            Ok(()) => {
+                                                let _ = result.send(Ok(TerminalControlOutput {
+                                                    action: request.action,
+                                                    sent: true,
+                                                    readiness_before,
+                                                }));
+                                            }
+                                            Err(error) => {
+                                                let _ = result
+                                                    .send(Err(TerminalControlError::Disconnected));
+                                                disconnect_error = Some(error);
+                                                break;
                                             }
                                         }
-                                        OscEvent::CommandStart => {
-                                            let _ = event_tx.send(TerminalEvent::CommandStart);
-                                        }
-                                        OscEvent::CommandFinished { exit_code } => {
-                                            // 133;D: 命令执行完毕
-                                            let _ = event_tx.send(TerminalEvent::CommandFinished {
-                                                exit_code: *exit_code,
-                                            });
-                                        }
-                                        OscEvent::CommandRecorded(command) => {
-                                            let _ = event_tx.send(TerminalEvent::CommandRecorded(
-                                                command.clone(),
-                                            ));
-                                        }
+                                    }
+                                    Err(error) => {
+                                        let _ = result.send(Err(error));
                                     }
                                 }
-
-                                // 自动登录完成且本轮没有刚发送应答时，再发送 init_commands。
-                                // 避免用户名/密码应答和初始化命令落在同一轮输出中，被设备误当成登录输入。
-                                if shell_ready
-                                    && login_expect.is_complete()
-                                    && !expect_responded
-                                    && !init_sent
-                                {
-                                    init_sent = true;
-                                    if let Some(ref commands) = pending_init {
-                                        let inter_command_delay = (!shell_integration_active)
-                                            .then_some(PLAIN_INIT_COMMAND_DELAY);
-                                        if let Err(error) = send_init_commands(
-                                            &mut channel,
-                                            terminal_encoding,
-                                            commands,
-                                            inter_command_delay,
-                                            &mut exec_supervisor,
-                                            &task_command_tx,
-                                            &mut exec_results,
-                                        )
-                                        .await
-                                        {
-                                            disconnect_error = Some(error);
-                                            break 'actor;
-                                        }
-                                    }
-                                }
-
-                                pending_ingress = Some(parser_ingress.pending(data));
                             }
-                            Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
-                                graceful_ingress_close = true;
+                            SshCommand::StartExec {
+                                id,
+                                request,
+                                result,
+                            } => {
+                                exec_results.insert(id, result);
                                 let effects = encode_exec_effects(
                                     terminal_encoding,
-                                    exec_supervisor.disconnect(),
+                                    exec_supervisor.start(id, request),
                                 );
-                                let _ = apply_exec_effects(
+                                if let Err(error) = apply_exec_effects(
                                     effects,
                                     &mut channel,
                                     &task_command_tx,
                                     &mut exec_results,
                                 )
-                                .await;
+                                .await
+                                {
+                                    disconnect_error = Some(
+                                        error.context("failed to start SSH terminal exec request"),
+                                    );
+                                    break;
+                                }
+                            }
+                            SshCommand::CancelExec { id } => {
+                                exec_results.remove(&id);
+                                let effects = encode_exec_effects(
+                                    terminal_encoding,
+                                    exec_supervisor.cancel(id),
+                                );
+                                if let Err(error) = apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                )
+                                .await
+                                {
+                                    disconnect_error = Some(
+                                        error.context("failed to cancel SSH terminal exec request"),
+                                    );
+                                    break;
+                                }
+                            }
+                            SshCommand::ExecTimeout { id, phase } => {
+                                let effects = encode_exec_effects(
+                                    terminal_encoding,
+                                    exec_supervisor.timeout(id, phase),
+                                );
+                                if let Err(error) = apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                )
+                                .await
+                                {
+                                    disconnect_error =
+                                        Some(error.context(
+                                            "failed to time out SSH terminal exec request",
+                                        ));
+                                    break;
+                                }
+                            }
+                            SshCommand::Resize(size) => {
+                                let _ =
+                                    channel.resize_pty(size.cols as u32, size.rows as u32).await;
+                            }
+                            SshCommand::Shutdown => {
+                                shutdown = true;
+                                parser_ingress.abort();
+                                let _ = channel.close().await;
                                 break;
                             }
-                            _ => {}
+                        },
+                        SshActorInput::TerminalResponse(data) => {
+                            let _ = exec_supervisor
+                                .on_input(TerminalInputSource::TerminalResponse, &data);
+                            if let Err(error) = send_terminal_data(&mut channel, &data)
+                                .await
+                                .context("failed to send terminal response over SSH")
+                            {
+                                disconnect_error = Some(error);
+                                break;
+                            }
+                        }
+                        SshActorInput::Ingress(Ok(())) => {}
+                        SshActorInput::Ingress(Err(error)) => {
+                            disconnect_error = Some(
+                                anyhow::Error::new(error)
+                                    .context("SSH terminal parser ingress rejected or closed"),
+                            );
+                            break;
+                        }
+                        SshActorInput::Channel(event) => {
+                            match event {
+                                Some(ChannelEvent::Data(data))
+                                | Some(ChannelEvent::ExtendedData { data, .. }) => {
+                                    // A zero-length SSH event carries no terminal
+                                    // bytes and must not be turned into a queue
+                                    // error that disconnects an otherwise valid
+                                    // session.
+                                    if data.is_empty() {
+                                        continue;
+                                    }
+                                    let routed = zmodem_detector.push(&data);
+                                    sync_zmodem_probe_flush(
+                                        &zmodem_detector,
+                                        &mut zmodem_probe_flush,
+                                    );
+                                    let mut routed_terminal_data = routed.terminal;
+                                    if let Some(detected) = routed.transfer {
+                                        match run_transfer(
+                                            &mut channel,
+                                            detected,
+                                            &zmodem_responder,
+                                            &task_transfer_cancellation,
+                                        )
+                                        .await
+                                        {
+                                            Ok(trailing) if !trailing.is_empty() => {
+                                                append_terminal_data(
+                                                    &mut routed_terminal_data,
+                                                    trailing,
+                                                );
+                                            }
+                                            Ok(_) => {}
+                                            Err(error) => {
+                                                let channel_closed = is_channel_closed(&error);
+                                                tracing::warn!(
+                                                    target: "terminal.ssh.runtime",
+                                                    error = %format!("{error:#}"),
+                                                    error_debug = ?error,
+                                                    "SSH ZMODEM transfer failed"
+                                                );
+                                                if channel_closed {
+                                                    disconnect_error = Some(error.context(
+                                                    "SSH ZMODEM transfer stopped because the channel closed",
+                                                ));
+                                                    graceful_ingress_close = true;
+                                                    break 'actor;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    raw_terminal_data = Some(routed_terminal_data);
+                                }
+                                Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
+                                    graceful_ingress_close = true;
+                                    let effects = encode_exec_effects(
+                                        terminal_encoding,
+                                        exec_supervisor.disconnect(),
+                                    );
+                                    let _ = apply_exec_effects(
+                                        effects,
+                                        &mut channel,
+                                        &task_command_tx,
+                                        &mut exec_results,
+                                    )
+                                    .await;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    },
+                }
+
+                let Some(raw_terminal_data) = raw_terminal_data else {
+                    continue;
+                };
+                if raw_terminal_data.is_empty() {
+                    continue;
+                }
+                let data = output_decoder.decode(&raw_terminal_data);
+                if data.is_empty() {
+                    continue;
+                }
+                let expect_sends = login_expect.advance(&data);
+                let expect_responded = !expect_sends.is_empty();
+                for send in expect_sends {
+                    if let Err(error) = send_terminal_data(&mut channel, &send)
+                        .await
+                        .context("failed to send SSH expect response")
+                    {
+                        disconnect_error = Some(error);
+                        break 'actor;
+                    }
+                }
+                // 解析所有 OSC 事件
+                let osc_events = osc_parser.push(&data);
+                let effects = encode_exec_effects(
+                    terminal_encoding,
+                    exec_supervisor.on_terminal_chunk(&data, &osc_events),
+                );
+                tracing::trace!(
+                    readiness = ?exec_supervisor.readiness(),
+                    "SSH terminal exec readiness updated"
+                );
+                if let Err(error) =
+                    apply_exec_effects(effects, &mut channel, &task_command_tx, &mut exec_results)
+                        .await
+                {
+                    disconnect_error =
+                        Some(error.context("failed to apply SSH terminal output effects"));
+                    break 'actor;
+                }
+                for osc_event in &osc_events {
+                    match osc_event {
+                        OscEvent::WorkingDirChanged(path) => {
+                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
+                        }
+                        OscEvent::PromptStart => {
+                            let _ = event_tx.send(TerminalEvent::PromptStart);
+                        }
+                        OscEvent::InputStart => {
+                            let _ = event_tx.send(TerminalEvent::InputStart);
+                            // 133;B: prompt 渲染完，用户可以输入了
+                            // 第一次收到时发送 init_commands
+                            if !shell_ready {
+                                shell_ready = true;
+                            }
+                        }
+                        OscEvent::CommandStart => {
+                            let _ = event_tx.send(TerminalEvent::CommandStart);
+                        }
+                        OscEvent::CommandFinished { exit_code } => {
+                            // 133;D: 命令执行完毕
+                            let _ = event_tx.send(TerminalEvent::CommandFinished {
+                                exit_code: *exit_code,
+                            });
+                        }
+                        OscEvent::CommandRecorded(command) => {
+                            let _ = event_tx.send(TerminalEvent::CommandRecorded(command.clone()));
                         }
                     }
                 }
+
+                // 自动登录完成且本轮没有刚发送应答时，再发送 init_commands。
+                // 避免用户名/密码应答和初始化命令落在同一轮输出中，被设备误当成登录输入。
+                if shell_ready && login_expect.is_complete() && !expect_responded && !init_sent {
+                    init_sent = true;
+                    if let Some(ref commands) = pending_init {
+                        let inter_command_delay =
+                            (!shell_integration_active).then_some(PLAIN_INIT_COMMAND_DELAY);
+                        if let Err(error) = send_init_commands(
+                            &mut channel,
+                            terminal_encoding,
+                            commands,
+                            inter_command_delay,
+                            &mut exec_supervisor,
+                            &task_command_tx,
+                            &mut exec_results,
+                        )
+                        .await
+                        {
+                            disconnect_error = Some(error);
+                            break 'actor;
+                        }
+                    }
+                }
+
+                pending_ingress = Some(parser_ingress.pending(data));
             }
 
             if !graceful_ingress_close {
                 parser_ingress.abort();
             } else {
-                let trailing = output_decoder.finish();
+                let mut trailing = output_decoder.decode(&zmodem_detector.flush_pending());
+                append_terminal_data(&mut trailing, output_decoder.finish());
                 if !trailing.is_empty() {
                     let mut trailing_ingress = parser_ingress.pending(trailing);
                     if let Err(error) = trailing_ingress.wait().await {
@@ -1400,6 +1461,26 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::time::sleep;
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn zmodem_probe_flush_arms_only_for_plain_asterisk_prefixes() {
+        let mut detector = ZmodemDetector::default();
+        let mut pending_flush = None;
+
+        let routed = detector.push(b"*");
+        assert!(routed.terminal.is_empty());
+        sync_zmodem_probe_flush(&detector, &mut pending_flush);
+        assert!(pending_flush.is_some());
+        assert!(should_poll_zmodem_probe_flush(&pending_flush, false));
+        assert!(!should_poll_zmodem_probe_flush(&pending_flush, true));
+
+        let routed = detector.push(b"\x18A");
+        assert!(routed.terminal.is_empty());
+        assert!(routed.transfer.is_none());
+        sync_zmodem_probe_flush(&detector, &mut pending_flush);
+        assert!(pending_flush.is_none());
+        assert!(detector.flush_plain_asterisk_prefix().is_empty());
+    }
 
     #[test]
     fn ssh_backend_records_direct_and_handle_input_without_double_counting() {
