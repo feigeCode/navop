@@ -255,7 +255,10 @@ impl Render for TerminalCommandBar {
             .on_action(cx.listener(Self::handle_history_next))
             .on_key_down(cx.listener(Self::handle_key_down))
             .when(
-                focused && !self.collapsed && !self.suggestions.is_empty(),
+                focused
+                    && !self.collapsed
+                    && self.suggestion_popup_enabled
+                    && !self.suggestions.is_empty(),
                 |bar| bar.child(self.render_suggestions(cx)),
             )
             .when(self.quick_commands_open, |bar| {

@@ -34,6 +34,7 @@ impl TerminalView {
         font_family: String,
         auto_copy: bool,
         autocomplete_enabled: bool,
+        suggestion_popup_enabled: bool,
         middle_click_paste: bool,
         right_click_paste: bool,
         paste_image_upload: bool,
@@ -60,6 +61,7 @@ impl TerminalView {
 
         self.auto_copy_on_select = auto_copy;
         self.apply_autocomplete_enabled(autocomplete_enabled, cx);
+        self.apply_suggestion_popup_enabled(suggestion_popup_enabled, cx);
         if !self.history_prompt_enabled(cx) {
             self.suggestion_debounce.take();
             self.hide_history_prompt_dropdown();
@@ -101,6 +103,7 @@ impl TerminalView {
             settings.font_family.clone(),
             settings.auto_copy,
             settings.enable_autocomplete,
+            settings.show_suggestion_popup,
             settings.middle_click_paste,
             settings.right_click_paste,
             settings.paste_image_upload,

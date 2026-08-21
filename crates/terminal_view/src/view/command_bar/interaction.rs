@@ -43,6 +43,7 @@ impl TerminalCommandBar {
             collapsed: true,
             input_height: COMMAND_BAR_INPUT_DEFAULT_HEIGHT,
             autocomplete_enabled: true,
+            suggestion_popup_enabled: true,
             colors: config.colors,
             recording_path_prompt_pending: false,
             recording_control_error: None,
@@ -98,6 +99,19 @@ impl TerminalCommandBar {
             self.suggestions.clear();
             self.selected_suggestion = None;
             self.clear_inline_completion(cx);
+        }
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_suggestion_popup_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.suggestion_popup_enabled = enabled;
+        if !enabled {
+            self.suggestions.clear();
+            self.selected_suggestion = None;
         }
         cx.notify();
     }

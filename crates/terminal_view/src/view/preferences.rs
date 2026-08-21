@@ -59,6 +59,29 @@ impl TerminalView {
         });
     }
 
+    pub fn apply_suggestion_popup_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.command_bar.update(cx, |command_bar, cx| {
+            command_bar.set_suggestion_popup_enabled(enabled, cx);
+        });
+        if self.suggestion_popup_enabled == enabled {
+            return;
+        }
+        self.suggestion_popup_enabled = enabled;
+        let _ = update_settings(cx, move |settings| {
+            settings.show_suggestion_popup = enabled;
+        });
+        cx.notify();
+    }
+
+    pub fn set_suggestion_popup_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.suggestion_popup_enabled == enabled {
+            return;
+        }
+        let _ = update_settings(cx, move |settings| {
+            settings.show_suggestion_popup = enabled;
+        });
+    }
+
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.middle_click_paste == enabled {
             return;

@@ -43,6 +43,7 @@ pub struct TerminalSettings {
     pub scrollback_lines: usize,
     pub auto_copy: bool,
     pub enable_autocomplete: bool,
+    pub show_suggestion_popup: bool,
     pub middle_click_paste: bool,
     pub right_click_paste: bool,
     pub paste_image_upload: bool,
@@ -92,6 +93,7 @@ impl TerminalSettings {
             scrollback_lines: app_settings.terminal_scrollback_lines,
             auto_copy: app_settings.terminal_auto_copy,
             enable_autocomplete: app_settings.terminal_enable_autocomplete,
+            show_suggestion_popup: app_settings.terminal_show_suggestion_popup,
             middle_click_paste: app_settings.terminal_middle_click_paste,
             right_click_paste: app_settings.terminal_right_click_paste,
             paste_image_upload: app_settings.terminal_paste_image_upload,
@@ -297,6 +299,7 @@ fn update_app_settings<T>(
         settings.terminal_scrollback_lines = next.scrollback_lines;
         settings.terminal_auto_copy = next.auto_copy;
         settings.terminal_enable_autocomplete = next.enable_autocomplete;
+        settings.terminal_show_suggestion_popup = next.show_suggestion_popup;
         settings.terminal_middle_click_paste = next.middle_click_paste;
         settings.terminal_right_click_paste = next.right_click_paste;
         settings.terminal_paste_image_upload = next.paste_image_upload;
@@ -315,6 +318,7 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.scrollback_lines == right.scrollback_lines
         && left.auto_copy == right.auto_copy
         && left.enable_autocomplete == right.enable_autocomplete
+        && left.show_suggestion_popup == right.show_suggestion_popup
         && left.middle_click_paste == right.middle_click_paste
         && left.right_click_paste == right.right_click_paste
         && left.paste_image_upload == right.paste_image_upload

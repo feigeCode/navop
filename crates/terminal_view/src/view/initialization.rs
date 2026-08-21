@@ -276,6 +276,7 @@ impl TerminalView {
             confirm_high_risk_command: true,
             auto_copy_on_select: true,
             autocomplete_enabled: true,
+            suggestion_popup_enabled: true,
             middle_click_paste: true,
             right_click_paste: false,
             paste_image_upload: true,

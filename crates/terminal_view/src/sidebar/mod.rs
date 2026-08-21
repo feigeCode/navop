@@ -568,6 +568,8 @@ pub enum TerminalSidebarEvent {
     AutoCopyChanged(bool),
     /// 自动补全开关
     AutocompleteChanged(bool),
+    /// 弹框候选词开关
+    SuggestionPopupChanged(bool),
     /// 中键粘贴开关
     MiddleClickPasteChanged(bool),
     /// 右键快速粘贴开关
@@ -655,6 +657,7 @@ impl TerminalSidebar {
                 initial_font_size,
                 initial_font_family,
                 has_file_manager,
+                true,
                 true,
                 true,
                 true,
@@ -816,6 +819,9 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::AutocompleteChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::AutocompleteChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::SuggestionPopupChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::SuggestionPopupChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::MiddleClickPasteChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::MiddleClickPasteChanged(*enabled));
