@@ -1944,6 +1944,83 @@ mod tests {
     }
 
     #[test]
+    fn incremental_cache_tracks_repeated_symbol_echo_and_erase() {
+        let dimensions = TestTermDimensions {
+            columns: 16,
+            screen_lines: 2,
+        };
+        let (event_tx, _event_rx) = unbounded_channel();
+        let mut term = Term::new(
+            TermConfig::default(),
+            &dimensions,
+            GpuiEventProxy::new(event_tx),
+        );
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        let addon_manager = AddonManager::new();
+        let theme = TerminalTheme::midnight();
+        let mut cache =
+            RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+
+        processor.advance(&mut term, b"$ ");
+        cache.update(&mut term, &addon_manager, &theme, None);
+
+        for input_index in 1..=4 {
+            processor.advance(&mut term, b"*");
+            cache.update(&mut term, &addon_manager, &theme, None);
+
+            let mut rebuilt =
+                RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+            rebuilt.rebuild_all(&term, None);
+            let actual = cached_screen_rows(&cache);
+
+            assert_eq!(
+                renderable_screen_rows(&term),
+                actual,
+                "incremental cache diverged after symbol input {input_index}"
+            );
+            assert_eq!(
+                cached_screen_rows(&rebuilt),
+                actual,
+                "incremental cache diverged from a full rebuild after symbol input {input_index}"
+            );
+            assert!(
+                actual[0].starts_with(&format!("$ {}", "*".repeat(input_index))),
+                "unexpected visible row after symbol input {input_index}: {:?}",
+                actual[0]
+            );
+        }
+
+        for erase_index in 1..=4 {
+            // Shells typically erase one echoed character by moving left,
+            // overwriting it with a space, then moving left again.
+            processor.advance(&mut term, b"\x08 \x08");
+            cache.update(&mut term, &addon_manager, &theme, None);
+
+            let mut rebuilt =
+                RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+            rebuilt.rebuild_all(&term, None);
+            let actual = cached_screen_rows(&cache);
+            let remaining = 4 - erase_index;
+
+            assert_eq!(
+                renderable_screen_rows(&term),
+                actual,
+                "incremental cache diverged after symbol erase {erase_index}"
+            );
+            assert_eq!(
+                cached_screen_rows(&rebuilt),
+                actual,
+                "incremental cache diverged from a full rebuild after symbol erase {erase_index}"
+            );
+            assert!(
+                actual[0].starts_with(&format!("$ {}", "*".repeat(remaining))),
+                "unexpected visible row after symbol erase {erase_index}: {:?}",
+                actual[0]
+            );
+        }
+    }
+
+    #[test]
     fn text_run_tracks_terminal_columns_for_wide_characters() {
         let mut cache = RenderCache::new(1, 8, Colors::default());
         cache.build_line_cache(
