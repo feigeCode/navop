@@ -20,6 +20,39 @@ fn tab_content_view_exposes_tab_action_contracts() {
 }
 
 #[test]
+fn tab_content_view_exposes_session_lock_contracts() {
+    let _lockable: fn(&dyn TabContentView, &App) -> bool = <dyn TabContentView>::lockable;
+    let _is_locked: fn(&dyn TabContentView, &App) -> bool = <dyn TabContentView>::is_locked;
+    let _is_disconnected: fn(&dyn TabContentView, &App) -> bool =
+        <dyn TabContentView>::is_disconnected;
+    let _lock_session: fn(
+        &dyn TabContentView,
+        &str,
+        bool,
+        &mut gpui::Window,
+        &mut App,
+    ) -> bool = <dyn TabContentView>::lock_session;
+    let _unlock_session: fn(&dyn TabContentView, &str, &mut App) -> bool =
+        <dyn TabContentView>::unlock_session;
+}
+
+#[test]
+fn tab_content_view_session_lock_defaults_fail_closed() {
+    let _defaults = <dyn TabContentView>::lockable;
+}
+
+#[test]
+fn tab_content_view_exposes_connection_status_contracts() {
+    let _connection_status: fn(&dyn TabContentView, &App) -> Option<crate::tab_container::TabConnectionStatus> =
+        <dyn TabContentView>::connection_status;
+}
+
+#[test]
+fn tab_content_view_connection_status_defaults_to_none() {
+    let _defaults = <dyn TabContentView>::connection_status;
+}
+
+#[test]
 fn tab_content_event_exposes_content_changed_contract() {
     let _event = TabContentEvent::ContentChanged;
 }

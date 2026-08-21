@@ -1353,7 +1353,7 @@ impl SftpView {
             return;
         }
         let generation = self.next_connection_generation();
-        self.connection_state = ConnectionState::Connecting;
+        self.set_connection_state(ConnectionState::Connecting, cx);
         let config = self.sftp_config.clone();
         let window_handle = self.window_handle.clone();
 
@@ -1383,7 +1383,7 @@ impl SftpView {
                             return false;
                         }
                         this.sftp_client = Some(client.clone());
-                        this.connection_state = ConnectionState::Connected;
+                        this.set_connection_state(ConnectionState::Connected, cx);
                         this.set_connection_active(true, cx);
 
                         // 如果成功获取了真实路径，更新远程路径和历史记录
@@ -1438,9 +1438,12 @@ impl SftpView {
                                 {
                                     return;
                                 }
-                                this.connection_state = ConnectionState::Disconnected {
-                                    error: Some(error_msg),
-                                };
+                                this.set_connection_state(
+                                    ConnectionState::Disconnected {
+                                        error: Some(error_msg),
+                                    },
+                                    cx,
+                                );
                                 this.set_connection_active(false, cx);
                                 cx.notify();
                             });
@@ -1454,9 +1457,12 @@ impl SftpView {
                     {
                         return;
                     }
-                    this.connection_state = ConnectionState::Disconnected {
-                        error: Some(error_msg),
-                    };
+                    this.set_connection_state(
+                        ConnectionState::Disconnected {
+                            error: Some(error_msg),
+                        },
+                        cx,
+                    );
                     this.set_connection_active(false, cx);
                     cx.notify();
                 });
@@ -1470,9 +1476,12 @@ impl SftpView {
                     {
                         return;
                     }
-                    this.connection_state = ConnectionState::Disconnected {
-                        error: Some(error_msg),
-                    };
+                    this.set_connection_state(
+                        ConnectionState::Disconnected {
+                            error: Some(error_msg),
+                        },
+                        cx,
+                    );
                     this.set_connection_active(false, cx);
                     cx.notify();
                 });
@@ -1492,6 +1501,17 @@ impl SftpView {
         } else {
             global_state.remove(connection_id);
         }
+    }
+
+    /// Update the connection state, notifying the owning tab bar whenever it
+    /// actually transitions so the status badge refreshes.
+    fn set_connection_state(&mut self, state: ConnectionState, cx: &mut Context<Self>) {
+        if self.connection_state == state {
+            return;
+        }
+        self.connection_state = state;
+        cx.emit(TabContentEvent::StateChanged);
+        cx.notify();
     }
 
     fn reconnect(&mut self, cx: &mut Context<Self>) {
@@ -6768,6 +6788,24 @@ impl TabContent for SftpView {
 
     fn closeable(&self, _cx: &App) -> bool {
         true
+    }
+
+    fn is_disconnected(&self, _cx: &App) -> bool {
+        matches!(self.connection_state, ConnectionState::Disconnected { .. })
+    }
+
+    fn connection_status(&self, _cx: &App) -> Option<one_core::tab_container::TabConnectionStatus> {
+        match self.connection_state {
+            ConnectionState::Connecting => {
+                Some(one_core::tab_container::TabConnectionStatus::Connecting)
+            }
+            ConnectionState::Connected => {
+                Some(one_core::tab_container::TabConnectionStatus::Connected)
+            }
+            ConnectionState::Disconnected { .. } => {
+                Some(one_core::tab_container::TabConnectionStatus::Disconnected)
+            }
+        }
     }
 
     fn try_close(

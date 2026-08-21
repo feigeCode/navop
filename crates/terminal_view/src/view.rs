@@ -14,8 +14,8 @@ use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_component::{
-    ActiveTheme, BlinkCursor, Disableable, ElementExt, Icon, IconName, Selectable, Sizable,
-    WindowExt, h_flex, kbd::Kbd, v_flex,
+    ActiveTheme, BlinkCursor, Disableable, ElementExt, Icon, IconName, IconSize, Selectable,
+    Sizable, WindowExt, h_flex, kbd::Kbd, v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
@@ -263,6 +263,8 @@ pub struct TerminalView {
     shell_prompt_input_active: bool,
     /// 本地 shell 命令是否处于执行阶段，由 OSC 133;C 到下一次 prompt/input 维护。
     local_command_running: bool,
+    /// 上一次已向 TabContainer 广播的连接状态，用于在变化时刷新标签页徽标。
+    last_connection_status: Option<one_core::tab_container::TabConnectionStatus>,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<Task<()>>,
     /// 当前 pane 是否正在等待用户选择录制文件保存目录。

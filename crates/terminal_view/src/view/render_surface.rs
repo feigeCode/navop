@@ -13,6 +13,8 @@ struct TerminalViewportState {
     accepts_live_input: bool,
     right_click_paste: bool,
     show_scrollbar: bool,
+    is_locked: bool,
+    hide_output: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +126,8 @@ impl TerminalView {
             right_click_paste: self.right_click_paste && accepts_live_input,
             show_scrollbar: (!accepts_live_input || !terminal_mode.contains(TermMode::ALT_SCREEN))
                 && history_size > 0,
+            is_locked: terminal.is_locked(),
+            hide_output: terminal.hide_output(),
         }
     }
 
@@ -168,7 +172,12 @@ impl TerminalView {
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .child(self.render_input_canvas(cx))
-            .child(self.render_terminal_surface(&state, cx))
+            .when(!state.hide_output, |this| {
+                this.child(self.render_terminal_surface(&state, cx))
+            })
+            .when(state.is_locked, |this| {
+                this.child(self.render_session_lock_overlay(state.hide_output, cx))
+            })
             .when_some(self.render_addon_tooltip(), |this, tooltip| {
                 this.child(tooltip)
             })
@@ -319,6 +328,63 @@ impl TerminalView {
             .w(px(12.0))
             .child(
                 Scrollbar::vertical(&self.scrollbar_handle).scrollbar_show(ScrollbarShow::Always),
+            )
+            .into_any_element()
+    }
+
+    fn render_session_lock_overlay(&self, hide_output: bool, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        if hide_output {
+            return div()
+                .absolute()
+                .left(px(12.0))
+                .right(px(12.0))
+                .top(px(12.0))
+                .bottom(px(12.0))
+                .bg(self.current_theme.background)
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(
+                    Icon::new(IconName::Key)
+                        .with_size(IconSize::Hero)
+                        .color()
+                )
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .text_size(px(14.0))
+                        .child(t!("SessionLock.hidden_notice")),
+                )
+                .into_any_element();
+        }
+        div()
+            .absolute()
+            .top(px(16.0))
+            .left(px(16.0))
+            .right(px(16.0))
+            .flex()
+            .justify_center()
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .max_w(px(760.0))
+                    .gap_3()
+                    .px_4()
+                    .py_3()
+                    .bg(theme.popover)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_lg()
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .text_color(theme.foreground)
+                            .text_size(px(14.0))
+                            .child(t!("SessionLock.locked_notice")),
+                    ),
             )
             .into_any_element()
     }
