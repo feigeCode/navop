@@ -247,6 +247,19 @@ pub struct QueryColumnMeta {
     pub field_type: FieldType,
     /// Whether the column is nullable
     pub nullable: bool,
+    /// Character set used for text bytes in this result column.
+    ///
+    /// This is runtime/wire metadata and may differ from the table column's
+    /// declared charset when the server applies `character_set_results`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_charset: Option<String>,
+    /// Collation reported for this result column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_collation: Option<String>,
+    /// Raw MySQL result-column collation ID, retained for diagnostics and
+    /// forward compatibility when the local collation table is older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_collation_id: Option<u16>,
 }
 
 impl QueryColumnMeta {
@@ -258,11 +271,26 @@ impl QueryColumnMeta {
             db_type: db_type_str,
             field_type,
             nullable: true,
+            result_charset: None,
+            result_collation: None,
+            result_collation_id: None,
         }
     }
 
     pub fn with_nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
+        self
+    }
+
+    pub fn with_result_encoding(
+        mut self,
+        charset: Option<impl Into<String>>,
+        collation: Option<impl Into<String>>,
+        collation_id: Option<u16>,
+    ) -> Self {
+        self.result_charset = charset.map(Into::into);
+        self.result_collation = collation.map(Into::into);
+        self.result_collation_id = collation_id;
         self
     }
 }
@@ -540,6 +568,39 @@ mod tests {
         .expect("legacy query result should remain compatible");
 
         assert!(result.binary_cells.is_empty());
+        assert!(result.column_meta[0].result_charset.is_none());
+        assert!(result.column_meta[0].result_collation.is_none());
+        assert!(result.column_meta[0].result_collation_id.is_none());
+    }
+
+    #[test]
+    fn query_column_meta_result_encoding_is_optional_and_roundtrips() {
+        let meta = QueryColumnMeta::new("payload", "MYSQL_TYPE_LONG_BLOB").with_result_encoding(
+            Some("gbk"),
+            Some("gbk_chinese_ci"),
+            Some(28),
+        );
+
+        let value = serde_json::to_value(&meta).expect("column metadata should serialize");
+        assert_eq!(value["result_charset"], "gbk");
+        assert_eq!(value["result_collation"], "gbk_chinese_ci");
+        assert_eq!(value["result_collation_id"], 28);
+
+        let decoded: QueryColumnMeta =
+            serde_json::from_value(value).expect("column metadata should deserialize");
+        assert_eq!(decoded.result_charset.as_deref(), Some("gbk"));
+        assert_eq!(decoded.result_collation.as_deref(), Some("gbk_chinese_ci"));
+        assert_eq!(decoded.result_collation_id, Some(28));
+    }
+
+    #[test]
+    fn query_column_meta_omits_missing_result_encoding() {
+        let value = serde_json::to_value(QueryColumnMeta::new("id", "BIGINT"))
+            .expect("column metadata should serialize");
+
+        assert!(value.get("result_charset").is_none());
+        assert!(value.get("result_collation").is_none());
+        assert!(value.get("result_collation_id").is_none());
     }
 
     #[test]

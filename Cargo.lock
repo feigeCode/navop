@@ -3018,6 +3018,7 @@ dependencies = [
  "hex",
  "moka",
  "mysql_async",
+ "mysql_common",
  "one-core",
  "oracle",
  "proptest",

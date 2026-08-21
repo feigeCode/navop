@@ -518,7 +518,26 @@ fn method_requires_auto_conn_id(method_name: &str) -> bool {
 
 /// 把 v2 wire 的列描述转成宿主侧的 `QueryColumnMeta`。
 fn column_spec_to_meta(spec: &ColumnSpec) -> QueryColumnMeta {
-    let meta = QueryColumnMeta::new(spec.name.clone(), spec.type_str.clone());
+    let result_charset = spec
+        .extra
+        .get("result_charset")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let result_collation = spec
+        .extra
+        .get("result_collation")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let result_collation_id = spec
+        .extra
+        .get("result_collation_id")
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok());
+    let meta = QueryColumnMeta::new(spec.name.clone(), spec.type_str.clone()).with_result_encoding(
+        result_charset,
+        result_collation,
+        result_collation_id,
+    );
     match spec.nullable {
         Some(nullable) => meta.with_nullable(nullable),
         None => meta,
@@ -1261,6 +1280,40 @@ mod tests {
         let spec = ColumnSpec::new("id", "BIGINT", ColumnTypeKind::I64).nullable(false);
         let meta = column_spec_to_meta(&spec);
         assert!(!meta.nullable);
+    }
+
+    #[test]
+    fn column_spec_to_meta_reads_optional_result_encoding() {
+        let spec = ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(
+            serde_json::json!({
+                "result_charset": "gbk",
+                "result_collation": "gbk_chinese_ci",
+                "result_collation_id": 28
+            }),
+        );
+
+        let meta = column_spec_to_meta(&spec);
+
+        assert_eq!(meta.result_charset.as_deref(), Some("gbk"));
+        assert_eq!(meta.result_collation.as_deref(), Some("gbk_chinese_ci"));
+        assert_eq!(meta.result_collation_id, Some(28));
+    }
+
+    #[test]
+    fn column_spec_to_meta_ignores_malformed_result_encoding() {
+        let spec = ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(
+            serde_json::json!({
+                "result_charset": 45,
+                "result_collation": false,
+                "result_collation_id": "28"
+            }),
+        );
+
+        let meta = column_spec_to_meta(&spec);
+
+        assert!(meta.result_charset.is_none());
+        assert!(meta.result_collation.is_none());
+        assert!(meta.result_collation_id.is_none());
     }
 
     #[test]

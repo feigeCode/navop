@@ -19,12 +19,30 @@ struct PagedConnection {
     pages: Arc<Mutex<Vec<Vec<Vec<Option<String>>>>>>,
 }
 
+struct MySqlBinaryTextConnection {
+    config: DbConnectionConfig,
+    queries: Arc<Mutex<Vec<String>>>,
+}
+
 impl PagedConnection {
     fn new(pages: Vec<Vec<Vec<Option<String>>>>) -> Self {
         Self {
             config: test_config(),
             queries: Arc::new(Mutex::new(Vec::new())),
             pages: Arc::new(Mutex::new(pages)),
+        }
+    }
+
+    fn queries(&self) -> Vec<String> {
+        self.queries.lock().unwrap().clone()
+    }
+}
+
+impl MySqlBinaryTextConnection {
+    fn new() -> Self {
+        Self {
+            config: test_config(),
+            queries: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -84,6 +102,158 @@ impl DbConnection for PagedConnection {
             column_meta,
             rows,
             binary_cells: vec![],
+            elapsed_ms: 1,
+        }))
+    }
+
+    async fn current_database(&self) -> std::result::Result<Option<String>, DbError> {
+        Ok(Some("app".to_string()))
+    }
+
+    async fn switch_database(&self, _database: &str) -> std::result::Result<(), DbError> {
+        Ok(())
+    }
+
+    async fn execute_streaming(
+        &self,
+        _plugin: &dyn DatabasePlugin,
+        _source: SqlSource,
+        _options: ExecOptions,
+        _sender: mpsc::Sender<StreamingProgress>,
+    ) -> std::result::Result<(), DbError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DbConnection for MySqlBinaryTextConnection {
+    fn config(&self) -> &DbConnectionConfig {
+        &self.config
+    }
+
+    fn set_config_database(&mut self, database: Option<String>) {
+        self.config.database = database;
+    }
+
+    async fn connect(&mut self) -> std::result::Result<(), DbError> {
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> std::result::Result<(), DbError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        _plugin: &dyn DatabasePlugin,
+        _script: &str,
+        _options: ExecOptions,
+    ) -> std::result::Result<Vec<SqlResult>, DbError> {
+        Ok(Vec::new())
+    }
+
+    async fn query(&self, query: &str) -> std::result::Result<SqlResult, DbError> {
+        self.queries.lock().unwrap().push(query.to_string());
+
+        if query.contains("INFORMATION_SCHEMA.COLUMNS") {
+            return Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: [
+                    "COLUMN_NAME",
+                    "COLUMN_TYPE",
+                    "IS_NULLABLE",
+                    "COLUMN_KEY",
+                    "COLUMN_DEFAULT",
+                    "COLUMN_COMMENT",
+                    "CHARACTER_SET_NAME",
+                    "COLLATION_NAME",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+                column_meta: [
+                    "COLUMN_NAME",
+                    "COLUMN_TYPE",
+                    "IS_NULLABLE",
+                    "COLUMN_KEY",
+                    "COLUMN_DEFAULT",
+                    "COLUMN_COMMENT",
+                    "CHARACTER_SET_NAME",
+                    "COLLATION_NAME",
+                ]
+                .into_iter()
+                .map(|name| QueryColumnMeta::new(name, "VARCHAR"))
+                .collect(),
+                rows: vec![
+                    vec![
+                        Some("id".to_string()),
+                        Some("BIGINT".to_string()),
+                        Some("NO".to_string()),
+                        Some("PRI".to_string()),
+                        None,
+                        Some(String::new()),
+                        None,
+                        None,
+                    ],
+                    vec![
+                        Some("payload".to_string()),
+                        Some("LONGTEXT".to_string()),
+                        Some("YES".to_string()),
+                        Some(String::new()),
+                        None,
+                        Some(String::new()),
+                        Some("utf8mb4".to_string()),
+                        Some("utf8mb4_0900_ai_ci".to_string()),
+                    ],
+                    vec![
+                        Some("raw".to_string()),
+                        Some("LONGBLOB".to_string()),
+                        Some("YES".to_string()),
+                        Some(String::new()),
+                        None,
+                        Some(String::new()),
+                        None,
+                        Some("binary".to_string()),
+                    ],
+                ],
+                binary_cells: vec![],
+                elapsed_ms: 1,
+            }));
+        }
+
+        Ok(SqlResult::Query(QueryResult {
+            sql: query.to_string(),
+            columns: vec!["id".to_string(), "payload".to_string(), "raw".to_string()],
+            column_meta: vec![
+                QueryColumnMeta::new("id", "MYSQL_TYPE_LONGLONG"),
+                QueryColumnMeta::new("payload", "MYSQL_TYPE_LONG_BLOB").with_result_encoding(
+                    Some("binary"),
+                    Some("binary"),
+                    Some(63),
+                ),
+                QueryColumnMeta::new("raw", "MYSQL_TYPE_LONG_BLOB").with_result_encoding(
+                    Some("binary"),
+                    Some("binary"),
+                    Some(63),
+                ),
+            ],
+            rows: vec![vec![
+                Some("1".to_string()),
+                Some("0x74727565".to_string()),
+                Some("0x000102ff".to_string()),
+            ]],
+            binary_cells: vec![
+                BinaryCell {
+                    row_index: 0,
+                    column_index: 1,
+                    bytes: b"true".to_vec(),
+                },
+                BinaryCell {
+                    row_index: 0,
+                    column_index: 2,
+                    bytes: vec![0x00, 0x01, 0x02, 0xff],
+                },
+            ],
             elapsed_ms: 1,
         }))
     }
@@ -315,6 +485,40 @@ fn sql_dump_prefers_binary_sidecar_without_guessing_from_display_text() {
     .expect("valid query result should render");
 
     assert!(output.contains("VALUES (X'0001ff', '0x0001ff');"));
+}
+
+#[tokio::test]
+async fn mysql_sql_export_normalizes_longtext_and_preserves_longblob_binary_literals() {
+    let connection = MySqlBinaryTextConnection::new();
+    let config = ExportConfig {
+        database: "app".to_string(),
+        tables: vec!["binary_text".to_string()],
+        ..ExportConfig::default()
+    };
+    let mut output = String::new();
+
+    let rows = export_table_data_in_pages(
+        &MySqlPlugin::new(),
+        &connection,
+        &config,
+        "binary_text",
+        false,
+        &mut output,
+        &|_| {},
+    )
+    .await
+    .expect("MySQL SQL export should reconcile text and binary schema semantics");
+
+    assert_eq!(rows, 1);
+    assert!(output.contains("VALUES (1, 'true', X'000102ff');"));
+    assert!(!output.contains("X'74727565'"));
+    assert_eq!(
+        connection.queries(),
+        vec![
+            "SELECT * FROM `app`.`binary_text` LIMIT 1000 OFFSET 0",
+            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, CHARACTER_SET_NAME, COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'app' AND TABLE_NAME = 'binary_text' ORDER BY ORDINAL_POSITION",
+        ]
+    );
 }
 
 #[test]
