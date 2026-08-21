@@ -86,6 +86,9 @@ pub struct PostgresPlugin;
 static POSTGRESQL_UI_MANIFEST: LazyLock<DatabaseUiManifest> =
     LazyLock::new(build_postgresql_ui_manifest);
 
+const POSTGRESQL_EXPORT_EXCLUDED_TABLES: &[&str] =
+    &["sys_stat_statements", "sys_stat_statements_all"];
+
 impl PostgresPlugin {
     pub fn new() -> Self {
         Self
@@ -97,6 +100,20 @@ impl PostgresPlugin {
         } else {
             format!("'{}'", comment.replace('\'', "''"))
         }
+    }
+
+    fn is_export_excluded_table(table: &str) -> bool {
+        POSTGRESQL_EXPORT_EXCLUDED_TABLES
+            .iter()
+            .any(|excluded| table.eq_ignore_ascii_case(excluded))
+    }
+
+    fn export_config_without_excluded_tables(config: &ExportConfig) -> ExportConfig {
+        let mut filtered = config.clone();
+        filtered
+            .tables
+            .retain(|table| !Self::is_export_excluded_table(table));
+        filtered
     }
 
     fn table_comment_sql(&self, table_name: &str, comment: &str) -> String {
@@ -308,6 +325,149 @@ fn postgres_string_literal(value: &str) -> String {
 
 fn postgres_routine_string_literal(value: &str) -> String {
     format!("E'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
+}
+
+fn postgres_metadata_row_value(row: &[Option<String>], index: usize) -> String {
+    row.get(index)
+        .and_then(|value| value.clone())
+        .unwrap_or_default()
+}
+
+fn parse_postgres_foreign_keys(rows: Vec<Vec<Option<String>>>) -> Vec<ForeignKeyDefinition> {
+    let mut foreign_keys = Vec::new();
+    let mut positions = HashMap::new();
+
+    for row in rows {
+        let name = postgres_metadata_row_value(&row, 0);
+        if name.is_empty() {
+            continue;
+        }
+
+        let index = *positions.entry(name.clone()).or_insert_with(|| {
+            foreign_keys.push(ForeignKeyDefinition {
+                name: name.clone(),
+                columns: Vec::new(),
+                ref_table: postgres_metadata_row_value(&row, 3),
+                ref_schema: Some(postgres_metadata_row_value(&row, 2))
+                    .filter(|value| !value.is_empty()),
+                ref_columns: Vec::new(),
+                on_delete: postgres_metadata_row_value(&row, 5),
+                on_update: postgres_metadata_row_value(&row, 6),
+            });
+            foreign_keys.len() - 1
+        });
+
+        foreign_keys[index]
+            .columns
+            .push(postgres_metadata_row_value(&row, 1));
+        foreign_keys[index]
+            .ref_columns
+            .push(postgres_metadata_row_value(&row, 4));
+    }
+
+    foreign_keys
+}
+
+fn qualify_postgres_foreign_key_reference(definition: &str, referenced_table: &str) -> String {
+    const REFERENCES: &str = " REFERENCES ";
+
+    let Some(references_offset) = find_unquoted_postgres_token(definition, REFERENCES) else {
+        return definition.to_string();
+    };
+    let relation_start = references_offset + REFERENCES.len();
+    let relation_name_start = if definition[relation_start..].starts_with("ONLY ") {
+        relation_start + "ONLY ".len()
+    } else {
+        relation_start
+    };
+
+    let mut quoted = false;
+    let mut chars = definition[relation_name_start..].char_indices().peekable();
+    let mut relation_end = None;
+    while let Some((offset, ch)) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek().is_some_and(|(_, next)| *next == '"') => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            '(' if !quoted => {
+                relation_end = Some(relation_name_start + offset);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let Some(relation_end) = relation_end else {
+        return definition.to_string();
+    };
+    format!(
+        "{}{}{}",
+        &definition[..relation_name_start],
+        referenced_table,
+        &definition[relation_end..]
+    )
+}
+
+fn find_unquoted_postgres_token(value: &str, token: &str) -> Option<usize> {
+    let bytes = value.as_bytes();
+    let token = token.as_bytes();
+    let mut quoted = false;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            if quoted && bytes.get(index + 1) == Some(&b'"') {
+                index += 2;
+                continue;
+            }
+            quoted = !quoted;
+        } else if !quoted && bytes[index..].starts_with(token) {
+            return Some(index);
+        }
+        index += 1;
+    }
+
+    None
+}
+
+fn qualify_postgres_index_table_reference(definition: &str, table: &str) -> String {
+    const ON: &str = " ON ";
+
+    let Some(on_offset) = find_unquoted_postgres_token(definition, ON) else {
+        return definition.to_string();
+    };
+    let relation_start = on_offset + ON.len();
+    let relation_name_start = if definition[relation_start..].starts_with("ONLY ") {
+        relation_start + "ONLY ".len()
+    } else {
+        relation_start
+    };
+
+    let mut quoted = false;
+    let mut chars = definition[relation_name_start..].char_indices().peekable();
+    let mut relation_end = None;
+    while let Some((offset, ch)) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek().is_some_and(|(_, next)| *next == '"') => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            '(' | ' ' | '\t' | '\n' if !quoted => {
+                relation_end = Some(relation_name_start + offset);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let relation_end = relation_end.unwrap_or(definition.len());
+    format!(
+        "{}{}{}",
+        &definition[..relation_name_start],
+        table,
+        &definition[relation_end..]
+    )
 }
 
 fn postgres_user_password(request: &DatabaseUserOperationRequest) -> &str {
@@ -1713,6 +1873,75 @@ impl DatabasePlugin for PostgresPlugin {
         })
     }
 
+    async fn list_foreign_keys(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyDefinition>> {
+        let schema_val = schema.unwrap_or_else(|| "public".to_string());
+        let sql = format!(
+            "SELECT \
+                c.conname AS constraint_name, \
+                source_att.attname AS column_name, \
+                target_ns.nspname AS referenced_schema, \
+                target.relname AS referenced_table, \
+                target_att.attname AS referenced_column, \
+                CASE c.confdeltype \
+                    WHEN 'a' THEN 'NO ACTION' \
+                    WHEN 'r' THEN 'RESTRICT' \
+                    WHEN 'c' THEN 'CASCADE' \
+                    WHEN 'n' THEN 'SET NULL' \
+                    WHEN 'd' THEN 'SET DEFAULT' \
+                    ELSE '' \
+                END AS on_delete, \
+                CASE c.confupdtype \
+                    WHEN 'a' THEN 'NO ACTION' \
+                    WHEN 'r' THEN 'RESTRICT' \
+                    WHEN 'c' THEN 'CASCADE' \
+                    WHEN 'n' THEN 'SET NULL' \
+                    WHEN 'd' THEN 'SET DEFAULT' \
+                    ELSE '' \
+                END AS on_update, \
+                keys.ordinality \
+             FROM pg_catalog.pg_constraint c \
+             JOIN pg_catalog.pg_class source ON source.oid = c.conrelid \
+             JOIN pg_catalog.pg_namespace source_ns ON source_ns.oid = source.relnamespace \
+             JOIN pg_catalog.pg_class target ON target.oid = c.confrelid \
+             JOIN pg_catalog.pg_namespace target_ns ON target_ns.oid = target.relnamespace \
+             JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY \
+                AS keys(source_attnum, target_attnum, ordinality) ON TRUE \
+             JOIN pg_catalog.pg_attribute source_att \
+                ON source_att.attrelid = source.oid \
+               AND source_att.attnum = keys.source_attnum \
+               AND source_att.attnum > 0 \
+               AND NOT source_att.attisdropped \
+             JOIN pg_catalog.pg_attribute target_att \
+                ON target_att.attrelid = target.oid \
+               AND target_att.attnum = keys.target_attnum \
+               AND target_att.attnum > 0 \
+               AND NOT target_att.attisdropped \
+             WHERE c.contype = 'f' \
+               AND source_ns.nspname = '{}' \
+               AND source.relname = '{}' \
+               AND source.relkind IN ('r', 'p') \
+             ORDER BY c.conname, keys.ordinality",
+            schema_val.replace('\'', "''"),
+            table.replace('\'', "''")
+        );
+
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to list foreign keys: {}", error))?;
+
+        match result {
+            SqlResult::Query(query_result) => Ok(parse_postgres_foreign_keys(query_result.rows)),
+            _ => Err(anyhow::anyhow!("Unexpected result type")),
+        }
+    }
+
     async fn list_table_checks(
         &self,
         _connection: &dyn DbConnection,
@@ -2287,6 +2516,200 @@ impl DatabasePlugin for PostgresPlugin {
         def
     }
 
+    async fn export_table_create_sql(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<String> {
+        let schema_name = schema.unwrap_or("public");
+        let escaped_schema = schema_name.replace('\'', "''");
+        let escaped_table = table.replace('\'', "''");
+        let columns = self
+            .list_columns(connection, database, Some(schema_name.to_string()), table)
+            .await?;
+        if columns.is_empty() {
+            return Ok(String::new());
+        }
+
+        let constraint_sql = format!(
+            "SELECT \
+                c.conname AS constraint_name, \
+                c.contype AS constraint_type, \
+                pg_get_constraintdef(c.oid, true) AS definition, \
+                referenced_ns.nspname AS referenced_schema, \
+                referenced.relname AS referenced_table \
+             FROM pg_catalog.pg_constraint c \
+             JOIN pg_catalog.pg_class t ON t.oid = c.conrelid \
+             JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
+             LEFT JOIN pg_catalog.pg_class referenced ON referenced.oid = c.confrelid \
+             LEFT JOIN pg_catalog.pg_namespace referenced_ns \
+                ON referenced_ns.oid = referenced.relnamespace \
+             WHERE n.nspname = '{}' \
+               AND t.relname = '{}' \
+               AND t.relkind IN ('r', 'p') \
+               AND c.contype IN ('p', 'u', 'c', 'f', 'x') \
+             ORDER BY \
+                CASE c.contype \
+                    WHEN 'p' THEN 0 \
+                    WHEN 'u' THEN 1 \
+                    WHEN 'c' THEN 2 \
+                    WHEN 'x' THEN 3 \
+                    WHEN 'f' THEN 4 \
+                    ELSE 5 \
+                END, \
+                c.conname",
+            escaped_schema, escaped_table
+        );
+        let constraints = match connection
+            .query(&constraint_sql)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to export table constraints: {}", error))?
+        {
+            SqlResult::Query(result) => result
+                .rows
+                .into_iter()
+                .filter_map(|row| {
+                    let name = postgres_metadata_row_value(&row, 0);
+                    let constraint_type = postgres_metadata_row_value(&row, 1);
+                    let mut definition = postgres_metadata_row_value(&row, 2);
+                    if constraint_type == "f" {
+                        let referenced_schema = postgres_metadata_row_value(&row, 3);
+                        let referenced_table = postgres_metadata_row_value(&row, 4);
+                        if !referenced_schema.is_empty() && !referenced_table.is_empty() {
+                            let referenced_table = format!(
+                                "{}.{}",
+                                self.quote_identifier(&referenced_schema),
+                                self.quote_identifier(&referenced_table)
+                            );
+                            definition = qualify_postgres_foreign_key_reference(
+                                &definition,
+                                &referenced_table,
+                            );
+                        }
+                    }
+                    (!name.is_empty() && !definition.is_empty()).then_some((name, definition))
+                })
+                .collect::<Vec<_>>(),
+            _ => return Err(anyhow::anyhow!("Unexpected constraint result type")),
+        };
+
+        let table_comment_sql = format!(
+            "SELECT obj_description(t.oid, 'pg_class') AS export_table_comment \
+             FROM pg_catalog.pg_class t \
+             JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
+             WHERE n.nspname = '{}' \
+               AND t.relname = '{}'",
+            escaped_schema, escaped_table
+        );
+        let table_comment = match connection
+            .query(&table_comment_sql)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to export table comment: {}", error))?
+        {
+            SqlResult::Query(result) => result
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .and_then(|value| value.clone()),
+            _ => return Err(anyhow::anyhow!("Unexpected table comment result type")),
+        };
+
+        let index_sql = format!(
+            "SELECT pg_get_indexdef(i.indexrelid, 0, true) AS index_definition \
+             FROM pg_catalog.pg_index i \
+             JOIN pg_catalog.pg_class t ON t.oid = i.indrelid \
+             JOIN pg_catalog.pg_class index_class ON index_class.oid = i.indexrelid \
+             JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
+             WHERE n.nspname = '{}' \
+               AND t.relname = '{}' \
+               AND t.relkind IN ('r', 'p') \
+               AND i.indisvalid \
+               AND i.indisready \
+               AND i.indislive \
+               AND NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_catalog.pg_constraint c \
+                    WHERE c.conindid = i.indexrelid \
+               ) \
+             ORDER BY index_class.relname",
+            escaped_schema, escaped_table
+        );
+        let indexes = match connection
+            .query(&index_sql)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to export table indexes: {}", error))?
+        {
+            SqlResult::Query(result) => result
+                .rows
+                .into_iter()
+                .filter_map(|row| {
+                    row.first()
+                        .and_then(|value| value.clone())
+                        .map(|definition| {
+                            qualify_postgres_index_table_reference(
+                                definition.trim_end_matches(';'),
+                                &self.format_export_table_reference(
+                                    database,
+                                    Some(schema_name),
+                                    table,
+                                ),
+                            )
+                        })
+                        .filter(|definition| !definition.is_empty())
+                })
+                .collect::<Vec<_>>(),
+            _ => return Err(anyhow::anyhow!("Unexpected index result type")),
+        };
+
+        let table_ref = self.format_export_table_reference(database, Some(schema_name), table);
+        let mut definitions = columns
+            .iter()
+            .map(|column| {
+                let mut column_without_primary_key = column.clone();
+                column_without_primary_key.is_primary_key = false;
+                format!(
+                    "    {}",
+                    self.build_column_definition(&column_without_primary_key, true)
+                )
+            })
+            .collect::<Vec<_>>();
+        definitions.extend(constraints.into_iter().map(|(name, definition)| {
+            format!(
+                "    CONSTRAINT {} {}",
+                self.quote_identifier(&name),
+                definition
+            )
+        }));
+
+        let mut statements = vec![format!(
+            "CREATE TABLE {} (\n{}\n)",
+            table_ref,
+            definitions.join(",\n")
+        )];
+        if let Some(comment) = table_comment {
+            statements.push(format!(
+                "COMMENT ON TABLE {} IS {}",
+                table_ref,
+                Self::comment_literal(&comment)
+            ));
+        }
+        statements.extend(columns.iter().filter_map(|column| {
+            column.comment.as_ref().map(|comment| {
+                format!(
+                    "COMMENT ON COLUMN {}.{} IS {}",
+                    table_ref,
+                    self.quote_identifier(&column.name),
+                    Self::comment_literal(comment)
+                )
+            })
+        }));
+        statements.extend(indexes);
+
+        Ok(statements.join(";\n"))
+    }
+
     fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
         Some(
             r#"SELECT
@@ -2795,8 +3218,14 @@ ORDER BY rolname;"#
         config: &ExportConfig,
         progress_tx: Option<ExportProgressSender>,
     ) -> Result<ExportResult> {
-        crate::plugin::default_export_data_with_progress(self, connection, config, progress_tx)
-            .await
+        let filtered_config = Self::export_config_without_excluded_tables(config);
+        crate::plugin::default_export_data_with_progress(
+            self,
+            connection,
+            &filtered_config,
+            progress_tx,
+        )
+        .await
     }
 }
 
@@ -2824,6 +3253,29 @@ mod tests {
 
     fn create_plugin() -> PostgresPlugin {
         PostgresPlugin::new()
+    }
+
+    #[test]
+    fn postgres_export_excludes_stat_statement_tables() {
+        let config = ExportConfig {
+            tables: vec![
+                "users".to_string(),
+                "sys_stat_statements".to_string(),
+                "orders".to_string(),
+                "sys_stat_statements_all".to_string(),
+                "SYS_STAT_STATEMENTS".to_string(),
+            ],
+            ..ExportConfig::default()
+        };
+
+        let filtered = PostgresPlugin::export_config_without_excluded_tables(&config);
+
+        assert_eq!(filtered.tables, vec!["users", "orders"]);
+        assert_eq!(
+            config.tables.len(),
+            5,
+            "filtering must not mutate the caller's export config"
+        );
     }
 
     fn numeric_column(scale: u32) -> ColumnDefinition {
@@ -2896,6 +3348,39 @@ mod tests {
     struct RoutineMetadataConnection {
         config: DbConnectionConfig,
         queries: Mutex<Vec<String>>,
+    }
+
+    struct ExportDdlMetadataConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl ExportDdlMetadataConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "export-ddl-metadata".to_string(),
+                    name: "Export DDL metadata".to_string(),
+                    database_type: DatabaseType::PostgreSQL,
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    username: "postgres".to_string(),
+                    password: String::new(),
+                    database: Some("app".to_string()),
+                    service_name: None,
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    credential_reference: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
     }
 
     impl RoutineMetadataConnection {
@@ -3030,6 +3515,199 @@ mod tests {
                 ]]
             } else {
                 vec![]
+            };
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(self.config.database.clone())
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl DbConnection for ExportDdlMetadataConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query(
+                "execute should not be used by export DDL metadata tests",
+            ))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            let rows = if query.contains("WITH ORDINALITY") && query.contains("c.contype = 'f'") {
+                vec![
+                    vec![
+                        Some("fk_order_items_order".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("audit".to_string()),
+                        Some("orders".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("CASCADE".to_string()),
+                        Some("RESTRICT".to_string()),
+                        Some("1".to_string()),
+                    ],
+                    vec![
+                        Some("fk_order_items_order".to_string()),
+                        Some("order_id".to_string()),
+                        Some("audit".to_string()),
+                        Some("orders".to_string()),
+                        Some("id".to_string()),
+                        Some("CASCADE".to_string()),
+                        Some("RESTRICT".to_string()),
+                        Some("2".to_string()),
+                    ],
+                ]
+            } else if query.contains("col_description(a.attrelid, a.attnum)") {
+                vec![
+                    vec![
+                        Some("order_id".to_string()),
+                        Some("integer".to_string()),
+                        Some("NO".to_string()),
+                        Some("nextval('orders_order_id_seq'::regclass)".to_string()),
+                        Some("t".to_string()),
+                        Some("Order identifier".to_string()),
+                    ],
+                    vec![
+                        Some("part_id".to_string()),
+                        Some("integer".to_string()),
+                        Some("NO".to_string()),
+                        None,
+                        Some("t".to_string()),
+                        Some("Part identifier".to_string()),
+                    ],
+                    vec![
+                        Some("customer_id".to_string()),
+                        Some("integer".to_string()),
+                        Some("NO".to_string()),
+                        None,
+                        Some("f".to_string()),
+                        Some("Customer's reference".to_string()),
+                    ],
+                    vec![
+                        Some("email".to_string()),
+                        Some("text".to_string()),
+                        Some("YES".to_string()),
+                        None,
+                        Some("f".to_string()),
+                        Some("Email address".to_string()),
+                    ],
+                    vec![
+                        Some("amount".to_string()),
+                        Some("numeric".to_string()),
+                        Some("NO".to_string()),
+                        Some("0".to_string()),
+                        Some("f".to_string()),
+                        Some("Order amount".to_string()),
+                    ],
+                ]
+            } else if query.contains("pg_get_constraintdef(c.oid, true)") {
+                vec![
+                    vec![
+                        Some("orders_pkey".to_string()),
+                        Some("p".to_string()),
+                        Some("PRIMARY KEY (order_id, part_id)".to_string()),
+                        None,
+                        None,
+                    ],
+                    vec![
+                        Some("orders_email_key".to_string()),
+                        Some("u".to_string()),
+                        Some("UNIQUE (email)".to_string()),
+                        None,
+                        None,
+                    ],
+                    vec![
+                        Some("orders_amount_check".to_string()),
+                        Some("c".to_string()),
+                        Some("CHECK (amount > 0::numeric)".to_string()),
+                        None,
+                        None,
+                    ],
+                    vec![
+                        Some("orders_email_exclude".to_string()),
+                        Some("x".to_string()),
+                        Some(
+                            "EXCLUDE USING gist (email WITH =) WHERE (email IS NOT NULL)"
+                                .to_string(),
+                        ),
+                        None,
+                        None,
+                    ],
+                    vec![
+                        Some("fk_orders_customer".to_string()),
+                        Some("f".to_string()),
+                        Some(
+                            "FOREIGN KEY (customer_id, part_id) REFERENCES customers(id, part_id) ON UPDATE RESTRICT ON DELETE CASCADE"
+                                .to_string(),
+                        ),
+                        Some("public".to_string()),
+                        Some("customers".to_string()),
+                    ],
+                ]
+            } else if query.contains("pg_get_indexdef") {
+                vec![
+                    vec![Some(
+                        "CREATE INDEX idx_orders_customer ON orders USING btree (customer_id)"
+                            .to_string(),
+                    )],
+                    vec![Some(
+                        "CREATE UNIQUE INDEX idx_orders_lower_email ON orders USING btree (lower(email)) WHERE (email IS NOT NULL)"
+                            .to_string(),
+                    )],
+                ]
+            } else if query.contains("export_table_comment") {
+                vec![vec![Some("Customer's orders".to_string())]]
+            } else {
+                return Err(DbError::query(format!(
+                    "unexpected export DDL metadata query: {query}"
+                )));
             };
 
             Ok(SqlResult::Query(QueryResult {
@@ -3270,6 +3948,141 @@ mod tests {
                 .iter()
                 .any(|query| query.contains("col_description(a.attrelid, a.attnum)"))
         );
+    }
+
+    #[tokio::test]
+    async fn postgres_export_table_create_sql_preserves_comments_constraints_and_indexes() {
+        let plugin = create_plugin();
+        let connection = ExportDdlMetadataConnection::new();
+
+        let sql = plugin
+            .export_table_create_sql(&connection, "app", None, "orders")
+            .await
+            .expect("export PostgreSQL table DDL");
+
+        assert!(sql.contains(r#"CREATE TABLE "public"."orders" ("#));
+        assert!(sql.contains(r#""order_id" integer NOT NULL DEFAULT nextval("#));
+        assert!(!sql.contains(r#""order_id" integer NOT NULL DEFAULT nextval('orders_order_id_seq'::regclass) PRIMARY KEY"#));
+        assert!(!sql.contains(r#""part_id" integer NOT NULL PRIMARY KEY"#));
+        assert!(sql.contains(r#"CONSTRAINT "orders_pkey" PRIMARY KEY (order_id, part_id)"#));
+        assert!(sql.contains(r#"CONSTRAINT "orders_email_key" UNIQUE (email)"#));
+        assert!(sql.contains(r#"CONSTRAINT "orders_amount_check" CHECK (amount > 0::numeric)"#));
+        assert!(sql.contains(
+            r#"CONSTRAINT "orders_email_exclude" EXCLUDE USING gist (email WITH =) WHERE (email IS NOT NULL)"#
+        ));
+        assert!(sql.contains(
+            r#"CONSTRAINT "fk_orders_customer" FOREIGN KEY (customer_id, part_id) REFERENCES "public"."customers"(id, part_id) ON UPDATE RESTRICT ON DELETE CASCADE"#
+        ));
+        assert!(sql.contains(r#"COMMENT ON TABLE "public"."orders" IS 'Customer''s orders'"#));
+        assert!(sql.contains(
+            r#"COMMENT ON COLUMN "public"."orders"."customer_id" IS 'Customer''s reference'"#
+        ));
+        assert!(sql.contains(
+            r#"CREATE INDEX idx_orders_customer ON "public"."orders" USING btree (customer_id)"#
+        ));
+        assert!(sql.contains(
+            r#"CREATE UNIQUE INDEX idx_orders_lower_email ON "public"."orders" USING btree (lower(email)) WHERE (email IS NOT NULL)"#
+        ));
+        assert_eq!(1, sql.matches(r#"CONSTRAINT "orders_pkey""#).count());
+        assert_eq!(1, sql.matches(r#"CONSTRAINT "orders_email_key""#).count());
+        assert!(!sql.ends_with(';'));
+
+        let queries = connection.queries();
+        assert!(
+            queries
+                .iter()
+                .any(|query| query.contains("pg_get_constraintdef(c.oid, true)"))
+        );
+        assert!(
+            queries
+                .iter()
+                .any(|query| query.contains("pg_get_indexdef"))
+        );
+        assert!(
+            queries
+                .iter()
+                .any(|query| query.contains("obj_description"))
+        );
+        assert!(
+            queries
+                .iter()
+                .any(|query| query.contains("col_description"))
+        );
+    }
+
+    #[test]
+    fn postgres_foreign_key_export_qualifies_referenced_schema() {
+        assert_eq!(
+            r#"FOREIGN KEY (customer_id) REFERENCES "audit"."customers"(id) ON DELETE CASCADE"#,
+            qualify_postgres_foreign_key_reference(
+                "FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE",
+                r#""audit"."customers""#,
+            )
+        );
+        assert_eq!(
+            r#"FOREIGN KEY (customer_id) REFERENCES ONLY "audit"."odd(table)"(id)"#,
+            qualify_postgres_foreign_key_reference(
+                r#"FOREIGN KEY (customer_id) REFERENCES ONLY "odd(table)"(id)"#,
+                r#""audit"."odd(table)""#,
+            )
+        );
+    }
+
+    #[test]
+    fn postgres_index_export_qualifies_table_schema() {
+        assert_eq!(
+            r#"CREATE INDEX "idx ON customer" ON "audit"."customers" USING btree (id)"#,
+            qualify_postgres_index_table_reference(
+                r#"CREATE INDEX "idx ON customer" ON customers USING btree (id)"#,
+                r#""audit"."customers""#,
+            )
+        );
+        assert_eq!(
+            r#"CREATE UNIQUE INDEX idx_customer ON ONLY "audit"."odd table"(id)"#,
+            qualify_postgres_index_table_reference(
+                r#"CREATE UNIQUE INDEX idx_customer ON ONLY "odd table"(id)"#,
+                r#""audit"."odd table""#,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_list_foreign_keys_preserves_composite_column_order_and_actions() {
+        let plugin = create_plugin();
+        let connection = ExportDdlMetadataConnection::new();
+
+        let foreign_keys = plugin
+            .list_foreign_keys(
+                &connection,
+                "app",
+                Some("public".to_string()),
+                "order_items",
+            )
+            .await
+            .expect("list PostgreSQL foreign keys");
+
+        assert_eq!(1, foreign_keys.len());
+        assert_eq!("fk_order_items_order", foreign_keys[0].name);
+        assert_eq!(
+            vec!["tenant_id".to_string(), "order_id".to_string()],
+            foreign_keys[0].columns
+        );
+        assert_eq!(Some("audit".to_string()), foreign_keys[0].ref_schema);
+        assert_eq!("orders", foreign_keys[0].ref_table);
+        assert_eq!(
+            vec!["tenant_id".to_string(), "id".to_string()],
+            foreign_keys[0].ref_columns
+        );
+        assert_eq!("CASCADE", foreign_keys[0].on_delete);
+        assert_eq!("RESTRICT", foreign_keys[0].on_update);
+
+        let query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("c.contype = 'f'"))
+            .expect("foreign key metadata query");
+        assert!(query.contains("WITH ORDINALITY"));
+        assert!(query.contains("ORDER BY c.conname, keys.ordinality"));
     }
 
     #[tokio::test]

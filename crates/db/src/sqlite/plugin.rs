@@ -44,6 +44,11 @@ impl SqlitePlugin {
         Self
     }
 
+    fn normalize_catalog_sql(sql: &str) -> Option<String> {
+        let sql = sql.trim().trim_end_matches(';').trim_end();
+        (!sql.is_empty()).then(|| sql.to_string())
+    }
+
     fn foreign_key_changed(left: &ForeignKeyDefinition, right: &ForeignKeyDefinition) -> bool {
         left.columns != right.columns
             || left.ref_table != right.ref_table
@@ -1261,19 +1266,43 @@ impl DatabasePlugin for SqlitePlugin {
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='{}'",
             table.replace('\'', "''")
         );
-        let result = connection
+        let table_result = connection
             .query(&query)
             .await
             .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?;
 
-        if let SqlResult::Query(query_result) = result {
-            if let Some(row) = query_result.rows.first() {
-                if let Some(Some(create_sql)) = row.first() {
-                    return Ok(create_sql.clone());
-                }
+        let mut statements = match table_result {
+            SqlResult::Query(query_result) => query_result
+                .rows
+                .into_iter()
+                .filter_map(|row| row.first().cloned().flatten())
+                .filter_map(|sql| Self::normalize_catalog_sql(&sql))
+                .collect::<Vec<_>>(),
+            SqlResult::Error(sql_error_info) => {
+                return Err(anyhow::anyhow!("Query failed: {}", sql_error_info.message));
             }
+            SqlResult::Exec(_) => Vec::new(),
+        };
+
+        let index_query = format!(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='{}' AND sql IS NOT NULL ORDER BY name",
+            table.replace('\'', "''")
+        );
+        let index_result = connection
+            .query(&index_query)
+            .await
+            .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?;
+        if let SqlResult::Query(query_result) = index_result {
+            statements.extend(
+                query_result
+                    .rows
+                    .into_iter()
+                    .filter_map(|row| row.first().cloned().flatten())
+                    .filter_map(|sql| Self::normalize_catalog_sql(&sql)),
+            );
         }
-        Ok(String::new())
+
+        Ok(statements.join(";\n"))
     }
 
     fn get_data_types(&self) -> &[(&'static str, &'static str)] {
@@ -1466,12 +1495,43 @@ impl Default for SqlitePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::DbConnection;
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
+    use crate::sqlite::SqliteDbConnection;
     use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
+    use one_core::storage::{DatabaseType, DbConnectionConfig};
 
     fn create_plugin() -> SqlitePlugin {
         SqlitePlugin::new()
+    }
+
+    fn build_config(path: String) -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: "sqlite-plugin-test".to_string(),
+            name: "sqlite-plugin-test".to_string(),
+            database_type: DatabaseType::SQLite,
+            host: path,
+            port: 0,
+            workspace_id: None,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            proxy: None,
+            credential_reference: None,
+            extra_params: Default::default(),
+        }
+    }
+
+    async fn create_connection() -> (tempfile::TempDir, SqliteDbConnection) {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("sqlite-plugin-test.db");
+        let mut connection =
+            SqliteDbConnection::new(build_config(db_path.to_string_lossy().to_string()));
+        connection.connect().await.expect("sqlite should connect");
+        (temp_dir, connection)
     }
 
     // ==================== Basic Plugin Info Tests ====================
@@ -1565,6 +1625,75 @@ mod tests {
         assert!(sql.contains("RENAME TO"));
         assert!(sql.contains("\"old_name\""));
         assert!(sql.contains("\"new_name\""));
+    }
+
+    #[tokio::test]
+    async fn export_table_create_sql_includes_explicit_indexes() {
+        let (_temp_dir, mut connection) = create_connection().await;
+        connection
+            .query(
+                "CREATE TABLE parent (
+                    tenant_id INTEGER NOT NULL,
+                    id INTEGER NOT NULL,
+                    PRIMARY KEY (tenant_id, id)
+                );",
+            )
+            .await
+            .expect("parent table creation should succeed");
+        connection
+            .query(
+                "CREATE TABLE child (
+                    tenant_id INTEGER NOT NULL,
+                    id INTEGER NOT NULL,
+                    email TEXT NOT NULL,
+                    score INTEGER CHECK (score >= 0),
+                    PRIMARY KEY (tenant_id, id),
+                    FOREIGN KEY (tenant_id, id) REFERENCES parent (tenant_id, id)
+                );",
+            )
+            .await
+            .expect("child table creation should succeed");
+        connection
+            .query("CREATE UNIQUE INDEX idx_child_email ON child (email);")
+            .await
+            .expect("unique index creation should succeed");
+        connection
+            .query("CREATE INDEX idx_child_score ON child (score);")
+            .await
+            .expect("secondary index creation should succeed");
+
+        let ddl = create_plugin()
+            .export_table_create_sql(&connection, "main", None, "child")
+            .await
+            .expect("table DDL export should succeed");
+
+        assert!(ddl.contains("PRIMARY KEY (tenant_id, id)"));
+        assert!(ddl.contains("FOREIGN KEY (tenant_id, id)"));
+        assert!(ddl.contains("CHECK (score >= 0)"));
+        assert!(ddl.contains("CREATE UNIQUE INDEX idx_child_email"));
+        assert!(ddl.contains("CREATE INDEX idx_child_score"));
+        assert!(
+            !ddl.contains("sqlite_autoindex"),
+            "implicit SQLite indexes must not be exported"
+        );
+
+        let first_index_offset = ddl
+            .find("CREATE ")
+            .and_then(|table_offset| {
+                ddl[table_offset + "CREATE ".len()..]
+                    .find("CREATE ")
+                    .map(|offset| table_offset + "CREATE ".len() + offset)
+            })
+            .expect("export should contain table and index statements");
+        assert!(
+            ddl[..first_index_offset].trim_end().ends_with(';'),
+            "table and index DDL must be separated by a semicolon: {ddl}"
+        );
+
+        connection
+            .disconnect()
+            .await
+            .expect("sqlite should disconnect");
     }
 
     #[test]

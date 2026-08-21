@@ -80,6 +80,32 @@ impl OraclePlugin {
         Self
     }
 
+    fn sql_literal(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+
+    fn normalize_export_ddl(sql: &str) -> Option<String> {
+        let sql = sql.trim().trim_end_matches(';').trim_end();
+        (!sql.is_empty()).then(|| sql.to_string())
+    }
+
+    async fn export_query_rows(
+        connection: &dyn DbConnection,
+        query: &str,
+        context: &str,
+    ) -> Result<Vec<Vec<Option<String>>>> {
+        match connection.query(query).await {
+            Ok(SqlResult::Query(result)) => Ok(result.rows),
+            Ok(SqlResult::Exec(_)) => {
+                Err(anyhow::anyhow!("{context} returned an execution result"))
+            }
+            Ok(SqlResult::Error(error)) => {
+                Err(anyhow::anyhow!("{context} failed: {}", error.message))
+            }
+            Err(error) => Err(anyhow::anyhow!("{context} failed: {error}")),
+        }
+    }
+
     fn comment_literal(comment: &str) -> String {
         format!("'{}'", comment.replace('\'', "''"))
     }
@@ -1110,6 +1136,122 @@ impl DatabasePlugin for OraclePlugin {
             ),
             None => self.quote_identifier(table),
         }
+    }
+
+    async fn export_table_create_sql(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<String> {
+        let owner = if let Some(owner) = schema.filter(|owner| !owner.trim().is_empty()) {
+            owner.to_string()
+        } else if !database.trim().is_empty() {
+            database.to_string()
+        } else {
+            connection
+                .current_database()
+                .await
+                .map_err(|error| anyhow::anyhow!("Failed to resolve Oracle owner: {error}"))?
+                .filter(|owner| !owner.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("Oracle table owner is required for DDL export"))?
+        };
+        let owner_literal = Self::sql_literal(&owner);
+        let table_literal = Self::sql_literal(table);
+        let table_ref = format!(
+            "{}.{}",
+            self.quote_identifier(&owner),
+            self.quote_identifier(table)
+        );
+        let mut statements = Vec::new();
+
+        let table_ddl_query = format!(
+            "SELECT DBMS_METADATA.GET_DDL('TABLE', {table_literal}, {owner_literal}) FROM DUAL"
+        );
+        let table_rows =
+            Self::export_query_rows(connection, &table_ddl_query, "Oracle table DDL query").await?;
+        let table_ddl = table_rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|value| value.as_deref())
+            .and_then(Self::normalize_export_ddl)
+            .ok_or_else(|| anyhow::anyhow!("Oracle table DDL query returned empty DDL"))?;
+        statements.push(table_ddl);
+
+        let table_comment_query = format!(
+            "SELECT comments FROM ALL_TAB_COMMENTS \
+             WHERE owner = {owner_literal} AND table_name = {table_literal} \
+             AND table_type = 'TABLE'"
+        );
+        let table_comment_rows = Self::export_query_rows(
+            connection,
+            &table_comment_query,
+            "Oracle table comment query",
+        )
+        .await?;
+        if let Some(comment) = table_comment_rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|value| value.as_deref())
+            .filter(|comment| !comment.is_empty())
+        {
+            statements.push(format!(
+                "COMMENT ON TABLE {table_ref} IS {}",
+                Self::comment_literal(comment)
+            ));
+        }
+
+        let column_comment_query = format!(
+            "SELECT column_name, comments FROM ALL_COL_COMMENTS \
+             WHERE owner = {owner_literal} AND table_name = {table_literal} \
+             AND comments IS NOT NULL ORDER BY column_name"
+        );
+        let column_comment_rows = Self::export_query_rows(
+            connection,
+            &column_comment_query,
+            "Oracle column comment query",
+        )
+        .await?;
+        for row in column_comment_rows {
+            let Some(column_name) = row.first().and_then(|value| value.as_deref()) else {
+                continue;
+            };
+            let Some(comment) = row
+                .get(1)
+                .and_then(|value| value.as_deref())
+                .filter(|comment| !comment.is_empty())
+            else {
+                continue;
+            };
+            statements.push(format!(
+                "COMMENT ON COLUMN {table_ref}.{} IS {}",
+                self.quote_identifier(column_name),
+                Self::comment_literal(comment)
+            ));
+        }
+
+        let index_ddl_query = format!(
+            "SELECT DBMS_METADATA.GET_DDL('INDEX', i.index_name, i.owner) \
+             FROM ALL_INDEXES i \
+             WHERE i.table_owner = {owner_literal} AND i.table_name = {table_literal} \
+             AND NOT EXISTS ( \
+                 SELECT 1 FROM ALL_CONSTRAINTS c \
+                 WHERE c.owner = i.owner AND c.index_name = i.index_name \
+                   AND c.constraint_type IN ('P', 'U') \
+             ) \
+             ORDER BY i.index_name"
+        );
+        let index_rows =
+            Self::export_query_rows(connection, &index_ddl_query, "Oracle index DDL query").await?;
+        statements.extend(
+            index_rows
+                .into_iter()
+                .filter_map(|row| row.first().cloned().flatten())
+                .filter_map(|ddl| Self::normalize_export_ddl(&ddl)),
+        );
+
+        Ok(statements.join(";\n"))
     }
 
     fn generate_table_changes_sql(&self, request: &TableSaveRequest) -> String {
@@ -2908,6 +3050,7 @@ ORDER BY username;"#
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::{ExecOptions, SqlSource};
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{
@@ -2915,6 +3058,139 @@ mod tests {
         TableDesign, TableOptions, TableRowChange, TableSaveRequest,
     };
     use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    struct ExportDdlConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl ExportDdlConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "oracle-export-ddl".to_string(),
+                    name: "Oracle export DDL".to_string(),
+                    database_type: DatabaseType::Oracle,
+                    host: "localhost".to_string(),
+                    port: 1521,
+                    username: "APP".to_string(),
+                    password: String::new(),
+                    credential_reference: None,
+                    database: Some("APP".to_string()),
+                    service_name: Some("FREEPDB1".to_string()),
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DbConnection for ExportDdlConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by export tests"))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            let rows = if query.contains("GET_DDL('TABLE'") {
+                vec![vec![Some(
+                    "CREATE TABLE \"APP\".\"ORDERS\" (
+  \"TENANT_ID\" NUMBER GENERATED BY DEFAULT AS IDENTITY,
+  \"ORDER_ID\" NUMBER NOT NULL,
+  \"CUSTOMER_ID\" NUMBER,
+  CONSTRAINT \"ORDERS_PK\" PRIMARY KEY (\"TENANT_ID\", \"ORDER_ID\"),
+  CONSTRAINT \"ORDERS_CUSTOMER_FK\" FOREIGN KEY (\"CUSTOMER_ID\") REFERENCES \"APP\".\"CUSTOMERS\" (\"ID\") ON DELETE CASCADE,
+  CONSTRAINT \"ORDERS_AMOUNT_CK\" CHECK (\"ORDER_ID\" > 0)
+) TABLESPACE \"USERS\";"
+                        .to_string(),
+                )]]
+            } else if query.contains("ALL_TAB_COMMENTS") {
+                vec![vec![Some("Customer's orders".to_string())]]
+            } else if query.contains("ALL_COL_COMMENTS") {
+                vec![
+                    vec![
+                        Some("TENANT_ID".to_string()),
+                        Some("Tenant identifier".to_string()),
+                    ],
+                    vec![
+                        Some("ORDER_ID".to_string()),
+                        Some("Order identifier".to_string()),
+                    ],
+                ]
+            } else if query.contains("GET_DDL('INDEX'") {
+                vec![vec![Some(
+                    "CREATE INDEX \"APP\".\"IDX_ORDERS_CUSTOMER\" ON \"APP\".\"ORDERS\" (\"CUSTOMER_ID\") TABLESPACE \"USERS\";"
+                        .to_string(),
+                )]]
+            } else {
+                return Err(DbError::query(format!(
+                    "unexpected Oracle export query: {query}"
+                )));
+            };
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(Some("APP".to_string()))
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<crate::connection::StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
 
     fn create_plugin() -> OraclePlugin {
         OraclePlugin::new()
@@ -2961,6 +3237,36 @@ mod tests {
             .strip_hidden_result_columns(&mut query_result)
             .unwrap();
         assert_eq!(query_result.columns, vec!["id"]);
+    }
+
+    #[tokio::test]
+    async fn export_table_create_sql_preserves_oracle_metadata() {
+        let connection = ExportDdlConnection::new();
+        let ddl = create_plugin()
+            .export_table_create_sql(&connection, "APP", Some("APP"), "ORDERS")
+            .await
+            .expect("Oracle DDL export should succeed");
+
+        assert!(ddl.contains("GENERATED BY DEFAULT AS IDENTITY"));
+        assert!(ddl.contains("PRIMARY KEY (\"TENANT_ID\", \"ORDER_ID\")"));
+        assert!(ddl.contains("FOREIGN KEY (\"CUSTOMER_ID\")"));
+        assert!(ddl.contains("CHECK (\"ORDER_ID\" > 0)"));
+        assert!(ddl.contains("TABLESPACE \"USERS\""));
+        assert!(ddl.contains("COMMENT ON TABLE \"APP\".\"ORDERS\" IS 'Customer''s orders'"));
+        assert!(
+            ddl.contains(
+                "COMMENT ON COLUMN \"APP\".\"ORDERS\".\"TENANT_ID\" IS 'Tenant identifier'"
+            )
+        );
+        assert!(ddl.contains("CREATE INDEX \"APP\".\"IDX_ORDERS_CUSTOMER\""));
+
+        let queries = connection.queries();
+        assert_eq!(queries.len(), 4);
+        assert!(queries[0].contains("GET_DDL('TABLE', 'ORDERS', 'APP')"));
+        assert!(
+            queries[3].contains("NOT EXISTS"),
+            "constraint-backed indexes must be excluded"
+        );
     }
 
     #[test]

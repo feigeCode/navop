@@ -67,6 +67,11 @@ impl DuckDbPlugin {
         value.replace('\'', "''")
     }
 
+    fn normalize_catalog_sql(sql: &str) -> Option<String> {
+        let sql = sql.trim().trim_end_matches(';').trim_end();
+        (!sql.is_empty()).then(|| sql.to_string())
+    }
+
     fn query_filter(
         database: &str,
         schema: Option<&str>,
@@ -1365,19 +1370,12 @@ impl DatabasePlugin for DuckDbPlugin {
         let mut statements = table_rows
             .into_iter()
             .filter_map(|row| row.first().cloned().flatten())
-            .filter(|sql| !sql.is_empty())
+            .filter_map(|sql| Self::normalize_catalog_sql(&sql))
             .collect::<Vec<_>>();
 
         let index_sql_query = format!(
             "SELECT sql FROM duckdb_indexes() WHERE {} ORDER BY index_name",
-            match schema.filter(|schema_name| Self::should_filter_schema(schema_name)) {
-                Some(schema_name) => format!(
-                    "schema_name = '{}' AND table_name = '{}'",
-                    Self::escape_sql_literal(schema_name),
-                    Self::escape_sql_literal(table)
-                ),
-                None => format!("table_name = '{}'", Self::escape_sql_literal(table)),
-            }
+            Self::query_filter(database, schema, "table_name", table)
         );
         let index_rows = self
             .query_rows(connection, &index_sql_query, "Failed to export index DDL")
@@ -1386,10 +1384,10 @@ impl DatabasePlugin for DuckDbPlugin {
             index_rows
                 .into_iter()
                 .filter_map(|row| row.first().cloned().flatten())
-                .filter(|sql| !sql.is_empty()),
+                .filter_map(|sql| Self::normalize_catalog_sql(&sql)),
         );
 
-        Ok(statements.join("\n"))
+        Ok(statements.join(";\n"))
     }
 
     fn get_data_types(&self) -> &[(&'static str, &'static str)] {
@@ -1486,6 +1484,7 @@ mod tests {
             host: path,
             port: 0,
             workspace_id: None,
+            credential_reference: None,
             username: String::new(),
             password: String::new(),
             database: None,
@@ -1551,6 +1550,14 @@ mod tests {
         let plugin = create_plugin();
 
         assert_eq!(None, plugin.build_list_users_sql(None));
+    }
+
+    #[test]
+    fn test_query_filter_scopes_attached_database_objects() {
+        assert_eq!(
+            DuckDbPlugin::query_filter("analytics", Some("reporting"), "table_name", "orders"),
+            "table_name = 'orders' AND database_name = 'analytics' AND schema_name = 'reporting'"
+        );
     }
 
     #[tokio::test]
@@ -1640,6 +1647,13 @@ mod tests {
         assert!(ddl.contains("CREATE TABLE"));
         assert!(ddl.contains("test"));
         assert!(ddl.contains("CREATE INDEX idx_test_score"));
+        let index_offset = ddl
+            .find("CREATE INDEX idx_test_score")
+            .expect("export should include the secondary index");
+        assert!(
+            ddl[..index_offset].trim_end().ends_with(';'),
+            "table and index DDL must be separated by a semicolon: {ddl}"
+        );
 
         connection
             .disconnect()

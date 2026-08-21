@@ -82,6 +82,11 @@ impl ClickHousePlugin {
     pub fn new() -> Self {
         Self
     }
+
+    fn normalize_export_ddl(sql: &str) -> Option<String> {
+        let sql = sql.trim().trim_end_matches(';').trim_end();
+        (!sql.is_empty()).then(|| sql.to_string())
+    }
 }
 
 fn build_clickhouse_ui_manifest() -> DatabaseUiManifest {
@@ -1318,6 +1323,61 @@ impl DatabasePlugin for ClickHousePlugin {
         def
     }
 
+    async fn export_table_create_sql(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<String> {
+        let table_ref = self.format_table_reference(database, schema, table);
+        let query = format!("SHOW CREATE TABLE {table_ref}");
+        let result = connection
+            .query(&query)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to export ClickHouse table DDL: {error}"))?;
+        let query_result = match result {
+            SqlResult::Query(query_result) => query_result,
+            SqlResult::Exec(_) => {
+                return Err(anyhow::anyhow!(
+                    "SHOW CREATE TABLE returned an execution result instead of table DDL"
+                ));
+            }
+            SqlResult::Error(error) => {
+                return Err(anyhow::anyhow!(
+                    "Failed to export ClickHouse table DDL: {}",
+                    error.message
+                ));
+            }
+        };
+
+        let ddl_column = query_result
+            .columns
+            .iter()
+            .position(|column| {
+                matches!(
+                    column.to_ascii_lowercase().as_str(),
+                    "statement" | "create_table" | "create_table_query" | "create_statement"
+                )
+            })
+            .or_else(|| (query_result.columns.len() == 1).then_some(0))
+            .or_else(|| (query_result.columns.len() == 2).then_some(1))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "SHOW CREATE TABLE returned no recognizable DDL column: {:?}",
+                    query_result.columns
+                )
+            })?;
+
+        query_result
+            .rows
+            .first()
+            .and_then(|row| row.get(ddl_column))
+            .and_then(|value| value.as_deref())
+            .and_then(Self::normalize_export_ddl)
+            .ok_or_else(|| anyhow::anyhow!("SHOW CREATE TABLE returned empty table DDL"))
+    }
+
     fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
         Some(
             r#"SELECT
@@ -1731,12 +1791,127 @@ ORDER BY name;"#
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::{ExecOptions, QueryResult, SqlSource};
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{
         ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign, TableOptions,
     };
     use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    struct ExportDdlConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl ExportDdlConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "clickhouse-export-ddl".to_string(),
+                    name: "ClickHouse export DDL".to_string(),
+                    database_type: DatabaseType::ClickHouse,
+                    host: "localhost".to_string(),
+                    port: 8123,
+                    username: "default".to_string(),
+                    password: String::new(),
+                    credential_reference: None,
+                    database: Some("analytics".to_string()),
+                    service_name: None,
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DbConnection for ExportDdlConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by export tests"))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec!["name".to_string(), "statement".to_string()],
+                column_meta: vec![],
+                rows: vec![vec![
+                    Some("events".to_string()),
+                    Some(
+                        "CREATE TABLE analytics.events\n(
+    `event_id` UInt64 COMMENT 'identifier',
+    `created_at` DateTime,
+    INDEX idx_created_at created_at TYPE minmax GRANULARITY 1
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (event_id, created_at)
+PRIMARY KEY event_id
+TTL created_at + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192
+COMMENT 'event stream';"
+                            .to_string(),
+                    ),
+                ]],
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(self.config.database.clone())
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<crate::connection::StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
 
     fn create_plugin() -> ClickHousePlugin {
         ClickHousePlugin::new()
@@ -1772,6 +1947,32 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "`table_name`");
         assert_eq!(plugin.quote_identifier("column"), "`column`");
         assert_eq!(plugin.quote_identifier("col`umn"), "`col``umn`");
+    }
+
+    #[tokio::test]
+    async fn export_table_create_sql_uses_show_create_and_preserves_clickhouse_ddl() {
+        let connection = ExportDdlConnection::new();
+        let ddl = create_plugin()
+            .export_table_create_sql(&connection, "analytics", None, "events")
+            .await
+            .expect("ClickHouse DDL export should succeed");
+
+        assert_eq!(
+            connection.queries(),
+            vec!["SHOW CREATE TABLE `analytics`.`events`".to_string()]
+        );
+        assert!(ddl.contains("ENGINE = MergeTree"));
+        assert!(ddl.contains("PARTITION BY toYYYYMM(created_at)"));
+        assert!(ddl.contains("ORDER BY (event_id, created_at)"));
+        assert!(ddl.contains("PRIMARY KEY event_id"));
+        assert!(ddl.contains("TTL created_at + INTERVAL 30 DAY"));
+        assert!(ddl.contains("SETTINGS index_granularity = 8192"));
+        assert!(ddl.contains("COMMENT 'event stream'"));
+        assert!(ddl.contains("INDEX idx_created_at"));
+        assert!(
+            !ddl.ends_with(';'),
+            "format handler owns the final script semicolon"
+        );
     }
 
     #[test]

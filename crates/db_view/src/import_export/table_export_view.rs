@@ -626,7 +626,8 @@ impl DataExportView {
                 let progress_clone = progress.clone();
 
                 match &event_clone {
-                    ExportProgressEvent::DataExported { data, .. } => {
+                    ExportProgressEvent::HeaderExported { data }
+                    | ExportProgressEvent::DataExported { data, .. } => {
                         if !data.is_empty() {
                             let write_result = if !file_created {
                                 file_created = true;

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
 use crate::types::ObjectViewColumn as Column;
@@ -156,6 +156,66 @@ fn mssql_drop_column_comment_sql(table_name: &str, column_name: &str) -> String 
         mssql_nstring_literal(table_name),
         mssql_nstring_literal(column_name)
     )
+}
+
+fn mssql_export_row_value(row: &[Option<String>], index: usize) -> Option<&str> {
+    row.get(index).and_then(|value| value.as_deref())
+}
+
+fn mssql_export_required_row_value(
+    row: &[Option<String>],
+    index: usize,
+    field: &str,
+) -> Result<String> {
+    mssql_export_row_value(row, index)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("SQL Server export returned NULL {field}"))
+}
+
+fn mssql_export_bool(row: &[Option<String>], index: usize) -> bool {
+    matches!(
+        mssql_export_row_value(row, index)
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("1" | "true" | "t" | "yes")
+    )
+}
+
+fn mssql_export_normalize_ddl(sql: &str) -> Option<String> {
+    let sql = sql.trim().trim_end_matches(';').trim_end();
+    (!sql.is_empty()).then(|| sql.to_string())
+}
+
+fn mssql_export_referential_action(action: &str) -> Option<&'static str> {
+    match action.trim().to_ascii_uppercase().as_str() {
+        "" => None,
+        "NO_ACTION" | "NO ACTION" => Some("NO ACTION"),
+        "CASCADE" => Some("CASCADE"),
+        "SET_NULL" | "SET NULL" => Some("SET NULL"),
+        "SET_DEFAULT" | "SET DEFAULT" => Some("SET DEFAULT"),
+        _ => None,
+    }
+}
+
+async fn mssql_export_query_rows(
+    connection: &dyn DbConnection,
+    query: &str,
+) -> Result<Vec<Vec<Option<String>>>> {
+    match connection
+        .query(query)
+        .await
+        .map_err(|error| anyhow::anyhow!("SQL Server export query failed: {error}"))?
+    {
+        SqlResult::Query(result) => Ok(result.rows),
+        SqlResult::Exec(_) => Err(anyhow::anyhow!(
+            "SQL Server export metadata query returned an execution result"
+        )),
+        SqlResult::Error(error) => Err(anyhow::anyhow!(
+            "SQL Server export metadata query failed: {}",
+            error.message
+        )),
+    }
 }
 
 fn mssql_comment_operation(original: &str, new: &str) -> Option<&'static str> {
@@ -1367,6 +1427,481 @@ impl DatabasePlugin for MsSqlPlugin {
         } else {
             Ok(vec![])
         }
+    }
+
+    async fn export_table_create_sql(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<String> {
+        let schema = schema
+            .map(str::trim)
+            .filter(|schema| !schema.is_empty())
+            .unwrap_or("dbo");
+        let database_identifier = database.replace(']', "]]");
+        let schema_literal = schema.replace('\'', "''");
+        let table_literal = table.replace('\'', "''");
+        let table_reference = self.format_export_table_reference(database, Some(schema), table);
+
+        let columns_sql = format!(
+            r#"
+            SELECT
+                c.column_id,
+                c.name AS column_name,
+                CASE
+                    WHEN c.is_computed = 1 THEN NULL
+                    WHEN ty.is_user_defined = 1 OR ty.is_assembly_type = 1
+                        THEN QUOTENAME(tys.name) + '.' + QUOTENAME(ty.name)
+                    WHEN ty.name IN ('varchar', 'char', 'varbinary', 'binary')
+                        THEN ty.name + '(' + CASE
+                            WHEN c.max_length = -1 THEN 'MAX'
+                            ELSE CONVERT(varchar(10), c.max_length)
+                        END + ')'
+                    WHEN ty.name IN ('nvarchar', 'nchar')
+                        THEN ty.name + '(' + CASE
+                            WHEN c.max_length = -1 THEN 'MAX'
+                            ELSE CONVERT(varchar(10), c.max_length / 2)
+                        END + ')'
+                    WHEN ty.name IN ('decimal', 'numeric')
+                        THEN ty.name + '(' + CONVERT(varchar(10), c.precision) + ',' +
+                            CONVERT(varchar(10), c.scale) + ')'
+                    WHEN ty.name IN ('datetime2', 'datetimeoffset', 'time')
+                        THEN ty.name + '(' + CONVERT(varchar(10), c.scale) + ')'
+                    WHEN ty.name = 'float'
+                        THEN ty.name + '(' + CONVERT(varchar(10), c.precision) + ')'
+                    ELSE ty.name
+                END AS type_sql,
+                c.is_nullable,
+                c.is_identity,
+                CONVERT(nvarchar(128), ic.seed_value) AS identity_seed,
+                CONVERT(nvarchar(128), ic.increment_value) AS identity_increment,
+                c.is_computed,
+                cc.definition AS computed_definition,
+                cc.is_persisted,
+                dc.name AS default_name,
+                dc.definition AS default_definition,
+                CAST(ep.value AS nvarchar(max)) AS column_comment
+            FROM [{database_identifier}].sys.columns c
+            INNER JOIN [{database_identifier}].sys.tables t
+                ON t.object_id = c.object_id
+            INNER JOIN [{database_identifier}].sys.schemas s
+                ON s.schema_id = t.schema_id
+            INNER JOIN [{database_identifier}].sys.types ty
+                ON ty.user_type_id = c.user_type_id
+            LEFT JOIN [{database_identifier}].sys.schemas tys
+                ON tys.schema_id = ty.schema_id
+            LEFT JOIN [{database_identifier}].sys.identity_columns ic
+                ON ic.object_id = c.object_id
+                AND ic.column_id = c.column_id
+            LEFT JOIN [{database_identifier}].sys.computed_columns cc
+                ON cc.object_id = c.object_id
+                AND cc.column_id = c.column_id
+            LEFT JOIN [{database_identifier}].sys.default_constraints dc
+                ON dc.parent_object_id = c.object_id
+                AND dc.parent_column_id = c.column_id
+            LEFT JOIN [{database_identifier}].sys.extended_properties ep
+                ON ep.class = 1
+                AND ep.major_id = c.object_id
+                AND ep.minor_id = c.column_id
+                AND ep.name = N'MS_Description'
+            WHERE s.name = N'{schema_literal}'
+                AND t.name = N'{table_literal}'
+            ORDER BY c.column_id
+            "#
+        );
+        let column_rows = mssql_export_query_rows(connection, &columns_sql).await?;
+        if column_rows.is_empty() {
+            return Ok(String::new());
+        }
+
+        let keys_sql = format!(
+            r#"
+            SELECT
+                kc.name AS constraint_name,
+                CASE kc.type WHEN 'PK' THEN 'PK' WHEN 'UQ' THEN 'UQ' END AS constraint_kind,
+                i.type_desc AS index_type,
+                ic.key_ordinal,
+                c.name AS column_name,
+                ic.is_descending_key
+            FROM [{database_identifier}].sys.key_constraints kc
+            INNER JOIN [{database_identifier}].sys.tables t
+                ON t.object_id = kc.parent_object_id
+            INNER JOIN [{database_identifier}].sys.schemas s
+                ON s.schema_id = t.schema_id
+            INNER JOIN [{database_identifier}].sys.indexes i
+                ON i.object_id = kc.parent_object_id
+                AND i.index_id = kc.unique_index_id
+            INNER JOIN [{database_identifier}].sys.index_columns ic
+                ON ic.object_id = i.object_id
+                AND ic.index_id = i.index_id
+                AND ic.key_ordinal > 0
+            INNER JOIN [{database_identifier}].sys.columns c
+                ON c.object_id = ic.object_id
+                AND c.column_id = ic.column_id
+            WHERE s.name = N'{schema_literal}'
+                AND t.name = N'{table_literal}'
+            ORDER BY
+                CASE kc.type WHEN 'PK' THEN 0 ELSE 1 END,
+                kc.name,
+                ic.key_ordinal
+            "#
+        );
+        let key_rows = mssql_export_query_rows(connection, &keys_sql).await?;
+
+        let foreign_keys_sql = format!(
+            r#"
+            SELECT
+                fk.name AS constraint_name,
+                fkc.constraint_column_id,
+                pc.name AS column_name,
+                rs.name AS referenced_schema,
+                rt.name AS referenced_table,
+                rc.name AS referenced_column,
+                fk.delete_referential_action_desc AS on_delete,
+                fk.update_referential_action_desc AS on_update
+            FROM [{database_identifier}].sys.foreign_keys fk
+            INNER JOIN [{database_identifier}].sys.tables pt
+                ON pt.object_id = fk.parent_object_id
+            INNER JOIN [{database_identifier}].sys.schemas ps
+                ON ps.schema_id = pt.schema_id
+            INNER JOIN [{database_identifier}].sys.foreign_key_columns fkc
+                ON fkc.constraint_object_id = fk.object_id
+            INNER JOIN [{database_identifier}].sys.columns pc
+                ON pc.object_id = fkc.parent_object_id
+                AND pc.column_id = fkc.parent_column_id
+            INNER JOIN [{database_identifier}].sys.tables rt
+                ON rt.object_id = fk.referenced_object_id
+            INNER JOIN [{database_identifier}].sys.schemas rs
+                ON rs.schema_id = rt.schema_id
+            INNER JOIN [{database_identifier}].sys.columns rc
+                ON rc.object_id = fkc.referenced_object_id
+                AND rc.column_id = fkc.referenced_column_id
+            WHERE ps.name = N'{schema_literal}'
+                AND pt.name = N'{table_literal}'
+            ORDER BY fk.name, fkc.constraint_column_id
+            "#
+        );
+        let foreign_key_rows = mssql_export_query_rows(connection, &foreign_keys_sql).await?;
+
+        let checks_sql = format!(
+            r#"
+            SELECT
+                cc.name AS constraint_name,
+                cc.definition
+            FROM [{database_identifier}].sys.check_constraints cc
+            INNER JOIN [{database_identifier}].sys.tables t
+                ON t.object_id = cc.parent_object_id
+            INNER JOIN [{database_identifier}].sys.schemas s
+                ON s.schema_id = t.schema_id
+            WHERE s.name = N'{schema_literal}'
+                AND t.name = N'{table_literal}'
+            ORDER BY cc.name
+            "#
+        );
+        let check_rows = mssql_export_query_rows(connection, &checks_sql).await?;
+
+        let table_comment_sql = format!(
+            r#"
+            SELECT CAST(ep.value AS nvarchar(max)) AS table_comment
+            FROM [{database_identifier}].sys.tables t
+            INNER JOIN [{database_identifier}].sys.schemas s
+                ON s.schema_id = t.schema_id
+            LEFT JOIN [{database_identifier}].sys.extended_properties ep
+                ON ep.class = 1
+                AND ep.major_id = t.object_id
+                AND ep.minor_id = 0
+                AND ep.name = N'MS_Description'
+            WHERE s.name = N'{schema_literal}'
+                AND t.name = N'{table_literal}'
+            "#
+        );
+        let table_comment_rows = mssql_export_query_rows(connection, &table_comment_sql).await?;
+
+        let indexes_sql = format!(
+            r#"
+            SELECT
+                i.name AS index_name,
+                i.is_unique,
+                i.type_desc AS index_type,
+                i.filter_definition,
+                ic.key_ordinal,
+                c.name AS column_name,
+                ic.is_descending_key,
+                ic.is_included_column
+            FROM [{database_identifier}].sys.indexes i
+            INNER JOIN [{database_identifier}].sys.tables t
+                ON t.object_id = i.object_id
+            INNER JOIN [{database_identifier}].sys.schemas s
+                ON s.schema_id = t.schema_id
+            INNER JOIN [{database_identifier}].sys.index_columns ic
+                ON ic.object_id = i.object_id
+                AND ic.index_id = i.index_id
+            INNER JOIN [{database_identifier}].sys.columns c
+                ON c.object_id = ic.object_id
+                AND c.column_id = ic.column_id
+            WHERE s.name = N'{schema_literal}'
+                AND t.name = N'{table_literal}'
+                AND i.type IN (1, 2)
+                AND i.is_primary_key = 0
+                AND i.is_unique_constraint = 0
+                AND i.is_hypothetical = 0
+                AND i.name IS NOT NULL
+            ORDER BY
+                i.name,
+                CASE WHEN ic.key_ordinal > 0 THEN 0 ELSE 1 END,
+                CASE
+                    WHEN ic.key_ordinal > 0 THEN ic.key_ordinal
+                    ELSE ic.index_column_id
+                END
+            "#
+        );
+        let index_rows = mssql_export_query_rows(connection, &indexes_sql).await?;
+
+        let mut definitions = Vec::new();
+        let mut column_comments = Vec::new();
+        for row in &column_rows {
+            let name = mssql_export_required_row_value(row, 1, "column name")?;
+            let mut definition = format!("    {}", self.quote_identifier(&name));
+            if mssql_export_bool(row, 7) {
+                let expression =
+                    mssql_export_required_row_value(row, 8, "computed column definition")?;
+                definition.push_str(" AS ");
+                definition.push_str(&expression);
+                if mssql_export_bool(row, 9) {
+                    definition.push_str(" PERSISTED");
+                }
+            } else {
+                let type_sql = mssql_export_required_row_value(row, 2, "column type")?;
+                definition.push(' ');
+                definition.push_str(&type_sql);
+
+                if mssql_export_bool(row, 4) {
+                    let seed = mssql_export_row_value(row, 5).unwrap_or("1");
+                    let increment = mssql_export_row_value(row, 6).unwrap_or("1");
+                    definition.push_str(&format!(" IDENTITY({seed},{increment})"));
+                }
+
+                definition.push_str(if mssql_export_bool(row, 3) {
+                    " NULL"
+                } else {
+                    " NOT NULL"
+                });
+
+                if let Some(default_definition) = mssql_export_row_value(row, 11) {
+                    if let Some(default_name) = mssql_export_row_value(row, 10) {
+                        definition.push_str(&format!(
+                            " CONSTRAINT {}",
+                            self.quote_identifier(default_name)
+                        ));
+                    }
+                    definition.push_str(" DEFAULT ");
+                    definition.push_str(default_definition);
+                }
+            }
+            definitions.push(definition);
+
+            if let Some(comment) =
+                mssql_export_row_value(row, 12).filter(|comment| !comment.is_empty())
+            {
+                column_comments.push((name, comment.to_string()));
+            }
+        }
+
+        struct ExportKey {
+            kind: String,
+            index_type: String,
+            columns: Vec<String>,
+        }
+        let mut keys: BTreeMap<String, ExportKey> = BTreeMap::new();
+        for row in &key_rows {
+            let name = mssql_export_required_row_value(row, 0, "key constraint name")?;
+            let kind = mssql_export_required_row_value(row, 1, "key constraint kind")?;
+            let index_type = mssql_export_required_row_value(row, 2, "key index type")?;
+            let column = mssql_export_required_row_value(row, 4, "key column name")?;
+            let direction = if mssql_export_bool(row, 5) {
+                "DESC"
+            } else {
+                "ASC"
+            };
+            keys.entry(name)
+                .or_insert_with(|| ExportKey {
+                    kind,
+                    index_type,
+                    columns: Vec::new(),
+                })
+                .columns
+                .push(format!("{} {direction}", self.quote_identifier(&column)));
+        }
+        for (name, key) in keys {
+            let keyword = if key.kind.eq_ignore_ascii_case("PK") {
+                "PRIMARY KEY"
+            } else {
+                "UNIQUE"
+            };
+            definitions.push(format!(
+                "    CONSTRAINT {} {keyword} {} ({})",
+                self.quote_identifier(&name),
+                key.index_type,
+                key.columns.join(", ")
+            ));
+        }
+
+        for row in &check_rows {
+            let name = mssql_export_required_row_value(row, 0, "check constraint name")?;
+            let expression =
+                mssql_export_required_row_value(row, 1, "check constraint definition")?;
+            definitions.push(format!(
+                "    CONSTRAINT {} CHECK {}",
+                self.quote_identifier(&name),
+                expression
+            ));
+        }
+
+        struct ExportForeignKey {
+            referenced_schema: String,
+            referenced_table: String,
+            columns: Vec<String>,
+            referenced_columns: Vec<String>,
+            on_delete: String,
+            on_update: String,
+        }
+        let mut foreign_keys: BTreeMap<String, ExportForeignKey> = BTreeMap::new();
+        for row in &foreign_key_rows {
+            let name = mssql_export_required_row_value(row, 0, "foreign key name")?;
+            let column = mssql_export_required_row_value(row, 2, "foreign key column")?;
+            let referenced_schema = mssql_export_required_row_value(row, 3, "referenced schema")?;
+            let referenced_table = mssql_export_required_row_value(row, 4, "referenced table")?;
+            let referenced_column = mssql_export_required_row_value(row, 5, "referenced column")?;
+            let on_delete = mssql_export_row_value(row, 6)
+                .unwrap_or("NO_ACTION")
+                .to_string();
+            let on_update = mssql_export_row_value(row, 7)
+                .unwrap_or("NO_ACTION")
+                .to_string();
+            let foreign_key = foreign_keys
+                .entry(name)
+                .or_insert_with(|| ExportForeignKey {
+                    referenced_schema,
+                    referenced_table,
+                    columns: Vec::new(),
+                    referenced_columns: Vec::new(),
+                    on_delete,
+                    on_update,
+                });
+            foreign_key.columns.push(self.quote_identifier(&column));
+            foreign_key
+                .referenced_columns
+                .push(self.quote_identifier(&referenced_column));
+        }
+        for (name, foreign_key) in foreign_keys {
+            let mut definition = format!(
+                "    CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {}.{} ({})",
+                self.quote_identifier(&name),
+                foreign_key.columns.join(", "),
+                self.quote_identifier(&foreign_key.referenced_schema),
+                self.quote_identifier(&foreign_key.referenced_table),
+                foreign_key.referenced_columns.join(", ")
+            );
+            if let Some(action) = mssql_export_referential_action(&foreign_key.on_delete) {
+                definition.push_str(&format!(" ON DELETE {action}"));
+            }
+            if let Some(action) = mssql_export_referential_action(&foreign_key.on_update) {
+                definition.push_str(&format!(" ON UPDATE {action}"));
+            }
+            definitions.push(definition);
+        }
+
+        let mut statements = vec![format!(
+            "CREATE TABLE {table_reference} (\n{}\n)",
+            definitions.join(",\n")
+        )];
+
+        if let Some(comment) = table_comment_rows
+            .first()
+            .and_then(|row| mssql_export_row_value(row, 0))
+            .filter(|comment| !comment.is_empty())
+        {
+            statements.push(format!(
+                "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name={}, @level1type=N'TABLE', @level1name={}",
+                mssql_nstring_literal(comment),
+                mssql_nstring_literal(schema),
+                mssql_nstring_literal(table)
+            ));
+        }
+        for (column, comment) in column_comments {
+            statements.push(format!(
+                "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name={}, @level1type=N'TABLE', @level1name={}, @level2type=N'COLUMN', @level2name={}",
+                mssql_nstring_literal(&comment),
+                mssql_nstring_literal(schema),
+                mssql_nstring_literal(table),
+                mssql_nstring_literal(&column)
+            ));
+        }
+
+        struct ExportIndex {
+            is_unique: bool,
+            index_type: String,
+            filter: Option<String>,
+            key_columns: Vec<String>,
+            include_columns: Vec<String>,
+        }
+        let mut indexes: BTreeMap<String, ExportIndex> = BTreeMap::new();
+        for row in &index_rows {
+            let name = mssql_export_required_row_value(row, 0, "index name")?;
+            let column = mssql_export_required_row_value(row, 5, "index column")?;
+            let index = indexes.entry(name).or_insert_with(|| ExportIndex {
+                is_unique: mssql_export_bool(row, 1),
+                index_type: mssql_export_row_value(row, 2)
+                    .unwrap_or("NONCLUSTERED")
+                    .to_string(),
+                filter: mssql_export_row_value(row, 3).map(str::to_string),
+                key_columns: Vec::new(),
+                include_columns: Vec::new(),
+            });
+            if mssql_export_bool(row, 7) {
+                index.include_columns.push(self.quote_identifier(&column));
+            } else if mssql_export_row_value(row, 4)
+                .and_then(|ordinal| ordinal.parse::<usize>().ok())
+                .is_some_and(|ordinal| ordinal > 0)
+            {
+                let direction = if mssql_export_bool(row, 6) {
+                    "DESC"
+                } else {
+                    "ASC"
+                };
+                index
+                    .key_columns
+                    .push(format!("{} {direction}", self.quote_identifier(&column)));
+            }
+        }
+        for (name, index) in indexes {
+            if index.key_columns.is_empty() {
+                continue;
+            }
+            let unique = if index.is_unique { "UNIQUE " } else { "" };
+            let mut statement = format!(
+                "CREATE {unique}{} INDEX {} ON {table_reference} ({})",
+                index.index_type,
+                self.quote_identifier(&name),
+                index.key_columns.join(", ")
+            );
+            if !index.include_columns.is_empty() {
+                statement.push_str(&format!(" INCLUDE ({})", index.include_columns.join(", ")));
+            }
+            if let Some(filter) = index.filter.filter(|filter| !filter.trim().is_empty()) {
+                statement.push_str(" WHERE ");
+                statement.push_str(&filter);
+            }
+            statements.push(statement);
+        }
+
+        Ok(statements
+            .into_iter()
+            .filter_map(|statement| mssql_export_normalize_ddl(&statement))
+            .collect::<Vec<_>>()
+            .join(";\n"))
     }
 
     async fn list_columns_view(
@@ -2826,12 +3361,292 @@ ORDER BY name;"#
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::{ExecOptions, QueryResult, SqlSource};
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{
         ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign, TableOptions,
     };
     use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    struct ExportDdlConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl ExportDdlConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "mssql-export-ddl".to_string(),
+                    name: "SQL Server export DDL".to_string(),
+                    database_type: DatabaseType::MSSQL,
+                    host: "localhost".to_string(),
+                    port: 1433,
+                    username: "sa".to_string(),
+                    password: String::new(),
+                    credential_reference: None,
+                    database: Some("salesdb".to_string()),
+                    service_name: None,
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DbConnection for ExportDdlConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by export tests"))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            let rows = if query.contains("sys.computed_columns") {
+                vec![
+                    vec![
+                        Some("1".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("bigint".to_string()),
+                        Some("0".to_string()),
+                        Some("1".to_string()),
+                        Some("100".to_string()),
+                        Some("5".to_string()),
+                        Some("0".to_string()),
+                        None,
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        Some("Tenant identifier".to_string()),
+                    ],
+                    vec![
+                        Some("2".to_string()),
+                        Some("order_id".to_string()),
+                        Some("int".to_string()),
+                        Some("0".to_string()),
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        Some("0".to_string()),
+                        None,
+                        Some("0".to_string()),
+                        Some("DF_orders_order_id".to_string()),
+                        Some("((0))".to_string()),
+                        None,
+                    ],
+                    vec![
+                        Some("3".to_string()),
+                        Some("total".to_string()),
+                        None,
+                        Some("1".to_string()),
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        Some("1".to_string()),
+                        Some("([quantity]*[unit_price])".to_string()),
+                        Some("1".to_string()),
+                        None,
+                        None,
+                        None,
+                    ],
+                    vec![
+                        Some("4".to_string()),
+                        Some("note".to_string()),
+                        Some("nvarchar(200)".to_string()),
+                        Some("1".to_string()),
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        Some("0".to_string()),
+                        None,
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        Some("Customer's note".to_string()),
+                    ],
+                    vec![
+                        Some("5".to_string()),
+                        Some("status".to_string()),
+                        Some("int".to_string()),
+                        Some("0".to_string()),
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        Some("0".to_string()),
+                        None,
+                        Some("0".to_string()),
+                        None,
+                        None,
+                        None,
+                    ],
+                ]
+            } else if query.contains("sys.key_constraints") {
+                vec![
+                    vec![
+                        Some("PK_orders".to_string()),
+                        Some("PK".to_string()),
+                        Some("NONCLUSTERED".to_string()),
+                        Some("1".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("0".to_string()),
+                    ],
+                    vec![
+                        Some("PK_orders".to_string()),
+                        Some("PK".to_string()),
+                        Some("NONCLUSTERED".to_string()),
+                        Some("2".to_string()),
+                        Some("order_id".to_string()),
+                        Some("1".to_string()),
+                    ],
+                    vec![
+                        Some("UQ_orders_note".to_string()),
+                        Some("UQ".to_string()),
+                        Some("NONCLUSTERED".to_string()),
+                        Some("1".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("0".to_string()),
+                    ],
+                    vec![
+                        Some("UQ_orders_note".to_string()),
+                        Some("UQ".to_string()),
+                        Some("NONCLUSTERED".to_string()),
+                        Some("2".to_string()),
+                        Some("note".to_string()),
+                        Some("0".to_string()),
+                    ],
+                ]
+            } else if query.contains("sys.foreign_keys") {
+                vec![
+                    vec![
+                        Some("FK_orders_customer".to_string()),
+                        Some("1".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("crm".to_string()),
+                        Some("customers".to_string()),
+                        Some("tenant_id".to_string()),
+                        Some("CASCADE".to_string()),
+                        Some("NO_ACTION".to_string()),
+                    ],
+                    vec![
+                        Some("FK_orders_customer".to_string()),
+                        Some("2".to_string()),
+                        Some("order_id".to_string()),
+                        Some("crm".to_string()),
+                        Some("customers".to_string()),
+                        Some("customer_order_id".to_string()),
+                        Some("CASCADE".to_string()),
+                        Some("NO_ACTION".to_string()),
+                    ],
+                ]
+            } else if query.contains("sys.check_constraints") {
+                vec![vec![
+                    Some("CK_orders_status".to_string()),
+                    Some("([status]>=(0))".to_string()),
+                ]]
+            } else if query.contains("ep.minor_id = 0") {
+                vec![vec![Some("Customer's orders".to_string())]]
+            } else if query.contains("i.is_unique_constraint = 0") {
+                vec![
+                    vec![
+                        Some("IX_orders_clustered".to_string()),
+                        Some("0".to_string()),
+                        Some("CLUSTERED".to_string()),
+                        None,
+                        Some("1".to_string()),
+                        Some("status".to_string()),
+                        Some("0".to_string()),
+                        Some("0".to_string()),
+                    ],
+                    vec![
+                        Some("IX_orders_lookup".to_string()),
+                        Some("1".to_string()),
+                        Some("NONCLUSTERED".to_string()),
+                        Some("([status]>(0))".to_string()),
+                        Some("1".to_string()),
+                        Some("order_id".to_string()),
+                        Some("1".to_string()),
+                        Some("0".to_string()),
+                    ],
+                    vec![
+                        Some("IX_orders_lookup".to_string()),
+                        Some("1".to_string()),
+                        Some("NONCLUSTERED".to_string()),
+                        Some("([status]>(0))".to_string()),
+                        Some("2".to_string()),
+                        Some("note".to_string()),
+                        Some("0".to_string()),
+                        Some("1".to_string()),
+                    ],
+                ]
+            } else {
+                return Err(DbError::query(format!(
+                    "unexpected SQL Server export query: {query}"
+                )));
+            };
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(self.config.database.clone())
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<crate::connection::StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
 
     fn create_plugin() -> MsSqlPlugin {
         MsSqlPlugin::new()
@@ -2867,6 +3682,57 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "[table_name]");
         assert_eq!(plugin.quote_identifier("column"), "[column]");
         assert_eq!(plugin.quote_identifier("col]umn"), "[col]]umn]");
+    }
+
+    #[tokio::test]
+    async fn export_table_create_sql_preserves_sql_server_metadata() {
+        let connection = ExportDdlConnection::new();
+        let ddl = create_plugin()
+            .export_table_create_sql(&connection, "salesdb", Some("app"), "orders")
+            .await
+            .expect("SQL Server DDL export should succeed");
+
+        assert!(ddl.starts_with("CREATE TABLE [app].[orders]"));
+        assert!(ddl.contains("[tenant_id] bigint IDENTITY(100,5) NOT NULL"));
+        assert!(
+            ddl.contains("[order_id] int NOT NULL CONSTRAINT [DF_orders_order_id] DEFAULT ((0))")
+        );
+        assert!(ddl.contains("[total] AS ([quantity]*[unit_price]) PERSISTED"));
+        assert!(ddl.contains(
+            "CONSTRAINT [PK_orders] PRIMARY KEY NONCLUSTERED ([tenant_id] ASC, [order_id] DESC)"
+        ));
+        assert!(ddl.contains(
+            "CONSTRAINT [UQ_orders_note] UNIQUE NONCLUSTERED ([tenant_id] ASC, [note] ASC)"
+        ));
+        assert!(ddl.contains(
+            "CONSTRAINT [FK_orders_customer] FOREIGN KEY ([tenant_id], [order_id]) REFERENCES [crm].[customers] ([tenant_id], [customer_order_id]) ON DELETE CASCADE ON UPDATE NO ACTION"
+        ));
+        assert!(ddl.contains("CONSTRAINT [CK_orders_status] CHECK ([status]>=(0))"));
+        assert!(ddl.contains("@level0name=N'app'"));
+        assert!(ddl.contains("@level1name=N'orders'"));
+        assert!(ddl.contains("@value=N'Customer''s orders'"));
+        assert!(ddl.contains("@level2name=N'note'"));
+        assert!(ddl.contains("@value=N'Customer''s note'"));
+        assert!(ddl.contains(
+            "CREATE CLUSTERED INDEX [IX_orders_clustered] ON [app].[orders] ([status] ASC)"
+        ));
+        assert!(ddl.contains(
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_orders_lookup] ON [app].[orders] ([order_id] DESC) INCLUDE ([note]) WHERE ([status]>(0))"
+        ));
+        assert!(ddl.contains(");\nEXEC sys.sp_addextendedproperty"));
+        assert!(
+            !ddl.ends_with(';'),
+            "format handler owns the final script semicolon"
+        );
+
+        let queries = connection.queries();
+        assert_eq!(queries.len(), 6);
+        assert!(queries.iter().all(|query| query.contains("[salesdb].sys.")));
+        let index_query = queries
+            .iter()
+            .find(|query| query.contains("i.is_unique_constraint = 0"))
+            .expect("ordinary index metadata query should be executed");
+        assert!(index_query.contains("i.is_primary_key = 0"));
     }
 
     #[test]

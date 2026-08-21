@@ -172,6 +172,9 @@ pub struct ExportResult {
 /// 导出进度事件
 #[derive(Debug, Clone)]
 pub enum ExportProgressEvent {
+    HeaderExported {
+        data: String,
+    },
     TableStart {
         table: String,
         table_index: usize,
