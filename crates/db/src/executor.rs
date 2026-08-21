@@ -7,6 +7,7 @@ use sqlparser::dialect::{
 };
 use sqlparser::tokenizer::{Location, Token, Tokenizer};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// SQL 脚本来源
@@ -299,6 +300,109 @@ pub struct QueryResult {
     pub elapsed_ms: u128,
 }
 
+/// A validated, typed view over one query result cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryCellRef<'a> {
+    Null,
+    Text(&'a str),
+    Binary(&'a [u8]),
+}
+
+/// Structural errors that make a [`QueryResult`] ambiguous or unsafe to consume.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum QueryResultError {
+    #[error("query result column metadata has length {actual}, expected {expected}")]
+    ColumnMetaWidth { actual: usize, expected: usize },
+    #[error("query result row {row_index} has width {actual}, expected {expected}")]
+    RowWidth {
+        row_index: usize,
+        actual: usize,
+        expected: usize,
+    },
+    #[error("binary cell ({row_index}, {column_index}) is out of bounds")]
+    BinaryCellOutOfBounds {
+        row_index: usize,
+        column_index: usize,
+    },
+    #[error("duplicate binary cell ({row_index}, {column_index})")]
+    DuplicateBinaryCell {
+        row_index: usize,
+        column_index: usize,
+    },
+}
+
+/// Validated typed access to a [`QueryResult`].
+///
+/// Binary sidecar values are authoritative over the string display value stored in `rows`.
+pub struct QueryResultView<'a> {
+    result: &'a QueryResult,
+    binary_by_cell: HashMap<(usize, usize), &'a [u8]>,
+}
+
+impl QueryResult {
+    /// Validate the result shape once and build an indexed typed view for lossless cell access.
+    pub fn typed_view(&self) -> Result<QueryResultView<'_>, QueryResultError> {
+        let column_count = self.columns.len();
+        if !self.column_meta.is_empty() && self.column_meta.len() != column_count {
+            return Err(QueryResultError::ColumnMetaWidth {
+                actual: self.column_meta.len(),
+                expected: column_count,
+            });
+        }
+
+        for (row_index, row) in self.rows.iter().enumerate() {
+            if row.len() != column_count {
+                return Err(QueryResultError::RowWidth {
+                    row_index,
+                    actual: row.len(),
+                    expected: column_count,
+                });
+            }
+        }
+
+        let mut binary_by_cell = HashMap::with_capacity(self.binary_cells.len());
+        for cell in &self.binary_cells {
+            if cell.row_index >= self.rows.len() || cell.column_index >= column_count {
+                return Err(QueryResultError::BinaryCellOutOfBounds {
+                    row_index: cell.row_index,
+                    column_index: cell.column_index,
+                });
+            }
+            if binary_by_cell
+                .insert((cell.row_index, cell.column_index), cell.bytes.as_slice())
+                .is_some()
+            {
+                return Err(QueryResultError::DuplicateBinaryCell {
+                    row_index: cell.row_index,
+                    column_index: cell.column_index,
+                });
+            }
+        }
+
+        Ok(QueryResultView {
+            result: self,
+            binary_by_cell,
+        })
+    }
+}
+
+impl<'a> QueryResultView<'a> {
+    pub fn cell(&self, row_index: usize, column_index: usize) -> Option<QueryCellRef<'a>> {
+        if let Some(bytes) = self.binary_by_cell.get(&(row_index, column_index)) {
+            return Some(QueryCellRef::Binary(bytes));
+        }
+
+        self.result
+            .rows
+            .get(row_index)?
+            .get(column_index)?
+            .as_deref()
+            .map_or(Some(QueryCellRef::Null), |text| {
+                Some(QueryCellRef::Text(text))
+            })
+    }
+}
+
 /// Execution result for non-query statements
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecResult {
@@ -451,6 +555,104 @@ mod tests {
             serde_json::from_str(&encoded).expect("binary cell should deserialize");
 
         assert_eq!(decoded, cell);
+    }
+
+    fn typed_result() -> QueryResult {
+        QueryResult {
+            sql: "select a, b, c".to_string(),
+            columns: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            column_meta: vec![],
+            rows: vec![vec![
+                None,
+                Some(String::new()),
+                Some("binary display".to_string()),
+            ]],
+            binary_cells: vec![BinaryCell {
+                row_index: 0,
+                column_index: 2,
+                bytes: vec![0, 0xff],
+            }],
+            elapsed_ms: 0,
+        }
+    }
+
+    #[test]
+    fn typed_view_distinguishes_null_empty_text_and_binary() {
+        let result = typed_result();
+        let view = result.typed_view().expect("result should be valid");
+
+        assert_eq!(view.cell(0, 0), Some(QueryCellRef::Null));
+        assert_eq!(view.cell(0, 1), Some(QueryCellRef::Text("")));
+        assert_eq!(
+            view.cell(0, 2),
+            Some(QueryCellRef::Binary(&[0_u8, 0xff]))
+        );
+        assert_eq!(view.cell(1, 0), None);
+        assert_eq!(view.cell(0, 3), None);
+    }
+
+    #[test]
+    fn typed_view_rejects_duplicate_binary_coordinates() {
+        let mut result = typed_result();
+        result.binary_cells.push(BinaryCell {
+            row_index: 0,
+            column_index: 2,
+            bytes: vec![1],
+        });
+
+        assert_eq!(
+            result.typed_view().err(),
+            Some(QueryResultError::DuplicateBinaryCell {
+                row_index: 0,
+                column_index: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn typed_view_rejects_out_of_bounds_binary_coordinates() {
+        for (row_index, column_index) in [(1, 0), (0, 3)] {
+            let mut result = typed_result();
+            result.binary_cells[0].row_index = row_index;
+            result.binary_cells[0].column_index = column_index;
+
+            assert_eq!(
+                result.typed_view().err(),
+                Some(QueryResultError::BinaryCellOutOfBounds {
+                    row_index,
+                    column_index,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn typed_view_rejects_inconsistent_row_width() {
+        let mut result = typed_result();
+        result.rows[0].pop();
+
+        assert_eq!(
+            result.typed_view().err(),
+            Some(QueryResultError::RowWidth {
+                row_index: 0,
+                actual: 2,
+                expected: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn typed_view_rejects_inconsistent_column_metadata_width() {
+        let mut result = typed_result();
+        result.column_meta = vec![QueryColumnMeta::new("a", "TEXT")];
+
+        assert_eq!(
+            result.typed_view().err(),
+            Some(QueryResultError::ColumnMetaWidth {
+                actual: 1,
+                expected: 3,
+            })
+        );
     }
 
     #[test]

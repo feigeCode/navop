@@ -2,6 +2,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod cache;
 pub mod cache_manager;
+pub mod binary_value;
 pub mod compare;
 pub mod connection;
 pub mod connection_config_resolver;

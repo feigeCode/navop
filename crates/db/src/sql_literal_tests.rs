@@ -45,7 +45,7 @@ fn formats_mysql_typed_values() {
     assert_eq!("0x0F", format(DatabaseType::MySQL, "BIT(8)", "0X0F"));
     assert_eq!(
         "X'deadbeef'",
-        format(DatabaseType::MySQL, "BLOB", "3q2+7w==")
+        format(DatabaseType::MySQL, "BLOB", "base64:3q2+7w==")
     );
     assert_eq!(
         "X'deadbeef'",
@@ -68,7 +68,7 @@ fn formats_postgres_typed_values() {
     );
     assert_eq!(
         "decode('deadbeef', 'hex')",
-        format(DatabaseType::PostgreSQL, "bytea", "3q2+7w==")
+        format(DatabaseType::PostgreSQL, "bytea", "base64:3q2+7w==")
     );
     assert_eq!(
         "decode('deadbeef', 'hex')",
@@ -90,7 +90,7 @@ fn formats_mssql_typed_values() {
     );
     assert_eq!(
         "0xdeadbeef",
-        format(DatabaseType::MSSQL, "varbinary(max)", "3q2+7w==")
+        format(DatabaseType::MSSQL, "varbinary(max)", "base64:3q2+7w==")
     );
     assert_eq!(
         "0xdeadbeef",
@@ -105,7 +105,7 @@ fn formats_sqlite_typed_values() {
     assert_eq!("1", format(DatabaseType::SQLite, "boolean", "true"));
     assert_eq!(
         "X'deadbeef'",
-        format(DatabaseType::SQLite, "blob", "3q2+7w==")
+        format(DatabaseType::SQLite, "blob", "base64:3q2+7w==")
     );
     assert_eq!(
         "X'deadbeef'",
@@ -120,7 +120,7 @@ fn formats_duckdb_typed_values() {
     assert_eq!("FALSE", format(DatabaseType::DuckDB, "bool", "0"));
     assert_eq!(
         "from_hex('deadbeef')",
-        format(DatabaseType::DuckDB, "blob", "3q2+7w==")
+        format(DatabaseType::DuckDB, "blob", "base64:3q2+7w==")
     );
     assert_eq!(
         "from_hex('deadbeef')",
@@ -136,7 +136,7 @@ fn formats_oracle_typed_values() {
     assert_eq!("'1'", format(DatabaseType::Oracle, "boolean", "1"));
     assert_eq!(
         "HEXTORAW('deadbeef')",
-        format(DatabaseType::Oracle, "raw(16)", "3q2+7w==")
+        format(DatabaseType::Oracle, "raw(16)", "base64:3q2+7w==")
     );
     assert_eq!(
         "HEXTORAW('deadbeef')",
@@ -190,13 +190,36 @@ fn invalid_special_values_fall_back_to_escaped_strings() {
         );
     }
     assert_eq!(
-        "'not-base64!''x'",
-        format(DatabaseType::SQLite, "blob", "not-base64!'x")
+        "'base64:not-base64!''x'",
+        format(DatabaseType::SQLite, "blob", "base64:not-base64!'x")
     );
     assert_eq!("'0xABC'", format(DatabaseType::SQLite, "blob", "0xABC"));
     assert_eq!(
         "'0xnothex'",
         format(DatabaseType::MySQL, "blob", "0xnothex")
+    );
+}
+
+#[test]
+fn binary_input_is_explicit_and_never_guessed_from_text_shape() {
+    for input in ["true", "text:true", "hex:74727565", "0x74727565", "base64:dHJ1ZQ=="] {
+        assert_eq!(
+            "X'74727565'",
+            format(DatabaseType::MySQL, "BLOB", input)
+        );
+    }
+
+    assert_eq!(
+        "X'41514944'",
+        format(DatabaseType::MySQL, "BLOB", "AQID")
+    );
+    assert_eq!(
+        "X'010203'",
+        format(DatabaseType::MySQL, "BLOB", "base64:AQID")
+    );
+    assert_eq!(
+        "'true'",
+        format(DatabaseType::MySQL, "LONGTEXT", "true")
     );
 }
 
