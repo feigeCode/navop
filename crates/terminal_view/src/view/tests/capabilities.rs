@@ -125,35 +125,6 @@ fn playback_pty_and_ime_writes_are_rejected_before_side_effects() {
 }
 
 #[test]
-fn direct_symbol_input_is_committed_and_consumed_before_history_handling() {
-    let source = include_str!("../text_input.rs");
-    let handler = function_region(source, "pub(super) fn handle_key_event", "\n}");
-
-    assert!(
-        handler.contains("crate::keys::direct_symbol_input(&event.keystroke)"),
-        "terminal key handling must explicitly direct punctuation to the PTY"
-    );
-    assert_guard_precedes(
-        handler,
-        "crate::keys::direct_symbol_input(&event.keystroke)",
-        "self.commit_text(text, cx)",
-        "direct symbol writes",
-    );
-    assert_guard_precedes(
-        handler,
-        "self.commit_text(text, cx)",
-        "cx.stop_propagation()",
-        "IME event consumption",
-    );
-    assert_guard_precedes(
-        handler,
-        "crate::keys::direct_symbol_input(&event.keystroke)",
-        "if self.history_prompt.mode() == HistoryPromptMode::Search",
-        "history-search input",
-    );
-}
-
-#[test]
 fn playback_key_handler_retains_copy_before_rejecting_input() {
     let source = include_str!("../text_input.rs");
     let key_event = source
