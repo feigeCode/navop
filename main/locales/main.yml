@@ -2336,6 +2336,14 @@ Settings:
         en: Show history suggestions and search completion in supported terminals
         zh-CN: 在支持的终端中显示历史建议和搜索补全
         zh-HK: 在支援的終端中顯示歷史建議和搜尋補全
+      suggestion_popup:
+        en: Suggestion popup
+        zh-CN: 弹框候选词
+        zh-HK: 彈框候選詞
+      suggestion_popup_desc:
+        en: Show candidate word popup when typing in terminal
+        zh-CN: 在终端输入时显示候选词弹框
+        zh-HK: 在終端輸入時顯示候選詞彈框
       middle_click_paste:
         en: Middle click paste
         zh-CN: 中键粘贴

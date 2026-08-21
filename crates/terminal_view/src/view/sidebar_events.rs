@@ -187,6 +187,9 @@ impl TerminalView {
             TerminalSidebarEvent::AutocompleteChanged(enabled) => {
                 self.set_autocomplete_enabled(*enabled, cx);
             }
+            TerminalSidebarEvent::SuggestionPopupChanged(enabled) => {
+                self.apply_suggestion_popup_enabled(*enabled, cx);
+            }
             TerminalSidebarEvent::MiddleClickPasteChanged(enabled) => {
                 self.set_middle_click_paste(*enabled, cx);
             }

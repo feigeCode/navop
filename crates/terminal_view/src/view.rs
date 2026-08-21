@@ -311,6 +311,8 @@ pub struct TerminalView {
     auto_copy_on_select: bool,
     /// 是否启用历史自动补全
     autocomplete_enabled: bool,
+    /// 是否显示弹框候选词
+    suggestion_popup_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
     /// 右键快速粘贴

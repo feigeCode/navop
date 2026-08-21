@@ -131,6 +131,8 @@ pub enum SettingsPanelEvent {
     AutoCopyChanged(bool),
     /// 自动补全开关
     AutocompleteChanged(bool),
+    /// 弹框候选词开关
+    SuggestionPopupChanged(bool),
     /// 中键粘贴开关
     MiddleClickPasteChanged(bool),
     /// 右键快速粘贴开关
@@ -179,6 +181,8 @@ pub struct SettingsPanel {
     auto_copy: bool,
     /// 自动补全
     autocomplete_enabled: bool,
+    /// 弹框候选词
+    suggestion_popup_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
     /// 右键快速粘贴
@@ -207,6 +211,7 @@ impl SettingsPanel {
         has_file_manager: bool,
         auto_copy: bool,
         autocomplete_enabled: bool,
+        suggestion_popup_enabled: bool,
         middle_click_paste: bool,
         right_click_paste: bool,
         paste_image_upload: bool,
@@ -390,6 +395,7 @@ impl SettingsPanel {
             auto_session_logging,
             auto_copy,
             autocomplete_enabled,
+            suggestion_popup_enabled,
             middle_click_paste,
             right_click_paste,
             paste_image_upload,
@@ -465,6 +471,11 @@ impl SettingsPanel {
 
     pub fn set_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.autocomplete_enabled = enabled;
+        cx.notify();
+    }
+
+    pub fn set_suggestion_popup_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.suggestion_popup_enabled = enabled;
         cx.notify();
     }
 
@@ -1070,6 +1081,7 @@ impl SettingsPanel {
         let confirm_high_risk = self.confirm_high_risk_command;
         let auto_copy = self.auto_copy;
         let autocomplete_enabled = self.autocomplete_enabled;
+        let suggestion_popup_enabled = self.suggestion_popup_enabled;
         let middle_click_paste = self.middle_click_paste;
         let right_click_paste = self.right_click_paste;
         let paste_image_upload = self.paste_image_upload;
@@ -1193,6 +1205,23 @@ impl SettingsPanel {
                                     .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                         this.autocomplete_enabled = *checked;
                                         cx.emit(SettingsPanelEvent::AutocompleteChanged(*checked));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.suggestion_popup")))
+                            .child(
+                                Switch::new("terminal-suggestion-popup-switch")
+                                    .checked(suggestion_popup_enabled)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.suggestion_popup_enabled = *checked;
+                                        cx.emit(SettingsPanelEvent::SuggestionPopupChanged(
+                                            *checked,
+                                        ));
                                     })),
                             ),
                     )

@@ -776,6 +776,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub terminal_enable_autocomplete: bool,
     #[serde(default = "default_true")]
+    pub terminal_show_suggestion_popup: bool,
+    #[serde(default = "default_true")]
     pub terminal_middle_click_paste: bool,
     #[serde(default)]
     pub terminal_right_click_paste: bool,
@@ -1139,6 +1141,7 @@ impl Default for AppSettings {
             terminal_scrollback_lines: default_terminal_scrollback_lines(),
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
+            terminal_show_suggestion_popup: default_true(),
             terminal_middle_click_paste: default_true(),
             terminal_right_click_paste: false,
             terminal_paste_image_upload: default_true(),

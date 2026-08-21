@@ -64,6 +64,7 @@ pub(super) struct TerminalCommandBar {
     collapsed: bool,
     input_height: f32,
     autocomplete_enabled: bool,
+    suggestion_popup_enabled: bool,
     colors: TerminalColors,
     recording_path_prompt_pending: bool,
     recording_control_error: Option<String>,
