@@ -29,6 +29,7 @@ use connection_tunnel::TunnelGuard;
 use extension_protocol::conn::ConnId;
 use extension_protocol::method;
 use extension_protocol::row::{CellValue, ColumnSpec, Row};
+use mysql_common::collations::{Collation, CollationId};
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -518,12 +519,12 @@ fn method_requires_auto_conn_id(method_name: &str) -> bool {
 
 /// 把 v2 wire 的列描述转成宿主侧的 `QueryColumnMeta`。
 fn column_spec_to_meta(spec: &ColumnSpec) -> QueryColumnMeta {
-    let result_charset = spec
+    let mut result_charset = spec
         .extra
         .get("result_charset")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let result_collation = spec
+    let mut result_collation = spec
         .extra
         .get("result_collation")
         .and_then(Value::as_str)
@@ -533,6 +534,23 @@ fn column_spec_to_meta(spec: &ColumnSpec) -> QueryColumnMeta {
         .get("result_collation_id")
         .and_then(Value::as_u64)
         .and_then(|value| u16::try_from(value).ok());
+    let result_encoding_namespace = spec
+        .extra
+        .get("result_encoding_namespace")
+        .and_then(Value::as_str);
+
+    if result_encoding_namespace == Some("mysql") {
+        if let Some(collation_id) = result_collation_id {
+            let (mapped_charset, mapped_collation) = mysql_result_encoding(collation_id);
+            if result_charset.is_none() {
+                result_charset = mapped_charset;
+            }
+            if result_collation.is_none() {
+                result_collation = mapped_collation;
+            }
+        }
+    }
+
     let meta = QueryColumnMeta::new(spec.name.clone(), spec.type_str.clone()).with_result_encoding(
         result_charset,
         result_collation,
@@ -542,6 +560,19 @@ fn column_spec_to_meta(spec: &ColumnSpec) -> QueryColumnMeta {
         Some(nullable) => meta.with_nullable(nullable),
         None => meta,
     }
+}
+
+fn mysql_result_encoding(collation_id: u16) -> (Option<String>, Option<String>) {
+    let id = CollationId::from(collation_id);
+    if id == CollationId::UNKNOWN_COLLATION_ID {
+        return (None, None);
+    }
+
+    let collation = Collation::from(id);
+    (
+        Some(collation.charset().to_string()),
+        Some(collation.collation().to_string()),
+    )
 }
 
 /// 把一行 `Row` 翻译成宿主侧的 `Vec<Option<String>>`(每列一个可空字符串)。
@@ -1300,12 +1331,46 @@ mod tests {
     }
 
     #[test]
-    fn column_spec_to_meta_ignores_malformed_result_encoding() {
+    fn column_spec_to_meta_resolves_namespaced_mysql_collation_id() {
         let spec = ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(
             serde_json::json!({
-                "result_charset": 45,
-                "result_collation": false,
-                "result_collation_id": "28"
+                "result_encoding_namespace": "mysql",
+                "result_collation_id": 28
+            }),
+        );
+
+        let meta = column_spec_to_meta(&spec);
+
+        assert_eq!(meta.result_charset.as_deref(), Some("gbk"));
+        assert_eq!(meta.result_collation.as_deref(), Some("gbk_chinese_ci"));
+        assert_eq!(meta.result_collation_id, Some(28));
+    }
+
+    #[test]
+    fn column_spec_to_meta_does_not_guess_collation_namespace() {
+        for extra in [
+            serde_json::json!({"result_collation_id": 28}),
+            serde_json::json!({
+                "result_encoding_namespace": "vendor-specific",
+                "result_collation_id": 28
+            }),
+        ] {
+            let spec =
+                ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(extra);
+            let meta = column_spec_to_meta(&spec);
+
+            assert!(meta.result_charset.is_none());
+            assert!(meta.result_collation.is_none());
+            assert_eq!(meta.result_collation_id, Some(28));
+        }
+    }
+
+    #[test]
+    fn column_spec_to_meta_keeps_unknown_mysql_collation_id_without_guessing_names() {
+        let spec = ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(
+            serde_json::json!({
+                "result_encoding_namespace": "mysql",
+                "result_collation_id": u16::MAX
             }),
         );
 
@@ -1313,7 +1378,48 @@ mod tests {
 
         assert!(meta.result_charset.is_none());
         assert!(meta.result_collation.is_none());
-        assert!(meta.result_collation_id.is_none());
+        assert_eq!(meta.result_collation_id, Some(u16::MAX));
+    }
+
+    #[test]
+    fn column_spec_to_meta_prefers_explicit_names_over_mysql_mapping() {
+        let spec = ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(
+            serde_json::json!({
+                "result_encoding_namespace": "mysql",
+                "result_charset": "producer_charset",
+                "result_collation": "producer_collation",
+                "result_collation_id": 28
+            }),
+        );
+
+        let meta = column_spec_to_meta(&spec);
+
+        assert_eq!(meta.result_charset.as_deref(), Some("producer_charset"));
+        assert_eq!(meta.result_collation.as_deref(), Some("producer_collation"));
+        assert_eq!(meta.result_collation_id, Some(28));
+    }
+
+    #[test]
+    fn column_spec_to_meta_ignores_malformed_result_encoding() {
+        for extra in [
+            serde_json::json!({
+                "result_charset": 45,
+                "result_collation": false,
+                "result_collation_id": "28"
+            }),
+            serde_json::json!({
+                "result_encoding_namespace": "mysql",
+                "result_collation_id": u64::from(u16::MAX) + 1
+            }),
+        ] {
+            let spec =
+                ColumnSpec::new("payload", "LONGTEXT", ColumnTypeKind::Text).with_extra(extra);
+            let meta = column_spec_to_meta(&spec);
+
+            assert!(meta.result_charset.is_none());
+            assert!(meta.result_collation.is_none());
+            assert!(meta.result_collation_id.is_none());
+        }
     }
 
     #[test]

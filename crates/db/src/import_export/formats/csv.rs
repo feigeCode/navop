@@ -183,15 +183,6 @@ impl CsvFormatHandler {
 
         records
     }
-
-    fn escape_csv_field(
-        field: &str,
-        delimiter: char,
-        qualifier: Option<char>,
-        null_string: &str,
-    ) -> Result<String> {
-        escape_delimited_field("CSV", field, delimiter, qualifier, null_string)
-    }
 }
 
 #[async_trait]
@@ -456,7 +447,7 @@ impl FormatHandler for CsvFormatHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::{CsvFormatHandler, render_delimited_query_result};
+    use super::{CsvFormatHandler, escape_delimited_field, render_delimited_query_result};
     use crate::executor::{BinaryCell, QueryColumnMeta, QueryResult};
 
     #[test]
@@ -510,20 +501,20 @@ mod tests {
     }
 
     #[test]
-    fn escape_csv_quotes_empty_and_literal_null_marker() {
+    fn escape_delimited_csv_quotes_empty_and_literal_null_marker() {
         assert_eq!(
-            CsvFormatHandler::escape_csv_field("", ',', Some('"'), "\\N").unwrap(),
+            escape_delimited_field("CSV", "", ',', Some('"'), "\\N").unwrap(),
             "\"\""
         );
         assert_eq!(
-            CsvFormatHandler::escape_csv_field("\\N", ',', Some('"'), "\\N").unwrap(),
+            escape_delimited_field("CSV", "\\N", ',', Some('"'), "\\N").unwrap(),
             "\"\\N\""
         );
         assert_eq!(
-            CsvFormatHandler::escape_csv_field("NULL", ',', Some('"'), "\\N").unwrap(),
+            escape_delimited_field("CSV", "NULL", ',', Some('"'), "\\N").unwrap(),
             "NULL"
         );
-        assert!(CsvFormatHandler::escape_csv_field("", ',', None, "\\N").is_err());
+        assert!(escape_delimited_field("CSV", "", ',', None, "\\N").is_err());
     }
 
     #[test]

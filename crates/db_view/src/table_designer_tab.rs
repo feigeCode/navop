@@ -3792,7 +3792,7 @@ mod tests {
             schema: Some("public".to_string()),
             comment: Some("User table".to_string()),
             engine: None,
-            row_count: None,
+
             create_time: None,
             charset: None,
             collation: None,

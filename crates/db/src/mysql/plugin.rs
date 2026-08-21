@@ -1417,19 +1417,17 @@ impl DatabasePlugin for MySqlPlugin {
         database: &str,
         _schema: Option<String>,
     ) -> Result<Vec<TableInfo>> {
-        // Query to get all tables with their description/metadata
         let sql = format!(
             "SELECT \
-                TABLE_NAME, \
-                TABLE_COMMENT, \
-                ENGINE, \
-                TABLE_ROWS, \
-                CREATE_TIME, \
-                TABLE_COLLATION, \
-                TABLE_TYPE \
-             FROM INFORMATION_SCHEMA.TABLES \
-             WHERE TABLE_SCHEMA = '{}' AND TABLE_TYPE IN ('BASE TABLE','VIEW','SYSTEM VIEW') \
-             ORDER BY TABLE_NAME",
+            TABLE_NAME, \
+            TABLE_COMMENT, \
+            ENGINE, \
+            CREATE_TIME, \
+            TABLE_COLLATION, \
+            TABLE_TYPE \
+         FROM INFORMATION_SCHEMA.TABLES \
+         WHERE TABLE_SCHEMA = '{}' \
+         ORDER BY TABLE_NAME",
             database
         );
 
@@ -1443,29 +1441,23 @@ impl DatabasePlugin for MySqlPlugin {
                 .rows
                 .iter()
                 .map(|row| {
-                    let collation = row.get(5).and_then(|v| v.clone());
-                    // Extract charset from collation (e.g., "utf8mb4_general_ci" -> "utf8mb4")
+                    // 索引顺序：0名, 1注释, 2引擎, 3时间, 4排序, 5类型
+                    let collation = row.get(4).and_then(|v| v.clone());
                     let charset = collation
                         .as_ref()
                         .and_then(|c| c.split('_').next().map(|s| s.to_string()));
 
-                    // Parse row count
-                    let row_count = row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse::<i64>().ok());
-
                     TableInfo {
                         name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        object_type: match row.get(6).and_then(|v| v.as_deref()) {
-                            Some("VIEW" | "SYSTEM VIEW") => crate::TableObjectType::View,
-                            _ => crate::TableObjectType::Table,
+                        object_type: match row.get(5).and_then(|v| v.as_deref()) {
+                            Some("VIEW" | "SYSTEM VIEW") => TableObjectType::View,
+                            _ => TableObjectType::Table,
                         },
                         schema: None,
                         comment: row.get(1).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
                         engine: row.get(2).and_then(|v| v.clone()),
-                        row_count,
-                        create_time: row.get(4).and_then(|v| v.clone()),
+                        // row_count 字段已根据要求移除
+                        create_time: row.get(3).and_then(|v| v.clone()),
                         charset,
                         collation,
                     }
@@ -1484,40 +1476,79 @@ impl DatabasePlugin for MySqlPlugin {
         database: &str,
         _schema: Option<String>,
     ) -> Result<ObjectView> {
-        let tables = self.list_tables(connection, database, None).await?;
-
+        // UI需要展示的列
         let columns = vec![
             Column::localized("name", "ObjectView.columns.name").width(200.0),
             Column::localized("engine", "ObjectView.columns.engine").width(150.0),
             Column::localized("rows", "ObjectView.columns.rows")
                 .width(100.0)
                 .text_right(),
+            Column::localized("size", "ObjectView.columns.size")
+                .width(100.0)
+                .text_right(),
             Column::localized("created", "ObjectView.columns.created").width(180.0),
             Column::localized("comment", "ObjectView.columns.comment").width(300.0),
         ];
 
-        let rows: Vec<Vec<String>> = tables
-            .iter()
-            .map(|table| {
-                vec![
-                    table.name.clone(),
-                    table.engine.as_deref().unwrap_or("-").to_string(),
-                    table
-                        .row_count
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    table.create_time.as_deref().unwrap_or("-").to_string(),
-                    table.comment.as_deref().unwrap_or("").to_string(),
-                ]
-            })
-            .collect();
+        // 独立写 SQL 获取 UI 需要的所有信息
+        let sql = format!(
+            "SELECT \
+            TABLE_NAME, \
+            ENGINE, \
+            TABLE_ROWS, \
+            ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS SIZE_MB, \
+            CREATE_TIME, \
+            TABLE_COMMENT \
+         FROM INFORMATION_SCHEMA.TABLES \
+         WHERE TABLE_SCHEMA = '{}' \
+         ORDER BY TABLE_NAME",
+            database
+        );
 
-        Ok(ObjectView {
-            db_node_type: DbNodeType::Table,
-            title: t!("ObjectView.counts.tables", count = tables.len()).to_string(),
-            columns,
-            rows,
-        })
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list tables view: {}", e))?;
+
+        if let SqlResult::Query(query_result) = result {
+            let rows: Vec<Vec<String>> = query_result
+                .rows
+                .iter()
+                .map(|row| {
+                    // 索引顺序：0名, 1引擎, 2行数, 3大小(MB), 4创建时间, 5注释
+                    let row_count = row
+                        .get(2)
+                        .and_then(|v| v.clone())
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+
+                    vec![
+                        row.first().and_then(|v| v.clone()).unwrap_or_default(),
+                        row.get(1)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| "-".to_string()),
+                        row_count,
+                        row.get(3)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| "-".to_string()),
+                        row.get(4)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| "-".to_string()),
+                        row.get(5).and_then(|v| v.clone()).unwrap_or_default(),
+                    ]
+                })
+                .collect();
+
+            Ok(ObjectView {
+                db_node_type: DbNodeType::Table,
+                title: t!("ObjectView.counts.tables", count = rows.len()).to_string(),
+                columns,
+                rows,
+            })
+        } else {
+            Err(anyhow::anyhow!("Unexpected result type"))
+        }
     }
 
     // === Table Operations ===
@@ -2303,6 +2334,54 @@ impl DatabasePlugin for MySqlPlugin {
         def
     }
 
+    fn build_create_database_sql(
+        &self,
+        request: &crate::plugin::DatabaseOperationRequest,
+    ) -> String {
+        let db_name = self.quote_identifier(&request.database_name);
+        let charset = request
+            .field_values
+            .get("charset")
+            .map(|s| s.as_str())
+            .unwrap_or("utf8mb4");
+        let collation = request
+            .field_values
+            .get("collation")
+            .map(|s| s.as_str())
+            .unwrap_or("utf8mb4_general_ci");
+
+        format!(
+            "CREATE DATABASE {} CHARACTER SET {} COLLATE {};",
+            db_name, charset, collation
+        )
+    }
+
+    fn build_modify_database_sql(
+        &self,
+        request: &crate::plugin::DatabaseOperationRequest,
+    ) -> String {
+        let db_name = self.quote_identifier(&request.database_name);
+        let charset = request
+            .field_values
+            .get("charset")
+            .map(|s| s.as_str())
+            .unwrap_or("utf8mb4");
+        let collation = request
+            .field_values
+            .get("collation")
+            .map(|s| s.as_str())
+            .unwrap_or("utf8mb4_general_ci");
+
+        format!(
+            "ALTER DATABASE {} CHARACTER SET {} COLLATE {};",
+            db_name, charset, collation
+        )
+    }
+
+    fn build_drop_database_sql(&self, database_name: &str) -> String {
+        format!("DROP DATABASE {};", self.quote_identifier(database_name))
+    }
+
     // === Database Management Operations ===
     fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
         Some(
@@ -2422,54 +2501,6 @@ ORDER BY User, Host;"#
             scope,
             mysql_user_account(request)
         ))
-    }
-
-    fn build_create_database_sql(
-        &self,
-        request: &crate::plugin::DatabaseOperationRequest,
-    ) -> String {
-        let db_name = self.quote_identifier(&request.database_name);
-        let charset = request
-            .field_values
-            .get("charset")
-            .map(|s| s.as_str())
-            .unwrap_or("utf8mb4");
-        let collation = request
-            .field_values
-            .get("collation")
-            .map(|s| s.as_str())
-            .unwrap_or("utf8mb4_general_ci");
-
-        format!(
-            "CREATE DATABASE {} CHARACTER SET {} COLLATE {};",
-            db_name, charset, collation
-        )
-    }
-
-    fn build_modify_database_sql(
-        &self,
-        request: &crate::plugin::DatabaseOperationRequest,
-    ) -> String {
-        let db_name = self.quote_identifier(&request.database_name);
-        let charset = request
-            .field_values
-            .get("charset")
-            .map(|s| s.as_str())
-            .unwrap_or("utf8mb4");
-        let collation = request
-            .field_values
-            .get("collation")
-            .map(|s| s.as_str())
-            .unwrap_or("utf8mb4_general_ci");
-
-        format!(
-            "ALTER DATABASE {} CHARACTER SET {} COLLATE {};",
-            db_name, charset, collation
-        )
-    }
-
-    fn build_drop_database_sql(&self, database_name: &str) -> String {
-        format!("DROP DATABASE {};", self.quote_identifier(database_name))
     }
 
     fn build_limit_clause(&self) -> String {
@@ -3012,6 +3043,14 @@ ORDER BY User, Host;"#
         def
     }
 
+    fn build_drop_foreign_key_sql(&self, table_name: &str, foreign_key_name: &str) -> String {
+        format!(
+            "ALTER TABLE {} DROP FOREIGN KEY {};",
+            self.quote_identifier(table_name),
+            self.quote_identifier(foreign_key_name)
+        )
+    }
+
     fn build_create_table_sql(&self, design: &TableDesign) -> String {
         let mut sql = String::new();
         sql.push_str("CREATE TABLE ");
@@ -3385,14 +3424,6 @@ ORDER BY User, Host;"#
         }
     }
 
-    fn build_drop_foreign_key_sql(&self, table_name: &str, foreign_key_name: &str) -> String {
-        format!(
-            "ALTER TABLE {} DROP FOREIGN KEY {};",
-            self.quote_identifier(table_name),
-            self.quote_identifier(foreign_key_name)
-        )
-    }
-
     /// MySQL 使用 CHANGE COLUMN 语法进行列重命名，需要完整列定义。
     fn build_column_rename_sql(
         &self,
@@ -3602,8 +3633,8 @@ mod tests {
         host: Option<&str>,
         database: Option<&str>,
         values: &[(&str, &str)],
-    ) -> crate::plugin::DatabaseUserOperationRequest {
-        crate::plugin::DatabaseUserOperationRequest {
+    ) -> DatabaseUserOperationRequest {
+        DatabaseUserOperationRequest {
             user_name: user_name.to_string(),
             host: host.map(str::to_string),
             database: database.map(str::to_string),

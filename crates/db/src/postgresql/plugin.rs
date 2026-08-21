@@ -1565,10 +1565,7 @@ impl DatabasePlugin for PostgresPlugin {
             "SELECT
                 c.relname AS tablename,
                 n.nspname AS schemaname,
-                pg_catalog.pg_get_userbyid(c.relowner) AS tableowner,
                 obj_description(c.oid, 'pg_class') AS table_comment,
-                c.reltuples::bigint AS row_count,
-                pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size,
                 c.relkind AS relation_kind
              FROM pg_class c
              JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -1588,23 +1585,18 @@ impl DatabasePlugin for PostgresPlugin {
                 .rows
                 .iter()
                 .map(|row| {
-                    let row_count = row
-                        .get(4)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse::<i64>().ok());
-                    let object_type = match row.get(6).and_then(|v| v.as_deref()) {
-                        Some("v") | Some("m") => crate::TableObjectType::View,
-                        _ => crate::TableObjectType::Table,
+                    let object_type = match row.get(3).and_then(|v| v.as_deref()) {
+                        Some("v") | Some("m") => TableObjectType::View,
+                        _ => TableObjectType::Table,
                     };
 
                     TableInfo {
                         name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
                         object_type,
                         schema: row.get(1).and_then(|v| v.clone()),
-                        comment: row.get(3).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
-                        engine: row.get(5).and_then(|v| v.clone()), // 用 engine 字段存储 size
-                        row_count,
-                        create_time: row.get(2).and_then(|v| v.clone()), // 用 create_time 字段存储 owner
+                        comment: row.get(2).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
+                        engine: None,
+                        create_time: None,
                         charset: None,
                         collation: None,
                     }
@@ -1622,45 +1614,104 @@ impl DatabasePlugin for PostgresPlugin {
     async fn list_tables_view(
         &self,
         connection: &dyn DbConnection,
-        database: &str,
+        _database: &str,
         schema: Option<String>,
     ) -> Result<ObjectView> {
-        let tables = self.list_tables(connection, database, schema).await?;
-
+        // 保留了 UI 中的 8 个列
         let columns = vec![
             Column::localized("name", "ObjectView.columns.name").width(200.0),
             Column::localized("owner", "ObjectView.columns.owner").width(100.0),
+            Column::localized("type", "ObjectView.columns.type").width(80.0),
             Column::localized("rows", "ObjectView.columns.rows")
                 .width(100.0)
                 .text_right(),
             Column::localized("size", "ObjectView.columns.size")
                 .width(100.0)
                 .text_right(),
-            Column::localized("comment", "ObjectView.columns.comment").width(300.0),
+            Column::localized("indexes", "ObjectView.columns.indexes")
+                .width(80.0)
+                .text_right(),
+            Column::localized("tablespace", "ObjectView.columns.tablespace").width(100.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(200.0),
         ];
 
-        let rows: Vec<Vec<String>> = tables
-            .iter()
-            .map(|table| {
-                vec![
-                    table.name.clone(),
-                    table.create_time.as_deref().unwrap_or("-").to_string(), // owner
-                    table
-                        .row_count
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    table.engine.as_deref().unwrap_or("-").to_string(), // size
-                    table.comment.as_deref().unwrap_or("").to_string(),
-                ]
-            })
-            .collect();
+        let schema_val = schema.unwrap_or_else(|| "public".to_string());
+        let safe_schema = schema_val.replace("'", "''");
 
-        Ok(ObjectView {
-            db_node_type: DbNodeType::Table,
-            title: t!("ObjectView.counts.tables", count = tables.len()).to_string(),
-            columns,
-            rows,
-        })
+        // 精简了 SQL，只查询实际需要的字段，移除了 pg_stat_user_tables 的 JOIN
+        let sql = format!(
+            "SELECT
+                c.relname AS tablename,
+                pg_catalog.pg_get_userbyid(c.relowner) AS tableowner,
+                c.relkind AS relation_kind,
+                c.reltuples::bigint AS row_count,
+                pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size,
+                CASE WHEN c.relhasindex THEN (SELECT count(*) FROM pg_index i WHERE i.indrelid = c.oid) ELSE 0 END AS index_count,
+                COALESCE(ts.spcname, 'pg_default') AS tablespace,
+                obj_description(c.oid, 'pg_class') AS table_comment
+             FROM pg_class c
+             JOIN pg_namespace n ON c.relnamespace = n.oid
+             LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
+             WHERE n.nspname = '{}'
+               AND c.relkind IN ('r', 'p', 'v', 'm')
+             ORDER BY c.relname",
+            safe_schema
+        );
+
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
+
+        if let SqlResult::Query(query_result) = result {
+            let object_view_rows: Vec<Vec<String>> = query_result
+                .rows
+                .iter()
+                .map(|row| {
+                    // 新的索引映射 (0-based)，严格对应 SQL 查询顺序：
+                    // 0: Name, 1: Owner, 2: Type, 3: Rows, 4: Size, 5: Indexes, 6: Tablespace, 7: Comment
+
+                    let row_count = row
+                        .get(3)
+                        .and_then(|v| v.clone())
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+
+                    // 类型转换
+                    let object_type = match row.get(2).and_then(|v| v.as_deref()) {
+                        Some("v") => "View",
+                        Some("m") => "Materialized View",
+                        Some("p") => "Partitioned Table",
+                        _ => "Table",
+                    };
+
+                    vec![
+                        row.first().and_then(|v| v.clone()).unwrap_or_default(), // Name (index 0)
+                        row.get(1).and_then(|v| v.clone()).unwrap_or_default(),  // Owner (index 1)
+                        object_type.to_string(),                                 // Type (index 2)
+                        row_count,                                               // Rows (index 3)
+                        row.get(4)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| "-".to_string()), // Size (index 4)
+                        row.get(5)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| "0".to_string()), // Indexes (index 5)
+                        row.get(6).and_then(|v| v.clone()).unwrap_or_default(), // Tablespace (index 6)
+                        row.get(7).and_then(|v| v.clone()).unwrap_or_default(), // Comment (index 7)
+                    ]
+                })
+                .collect();
+
+            Ok(ObjectView {
+                db_node_type: DbNodeType::Table,
+                title: t!("ObjectView.counts.tables", count = object_view_rows.len()).to_string(),
+                columns,
+                rows: object_view_rows,
+            })
+        } else {
+            Err(anyhow::anyhow!("Unexpected result type"))
+        }
     }
 
     async fn list_columns(

@@ -1465,7 +1465,7 @@ mod tests {
             schema: None,
             comment: None,
             engine: None,
-            row_count: None,
+
             create_time: None,
             charset: None,
             collation: None,

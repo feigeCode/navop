@@ -847,9 +847,8 @@ impl DatabasePlugin for ClickHousePlugin {
 
                     tables.push(TableInfo {
                         name: name.clone(),
-                        object_type: crate::TableObjectType::Table,
+                        object_type: TableObjectType::Table,
                         schema: None,
-                        row_count: None,
                         create_time: None,
                         charset: None,
                         collation: None,

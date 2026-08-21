@@ -1438,6 +1438,25 @@ mod tests {
     }
 
     #[test]
+    fn binary_flag_does_not_override_character_collation() {
+        use mysql_async::consts::{ColumnFlags, ColumnType};
+
+        let column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_VAR_STRING)
+            .with_flags(ColumnFlags::BINARY_FLAG)
+            .with_character_set(45);
+        let bytes = "带 BINARY 属性的文本".repeat(80).into_bytes();
+
+        let (display, binary) =
+            MysqlDbConnection::extract_query_cell(Value::Bytes(bytes.clone()), Some(&column));
+
+        assert_eq!(display.as_deref(), std::str::from_utf8(&bytes).ok());
+        assert!(
+            binary.is_none(),
+            "BINARY_FLAG only describes comparison/padding semantics and must not override a character collation"
+        );
+    }
+
+    #[test]
     fn gbk_text_query_cell_uses_result_column_charset() {
         use encoding_rs::GBK;
         use mysql_async::consts::ColumnType;

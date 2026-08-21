@@ -1263,7 +1263,7 @@ impl DatabasePlugin for MsSqlPlugin {
                     schema: row.get(1).and_then(|v| v.clone()),
                     comment: row.get(2).and_then(|v| v.clone()),
                     engine: None,
-                    row_count: None,
+
                     create_time: row.get(3).and_then(|v| v.clone()),
                     charset: None,
                     collation: None,

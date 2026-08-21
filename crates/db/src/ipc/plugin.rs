@@ -2014,7 +2014,6 @@ fn table_info_from_wire(object: wire_schema::ObjectInfo) -> TableInfo {
         schema: None,
         comment: empty_to_none(object.comment),
         engine: None,
-        row_count: object.row_count_estimate.map(|count| count as i64),
         create_time: object.created_at,
         charset: None,
         collation: None,

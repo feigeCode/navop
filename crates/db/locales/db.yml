@@ -793,6 +793,10 @@ ObjectView:
       en: Nullable
       zh-CN: 可为空
       zh-HK: 可為空
+    indexes:
+      en: Indexes
+      zh-CN: 索引数
+      zh-HK: 索引數
     owner:
       en: Owner
       zh-CN: 所有者

@@ -3487,33 +3487,6 @@ fn select_has_group_by(select: &ast::Select) -> bool {
     }
 }
 
-fn has_aggregate_function_in_select_item(item: &ast::SelectItem) -> bool {
-    match item {
-        ast::SelectItem::UnnamedExpr(expr) | ast::SelectItem::ExprWithAlias { expr, .. } => {
-            has_aggregate_function(expr)
-        }
-        _ => false,
-    }
-}
-
-fn has_aggregate_function(expr: &Expr) -> bool {
-    match expr {
-        Expr::Function(func) => {
-            let name = func.name.to_string().to_uppercase();
-            matches!(
-                name.as_str(),
-                "COUNT" | "SUM" | "AVG" | "MAX" | "MIN" | "GROUP_CONCAT" | "STRING_AGG"
-            )
-        }
-        Expr::BinaryOp { left, right, .. } => {
-            has_aggregate_function(left) || has_aggregate_function(right)
-        }
-        Expr::UnaryOp { expr, .. } => has_aggregate_function(expr),
-        Expr::Nested(inner) => has_aggregate_function(inner),
-        _ => false,
-    }
-}
-
 pub fn analyze_select_editability_fallback(sql: &str) -> Option<String> {
     let upper = sql.trim().to_uppercase();
 

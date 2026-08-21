@@ -920,7 +920,7 @@ impl DatabasePlugin for DuckDbPlugin {
                 schema: row.get(1).and_then(|value| value.clone()),
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,

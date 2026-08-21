@@ -1675,7 +1675,7 @@ impl DatabasePlugin for OraclePlugin {
                     schema: Some(schema.to_string()),
                     comment: row.get(1).and_then(|v| v.clone()),
                     engine: None,
-                    row_count: None,
+
                     create_time: None,
                     charset: None,
                     collation: None,

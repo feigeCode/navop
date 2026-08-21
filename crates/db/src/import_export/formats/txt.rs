@@ -19,15 +19,6 @@ use crate::import_export::{
 pub struct TxtFormatHandler;
 
 impl TxtFormatHandler {
-    fn escape_txt_field(
-        field: &str,
-        delimiter: char,
-        qualifier: Option<char>,
-        null_string: &str,
-    ) -> Result<String> {
-        super::csv::escape_delimited_field("TXT", field, delimiter, qualifier, null_string)
-    }
-
     fn import_config(config: &ImportConfig) -> CsvImportConfig {
         config
             .csv_config
@@ -308,24 +299,25 @@ impl FormatHandler for TxtFormatHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::{TxtFormatHandler, render_delimited_query_result};
+    use super::render_delimited_query_result;
     use crate::executor::{BinaryCell, QueryColumnMeta, QueryResult};
+    use crate::import_export::formats::csv::escape_delimited_field;
 
     #[test]
-    fn escape_txt_quotes_empty_and_literal_null_marker() {
+    fn escape_delimited_txt_quotes_empty_and_literal_null_marker() {
         assert_eq!(
-            TxtFormatHandler::escape_txt_field("", '\t', Some('"'), "\\N").unwrap(),
+            escape_delimited_field("TXT", "", '\t', Some('"'), "\\N").unwrap(),
             "\"\""
         );
         assert_eq!(
-            TxtFormatHandler::escape_txt_field("\\N", '\t', Some('"'), "\\N").unwrap(),
+            escape_delimited_field("TXT", "\\N", '\t', Some('"'), "\\N").unwrap(),
             "\"\\N\""
         );
         assert_eq!(
-            TxtFormatHandler::escape_txt_field("NULL", '\t', Some('"'), "\\N").unwrap(),
+            escape_delimited_field("TXT", "NULL", '\t', Some('"'), "\\N").unwrap(),
             "NULL"
         );
-        assert!(TxtFormatHandler::escape_txt_field("", '\t', None, "\\N").is_err());
+        assert!(escape_delimited_field("TXT", "", '\t', None, "\\N").is_err());
     }
 
     #[test]

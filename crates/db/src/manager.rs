@@ -992,31 +992,39 @@ impl StreamingExecutionRequest {
         let current_database = self.config.database.as_deref().unwrap_or_default();
         let cache_ctx = CacheContext::from_config(&self.config);
 
-        match &self.cache_invalidation {
-            StreamingCacheInvalidation::Script(script) => {
-                cache
-                    .process_sql_for_invalidation(
-                        &self.config.id,
-                        script,
-                        current_database,
-                        self.schema.as_deref(),
-                        &self.config.database_type,
-                        Some(&cache_ctx),
-                    )
-                    .await
-            }
-            StreamingCacheInvalidation::Connection => {
-                // SQL files are parsed incrementally, so avoid loading the full file
-                // solely for DDL detection and invalidate the connection conservatively.
-                cache.invalidate_connection_metadata(&self.config.id).await;
-                cache.clear_connection_cache(&cache_ctx).await;
-                Some((
-                    self.config.id.clone(),
-                    current_database.to_string(),
-                    self.schema.clone(),
-                ))
-            }
-        }
+        // match &self.cache_invalidation {
+        //     StreamingCacheInvalidation::Script(script) => {
+        //         cache
+        //             .process_sql_for_invalidation(
+        //                 &self.config.id,
+        //                 script,
+        //                 current_database,
+        //                 self.schema.as_deref(),
+        //                 &self.config.database_type,
+        //                 Some(&cache_ctx),
+        //             )
+        //             .await
+        //     }
+        //     StreamingCacheInvalidation::Connection => {
+        //         // SQL files are parsed incrementally, so avoid loading the full file
+        //         // solely for DDL detection and invalidate the connection conservatively.
+        //         cache.invalidate_connection_metadata(&self.config.id).await;
+        //         cache.clear_connection_cache(&cache_ctx).await;
+        //         Some((
+        //             self.config.id.clone(),
+        //             current_database.to_string(),
+        //             self.schema.clone(),
+        //         ))
+        //     }
+        // }
+
+        cache.invalidate_connection_metadata(&self.config.id).await;
+        cache.clear_connection_cache(&cache_ctx).await;
+        Some((
+            self.config.id.clone(),
+            current_database.to_string(),
+            self.schema.clone(),
+        ))
     }
 }
 
@@ -1978,10 +1986,10 @@ impl GlobalDbState {
             .clone();
 
         // Build the cache context up front for cache lookup and write-back.
-        let cache_ctx = crate::CacheContext::from_config(&config);
+        let cache_ctx = CacheContext::from_config(&config);
 
         // Access the global node cache if it is available.
-        let cache = cx.update(|cx| cx.try_global::<crate::GlobalNodeCache>().cloned());
+        let cache = cx.update(|cx| cx.try_global::<GlobalNodeCache>().cloned());
 
         // For Database and Schema nodes, we need to connect to the specific database
         // This is especially important for PostgreSQL which doesn't support database switching
@@ -2002,7 +2010,7 @@ impl GlobalDbState {
             if let Some(ref cache) = cache {
                 if let Some(cached) = cache.get_node(&cache_ctx, &node_clone.id).await {
                     if Self::cached_children_ready(&cached) {
-                        tracing::debug!("Cache hit for node: {}", node_clone.id);
+                        debug!("Cache hit for node: {}", node_clone.id);
                         info!(
                             "[DB][Timing] load_node_children cache_hit connection_id={} node_id={} node_type={:?} children={} elapsed={}ms",
                             connection_id,
@@ -2017,7 +2025,7 @@ impl GlobalDbState {
             }
 
             // Cache miss. Load children from the database.
-            tracing::debug!(
+            debug!(
                 "Cache miss for node: {}, loading from database",
                 node_clone.id
             );
@@ -2087,7 +2095,7 @@ impl GlobalDbState {
                     cache
                         .cache_node(&cache_ctx, &node_with_children.id, &node_with_children)
                         .await;
-                    tracing::debug!(
+                    debug!(
                         "Cached node: {} with {} children",
                         node_with_children.id,
                         children.len()
@@ -2191,7 +2199,7 @@ impl GlobalDbState {
             let conn_id = connection_id.clone();
             let result = Tokio::spawn_result(cx, async move {
                 if let Some(databases) = cache.get_databases(&conn_id).await {
-                    tracing::debug!("Cache hit for databases: {}", conn_id);
+                    debug!("Cache hit for databases: {}", conn_id);
                     return Ok(databases);
                 }
                 Err(anyhow::anyhow!("Cache miss"))
@@ -2214,7 +2222,7 @@ impl GlobalDbState {
             let databases_clone = databases.clone();
             Tokio::spawn(cx, async move {
                 cache.cache_databases(&conn_id, databases_clone).await;
-                tracing::debug!("Cached databases for: {}", conn_id);
+                debug!("Cached databases for: {}", conn_id);
             })
             .detach();
         }
@@ -2276,7 +2284,7 @@ impl GlobalDbState {
             let db = database.clone();
             let result = Tokio::spawn_result(cx, async move {
                 if let Some(schemas) = cache.get_schemas(&conn_id, &db).await {
-                    tracing::debug!("Cache hit for schemas: {}:{}", conn_id, db);
+                    debug!("Cache hit for schemas: {}:{}", conn_id, db);
                     return Ok(schemas);
                 }
                 Err(anyhow::anyhow!("Cache miss"))
@@ -2301,7 +2309,7 @@ impl GlobalDbState {
             let schemas_clone = schemas.clone();
             Tokio::spawn(cx, async move {
                 cache.cache_schemas(&conn_id, &db, schemas_clone).await;
-                tracing::debug!("Cached schemas for: {}:{}", conn_id, db);
+                debug!("Cached schemas for: {}:{}", conn_id, db);
             })
             .detach();
         }
@@ -2327,7 +2335,7 @@ impl GlobalDbState {
             let sch = schema.clone();
             let result = Tokio::spawn_result(cx, async move {
                 if let Some(tables) = cache.get_tables(&conn_id, &db, sch.as_deref()).await {
-                    tracing::debug!("Cache hit for tables: {}:{}:{:?}", conn_id, db, sch);
+                    debug!("Cache hit for tables: {}:{}:{:?}", conn_id, db, sch);
                     return Ok(tables);
                 }
                 Err(anyhow::anyhow!("Cache miss"))
@@ -2355,7 +2363,7 @@ impl GlobalDbState {
                 cache
                     .cache_tables(&conn_id, &db, sch.as_deref(), tables_clone)
                     .await;
-                tracing::debug!("Cached tables for: {}:{}:{:?}", conn_id, db, sch);
+                debug!("Cached tables for: {}:{}:{:?}", conn_id, db, sch);
             })
             .detach();
         }
@@ -2397,7 +2405,7 @@ impl GlobalDbState {
             let result = Tokio::spawn_result(cx, async move {
                 if let Some(columns) = cache.get_columns(&conn_id, &db, sch.as_deref(), &tbl).await
                 {
-                    tracing::debug!(
+                    debug!(
                         "Cache hit for columns: {}:{}:{:?}:{}",
                         conn_id,
                         db,
@@ -2432,7 +2440,7 @@ impl GlobalDbState {
                 cache
                     .cache_columns(&conn_id, &db, sch.as_deref(), &tbl, columns_clone)
                     .await;
-                tracing::debug!("Cached columns for: {}:{}:{:?}:{}", conn_id, db, sch, tbl);
+                debug!("Cached columns for: {}:{}:{:?}:{}", conn_id, db, sch, tbl);
             })
             .detach();
         }
@@ -2477,7 +2485,7 @@ impl GlobalDbState {
             let result = Tokio::spawn_result(cx, async move {
                 if let Some(indexes) = cache.get_indexes(&conn_id, &db, sch.as_deref(), &tbl).await
                 {
-                    tracing::debug!(
+                    debug!(
                         "Cache hit for indexes: {}:{}:{:?}:{}",
                         conn_id,
                         db,
@@ -2512,7 +2520,7 @@ impl GlobalDbState {
                 cache
                     .cache_indexes(&conn_id, &db, sch.as_deref(), &tbl, indexes_clone)
                     .await;
-                tracing::debug!("Cached indexes for: {}:{}:{:?}:{}", conn_id, db, sch, tbl);
+                debug!("Cached indexes for: {}:{}:{:?}:{}", conn_id, db, sch, tbl);
             })
             .detach();
         }
@@ -3398,7 +3406,7 @@ mod tests {
             let active = self.active_opens.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_active_opens.fetch_max(active, Ordering::SeqCst);
             self.open_started.notify_waiters();
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(100)).await;
             self.active_opens.fetch_sub(1, Ordering::SeqCst);
             Ok(Box::new(MockConnection::new(config, true)))
         }
@@ -3945,7 +3953,7 @@ mod tests {
             .to_string();
         config.database = Some("main".to_string());
 
-        let plugin = ExternalDatabasePlugin::with_registry(crate::ipc::IpcDriverRegistry::empty());
+        let plugin = ExternalDatabasePlugin::with_registry(IpcDriverRegistry::empty());
 
         let error = plugin.test_connection(config).await.unwrap_err();
 
@@ -4523,7 +4531,7 @@ mod tests {
         let acquire_task =
             tokio::spawn(async move { acquire_manager.try_acquire_session(&acquire_config).await });
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         assert!(
             !acquire_task.is_finished(),
             "busy close-on-release session should not allow opening a second physical connection"
@@ -4574,7 +4582,7 @@ mod tests {
         });
 
         let first_session = first.await.unwrap().unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         assert_eq!(
             1,
             max_active_opens.load(Ordering::SeqCst),
@@ -4635,7 +4643,7 @@ mod tests {
         });
 
         let first_session = first.await.unwrap().unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
         assert_eq!(
             1,
             max_active_opens.load(Ordering::SeqCst),

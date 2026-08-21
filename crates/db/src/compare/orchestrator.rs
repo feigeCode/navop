@@ -507,7 +507,6 @@ pub fn table_schema_from_columns(table_name: &str, columns: &[ColumnInfo]) -> Ta
             schema: None,
             comment: None,
             engine: None,
-            row_count: None,
             create_time: None,
             charset: None,
             collation: None,
@@ -608,7 +607,7 @@ mod tests {
             schema: Some("public".to_string()),
             comment: Some("order table".to_string()),
             engine: None,
-            row_count: None,
+
             create_time: None,
             charset: None,
             collation: None,
@@ -668,7 +667,7 @@ mod tests {
                 schema: Some("public".to_string()),
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,
@@ -690,7 +689,7 @@ mod tests {
                 schema: None,
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,
@@ -701,7 +700,7 @@ mod tests {
                 schema: None,
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,
@@ -736,7 +735,7 @@ mod tests {
                 schema: None,
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,
@@ -747,7 +746,7 @@ mod tests {
                 schema: None,
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,
@@ -758,7 +757,7 @@ mod tests {
                 schema: None,
                 comment: None,
                 engine: None,
-                row_count: None,
+
                 create_time: None,
                 charset: None,
                 collation: None,
