@@ -2926,9 +2926,18 @@ impl GlobalDbState {
         request: ExportProgressRequest,
     ) -> anyhow::Result<ExportResult> {
         require_tokio_runtime("database export")?;
-        let db_config = self
+        let mut db_config = self
             .get_config(&request.connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", request.connection_id))?;
+
+        // Some databases (notably PostgreSQL) cannot switch to another database
+        // after connecting. When the export config identifies a database selected
+        // in the UI, open the export session directly against that database.
+        // Preserve the connection's default database when the export database is
+        // unspecified.
+        if !request.config.database.trim().is_empty() {
+            db_config.database = Some(request.config.database.clone());
+        }
 
         let plugin = self.get_plugin(&db_config.database_type)?;
         let session_id = self
@@ -3316,6 +3325,7 @@ mod tests {
         active_opens: Arc<AtomicUsize>,
         max_active_opens: Arc<AtomicUsize>,
         open_started: Arc<tokio::sync::Notify>,
+        created_configs: Option<Arc<StdMutex<Vec<DbConnectionConfig>>>>,
     }
 
     impl SlowOpenPlugin {
@@ -3351,7 +3361,20 @@ mod tests {
                 active_opens,
                 max_active_opens,
                 open_started,
+                created_configs: None,
             }
+        }
+
+        fn recording_postgres(created_configs: Arc<StdMutex<Vec<DbConnectionConfig>>>) -> Self {
+            let mut plugin = Self::with_lifecycle(
+                DatabaseType::PostgreSQL,
+                ConnectionLifecycle::default(),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(tokio::sync::Notify::new()),
+            );
+            plugin.created_configs = Some(created_configs);
+            plugin
         }
     }
 
@@ -3369,6 +3392,9 @@ mod tests {
             &self,
             config: DbConnectionConfig,
         ) -> Result<Box<dyn DbConnection + Send + Sync>, DbError> {
+            if let Some(created_configs) = &self.created_configs {
+                created_configs.lock().unwrap().push(config.clone());
+            }
             let active = self.active_opens.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_active_opens.fetch_max(active, Ordering::SeqCst);
             self.open_started.notify_waiters();
@@ -4182,6 +4208,69 @@ mod tests {
                 .get_session_config(&session_id)
                 .await
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn export_data_opens_session_for_selected_database() {
+        let mut state = GlobalDbState::new();
+        let config = test_config("export-selected-database");
+        state.register_connection(config);
+
+        let created_configs = Arc::new(StdMutex::new(Vec::new()));
+        state.db_manager.postgresql =
+            Arc::new(SlowOpenPlugin::recording_postgres(created_configs.clone()));
+
+        state
+            .export_data_with_progress_on_tokio(ExportProgressRequest {
+                connection_id: "export-selected-database".to_string(),
+                config: ExportConfig {
+                    database: "target_database".to_string(),
+                    ..ExportConfig::default()
+                },
+                progress_tx: None,
+            })
+            .await
+            .expect("export should use a session connected to the selected database");
+
+        assert_eq!(
+            vec![Some("target_database".to_string())],
+            created_configs
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|config| config.database.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn export_data_preserves_connection_database_when_not_selected() {
+        let mut state = GlobalDbState::new();
+        let config = test_config("export-default-database");
+        state.register_connection(config);
+
+        let created_configs = Arc::new(StdMutex::new(Vec::new()));
+        state.db_manager.postgresql =
+            Arc::new(SlowOpenPlugin::recording_postgres(created_configs.clone()));
+
+        state
+            .export_data_with_progress_on_tokio(ExportProgressRequest {
+                connection_id: "export-default-database".to_string(),
+                config: ExportConfig::default(),
+                progress_tx: None,
+            })
+            .await
+            .expect("export should preserve the connection's default database");
+
+        assert_eq!(
+            vec![Some("postgres".to_string())],
+            created_configs
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|config| config.database.clone())
+                .collect::<Vec<_>>()
         );
     }
 
