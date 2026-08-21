@@ -327,6 +327,30 @@ pub fn to_esc_str_with_backspace(
     None
 }
 
+/// Returns symbol input that should bypass the platform IME and be sent
+/// directly to the PTY.
+///
+/// Non-ASCII input sources (notably Chinese IMEs) can keep punctuation such as
+/// `*` in marked-text state until another key commits it. Terminals need that
+/// punctuation immediately, while alphabetic keys must still be left available
+/// to the IME for actual composition.
+pub fn direct_symbol_input(keystroke: &Keystroke) -> Option<&str> {
+    let modifiers = keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+        return None;
+    }
+    if keystroke.key == "space" {
+        return None;
+    }
+
+    let key_char = keystroke.key_char.as_deref()?;
+    (!key_char.is_empty()
+        && key_char
+            .chars()
+            .all(|ch| !ch.is_control() && !ch.is_alphanumeric() && !ch.is_whitespace()))
+    .then_some(key_char)
+}
+
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::term::TermMode;
@@ -582,6 +606,26 @@ mod tests {
                 .unwrap()
                 .as_ref(),
             "\x1b[1;3D"
+        );
+    }
+
+    #[test]
+    fn symbol_input_can_bypass_ime_without_commit_keys() {
+        assert_eq!(
+            super::direct_symbol_input(&Keystroke::parse("8->*").unwrap()),
+            Some("*")
+        );
+        assert_eq!(
+            super::direct_symbol_input(&Keystroke::parse("a").unwrap()),
+            None
+        );
+        assert_eq!(
+            super::direct_symbol_input(&Keystroke::parse("space").unwrap()),
+            None
+        );
+        assert_eq!(
+            super::direct_symbol_input(&Keystroke::parse("ctrl-8->*").unwrap()),
+            None
         );
     }
 }

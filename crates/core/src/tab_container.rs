@@ -26,8 +26,8 @@ use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme, Colorize as _, Disableable, ElementExt as _, Icon, IconName, IconSize,
-    InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, WindowExt as _,
-    notification::Notification, h_flex, v_flex,
+    InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, WindowExt as _, h_flex,
+    notification::Notification, v_flex,
 };
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -119,10 +119,16 @@ fn connection_status_badges(
 ) -> Vec<(IconName, SharedString)> {
     match status {
         Some(TabConnectionStatus::Disconnected) => {
-            vec![(IconName::StatusDisconnected, t!("TabStatus.disconnected").into())]
+            vec![(
+                IconName::StatusDisconnected,
+                t!("TabStatus.disconnected").into(),
+            )]
         }
         Some(TabConnectionStatus::Connected) if is_locked => {
-            vec![(IconName::StatusConnectedLocked, t!("TabStatus.connected_locked").into())]
+            vec![(
+                IconName::StatusConnectedLocked,
+                t!("TabStatus.connected_locked").into(),
+            )]
         }
         Some(TabConnectionStatus::Connected) => {
             vec![(IconName::StatusConnected, t!("TabStatus.connected").into())]
@@ -1840,7 +1846,12 @@ impl TabContainer {
     }
 
     /// Prompt for a lock password and lock the session (or all sessions).
-    pub fn start_lock_session(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn start_lock_session(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let lockable = self
             .tabs
             .get(index)
@@ -1909,9 +1920,7 @@ impl TabContainer {
             self.tabs
                 .iter()
                 .enumerate()
-                .filter(|(_, tab)| {
-                    tab.content().lockable(cx) && !tab.content().is_locked(cx)
-                })
+                .filter(|(_, tab)| tab.content().lockable(cx) && !tab.content().is_locked(cx))
                 .map(|(i, _)| i)
                 .collect()
         } else {
@@ -5487,7 +5496,7 @@ mod tests {
             icons(Some(TabConnectionStatus::Connected), false),
             vec![IconName::StatusConnected]
         );
-assert_eq!(
+        assert_eq!(
             icons(Some(TabConnectionStatus::Connected), true),
             vec![IconName::StatusConnectedLocked],
             "locked and connected is a single combined badge"

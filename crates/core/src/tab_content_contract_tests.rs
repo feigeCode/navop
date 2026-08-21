@@ -25,13 +25,8 @@ fn tab_content_view_exposes_session_lock_contracts() {
     let _is_locked: fn(&dyn TabContentView, &App) -> bool = <dyn TabContentView>::is_locked;
     let _is_disconnected: fn(&dyn TabContentView, &App) -> bool =
         <dyn TabContentView>::is_disconnected;
-    let _lock_session: fn(
-        &dyn TabContentView,
-        &str,
-        bool,
-        &mut gpui::Window,
-        &mut App,
-    ) -> bool = <dyn TabContentView>::lock_session;
+    let _lock_session: fn(&dyn TabContentView, &str, bool, &mut gpui::Window, &mut App) -> bool =
+        <dyn TabContentView>::lock_session;
     let _unlock_session: fn(&dyn TabContentView, &str, &mut App) -> bool =
         <dyn TabContentView>::unlock_session;
 }
@@ -43,7 +38,10 @@ fn tab_content_view_session_lock_defaults_fail_closed() {
 
 #[test]
 fn tab_content_view_exposes_connection_status_contracts() {
-    let _connection_status: fn(&dyn TabContentView, &App) -> Option<crate::tab_container::TabConnectionStatus> =
+    let _connection_status: fn(
+        &dyn TabContentView,
+        &App,
+    ) -> Option<crate::tab_container::TabConnectionStatus> =
         <dyn TabContentView>::connection_status;
 }
 

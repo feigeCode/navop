@@ -347,11 +347,7 @@ impl TerminalView {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(
-                    Icon::new(IconName::Key)
-                        .with_size(IconSize::Hero)
-                        .color()
-                )
+                .child(Icon::new(IconName::Key).with_size(IconSize::Hero).color())
                 .child(
                     div()
                         .text_color(theme.muted_foreground)

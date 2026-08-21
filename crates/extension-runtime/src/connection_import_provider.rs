@@ -17,6 +17,8 @@ mod host;
 
 #[cfg(feature = "wasm-components")]
 pub(crate) use host::ManifestConnectionImportHost;
+#[cfg(all(test, feature = "wasm-components"))]
+pub(crate) use host::candidates_for_platform;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestConnectionImporter {
@@ -33,6 +35,18 @@ pub struct ManifestConnectionImporter {
 pub struct ManualConnectionImportFile {
     pub importer_id: String,
     pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImportPreviewReport {
+    pub records: Vec<ImportRecord>,
+    pub errors: Vec<ImportPreviewError>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportPreviewError {
+    pub importer_id: String,
+    pub message: String,
 }
 
 impl ManualConnectionImportFile {
@@ -170,7 +184,7 @@ pub async fn preview_manifest_connection_importers(
     composite_root: &Path,
     importer_ids: &[String],
     include_passwords: bool,
-) -> Result<Vec<ImportRecord>> {
+) -> Result<ImportPreviewReport> {
     preview_manifest_connection_importers_with_files(
         composite_root,
         importer_ids,
@@ -186,9 +200,9 @@ pub async fn preview_manifest_connection_importers_with_files(
     importer_ids: &[String],
     include_passwords: bool,
     manual_files: &[ManualConnectionImportFile],
-) -> Result<Vec<ImportRecord>> {
+) -> Result<ImportPreviewReport> {
     let importers = list_manifest_connection_importers(composite_root)?;
-    let mut records = Vec::new();
+    let mut report = ImportPreviewReport::default();
     for importer in importers
         .into_iter()
         .filter(|importer| importer_ids.contains(&importer.descriptor.id))
@@ -221,17 +235,21 @@ pub async fn preview_manifest_connection_importers_with_files(
                 for record in &mut preview {
                     record.importer_id = descriptor_id.clone();
                 }
-                records.extend(preview);
+                report.records.extend(preview);
             }
             Err(error) => {
                 tracing::warn!(
                     importer_id = %descriptor_id,
                     "connection import preview failed: {error:?}"
                 );
+                report.errors.push(ImportPreviewError {
+                    importer_id: descriptor_id,
+                    message: error.to_string(),
+                });
             }
         }
     }
-    Ok(records)
+    Ok(report)
 }
 
 fn connection_import_inputs(
@@ -284,7 +302,7 @@ pub async fn preview_manifest_connection_importers(
     _composite_root: &Path,
     _importer_ids: &[String],
     _include_passwords: bool,
-) -> Result<Vec<ImportRecord>> {
+) -> Result<ImportPreviewReport> {
     Err(anyhow::anyhow!("wasm component runtime is disabled"))
 }
 
@@ -294,7 +312,7 @@ pub async fn preview_manifest_connection_importers_with_files(
     _importer_ids: &[String],
     _include_passwords: bool,
     _manual_files: &[ManualConnectionImportFile],
-) -> Result<Vec<ImportRecord>> {
+) -> Result<ImportPreviewReport> {
     Err(anyhow::anyhow!("wasm component runtime is disabled"))
 }
 
@@ -370,6 +388,7 @@ fn parse_output_kind(value: &str) -> Option<ImportRecordKind> {
         "database" => Some(ImportRecordKind::Database),
         "ssh" => Some(ImportRecordKind::Ssh),
         "port-forwarding" | "port_forwarding" => Some(ImportRecordKind::PortForwarding),
+        "quick-command" | "quick_command" => Some(ImportRecordKind::QuickCommand),
         _ => None,
     }
 }

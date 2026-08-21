@@ -1,5 +1,10 @@
-use connection_import_protocol::{ImportRecord, ImportRecordKind, SshImportAuthMethod};
-use one_core::storage::{ConnectionType, SshAuthMethod, SshParams, StoredConnection};
+use connection_import_protocol::{
+    ImportRecord, ImportRecordKind, SshImportAuthMethod, SshProxyImportKind,
+};
+use one_core::storage::{
+    ConnectionType, JumpServerConfig, ProxyConfig, ProxyType, QuickCommand, SshAuthMethod,
+    SshParams, StoredConnection,
+};
 use rust_i18n::t;
 
 use super::connection_import_database_conversion::{
@@ -27,6 +32,34 @@ pub(crate) fn import_draft_to_editor_connection(
     import_draft_to_connection(draft, record, ConversionMode::EditorPrefill)
 }
 
+pub(crate) fn import_draft_to_quick_command(
+    draft: &EditableImportDraft,
+    record: &ImportRecord,
+) -> Result<QuickCommand, String> {
+    if record.kind != ImportRecordKind::QuickCommand {
+        return Err(t!("Home.ConnectionImport.quick_command_config_missing").to_string());
+    }
+    let name = required_text(
+        &draft.name,
+        t!("Home.ConnectionImport.field_connection_name").as_ref(),
+    )?;
+    let command = required_text(
+        &draft.quick_command_command,
+        t!("Home.ConnectionImport.field_quick_command").as_ref(),
+    )?;
+    let mut quick_command = QuickCommand::new(command);
+    quick_command.name = Some(name);
+    quick_command.group_name = optional_text(&draft.quick_command_group_name);
+    quick_command.shortcut = optional_text(&draft.quick_command_shortcut);
+    quick_command.description = optional_text(&draft.quick_command_description);
+    quick_command.sort_order = record
+        .quick_command
+        .as_ref()
+        .map(|imported| imported.sort_order)
+        .unwrap_or_default();
+    Ok(quick_command)
+}
+
 fn import_draft_to_connection(
     draft: &EditableImportDraft,
     record: &ImportRecord,
@@ -35,6 +68,9 @@ fn import_draft_to_connection(
     match record.kind {
         ImportRecordKind::Database => to_database_connection(draft, record, mode),
         ImportRecordKind::Ssh => to_ssh_connection(draft, record),
+        ImportRecordKind::QuickCommand => {
+            Err(t!("Home.ConnectionImport.quick_command_editor_unsupported").to_string())
+        }
         ImportRecordKind::PortForwarding => {
             Err(t!("Home.ConnectionImport.port_forwarding_save_unsupported").to_string())
         }
@@ -48,10 +84,30 @@ pub(crate) fn import_draft_duplicate_identity(
     match record.kind {
         ImportRecordKind::Database => database_duplicate_identity(draft, record),
         ImportRecordKind::Ssh => ssh_duplicate_identity(draft),
+        ImportRecordKind::QuickCommand => quick_command_duplicate_identity(draft),
         ImportRecordKind::PortForwarding => {
             Err(t!("Home.ConnectionImport.port_forwarding_duplicate_unsupported").to_string())
         }
     }
+}
+
+pub(crate) fn quick_command_duplicate_identity(
+    draft: &EditableImportDraft,
+) -> Result<String, String> {
+    let name = required_text(
+        &draft.name,
+        t!("Home.ConnectionImport.field_connection_name").as_ref(),
+    )?;
+    let command = required_text(
+        &draft.quick_command_command,
+        t!("Home.ConnectionImport.field_quick_command").as_ref(),
+    )?;
+    Ok(format!(
+        "quick-command:{}:{}:{}",
+        normalize_identity_part(&draft.quick_command_group_name),
+        normalize_identity_part(&name),
+        command.trim()
+    ))
 }
 
 pub(crate) fn stored_connection_duplicate_identity(
@@ -132,12 +188,34 @@ fn to_ssh_connection(
         keepalive_interval: None,
         keepalive_max: None,
         default_directory: None,
-        init_script: None,
+        init_script: imported.init_script.clone(),
         disable_shell_integration: None,
         x11_forwarding: None,
         allow_legacy_algorithms: None,
-        jump_server: None,
-        proxy: None,
+        jump_server: imported
+            .jump_server
+            .as_ref()
+            .map(|jump| -> Result<JumpServerConfig, String> {
+                Ok(JumpServerConfig {
+                    host: jump.host.clone(),
+                    port: jump.port,
+                    username: jump.username.clone(),
+                    auth_method: imported_ssh_auth_method(&jump.auth_method)?,
+                    credential_reference: None,
+                })
+            })
+            .transpose()?,
+        proxy: imported.proxy.as_ref().map(|proxy| ProxyConfig {
+            proxy_type: match proxy.kind {
+                SshProxyImportKind::Socks5 => ProxyType::Socks5,
+                SshProxyImportKind::Http => ProxyType::Http,
+            },
+            host: proxy.host.clone(),
+            port: proxy.port,
+            username: proxy.username.clone(),
+            password: proxy.password.clone(),
+            credential_reference: None,
+        }),
         os_id: None,
         icon: None,
         account_expect: Default::default(),
@@ -160,6 +238,38 @@ fn edited_ssh_auth_method(
         }),
         SshImportAuthMethod::PrivateKey { passphrase, .. } => Ok(SshAuthMethod::PrivateKey {
             key_path: draft.private_key_path.trim().to_string(),
+            passphrase: passphrase.clone(),
+        }),
+        SshImportAuthMethod::PrivateKeyMaterial {
+            private_key,
+            passphrase,
+            ..
+        } => {
+            let private_key = private_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| t!("Home.ConnectionImport.private_key_missing").to_string())?;
+            Ok(SshAuthMethod::PrivateKeyContent {
+                private_key: private_key.to_string(),
+                passphrase: passphrase.clone(),
+            })
+        }
+        SshImportAuthMethod::Agent => Ok(SshAuthMethod::Agent),
+        SshImportAuthMethod::AutoPublicKey => Ok(SshAuthMethod::AutoPublicKey),
+    }
+}
+
+fn imported_ssh_auth_method(auth_method: &SshImportAuthMethod) -> Result<SshAuthMethod, String> {
+    match auth_method {
+        SshImportAuthMethod::Password { password } => Ok(SshAuthMethod::Password {
+            password: password.clone().unwrap_or_default(),
+        }),
+        SshImportAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => Ok(SshAuthMethod::PrivateKey {
+            key_path: key_path.clone(),
             passphrase: passphrase.clone(),
         }),
         SshImportAuthMethod::PrivateKeyMaterial {

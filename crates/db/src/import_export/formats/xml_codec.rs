@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::executor::QueryResult;
+use crate::executor::{QueryCellRef, QueryResult};
 
 #[derive(Debug)]
 pub(super) enum ImportedValue {
@@ -36,14 +36,12 @@ pub(super) fn parse_rows(
 }
 
 pub(super) fn serialize_table(table: &str, result: &QueryResult) -> Result<String> {
-    let binary_cells: HashMap<(usize, usize), &[u8]> = result
-        .binary_cells
-        .iter()
-        .map(|cell| ((cell.row_index, cell.column_index), cell.bytes.as_slice()))
-        .collect();
+    let view = result
+        .typed_view()
+        .map_err(|error| anyhow!("Invalid query result for XML export: {error}"))?;
     let mut output = String::new();
 
-    for (row_index, row) in result.rows.iter().enumerate() {
+    for row_index in 0..result.rows.len() {
         output.push_str("  <row table=\"");
         output.push_str(&escape_xml(table)?);
         output.push_str("\">\n");
@@ -53,17 +51,17 @@ pub(super) fn serialize_table(table: &str, result: &QueryResult) -> Result<Strin
             output.push_str(&escape_xml(column)?);
             output.push('"');
 
-            if let Some(bytes) = binary_cells.get(&(row_index, column_index)) {
-                output.push_str(" encoding=\"hex\">");
-                output.push_str(&hex::encode(bytes));
-            } else {
-                match row.get(column_index).and_then(Option::as_deref) {
-                    None => output.push_str(" null=\"true\">"),
-                    Some(value) => {
-                        output.push('>');
-                        output.push_str(&escape_xml(value)?);
-                    }
+            match view.cell(row_index, column_index) {
+                Some(QueryCellRef::Null) => output.push_str(" null=\"true\">"),
+                Some(QueryCellRef::Text(value)) => {
+                    output.push('>');
+                    output.push_str(&escape_xml(value)?);
                 }
+                Some(QueryCellRef::Binary(bytes)) => {
+                    output.push_str(" encoding=\"hex\">");
+                    output.push_str(&hex::encode(bytes));
+                }
+                None => unreachable!("typed view validated row and column bounds"),
             }
             output.push_str("</field>\n");
         }
@@ -168,12 +166,43 @@ fn is_valid_xml_char(character: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::escape_xml;
+    use super::{escape_xml, serialize_table};
+    use crate::executor::{BinaryCell, QueryColumnMeta, QueryResult};
 
     #[test]
     fn escape_xml_rejects_xml_1_0_control_characters() {
         let error = escape_xml("before\0after").expect_err("NUL should be rejected");
 
         assert!(error.to_string().contains("U+0000"));
+    }
+
+    #[test]
+    fn serialize_table_preserves_null_empty_text_and_binary_cells() {
+        let result = QueryResult {
+            sql: "SELECT a, b, c FROM t".to_string(),
+            columns: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            column_meta: vec![
+                QueryColumnMeta::new("a", "TEXT"),
+                QueryColumnMeta::new("b", "TEXT"),
+                QueryColumnMeta::new("c", "BLOB"),
+            ],
+            rows: vec![vec![
+                None,
+                Some(String::new()),
+                Some("display value".to_string()),
+            ]],
+            binary_cells: vec![BinaryCell {
+                row_index: 0,
+                column_index: 2,
+                bytes: vec![0x00, 0xff],
+            }],
+            elapsed_ms: 1,
+        };
+
+        let output = serialize_table("t", &result).expect("valid query result should serialize");
+
+        assert!(output.contains("<field name=\"a\" null=\"true\"></field>"));
+        assert!(output.contains("<field name=\"b\"></field>"));
+        assert!(output.contains("<field name=\"c\" encoding=\"hex\">00ff</field>"));
     }
 }

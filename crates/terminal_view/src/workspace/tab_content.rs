@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Task,
-    Window,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    Task, Window,
 };
 use gpui_component::{Icon, IconName};
 use one_core::sidebar_contribution::SidebarContribution;
@@ -44,6 +44,9 @@ impl TabContent for TerminalWorkspace {
     fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_tab_metric_state(true, cx);
         self.set_active_pane_metric_state(cx);
+        self.active_pane().update(cx, |pane, cx| {
+            pane.on_host_activated(cx);
+        });
     }
 
     fn on_deactivate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

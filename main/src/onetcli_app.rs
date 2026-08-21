@@ -315,7 +315,7 @@ use gpui::px;
 use gpui_component::dock::ToggleZoom;
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
-use one_core::settings::{AppSettings, HomePageStyle, MainWindowSize, StartupDefaultPage};
+use one_core::settings::{AppSettings, HomePageStyle, MainWindowState, StartupDefaultPage};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContainerEvent, TabContentRegistry, TabItem};
 use one_core::tab_navigation::{
@@ -1242,7 +1242,7 @@ impl OnetCliApp {
                     .timer(Duration::from_millis(150))
                     .await;
                 app.update_in(cx, |app, window, cx| {
-                    app.save_main_window_size(window, cx);
+                    app.save_main_window_state(window, cx);
                     app.main_window_size_save_task.take();
                 })
                 .ok();
@@ -1643,21 +1643,31 @@ impl OnetCliApp {
             .update(cx, |sidebar, cx| sidebar.set_terminal_colors(colors, cx));
     }
 
-    fn save_main_window_size(&self, window: &Window, cx: &mut App) {
+    fn save_main_window_state(&self, window: &Window, cx: &mut App) {
         let bounds = window.window_bounds().get_bounds();
-        let width = f32::from(bounds.size.width);
-        let height = f32::from(bounds.size.height);
-        let Some(size) = MainWindowSize::new(width, height) else {
+        let display_uuid = window
+            .display(cx)
+            .and_then(|display| display.uuid().ok())
+            .map(|uuid| uuid.to_string());
+        let Some(state) = MainWindowState::new(
+            f32::from(bounds.origin.x),
+            f32::from(bounds.origin.y),
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+            display_uuid,
+        ) else {
             return;
         };
-        if AppSettings::current(cx).main_window_size == Some(size) {
+        if AppSettings::current(cx).main_window_state.as_ref() == Some(&state) {
             return;
         }
-        AppSettings::update_and_save(cx, |settings| settings.main_window_size = Some(size));
+        AppSettings::update_and_save(cx, |settings| {
+            settings.main_window_state = Some(state);
+        });
     }
 
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.save_main_window_size(window, cx);
+        self.save_main_window_state(window, cx);
         if self.quit_state.request() == QuitRequestDecision::OpenPrompt {
             self.show_quit_confirmation(window, cx);
         }
@@ -2124,7 +2134,7 @@ mod tests {
     }
 
     #[test]
-    fn onetcli_app_persists_window_size_after_bounds_changes() {
+    fn onetcli_app_persists_window_state_after_bounds_changes() {
         let source = include_str!("onetcli_app.rs");
         let start = source.find("pub fn new").expect("OnetCliApp::new");
         let end = source[start..]
@@ -2134,7 +2144,29 @@ mod tests {
         let new_fn = &source[start..end];
 
         assert!(new_fn.contains("observe_window_bounds"));
-        assert!(new_fn.contains("save_main_window_size(window, cx)"));
+        assert!(new_fn.contains("save_main_window_state(window, cx)"));
+    }
+
+    #[test]
+    fn saved_main_window_state_includes_position_size_and_display() {
+        let source = include_str!("onetcli_app.rs");
+        let start = source
+            .find("fn save_main_window_state")
+            .expect("save_main_window_state");
+        let end = source[start..]
+            .find("\n    fn request_quit")
+            .map(|offset| start + offset)
+            .expect("save_main_window_state end");
+        let save = &source[start..end];
+
+        assert!(save.contains("bounds.origin.x"));
+        assert!(save.contains("bounds.origin.y"));
+        assert!(save.contains("bounds.size.width"));
+        assert!(save.contains("bounds.size.height"));
+        assert!(save.contains("let display_uuid = window"));
+        assert!(save.contains(".display(cx)"));
+        assert!(save.contains("display.uuid()"));
+        assert!(save.contains("settings.main_window_state = Some(state)"));
     }
 
     #[test]

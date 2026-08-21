@@ -3536,7 +3536,12 @@ impl Terminal {
     }
 
     /// 锁定会话；密码仅保存在内存中。
-    pub fn lock_session(&mut self, password_hash: String, hide_output: bool, cx: &mut Context<Self>) {
+    pub fn lock_session(
+        &mut self,
+        password_hash: String,
+        hide_output: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.session_lock = Some(SessionLockState {
             password_hash,
             hide_output,
@@ -4421,10 +4426,10 @@ mod tests {
         flush_pending_terminal_events, format_connection_error, host_key_verification_request,
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
         merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
-        receive_terminal_event_for_gpui, recent_text_from_term, resolve_default_windows_shell_from_env,
-        resolve_local_working_dir, resolve_ssh_connection, send_coalesced_wakeup, shell_escape_arg,
-        should_install_connected_backend, ssh_config_with_confirmed_host_key,
-        ssh_config_with_runtime_credentials,
+        receive_terminal_event_for_gpui, recent_text_from_term,
+        resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
+        send_coalesced_wakeup, shell_escape_arg, should_install_connected_backend,
+        ssh_config_with_confirmed_host_key, ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -5085,14 +5090,18 @@ mod tests {
 
         terminal.write(b"human input");
         terminal.write_external_input(b"external input");
-        assert!(direct_writes
-            .lock()
-            .expect("direct input probe should lock")
-            .is_empty());
-        assert!(external_writes
-            .lock()
-            .expect("external input probe should lock")
-            .is_empty());
+        assert!(
+            direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .is_empty()
+        );
+        assert!(
+            external_writes
+                .lock()
+                .expect("external input probe should lock")
+                .is_empty()
+        );
         assert!(terminal.external_input_handle().is_none());
         assert!(terminal.external_exec_handle().is_none());
         assert!(terminal.external_control_handle().is_none());

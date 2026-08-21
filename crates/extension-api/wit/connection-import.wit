@@ -11,6 +11,7 @@ interface connection-import {
         database,
         ssh,
         port-forwarding,
+        quick-command,
     }
 
     record importer-capabilities {
@@ -134,6 +135,7 @@ interface connection-import {
         host: string,
         port: option<u16>,
         username: string,
+        group-path: option<string>,
         auth-method: ssh-import-auth-method,
         init-script: option<string>,
         jump-server: option<ssh-jump-server-import-record>,
@@ -156,6 +158,16 @@ interface connection-import {
         target-port: u16,
     }
 
+    record quick-command-import-record {
+        name: string,
+        command: string,
+        group-name: option<string>,
+        shortcut: option<string>,
+        description: option<string>,
+        sort-order: s32,
+        connection-source-id: option<string>,
+    }
+
     enum password-import-status {
         included,
         missing,
@@ -173,6 +185,7 @@ interface connection-import {
         database: option<database-import-record>,
         ssh: option<ssh-import-record>,
         port-forwarding: option<port-forwarding-import-record>,
+        quick-command: option<quick-command-import-record>,
         password-status: password-import-status,
         warnings: list<import-warning>,
     }
@@ -232,6 +245,7 @@ interface connection-import-host {
     list-candidate-files: func(importer-id: string) -> list<candidate-file>;
     read-file: func(candidate-id: string) -> result<list<u8>, host-error>;
     read-directory: func(candidate-id: string) -> result<list<directory-entry>, host-error>;
+    read-candidate-directory: func(candidate-id: string, relative-path: string) -> result<list<directory-entry>, host-error>;
     read-candidate-child-file: func(candidate-id: string, relative-path: string) -> result<list<u8>, host-error>;
     read-secret: func(query: secret-query) -> secret-result;
     log: func(level: string, message: string);

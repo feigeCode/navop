@@ -125,6 +125,35 @@ fn playback_pty_and_ime_writes_are_rejected_before_side_effects() {
 }
 
 #[test]
+fn direct_symbol_input_is_committed_and_consumed_before_history_handling() {
+    let source = include_str!("../text_input.rs");
+    let handler = function_region(source, "pub(super) fn handle_key_event", "\n}");
+
+    assert!(
+        handler.contains("crate::keys::direct_symbol_input(&event.keystroke)"),
+        "terminal key handling must explicitly direct punctuation to the PTY"
+    );
+    assert_guard_precedes(
+        handler,
+        "crate::keys::direct_symbol_input(&event.keystroke)",
+        "self.commit_text(text, cx)",
+        "direct symbol writes",
+    );
+    assert_guard_precedes(
+        handler,
+        "self.commit_text(text, cx)",
+        "cx.stop_propagation()",
+        "IME event consumption",
+    );
+    assert_guard_precedes(
+        handler,
+        "crate::keys::direct_symbol_input(&event.keystroke)",
+        "if self.history_prompt.mode() == HistoryPromptMode::Search",
+        "history-search input",
+    );
+}
+
+#[test]
 fn playback_key_handler_retains_copy_before_rejecting_input() {
     let source = include_str!("../text_input.rs");
     let key_event = source
@@ -230,6 +259,67 @@ fn quick_command_changes_refresh_the_command_bar_cache() {
         .expect("quick-command changes should refresh active suggestions");
 
     assert!(update < load && load < refresh);
+}
+
+#[test]
+fn quick_command_click_with_explicit_enter_submits_instead_of_pasting() {
+    let source = include_str!("../sidebar_events.rs");
+    let handler = function_region(
+        source,
+        "pub(super) fn handle_sidebar_event",
+        "pub(super) fn invalidate_terminal_searches",
+    );
+    let event = handler
+        .find("TerminalSidebarEvent::ExecuteCommand")
+        .expect("sidebar should forward quick-command clicks");
+    let marker = handler[event..]
+        .find("quick_command_executes_on_click(command)")
+        .expect("click behavior should be gated by the explicit trailing-enter marker");
+    let submit = handler[marker..]
+        .find("TerminalCommandBarEvent::Submit(command.clone())")
+        .expect("commands with trailing Enter should submit");
+    let paste = handler[marker..]
+        .find("self.paste_text(command, window, cx)")
+        .expect("commands without trailing Enter should retain paste/fill behavior");
+
+    assert!(submit < paste);
+}
+
+#[test]
+fn quick_command_sync_refreshes_open_terminal_views_globally() {
+    let initialization = include_str!("../initialization.rs");
+    assert!(
+        initialization.contains("quick_command_sync_notifier(cx)"),
+        "every terminal view must subscribe to the app-wide quick-command notifier"
+    );
+    assert!(
+        initialization.contains("Self::handle_quick_command_sync_event"),
+        "terminal views must retain the app-wide quick-command subscription"
+    );
+
+    let source = include_str!("../sidebar_events.rs");
+    let sync_handler = function_region(
+        source,
+        "pub(super) fn handle_quick_command_sync_event",
+        "pub(super) fn handle_sidebar_event",
+    );
+    let command_bar = sync_handler
+        .find("self.command_bar.update")
+        .expect("sync should refresh the command-bar cache");
+    let load = command_bar
+        + sync_handler[command_bar..]
+            .find("load_quick_commands")
+            .expect("sync should reload quick commands");
+    let sidebar = command_bar
+        + sync_handler[command_bar..]
+            .find("self.sidebar.update")
+            .expect("sync should refresh the sidebar panel");
+    let panel_refresh = sidebar
+        + sync_handler[sidebar..]
+            .find("refresh_quick_commands")
+            .expect("sync should reload sidebar quick commands");
+
+    assert!(command_bar < load && load < sidebar && sidebar < panel_refresh);
 }
 
 #[test]
@@ -673,7 +763,11 @@ fn assert_guard_precedes(source: &str, guard: &str, side_effect: &str, capabilit
 #[test]
 fn status_badge_sync_emits_state_changed_only_on_transition() {
     let source = include_str!("../terminal_events.rs");
-    let sync = function_region(source, "fn sync_connection_status_badge", "fn sync_credential_inputs");
+    let sync = function_region(
+        source,
+        "fn sync_connection_status_badge",
+        "fn sync_credential_inputs",
+    );
     assert!(sync.contains("self.last_connection_status = current"));
     assert_guard_precedes(
         sync,

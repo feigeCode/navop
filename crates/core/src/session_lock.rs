@@ -8,10 +8,10 @@
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Entity, FontWeight, ParentElement, Styled as _, Task, Window, div, px,
 };
-use gpui::prelude::FluentBuilder as _;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{Input, InputState};
@@ -171,12 +171,7 @@ pub fn prompt_session_lock(window: &mut Window, cx: &mut App) -> Task<Option<Loc
                             }),
                     )
                     .when_some(error_for_render.read(cx).clone(), |this, msg| {
-                        this.child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().danger)
-                                .child(msg),
-                        )
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(msg))
                     }),
             )
     });
@@ -269,12 +264,7 @@ pub fn prompt_session_unlock(
                             }),
                     )
                     .when_some(error_for_render.read(cx).clone(), |this, msg| {
-                        this.child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().danger)
-                                .child(msg),
-                        )
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(msg))
                     }),
             )
     });
@@ -330,6 +320,10 @@ mod tests {
         assert_ne!(hash_session_lock_password("secret"), other);
 
         let direct = format!("{:x}", Sha256::digest(b"secret"));
-        assert_ne!(hash_session_lock_password("secret"), direct, "must be salted");
+        assert_ne!(
+            hash_session_lock_password("secret"),
+            direct,
+            "must be salted"
+        );
     }
 }

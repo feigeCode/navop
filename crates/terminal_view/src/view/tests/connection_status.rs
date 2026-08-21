@@ -28,7 +28,10 @@ fn live_ssh_maps_connection_state_to_tab_badge() {
 
 #[test]
 fn read_only_terminals_surface_no_status_badge() {
-    assert_eq!(map_connection_status(false, &ConnectionState::Connected), None);
+    assert_eq!(
+        map_connection_status(false, &ConnectionState::Connected),
+        None
+    );
     assert_eq!(
         map_connection_status(false, &ConnectionState::Connecting),
         None

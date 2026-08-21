@@ -44,9 +44,13 @@ impl ManifestConnectionImportHost {
 
     fn candidate_access(&self) -> CandidateFileAccess {
         CandidateFileAccess::new(
-            self.candidates.clone(),
+            self.visible_candidates(),
             PermissionSet::new(self.permissions.iter().map(String::as_str)),
         )
+    }
+
+    fn visible_candidates(&self) -> Vec<CandidateFile> {
+        candidates_for_platform(&self.candidates, current_platform())
     }
 }
 
@@ -56,7 +60,7 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
     }
 
     fn list_candidate_files(&self, _importer_id: &str) -> Vec<CandidateFile> {
-        self.candidates.clone()
+        self.visible_candidates()
     }
 
     fn read_file(&self, candidate_id: &str) -> Result<Vec<u8>, HostAccessError> {
@@ -72,17 +76,21 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
 
     fn read_directory(&self, candidate_id: &str) -> Result<Vec<DirectoryEntry>, HostAccessError> {
         let candidate = self.candidate_access().candidate(candidate_id)?.clone();
-        let entries = std::fs::read_dir(expand_connection_import_path(&candidate.path))
-            .map_err(|error| HostAccessError::Io(error.to_string()))?;
-        let mut out = Vec::new();
-        for entry in entries.flatten() {
-            out.push(DirectoryEntry {
-                candidate_id: candidate_id.to_string(),
-                name: entry.file_name().to_string_lossy().to_string(),
-                is_dir: entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false),
-            });
-        }
-        Ok(out)
+        read_directory_entries(candidate_id, expand_connection_import_path(&candidate.path))
+    }
+
+    fn read_candidate_directory(
+        &self,
+        candidate_id: &str,
+        relative_path: &str,
+    ) -> Result<Vec<DirectoryEntry>, HostAccessError> {
+        let (candidate, child) = self
+            .candidate_access()
+            .validate_child(candidate_id, relative_path)?;
+        read_directory_entries(
+            candidate_id,
+            expand_connection_import_path(&candidate.path).join(child),
+        )
     }
 
     fn read_candidate_child_file(
@@ -116,6 +124,28 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
     fn log(&self, level: &str, message: &str) {
         tracing::debug!(target: "connection_import", level, message);
     }
+}
+
+fn read_directory_entries(
+    candidate_id: &str,
+    path: PathBuf,
+) -> Result<Vec<DirectoryEntry>, HostAccessError> {
+    let entries = std::fs::read_dir(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            HostAccessError::NotFound(path.display().to_string())
+        } else {
+            HostAccessError::Io(error.to_string())
+        }
+    })?;
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        out.push(DirectoryEntry {
+            candidate_id: candidate_id.to_string(),
+            name: entry.file_name().to_string_lossy().to_string(),
+            is_dir: entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false),
+        });
+    }
+    Ok(out)
 }
 
 fn secret_scope(query: &SecretQuery) -> (String, String) {
@@ -170,6 +200,19 @@ fn current_platform() -> Platform {
     } else {
         Platform::Macos
     }
+}
+
+pub(crate) fn candidates_for_platform(
+    candidates: &[CandidateFile],
+    platform: Platform,
+) -> Vec<CandidateFile> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.platform.is_none() || candidate.platform.as_ref() == Some(&platform)
+        })
+        .cloned()
+        .collect()
 }
 
 fn expand_connection_import_path(path: &str) -> PathBuf {

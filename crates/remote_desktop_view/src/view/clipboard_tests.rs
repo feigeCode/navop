@@ -131,3 +131,34 @@ fn remote_clipboard_paths_reject_symlink_escape_from_staging_root() {
             .is_err()
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn remote_clipboard_paths_normalize_windows_verbatim_prefixes() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let root = temp.path().join("navop-rdp-clipboard");
+    let transfer = root.join("transfer-remote");
+    std::fs::create_dir_all(&transfer).expect("create transfer directory");
+    let received = transfer.join("report.txt");
+    std::fs::write(&received, b"report").expect("write received file");
+
+    let received_string = received.to_string_lossy().into_owned();
+    let prefix_string = if received_string.starts_with(r"\\?\") {
+        received_string
+    } else {
+        format!(r"\\?\{}", received_string)
+    };
+
+    let validated = validate_remote_clipboard_paths_in_root(&root, &[received_string])
+        .expect("plain Windows paths remain valid");
+
+    let prefix_validated = validate_remote_clipboard_paths_in_root(&root, &[prefix_string])
+        .expect("Windows verbatim prefix is normalized");
+    assert_eq!(validated[0], prefix_validated[0]);
+    assert!(
+        !validated[0]
+            .as_os_str()
+            .to_string_lossy()
+            .starts_with(r"\\?\")
+    );
+}

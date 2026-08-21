@@ -49,7 +49,6 @@ fn popup_fullscreen_hint_uses_an_auto_hiding_notification() {
     assert!(source.contains("fullscreen_hint: Option<SharedString>"));
     assert!(open.contains("if let Some(fullscreen_hint)"));
     assert!(open.contains("cx.update_window(window.into()"));
-    assert!(!open.contains("window.update(cx"));
     assert!(open.contains("Notification::info(fullscreen_hint)"));
     assert!(open.contains(".autohide(true)"));
     assert!(open.contains("window.push_notification"));
@@ -61,4 +60,16 @@ fn every_popup_registers_with_the_shared_window_close_router() {
 
     assert!(open.contains("crate::window_close::register_window"));
     assert!(open.contains("window.window_handle()"));
+}
+
+#[test]
+fn popup_uses_the_active_window_display() {
+    let open = popup_open_source();
+
+    assert!(open.contains("cx.active_window()"));
+    assert!(open.contains("window.display(cx)"));
+    assert!(open.contains("cx.primary_display()"));
+    assert!(open.contains("display_id"));
+    assert!(open.contains("display.visible_bounds()"));
+    assert!(open.contains("Bounds::centered_at(display_bounds.center()"));
 }

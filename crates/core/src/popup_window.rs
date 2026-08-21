@@ -1,7 +1,7 @@
 use gpui::{
     AnyView, App, AppContext, Bounds, Context, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Render, SharedString, Size, StatefulInteractiveElement, Styled, Window,
-    WindowBounds, WindowKind, WindowOptions, actions, div, prelude::FluentBuilder, px, size,
+    WindowBounds, WindowKind, WindowOptions, actions, div, point, prelude::FluentBuilder, px, size,
 };
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt, notification::Notification, v_flex,
@@ -124,12 +124,25 @@ where
     F: FnOnce(&mut Window, &mut App) -> E + Send + 'static,
 {
     let mut window_size = size(px(options.width), px(options.height));
-    if let Some(display) = cx.primary_display() {
-        let display_size = display.bounds().size;
+    let display = if let Some(active_window) = cx.active_window() {
+        active_window
+            .update(cx, |_, window, cx| window.display(cx))
+            .ok()
+            .flatten()
+            .or_else(|| cx.primary_display())
+    } else {
+        cx.primary_display()
+    };
+    let display_id = display.as_ref().map(|display| display.id());
+    let window_bounds = if let Some(display) = display.as_ref() {
+        let display_bounds = display.visible_bounds();
+        let display_size = display_bounds.size;
         window_size.width = window_size.width.min(display_size.width * 0.85);
         window_size.height = window_size.height.min(display_size.height * 0.85);
-    }
-    let window_bounds = Bounds::centered(None, window_size, cx);
+        Bounds::centered_at(display_bounds.center(), window_size)
+    } else {
+        Bounds::new(point(px(0.0), px(0.0)), window_size)
+    };
     let title = options.title.clone();
     let fullscreen_hint = options.fullscreen_hint.clone();
 
@@ -146,6 +159,7 @@ where
                 width: px(options.min_width),
                 height: px(options.min_height),
             }),
+            display_id,
             kind: WindowKind::Normal,
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             #[cfg(target_os = "linux")]

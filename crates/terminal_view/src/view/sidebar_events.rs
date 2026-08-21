@@ -28,6 +28,22 @@ fn terminal_search_display_offset(term: &Term<GpuiEventProxy>, point: AlacPoint)
 }
 
 impl TerminalView {
+    pub(super) fn handle_quick_command_sync_event(
+        &mut self,
+        _notifier: &Entity<QuickCommandSyncNotifier>,
+        _event: &QuickCommandSyncEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_bar.update(cx, |command_bar, cx| {
+            command_bar.load_quick_commands(cx);
+            command_bar.refresh_suggestions(cx);
+        });
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.refresh_quick_commands(cx);
+        });
+    }
+
     pub(super) fn handle_workspace_editor_event(
         &mut self,
         _editor: &Entity<WorkspaceEditor>,
@@ -118,8 +134,14 @@ impl TerminalView {
                 });
             }
             TerminalSidebarEvent::ExecuteCommand(command) => {
-                // 仅粘贴命令，不自动回车执行，降低误操作风险
-                self.paste_text(command, window, cx);
+                // 末尾显式换行是“点击即执行”的标记；默认仍只粘贴，避免误操作。
+                if quick_command_executes_on_click(command) {
+                    self.command_bar.update(cx, |_, cx| {
+                        cx.emit(TerminalCommandBarEvent::Submit(command.clone()));
+                    });
+                } else {
+                    self.paste_text(command, window, cx);
+                }
             }
             TerminalSidebarEvent::QuickCommandsChanged => {
                 self.command_bar.update(cx, |command_bar, cx| {

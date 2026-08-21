@@ -2585,12 +2585,10 @@ pub trait DatabasePlugin: Send + Sync {
         };
         query.strip_hidden_result_columns(&mut query_result)?;
         let table_ident = self.format_export_table_reference(database, schema, table);
-        Ok(
-            crate::import_export::formats::sql_export::render_insert_statements(
-                self,
-                &table_ident,
-                &query_result,
-            ),
+        crate::import_export::formats::sql_export::render_insert_statements(
+            self,
+            &table_ident,
+            &query_result,
         )
     }
 

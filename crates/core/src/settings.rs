@@ -731,6 +731,8 @@ pub struct ConnectionSidebarTreeState {
 pub struct AppSettings {
     #[serde(default)]
     pub main_window_size: Option<MainWindowSize>,
+    #[serde(default)]
+    pub main_window_state: Option<MainWindowState>,
     #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default = "default_theme_mode")]
@@ -1117,6 +1119,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             main_window_size: None,
+            main_window_state: None,
             locale: default_locale(),
             theme_mode: default_theme_mode(),
             auto_switch_theme: false,
@@ -1188,6 +1191,40 @@ impl MainWindowSize {
     pub fn new(width: f32, height: f32) -> Option<Self> {
         (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
             .then_some(Self { width, height })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MainWindowState {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub display_uuid: Option<String>,
+}
+
+impl MainWindowState {
+    pub fn new(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        display_uuid: Option<String>,
+    ) -> Option<Self> {
+        (x.is_finite()
+            && y.is_finite()
+            && width.is_finite()
+            && height.is_finite()
+            && width > 0.0
+            && height > 0.0)
+            .then_some(Self {
+                x,
+                y,
+                width,
+                height,
+                display_uuid,
+            })
     }
 }
 
@@ -1407,9 +1444,9 @@ mod tests {
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, CustomFont, DEFAULT_TERMINAL_THEME,
         HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
-        LocalTerminalProfileKind, LocalTerminalProfileSettings, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, MainWindowState, McpPermissionMode,
+        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage,
+        SyncProvider, default_grid_font_fallback_families, default_grid_monospace_font_family,
         grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
     };
@@ -1417,6 +1454,46 @@ mod tests {
     #[test]
     fn app_settings_disables_sync_by_default() {
         assert!(!AppSettings::default().sync_enabled);
+    }
+
+    #[test]
+    fn main_window_state_accepts_valid_values() {
+        let state = MainWindowState::new(100.0, -200.0, 1200.0, 800.0, Some("display-1".into()))
+            .expect("valid window state");
+
+        assert_eq!(100.0, state.x);
+        assert_eq!(-200.0, state.y);
+        assert_eq!(1200.0, state.width);
+        assert_eq!(800.0, state.height);
+        assert_eq!(Some("display-1"), state.display_uuid.as_deref());
+    }
+
+    #[test]
+    fn main_window_state_rejects_non_finite_or_non_positive_values() {
+        assert!(MainWindowState::new(f32::NAN, 0.0, 1200.0, 800.0, None).is_none());
+        assert!(MainWindowState::new(0.0, f32::INFINITY, 1200.0, 800.0, None).is_none());
+        assert!(MainWindowState::new(0.0, 0.0, 0.0, 800.0, None).is_none());
+        assert!(MainWindowState::new(0.0, 0.0, 1200.0, -1.0, None).is_none());
+    }
+
+    #[test]
+    fn main_window_state_round_trips_through_settings_json() {
+        let mut settings = AppSettings::default();
+        settings.main_window_state =
+            MainWindowState::new(-1920.0, 80.0, 1200.0, 800.0, Some("display-2".into()));
+
+        let json = serde_json::to_value(&settings).expect("serialize settings");
+        let restored: AppSettings = serde_json::from_value(json).expect("deserialize settings");
+
+        assert_eq!(settings.main_window_state, restored.main_window_state);
+    }
+
+    #[test]
+    fn legacy_app_settings_default_main_window_state_to_none() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert!(settings.main_window_state.is_none());
     }
 
     #[test]

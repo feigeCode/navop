@@ -45,7 +45,7 @@ use gpui::*;
 
 use gpui_component::Root;
 use gpui_component_assets::Assets;
-use one_core::settings::{AppSettings, MainWindowSize};
+use one_core::settings::{AppSettings, MainWindowSize, MainWindowState};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -68,34 +68,115 @@ enum AppOpenRequest {
     Open(file_open::FileOpenInput),
 }
 
-fn initial_main_window_size(
-    saved: Option<MainWindowSize>,
-    display_size: Option<Size<Pixels>>,
-) -> Size<Pixels> {
-    let mut result = saved
-        .and_then(|saved| MainWindowSize::new(saved.width, saved.height))
-        .map(|saved| size(px(saved.width), px(saved.height)))
+fn default_main_window_size(display_size: Option<Size<Pixels>>) -> Size<Pixels> {
+    display_size
+        .map(|display_size| {
+            size(
+                px(f32::from(display_size.width) * MAIN_WINDOW_DISPLAY_RATIO),
+                px(f32::from(display_size.height) * MAIN_WINDOW_DISPLAY_RATIO),
+            )
+        })
         .unwrap_or_else(|| {
             size(
                 px(DEFAULT_MAIN_WINDOW_WIDTH),
                 px(DEFAULT_MAIN_WINDOW_HEIGHT),
             )
-        });
-    if let Some(display_size) = display_size {
-        let maximum = size(
-            px(f32::from(display_size.width) * MAIN_WINDOW_DISPLAY_RATIO),
-            px(f32::from(display_size.height) * MAIN_WINDOW_DISPLAY_RATIO),
-        );
-        if saved.is_none() {
-            result = maximum;
-        }
-        result.width = result.width.min(maximum.width);
-        result.height = result.height.min(maximum.height);
-    }
-    result
+        })
 }
 
-fn main_window_options(window_bounds: Bounds<Pixels>) -> WindowOptions {
+fn initial_main_window_size(
+    saved_state: Option<&MainWindowState>,
+    legacy_saved_size: Option<MainWindowSize>,
+    display_size: Option<Size<Pixels>>,
+) -> Size<Pixels> {
+    let Some(display_size) = display_size else {
+        return saved_state
+            .and_then(|saved| MainWindowSize::new(saved.width, saved.height))
+            .or_else(|| {
+                legacy_saved_size.and_then(|saved| MainWindowSize::new(saved.width, saved.height))
+            })
+            .map(|saved| size(px(saved.width), px(saved.height)))
+            .unwrap_or_else(|| default_main_window_size(None));
+    };
+
+    let default_size = default_main_window_size(Some(display_size));
+    let saved_size = saved_state
+        .and_then(|saved| MainWindowSize::new(saved.width, saved.height))
+        .or_else(|| {
+            legacy_saved_size.and_then(|saved| MainWindowSize::new(saved.width, saved.height))
+        });
+    let Some(saved_size) = saved_size else {
+        return default_size;
+    };
+
+    let saved_size = size(px(saved_size.width), px(saved_size.height));
+    if saved_size.width <= display_size.width && saved_size.height <= display_size.height {
+        saved_size
+    } else {
+        default_size
+    }
+}
+
+fn bounds_fit_display(window_bounds: Bounds<Pixels>, display_bounds: Bounds<Pixels>) -> bool {
+    window_bounds.origin.x >= display_bounds.origin.x
+        && window_bounds.origin.y >= display_bounds.origin.y
+        && window_bounds.right() <= display_bounds.right()
+        && window_bounds.bottom() <= display_bounds.bottom()
+}
+
+fn initial_main_window_bounds(
+    saved_state: Option<&MainWindowState>,
+    legacy_saved_size: Option<MainWindowSize>,
+    display: Option<&dyn PlatformDisplay>,
+) -> Bounds<Pixels> {
+    initial_main_window_bounds_for_display(
+        saved_state,
+        legacy_saved_size,
+        display.map(|display| display.visible_bounds()),
+    )
+}
+
+fn initial_main_window_bounds_for_display(
+    saved_state: Option<&MainWindowState>,
+    legacy_saved_size: Option<MainWindowSize>,
+    display_bounds: Option<Bounds<Pixels>>,
+) -> Bounds<Pixels> {
+    let Some(display_bounds) = display_bounds else {
+        return Bounds::new(
+            point(px(0.0), px(0.0)),
+            initial_main_window_size(saved_state, legacy_saved_size, None),
+        );
+    };
+
+    let window_size =
+        initial_main_window_size(saved_state, legacy_saved_size, Some(display_bounds.size));
+    if let Some(saved_state) = saved_state
+        && let Some(saved_bounds) = MainWindowState::new(
+            saved_state.x,
+            saved_state.y,
+            saved_state.width,
+            saved_state.height,
+            saved_state.display_uuid.clone(),
+        )
+        .map(|saved| {
+            Bounds::new(
+                point(px(saved.x), px(saved.y)),
+                size(px(saved.width), px(saved.height)),
+            )
+        })
+        && saved_bounds.size == window_size
+        && bounds_fit_display(saved_bounds, display_bounds)
+    {
+        return saved_bounds;
+    }
+
+    Bounds::centered_at(display_bounds.center(), window_size)
+}
+
+fn main_window_options(
+    window_bounds: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
+) -> WindowOptions {
     let mut titlebar = gpui_component::TitleBar::title_bar_options();
     titlebar.title = Some(NAVOP_WINDOW_TITLE.into());
 
@@ -104,6 +185,7 @@ fn main_window_options(window_bounds: Bounds<Pixels>) -> WindowOptions {
         titlebar: Some(titlebar),
         window_min_size: Some(size(px(640.0), px(480.0))),
         window_background: WindowBackgroundAppearance::Transparent,
+        display_id,
         #[cfg(target_os = "linux")]
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::Normal,
@@ -290,12 +372,34 @@ fn main() {
         api_tools::init(cx);
         extension_runtime::init(cx);
 
-        let saved_size = AppSettings::current(cx).main_window_size;
-        let display_size = cx.primary_display().map(|display| display.bounds().size);
-        let window_size = initial_main_window_size(saved_size, display_size);
-
-        let window_bounds = Bounds::centered(None, window_size, cx);
-        let options = main_window_options(window_bounds);
+        let settings = AppSettings::current(cx);
+        let saved_state = settings.main_window_state.as_ref();
+        let saved_display = saved_state.and_then(|saved_state| {
+            saved_state.display_uuid.as_deref().and_then(|saved_uuid| {
+                cx.displays().into_iter().find(|display| {
+                    display
+                        .uuid()
+                        .ok()
+                        .is_some_and(|uuid| uuid.to_string() == saved_uuid)
+                })
+            })
+        });
+        let display = saved_display.clone().or_else(|| cx.primary_display());
+        let state_to_restore = if saved_display.is_some()
+            || saved_state.is_some_and(|state| state.display_uuid.is_none())
+        {
+            saved_state
+        } else {
+            None
+        };
+        let legacy_saved_size = saved_state
+            .is_none()
+            .then_some(settings.main_window_size)
+            .flatten();
+        let window_bounds =
+            initial_main_window_bounds(state_to_restore, legacy_saved_size, display.as_deref());
+        let options =
+            main_window_options(window_bounds, display.as_ref().map(|display| display.id()));
 
         cx.spawn(async move |cx| {
             let main_window = match cx.open_window(options, |window, cx| {
@@ -351,7 +455,7 @@ fn main() {
 #[cfg(test)]
 mod embedded_cli_removal_tests {
     use gpui::{px, size};
-    use one_core::settings::MainWindowSize;
+    use one_core::settings::{MainWindowSize, MainWindowState};
 
     #[test]
     fn main_does_not_route_business_cli() {
@@ -480,17 +584,106 @@ mod embedded_cli_removal_tests {
 
     #[test]
     fn first_launch_uses_ninety_percent_of_display() {
-        let actual = super::initial_main_window_size(None, Some(size(px(2000.0), px(1000.0))));
+        let actual =
+            super::initial_main_window_size(None, None, Some(size(px(2000.0), px(1000.0))));
 
         assert_eq!(size(px(1800.0), px(900.0)), actual);
     }
 
     #[test]
-    fn saved_window_size_is_restored_and_capped_to_display() {
-        let saved = MainWindowSize::new(1600.0, 1200.0);
-        let actual = super::initial_main_window_size(saved, Some(size(px(1200.0), px(800.0))));
+    fn saved_window_size_falls_back_to_default_when_it_does_not_fit() {
+        let saved = MainWindowState::new(0.0, 0.0, 1600.0, 1200.0, None);
+        let actual = super::initial_main_window_size(
+            saved.as_ref(),
+            None,
+            Some(size(px(1200.0), px(800.0))),
+        );
 
         assert_eq!(size(px(1080.0), px(720.0)), actual);
+    }
+
+    #[test]
+    fn saved_window_size_is_restored_when_it_fits_display() {
+        let saved = MainWindowState::new(100.0, 120.0, 1000.0, 700.0, None);
+        let actual = super::initial_main_window_size(
+            saved.as_ref(),
+            None,
+            Some(size(px(1200.0), px(800.0))),
+        );
+
+        assert_eq!(size(px(1000.0), px(700.0)), actual);
+    }
+
+    #[test]
+    fn legacy_saved_window_size_is_restored() {
+        let saved = MainWindowSize::new(1000.0, 700.0);
+        let actual =
+            super::initial_main_window_size(None, saved, Some(size(px(1200.0), px(800.0))));
+
+        assert_eq!(size(px(1000.0), px(700.0)), actual);
+    }
+
+    #[test]
+    fn bounds_fit_display_requires_the_entire_window_to_be_visible() {
+        let display = gpui::Bounds::new(
+            gpui::point(px(-1920.0), px(0.0)),
+            size(px(1920.0), px(1080.0)),
+        );
+
+        assert!(super::bounds_fit_display(
+            gpui::Bounds::new(
+                gpui::point(px(-1800.0), px(100.0)),
+                size(px(1200.0), px(800.0)),
+            ),
+            display,
+        ));
+        assert!(!super::bounds_fit_display(
+            gpui::Bounds::new(
+                gpui::point(px(-1800.0), px(100.0)),
+                size(px(1800.0), px(1000.0)),
+            ),
+            display,
+        ));
+    }
+
+    #[test]
+    fn saved_window_bounds_restore_position_on_the_target_display() {
+        let display = gpui::Bounds::new(
+            gpui::point(px(-1920.0), px(0.0)),
+            size(px(1920.0), px(1080.0)),
+        );
+        let saved = MainWindowState::new(-1800.0, 100.0, 1200.0, 800.0, Some("display-2".into()));
+
+        let actual =
+            super::initial_main_window_bounds_for_display(saved.as_ref(), None, Some(display));
+
+        assert_eq!(
+            gpui::Bounds::new(
+                gpui::point(px(-1800.0), px(100.0)),
+                size(px(1200.0), px(800.0)),
+            ),
+            actual,
+        );
+    }
+
+    #[test]
+    fn saved_window_bounds_center_when_the_saved_position_is_not_visible() {
+        let display = gpui::Bounds::new(
+            gpui::point(px(-1920.0), px(0.0)),
+            size(px(1920.0), px(1080.0)),
+        );
+        let saved = MainWindowState::new(100.0, 100.0, 1200.0, 800.0, Some("display-2".into()));
+
+        let actual =
+            super::initial_main_window_bounds_for_display(saved.as_ref(), None, Some(display));
+
+        assert_eq!(
+            gpui::Bounds::new(
+                gpui::point(px(-1560.0), px(140.0)),
+                size(px(1200.0), px(800.0)),
+            ),
+            actual,
+        );
     }
 
     #[test]
@@ -507,7 +700,7 @@ mod embedded_cli_removal_tests {
             origin: gpui::point(px(0.0), px(0.0)),
             size: size(px(800.0), px(600.0)),
         };
-        let options = super::main_window_options(bounds);
+        let options = super::main_window_options(bounds, None);
 
         assert_eq!(Some("navop"), options.app_id.as_deref());
         assert_eq!(

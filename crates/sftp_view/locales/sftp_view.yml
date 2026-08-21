@@ -488,6 +488,37 @@ Connection:
     zh-CN: SFTP 会话已断开连接。
     zh-HK: SFTP 會話已斷開連接。
 
+# SSH 凭据
+Credentials:
+  title:
+    en: SSH credentials required
+    zh-CN: 需要 SSH 凭据
+    zh-HK: 需要 SSH 憑據
+  hint:
+    en: Enter the credentials for this SFTP session. They will not be saved.
+    zh-CN: 请输入本次 SFTP 会话使用的凭据，这些内容不会被保存。
+    zh-HK: 請輸入本次 SFTP 工作階段使用的憑據，這些內容不會被儲存。
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  connect:
+    en: Connect
+    zh-CN: 连接
+    zh-HK: 連線
+  username_required:
+    en: Username is required.
+    zh-CN: 请输入用户名。
+    zh-HK: 請輸入使用者名稱。
+  password_required:
+    en: Password is required.
+    zh-CN: 请输入密码。
+    zh-HK: 請輸入密碼。
+
 # 终端
 Terminal:
   open_here:

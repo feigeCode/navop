@@ -56,6 +56,7 @@ use crate::cd_completion::{
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
 use crate::public_mcp::TerminalPublicMcpRegistration;
+use crate::quick_command_sync::{QuickCommandSyncEvent, QuickCommandSyncNotifier};
 use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
@@ -170,6 +171,7 @@ mod zmodem_picker;
 
 use actions::*;
 use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
+pub(crate) use command_bar_model::quick_command_executes_on_click;
 use helpers::*;
 use init_config::TerminalViewInit;
 use keybindings::{

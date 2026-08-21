@@ -1,12 +1,19 @@
-use std::collections::BTreeMap;
-
 use connection_import_protocol::{
     DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, PasswordImportStatus,
-    SshImportAuthMethod, SshImportRecord,
+    SshImportAuthMethod, SshImportRecord, SshJumpServerImportRecord, SshProxyImportKind,
+    SshProxyImportRecord,
 };
-use one_core::storage::{ConnectionType, DatabaseType, SshAuthMethod};
+use one_core::storage::connection::SqliteConnection;
+use one_core::storage::migration::run_migrations;
+use one_core::storage::traits::Repository;
+use one_core::storage::{
+    ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState, ProxyType,
+    SshAuthMethod, StorageManager, WorkspaceRepository,
+};
+use std::collections::BTreeMap;
 
 use super::connection_import_actions::duplicate_connection_name;
+use super::connection_import_actions::save_import_draft;
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, selected_import_count,
     selected_import_drafts_to_connections,
@@ -77,6 +84,108 @@ fn edited_database_draft_is_converted_to_stored_connection() {
     assert_eq!("app_user", config.username);
     assert_eq!("changed-secret", config.password);
     assert_eq!(Some("reporting".to_string()), config.database);
+}
+
+#[gpui::test]
+fn saving_ssh_import_creates_and_reuses_nested_workspaces(cx: &mut gpui::TestAppContext) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("import.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations");
+    let storage = StorageManager::new_with_connection(conn);
+    storage.register(ConnectionRepository::new(storage.connection()));
+    storage.register(WorkspaceRepository::new(storage.connection()));
+    cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+    let mut record = ssh_import("api");
+    record.ssh.as_mut().unwrap().group_path = Some("Production / Staging".to_string());
+    let draft = EditableImportDraft::new(record);
+    let first_connection_id = match cx
+        .update(|cx| save_import_draft(&draft, cx))
+        .expect("save first SSH import")
+    {
+        super::connection_import_actions::ImportSaveResult::Saved { connection_id } => {
+            connection_id
+        }
+        super::connection_import_actions::ImportSaveResult::SkippedDuplicate { .. } => {
+            panic!("first SSH import should be saved")
+        }
+    };
+
+    let (production, staging) = cx.update(|cx| {
+        let workspaces = cx
+            .global::<GlobalStorageState>()
+            .storage
+            .get::<WorkspaceRepository>()
+            .unwrap()
+            .list()
+            .expect("list workspaces after first save");
+        let production = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Production")
+            .expect("Production workspace");
+        let staging = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Staging")
+            .expect("Staging workspace");
+        (production.clone(), staging.clone())
+    });
+    assert_eq!(None, production.parent_id);
+    assert_eq!(production.id, staging.parent_id);
+
+    let first = cx
+        .update(|cx| {
+            cx.global::<GlobalStorageState>()
+                .storage
+                .get::<ConnectionRepository>()
+                .unwrap()
+                .list()
+                .expect("list connections after first save")
+        })
+        .into_iter()
+        .find(|connection| connection.id == first_connection_id)
+        .expect("saved first connection");
+    assert_eq!(staging.id, first.workspace_id);
+
+    let mut duplicate_record = ssh_import("api-different-endpoint");
+    duplicate_record.ssh.as_mut().unwrap().host = "another.example.test".to_string();
+    duplicate_record.ssh.as_mut().unwrap().group_path = Some(" Production / Staging ".to_string());
+    let duplicate = EditableImportDraft::new(duplicate_record);
+    let second_connection_id = match cx
+        .update(|cx| save_import_draft(&duplicate, cx))
+        .expect("save second SSH import")
+    {
+        super::connection_import_actions::ImportSaveResult::Saved { connection_id } => {
+            connection_id
+        }
+        super::connection_import_actions::ImportSaveResult::SkippedDuplicate { .. } => {
+            panic!("second SSH import should be saved")
+        }
+    };
+    let second = cx
+        .update(|cx| {
+            cx.global::<GlobalStorageState>()
+                .storage
+                .get::<ConnectionRepository>()
+                .unwrap()
+                .list()
+                .expect("list connections after second save")
+        })
+        .into_iter()
+        .find(|connection| connection.id == second_connection_id)
+        .expect("saved second connection");
+
+    let final_workspaces = cx
+        .update(|cx| {
+            cx.global::<GlobalStorageState>()
+                .storage
+                .get::<WorkspaceRepository>()
+                .unwrap()
+                .list()
+        })
+        .expect("list workspaces after second save");
+    assert_eq!(2, final_workspaces.len());
+    assert_eq!(staging.id, second.workspace_id);
 }
 
 #[test]
@@ -201,6 +310,85 @@ fn imported_ssh_private_key_material_is_converted_to_stored_connection() {
 }
 
 #[test]
+fn imported_ssh_extended_options_are_converted_to_stored_connection() {
+    let mut record = ssh_import("extended");
+    let ssh = record.ssh.as_mut().expect("ssh record should exist");
+    ssh.init_script = Some("echo ready".to_string());
+    ssh.jump_server = Some(SshJumpServerImportRecord {
+        host: "bastion.example.test".to_string(),
+        port: 2200,
+        username: "jump-user".to_string(),
+        auth_method: SshImportAuthMethod::Password {
+            password: Some("jump-secret".to_string()),
+        },
+    });
+    ssh.proxy = Some(SshProxyImportRecord {
+        kind: SshProxyImportKind::Socks5,
+        host: "proxy.example.test".to_string(),
+        port: 1080,
+        username: Some("proxy-user".to_string()),
+        password: Some("proxy-secret".to_string()),
+    });
+
+    let stored =
+        selected_import_drafts_to_connections(&[EditableImportDraft::new(record)]).unwrap();
+    let params = stored[0].to_ssh_params().unwrap();
+
+    assert_eq!(Some("echo ready".to_string()), params.init_script);
+    let jump = params.jump_server.expect("jump server should be preserved");
+    assert_eq!("bastion.example.test", jump.host);
+    assert_eq!(2200, jump.port);
+    assert_eq!("jump-user", jump.username);
+    assert!(matches!(
+        jump.auth_method,
+        SshAuthMethod::Password { ref password } if password == "jump-secret"
+    ));
+    assert!(jump.credential_reference.is_none());
+
+    let proxy = params.proxy.expect("proxy should be preserved");
+    assert_eq!(ProxyType::Socks5, proxy.proxy_type);
+    assert_eq!("proxy.example.test", proxy.host);
+    assert_eq!(1080, proxy.port);
+    assert_eq!(Some("proxy-user".to_string()), proxy.username);
+    assert_eq!(Some("proxy-secret".to_string()), proxy.password);
+    assert!(proxy.credential_reference.is_none());
+}
+
+#[test]
+fn imported_jump_server_private_key_uses_its_own_key_path() {
+    let mut record = ssh_import("jump-key");
+    let ssh = record.ssh.as_mut().expect("ssh record should exist");
+    ssh.jump_server = Some(SshJumpServerImportRecord {
+        host: "bastion.example.test".to_string(),
+        port: 22,
+        username: "jump-user".to_string(),
+        auth_method: SshImportAuthMethod::PrivateKey {
+            key_path: "/jump/.ssh/id_ed25519".to_string(),
+            passphrase: Some("passphrase".to_string()),
+        },
+    });
+    let mut draft = EditableImportDraft::new(record);
+    draft
+        .apply_edit(ImportDraftEdit::Text {
+            field: ImportDraftField::PrivateKeyPath,
+            value: "/target/.ssh/id_rsa".to_string(),
+        })
+        .unwrap();
+
+    let stored = selected_import_drafts_to_connections(&[draft]).unwrap();
+    let params = stored[0].to_ssh_params().unwrap();
+    let jump = params.jump_server.expect("jump server should be preserved");
+
+    assert!(matches!(
+        jump.auth_method,
+        SshAuthMethod::PrivateKey {
+            ref key_path,
+            passphrase: Some(ref passphrase),
+        } if key_path == "/jump/.ssh/id_ed25519" && passphrase == "passphrase"
+    ));
+}
+
+#[test]
 fn database_duplicate_identity_uses_type_host_port_username_and_database() {
     let draft = EditableImportDraft::new(database_import("prod"));
 
@@ -273,6 +461,7 @@ fn database_import(name: &str) -> ImportRecord {
         }),
         ssh: None,
         port_forwarding: None,
+        quick_command: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -298,6 +487,7 @@ fn sqlite_import(name: &str, path: Option<&str>) -> ImportRecord {
         }),
         ssh: None,
         port_forwarding: None,
+        quick_command: None,
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
@@ -325,6 +515,7 @@ fn external_database_import(name: &str, driver_id: &str, port: u16) -> ImportRec
         }),
         ssh: None,
         port_forwarding: None,
+        quick_command: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -344,6 +535,7 @@ fn ssh_import(name: &str) -> ImportRecord {
             host: "ssh.example.test".to_string(),
             port: Some(2222),
             username: "deploy".to_string(),
+            group_path: None,
             auth_method: SshImportAuthMethod::PrivateKey {
                 key_path: "~/.ssh/id_rsa".to_string(),
                 passphrase: None,
@@ -353,6 +545,7 @@ fn ssh_import(name: &str) -> ImportRecord {
             proxy: None,
         }),
         port_forwarding: None,
+        quick_command: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }

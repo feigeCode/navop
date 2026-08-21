@@ -204,6 +204,14 @@ fn command_submission_trims_outer_whitespace_and_appends_enter() {
 }
 
 #[test]
+fn quick_command_click_executes_only_for_explicit_trailing_enter() {
+    assert!(quick_command_executes_on_click("echo hello\n"));
+    assert!(quick_command_executes_on_click("echo hello\r"));
+    assert!(!quick_command_executes_on_click("echo hello"));
+    assert!(!quick_command_executes_on_click("echo \\\nhello"));
+}
+
+#[test]
 fn command_batch_lines_split_trim_and_drop_empty_lines() {
     assert_eq!(
         vec![
