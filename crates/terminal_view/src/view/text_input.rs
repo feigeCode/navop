@@ -126,6 +126,16 @@ impl TerminalView {
             return;
         }
 
+        // macOS may leave punctuation in marked-text state when a non-ASCII
+        // input source is active. Punctuation is not useful IME composition
+        // input for a terminal, so send it to the PTY and consume the event
+        // before the input context can defer it until the next keystroke.
+        if let Some(text) = crate::keys::direct_symbol_input(&event.keystroke) {
+            self.commit_text(text, cx);
+            cx.stop_propagation();
+            return;
+        }
+
         let modifiers = event.keystroke.modifiers;
         let key = event.keystroke.key.as_str();
         tracing::debug!(

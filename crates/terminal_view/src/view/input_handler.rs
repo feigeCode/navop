@@ -6,8 +6,8 @@ use super::*;
 /// `EntityInputHandler::accepts_text_input`, which is appropriate for text
 /// editors but not for a terminal. A terminal must let printable key events
 /// reach the shell as raw input even when a non-ASCII macOS input source is
-/// active; otherwise symbols such as `*` can remain marked by the IME until
-/// the following key is pressed.
+/// active; otherwise symbols can remain marked by the IME until the following
+/// key is pressed.
 pub(super) struct TerminalInputHandler {
     inner: ElementInputHandler<TerminalView>,
 }
