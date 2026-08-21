@@ -17,6 +17,9 @@ use gpui_component::{
 use rust_i18n::t;
 use tokio::sync::mpsc;
 
+use crate::compare::data_diff_detail::{
+    DataDiffListState, clear_data_diff_list, data_diff_list_state, refresh_data_diff_list,
+};
 use crate::compare::sync_statement_picker::{
     SyncExecutionSnapshot, SyncStatementListState, clear_sync_statement_list,
     default_selected_statement_ids, refresh_sync_statement_list, selected_sync_execution_snapshot,
@@ -72,7 +75,8 @@ pub struct DataCompareWindow {
     pub(super) target_table_list: TableSelectionListState,
     pub(super) key_columns: Entity<InputState>,
     pub(super) ignore_identifier_case: Entity<bool>,
-    pub(super) result: Entity<Option<DataCompareBatchResult>>,
+    pub(super) result: Entity<Option<Arc<DataCompareBatchResult>>>,
+    pub(super) data_diff_list: DataDiffListState,
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
     pub(super) sync_statement_list: SyncStatementListState,
@@ -149,6 +153,7 @@ impl DataCompareWindow {
 
         let view = cx.new(|cx: &mut Context<Self>| {
             let selected_statement_ids = cx.new(|_| HashSet::new());
+            let data_diff_list = data_diff_list_state(selected_statement_ids.clone(), window, cx);
             let sync_statement_list =
                 sync_statement_list_state(selected_statement_ids.clone(), window, cx);
             let selected_source_tables = cx.new({
@@ -188,6 +193,7 @@ impl DataCompareWindow {
                 ignore_identifier_case,
                 sync_sql_editor,
                 result: cx.new(|_| None),
+                data_diff_list,
                 sync_plan: cx.new(|_| None),
                 selected_statement_ids,
                 sync_statement_list,
@@ -216,6 +222,7 @@ impl DataCompareWindow {
                     if !this.sync_sql_dirty {
                         this.refresh_sync_editor(window, cx);
                     }
+                    this.data_diff_list.update(cx, |_, cx| cx.notify());
                     this.sync_statement_list.update(cx, |_, cx| cx.notify());
                 },
             );
@@ -410,6 +417,13 @@ impl DataCompareWindow {
                             let sync_sql_blocked_status =
                                 data_compare_sync_sql_blocked_status(&result);
                             let selected_ids = default_selected_statement_ids(&plan);
+                            let result = Arc::new(result);
+                            refresh_data_diff_list(
+                                &view.data_diff_list,
+                                result.clone(),
+                                Some(&plan),
+                                cx,
+                            );
                             refresh_sync_statement_list(&view.sync_statement_list, &plan, cx);
                             view.result.update(cx, |slot, cx| {
                                 *slot = Some(result);
@@ -438,6 +452,8 @@ impl DataCompareWindow {
                             }
                         }
                         Err(error) => {
+                            let result = Arc::new(result);
+                            refresh_data_diff_list(&view.data_diff_list, result.clone(), None, cx);
                             view.result.update(cx, |slot, cx| {
                                 *slot = Some(result);
                                 cx.notify();
@@ -568,6 +584,7 @@ impl DataCompareWindow {
             *slot = None;
             cx.notify();
         });
+        clear_data_diff_list(&self.data_diff_list, cx);
         self.sync_plan.update(cx, |slot, cx| {
             *slot = None;
             cx.notify();
@@ -712,6 +729,7 @@ impl DataCompareWindow {
             *slot = None;
             cx.notify();
         });
+        clear_data_diff_list(&self.data_diff_list, cx);
         self.sync_plan.update(cx, |slot, cx| {
             *slot = None;
             cx.notify();
@@ -745,7 +763,7 @@ impl DataCompareWindow {
                 .result
                 .read(cx)
                 .as_ref()
-                .is_none_or(DataCompareBatchResult::is_sync_sql_blocked)
+                .is_none_or(|result| result.is_sync_sql_blocked())
     }
 
     fn sync_sql_blocked_status(&self, cx: &Context<Self>) -> Option<String> {

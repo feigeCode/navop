@@ -385,7 +385,7 @@ impl DataCompareWindow {
             .result
             .read(cx)
             .as_ref()
-            .and_then(data_compare_batch_truncation_note);
+            .and_then(|result| data_compare_batch_truncation_note(result));
         let missing_target = self
             .result
             .read(cx)
@@ -450,13 +450,8 @@ impl DataCompareWindow {
             .when_some(stats, |this, (added, removed, modified)| {
                 this.child(stat_cards_row(added, removed, modified, cx))
             })
-            .when_some(self.result.read(cx).as_ref(), |this, result| {
-                this.child(data_diff_detail_panel(
-                    result,
-                    plan.as_ref(),
-                    self.selected_statement_ids.clone(),
-                    cx,
-                ))
+            .when(self.result.read(cx).is_some(), |this| {
+                this.child(data_diff_detail_panel(self.data_diff_list.clone(), cx))
             })
             .when_some(truncation, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))

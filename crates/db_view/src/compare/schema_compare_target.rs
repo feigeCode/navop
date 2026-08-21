@@ -8,11 +8,14 @@ use db::{
 };
 use extension_component::DbSelectorKind;
 use gpui::{
-    App, AsyncApp, ColorExt, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Styled, div, prelude::FluentBuilder, px,
+    App, AppContext, AsyncApp, ColorExt, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, IconName, StyledExt, h_flex, scroll::ScrollableElement, v_flex,
+    ActiveTheme, ContentState, IconName, IndexPath, StyledExt, h_flex,
+    list::{List, ListDelegate, ListItem, ListState},
+    scroll::ScrollableElement,
+    v_flex,
 };
 use rust_i18n::t;
 use std::collections::HashSet;
@@ -37,6 +40,38 @@ use crate::db_object_selector::{
     DbObjectSelectorControls, db_object_selector_panel, effective_database_schema,
     policy_for_connection,
 };
+
+const SCHEMA_DIFF_ROW_HEIGHT: f32 = 62.0;
+
+pub(super) type SchemaDiffListState = Entity<ListState<SchemaDiffListDelegate>>;
+
+pub(super) fn schema_diff_list_state<T: 'static>(
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> SchemaDiffListState {
+    cx.new(|cx| ListState::new(SchemaDiffListDelegate::default(), window, cx).selectable(false))
+}
+
+pub(super) fn refresh_schema_diff_list<T: 'static>(
+    list_state: &SchemaDiffListState,
+    result: &SchemaCompareResult,
+    cx: &mut Context<T>,
+) {
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().set_result(result);
+        cx.notify();
+    });
+}
+
+pub(super) fn clear_schema_diff_list<T: 'static>(
+    list_state: &SchemaDiffListState,
+    cx: &mut Context<T>,
+) {
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().clear();
+        cx.notify();
+    });
+}
 
 impl SchemaCompareWindow {
     pub(super) fn load_source_databases(&mut self, cx: &mut Context<Self>) {
@@ -260,8 +295,8 @@ impl SchemaCompareWindow {
             .when_some(stats, |this, (added, removed, modified)| {
                 this.child(stat_cards_row(added, removed, modified, cx))
             })
-            .when_some(self.result.read(cx).as_ref(), |this, result| {
-                this.child(schema_diff_panel(result, cx))
+            .when(self.result.read(cx).is_some(), |this| {
+                this.child(schema_diff_panel(self.schema_diff_list.clone(), cx))
             })
             .when_some(failed_tables, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))
@@ -437,9 +472,8 @@ impl SchemaCompareWindow {
     }
 }
 
-pub(crate) fn schema_diff_panel(result: &SchemaCompareResult, cx: &App) -> impl IntoElement {
-    let diff_count = result.total_diff_count();
-    let has_diffs = diff_count > 0;
+pub(crate) fn schema_diff_panel(list_state: SchemaDiffListState, cx: &App) -> impl IntoElement {
+    let diff_count = list_state.read(cx).delegate().diff_count;
 
     v_flex()
         .flex_1()
@@ -481,94 +515,203 @@ pub(crate) fn schema_diff_panel(result: &SchemaCompareResult, cx: &App) -> impl 
                 .rounded_md()
                 .bg(cx.theme().background)
                 .overflow_hidden()
-                .when(!has_diffs, |this| {
-                    this.child(
-                        ContentState::empty(t!("Compare.schema_diff_no_changes").to_string())
-                            .icon(IconName::CircleCheck)
-                            .compact(),
-                    )
-                })
-                .when(has_diffs, |this| {
-                    this.child(
-                        v_flex()
-                            .size_full()
-                            .p_2()
-                            .gap_2()
-                            .overflow_y_scrollbar()
-                            .children(
-                                result
-                                    .table_diffs
-                                    .iter()
-                                    .map(|diff| schema_table_diff_block(diff, cx)),
-                            )
-                            .when(!result.routine_diffs.is_empty(), |this| {
-                                this.child(schema_routine_diff_section(&result.routine_diffs, cx))
-                            })
-                            .when(!result.trigger_diffs.is_empty(), |this| {
-                                this.child(schema_trigger_diff_section(&result.trigger_diffs, cx))
-                            }),
-                    )
-                }),
+                .child(List::new(&list_state).size_full()),
         )
 }
 
-fn schema_routine_diff_section(diffs: &[RoutineDiff], cx: &App) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap_1()
-        .child(schema_diff_group_title(
-            t!("Compare.object_routines").to_string(),
-            cx,
-        ))
-        .children(diffs.iter().map(|diff| {
-            let details = schema_child_details(
-                diff.status,
-                &diff.changes,
-                diff.source.as_ref().map(routine_definition),
-                diff.target.as_ref().map(routine_definition),
-            );
-            schema_child_diff_row(routine_display_name(diff), diff.status, details, cx)
-        }))
+#[derive(Clone)]
+struct SchemaDiffListEntry {
+    id: String,
+    name: String,
+    category: String,
+    status: DiffStatus,
+    details: String,
+    indent: bool,
 }
 
-fn schema_trigger_diff_section(diffs: &[TriggerDiff], cx: &App) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap_1()
-        .child(schema_diff_group_title(
-            t!("Compare.object_triggers").to_string(),
-            cx,
-        ))
-        .children(diffs.iter().map(|diff| {
-            let details = schema_child_details(
-                diff.status,
-                &diff.changes,
-                diff.source.as_ref().map(trigger_definition),
-                diff.target.as_ref().map(trigger_definition),
-            );
-            schema_child_diff_row(trigger_display_name(diff), diff.status, details, cx)
-        }))
+#[derive(Default)]
+pub(super) struct SchemaDiffListDelegate {
+    entries: Vec<SchemaDiffListEntry>,
+    diff_count: usize,
+    selected_index: Option<IndexPath>,
 }
 
-fn schema_table_diff_block(diff: &TableDiff, cx: &App) -> impl IntoElement {
-    let object_type = match diff.object_type {
-        SchemaObjectType::Table => t!("Compare.object_table").to_string(),
-        SchemaObjectType::View => t!("Compare.object_view").to_string(),
-    };
-    let table_changes = table_level_changes(diff);
+impl SchemaDiffListDelegate {
+    fn set_result(&mut self, result: &SchemaCompareResult) {
+        self.entries.clear();
+        self.diff_count = result.total_diff_count();
 
-    v_flex()
+        for table in &result.table_diffs {
+            let category = match table.object_type {
+                SchemaObjectType::Table => t!("Compare.object_table").to_string(),
+                SchemaObjectType::View => t!("Compare.object_view").to_string(),
+            };
+            self.push_entry(
+                table.name.clone(),
+                category,
+                table.status,
+                table_level_changes(table),
+                false,
+            );
+
+            for column in &table.column_diffs {
+                self.push_entry(
+                    column.name.clone(),
+                    t!("Compare.object_columns").to_string(),
+                    column.status,
+                    schema_child_details(
+                        column.status,
+                        &column.changes,
+                        column.source.as_ref().map(column_definition),
+                        column.target.as_ref().map(column_definition),
+                    ),
+                    true,
+                );
+            }
+            for index in &table.index_diffs {
+                self.push_entry(
+                    index.name.clone(),
+                    t!("Compare.object_indexes").to_string(),
+                    index.status,
+                    schema_child_details(
+                        index.status,
+                        &index.changes,
+                        index.source.as_ref().map(index_definition),
+                        index.target.as_ref().map(index_definition),
+                    ),
+                    true,
+                );
+            }
+            for foreign_key in &table.foreign_key_diffs {
+                self.push_entry(
+                    foreign_key.name.clone(),
+                    t!("Compare.object_foreign_keys").to_string(),
+                    foreign_key.status,
+                    schema_child_details(
+                        foreign_key.status,
+                        &foreign_key.changes,
+                        foreign_key.source.as_ref().map(foreign_key_definition),
+                        foreign_key.target.as_ref().map(foreign_key_definition),
+                    ),
+                    true,
+                );
+            }
+        }
+
+        for routine in &result.routine_diffs {
+            self.push_entry(
+                routine_display_name(routine),
+                t!("Compare.object_routines").to_string(),
+                routine.status,
+                schema_child_details(
+                    routine.status,
+                    &routine.changes,
+                    routine.source.as_ref().map(routine_definition),
+                    routine.target.as_ref().map(routine_definition),
+                ),
+                false,
+            );
+        }
+        for trigger in &result.trigger_diffs {
+            self.push_entry(
+                trigger_display_name(trigger),
+                t!("Compare.object_triggers").to_string(),
+                trigger.status,
+                schema_child_details(
+                    trigger.status,
+                    &trigger.changes,
+                    trigger.source.as_ref().map(trigger_definition),
+                    trigger.target.as_ref().map(trigger_definition),
+                ),
+                false,
+            );
+        }
+        self.selected_index = None;
+    }
+
+    fn push_entry(
+        &mut self,
+        name: String,
+        category: String,
+        status: DiffStatus,
+        details: Vec<String>,
+        indent: bool,
+    ) {
+        let id = format!("schema-diff-row-{}", self.entries.len());
+        self.entries.push(SchemaDiffListEntry {
+            id,
+            name,
+            category,
+            status,
+            details: details.join(" · "),
+            indent,
+        });
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.diff_count = 0;
+        self.selected_index = None;
+    }
+}
+
+impl ListDelegate for SchemaDiffListDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.entries.len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<Self::Item> {
+        let entry = self.entries.get(ix.row)?.clone();
+        Some(schema_diff_list_row(entry, cx))
+    }
+
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        ContentState::empty(t!("Compare.schema_diff_no_changes").to_string())
+            .icon(IconName::CircleCheck)
+            .compact()
+    }
+
+    fn perform_search(
+        &mut self,
+        _query: &str,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        Task::ready(())
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected_index = ix;
+    }
+}
+
+fn schema_diff_list_row(entry: SchemaDiffListEntry, cx: &App) -> ListItem {
+    let row = v_flex()
         .w_full()
+        .min_w_0()
         .gap_1()
-        .p_2()
-        .border_1()
-        .border_color(cx.theme().border)
-        .rounded_md()
+        .when(entry.indent, |this| this.pl_4())
         .child(
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(schema_diff_status_marker(diff.status, cx))
+                .child(schema_diff_status_marker(entry.status, cx))
                 .child(
                     div()
                         .flex_1()
@@ -576,93 +719,28 @@ fn schema_table_diff_block(diff: &TableDiff, cx: &App) -> impl IntoElement {
                         .truncate()
                         .text_sm()
                         .font_semibold()
-                        .child(diff.name.clone()),
+                        .child(entry.name),
                 )
                 .child(
                     div()
+                        .flex_none()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(object_type),
+                        .child(entry.category),
                 ),
         )
-        .when(!table_changes.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .pl_6()
-                    .gap_1()
-                    .children(table_changes.into_iter().map(|change| {
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(change)
-                    })),
-            )
-        })
-        .when(!diff.column_diffs.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .pl_4()
-                    .gap_1()
-                    .child(schema_diff_group_title(
-                        t!("Compare.object_columns").to_string(),
-                        cx,
-                    ))
-                    .children(diff.column_diffs.iter().map(|column| {
-                        let details = schema_child_details(
-                            column.status,
-                            &column.changes,
-                            column.source.as_ref().map(column_definition),
-                            column.target.as_ref().map(column_definition),
-                        );
-                        schema_child_diff_row(column.name.clone(), column.status, details, cx)
-                    })),
-            )
-        })
-        .when(!diff.index_diffs.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .pl_4()
-                    .gap_1()
-                    .child(schema_diff_group_title(
-                        t!("Compare.object_indexes").to_string(),
-                        cx,
-                    ))
-                    .children(diff.index_diffs.iter().map(|index| {
-                        let details = schema_child_details(
-                            index.status,
-                            &index.changes,
-                            index.source.as_ref().map(index_definition),
-                            index.target.as_ref().map(index_definition),
-                        );
-                        schema_child_diff_row(index.name.clone(), index.status, details, cx)
-                    })),
-            )
-        })
-        .when(!diff.foreign_key_diffs.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .pl_4()
-                    .gap_1()
-                    .child(schema_diff_group_title(
-                        t!("Compare.object_foreign_keys").to_string(),
-                        cx,
-                    ))
-                    .children(diff.foreign_key_diffs.iter().map(|foreign_key| {
-                        let details = schema_child_details(
-                            foreign_key.status,
-                            &foreign_key.changes,
-                            foreign_key.source.as_ref().map(foreign_key_definition),
-                            foreign_key.target.as_ref().map(foreign_key_definition),
-                        );
-                        schema_child_diff_row(
-                            foreign_key.name.clone(),
-                            foreign_key.status,
-                            details,
-                            cx,
-                        )
-                    })),
-            )
-        })
+        .child(
+            div()
+                .pl_6()
+                .truncate()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(entry.details),
+        );
+
+    ListItem::new(entry.id)
+        .h(px(SCHEMA_DIFF_ROW_HEIGHT))
+        .child(row)
 }
 
 fn table_level_changes(diff: &TableDiff) -> Vec<String> {
@@ -833,48 +911,6 @@ fn push_optional_detail(details: &mut Vec<String>, label: &str, value: Option<&s
     if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
         details.push(format!("{label}: {}", value.trim()));
     }
-}
-
-fn schema_diff_group_title(title: String, cx: &App) -> impl IntoElement {
-    div()
-        .pt_1()
-        .text_xs()
-        .font_semibold()
-        .text_color(cx.theme().muted_foreground)
-        .child(title)
-}
-
-fn schema_child_diff_row(
-    name: String,
-    status: DiffStatus,
-    changes: Vec<String>,
-    cx: &App,
-) -> impl IntoElement {
-    let details = if changes.is_empty() {
-        String::new()
-    } else {
-        changes.join(" · ")
-    };
-
-    v_flex()
-        .pl_2()
-        .gap_1()
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(schema_diff_status_marker(status, cx))
-                .child(div().text_sm().child(name)),
-        )
-        .when(!details.is_empty(), |this| {
-            this.child(
-                div()
-                    .pl_6()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(details),
-            )
-        })
 }
 
 fn schema_diff_status_marker(status: DiffStatus, cx: &App) -> impl IntoElement {

@@ -2,34 +2,66 @@ use db::compare::{
     DataCompareBatchResult, DataCompareResult, RowData, SyncPlan, SyncStatementKind,
 };
 use gpui::{
-    App, ColorExt, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
+    App, AppContext, ColorExt, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, IconName, Sizable, StyledExt, checkbox::Checkbox, h_flex,
-    scroll::ScrollableElement, tag::Tag, v_flex,
+    ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt,
+    checkbox::Checkbox,
+    h_flex,
+    list::{List, ListDelegate, ListItem, ListState},
+    tag::Tag,
+    v_flex,
 };
 use rust_i18n::t;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-const DATA_DIFF_PREVIEW_LIMIT: usize = 100;
 const DATA_DIFF_VALUE_SUMMARY_LIMIT: usize = 240;
+const DATA_DIFF_ROW_HEIGHT: f32 = 64.0;
+const DATA_DIFF_SECTION_HEADER_HEIGHT: f32 = 40.0;
 
 type StatementLookupKey = (String, u8, String);
 type StatementIndex = HashMap<StatementLookupKey, Vec<String>>;
 
-pub(super) fn data_diff_detail_panel(
-    result: &DataCompareBatchResult,
-    plan: Option<&SyncPlan>,
-    selected_ids: Entity<HashSet<String>>,
-    cx: &App,
-) -> impl IntoElement {
-    let statement_index = build_statement_index(plan);
-    let has_changes = result.table_results.iter().any(|table| {
-        !table.added.is_empty() || !table.removed.is_empty() || !table.modified.is_empty()
-    });
+pub(super) type DataDiffListState = Entity<ListState<DataDiffListDelegate>>;
 
+pub(super) fn data_diff_list_state<T: 'static>(
+    selected_ids: Entity<HashSet<String>>,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> DataDiffListState {
+    cx.new(|cx| {
+        ListState::new(DataDiffListDelegate::new(selected_ids), window, cx).selectable(false)
+    })
+}
+
+pub(super) fn refresh_data_diff_list<T: 'static>(
+    list_state: &DataDiffListState,
+    result: Arc<DataCompareBatchResult>,
+    plan: Option<&SyncPlan>,
+    cx: &mut Context<T>,
+) {
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().set_result(result, plan);
+        cx.notify();
+    });
+}
+
+pub(super) fn clear_data_diff_list<T: 'static>(
+    list_state: &DataDiffListState,
+    cx: &mut Context<T>,
+) {
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().clear();
+        cx.notify();
+    });
+}
+
+pub(super) fn data_diff_detail_panel(list_state: DataDiffListState, cx: &App) -> impl IntoElement {
     v_flex()
         .flex_1()
         .min_h_0()
@@ -62,114 +94,132 @@ pub(super) fn data_diff_detail_panel(
                 .rounded_md()
                 .bg(cx.theme().background)
                 .overflow_hidden()
-                .when(!has_changes, |this| {
-                    this.child(
-                        ContentState::empty(t!("Compare.data_diff_no_changes").to_string())
-                            .icon(IconName::CircleCheck)
-                            .compact(),
-                    )
-                })
-                .when(has_changes, |this| {
-                    this.child(
-                        v_flex()
-                            .size_full()
-                            .p_2()
-                            .gap_2()
-                            .overflow_y_scrollbar()
-                            .children(
-                                result
-                                    .table_results
-                                    .iter()
-                                    .filter(|table| {
-                                        !table.added.is_empty()
-                                            || !table.removed.is_empty()
-                                            || !table.modified.is_empty()
-                                    })
-                                    .map(|table| {
-                                        table_diff_panel(
-                                            table,
-                                            &statement_index,
-                                            selected_ids.clone(),
-                                            cx,
-                                        )
-                                    }),
-                            ),
-                    )
-                }),
+                .child(List::new(&list_state).size_full()),
         )
 }
 
-fn table_diff_panel(
-    result: &DataCompareResult,
-    statement_index: &StatementIndex,
+pub(super) struct DataDiffListDelegate {
+    result: Option<Arc<DataCompareBatchResult>>,
+    table_indices: Vec<usize>,
+    statement_index: StatementIndex,
     selected_ids: Entity<HashSet<String>>,
-    cx: &App,
-) -> impl IntoElement {
-    let table_name = result.target_table.clone();
-    let added_count = result.added.len();
-    let removed_count = result.removed.len();
-    let modified_count = result.modified.len();
-    let mut rows = Vec::new();
+    selected_index: Option<IndexPath>,
+}
 
-    for (_index, row) in result
-        .added
-        .iter()
-        .take(DATA_DIFF_PREVIEW_LIMIT)
-        .enumerate()
-    {
-        let key_values = row_key(row, &result.key_columns);
-        let canonical_key = canonical_row_key(&key_values);
-        rows.push(data_row(
-            row_ui_id(&table_name, &SyncStatementKind::Insert, &canonical_key),
-            t!("Compare.added").to_string(),
-            Tag::success(),
-            key_values.clone(),
-            &result.key_columns,
-            vec![row_value_summary(row, &result.columns)],
-            statement_ids_for_row(
-                statement_index,
-                &table_name,
-                &SyncStatementKind::Insert,
-                &key_values,
-            ),
-            selected_ids.clone(),
-            cx,
-        ));
+impl DataDiffListDelegate {
+    fn new(selected_ids: Entity<HashSet<String>>) -> Self {
+        Self {
+            result: None,
+            table_indices: Vec::new(),
+            statement_index: StatementIndex::new(),
+            selected_ids,
+            selected_index: None,
+        }
     }
 
-    for (_index, row) in result
-        .removed
-        .iter()
-        .take(DATA_DIFF_PREVIEW_LIMIT)
-        .enumerate()
-    {
-        let key_values = row_key(row, &result.key_columns);
-        let canonical_key = canonical_row_key(&key_values);
-        rows.push(data_row(
-            row_ui_id(&table_name, &SyncStatementKind::Delete, &canonical_key),
-            t!("Compare.removed").to_string(),
-            Tag::danger(),
-            key_values.clone(),
-            &result.key_columns,
-            vec![row_value_summary(row, &result.columns)],
-            statement_ids_for_row(
-                statement_index,
-                &table_name,
-                &SyncStatementKind::Delete,
-                &key_values,
-            ),
-            selected_ids.clone(),
-            cx,
-        ));
+    fn set_result(&mut self, result: Arc<DataCompareBatchResult>, plan: Option<&SyncPlan>) {
+        self.table_indices = result
+            .table_results
+            .iter()
+            .enumerate()
+            .filter_map(|(index, table)| {
+                (!table.added.is_empty() || !table.removed.is_empty() || !table.modified.is_empty())
+                    .then_some(index)
+            })
+            .collect();
+        self.statement_index = build_statement_index(plan);
+        self.result = Some(result);
+        self.selected_index = None;
     }
 
-    for (_index, modified) in result
-        .modified
-        .iter()
-        .take(DATA_DIFF_PREVIEW_LIMIT)
-        .enumerate()
-    {
-        let changes = result
+    fn clear(&mut self) {
+        self.result = None;
+        self.table_indices.clear();
+        self.statement_index.clear();
+        self.selected_index = None;
+    }
+
+    fn table(&self, section: usize) -> Option<&DataCompareResult> {
+        let result = self.result.as_ref()?;
+        result.table_results.get(*self.table_indices.get(section)?)
+    }
+}
+
+impl ListDelegate for DataDiffListDelegate {
+    type Item = ListItem;
+
+    fn sections_count(&self, _cx: &App) -> usize {
+        self.table_indices.len().max(1)
+    }
+
+    fn items_count(&self, section: usize, _cx: &App) -> usize {
+        self.table(section)
+            .map(|table| table.added.len() + table.removed.len() + table.modified.len())
+            .unwrap_or_default()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<Self::Item> {
+        let table = self.table(ix.section)?;
+        let table_name = table.target_table.as_str();
+        let added_count = table.added.len();
+        let removed_count = table.removed.len();
+
+        if ix.row < added_count {
+            let row = table.added.get(ix.row)?;
+            let key_values = row_key(row, &table.key_columns);
+            let canonical_key = canonical_row_key(&key_values);
+            return Some(data_row(
+                row_ui_id(table_name, &SyncStatementKind::Insert, &canonical_key),
+                t!("Compare.added").to_string(),
+                Tag::success(),
+                key_values.clone(),
+                &table.key_columns,
+                row_value_summary(row, &table.columns),
+                statement_ids_for_row(
+                    &self.statement_index,
+                    table_name,
+                    &SyncStatementKind::Insert,
+                    &key_values,
+                ),
+                self.selected_ids.clone(),
+                cx,
+            ));
+        }
+
+        let removed_row = ix.row.saturating_sub(added_count);
+        if removed_row < removed_count {
+            let row = table.removed.get(removed_row)?;
+            let key_values = row_key(row, &table.key_columns);
+            let canonical_key = canonical_row_key(&key_values);
+            return Some(data_row(
+                row_ui_id(table_name, &SyncStatementKind::Delete, &canonical_key),
+                t!("Compare.removed").to_string(),
+                Tag::danger(),
+                key_values.clone(),
+                &table.key_columns,
+                row_value_summary(row, &table.columns),
+                statement_ids_for_row(
+                    &self.statement_index,
+                    table_name,
+                    &SyncStatementKind::Delete,
+                    &key_values,
+                ),
+                self.selected_ids.clone(),
+                cx,
+            ));
+        }
+
+        let modified_row = ix
+            .row
+            .saturating_sub(added_count)
+            .saturating_sub(removed_count);
+        let modified = table.modified.get(modified_row)?;
+        let details = table
             .columns
             .iter()
             .filter_map(|column| {
@@ -177,68 +227,88 @@ fn table_diff_panel(
                     format!("{}: {} → {}", column, cell_text(target), cell_text(source))
                 })
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .join(" · ");
         let canonical_key = canonical_row_key(&modified.key_values);
-        rows.push(data_row(
-            row_ui_id(&table_name, &SyncStatementKind::Update, &canonical_key),
+        Some(data_row(
+            row_ui_id(table_name, &SyncStatementKind::Update, &canonical_key),
             t!("Compare.modified").to_string(),
             Tag::warning(),
             modified.key_values.clone(),
-            &result.key_columns,
-            changes,
+            &table.key_columns,
+            truncate_text(&details, DATA_DIFF_VALUE_SUMMARY_LIMIT),
             statement_ids_for_row(
-                statement_index,
-                &table_name,
+                &self.statement_index,
+                table_name,
                 &SyncStatementKind::Update,
                 &modified.key_values,
             ),
-            selected_ids.clone(),
+            self.selected_ids.clone(),
             cx,
-        ));
+        ))
     }
 
-    let total = added_count + removed_count + modified_count;
-    v_flex()
-        .gap_1()
-        .p_2()
-        .border_1()
-        .border_color(cx.theme().border)
-        .rounded_md()
-        .child(
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let table = self.table(section)?;
+        let total = table.added.len() + table.removed.len() + table.modified.len();
+        Some(
             h_flex()
+                .h(px(DATA_DIFF_SECTION_HEADER_HEIGHT))
+                .px_3()
                 .gap_2()
-                .child(div().font_semibold().text_sm().child(table_name))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.18))
                 .child(
                     div()
+                        .min_w_0()
+                        .truncate()
+                        .font_semibold()
+                        .text_sm()
+                        .child(table.target_table.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(t!("Compare.data_diff_row_count", count = total).to_string()),
                 ),
         )
-        .children(rows)
-        .when(
-            has_hidden_data_diff_rows(added_count, removed_count, modified_count),
-            |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            t!(
-                                "Compare.data_diff_show_limit",
-                                count = DATA_DIFF_PREVIEW_LIMIT
-                            )
-                            .to_string(),
-                        ),
-                )
-            },
-        )
-}
+    }
 
-fn has_hidden_data_diff_rows(added: usize, removed: usize, modified: usize) -> bool {
-    added > DATA_DIFF_PREVIEW_LIMIT
-        || removed > DATA_DIFF_PREVIEW_LIMIT
-        || modified > DATA_DIFF_PREVIEW_LIMIT
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        ContentState::empty(t!("Compare.data_diff_no_changes").to_string())
+            .icon(IconName::CircleCheck)
+            .compact()
+    }
+
+    fn perform_search(
+        &mut self,
+        _query: &str,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        Task::ready(())
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected_index = ix;
+    }
 }
 
 fn data_row(
@@ -247,11 +317,11 @@ fn data_row(
     tag: Tag,
     key_values: HashMap<String, Value>,
     key_columns: &[String],
-    details: Vec<String>,
+    details: String,
     statement_ids: Vec<String>,
     selected_ids: Entity<HashSet<String>>,
     cx: &App,
-) -> impl IntoElement {
+) -> ListItem {
     let checked = !statement_ids.is_empty()
         && statement_ids
             .iter()
@@ -261,12 +331,10 @@ fn data_row(
     let statement_ids_for_click = statement_ids.clone();
     let checkbox_id = format!("{id}-checkbox");
 
-    h_flex()
-        .id(id)
+    let row = h_flex()
         .w_full()
         .gap_2()
         .items_start()
-        .p_1()
         .when(selectable, |this| {
             this.child(Checkbox::new(checkbox_id).checked(checked))
         })
@@ -276,38 +344,34 @@ fn data_row(
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().text_xs().child(key_text))
-                .children(
-                    details
-                        .into_iter()
-                        .filter(|detail| !detail.is_empty())
-                        .map(|detail| {
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(detail)
-                        }),
+                .child(div().truncate().text_xs().child(key_text))
+                .child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(details),
                 ),
-        )
+        );
+
+    ListItem::new(id)
+        .h(px(DATA_DIFF_ROW_HEIGHT))
+        .child(row)
+        .when(checked, |this| this.bg(cx.theme().list_active.opacity(0.7)))
         .when(selectable, |this| {
-            this.bg(cx
-                .theme()
-                .list_active
-                .opacity(if checked { 0.7 } else { 0.0 }))
-                .on_click(move |_, _, cx| {
-                    selected_ids.update(cx, |ids, cx| {
-                        let all_selected =
-                            statement_ids_for_click.iter().all(|id| ids.contains(id));
-                        for id in &statement_ids_for_click {
-                            if all_selected {
-                                ids.remove(id);
-                            } else {
-                                ids.insert(id.clone());
-                            }
+            this.on_click(move |_, _, cx| {
+                selected_ids.update(cx, |ids, cx| {
+                    let all_selected = statement_ids_for_click.iter().all(|id| ids.contains(id));
+                    for id in &statement_ids_for_click {
+                        if all_selected {
+                            ids.remove(id);
+                        } else {
+                            ids.insert(id.clone());
                         }
-                        cx.notify();
-                    });
-                })
+                    }
+                    cx.notify();
+                });
+            })
         })
 }
 
@@ -463,8 +527,8 @@ fn cell_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_statement_index, canonical_row_key, has_hidden_data_diff_rows, ordered_key_text,
-        row_key, row_ui_id, row_value_summary, statement_ids_for_row, statement_kind_code,
+        build_statement_index, canonical_row_key, ordered_key_text, row_key, row_ui_id,
+        row_value_summary, statement_ids_for_row, statement_kind_code,
     };
     use db::compare::{RowData, SyncPlan, SyncPlanSummary, SyncStatement, SyncStatementKind};
     use serde_json::{Map, json};
@@ -603,14 +667,6 @@ mod tests {
             statement_ids_for_row(&index, "orders", &SyncStatementKind::Insert, &key),
             vec!["orders-insert".to_string()]
         );
-    }
-
-    #[test]
-    fn hidden_row_notice_tracks_each_preview_group_independently() {
-        assert!(has_hidden_data_diff_rows(101, 0, 0));
-        assert!(has_hidden_data_diff_rows(0, 101, 0));
-        assert!(has_hidden_data_diff_rows(0, 0, 101));
-        assert!(!has_hidden_data_diff_rows(100, 100, 100));
     }
 
     fn statement(
