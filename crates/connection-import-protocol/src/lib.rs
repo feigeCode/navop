@@ -23,12 +23,14 @@ mod tests {
                 host: "prod.example.com".to_string(),
                 port: Some(22),
                 username: "root".to_string(),
+                group_path: None,
                 auth_method: SshImportAuthMethod::Agent,
                 init_script: None,
                 jump_server: None,
                 proxy: None,
             }),
             port_forwarding: None,
+            quick_command: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         };
@@ -60,6 +62,7 @@ mod tests {
             }),
             ssh: None,
             port_forwarding: None,
+            quick_command: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         };

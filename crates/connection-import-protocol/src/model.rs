@@ -28,6 +28,7 @@ pub enum ImportRecordKind {
     Database,
     Ssh,
     PortForwarding,
+    QuickCommand,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +86,8 @@ pub struct ImportRecord {
     pub ssh: Option<SshImportRecord>,
     #[serde(default)]
     pub port_forwarding: Option<PortForwardingImportRecord>,
+    #[serde(default)]
+    pub quick_command: Option<QuickCommandImportRecord>,
     pub password_status: PasswordImportStatus,
     pub warnings: Vec<ImportWarning>,
 }
@@ -96,11 +99,13 @@ impl ImportRecord {
                 self.kind,
                 self.database.is_some(),
                 self.ssh.is_some(),
-                self.port_forwarding.is_some()
+                self.port_forwarding.is_some(),
+                self.quick_command.is_some()
             ),
-            (ImportRecordKind::Database, true, false, false)
-                | (ImportRecordKind::Ssh, false, true, false)
-                | (ImportRecordKind::PortForwarding, false, false, true)
+            (ImportRecordKind::Database, true, false, false, false)
+                | (ImportRecordKind::Ssh, false, true, false, false)
+                | (ImportRecordKind::PortForwarding, false, false, true, false)
+                | (ImportRecordKind::QuickCommand, false, false, false, true)
         );
         if matches_payload {
             Ok(())
@@ -144,6 +149,8 @@ pub struct SshImportRecord {
     pub host: String,
     pub port: Option<u16>,
     pub username: String,
+    #[serde(default)]
+    pub group_path: Option<String>,
     pub auth_method: SshImportAuthMethod,
     #[serde(default)]
     pub init_script: Option<String>,
@@ -151,6 +158,21 @@ pub struct SshImportRecord {
     pub jump_server: Option<SshJumpServerImportRecord>,
     #[serde(default)]
     pub proxy: Option<SshProxyImportRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuickCommandImportRecord {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub group_name: Option<String>,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub sort_order: i32,
+    #[serde(default)]
+    pub connection_source_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,6 +323,7 @@ mod tests {
             database: None,
             ssh: None,
             port_forwarding: None,
+            quick_command: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         }
@@ -333,12 +356,72 @@ mod tests {
     }
 
     #[test]
+    fn validates_quick_command_payload_shape_and_json_round_trip() {
+        let mut record = base_record(ImportRecordKind::QuickCommand);
+        record.quick_command = Some(QuickCommandImportRecord {
+            name: "Interfaces".to_string(),
+            command: "show ip interface brief\r".to_string(),
+            group_name: Some("Operations".to_string()),
+            shortcut: None,
+            description: Some("SecureCRT button".to_string()),
+            sort_order: 3,
+            connection_source_id: None,
+        });
+
+        assert_eq!(Ok(()), record.validate_shape());
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded: ImportRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn rejects_quick_command_without_quick_command_payload() {
+        let record = base_record(ImportRecordKind::QuickCommand);
+
+        assert!(matches!(
+            record.validate_shape(),
+            Err(ImportProtocolError::MismatchedRecordPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_quick_command_with_another_payload() {
+        let mut record = base_record(ImportRecordKind::QuickCommand);
+        record.quick_command = Some(QuickCommandImportRecord {
+            name: "Interfaces".to_string(),
+            command: "show ip interface brief\r".to_string(),
+            group_name: None,
+            shortcut: None,
+            description: None,
+            sort_order: 0,
+            connection_source_id: None,
+        });
+        record.ssh = Some(SshImportRecord {
+            name: "unexpected".to_string(),
+            host: "example.test".to_string(),
+            port: Some(22),
+            username: "deploy".to_string(),
+            group_path: None,
+            auth_method: SshImportAuthMethod::Agent,
+            init_script: None,
+            jump_server: None,
+            proxy: None,
+        });
+
+        assert!(matches!(
+            record.validate_shape(),
+            Err(ImportProtocolError::MismatchedRecordPayload { .. })
+        ));
+    }
+
+    #[test]
     fn ssh_record_round_trips_init_script_proxy_jump_and_key_material() {
         let record = SshImportRecord {
             name: "prod".to_string(),
             host: "prod.example.test".to_string(),
             port: Some(22),
             username: "deploy".to_string(),
+            group_path: Some("Production/API".to_string()),
             auth_method: SshImportAuthMethod::PrivateKeyMaterial {
                 private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n".to_string()),
                 passphrase: Some("secret".to_string()),
@@ -364,6 +447,21 @@ mod tests {
         let decoded: SshImportRecord = serde_json::from_str(&json).unwrap();
 
         assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn ssh_record_decodes_without_optional_group_path() {
+        let json = r#"{
+            "name": "prod",
+            "host": "prod.example.test",
+            "port": 22,
+            "username": "deploy",
+            "auth_method": "agent"
+        }"#;
+
+        let decoded: SshImportRecord = serde_json::from_str(json).unwrap();
+
+        assert!(decoded.group_path.is_none());
     }
 
     #[test]

@@ -4,6 +4,7 @@ use connection_import_protocol::{
     DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, ImporterCapabilities,
     ImporterDescriptor, PasswordImportStatus, Platform,
 };
+use extension_runtime::connection_import_provider::ImportPreviewError;
 
 use super::connection_import_window::ConnectionImportWindowModel;
 
@@ -25,6 +26,28 @@ fn batch_save_only_targets_selected_pending_or_failed_rows() {
     model.mark_saved("a", Some(1));
 
     assert_eq!(vec!["b".to_string()], model.batch_save_row_ids());
+}
+
+#[test]
+fn import_window_model_exposes_preview_error_on_matching_source() {
+    let mut model = ConnectionImportWindowModel::new_for_tests(vec![
+        descriptor("broken"),
+        descriptor("healthy"),
+    ]);
+
+    model.apply_preview_errors(
+        &["broken".to_string(), "healthy".to_string()],
+        vec![ImportPreviewError {
+            importer_id: "broken".to_string(),
+            message: "invalid preview payload".to_string(),
+        }],
+    );
+
+    assert_eq!(
+        Some("invalid preview payload"),
+        model.sources()[0].preview_error.as_deref()
+    );
+    assert!(model.sources()[1].preview_error.is_none());
 }
 
 fn descriptor(id: &str) -> ImporterDescriptor {
@@ -66,6 +89,7 @@ fn database_record(name: &str) -> ImportRecord {
         }),
         ssh: None,
         port_forwarding: None,
+        quick_command: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }

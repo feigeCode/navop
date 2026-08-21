@@ -14,6 +14,16 @@ pub trait ExtensionConnectionImportHost: Send + Sync {
 
     fn read_directory(&self, candidate_id: &str) -> Result<Vec<DirectoryEntry>, HostAccessError>;
 
+    fn read_candidate_directory(
+        &self,
+        candidate_id: &str,
+        _relative_path: &str,
+    ) -> Result<Vec<DirectoryEntry>, HostAccessError> {
+        Err(HostAccessError::UndeclaredCandidate(
+            candidate_id.to_string(),
+        ))
+    }
+
     fn read_candidate_child_file(
         &self,
         candidate_id: &str,

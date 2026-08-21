@@ -339,6 +339,10 @@ Home:
       en: Database
       zh-CN: 数据库
       zh-HK: 資料庫
+    kind_quick_command:
+      en: Quick Command
+      zh-CN: 快捷命令
+      zh-HK: 快速命令
     kind_unsupported:
       en: Not Supported Yet
       zh-CN: 暂不支持
@@ -415,6 +419,18 @@ Home:
       en: Duplicate detection for imported port forwarding records is not supported yet
       zh-CN: 暂不支持端口转发导入记录重复检测
       zh-HK: 暫不支援連接埠轉送匯入記錄的重複偵測
+    quick_command_config_missing:
+      en: Imported quick command record is missing its quick command configuration
+      zh-CN: 快捷命令导入记录缺少快捷命令配置
+      zh-HK: 快速命令匯入記錄缺少快速命令設定
+    quick_command_editor_unsupported:
+      en: Editing imported quick command records before saving is not supported yet
+      zh-CN: 暂不支持在保存前编辑快捷命令导入记录
+      zh-HK: 暫不支援儲存前編輯快速命令匯入記錄
+    field_quick_command:
+      en: Quick command
+      zh-CN: 快捷命令
+      zh-HK: 快速命令
     ssh_config_missing:
       en: Imported SSH record is missing its SSH configuration
       zh-CN: SSH 导入记录缺少 SSH 配置

@@ -1,6 +1,7 @@
 use connection_import_protocol::{
     ImportRecord, ImportScanReport, ImporterAvailability, ImporterDescriptor, Platform,
 };
+use extension_runtime::connection_import_provider::ImportPreviewError;
 
 use super::connection_import_draft::EditableImportDraft;
 
@@ -15,6 +16,7 @@ pub(crate) struct ImportSourceState {
     pub(crate) selectable: bool,
     pub(crate) availability: ImporterAvailability,
     pub(crate) scan_error: Option<String>,
+    pub(crate) preview_error: Option<String>,
 }
 
 pub(crate) struct ImportPreviewRow {
@@ -99,7 +101,33 @@ impl ImportCenterState {
                 .find(|source| source.descriptor.id == report.importer_id)
             {
                 source.availability = report.availability;
-                source.scan_error = None;
+                source.scan_error = match &source.availability {
+                    ImporterAvailability::Error { message } => Some(message.clone()),
+                    _ => None,
+                };
+            }
+        }
+    }
+
+    pub(crate) fn apply_preview_errors(
+        &mut self,
+        importer_ids: &[String],
+        errors: Vec<ImportPreviewError>,
+    ) {
+        for source in self
+            .sources
+            .iter_mut()
+            .filter(|source| importer_ids.contains(&source.descriptor.id))
+        {
+            source.preview_error = None;
+        }
+        for error in errors {
+            if let Some(source) = self
+                .sources
+                .iter_mut()
+                .find(|source| source.descriptor.id == error.importer_id)
+            {
+                source.preview_error = Some(error.message);
             }
         }
     }
@@ -181,6 +209,7 @@ impl ImportSourceState {
             selectable,
             availability,
             scan_error: None,
+            preview_error: None,
         }
     }
 }

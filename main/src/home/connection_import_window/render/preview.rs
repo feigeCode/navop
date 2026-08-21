@@ -9,7 +9,6 @@ use gpui_component::{
 use rust_i18n::t;
 
 use super::super::{ConnectionImportWindow, is_save_candidate};
-use crate::connection_visuals::{ConnectionVisualSize, connection_type_icon};
 use crate::home::connection_import_draft::{EditableImportDraft, ImportDraftKind};
 use crate::home::connection_import_model::{ImportPreviewRow, ImportRowSaveStatus};
 
@@ -37,10 +36,7 @@ pub(super) fn render_preview_row(
                     }
                 })),
         )
-        .child(connection_type_icon(
-            row.draft.visual_connection_type(),
-            ConnectionVisualSize::Tree,
-        ))
+        .child(row.draft.icon())
         .child(render_row_text(row, cx))
         .child(render_row_status(row, cx))
         .child(render_row_actions(row, &record_id, cx))
@@ -54,15 +50,20 @@ fn render_row_actions(
 ) -> impl IntoElement {
     h_flex()
         .gap_2()
-        .child(
-            Button::new(format!("edit-import-{record_id}"))
-                .xsmall()
-                .icon(IconName::Edit)
-                .disabled(matches!(row.save_status, ImportRowSaveStatus::Saving))
-                .on_click(cx.listener({
-                    let record_id = record_id.to_string();
-                    move |this, _, _, cx| this.edit_row(record_id.clone(), cx)
-                })),
+        .when(
+            !matches!(row.draft.kind(), ImportDraftKind::QuickCommand),
+            |this| {
+                this.child(
+                    Button::new(format!("edit-import-{record_id}"))
+                        .xsmall()
+                        .icon(IconName::Edit)
+                        .disabled(matches!(row.save_status, ImportRowSaveStatus::Saving))
+                        .on_click(cx.listener({
+                            let record_id = record_id.to_string();
+                            move |this, _, _, cx| this.edit_row(record_id.clone(), cx)
+                        })),
+                )
+            },
         )
         .child(
             Button::new(format!("save-import-{record_id}"))
@@ -129,8 +130,15 @@ fn render_row_text(
 
 fn row_detail_text(draft: &EditableImportDraft) -> String {
     let mut parts = vec![draft.source_name().to_string()];
+    if matches!(draft.kind(), ImportDraftKind::QuickCommand) {
+        parts.push(draft.quick_command_detail_text());
+        return parts.join(" · ");
+    }
     if let Some(endpoint) = endpoint_text(draft) {
         parts.push(endpoint);
+    }
+    if let Some(group) = trimmed_text(&draft.ssh_group_path) {
+        parts.push(group);
     }
     if let Some(username) = trimmed_text(&draft.username) {
         parts.push(username);
@@ -166,6 +174,7 @@ fn kind_text(kind: ImportDraftKind) -> String {
     match kind {
         ImportDraftKind::Database => t!("Home.ConnectionImport.kind_database").to_string(),
         ImportDraftKind::Ssh => "SSH".to_string(),
+        ImportDraftKind::QuickCommand => t!("Home.ConnectionImport.kind_quick_command").to_string(),
         ImportDraftKind::Unsupported => t!("Home.ConnectionImport.kind_unsupported").to_string(),
     }
 }

@@ -25,6 +25,12 @@ pub(super) fn render_source_row(
         .clone()
         .unwrap_or_else(|| t!("Home.ConnectionImport.choose_import_file").to_string());
     let file_pick_tooltip = file_pick_prompt.clone();
+    let status_text = source
+        .preview_error
+        .clone()
+        .unwrap_or_else(|| availability_text(&source.availability));
+    let has_error = source.preview_error.is_some()
+        || matches!(source.availability, ImporterAvailability::Error { .. });
     h_flex()
         .items_center()
         .gap_3()
@@ -61,8 +67,12 @@ pub(super) fn render_source_row(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(availability_text(&source.availability)),
+                        .text_color(if has_error {
+                            cx.theme().danger
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(status_text),
                 ),
         )
         .when(

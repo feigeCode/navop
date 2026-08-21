@@ -87,8 +87,8 @@ impl ConnectionImportWindow {
                 let task = Tokio::spawn(cx, async move {
                     let reports = scan_import_sources(ids.clone()).await?;
                     let preview_ids = previewable_source_ids_after_scan(&ids, &reports);
-                    let records = preview_import_records(preview_ids, true).await?;
-                    Ok::<_, String>((reports, records))
+                    let preview = preview_import_records(preview_ids.clone(), true).await?;
+                    Ok::<_, String>((reports, preview_ids, preview))
                 });
                 match task.await {
                     Ok(result) => result,
@@ -100,9 +100,11 @@ impl ConnectionImportWindow {
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;
                 match result {
-                    Ok((reports, records)) => {
+                    Ok((reports, preview_ids, preview)) => {
                         this.model.apply_scan_reports(reports);
-                        this.model.apply_preview_records(records);
+                        this.model.apply_preview_records(preview.records);
+                        this.model
+                            .apply_preview_errors(&preview_ids, preview.errors);
                         this.status_message = None;
                     }
                     Err(error) => this.status_message = Some(error),
@@ -159,11 +161,19 @@ impl ConnectionImportWindow {
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;
                 match result {
-                    Ok(records) => {
-                        let is_empty = records.is_empty();
-                        this.model.apply_preview_records(records);
-                        this.status_message = is_empty.then(|| {
-                            t!("Home.ConnectionImport.no_importable_connections").to_string()
+                    Ok(preview) => {
+                        let is_empty = preview.records.is_empty() && preview.errors.is_empty();
+                        let error_message =
+                            preview.errors.first().map(|error| error.message.clone());
+                        this.model.apply_preview_records(preview.records);
+                        this.model.apply_preview_errors(
+                            std::slice::from_ref(&importer_id),
+                            preview.errors,
+                        );
+                        this.status_message = error_message.or_else(|| {
+                            is_empty.then(|| {
+                                t!("Home.ConnectionImport.no_importable_connections").to_string()
+                            })
                         });
                     }
                     Err(error) => this.status_message = Some(error),
