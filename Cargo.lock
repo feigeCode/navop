@@ -3010,6 +3010,7 @@ dependencies = [
  "connection_tunnel",
  "dashmap 5.5.3",
  "duckdb",
+ "encoding_rs",
  "extension-host",
  "extension-protocol",
  "gpui",

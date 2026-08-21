@@ -3,7 +3,11 @@ use anyhow::Result;
 use crate::connection::DbConnection;
 use crate::executor::{QueryCellRef, QueryResult, QueryResultView, SqlResult};
 use crate::import_export::{ExportConfig, ExportProgressEvent};
-use crate::{DatabasePlugin, PaginatedQuery};
+use crate::{
+    ColumnInfo, DatabasePlugin, PaginatedQuery,
+    query_result_normalization::normalize_query_result_binary_semantics,
+};
+use one_core::storage::DatabaseType;
 
 const SQL_EXPORT_PAGE_SIZE: usize = 1000;
 
@@ -22,13 +26,28 @@ pub(super) async fn export_table_data_in_pages(
     let mut total_rows = 0u64;
     let mut remaining = config.limit;
     let mut wrote_header = false;
+    let mut schema_columns: Option<Vec<ColumnInfo>> = None;
 
     loop {
         let Some(page_limit) = next_export_page_limit(remaining) else {
             break;
         };
         let paginated_query = export_page_select_sql(plugin, config, table, page_limit, offset);
-        let query_result = query_export_page(connection, &paginated_query).await?;
+        let mut query_result = query_export_page(connection, &paginated_query).await?;
+        if plugin.name() == DatabaseType::MySQL && !query_result.binary_cells.is_empty() {
+            if schema_columns.is_none() {
+                schema_columns = Some(
+                    plugin
+                        .list_columns(connection, &config.database, config.schema.clone(), table)
+                        .await?,
+                );
+            }
+            normalize_query_result_binary_semantics(
+                &mut query_result,
+                &DatabaseType::MySQL,
+                schema_columns.as_deref().unwrap_or_default(),
+            )?;
+        }
         let rows_count = query_result.rows.len() as u64;
         let data_output = sql_dump_page(
             plugin,
@@ -74,7 +93,18 @@ fn export_page_select_sql(
 ) -> PaginatedQuery {
     let table_ref =
         plugin.format_table_reference(&config.database, config.schema.as_deref(), table);
-    let mut select_sql = format!("SELECT * FROM {}", table_ref);
+    let columns = config
+        .columns
+        .as_ref()
+        .map(|columns| {
+            columns
+                .iter()
+                .map(|column| plugin.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_else(|| "*".to_string());
+    let mut select_sql = format!("SELECT {columns} FROM {table_ref}");
     if let Some(where_c) = &config.where_clause {
         select_sql.push_str(" WHERE ");
         select_sql.push_str(where_c);

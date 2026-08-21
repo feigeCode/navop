@@ -237,7 +237,11 @@ impl MysqlDbConnection {
         }
     }
 
-    fn is_binary_column(column_type: ColumnType, flags: ColumnFlags, collation_id: u16) -> bool {
+    fn is_binary_wire_value(
+        column_type: ColumnType,
+        flags: ColumnFlags,
+        collation_id: u16,
+    ) -> bool {
         flags.contains(ColumnFlags::BINARY_FLAG)
             && collation_id == Self::MYSQL_BINARY_COLLATION_ID
             && matches!(
@@ -361,7 +365,7 @@ impl MysqlDbConnection {
                     let Some(column) = columns_arc.get(i) else {
                         return Self::extract_value(&row[i]);
                     };
-                    if Self::is_binary_column(
+                    if Self::is_binary_wire_value(
                         column.column_type(),
                         column.flags(),
                         column.character_set(),
@@ -1242,41 +1246,87 @@ mod tests {
     }
 
     #[test]
-    fn binary_column_detection_excludes_bit_and_requires_binary_collation_for_byte_columns() {
+    fn binary_wire_value_detection_accepts_only_binary_string_families() {
         use mysql_async::consts::{ColumnFlags, ColumnType};
 
         const UTF8MB4_BIN_COLLATION_ID: u16 = 46;
-
-        assert!(!MysqlDbConnection::is_binary_column(
-            ColumnType::MYSQL_TYPE_BIT,
-            ColumnFlags::empty(),
-            0,
-        ));
-        assert!(MysqlDbConnection::is_binary_column(
-            ColumnType::MYSQL_TYPE_BLOB,
-            ColumnFlags::BLOB_FLAG | ColumnFlags::BINARY_FLAG,
-            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
-        ));
-        assert!(MysqlDbConnection::is_binary_column(
+        let accepted_types = [
+            ColumnType::MYSQL_TYPE_STRING,
             ColumnType::MYSQL_TYPE_VAR_STRING,
-            ColumnFlags::BINARY_FLAG,
-            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
-        ));
-        assert!(!MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_VARCHAR,
-            ColumnFlags::BINARY_FLAG,
-            UTF8MB4_BIN_COLLATION_ID,
-        ));
-        assert!(!MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_TINY_BLOB,
+            ColumnType::MYSQL_TYPE_MEDIUM_BLOB,
+            ColumnType::MYSQL_TYPE_LONG_BLOB,
             ColumnType::MYSQL_TYPE_BLOB,
-            ColumnFlags::BLOB_FLAG,
-            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
-        ));
-        assert!(!MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_GEOMETRY,
+            ColumnType::MYSQL_TYPE_VECTOR,
+        ];
+
+        for column_type in accepted_types {
+            assert!(
+                MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::BINARY_FLAG,
+                    MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+                ),
+                "{column_type:?} should be accepted without requiring BLOB_FLAG"
+            );
+            assert!(
+                MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::BLOB_FLAG | ColumnFlags::BINARY_FLAG,
+                    MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+                ),
+                "{column_type:?} should ignore the optional BLOB_FLAG"
+            );
+            assert!(
+                !MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::BLOB_FLAG,
+                    MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+                ),
+                "{column_type:?} must require BINARY_FLAG"
+            );
+            assert!(
+                !MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::BINARY_FLAG,
+                    UTF8MB4_BIN_COLLATION_ID,
+                ),
+                "{column_type:?} must not treat a character _bin collation as binary bytes"
+            );
+            assert!(
+                !MysqlDbConnection::is_binary_wire_value(column_type, ColumnFlags::BINARY_FLAG, 0,),
+                "{column_type:?} must require the binary collation id"
+            );
+        }
+    }
+
+    #[test]
+    fn binary_wire_value_detection_rejects_non_binary_value_types() {
+        use mysql_async::consts::{ColumnFlags, ColumnType};
+
+        for column_type in [
+            ColumnType::MYSQL_TYPE_BIT,
+            ColumnType::MYSQL_TYPE_TINY,
             ColumnType::MYSQL_TYPE_LONG,
-            ColumnFlags::BINARY_FLAG,
-            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
-        ));
+            ColumnType::MYSQL_TYPE_LONGLONG,
+            ColumnType::MYSQL_TYPE_DOUBLE,
+            ColumnType::MYSQL_TYPE_NEWDECIMAL,
+            ColumnType::MYSQL_TYPE_DATE,
+            ColumnType::MYSQL_TYPE_DATETIME,
+            ColumnType::MYSQL_TYPE_TIMESTAMP,
+            ColumnType::MYSQL_TYPE_JSON,
+        ] {
+            assert!(
+                !MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::BINARY_FLAG | ColumnFlags::BLOB_FLAG,
+                    MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+                ),
+                "{column_type:?} must remain a typed non-binary value"
+            );
+        }
     }
 
     #[test]
@@ -1304,7 +1354,7 @@ mod tests {
             Some("0010".to_string()),
             MysqlDbConnection::extract_column_value(&Value::Bytes(vec![0b0010]), &column)
         );
-        assert!(!MysqlDbConnection::is_binary_column(
+        assert!(!MysqlDbConnection::is_binary_wire_value(
             column.column_type(),
             column.flags(),
             column.character_set(),

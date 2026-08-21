@@ -1,5 +1,5 @@
 use db::ipc::{ExternalDatabasePlugin, IpcDriverManifest};
-use db::{ColumnInfo, DatabasePlugin, DbManager};
+use db::{BinaryCell, ColumnInfo, DatabasePlugin, DbManager};
 use one_core::storage::DatabaseType;
 use std::path::PathBuf;
 
@@ -28,6 +28,14 @@ fn sql_context<'a>(
 ) -> CopyFormatContext<'a> {
     let (data, columns, metadata) = input;
     CopyFormatContext::new(data, columns, metadata).with_plugin(plugin)
+}
+
+fn binary_cell(row_index: usize, column_index: usize, bytes: &[u8]) -> BinaryCell {
+    BinaryCell {
+        row_index,
+        column_index,
+        bytes: bytes.to_vec(),
+    }
 }
 
 fn compatible_driver_plugin(database_type: DatabaseType) -> ExternalDatabasePlugin {
@@ -73,6 +81,92 @@ fn formats_csv_and_structured_null_values() {
 }
 
 #[test]
+fn json_escapes_column_names_and_only_emits_strict_json_numbers() {
+    let data = vec![vec![
+        Some("1".into()),
+        Some("-1.5e2".into()),
+        Some("+1".into()),
+        Some("01".into()),
+        Some("1.".into()),
+        Some("NaN".into()),
+        Some("inf".into()),
+    ]];
+    let columns = vec![
+        "a\"b\\c\n".into(),
+        "exponent".into(),
+        "plus".into(),
+        "leading_zero".into(),
+        "trailing_dot".into(),
+        "nan".into(),
+        "infinity".into(),
+    ];
+    let metadata = TableMetadata::new("values_table");
+
+    let json = CopyFormatter::format(
+        CopyFormat::Json,
+        CopyFormatContext::new(&data, &columns, &metadata),
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json).expect("copy output should be valid JSON");
+    let row = parsed[0].as_object().expect("row should be a JSON object");
+
+    assert_eq!(row["a\"b\\c\n"], serde_json::json!(1));
+    assert_eq!(row["exponent"].as_f64(), Some(-1.5e2));
+    assert_eq!(row["plus"], serde_json::json!("+1"));
+    assert_eq!(row["leading_zero"], serde_json::json!("01"));
+    assert_eq!(row["trailing_dot"], serde_json::json!("1."));
+    assert_eq!(row["nan"], serde_json::json!("NaN"));
+    assert_eq!(row["infinity"], serde_json::json!("inf"));
+}
+
+#[test]
+fn plain_copy_formats_use_binary_sidecar_without_guessing_text() {
+    let data = vec![
+        vec![
+            Some("wrong".into()),
+            Some("true".into()),
+            Some("8000".into()),
+            Some("AQID".into()),
+        ],
+        vec![None, Some("base64:AQID".into()), None, None],
+    ];
+    let columns = vec![
+        "binary".into(),
+        "boolean_text".into(),
+        "number_text".into(),
+        "base64_shaped_text".into(),
+    ];
+    let metadata = TableMetadata::new("values_table");
+    let binary_cells = vec![binary_cell(0, 0, &[1, 2, 3]), binary_cell(1, 0, &[])];
+    let context =
+        CopyFormatContext::new(&data, &columns, &metadata).with_binary_cells(&binary_cells);
+
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::Tsv, context),
+        "base64:AQID\ttrue\t8000\tAQID\nbase64:\tbase64:AQID\t\\N\t\\N"
+    );
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::Csv, context),
+        "base64:AQID,true,8000,AQID\nbase64:,base64:AQID,\\N,\\N"
+    );
+
+    let json = CopyFormatter::format(CopyFormat::Json, context);
+    assert!(json.contains("\"binary\": \"base64:AQID\""), "{json}");
+    assert!(json.contains("\"binary\": \"base64:\""), "{json}");
+    assert!(json.contains("\"base64_shaped_text\": \"AQID\""), "{json}");
+
+    let markdown = CopyFormatter::format(CopyFormat::Markdown, context);
+    assert!(
+        markdown.contains("| base64:AQID | true | 8000 | AQID |"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("| base64: | base64:AQID | \\N | \\N |"),
+        "{markdown}"
+    );
+}
+
+#[test]
 fn mysql_insert_uses_typed_bit_and_string_literals() {
     let manager = DbManager::default();
     let plugin = manager.get_plugin(&DatabaseType::MySQL).unwrap();
@@ -95,6 +189,79 @@ fn mysql_insert_uses_typed_bit_and_string_literals() {
     assert_eq!(
         sql,
         "INSERT INTO `test_bit` (`id`, `bit_name`, `text_name`) VALUES\n(1, 1, '1');"
+    );
+}
+
+#[test]
+fn mysql_sql_formats_use_binary_sidecar_as_authoritative_bytes() {
+    let manager = DbManager::default();
+    let plugin = manager.get_plugin(&DatabaseType::MySQL).unwrap();
+    let data = vec![vec![None, Some("wrong".into())]];
+    let columns = vec!["binary_id".into(), "payload".into()];
+    let metadata = TableMetadata::new("binary_values")
+        .with_columns(columns.clone())
+        .with_column_meta(vec![
+            column("binary_id", "VARBINARY(8)"),
+            column("payload", "BLOB"),
+        ])
+        .with_primary_keys(vec![0]);
+    let binary_cells = vec![
+        binary_cell(0, 0, &[1, 2, 3]),
+        binary_cell(0, 1, &[0xde, 0xad]),
+    ];
+    let context =
+        sql_context((&data, &columns, &metadata), plugin.as_ref()).with_binary_cells(&binary_cells);
+
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlInsert, context),
+        "INSERT INTO `binary_values` (`binary_id`, `payload`) VALUES\n(X'010203', X'dead');"
+    );
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlUpdate, context),
+        "UPDATE `binary_values` SET `payload` = X'dead' WHERE `binary_id` = X'010203';"
+    );
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlDelete, context),
+        "DELETE FROM `binary_values` WHERE `binary_id` = X'010203';"
+    );
+}
+
+#[test]
+fn single_column_in_preserves_binary_rows_and_distinguishes_null() {
+    let manager = DbManager::default();
+    let plugin = manager.get_plugin(&DatabaseType::MySQL).unwrap();
+    let data = vec![
+        vec![None],
+        vec![None],
+        vec![Some("plain".into())],
+        vec![Some("wrong".into())],
+    ];
+    let columns = vec!["value".into()];
+    let metadata = TableMetadata::new("binary_values")
+        .with_columns(columns.clone())
+        .with_column_meta(vec![column("value", "BLOB")]);
+    let binary_cells = vec![binary_cell(1, 0, &[]), binary_cell(3, 0, &[1, 2, 3])];
+    let context =
+        sql_context((&data, &columns, &metadata), plugin.as_ref()).with_binary_cells(&binary_cells);
+
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlIn, context),
+        "(`value` IN (X'', X'706c61696e', X'010203') OR `value` IS NULL)"
+    );
+}
+
+#[test]
+fn fallback_sql_uses_standard_hex_literal_for_binary_sidecar() {
+    let data = vec![vec![Some("wrong".into())]];
+    let columns = vec!["payload".into()];
+    let metadata = TableMetadata::new("binary_values").with_columns(columns.clone());
+    let binary_cells = vec![binary_cell(0, 0, &[0, 0xff])];
+    let context =
+        CopyFormatContext::new(&data, &columns, &metadata).with_binary_cells(&binary_cells);
+
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlInsert, context),
+        "INSERT INTO \"binary_values\" (\"payload\") VALUES\n(X'00ff');"
     );
 }
 
@@ -271,4 +438,40 @@ fn sql_mutations_preserve_typed_values_and_null_predicates() {
         CopyFormatter::format(CopyFormat::SqlIn, context),
         "(`enabled` IN (1, 0) OR `enabled` IS NULL)"
     );
+}
+
+#[test]
+fn sql_mutations_require_non_null_primary_keys() {
+    let plugin = DbManager::default()
+        .get_plugin(&DatabaseType::MySQL)
+        .expect("MySQL plugin should exist");
+    let columns = vec!["id".into(), "name".into()];
+    let no_key_metadata = TableMetadata::new("items")
+        .with_columns(columns.clone())
+        .with_column_meta(vec![column("id", "INT"), column("name", "VARCHAR(20)")]);
+    let data = vec![vec![Some("1".into()), Some("safe".into())]];
+    let context = sql_context((&data, &columns, &no_key_metadata), plugin.as_ref());
+
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlUpdate, context), "");
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlDelete, context), "");
+
+    let keyed_metadata = no_key_metadata.with_primary_keys(vec![0]);
+    let null_key_data = vec![vec![None, Some("unsafe".into())]];
+    let context = sql_context((&null_key_data, &columns, &keyed_metadata), plugin.as_ref());
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlUpdate, context), "");
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlDelete, context), "");
+}
+
+#[test]
+fn sql_insert_and_multicolumn_in_reject_ragged_rows() {
+    let data = vec![
+        vec![Some("1".into()), Some("a".into())],
+        vec![Some("2".into())],
+    ];
+    let columns = vec!["id".into(), "name".into()];
+    let metadata = TableMetadata::new("items").with_columns(columns.clone());
+    let context = CopyFormatContext::new(&data, &columns, &metadata);
+
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlInsert, context), "");
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlIn, context), "");
 }

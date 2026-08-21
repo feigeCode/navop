@@ -3577,7 +3577,7 @@ mod tests {
                     column_index: 1,
                     column_name: "payload".to_string(),
                     old_value: "AQI=".into(),
-                    new_value: "3q2+7w==".into(),
+                    new_value: TableCellValue::Binary(vec![0xde, 0xad, 0xbe, 0xef]),
                 }],
                 rowid: None,
             }],

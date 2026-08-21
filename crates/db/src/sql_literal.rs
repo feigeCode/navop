@@ -89,6 +89,7 @@ pub(crate) fn format_table_value_for_database(
 ) -> String {
     match value {
         TableCellValue::Null => "NULL".to_string(),
+        TableCellValue::Binary(bytes) => format_binary_literal_for_database(database_type, bytes),
         TableCellValue::Text(value) => {
             format_special_table_value_for_database(database_type, value, column)
                 .unwrap_or_else(|| quote_string(value))

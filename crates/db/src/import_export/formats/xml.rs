@@ -165,6 +165,15 @@ async fn query_table(
             if let Some(paginated_query) = &paginated_query {
                 paginated_query.strip_hidden_result_columns(&mut result)?;
             }
+            crate::query_result_normalization::normalize_table_query_result(
+                plugin,
+                connection,
+                &config.database,
+                config.schema.as_deref(),
+                table,
+                &mut result,
+            )
+            .await?;
             Ok(result)
         }
         SqlResult::Error(error) => Err(anyhow!("Query failed: {}", error.message)),

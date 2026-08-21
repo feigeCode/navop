@@ -368,7 +368,7 @@ fn sql_dump_rejects_malformed_query_result() {
             .to_string()
             .contains("Invalid query result for SQL export")
     );
-    assert!(error.to_string().contains("row 1 has 1 cells, expected 2"));
+    assert!(error.to_string().contains("row 0 has width 1, expected 2"));
 }
 
 #[test]

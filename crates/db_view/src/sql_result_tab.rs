@@ -801,14 +801,13 @@ impl SqlResultTabContainer {
             new_all_results.push(result.clone());
 
             if let SqlResult::Query(query_result) = result {
-                let (editable, table_name) = if let Some(ref plugin) = plugin {
-                    match plugin.analyze_select_editability(&query_result.sql) {
-                        Some(parsed_table_name) => (true, parsed_table_name),
-                        None => (false, "".to_string()),
-                    }
+                let analysis = if let Some(ref plugin) = plugin {
+                    plugin.analyze_select_query(&query_result.sql)
                 } else {
-                    (false, "".to_string())
+                    db::SelectQueryAnalysis::default()
                 };
+                let editable = analysis.editable;
+                let table_name = analysis.table_name.unwrap_or_default();
 
                 let mut config = DataGridConfig::new(
                     db_name.clone(),
@@ -817,6 +816,7 @@ impl SqlResultTabContainer {
                     database_type.clone(),
                 )
                 .editable(editable)
+                .schema_metadata_safe(analysis.schema_metadata_safe)
                 .show_toolbar(true)
                 .usage(DataGridUsage::SqlResult)
                 .rows_count(query_result.rows.len())
@@ -851,7 +851,7 @@ impl SqlResultTabContainer {
                         query_result.binary_cells.clone(),
                         cx,
                     );
-                    this.load_column_meta_if_editable(cx);
+                    this.load_column_meta_for_sql_result(cx);
                 });
 
                 if editable
@@ -863,6 +863,7 @@ impl SqlResultTabContainer {
                     let database_name = db_name.clone();
                     let table_name = table_name.clone();
                     let data_grid = data_grid.clone();
+                    let expected_generation = data_grid.read(cx).current_data_generation();
                     cx.spawn(async move |cx: &mut AsyncApp| {
                         let result = global_state
                             .list_views_view(cx, connection_id, database_name)
@@ -883,7 +884,9 @@ impl SqlResultTabContainer {
                         if is_view {
                             cx.update(|cx| {
                                 data_grid.update(cx, |grid, cx| {
-                                    grid.set_editable(false, cx);
+                                    if grid.is_data_generation_current(expected_generation) {
+                                        grid.set_editable(false, cx);
+                                    }
                                 });
                             });
                         }

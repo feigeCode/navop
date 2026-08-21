@@ -30,6 +30,20 @@ use std::collections::HashMap;
 use std::io;
 use tracing::log::error;
 
+/// Capabilities inferred from a SELECT statement.
+///
+/// `editable` answers whether the result can safely be written back to the
+/// source table. `schema_metadata_safe` is deliberately independent: a
+/// read-only query such as `SELECT DISTINCT body FROM articles` can still
+/// expose a result projection whose types can be reconciled with the source
+/// table schema.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectQueryAnalysis {
+    pub table_name: Option<String>,
+    pub editable: bool,
+    pub schema_metadata_safe: bool,
+}
+
 pub(crate) fn parse_table_data_total_count(result: SqlResult) -> Result<usize> {
     let query_result = match result {
         SqlResult::Query(query_result) => query_result,
@@ -512,15 +526,33 @@ pub trait DatabasePlugin: Send + Sync {
         classify_fallback(sql)
     }
 
-    /// Check if a SELECT query might be editable
-    /// Returns None if cannot determine, Some(table_name) if looks like simple single-table query
-    fn analyze_select_editability(&self, sql: &str) -> Option<String> {
+    /// Analyze a SELECT query for editability and safe source-schema mapping.
+    fn analyze_select_query(&self, sql: &str) -> SelectQueryAnalysis {
         if let Ok(statements) = Parser::parse_sql(self.sql_dialect().as_ref(), sql) {
             if let Some(Statement::Query(query)) = statements.first() {
-                return analyze_query_editability(query);
+                return analyze_query_capabilities(query);
             }
         }
-        analyze_select_editability_fallback(sql)
+
+        // Keep the legacy fallback useful for the editability affordance, but
+        // never use string heuristics as a source of schema identity. A
+        // parser failure must not enable LONGTEXT/BLOB reconciliation.
+        let table_name = analyze_select_editability_fallback(sql);
+        SelectQueryAnalysis {
+            editable: table_name.is_some(),
+            table_name,
+            schema_metadata_safe: false,
+        }
+    }
+
+    /// Check if a SELECT query might be editable.
+    ///
+    /// This compatibility wrapper intentionally exposes only the old
+    /// `Option<table_name>` view. Callers that need schema reconciliation must
+    /// use [`DatabasePlugin::analyze_select_query`] instead.
+    fn analyze_select_editability(&self, sql: &str) -> Option<String> {
+        let analysis = self.analyze_select_query(sql);
+        analysis.editable.then_some(analysis.table_name).flatten()
     }
 
     /// List schemas in a database (for databases that support schemas)
@@ -2007,6 +2039,15 @@ pub trait DatabasePlugin: Send + Sync {
             SqlResult::Error(sql_error_info) => bail!(sql_error_info.message),
         }?;
         paginated_query.strip_hidden_result_columns(&mut query_result)?;
+        crate::query_result_normalization::normalize_table_query_result(
+            self,
+            connection,
+            &request.database,
+            request.schema.as_deref(),
+            &request.table,
+            &mut query_result,
+        )
+        .await?;
 
         Ok(TableDataResponse {
             query_result,
@@ -2038,7 +2079,13 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Generate INSERT SQL statements for copying
     fn generate_copy_insert_sql(&self, request: &CopySqlRequest) -> String {
-        if request.rows.is_empty() || request.column_names.is_empty() {
+        if request.rows.is_empty()
+            || request.column_names.is_empty()
+            || request
+                .rows
+                .iter()
+                .any(|row| row.len() != request.column_names.len())
+        {
             return String::new();
         }
 
@@ -2074,7 +2121,13 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Generate INSERT SQL statements with column comments for copying
     fn generate_copy_insert_with_comments_sql(&self, request: &CopySqlRequest) -> String {
-        if request.rows.is_empty() || request.column_names.is_empty() {
+        if request.rows.is_empty()
+            || request.column_names.is_empty()
+            || request
+                .rows
+                .iter()
+                .any(|row| row.len() != request.column_names.len())
+        {
             return String::new();
         }
 
@@ -2128,6 +2181,15 @@ pub trait DatabasePlugin: Send + Sync {
         }
 
         let original_rows = request.original_rows.as_ref().unwrap_or(&request.rows);
+        if original_rows.len() != request.rows.len()
+            || request
+                .rows
+                .iter()
+                .chain(original_rows.iter())
+                .any(|row| row.len() != request.column_names.len())
+        {
+            return String::new();
+        }
         let table_name = self.format_copy_table_name(request.schema.as_deref(), &request.table);
         let mut statements = Vec::new();
 
@@ -2152,7 +2214,9 @@ pub trait DatabasePlugin: Send + Sync {
             let set_str = set_parts.join(", ");
 
             // Generate WHERE clause
-            let where_str = self.generate_copy_where_clause(request, original_row);
+            let Some(where_str) = self.generate_copy_where_clause(request, original_row) else {
+                return String::new();
+            };
 
             statements.push(format!(
                 "UPDATE {} SET {} WHERE {};",
@@ -2165,15 +2229,22 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Generate DELETE SQL statements for copying
     fn generate_copy_delete_sql(&self, request: &CopySqlRequest) -> String {
-        if request.rows.is_empty() || request.column_names.is_empty() {
+        let original_rows = request.original_rows.as_ref().unwrap_or(&request.rows);
+        if original_rows.is_empty()
+            || request.column_names.is_empty()
+            || original_rows
+                .iter()
+                .any(|row| row.len() != request.column_names.len())
+        {
             return String::new();
         }
-
         let table_name = self.format_copy_table_name(request.schema.as_deref(), &request.table);
         let mut statements = Vec::new();
 
-        for row in &request.rows {
-            let where_str = self.generate_copy_where_clause(request, row);
+        for row in original_rows {
+            let Some(where_str) = self.generate_copy_where_clause(request, row) else {
+                return String::new();
+            };
             statements.push(format!("DELETE FROM {} WHERE {};", table_name, where_str));
         }
 
@@ -2192,13 +2263,8 @@ pub trait DatabasePlugin: Send + Sync {
     }
 
     /// Format a value for copy SQL based on column type
-    fn format_copy_value(&self, value: &Option<String>, col_info: Option<&ColumnInfo>) -> String {
-        match value {
-            None => "NULL".to_string(),
-            Some(value) => {
-                self.format_table_change_value(&TableCellValue::Text(value.clone()), col_info)
-            }
-        }
+    fn format_copy_value(&self, value: &TableCellValue, col_info: Option<&ColumnInfo>) -> String {
+        self.format_table_change_value(value, col_info)
     }
 
     /// Check if data type is numeric
@@ -2267,14 +2333,18 @@ pub trait DatabasePlugin: Send + Sync {
     fn generate_copy_where_clause(
         &self,
         request: &CopySqlRequest,
-        row: &[Option<String>],
-    ) -> String {
+        row: &[TableCellValue],
+    ) -> Option<String> {
+        if row.len() != request.column_names.len() {
+            return None;
+        }
+
         // Prefer primary key columns
         let primary_key_indices: Vec<usize> = request
             .columns
             .iter()
             .enumerate()
-            .filter(|(_, col)| col.is_primary_key)
+            .filter(|(index, col)| *index < request.column_names.len() && col.is_primary_key)
             .map(|(i, _)| i)
             .collect();
 
@@ -2285,29 +2355,25 @@ pub trait DatabasePlugin: Send + Sync {
             (0..request.column_names.len()).collect()
         };
 
-        let conditions: Vec<String> = indices_to_use
+        let conditions: Option<Vec<String>> = indices_to_use
             .iter()
-            .filter_map(|&i| {
+            .map(|&i| {
                 let col_name = request.column_names.get(i)?;
                 let val = row.get(i)?;
                 let col_info = request.columns.get(i);
 
                 let quoted_col = self.quote_identifier(col_name);
                 match val {
-                    None => Some(format!("{} IS NULL", quoted_col)),
-                    _ => {
+                    TableCellValue::Null => Some(format!("{} IS NULL", quoted_col)),
+                    TableCellValue::Text(_) | TableCellValue::Binary(_) => {
                         let formatted = self.format_copy_value(val, col_info);
                         Some(format!("{} = {}", quoted_col, formatted))
                     }
                 }
             })
             .collect();
-
-        if conditions.is_empty() {
-            "1=1".to_string() // Safe fallback
-        } else {
-            conditions.join(" AND ")
-        }
+        let conditions = conditions?;
+        (!conditions.is_empty()).then(|| conditions.join(" AND "))
     }
 
     fn build_table_change_sql(
@@ -2516,7 +2582,7 @@ pub trait DatabasePlugin: Send + Sync {
                 let ident = self.quote_identifier(column);
                 match value {
                     TableCellValue::Null => parts.push(format!("{} IS NULL", ident)),
-                    TableCellValue::Text(_) => {
+                    TableCellValue::Text(_) | TableCellValue::Binary(_) => {
                         let formatted =
                             self.format_table_change_value(value, request.columns.get(index));
                         parts.push(format!("{} = {}", ident, formatted));
@@ -2584,6 +2650,15 @@ pub trait DatabasePlugin: Send + Sync {
             return Ok(String::new());
         };
         query.strip_hidden_result_columns(&mut query_result)?;
+        crate::query_result_normalization::normalize_table_query_result(
+            self,
+            connection,
+            database,
+            schema,
+            table,
+            &mut query_result,
+        )
+        .await?;
         let table_ident = self.format_export_table_reference(database, schema, table);
         crate::import_export::formats::sql_export::render_insert_statements(
             self,
@@ -3254,51 +3329,161 @@ pub fn classify_fallback(sql: &str) -> StatementType {
     StatementType::Exec
 }
 
-pub fn analyze_query_editability(query: &Box<ast::Query>) -> Option<String> {
-    let body = &query.body;
-
-    let select = match body.as_ref() {
-        SetExpr::Select(s) => s,
-        _ => return None,
+pub fn analyze_query_capabilities(query: &ast::Query) -> SelectQueryAnalysis {
+    let select = match query.body.as_ref() {
+        SetExpr::Select(select) => select,
+        _ => return SelectQueryAnalysis::default(),
     };
 
-    if select.distinct.is_some() {
+    let Some(table_with_joins) = (select.from.len() == 1).then(|| &select.from[0]) else {
+        return SelectQueryAnalysis::default();
+    };
+    if !table_with_joins.joins.is_empty() {
+        return SelectQueryAnalysis::default();
+    }
+
+    let Some((table_name, alias)) = direct_table_identity(&table_with_joins.relation) else {
+        return SelectQueryAnalysis::default();
+    };
+
+    let schema_metadata_safe =
+        query.with.is_none() && select_projection_is_direct(select, &table_name, alias.as_deref());
+    let editable = schema_metadata_safe
+        && select.distinct.is_none()
+        && !select_has_group_by(select)
+        && select.having.is_none();
+
+    SelectQueryAnalysis {
+        table_name: Some(table_name),
+        editable,
+        schema_metadata_safe,
+    }
+}
+
+/// Compatibility API retained for existing callers and tests.
+pub fn analyze_query_editability(query: &Box<ast::Query>) -> Option<String> {
+    let analysis = analyze_query_capabilities(query);
+    analysis.editable.then_some(analysis.table_name).flatten()
+}
+
+fn direct_table_identity(relation: &TableFactor) -> Option<(String, Option<String>)> {
+    let TableFactor::Table {
+        name,
+        alias,
+        args,
+        with_hints,
+        version,
+        with_ordinality,
+        partitions,
+        json_path,
+        sample,
+        index_hints,
+    } = relation
+    else {
+        return None;
+    };
+
+    if args.is_some()
+        || !with_hints.is_empty()
+        || version.is_some()
+        || *with_ordinality
+        || !partitions.is_empty()
+        || json_path.is_some()
+        || sample.is_some()
+        || !index_hints.is_empty()
+        || name.0.is_empty()
+        || name.0.iter().any(|part| part.as_ident().is_none())
+    {
         return None;
     }
 
-    let has_group_by = match &select.group_by {
+    Some((
+        name.to_string(),
+        alias.as_ref().map(|alias| alias.name.value.clone()),
+    ))
+}
+
+fn select_projection_is_direct(
+    select: &ast::Select,
+    table_name: &str,
+    alias: Option<&str>,
+) -> bool {
+    if select.exclude.is_some() {
+        return false;
+    }
+
+    select.projection.iter().all(|item| match item {
+        ast::SelectItem::Wildcard(options) => wildcard_options_are_plain(options),
+        ast::SelectItem::QualifiedWildcard(kind, options) => {
+            wildcard_options_are_plain(options)
+                && match kind {
+                    ast::SelectItemQualifiedWildcardKind::ObjectName(name) => {
+                        object_name_matches_table(name, table_name, alias)
+                    }
+                    ast::SelectItemQualifiedWildcardKind::Expr(_) => false,
+                }
+        }
+        // Aliases change the result column name, so the source schema cannot
+        // be mapped by name without additional result-column lineage support.
+        ast::SelectItem::ExprWithAlias { .. } => false,
+        ast::SelectItem::UnnamedExpr(expr) => direct_column_reference(expr, table_name, alias),
+    })
+}
+
+fn wildcard_options_are_plain(options: &ast::WildcardAdditionalOptions) -> bool {
+    options.opt_ilike.is_none()
+        && options.opt_exclude.is_none()
+        && options.opt_except.is_none()
+        && options.opt_replace.is_none()
+        && options.opt_rename.is_none()
+}
+
+fn direct_column_reference(expr: &Expr, table_name: &str, alias: Option<&str>) -> bool {
+    match expr {
+        Expr::Identifier(_) => true,
+        Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
+            let qualifier = parts[..parts.len() - 1]
+                .iter()
+                .map(|part| part.value.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            identifier_matches(&qualifier, table_name)
+                || alias.is_some_and(|alias| identifier_matches(alias, &qualifier))
+        }
+        _ => false,
+    }
+}
+
+fn object_name_matches_table(
+    object_name: &ast::ObjectName,
+    table_name: &str,
+    alias: Option<&str>,
+) -> bool {
+    let qualified_name = object_name
+        .0
+        .iter()
+        .map(|part| part.as_ident().map(|ident| ident.value.as_str()))
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join("."));
+    qualified_name
+        .as_deref()
+        .is_some_and(|name| identifier_matches(name, table_name))
+        || (object_name.0.len() == 1
+            && alias.is_some_and(|alias| {
+                qualified_name
+                    .as_deref()
+                    .is_some_and(|name| identifier_matches(name, alias))
+            }))
+}
+
+fn identifier_matches(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+fn select_has_group_by(select: &ast::Select) -> bool {
+    match &select.group_by {
         ast::GroupByExpr::All(_) => true,
         ast::GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
-    };
-    if has_group_by {
-        return None;
-    }
-
-    if select.having.is_some() {
-        return None;
-    }
-
-    for item in &select.projection {
-        if has_aggregate_function_in_select_item(item) {
-            return None;
-        }
-    }
-
-    if select.from.len() != 1 {
-        return None;
-    }
-
-    let table_with_joins = &select.from[0];
-    if !table_with_joins.joins.is_empty() {
-        return None;
-    }
-
-    match &table_with_joins.relation {
-        TableFactor::Table { name, .. } => {
-            let table_name = name.to_string();
-            Some(table_name)
-        }
-        _ => None,
     }
 }
 
@@ -3568,6 +3753,156 @@ mod tests {
         assert_eq!(
             plugin.generate_copy_insert_sql(&request),
             "INSERT INTO `features` (`id`, `enabled`) VALUES (1, 0);"
+        );
+    }
+
+    #[test]
+    fn copy_sql_preserves_typed_binary_and_uses_original_values_for_where() {
+        let plugin = MySqlPlugin::new();
+        let columns = vec![
+            ColumnInfo {
+                name: "label".to_string(),
+                data_type: "VARCHAR".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                comment: None,
+                charset: Some("utf8mb4".to_string()),
+                collation: Some("utf8mb4_0900_ai_ci".to_string()),
+            },
+            ColumnInfo {
+                name: "payload".to_string(),
+                data_type: "LONGBLOB".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: Some("binary".to_string()),
+            },
+        ];
+        let current = vec![
+            TableCellValue::Text("changed".to_string()),
+            TableCellValue::Binary(vec![1, 2, 3]),
+        ];
+        let original = vec![
+            TableCellValue::Text("original".to_string()),
+            TableCellValue::Binary(vec![4, 5, 6]),
+        ];
+        let request = CopySqlRequest::new("binary_values", columns)
+            .with_typed_rows(vec![current])
+            .with_typed_original_rows(vec![original]);
+
+        assert_eq!(
+            plugin.generate_copy_insert_sql(&request),
+            "INSERT INTO `binary_values` (`label`, `payload`) VALUES ('changed', X'010203');"
+        );
+        assert_eq!(
+            plugin.generate_copy_update_sql(&request),
+            "UPDATE `binary_values` SET `label` = 'changed', `payload` = X'010203' WHERE `label` = 'original';"
+        );
+        assert_eq!(
+            plugin.generate_copy_delete_sql(&request),
+            "DELETE FROM `binary_values` WHERE `label` = 'original';"
+        );
+    }
+
+    #[test]
+    fn copy_sql_distinguishes_empty_binary_null_and_binary_like_text() {
+        let plugin = MySqlPlugin::new();
+        let columns = [
+            "empty_binary",
+            "nullable",
+            "plain_true",
+            "plain_number",
+            "plain_base64",
+        ]
+        .into_iter()
+        .map(|name| ColumnInfo {
+            name: name.to_string(),
+            data_type: "VARCHAR".to_string(),
+            is_nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            comment: None,
+            charset: Some("utf8mb4".to_string()),
+            collation: Some("utf8mb4_0900_ai_ci".to_string()),
+        })
+        .collect();
+        let request = CopySqlRequest::new("typed_values", columns).with_typed_rows(vec![vec![
+            TableCellValue::Binary(Vec::new()),
+            TableCellValue::Null,
+            TableCellValue::Text("true".to_string()),
+            TableCellValue::Text("8000".to_string()),
+            TableCellValue::Text("AQID".to_string()),
+        ]]);
+
+        assert_eq!(
+            plugin.generate_copy_insert_sql(&request),
+            "INSERT INTO `typed_values` (`empty_binary`, `nullable`, `plain_true`, `plain_number`, `plain_base64`) VALUES (X'', NULL, 'true', '8000', 'AQID');"
+        );
+    }
+
+    #[test]
+    fn copy_sql_rejects_malformed_row_shapes_and_never_uses_unbounded_where() {
+        let plugin = MySqlPlugin::new();
+        let columns = vec![ColumnInfo {
+            name: "id".to_string(),
+            data_type: "INT".to_string(),
+            is_nullable: false,
+            is_primary_key: true,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+        }];
+
+        let mismatched = CopySqlRequest::new("items", columns.clone())
+            .with_typed_rows(vec![
+                vec![TableCellValue::Text("1".to_string())],
+                vec![TableCellValue::Text("2".to_string())],
+            ])
+            .with_typed_original_rows(vec![vec![TableCellValue::Text("1".to_string())]]);
+        assert!(plugin.generate_copy_update_sql(&mismatched).is_empty());
+
+        let missing_key = CopySqlRequest::new("items", columns.clone())
+            .with_typed_rows(vec![vec![TableCellValue::Text("changed".to_string())]])
+            .with_typed_original_rows(vec![vec![]]);
+        assert!(plugin.generate_copy_update_sql(&missing_key).is_empty());
+        assert!(plugin.generate_copy_delete_sql(&missing_key).is_empty());
+
+        let malformed_insert = CopySqlRequest::new("items", columns).with_typed_rows(vec![vec![]]);
+        assert!(
+            plugin
+                .generate_copy_insert_sql(&malformed_insert)
+                .is_empty()
+        );
+        assert!(
+            plugin
+                .generate_copy_insert_with_comments_sql(&malformed_insert)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn copy_delete_can_use_original_rows_when_current_rows_are_empty() {
+        let plugin = MySqlPlugin::new();
+        let columns = vec![ColumnInfo {
+            name: "id".to_string(),
+            data_type: "INT".to_string(),
+            is_nullable: false,
+            is_primary_key: true,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+        }];
+        let request = CopySqlRequest::new("items", columns)
+            .with_typed_original_rows(vec![vec![TableCellValue::Text("42".to_string())]]);
+
+        assert_eq!(
+            plugin.generate_copy_delete_sql(&request),
+            "DELETE FROM `items` WHERE `id` = 42;"
         );
     }
 

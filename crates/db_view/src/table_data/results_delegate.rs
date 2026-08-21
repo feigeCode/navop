@@ -4,8 +4,10 @@ use std::sync::Arc;
 use super::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use super::data_grid::DataGrid;
 use db::{
-    BinaryCell, ColumnInfo, FieldType, GlobalDbState,
-    binary_value::{format_binary_input, parse_binary_input},
+    BinaryCell, ColumnInfo, FieldType, GlobalDbState, QueryResult, TableCellValue,
+    binary_value::{BinaryInputError, format_binary_input, parse_binary_input},
+    normalize_query_result_binary_semantics, project_schema_columns,
+    query_result_normalization::QueryResultNormalizationError,
 };
 use gpui::{
     App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
@@ -130,6 +132,8 @@ pub struct EditorTableDelegate {
     data_grid: Option<WeakEntity<DataGrid>>,
     /// Exact binary values keyed by their coordinates in `rows`.
     binary_cells: HashMap<(usize, usize), Arc<Vec<u8>>>,
+    /// Exact binary values keyed by their coordinates in `original_rows`.
+    original_binary_cells: HashMap<(usize, usize), Arc<Vec<u8>>>,
     preview_font_cache: Option<PreviewFontCache>,
 }
 
@@ -223,6 +227,7 @@ impl Clone for EditorTableDelegate {
             primary_key_indices: self.primary_key_indices.clone(),
             data_grid: self.data_grid.clone(),
             binary_cells: self.binary_cells.clone(),
+            original_binary_cells: self.original_binary_cells.clone(),
             preview_font_cache: self.preview_font_cache.clone(),
         }
     }
@@ -264,6 +269,7 @@ impl EditorTableDelegate {
             primary_key_indices: Vec::new(),
             data_grid: None,
             binary_cells: HashMap::new(),
+            original_binary_cells: HashMap::new(),
             preview_font_cache: None,
         }
     }
@@ -291,6 +297,14 @@ impl EditorTableDelegate {
 
     pub fn is_binary_cell(&self, row_ix: usize, col_ix: usize) -> bool {
         self.binary_cells.contains_key(&(row_ix, col_ix))
+    }
+
+    fn is_binary_aware_cell(&self, row_ix: usize, col_ix: usize) -> bool {
+        self.is_binary_cell(row_ix, col_ix)
+            || self.original_row_index(row_ix).is_some_and(|original_ix| {
+                self.original_binary_cells
+                    .contains_key(&(original_ix, col_ix))
+            })
     }
 
     pub fn set_editable(&mut self, editable: bool) {
@@ -334,7 +348,7 @@ impl EditorTableDelegate {
         a: &Option<String>,
         b: &Option<String>,
     ) -> bool {
-        if self.is_binary_cell(row_ix, col_ix) {
+        if self.is_binary_aware_cell(row_ix, col_ix) {
             binary_edit_values_equal(a, b)
         } else if self.get_field_type(col_ix) == FieldType::DateTime {
             Self::datetime_values_equal(a, b)
@@ -349,8 +363,8 @@ impl EditorTableDelegate {
         col_ix: usize,
         value: &Option<String>,
     ) -> bool {
-        self.binary_cells
-            .get(&(row_ix, col_ix))
+        self.original_row_index(row_ix)
+            .and_then(|original_ix| self.original_binary_cells.get(&(original_ix, col_ix)))
             .zip(
                 value
                     .as_deref()
@@ -359,6 +373,13 @@ impl EditorTableDelegate {
             .is_some_and(|(original_bytes, value_bytes)| {
                 original_bytes.as_slice() == value_bytes.as_slice()
             })
+    }
+
+    fn original_row_index(&self, row_ix: usize) -> Option<usize> {
+        self.row_index_map
+            .get(&row_ix)
+            .copied()
+            .filter(|original_ix| *original_ix < 1_000_000)
     }
 
     pub fn editable_cell_text(&self, row_ix: usize, col_ix: usize) -> String {
@@ -394,6 +415,157 @@ impl EditorTableDelegate {
             .map(|(i, _)| i)
             .collect();
         self.column_meta = meta;
+    }
+
+    /// Reconcile late authoritative schema metadata with the current typed cell state.
+    ///
+    /// MySQL can expose TEXT-family values through a binary-looking wire type. SQL result tabs
+    /// receive those bytes before the table schema lookup completes, so metadata must repair the
+    /// affected cells incrementally instead of replacing the whole data set and clearing edits.
+    pub fn reconcile_binary_cells_with_column_meta(
+        &mut self,
+        meta: Vec<ColumnInfo>,
+    ) -> Result<(), QueryResultNormalizationError> {
+        if self.database_type != DatabaseType::MySQL {
+            self.set_column_meta(meta);
+            return Ok(());
+        }
+
+        let result_columns = self
+            .columns
+            .iter()
+            .map(|column| column.key.to_string())
+            .collect::<Vec<_>>();
+        let projected_meta = project_schema_columns(&result_columns, &meta)?;
+        let mut normalized = QueryResult {
+            sql: String::new(),
+            columns: result_columns,
+            column_meta: Vec::new(),
+            rows: self.original_rows.clone(),
+            binary_cells: self
+                .original_binary_cells
+                .iter()
+                .map(|(&(row_index, column_index), bytes)| BinaryCell {
+                    row_index,
+                    column_index,
+                    bytes: bytes.as_ref().clone(),
+                })
+                .collect(),
+            elapsed_ms: 0,
+        };
+
+        normalize_query_result_binary_semantics(
+            &mut normalized,
+            &DatabaseType::MySQL,
+            &projected_meta,
+        )?;
+
+        let retained_original_binary_cells = normalized
+            .binary_cells
+            .into_iter()
+            .map(|cell| ((cell.row_index, cell.column_index), Arc::new(cell.bytes)))
+            .collect::<HashMap<_, _>>();
+        let reclassified_text_cells = self
+            .original_binary_cells
+            .keys()
+            .copied()
+            .filter(|coordinate| !retained_original_binary_cells.contains_key(coordinate))
+            .collect::<Vec<_>>();
+
+        for (original_ix, col_ix) in reclassified_text_cells {
+            let Some(authoritative_value) = normalized
+                .rows
+                .get(original_ix)
+                .and_then(|row| row.get(col_ix))
+                .cloned()
+            else {
+                continue;
+            };
+
+            if let Some(original_cell) = self
+                .original_rows
+                .get_mut(original_ix)
+                .and_then(|row| row.get_mut(col_ix))
+            {
+                *original_cell = authoritative_value.clone();
+            }
+
+            let current_rows = self
+                .row_index_map
+                .iter()
+                .filter_map(|(&row_ix, &mapped_original_ix)| {
+                    (mapped_original_ix == original_ix).then_some(row_ix)
+                })
+                .collect::<Vec<_>>();
+
+            for row_ix in current_rows {
+                if self.modified_cells.contains(&(row_ix, col_ix)) {
+                    let current_value = self
+                        .rows
+                        .get(row_ix)
+                        .and_then(|row| row.get(col_ix))
+                        .cloned();
+                    if current_value.as_ref() == Some(&authoritative_value) {
+                        self.modified_cells.remove(&(row_ix, col_ix));
+                        self.cell_changes.remove(&(row_ix, col_ix));
+                        if let Some(current_cell) = self
+                            .rows
+                            .get_mut(row_ix)
+                            .and_then(|row| row.get_mut(col_ix))
+                        {
+                            *current_cell = authoritative_value.clone();
+                        }
+                    } else if let Some((old_value, _)) =
+                        self.cell_changes.get_mut(&(row_ix, col_ix))
+                    {
+                        *old_value = authoritative_value.clone();
+                    }
+                } else if let Some(current_cell) = self
+                    .rows
+                    .get_mut(row_ix)
+                    .and_then(|row| row.get_mut(col_ix))
+                {
+                    *current_cell = authoritative_value.clone();
+                }
+
+                self.binary_cells.remove(&(row_ix, col_ix));
+                let row_has_changes = (0..self.columns.len())
+                    .any(|column_ix| self.modified_cells.contains(&(row_ix, column_ix)));
+                if !row_has_changes
+                    && matches!(self.row_status.get(&row_ix), Some(RowStatus::Modified))
+                {
+                    self.row_status.insert(row_ix, RowStatus::Original);
+                }
+            }
+        }
+
+        self.original_binary_cells = retained_original_binary_cells;
+        for (&row_ix, &original_ix) in &self.row_index_map {
+            if original_ix >= 1_000_000 {
+                continue;
+            }
+            for col_ix in 0..self.columns.len() {
+                let coordinate = (row_ix, col_ix);
+                if self.modified_cells.contains(&coordinate) {
+                    continue;
+                }
+                match self
+                    .original_binary_cells
+                    .get(&(original_ix, col_ix))
+                    .cloned()
+                {
+                    Some(bytes) => {
+                        self.binary_cells.insert(coordinate, bytes);
+                    }
+                    None => {
+                        self.binary_cells.remove(&coordinate);
+                    }
+                }
+            }
+        }
+        self.set_column_meta(projected_meta);
+        self.recalculate_filtered_indices();
+        Ok(())
     }
 
     /// Set table name for SQL generation
@@ -454,7 +626,7 @@ impl EditorTableDelegate {
     fn edit_value(&self, row_ix: usize, col_ix: usize, new_value: String) -> Option<String> {
         // An empty Base64 string is the lossless representation of zero bytes.
         // SQL NULL remains an explicit operation through `record_cell_change_value`.
-        if self.is_binary_cell(row_ix, col_ix) || !new_value.is_empty() {
+        if self.is_binary_aware_cell(row_ix, col_ix) || !new_value.is_empty() {
             Some(new_value)
         } else {
             None
@@ -468,12 +640,13 @@ impl EditorTableDelegate {
         new_opt_value: Option<String>,
     ) -> bool {
         if !self.is_new_row(row_ix) {
-            if let Some(original_value) = self
-                .original_rows
-                .get(row_ix)
-                .and_then(|row| row.get(col_ix))
-                .cloned()
-                && if self.is_binary_cell(row_ix, col_ix) {
+            if let Some(original_ix) = self.original_row_index(row_ix)
+                && let Some(original_value) = self
+                    .original_rows
+                    .get(original_ix)
+                    .and_then(|row| row.get(col_ix))
+                    .cloned()
+                && if self.is_binary_aware_cell(row_ix, col_ix) {
                     self.binary_value_matches_original(row_ix, col_ix, &new_opt_value)
                 } else {
                     self.cell_values_equal(row_ix, col_ix, &original_value, &new_opt_value)
@@ -491,6 +664,15 @@ impl EditorTableDelegate {
                     .and_then(|row| row.get_mut(col_ix))
                 {
                     *cell = original_value;
+                }
+                if let Some(bytes) = self
+                    .original_binary_cells
+                    .get(&(original_ix, col_ix))
+                    .cloned()
+                {
+                    self.binary_cells.insert((row_ix, col_ix), bytes);
+                } else {
+                    self.binary_cells.remove(&(row_ix, col_ix));
                 }
 
                 let row_has_changes =
@@ -526,6 +708,16 @@ impl EditorTableDelegate {
         };
         let old_value = cell.clone();
         *cell = new_opt_value.clone();
+        if self.is_binary_aware_cell(row_ix, col_ix) {
+            match new_opt_value.as_deref().map(parse_binary_input).transpose() {
+                Ok(Some(bytes)) => {
+                    self.binary_cells.insert((row_ix, col_ix), Arc::new(bytes));
+                }
+                Ok(None) | Err(_) => {
+                    self.binary_cells.remove(&(row_ix, col_ix));
+                }
+            }
+        }
 
         // Mark cell as modified for UI
         self.modified_cells.insert((row_ix, col_ix));
@@ -569,6 +761,11 @@ impl EditorTableDelegate {
         self.new_rows.insert(new_row_id, row_data);
         self.row_status.insert(new_row_ix, RowStatus::New);
         self.row_index_map.insert(new_row_ix, new_row_id);
+        for col_ix in 0..self.columns.len() {
+            if let Some(bytes) = self.binary_cells.get(&(actual_row_ix, col_ix)).cloned() {
+                self.binary_cells.insert((new_row_ix, col_ix), bytes);
+            }
+        }
 
         Some(new_row_ix)
     }
@@ -624,6 +821,7 @@ impl EditorTableDelegate {
         self.rowids = rowids.clone();
         self.original_rowids = rowids;
         self.row_index_map = (0..row_count).map(|i| (i, i)).collect();
+        self.original_binary_cells = binary_cells.clone();
         self.binary_cells = binary_cells;
 
         // Clear all change tracking
@@ -797,6 +995,7 @@ impl EditorTableDelegate {
     pub fn revert_all_changes(&mut self) {
         // Restore rows to original state
         self.rows = self.original_rows.clone();
+        self.binary_cells = self.original_binary_cells.clone();
 
         // Restore row_index_map for restored rows
         let row_count = self.rows.len();
@@ -1098,15 +1297,68 @@ impl EditTableDelegate for EditorTableDelegate {
             cx: &mut App,
         ) {
             table.update(cx, |state, cx| {
-                let Some(data) = state.get_optional_selection_data(cx) else {
+                let Some(range) = state.selection().first_range() else {
                     window.push_notification(
                         Notification::warning(t!("TableData.select_cell").to_string()),
                         cx,
                     );
                     return;
                 };
-                let columns = state.get_selection_columns(cx);
                 let indices = state.get_selection_column_indices(cx);
+                if indices.is_empty() {
+                    window.push_notification(
+                        Notification::warning(t!("TableData.select_cell").to_string()),
+                        cx,
+                    );
+                    return;
+                }
+
+                let ((min_row, _), (max_row, _)) = range.normalized();
+                let actual_rows = {
+                    let delegate = state.delegate();
+                    (min_row..=max_row)
+                        .map(|display_row| delegate.resolve_display_row(display_row))
+                        .collect::<Option<Vec<_>>>()
+                };
+                let Some(actual_rows) = actual_rows else {
+                    window.push_notification(
+                        Notification::warning(t!("TableData.select_cell").to_string()),
+                        cx,
+                    );
+                    return;
+                };
+
+                let (all_data, all_binary_cells) =
+                    match state.delegate().get_rows_with_binary_cells(&actual_rows) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            window.push_notification(Notification::warning(error.to_string()), cx);
+                            return;
+                        }
+                    };
+                let data = all_data
+                    .iter()
+                    .map(|row| {
+                        indices
+                            .iter()
+                            .map(|index| row.get(*index).cloned().unwrap_or(None))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let binary_cells = all_binary_cells
+                    .into_iter()
+                    .filter_map(|cell| {
+                        indices
+                            .iter()
+                            .position(|index| *index == cell.column_index)
+                            .map(|column_index| BinaryCell {
+                                row_index: cell.row_index,
+                                column_index,
+                                bytes: cell.bytes,
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                let columns = state.get_selection_columns(cx);
                 let (metadata, database_type) = {
                     let delegate = state.delegate();
                     (
@@ -1115,7 +1367,8 @@ impl EditTableDelegate for EditorTableDelegate {
                     )
                 };
                 let plugin = cx.global::<GlobalDbState>().get_plugin(&database_type).ok();
-                let context = CopyFormatContext::new(&data, &columns, &metadata);
+                let context = CopyFormatContext::new(&data, &columns, &metadata)
+                    .with_binary_cells(&binary_cells);
                 let context = plugin
                     .as_deref()
                     .map_or(context, |plugin| context.with_plugin(plugin));
@@ -2676,6 +2929,16 @@ impl EditorTableDelegate {
             }
         }
         self.modified_cells = new_modified;
+
+        let mut new_binary_cells = HashMap::new();
+        for (&(row_ix, col_ix), bytes) in &self.binary_cells {
+            if row_ix > deleted_ix {
+                new_binary_cells.insert((row_ix - 1, col_ix), bytes.clone());
+            } else if row_ix < deleted_ix {
+                new_binary_cells.insert((row_ix, col_ix), bytes.clone());
+            }
+        }
+        self.binary_cells = new_binary_cells;
     }
 
     // ============================================================================
@@ -2693,6 +2956,57 @@ impl EditorTableDelegate {
         row_indices
             .iter()
             .filter_map(|&row_ix| self.rows.get(row_ix).cloned())
+            .collect()
+    }
+
+    fn get_typed_cell(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+    ) -> Result<Option<TableCellValue>, BinaryInputError> {
+        let Some(value) = self.rows.get(row_ix).and_then(|row| row.get(col_ix)) else {
+            return Ok(None);
+        };
+
+        if self.modified_cells.contains(&(row_ix, col_ix)) {
+            return match value {
+                None => Ok(Some(TableCellValue::Null)),
+                Some(value) if self.is_binary_aware_cell(row_ix, col_ix) => {
+                    parse_binary_input(value)
+                        .map(TableCellValue::Binary)
+                        .map(Some)
+                }
+                Some(value) => Ok(Some(TableCellValue::Text(value.clone()))),
+            };
+        }
+
+        if let Some(bytes) = self.binary_cells.get(&(row_ix, col_ix)) {
+            return Ok(Some(TableCellValue::Binary(bytes.as_ref().clone())));
+        }
+
+        Ok(Some(match value {
+            Some(value) => TableCellValue::Text(value.clone()),
+            None => TableCellValue::Null,
+        }))
+    }
+
+    /// 获取当前行的强类型数据。`row_indices` 使用实际行坐标，而不是过滤后的展示坐标。
+    pub fn get_typed_rows_data(
+        &self,
+        row_indices: &[usize],
+    ) -> Result<Vec<Vec<TableCellValue>>, BinaryInputError> {
+        row_indices
+            .iter()
+            .filter_map(|&row_ix| {
+                self.rows.get(row_ix).map(|row| {
+                    (0..row.len())
+                        .map(|col_ix| {
+                            self.get_typed_cell(row_ix, col_ix)
+                                .map(|value| value.expect("row and column were validated"))
+                        })
+                        .collect()
+                })
+            })
             .collect()
     }
 
@@ -2717,6 +3031,75 @@ impl EditorTableDelegate {
             .collect()
     }
 
+    /// 获取原始行的强类型数据（用于生成 UPDATE/DELETE 的 WHERE 子句）。
+    pub fn get_typed_original_rows_data(
+        &self,
+        row_indices: &[usize],
+    ) -> Result<Vec<Vec<TableCellValue>>, BinaryInputError> {
+        let mut result = Vec::new();
+        for &row_ix in row_indices {
+            if let Some(original_ix) = self.original_row_index(row_ix) {
+                if let Some(row) = self.original_rows.get(original_ix) {
+                    result.push(
+                        row.iter()
+                            .enumerate()
+                            .map(|(col_ix, value)| {
+                                if let Some(bytes) =
+                                    self.original_binary_cells.get(&(original_ix, col_ix))
+                                {
+                                    TableCellValue::Binary(bytes.as_ref().clone())
+                                } else {
+                                    TableCellValue::from(value.clone())
+                                }
+                            })
+                            .collect(),
+                    );
+                }
+            } else if let Some(row) = self.rows.get(row_ix) {
+                let mut typed_row = Vec::with_capacity(row.len());
+                for col_ix in 0..row.len() {
+                    typed_row.push(
+                        self.get_typed_cell(row_ix, col_ix)?
+                            .expect("row and column were validated"),
+                    );
+                }
+                result.push(typed_row);
+            }
+        }
+        Ok(result)
+    }
+
+    /// 获取字符串兼容行及与返回行局部坐标对齐的二进制 sidecar。
+    pub fn get_rows_with_binary_cells(
+        &self,
+        row_indices: &[usize],
+    ) -> Result<(Vec<Vec<Option<String>>>, Vec<BinaryCell>), BinaryInputError> {
+        let typed_rows = self.get_typed_rows_data(row_indices)?;
+        let mut rows = Vec::with_capacity(typed_rows.len());
+        let mut binary_cells = Vec::new();
+
+        for (row_index, typed_row) in typed_rows.into_iter().enumerate() {
+            let mut row = Vec::with_capacity(typed_row.len());
+            for (column_index, value) in typed_row.into_iter().enumerate() {
+                match value {
+                    TableCellValue::Null => row.push(None),
+                    TableCellValue::Text(value) => row.push(Some(value)),
+                    TableCellValue::Binary(bytes) => {
+                        row.push(Some(format_binary_input(&bytes)));
+                        binary_cells.push(BinaryCell {
+                            row_index,
+                            column_index,
+                            bytes,
+                        });
+                    }
+                }
+            }
+            rows.push(row);
+        }
+
+        Ok((rows, binary_cells))
+    }
+
     /// 获取数据库类型
     pub fn database_type(&self) -> DatabaseType {
         self.database_type.clone()
@@ -2726,11 +3109,11 @@ impl EditorTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::{
-        EditorTableDelegate, binary_cell_copy_text, binary_cell_image_format,
+        EditorTableDelegate, RowStatus, binary_cell_copy_text, binary_cell_image_format,
         binary_download_file_name, binary_edit_values_equal, normalize_row_search_query,
         normalize_sort_identifier, parse_primary_order_by_clause, row_matches_search_query,
     };
-    use db::{ColumnInfo, binary_value::parse_binary_input};
+    use db::{ColumnInfo, TableCellValue, binary_value::parse_binary_input};
     use gpui::SharedString;
     use one_core::storage::DatabaseType;
     use one_ui::edit_table::{Column, ColumnSort, FilterValueKey};
@@ -2763,7 +3146,168 @@ mod tests {
             primary_key_indices: Vec::new(),
             data_grid: None,
             binary_cells: HashMap::new(),
+            original_binary_cells: HashMap::new(),
             preview_font_cache: None,
+        }
+    }
+
+    fn set_binary_cell(
+        delegate: &mut EditorTableDelegate,
+        row_ix: usize,
+        col_ix: usize,
+        bytes: Vec<u8>,
+    ) {
+        let bytes = std::sync::Arc::new(bytes);
+        delegate
+            .binary_cells
+            .insert((row_ix, col_ix), bytes.clone());
+        delegate
+            .original_binary_cells
+            .insert((row_ix, col_ix), bytes);
+    }
+
+    #[test]
+    fn typed_rows_use_binary_sidecar_without_inspecting_display_text() {
+        let mut delegate =
+            test_delegate(vec![vec![Some("1".to_string()), Some("AQID".to_string())]]);
+        set_binary_cell(&mut delegate, 0, 1, vec![1, 2, 3]);
+
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap(),
+            vec![vec![
+                TableCellValue::Text("1".to_string()),
+                TableCellValue::Binary(vec![1, 2, 3]),
+            ]]
+        );
+        assert_eq!(
+            delegate.get_typed_original_rows_data(&[0]).unwrap(),
+            vec![vec![
+                TableCellValue::Text("1".to_string()),
+                TableCellValue::Binary(vec![1, 2, 3]),
+            ]]
+        );
+    }
+
+    #[test]
+    fn typed_binary_edits_require_only_explicit_prefixes_for_encoded_input() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("binary display".to_string()),
+        ]]);
+        set_binary_cell(&mut delegate, 0, 1, vec![9]);
+
+        assert!(delegate.record_cell_change(0, 1, "base64:AQID".to_string()));
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap()[0][1],
+            TableCellValue::Binary(vec![1, 2, 3])
+        );
+
+        assert!(delegate.record_cell_change(0, 1, "hex:74727565".to_string()));
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap()[0][1],
+            TableCellValue::Binary(b"true".to_vec())
+        );
+
+        for value in ["8000", "AQID", "true"] {
+            assert!(delegate.record_cell_change(0, 1, value.to_string()));
+            assert_eq!(
+                delegate.get_typed_rows_data(&[0]).unwrap()[0][1],
+                TableCellValue::Binary(value.as_bytes().to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn typed_binary_edits_reject_invalid_explicit_encodings_and_preserve_null() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("binary display".to_string()),
+        ]]);
+        set_binary_cell(&mut delegate, 0, 1, vec![1, 2, 3]);
+
+        assert!(delegate.record_cell_change(0, 1, "base64:not-valid!".to_string()));
+        assert!(delegate.get_typed_rows_data(&[0]).is_err());
+
+        assert!(delegate.record_cell_change_value(0, 1, None));
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap()[0][1],
+            TableCellValue::Null
+        );
+        assert_eq!(
+            delegate.get_typed_original_rows_data(&[0]).unwrap()[0][1],
+            TableCellValue::Binary(vec![1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn typed_rows_preserve_empty_binary_and_revert_original_bytes() {
+        let mut delegate = test_delegate(vec![vec![Some("1".to_string()), Some(String::new())]]);
+        set_binary_cell(&mut delegate, 0, 1, Vec::new());
+
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap()[0][1],
+            TableCellValue::Binary(Vec::new())
+        );
+        assert!(delegate.record_cell_change(0, 1, "text:changed".to_string()));
+        delegate.revert_all_changes();
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap()[0][1],
+            TableCellValue::Binary(Vec::new())
+        );
+    }
+
+    #[test]
+    fn typed_original_rows_follow_actual_to_original_mapping_and_new_rows_fallback() {
+        let mut delegate = test_delegate(vec![
+            vec![Some("first".to_string()), Some("a".to_string())],
+            vec![Some("second".to_string()), Some("b".to_string())],
+        ]);
+        delegate.row_index_map.insert(0, 1);
+        delegate.row_index_map.insert(1, 0);
+        delegate
+            .original_binary_cells
+            .insert((1, 1), std::sync::Arc::new(vec![2]));
+
+        assert_eq!(
+            delegate.get_typed_original_rows_data(&[0]).unwrap(),
+            vec![vec![
+                TableCellValue::Text("second".to_string()),
+                TableCellValue::Binary(vec![2]),
+            ]]
+        );
+
+        delegate.rows.push(vec![
+            Some("new".to_string()),
+            Some("base64:AQID".to_string()),
+        ]);
+        delegate.row_index_map.insert(2, 1_000_000);
+        delegate
+            .binary_cells
+            .insert((2, 1), std::sync::Arc::new(vec![1, 2, 3]));
+        assert_eq!(
+            delegate.get_typed_original_rows_data(&[2]).unwrap()[0][1],
+            TableCellValue::Binary(vec![1, 2, 3])
+        );
+    }
+
+    fn mysql_column(name: &str, data_type: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: true,
+            is_primary_key: name == "id",
+            default_value: None,
+            comment: None,
+            charset: if data_type.contains("TEXT") {
+                Some("utf8mb4".to_string())
+            } else {
+                None
+            },
+            collation: if data_type.contains("TEXT") {
+                Some("utf8mb4_0900_ai_ci".to_string())
+            } else {
+                None
+            },
         }
     }
 
@@ -2914,9 +3458,7 @@ mod tests {
     #[test]
     fn binary_cell_accepts_explicit_binary_encodings_and_utf8_text() {
         let mut delegate = test_delegate(vec![vec![Some("binary display value".to_string())]]);
-        delegate
-            .binary_cells
-            .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
+        set_binary_cell(&mut delegate, 0, 0, vec![1, 2, 3]);
 
         assert!(!delegate.record_cell_change(0, 0, "base64:AQID".to_string()));
         assert!(delegate.record_cell_change(0, 0, "3q2+7w==".to_string()));
@@ -2939,11 +3481,143 @@ mod tests {
     }
 
     #[test]
+    fn late_mysql_metadata_reclassifies_longtext_without_clearing_edits() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("incorrect display value".to_string()),
+        ]]);
+        set_binary_cell(&mut delegate, 0, 1, b"true".to_vec());
+        delegate.rows[0][1] = Some("user edit".to_string());
+        delegate.modified_cells.insert((0, 1));
+        delegate.cell_changes.insert(
+            (0, 1),
+            (
+                Some("incorrect display value".to_string()),
+                Some("user edit".to_string()),
+            ),
+        );
+        delegate.row_status.insert(0, RowStatus::Modified);
+
+        delegate
+            .reconcile_binary_cells_with_column_meta(vec![
+                mysql_column("id", "BIGINT"),
+                mysql_column("name", "LONGTEXT"),
+            ])
+            .unwrap();
+
+        assert!(!delegate.is_binary_cell(0, 1));
+        assert_eq!(delegate.original_rows[0][1].as_deref(), Some("true"));
+        assert_eq!(delegate.rows[0][1].as_deref(), Some("user edit"));
+        assert_eq!(
+            delegate.cell_changes.get(&(0, 1)),
+            Some(&(Some("true".to_string()), Some("user edit".to_string())))
+        );
+        assert!(delegate.modified_cells.contains(&(0, 1)));
+        assert_eq!(delegate.row_status.get(&0), Some(&RowStatus::Modified));
+        assert_eq!(delegate.column_meta[1].data_type, "LONGTEXT");
+        assert_eq!(delegate.primary_key_indices, vec![0]);
+    }
+
+    #[test]
+    fn late_mysql_metadata_updates_unmodified_longtext_display() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("incorrect display value".to_string()),
+        ]]);
+        set_binary_cell(&mut delegate, 0, 1, b"true".to_vec());
+
+        delegate
+            .reconcile_binary_cells_with_column_meta(vec![
+                mysql_column("id", "BIGINT"),
+                mysql_column("name", "LONGTEXT"),
+            ])
+            .unwrap();
+
+        assert!(!delegate.is_binary_cell(0, 1));
+        assert_eq!(delegate.original_rows[0][1].as_deref(), Some("true"));
+        assert_eq!(delegate.rows[0][1].as_deref(), Some("true"));
+        assert!(delegate.cell_changes.is_empty());
+        assert!(delegate.modified_cells.is_empty());
+    }
+
+    #[test]
+    fn late_mysql_metadata_clears_an_edit_equal_to_authoritative_text() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("incorrect display value".to_string()),
+        ]]);
+        set_binary_cell(&mut delegate, 0, 1, b"true".to_vec());
+        delegate.rows[0][1] = Some("true".to_string());
+        delegate.modified_cells.insert((0, 1));
+        delegate.cell_changes.insert(
+            (0, 1),
+            (
+                Some("incorrect display value".to_string()),
+                Some("true".to_string()),
+            ),
+        );
+        delegate.row_status.insert(0, RowStatus::Modified);
+
+        delegate
+            .reconcile_binary_cells_with_column_meta(vec![
+                mysql_column("id", "BIGINT"),
+                mysql_column("name", "LONGTEXT"),
+            ])
+            .unwrap();
+
+        assert!(!delegate.is_binary_cell(0, 1));
+        assert_eq!(delegate.rows[0][1].as_deref(), Some("true"));
+        assert!(delegate.cell_changes.is_empty());
+        assert!(delegate.modified_cells.is_empty());
+        assert_eq!(delegate.row_status.get(&0), Some(&RowStatus::Original));
+    }
+
+    #[test]
+    fn late_mysql_metadata_retains_real_blob_and_is_atomic_on_decode_error() {
+        let mut blob_delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("binary display value".to_string()),
+        ]]);
+        set_binary_cell(&mut blob_delegate, 0, 1, vec![0, 1, 255]);
+
+        blob_delegate
+            .reconcile_binary_cells_with_column_meta(vec![
+                mysql_column("id", "BIGINT"),
+                mysql_column("name", "LONGBLOB"),
+            ])
+            .unwrap();
+
+        assert!(blob_delegate.is_binary_cell(0, 1));
+        assert_eq!(blob_delegate.binary_cells[&(0, 1)].as_slice(), &[0, 1, 255]);
+
+        let mut invalid_text_delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("binary display value".to_string()),
+        ]]);
+        set_binary_cell(&mut invalid_text_delegate, 0, 1, vec![0xff]);
+        let original_rows = invalid_text_delegate.original_rows.clone();
+        let rows = invalid_text_delegate.rows.clone();
+        let binary_cells = invalid_text_delegate.binary_cells.clone();
+        let column_meta = invalid_text_delegate.column_meta.clone();
+
+        assert!(
+            invalid_text_delegate
+                .reconcile_binary_cells_with_column_meta(vec![
+                    mysql_column("id", "BIGINT"),
+                    mysql_column("name", "LONGTEXT"),
+                ])
+                .is_err()
+        );
+        assert_eq!(invalid_text_delegate.original_rows, original_rows);
+        assert_eq!(invalid_text_delegate.rows, rows);
+        assert_eq!(invalid_text_delegate.binary_cells, binary_cells);
+        assert_eq!(invalid_text_delegate.column_meta.len(), column_meta.len());
+    }
+
+    #[test]
     fn empty_binary_edit_is_distinct_from_null() {
         let mut delegate = test_delegate(vec![vec![Some("binary display value".to_string())]]);
-        delegate
-            .binary_cells
-            .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
+        set_binary_cell(&mut delegate, 0, 0, vec![1, 2, 3]);
 
         assert!(delegate.record_cell_change(0, 0, String::new()));
         assert_eq!(delegate.rows[0][0].as_deref(), Some(""));
@@ -2966,9 +3640,7 @@ mod tests {
     #[test]
     fn unchanged_empty_binary_value_does_not_become_null() {
         let mut delegate = test_delegate(vec![vec![Some(String::new())]]);
-        delegate
-            .binary_cells
-            .insert((0, 0), std::sync::Arc::new(Vec::new()));
+        set_binary_cell(&mut delegate, 0, 0, Vec::new());
 
         assert!(!delegate.record_cell_change(0, 0, String::new()));
         assert_eq!(delegate.rows[0][0].as_deref(), Some(""));

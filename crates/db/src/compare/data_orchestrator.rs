@@ -582,7 +582,7 @@ async fn load_table_data_pages(
             has_internal_rowid.then_some(internal_rowid_alias.as_str()),
             &config.database_type,
             business_columns,
-        );
+        )?;
         let page_row_count = response.query_result.rows.len();
         let next_keyset_where_clause = build_keyset_where_clause(
             plugin.as_ref(),
@@ -645,7 +645,7 @@ async fn load_table_data_pages(
                         has_internal_rowid.then_some(internal_rowid_alias.as_str()),
                         &config.database_type,
                         business_columns,
-                    );
+                    )?;
                     append_table_data_page(&mut accumulated, probe)?;
                 }
                 return Ok(accumulated.take().expect("accumulated response exists"));

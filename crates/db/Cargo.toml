@@ -39,6 +39,7 @@ sqlformat.workspace = true
 sqlparser.workspace = true
 uuid.workspace = true
 dashmap.workspace = true
+encoding_rs.workspace = true
 moka.workspace = true
 smol.workspace = true
 regex.workspace = true

@@ -162,8 +162,10 @@ impl OraclePlugin {
         value: &TableCellValue,
         column: Option<&ColumnInfo>,
     ) -> String {
-        let TableCellValue::Text(value) = value else {
-            return "NULL".to_string();
+        let value = match value {
+            TableCellValue::Null => return "NULL".to_string(),
+            TableCellValue::Binary(bytes) => return self.format_binary_literal(bytes),
+            TableCellValue::Text(value) => value,
         };
         if value.is_empty() {
             return "NULL".to_string();
@@ -1322,6 +1324,15 @@ impl DatabasePlugin for OraclePlugin {
             SqlResult::Error(sql_error_info) => anyhow::bail!(sql_error_info.message),
         }?;
         paginated_query.strip_hidden_result_columns(&mut query_result)?;
+        crate::query_result_normalization::normalize_table_query_result(
+            self,
+            connection,
+            &request.database,
+            request.schema.as_deref(),
+            &request.table,
+            &mut query_result,
+        )
+        .await?;
 
         Ok(TableDataResponse {
             query_result,
@@ -3640,7 +3651,12 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Added {
-                data: vec!["12.50".into(), "true".into(), "3q2+7w==".into(), "1".into()],
+                data: vec![
+                    "12.50".into(),
+                    "true".into(),
+                    TableCellValue::Binary(vec![0xde, 0xad, 0xbe, 0xef]),
+                    "1".into(),
+                ],
             }],
         };
 

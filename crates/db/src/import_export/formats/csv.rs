@@ -366,7 +366,8 @@ impl FormatHandler for CsvFormatHandler {
                 table: table.clone(),
             });
 
-            let table_ref = plugin.format_table_reference(&config.database, None, table);
+            let table_ref =
+                plugin.format_table_reference(&config.database, config.schema.as_deref(), table);
             let columns_str = if let Some(cols) = &config.columns {
                 cols.iter()
                     .map(|c| plugin.quote_identifier(c))
@@ -398,6 +399,15 @@ impl FormatHandler for CsvFormatHandler {
                 if let Some(paginated_query) = &paginated_query {
                     paginated_query.strip_hidden_result_columns(&mut query_result)?;
                 }
+                crate::query_result_normalization::normalize_table_query_result(
+                    plugin,
+                    connection,
+                    &config.database,
+                    config.schema.as_deref(),
+                    table,
+                    &mut query_result,
+                )
+                .await?;
                 let rows_count = query_result.rows.len() as u64;
                 let table_output = render_delimited_query_result(
                     "CSV",

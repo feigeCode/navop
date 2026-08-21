@@ -95,6 +95,32 @@ impl DbConnection for XmlTestConnection {
     }
 
     async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+        if query.contains("FROM INFORMATION_SCHEMA.COLUMNS") {
+            return Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![
+                    "COLUMN_NAME".to_string(),
+                    "COLUMN_TYPE".to_string(),
+                    "IS_NULLABLE".to_string(),
+                    "COLUMN_KEY".to_string(),
+                    "COLUMN_DEFAULT".to_string(),
+                    "COLUMN_COMMENT".to_string(),
+                    "CHARACTER_SET_NAME".to_string(),
+                    "COLLATION_NAME".to_string(),
+                ],
+                column_meta: vec![],
+                rows: vec![
+                    mysql_schema_row("nullable", "TEXT", Some("utf8mb4")),
+                    mysql_schema_row("empty", "TEXT", Some("utf8mb4")),
+                    mysql_schema_row("marker", "TEXT", Some("utf8mb4")),
+                    mysql_schema_row("payload", "BLOB", None),
+                    mysql_schema_row("display name", "TEXT", Some("utf8mb4")),
+                ],
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }));
+        }
+
         let mut result = self
             .query_result
             .clone()
@@ -120,6 +146,19 @@ impl DbConnection for XmlTestConnection {
     ) -> Result<(), DbError> {
         Ok(())
     }
+}
+
+fn mysql_schema_row(name: &str, data_type: &str, charset: Option<&str>) -> Vec<Option<String>> {
+    vec![
+        Some(name.to_string()),
+        Some(data_type.to_string()),
+        Some("YES".to_string()),
+        Some(String::new()),
+        None,
+        None,
+        charset.map(str::to_string),
+        charset.map(|charset| format!("{charset}_0900_ai_ci")),
+    ]
 }
 
 fn test_config(database_type: DatabaseType) -> DbConnectionConfig {

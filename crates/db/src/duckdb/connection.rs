@@ -603,6 +603,7 @@ mod tests {
             host: db_path.to_string_lossy().to_string(),
             port: 0,
             workspace_id: None,
+            credential_reference: None,
             username: String::new(),
             password: String::new(),
             database: None,

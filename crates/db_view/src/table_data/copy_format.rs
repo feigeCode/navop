@@ -1,4 +1,4 @@
-use db::{ColumnInfo, DatabasePlugin};
+use db::{ColumnInfo, DatabasePlugin, binary_value::format_binary_input, executor::BinaryCell};
 use gpui::SharedString;
 
 #[path = "copy_sql_format.rs"]
@@ -133,9 +133,17 @@ fn find_column_index(
 #[derive(Clone, Copy)]
 pub struct CopyFormatContext<'a> {
     pub data: &'a [Vec<Option<String>>],
+    pub binary_cells: &'a [BinaryCell],
     pub columns: &'a [SharedString],
     pub metadata: &'a TableMetadata,
     pub plugin: Option<&'a dyn DatabasePlugin>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CopyCell<'a> {
+    Null,
+    Text(&'a str),
+    Binary(&'a [u8]),
 }
 
 impl<'a> CopyFormatContext<'a> {
@@ -146,15 +154,42 @@ impl<'a> CopyFormatContext<'a> {
     ) -> Self {
         Self {
             data,
+            binary_cells: &[],
             columns,
             metadata,
             plugin: None,
         }
     }
 
+    pub fn with_binary_cells(mut self, binary_cells: &'a [BinaryCell]) -> Self {
+        self.binary_cells = binary_cells;
+        self
+    }
+
     pub fn with_plugin(mut self, plugin: &'a dyn DatabasePlugin) -> Self {
         self.plugin = Some(plugin);
         self
+    }
+
+    pub(super) fn cell(self, row_index: usize, column_index: usize) -> CopyCell<'a> {
+        if let Some(bytes) = self
+            .binary_cells
+            .iter()
+            .find(|cell| cell.row_index == row_index && cell.column_index == column_index)
+            .map(|cell| cell.bytes.as_slice())
+        {
+            return CopyCell::Binary(bytes);
+        }
+
+        match self
+            .data
+            .get(row_index)
+            .and_then(|row| row.get(column_index))
+            .and_then(Option::as_deref)
+        {
+            Some(value) => CopyCell::Text(value),
+            None => CopyCell::Null,
+        }
     }
 }
 
@@ -165,19 +200,25 @@ impl CopyFormatter {
     /// 格式化数据为指定格式
     pub fn format(format: CopyFormat, context: CopyFormatContext<'_>) -> String {
         match format {
-            CopyFormat::Tsv => Self::format_tsv(context.data),
-            CopyFormat::Csv => Self::format_csv(context.data),
-            CopyFormat::Json => Self::format_json(context.data, context.columns),
-            CopyFormat::Markdown => Self::format_markdown(context.data, context.columns),
+            CopyFormat::Tsv => Self::format_tsv(context),
+            CopyFormat::Csv => Self::format_csv(context),
+            CopyFormat::Json => Self::format_json(context),
+            CopyFormat::Markdown => Self::format_markdown(context),
             _ => copy_sql_format::format(format, context),
         }
     }
 
-    fn format_tsv(data: &[Vec<Option<String>>]) -> String {
-        data.iter()
-            .map(|row| {
+    fn format_tsv(context: CopyFormatContext<'_>) -> String {
+        context
+            .data
+            .iter()
+            .enumerate()
+            .map(|(row_index, row)| {
                 row.iter()
-                    .map(|cell| cell.as_deref().unwrap_or("\\N"))
+                    .enumerate()
+                    .map(|(column_index, _)| {
+                        Self::plain_cell(context.cell(row_index, column_index))
+                    })
                     .collect::<Vec<_>>()
                     .join("\t")
             })
@@ -185,14 +226,23 @@ impl CopyFormatter {
             .join("\n")
     }
 
-    fn format_csv(data: &[Vec<Option<String>>]) -> String {
-        data.iter()
-            .map(|row| {
+    fn format_csv(context: CopyFormatContext<'_>) -> String {
+        context
+            .data
+            .iter()
+            .enumerate()
+            .map(|(row_index, row)| {
                 row.iter()
-                    .map(|cell| match cell {
-                        Some(cell) => Self::escape_csv_field(cell),
-                        None => "\\N".to_string(),
-                    })
+                    .enumerate()
+                    .map(
+                        |(column_index, _)| match context.cell(row_index, column_index) {
+                            CopyCell::Null => "\\N".to_string(),
+                            CopyCell::Text(value) => Self::escape_csv_field(value),
+                            CopyCell::Binary(bytes) => {
+                                Self::escape_csv_field(&format_binary_input(bytes))
+                            }
+                        },
+                    )
                     .collect::<Vec<_>>()
                     .join(",")
             })
@@ -200,16 +250,25 @@ impl CopyFormatter {
             .join("\n")
     }
 
-    fn format_json(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
-        let rows = data
+    fn format_json(context: CopyFormatContext<'_>) -> String {
+        let rows = context
+            .data
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(row_index, row)| {
                 let fields = row
                     .iter()
                     .enumerate()
-                    .map(|(index, value)| {
-                        let name = columns.get(index).map_or("_", SharedString::as_ref);
-                        format!("    \"{}\": {}", name, Self::to_json_value(value))
+                    .map(|(column_index, _)| {
+                        let name = context
+                            .columns
+                            .get(column_index)
+                            .map_or("_", SharedString::as_ref);
+                        format!(
+                            "    {}: {}",
+                            Self::json_string(name),
+                            Self::to_json_value(context.cell(row_index, column_index))
+                        )
                     })
                     .collect::<Vec<_>>();
                 format!("  {{\n{}\n  }}", fields.join(",\n"))
@@ -218,26 +277,37 @@ impl CopyFormatter {
         format!("[\n{}\n]", rows.join(",\n"))
     }
 
-    fn format_markdown(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
-        let Some(first_row) = data.first() else {
+    fn format_markdown(context: CopyFormatContext<'_>) -> String {
+        let Some(first_row) = context.data.first() else {
             return String::new();
         };
         let header = (0..first_row.len())
-            .map(|index| columns.get(index).map_or("-", SharedString::as_ref))
+            .map(|index| context.columns.get(index).map_or("-", SharedString::as_ref))
             .collect::<Vec<_>>();
         let separator = vec!["---"; first_row.len()];
         let mut lines = vec![
             format!("| {} |", header.join(" | ")),
             format!("| {} |", separator.join(" | ")),
         ];
-        lines.extend(data.iter().map(|row| {
+        lines.extend(context.data.iter().enumerate().map(|(row_index, row)| {
             let values = row
                 .iter()
-                .map(|cell| cell.as_deref().unwrap_or("\\N").replace('|', "\\|"))
+                .enumerate()
+                .map(|(column_index, _)| {
+                    Self::plain_cell(context.cell(row_index, column_index)).replace('|', "\\|")
+                })
                 .collect::<Vec<_>>();
             format!("| {} |", values.join(" | "))
         }));
         lines.join("\n")
+    }
+
+    fn plain_cell(cell: CopyCell<'_>) -> String {
+        match cell {
+            CopyCell::Null => "\\N".to_string(),
+            CopyCell::Text(value) => value.to_string(),
+            CopyCell::Binary(bytes) => format_binary_input(bytes),
+        }
     }
 
     fn escape_csv_field(field: &str) -> String {
@@ -248,23 +318,26 @@ impl CopyFormatter {
         }
     }
 
-    fn to_json_value(value: &Option<String>) -> String {
-        let Some(value) = value else {
-            return "null".to_string();
+    fn to_json_value(cell: CopyCell<'_>) -> String {
+        let value = match cell {
+            CopyCell::Null => return "null".to_string(),
+            CopyCell::Binary(bytes) => return Self::json_string(&format_binary_input(bytes)),
+            CopyCell::Text(value) => value,
         };
-        if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
+        if matches!(
+            serde_json::from_str::<serde_json::Value>(value),
+            Ok(serde_json::Value::Number(_))
+        ) {
             return value.to_string();
         }
-        if matches!(value.as_str(), "true" | "false") {
+        if matches!(value, "true" | "false") {
             return value.to_string();
         }
-        let escaped = value
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t");
-        format!("\"{escaped}\"")
+        Self::json_string(value)
+    }
+
+    fn json_string(value: &str) -> String {
+        serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
     }
 }
 
