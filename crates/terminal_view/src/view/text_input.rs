@@ -88,7 +88,9 @@ impl TerminalView {
 
         // Xshell 风格：会话未激活（未连接/已断开）时 Ctrl+D 关闭当前窗口；
         // 会话存活时 Ctrl+D 照常透传为 EOF（\x04）退出 shell。
-        if !self.accepts_live_terminal_input(cx) {
+        // 锁定会话不关闭窗口，仅拦截输入。
+        let is_locked = self.terminal.read(cx).is_locked();
+        if !self.accepts_live_terminal_input(cx) && !is_locked {
             let modifiers = event.keystroke.modifiers;
             if modifiers.control
                 && !modifiers.alt

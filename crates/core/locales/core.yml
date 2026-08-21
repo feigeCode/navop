@@ -61,6 +61,18 @@ TabContextMenu:
     en: "Duplicate Tab"
     zh-CN: "复制标签页"
     zh-HK: "複製標籤頁"
+  lock_session:
+    en: "Lock Session"
+    zh-CN: "锁定会话"
+    zh-HK: "鎖定會話"
+  unlock_session:
+    en: "Unlock Session"
+    zh-CN: "解锁会话"
+    zh-HK: "解鎖會話"
+  close_disconnected_tabs:
+    en: "Close Disconnected Connections"
+    zh-CN: "关闭已断开的连接"
+    zh-HK: "關閉已斷開的連線"
   close_tab:
     en: "Close Tab"
     zh-CN: "关闭标签页"
@@ -117,6 +129,94 @@ TabContextMenu:
     en: "Use Cancel Split or drag the floating title back to the tab bar"
     zh-CN: "点击取消分屏，或将浮动标题拖回标签栏"
     zh-HK: "點擊取消分屏，或將浮動標題拖回標籤列"
+
+SessionLock:
+  title:
+    en: "Lock Session"
+    zh-CN: "锁定会话"
+    zh-HK: "鎖定會話"
+  unlock_title:
+    en: "Unlock Session"
+    zh-CN: "解锁会话"
+    zh-HK: "解鎖會話"
+  password:
+    en: "Password"
+    zh-CN: "密码"
+    zh-HK: "密碼"
+  password_placeholder:
+    en: "Enter password"
+    zh-CN: "请输入密码"
+    zh-HK: "請輸入密碼"
+  confirm_password:
+    en: "Re-enter Password"
+    zh-CN: "再次输入密码"
+    zh-HK: "再次輸入密碼"
+  confirm_password_placeholder:
+    en: "Re-enter password"
+    zh-CN: "请再次输入密码"
+    zh-HK: "請再次輸入密碼"
+  lock_all:
+    en: "Lock All Sessions"
+    zh-CN: "锁定所有会话"
+    zh-HK: "鎖定所有會話"
+  hide_output:
+    en: "Hide Output"
+    zh-CN: "隐藏输出"
+    zh-HK: "隱藏輸出"
+  unlock_all:
+    en: "Unlock All Sessions"
+    zh-CN: "解锁所有会话"
+    zh-HK: "解鎖所有會話"
+  lock:
+    en: "Lock"
+    zh-CN: "锁定"
+    zh-HK: "鎖定"
+  unlock:
+    en: "Unlock"
+    zh-CN: "解锁"
+    zh-HK: "解鎖"
+  password_empty:
+    en: "Password cannot be empty"
+    zh-CN: "密码不能为空"
+    zh-HK: "密碼不能為空"
+  password_mismatch:
+    en: "Passwords do not match"
+    zh-CN: "两次输入的密码不一致"
+    zh-HK: "兩次輸入的密碼不一致"
+  incorrect_password:
+    en: "Incorrect password"
+    zh-CN: "密码错误"
+    zh-HK: "密碼錯誤"
+  locked_notice:
+    en: "Session Locked"
+    zh-CN: "会话已锁定"
+    zh-HK: "會話已鎖定"
+  hidden_notice:
+    en: "Session Locked - Output Hidden"
+    zh-CN: "会话已锁定 - 输出已隐藏"
+    zh-HK: "會話已鎖定 - 輸出已隱藏"
+
+TabStatus:
+  connected:
+    en: "Connected"
+    zh-CN: "已连接"
+    zh-HK: "已連接"
+  connected_locked:
+    en: "Connected and Locked"
+    zh-CN: "已连接且已锁定"
+    zh-HK: "已連接且已鎖定"
+  locked_close_blocked:
+    en: "Unlock the session before closing the tab"
+    zh-CN: "请先解锁会话再关闭标签页"
+    zh-HK: "請先解鎖會話再關閉標籤頁"
+  disconnected:
+    en: "Disconnected"
+    zh-CN: "已断开"
+    zh-HK: "已斷開"
+  locked:
+    en: "Session Locked"
+    zh-CN: "会话已锁定"
+    zh-HK: "會話已鎖定"
 
 AiChat:
   title:

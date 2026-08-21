@@ -7,13 +7,102 @@ use super::import_execution::{ImportStatement, execute_import_statements};
 use super::{format_import_table_reference, format_import_text_value, load_import_columns};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
-use crate::executor::SqlResult;
+use crate::executor::{QueryCellRef, QueryResult, SqlResult};
 use crate::import_export::{
     ExportConfig, ExportProgressEvent, ExportProgressSender, ExportResult, FormatHandler,
     ImportConfig, ImportResult,
 };
 
 pub struct CsvFormatHandler;
+
+pub(super) fn render_delimited_query_result(
+    format_name: &str,
+    query_result: &QueryResult,
+    delimiter: char,
+    qualifier: Option<char>,
+    include_header: bool,
+    record_terminator: &str,
+    null_string: &str,
+) -> Result<String> {
+    let view = query_result
+        .typed_view()
+        .map_err(|error| anyhow!("Invalid query result for {format_name} export: {error}"))?;
+    let mut output = String::new();
+
+    if include_header {
+        for (column_index, column) in query_result.columns.iter().enumerate() {
+            if column_index > 0 {
+                output.push(delimiter);
+            }
+            output.push_str(&escape_delimited_field(
+                format_name,
+                column,
+                delimiter,
+                qualifier,
+                null_string,
+            )?);
+        }
+        output.push_str(record_terminator);
+    }
+
+    for row_index in 0..query_result.rows.len() {
+        for column_index in 0..query_result.columns.len() {
+            if column_index > 0 {
+                output.push(delimiter);
+            }
+            match view.cell(row_index, column_index) {
+                Some(QueryCellRef::Null) => output.push_str(null_string),
+                Some(QueryCellRef::Text(value)) => output.push_str(&escape_delimited_field(
+                    format_name,
+                    value,
+                    delimiter,
+                    qualifier,
+                    null_string,
+                )?),
+                Some(QueryCellRef::Binary(_)) => {
+                    return Err(anyhow!(
+                        "{format_name} export does not support binary cell at row {}, column {} ({:?}) without an explicit binary encoding",
+                        row_index + 1,
+                        column_index + 1,
+                        query_result.columns[column_index],
+                    ));
+                }
+                None => unreachable!("typed view validated row and column bounds"),
+            }
+        }
+        output.push_str(record_terminator);
+    }
+
+    Ok(output)
+}
+
+pub(super) fn escape_delimited_field(
+    format_name: &str,
+    field: &str,
+    delimiter: char,
+    qualifier: Option<char>,
+    null_string: &str,
+) -> Result<String> {
+    // 空字符串和与 NULL marker 相同的文本都需要用引号包裹，以保留三态语义。
+    let needs_quote = field.is_empty()
+        || field == null_string
+        || field.contains(delimiter)
+        || field.contains('\n')
+        || field.contains('\r')
+        || qualifier.map(|q| field.contains(q)).unwrap_or(false);
+
+    if needs_quote {
+        let q = qualifier.ok_or_else(|| {
+            anyhow!(
+                "{format_name} text qualifier is required to safely export empty, NULL-marker, delimited, or multiline text"
+            )
+        })?;
+        let escaped = field.replace(q, &format!("{}{}", q, q));
+        Ok(format!("{}{}{}", q, escaped, q))
+    } else {
+        Ok(field.to_string())
+    }
+}
 
 impl CsvFormatHandler {
     pub(crate) fn parse_csv_data_with_null_string(
@@ -101,25 +190,7 @@ impl CsvFormatHandler {
         qualifier: Option<char>,
         null_string: &str,
     ) -> Result<String> {
-        // 空字符串和与 NULL marker 相同的文本都需要用引号包裹，以保留三态语义。
-        let needs_quote = field.is_empty()
-            || field == null_string
-            || field.contains(delimiter)
-            || field.contains('\n')
-            || field.contains('\r')
-            || qualifier.map(|q| field.contains(q)).unwrap_or(false);
-
-        if needs_quote {
-            let q = qualifier.ok_or_else(|| {
-                anyhow!(
-                    "CSV text qualifier is required to safely export empty, NULL-marker, delimited, or multiline text"
-                )
-            })?;
-            let escaped = field.replace(q, &format!("{}{}", q, q));
-            Ok(format!("{}{}{}", q, escaped, q))
-        } else {
-            Ok(field.to_string())
-        }
+        escape_delimited_field("CSV", field, delimiter, qualifier, null_string)
     }
 }
 
@@ -327,41 +398,16 @@ impl FormatHandler for CsvFormatHandler {
                 if let Some(paginated_query) = &paginated_query {
                     paginated_query.strip_hidden_result_columns(&mut query_result)?;
                 }
-                let mut table_output = String::new();
-
-                if include_header {
-                    for (i, col) in query_result.columns.iter().enumerate() {
-                        if i > 0 {
-                            table_output.push(delimiter);
-                        }
-                        table_output.push_str(&Self::escape_csv_field(
-                            col,
-                            delimiter,
-                            qualifier,
-                            &null_string,
-                        )?);
-                    }
-                    table_output.push_str(&record_terminator);
-                }
-
                 let rows_count = query_result.rows.len() as u64;
-                for row in &query_result.rows {
-                    for (i, val) in row.iter().enumerate() {
-                        if i > 0 {
-                            table_output.push(delimiter);
-                        }
-                        match val {
-                            Some(v) => table_output.push_str(&Self::escape_csv_field(
-                                v,
-                                delimiter,
-                                qualifier,
-                                &null_string,
-                            )?),
-                            None => table_output.push_str(&null_string),
-                        }
-                    }
-                    table_output.push_str(&record_terminator);
-                }
+                let table_output = render_delimited_query_result(
+                    "CSV",
+                    &query_result,
+                    delimiter,
+                    qualifier,
+                    include_header,
+                    &record_terminator,
+                    &null_string,
+                )?;
 
                 total_rows += rows_count;
                 send_progress(ExportProgressEvent::DataExported {
@@ -400,7 +446,8 @@ impl FormatHandler for CsvFormatHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::CsvFormatHandler;
+    use super::{CsvFormatHandler, render_delimited_query_result};
+    use crate::executor::{BinaryCell, QueryColumnMeta, QueryResult};
 
     #[test]
     fn test_parse_csv_data_supports_multiline_quoted_field() {
@@ -467,5 +514,52 @@ mod tests {
             "NULL"
         );
         assert!(CsvFormatHandler::escape_csv_field("", ',', None, "\\N").is_err());
+    }
+
+    #[test]
+    fn csv_render_preserves_null_and_empty_text() {
+        let result = QueryResult {
+            sql: String::new(),
+            columns: vec!["nullable".to_string(), "empty".to_string()],
+            column_meta: vec![
+                QueryColumnMeta::new("nullable", "TEXT"),
+                QueryColumnMeta::new("empty", "TEXT"),
+            ],
+            rows: vec![vec![None, Some(String::new())]],
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        };
+
+        let output =
+            render_delimited_query_result("CSV", &result, ',', Some('"'), true, "\n", "\\N")
+                .expect("text-only CSV should render");
+
+        assert_eq!(output, "nullable,empty\n\\N,\"\"\n");
+    }
+
+    #[test]
+    fn csv_render_rejects_binary_sidecar_even_with_display_text() {
+        let result = QueryResult {
+            sql: String::new(),
+            columns: vec!["payload".to_string()],
+            column_meta: vec![QueryColumnMeta::new("payload", "BLOB")],
+            rows: vec![vec![Some("true".to_string())]],
+            binary_cells: vec![BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: b"true".to_vec(),
+            }],
+            elapsed_ms: 0,
+        };
+
+        let error =
+            render_delimited_query_result("CSV", &result, ',', Some('"'), true, "\n", "\\N")
+                .expect_err("CSV has no binary wire encoding");
+
+        assert!(
+            error
+                .to_string()
+                .contains("CSV export does not support binary cell at row 1, column 1")
+        );
     }
 }

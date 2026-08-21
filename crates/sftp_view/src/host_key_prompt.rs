@@ -224,9 +224,12 @@ impl SftpView {
             match target {
                 HostKeyPromptTarget::Main { .. } => {
                     self.credential_inputs = None;
-                    self.connection_state = ConnectionState::Disconnected {
-                        error: Some(t!("HostKey.rejected").to_string()),
-                    };
+                    self.set_connection_state(
+                        ConnectionState::Disconnected {
+                            error: Some(t!("HostKey.rejected").to_string()),
+                        },
+                        cx,
+                    );
                     self.set_connection_active(false, cx);
                 }
                 HostKeyPromptTarget::Left { .. } => {

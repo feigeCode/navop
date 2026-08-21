@@ -6,6 +6,7 @@ use super::render_surface::{
 };
 use super::tab_content::recording_playback_tab_title;
 use super::terminal_layout::terminal_grid_size;
+use super::workspace_support::map_connection_status;
 use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,
     UnbracketedPasteHazard, WrappedLineSegment, block_selection_text_from_rows,
@@ -39,6 +40,7 @@ use terminal::LocalConfig;
 use terminal::terminal::{ConnectionState, TerminalConnectionKind, TerminalModelEvent};
 
 mod capabilities;
+mod connection_status;
 mod core;
 mod history_availability;
 mod history_interaction;

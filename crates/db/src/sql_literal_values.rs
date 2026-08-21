@@ -1,8 +1,7 @@
 use one_core::storage::DatabaseType;
 
-use crate::sql_literal::{
-    decode_base64_binary, decode_hex_binary, parse_boolean, quote_string, strict_numeric_literal,
-};
+use crate::binary_value::parse_binary_input;
+use crate::sql_literal::{parse_boolean, quote_string, strict_numeric_literal};
 use crate::sql_literal_types::{
     is_clickhouse_numeric_type, is_duckdb_numeric_type, is_mssql_numeric_type,
     is_mysql_numeric_type, is_oracle_numeric_type, is_postgres_numeric_type,
@@ -238,14 +237,8 @@ fn format_bit_or_quoted(value: &str) -> String {
 }
 
 fn format_binary_or_quoted(database_type: DatabaseType, value: &str) -> String {
-    let trimmed = value.trim();
-    let bytes = if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        decode_hex_binary(trimmed)
-    } else {
-        decode_base64_binary(trimmed)
-    };
-
-    bytes
+    parse_binary_input(value)
+        .ok()
         .map(|bytes| crate::sql_literal::format_binary_literal_for_database(&database_type, &bytes))
         .unwrap_or_else(|| quote_string(value))
 }

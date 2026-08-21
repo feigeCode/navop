@@ -122,6 +122,8 @@ pub enum TerminalModelEvent {
     ClipboardStore(String),
     /// 远程工作目录变更（OSC 7）
     WorkingDirChanged(String),
+    /// 会话锁定/解锁状态变化
+    LockStateChanged,
 }
 
 /// 终端连接状态
@@ -134,6 +136,13 @@ pub enum ConnectionState {
 
 fn should_install_connected_backend(state: &ConnectionState) -> bool {
     !matches!(state, ConnectionState::Disconnected { .. })
+}
+
+/// 会话锁定状态（仅内存中，不持久化）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionLockState {
+    pub password_hash: String,
+    pub hide_output: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1132,6 +1141,8 @@ pub struct Terminal {
     child_exited: Option<i32>,
     /// 连接状态
     connection_state: ConnectionState,
+    /// 会话锁定状态；锁定后禁止输入，可选隐藏输出。
+    session_lock: Option<SessionLockState>,
 
     /// 终端尺寸
     cols: usize,
@@ -1608,6 +1619,7 @@ impl Terminal {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Disconnected { error: Some(error) },
+            session_lock: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             pixel_width: 0,
@@ -1760,6 +1772,7 @@ impl Terminal {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
+            session_lock: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             pixel_width: 0,
@@ -1904,6 +1917,7 @@ impl Terminal {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
+            session_lock: None,
             cols,
             rows,
             pixel_width: 0,
@@ -2037,6 +2051,7 @@ impl Terminal {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
+            session_lock: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             pixel_width: 0,
@@ -2156,6 +2171,7 @@ impl Terminal {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
+            session_lock: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             pixel_width: 0,
@@ -2299,6 +2315,7 @@ impl Terminal {
                 // Connected suppresses the live reconnect overlay. Capability
                 // checks still fail closed through `session_mode`.
                 connection_state: ConnectionState::Connected,
+                session_lock: None,
                 cols,
                 rows,
                 pixel_width: 0,
@@ -3498,6 +3515,52 @@ impl Terminal {
         )
     }
 
+    /// 会话是否处于锁定状态。
+    pub fn is_locked(&self) -> bool {
+        self.session_lock.is_some()
+    }
+
+    /// 锁定状态下是否隐藏输出。
+    pub fn hide_output(&self) -> bool {
+        self.session_lock
+            .as_ref()
+            .map(|lock| lock.hide_output)
+            .unwrap_or(false)
+    }
+
+    /// 锁定密码哈希是否匹配（用于解锁全部会话时校验）。
+    pub fn lock_password_matches(&self, password_hash: &str) -> bool {
+        self.session_lock
+            .as_ref()
+            .is_some_and(|lock| lock.password_hash == password_hash)
+    }
+
+    /// 锁定会话；密码仅保存在内存中。
+    pub fn lock_session(
+        &mut self,
+        password_hash: String,
+        hide_output: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_lock = Some(SessionLockState {
+            password_hash,
+            hide_output,
+        });
+        cx.emit(TerminalModelEvent::LockStateChanged);
+        cx.notify();
+    }
+
+    /// 密码哈希匹配时解锁会话。
+    pub fn unlock_session(&mut self, password_hash: &str, cx: &mut Context<Self>) -> bool {
+        let matches = self.lock_password_matches(password_hash);
+        if matches {
+            self.session_lock = None;
+            cx.emit(TerminalModelEvent::LockStateChanged);
+            cx.notify();
+        }
+        matches
+    }
+
     /// Returns a connection kind only when the surface owns live connection
     /// capabilities. Recording metadata must not be treated as a live SSH or
     /// serial session by Public MCP or other integrations.
@@ -3769,7 +3832,7 @@ impl Terminal {
 
     /// 写入数据到终端
     pub fn write(&self, data: &[u8]) {
-        if self.is_read_only() {
+        if self.is_read_only() || self.is_locked() {
             return;
         }
         if let Some(ref backend) = self.backend {
@@ -3785,7 +3848,7 @@ impl Terminal {
     }
 
     pub fn external_input_handle(&self) -> Option<TerminalInputHandle> {
-        if self.is_read_only() {
+        if self.is_read_only() || self.is_locked() {
             return None;
         }
         self.backend
@@ -3794,7 +3857,7 @@ impl Terminal {
     }
 
     pub fn external_exec_handle(&self) -> Option<TerminalExecHandle> {
-        if self.is_read_only() {
+        if self.is_read_only() || self.is_locked() {
             return None;
         }
         self.backend
@@ -3803,7 +3866,7 @@ impl Terminal {
     }
 
     pub fn external_control_handle(&self) -> Option<TerminalControlHandle> {
-        if self.is_read_only() {
+        if self.is_read_only() || self.is_locked() {
             return None;
         }
         self.backend
@@ -4354,19 +4417,19 @@ mod tests {
     use super::with_local_terminal_default_env;
     use super::{
         AutomaticSessionLogRequestInput, CommandRecordGate, ConnectionState,
-        HostKeyVerificationReason, HostKeyVerificationRequest, SshConnectionUpdate,
-        SshCredentialPromptPolicy, TermDimensions, Terminal, TerminalConnectionKind,
-        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalScrollProxy,
-        TerminalSessionMode, TerminalSshCredentials, build_automatic_session_log_request,
-        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
-        clear_screen_remote_redraw_bytes, compose_ssh_init_commands, flush_pending_terminal_events,
-        format_connection_error, host_key_verification_request, is_reconnect_generation,
-        is_ssh_password_prompt, keyboard_interactive_answers_for_terminal, merge_history_matches,
-        normalize_history_matches, parse_stored_telnet_params, receive_terminal_event_for_gpui,
-        recent_text_from_term, resolve_default_windows_shell_from_env, resolve_local_working_dir,
-        resolve_ssh_connection, send_coalesced_wakeup, shell_escape_arg,
-        should_install_connected_backend, ssh_config_with_confirmed_host_key,
-        ssh_config_with_runtime_credentials,
+        HostKeyVerificationReason, HostKeyVerificationRequest, SessionLockState,
+        SshConnectionUpdate, SshCredentialPromptPolicy, TermDimensions, Terminal,
+        TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
+        TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials,
+        build_automatic_session_log_request, build_cd_command, build_ssh_base_init_commands,
+        build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
+        flush_pending_terminal_events, format_connection_error, host_key_verification_request,
+        is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
+        merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
+        receive_terminal_event_for_gpui, recent_text_from_term,
+        resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
+        send_coalesced_wakeup, shell_escape_arg, should_install_connected_backend,
+        ssh_config_with_confirmed_host_key, ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -4508,6 +4571,7 @@ mod tests {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
+            session_lock: None,
             cols: 80,
             rows: 24,
             pixel_width: 640,
@@ -4989,6 +5053,63 @@ mod tests {
                 .lock()
                 .expect("external input probe should lock")
         );
+
+        terminal.write(b"human input");
+        assert_eq!(
+            vec![b"human input".to_vec()],
+            *direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn locked_session_blocks_all_input_routes_and_unlock_requires_password_match() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let direct_writes = Arc::new(Mutex::new(Vec::new()));
+        let external_writes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(InputRouteProbe {
+            direct_writes: direct_writes.clone(),
+            external_writes: external_writes.clone(),
+        }));
+
+        let hash = "correct-lock-hash";
+        terminal.session_lock = Some(SessionLockState {
+            password_hash: hash.to_string(),
+            hide_output: true,
+        });
+
+        assert!(terminal.is_locked());
+        assert!(terminal.hide_output());
+        assert!(terminal.lock_password_matches(hash));
+
+        terminal.write(b"human input");
+        terminal.write_external_input(b"external input");
+        assert!(
+            direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .is_empty()
+        );
+        assert!(
+            external_writes
+                .lock()
+                .expect("external input probe should lock")
+                .is_empty()
+        );
+        assert!(terminal.external_input_handle().is_none());
+        assert!(terminal.external_exec_handle().is_none());
+        assert!(terminal.external_control_handle().is_none());
+
+        assert!(!terminal.lock_password_matches("wrong-lock-hash"));
+
+        terminal.session_lock = None;
+        assert!(!terminal.is_locked());
 
         terminal.write(b"human input");
         assert_eq!(
@@ -6455,6 +6576,7 @@ mod tests {
             current_working_dir: Some("/tmp/project".to_string()),
             child_exited: Some(255),
             connection_state: ConnectionState::Connected,
+            session_lock: None,
             cols: 80,
             rows: 24,
             pixel_width: 0,
@@ -6738,6 +6860,7 @@ mod tests {
             current_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
+            session_lock: None,
             cols: 80,
             rows: 24,
             pixel_width: 0,

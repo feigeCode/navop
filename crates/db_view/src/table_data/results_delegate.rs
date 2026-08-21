@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use super::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use super::data_grid::DataGrid;
-use base64::Engine as _;
-use db::{BinaryCell, ColumnInfo, FieldType, GlobalDbState};
+use db::{
+    BinaryCell, ColumnInfo, FieldType, GlobalDbState,
+    binary_value::{format_binary_input, parse_binary_input},
+};
 use gpui::{
     App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement, Styled,
@@ -349,7 +351,11 @@ impl EditorTableDelegate {
     ) -> bool {
         self.binary_cells
             .get(&(row_ix, col_ix))
-            .zip(value.as_deref().and_then(decode_binary_edit_value))
+            .zip(
+                value
+                    .as_deref()
+                    .and_then(|value| parse_binary_input(value).ok()),
+            )
             .is_some_and(|(original_bytes, value_bytes)| {
                 original_bytes.as_slice() == value_bytes.as_slice()
             })
@@ -440,14 +446,19 @@ impl EditorTableDelegate {
     /// This method handles tracking cell changes and updating row status.
     /// It's similar to `on_cell_edited` but can be called directly from external code.
     pub fn record_cell_change(&mut self, row_ix: usize, col_ix: usize, new_value: String) -> bool {
-        // 空字符串转换为 None (NULL)
-        let new_opt_value: Option<String> = if new_value.is_empty() {
-            None
-        } else {
-            Some(new_value)
-        };
+        let new_opt_value = self.edit_value(row_ix, col_ix, new_value);
 
         self.record_cell_change_value(row_ix, col_ix, new_opt_value)
+    }
+
+    fn edit_value(&self, row_ix: usize, col_ix: usize, new_value: String) -> Option<String> {
+        // An empty Base64 string is the lossless representation of zero bytes.
+        // SQL NULL remains an explicit operation through `record_cell_change_value`.
+        if self.is_binary_cell(row_ix, col_ix) || !new_value.is_empty() {
+            Some(new_value)
+        } else {
+            None
+        }
     }
 
     fn record_cell_change_value(
@@ -2088,12 +2099,7 @@ impl EditTableDelegate for EditorTableDelegate {
     ) -> bool {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
-        // 空字符串转换为 None (NULL)
-        let new_opt_value: Option<String> = if new_value.is_empty() {
-            None
-        } else {
-            Some(new_value.clone())
-        };
+        let new_opt_value = self.edit_value(actual_row, col_ix, new_value.clone());
 
         tracing::debug!(
             "on_cell_edited: row={}, col={}, new_value='{}', new_opt_value={:?}",
@@ -2553,46 +2559,14 @@ impl EditTableDelegate for EditorTableDelegate {
 }
 
 fn binary_cell_copy_text(bytes: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
-
-fn decode_binary_edit_value(value: &str) -> Option<Vec<u8>> {
-    let value = value.trim();
-    if let Some(hex) = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-    {
-        if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            return None;
-        }
-
-        let mut bytes = Vec::with_capacity(hex.len() / 2);
-        for pair in hex.as_bytes().chunks_exact(2) {
-            let high = hex_digit(pair[0])?;
-            let low = hex_digit(pair[1])?;
-            bytes.push((high << 4) | low);
-        }
-        return Some(bytes);
-    }
-
-    base64::engine::general_purpose::STANDARD.decode(value).ok()
-}
-
-fn hex_digit(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    format_binary_input(bytes)
 }
 
 fn binary_edit_values_equal(a: &Option<String>, b: &Option<String>) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some(a), Some(b)) => match (decode_binary_edit_value(a), decode_binary_edit_value(b)) {
-            (Some(a), Some(b)) => a == b,
+        (Some(a), Some(b)) => match (parse_binary_input(a), parse_binary_input(b)) {
+            (Ok(a), Ok(b)) => a == b,
             _ => a == b,
         },
         _ => false,
@@ -2753,11 +2727,10 @@ impl EditorTableDelegate {
 mod tests {
     use super::{
         EditorTableDelegate, binary_cell_copy_text, binary_cell_image_format,
-        binary_download_file_name, binary_edit_values_equal, decode_binary_edit_value,
-        normalize_row_search_query, normalize_sort_identifier, parse_primary_order_by_clause,
-        row_matches_search_query,
+        binary_download_file_name, binary_edit_values_equal, normalize_row_search_query,
+        normalize_sort_identifier, parse_primary_order_by_clause, row_matches_search_query,
     };
-    use db::ColumnInfo;
+    use db::{ColumnInfo, binary_value::parse_binary_input};
     use gpui::SharedString;
     use one_core::storage::DatabaseType;
     use one_ui::edit_table::{Column, ColumnSort, FilterValueKey};
@@ -2931,41 +2904,94 @@ mod tests {
     }
 
     #[test]
-    fn binary_cell_copy_uses_standard_base64_without_metadata() {
+    fn binary_cell_copy_uses_explicit_base64_metadata() {
         assert_eq!(
             binary_cell_copy_text(&[0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00]),
-            "C8/b3gEA"
+            "base64:C8/b3gEA"
         );
     }
 
     #[test]
-    fn binary_cell_accepts_base64_and_hex_edits() {
+    fn binary_cell_accepts_explicit_binary_encodings_and_utf8_text() {
         let mut delegate = test_delegate(vec![vec![Some("binary display value".to_string())]]);
         delegate
             .binary_cells
             .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
 
-        assert!(!delegate.record_cell_change(0, 0, "AQID".to_string()));
+        assert!(!delegate.record_cell_change(0, 0, "base64:AQID".to_string()));
         assert!(delegate.record_cell_change(0, 0, "3q2+7w==".to_string()));
         assert_eq!(delegate.rows[0][0].as_deref(), Some("3q2+7w=="));
         assert!(delegate.cell_changes.contains_key(&(0, 0)));
 
-        assert!(delegate.record_cell_change(0, 0, "0x010203".to_string()));
+        assert!(delegate.record_cell_change(0, 0, "hex:010203".to_string()));
         assert_eq!(delegate.rows[0][0].as_deref(), Some("binary display value"));
         assert!(delegate.cell_changes.is_empty());
         assert!(delegate.modified_cells.is_empty());
-        assert_eq!(delegate.editable_cell_text(0, 0), "AQID");
+        assert_eq!(delegate.editable_cell_text(0, 0), "base64:AQID");
+
+        assert!(delegate.record_cell_change(0, 0, "true".to_string()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some("true"));
+        assert_eq!(parse_binary_input("true").unwrap(), b"true");
+        assert!(!binary_edit_values_equal(
+            &Some("AQID".to_string()),
+            &Some("base64:AQID".to_string())
+        ));
     }
 
     #[test]
-    fn binary_edit_values_decode_explicit_hex_before_base64() {
-        assert_eq!(decode_binary_edit_value("0xABCD"), Some(vec![0xab, 0xcd]));
-        assert_eq!(decode_binary_edit_value("0Xabcd"), Some(vec![0xab, 0xcd]));
-        assert_eq!(decode_binary_edit_value("0xABC"), None);
-        assert_eq!(decode_binary_edit_value("0x"), None);
+    fn empty_binary_edit_is_distinct_from_null() {
+        let mut delegate = test_delegate(vec![vec![Some("binary display value".to_string())]]);
+        delegate
+            .binary_cells
+            .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
+
+        assert!(delegate.record_cell_change(0, 0, String::new()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some(""));
+        assert_eq!(
+            delegate.cell_changes.get(&(0, 0)),
+            Some(&(
+                Some("binary display value".to_string()),
+                Some(String::new())
+            ))
+        );
+
+        assert!(delegate.record_cell_change_value(0, 0, None));
+        assert_eq!(delegate.rows[0][0], None);
+        assert_eq!(
+            delegate.cell_changes.get(&(0, 0)),
+            Some(&(Some("binary display value".to_string()), None))
+        );
+    }
+
+    #[test]
+    fn unchanged_empty_binary_value_does_not_become_null() {
+        let mut delegate = test_delegate(vec![vec![Some(String::new())]]);
+        delegate
+            .binary_cells
+            .insert((0, 0), std::sync::Arc::new(Vec::new()));
+
+        assert!(!delegate.record_cell_change(0, 0, String::new()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some(""));
+        assert!(delegate.cell_changes.is_empty());
+        assert!(delegate.modified_cells.is_empty());
+    }
+
+    #[test]
+    fn binary_edit_values_use_explicit_encodings() {
+        assert_eq!(parse_binary_input("hex:ABCD"), Ok(vec![0xab, 0xcd]));
+        assert_eq!(parse_binary_input("0xABCD"), Ok(vec![0xab, 0xcd]));
+        assert_eq!(parse_binary_input("0Xabcd"), Ok(vec![0xab, 0xcd]));
+        assert_eq!(
+            parse_binary_input("0xABC"),
+            Err(db::binary_value::BinaryInputError::InvalidHex)
+        );
+        assert_eq!(
+            parse_binary_input("0x"),
+            Err(db::binary_value::BinaryInputError::InvalidHex)
+        );
         assert!(binary_edit_values_equal(
-            &Some("q80=".to_string()),
-            &Some("0xABCD".to_string())
+            &Some("base64:q80=".to_string()),
+            &Some("hex:abcd".to_string())
         ));
     }
 

@@ -5,6 +5,7 @@ use connection_import_protocol::{
     ImportWarning, ImporterAvailability, ImporterCapabilities, ImporterDescriptor,
     PasswordImportStatus, Platform,
 };
+use extension_runtime::connection_import_provider::ImportPreviewError;
 
 use super::connection_import_model::{
     ImportCenterState, ImportRowSaveStatus, previewable_source_ids_after_scan,
@@ -37,6 +38,35 @@ fn scan_reports_are_scoped_to_the_matching_source() {
         state.source("dbeaver").unwrap().availability,
         ImporterAvailability::NoData
     ));
+}
+
+#[test]
+fn preview_errors_are_scoped_to_the_matching_source_and_can_be_cleared() {
+    let mut state = ImportCenterState::new(
+        vec![
+            descriptor("broken", vec![Platform::Macos]),
+            descriptor("healthy", vec![Platform::Macos]),
+        ],
+        Platform::Macos,
+    );
+
+    state.apply_preview_errors(
+        &["broken".to_string(), "healthy".to_string()],
+        vec![ImportPreviewError {
+            importer_id: "broken".to_string(),
+            message: "preview failed".to_string(),
+        }],
+    );
+
+    assert_eq!(
+        Some("preview failed"),
+        state.source("broken").unwrap().preview_error.as_deref()
+    );
+    assert!(state.source("healthy").unwrap().preview_error.is_none());
+
+    state.apply_preview_errors(&["broken".to_string()], Vec::new());
+
+    assert!(state.source("broken").unwrap().preview_error.is_none());
 }
 
 #[test]
@@ -162,6 +192,7 @@ fn database_record(name: &str) -> ImportRecord {
         }),
         ssh: None,
         port_forwarding: None,
+        quick_command: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }

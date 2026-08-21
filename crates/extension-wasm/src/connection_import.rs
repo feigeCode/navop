@@ -109,7 +109,13 @@ impl ConnectionImportComponentRuntime {
             .call_preview(&mut store, options)
             .await
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
-        decode_json(&json)
+        let records: Vec<connection_import_protocol::ImportRecord> = decode_json(&json)?;
+        for record in &records {
+            record
+                .validate_shape()
+                .map_err(|error| WasmError::ProtocolDecode(error.to_string()))?;
+        }
+        Ok(records)
     }
 
     async fn instantiate<H>(
@@ -253,6 +259,24 @@ where
         Ok(self
             .host
             .read_directory(&candidate_id)
+            .map(|entries| entries.into_iter().map(wit_directory_entry).collect())
+            .map_err(wit_host_error))
+    }
+
+    async fn read_candidate_directory(
+        &mut self,
+        candidate_id: String,
+        relative_path: String,
+    ) -> wasmtime::Result<Result<Vec<Wit::DirectoryEntry>, Wit::HostError>> {
+        if let Err(error) = self
+            .candidate_access()
+            .validate_child(&candidate_id, &relative_path)
+        {
+            return Ok(Err(wit_host_error(error)));
+        }
+        Ok(self
+            .host
+            .read_candidate_directory(&candidate_id, &relative_path)
             .map(|entries| entries.into_iter().map(wit_directory_entry).collect())
             .map_err(wit_host_error))
     }

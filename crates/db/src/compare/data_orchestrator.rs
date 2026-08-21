@@ -19,7 +19,7 @@ use super::{
     DataCompareTableDependency, DataCompareTableFailure, DataCompareTablePair, RowData, SyncPlan,
     TableSchema, append_table_data_page, build_table_data_request, common_column_mappings,
     compare_data_rows, data_compare_next_page_size, data_compare_paging_decision, identifier_key,
-    map_column_type, rows_from_query_result_with_mappings, strip_internal_compare_columns_if,
+    map_column_type, normalize_compare_table_data_response, rows_from_query_result_with_mappings,
     table_data_terminal_probe_required, table_schema_from_columns,
 };
 
@@ -577,10 +577,10 @@ async fn load_table_data_pages(
         }
         let response =
             query_compare_table_data(db_state, cx, connection_id, session_id, request).await?;
-        let response = strip_internal_compare_columns_if(
+        let response = normalize_compare_table_data_response(
             response,
-            has_internal_rowid,
-            &internal_rowid_alias,
+            has_internal_rowid.then_some(internal_rowid_alias.as_str()),
+            &config.database_type,
             business_columns,
         );
         let page_row_count = response.query_result.rows.len();
@@ -640,10 +640,10 @@ async fn load_table_data_pages(
                         probe_request,
                     )
                     .await?;
-                    let probe = strip_internal_compare_columns_if(
+                    let probe = normalize_compare_table_data_response(
                         probe,
-                        has_internal_rowid,
-                        &internal_rowid_alias,
+                        has_internal_rowid.then_some(internal_rowid_alias.as_str()),
+                        &config.database_type,
                         business_columns,
                     );
                     append_table_data_page(&mut accumulated, probe)?;
@@ -1099,17 +1099,21 @@ pub fn build_data_compare_result(
             target: column.source.clone(),
         })
         .collect::<Vec<_>>();
+    let source_rows = rows_from_query_result_with_mappings(
+        &source_response.query_result,
+        &source_mappings,
+        case_sensitive_identifiers,
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid source comparison data: {error}"))?;
+    let target_rows = rows_from_query_result_with_mappings(
+        &target_response.query_result,
+        &columns,
+        case_sensitive_identifiers,
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid target comparison data: {error}"))?;
     let mut result = compare_data_rows(
-        rows_from_query_result_with_mappings(
-            &source_response.query_result,
-            &source_mappings,
-            case_sensitive_identifiers,
-        ),
-        rows_from_query_result_with_mappings(
-            &target_response.query_result,
-            &columns,
-            case_sensitive_identifiers,
-        ),
+        source_rows,
+        target_rows,
         DataCompareOptions {
             source_table: pair.source_table,
             target_table: pair.target_table,

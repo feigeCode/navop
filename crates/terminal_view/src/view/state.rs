@@ -170,6 +170,7 @@ impl TerminalView {
             && terminal.telnet_credential_request().is_none()
             && terminal.ssh_mfa_request().is_none()
             && terminal.host_key_verification_request().is_none()
+            && !terminal.is_locked()
     }
 
     pub(super) fn has_blocking_auth_prompt(&self, cx: &App) -> bool {

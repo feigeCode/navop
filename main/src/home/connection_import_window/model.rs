@@ -1,4 +1,5 @@
 use connection_import_protocol::{ImportRecord, ImportScanReport, ImporterDescriptor, Platform};
+use extension_runtime::connection_import_provider::ImportPreviewError;
 
 use super::is_save_candidate;
 use crate::home::connection_import_draft::EditableImportDraft;
@@ -61,6 +62,14 @@ impl ConnectionImportWindowModel {
 
     pub(crate) fn apply_preview_records(&mut self, records: Vec<ImportRecord>) {
         self.state.apply_preview_records(records);
+    }
+
+    pub(crate) fn apply_preview_errors(
+        &mut self,
+        importer_ids: &[String],
+        errors: Vec<ImportPreviewError>,
+    ) {
+        self.state.apply_preview_errors(importer_ids, errors);
     }
 
     pub(crate) fn mark_saving(&mut self, record_id: &str) {
