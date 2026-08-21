@@ -759,3 +759,43 @@ fn assert_guard_precedes(source: &str, guard: &str, side_effect: &str, capabilit
         "{capability} must reject playback before `{side_effect}`"
     );
 }
+
+#[test]
+fn status_badge_sync_emits_state_changed_only_on_transition() {
+    let source = include_str!("../terminal_events.rs");
+    let sync = function_region(
+        source,
+        "fn sync_connection_status_badge",
+        "fn sync_credential_inputs",
+    );
+    assert!(sync.contains("self.last_connection_status = current"));
+    assert_guard_precedes(
+        sync,
+        "if current == self.last_connection_status",
+        "cx.emit(TabContentEvent::StateChanged)",
+        "status badge sync must skip unchanged connection states",
+    );
+}
+
+#[test]
+fn workspace_connection_status_delegates_to_the_active_pane() {
+    let source = include_str!("../../workspace/tab_content.rs");
+    let region = function_region(source, "fn connection_status", "fn lock_session");
+    assert!(
+        region.contains("terminal_connection_status(cx)"),
+        "workspace badge must delegate to the active pane terminal"
+    );
+}
+
+#[test]
+fn sftp_status_badge_emits_state_changed_on_transition() {
+    let source = include_str!("../../../../sftp_view/src/lib.rs");
+    let helper = function_region(source, "fn set_connection_state", "fn reconnect");
+    assert!(helper.contains("cx.emit(TabContentEvent::StateChanged)"));
+    assert_guard_precedes(
+        helper,
+        "if self.connection_state == state",
+        "cx.emit(TabContentEvent::StateChanged)",
+        "SFTP badge must only notify on a real state transition",
+    );
+}

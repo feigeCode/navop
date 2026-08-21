@@ -109,6 +109,18 @@ enum ConnectionState {
     Disconnected { error: Option<String> },
 }
 
+fn tab_connection_status(state: &ConnectionState) -> one_core::tab_container::TabConnectionStatus {
+    match state {
+        ConnectionState::AwaitingCredentials | ConnectionState::Connecting => {
+            one_core::tab_container::TabConnectionStatus::Connecting
+        }
+        ConnectionState::Connected => one_core::tab_container::TabConnectionStatus::Connected,
+        ConnectionState::Disconnected { .. } => {
+            one_core::tab_container::TabConnectionStatus::Disconnected
+        }
+    }
+}
+
 struct SftpCredentialInputs {
     policy: ssh_config::SshCredentialPromptPolicy,
     username: Option<Entity<InputState>>,
@@ -1412,7 +1424,7 @@ impl SftpView {
             return;
         }
         let generation = self.next_connection_generation();
-        self.connection_state = ConnectionState::Connecting;
+        self.set_connection_state(ConnectionState::Connecting, cx);
         let config = self.sftp_config.clone();
         let window_handle = self.window_handle.clone();
 
@@ -1441,9 +1453,9 @@ impl SftpView {
                         {
                             return false;
                         }
-                        this.sftp_client = Some(client.clone());
-                        this.connection_state = ConnectionState::Connected;
                         this.credential_inputs = None;
+                        this.sftp_client = Some(client.clone());
+                        this.set_connection_state(ConnectionState::Connected, cx);
                         this.set_connection_active(true, cx);
 
                         // 如果成功获取了真实路径，更新远程路径和历史记录
@@ -1542,13 +1554,25 @@ impl SftpView {
         }
     }
 
-    fn set_connection_error(&mut self, error: String, cx: &mut Context<Self>) {
-        if let Some(inputs) = self.credential_inputs.as_mut() {
-            inputs.error = Some(error);
-            self.connection_state = ConnectionState::AwaitingCredentials;
-        } else {
-            self.connection_state = ConnectionState::Disconnected { error: Some(error) };
+    /// Update the connection state, notifying the owning tab bar whenever it
+    /// actually transitions so the status badge refreshes.
+    fn set_connection_state(&mut self, state: ConnectionState, cx: &mut Context<Self>) {
+        if self.connection_state == state {
+            return;
         }
+        self.connection_state = state;
+        cx.emit(TabContentEvent::StateChanged);
+        cx.notify();
+    }
+
+    fn set_connection_error(&mut self, error: String, cx: &mut Context<Self>) {
+        let state = if let Some(inputs) = self.credential_inputs.as_mut() {
+            inputs.error = Some(error);
+            ConnectionState::AwaitingCredentials
+        } else {
+            ConnectionState::Disconnected { error: Some(error) }
+        };
+        self.set_connection_state(state, cx);
         self.set_connection_active(false, cx);
         cx.notify();
     }
@@ -6988,6 +7012,14 @@ impl TabContent for SftpView {
         true
     }
 
+    fn is_disconnected(&self, _cx: &App) -> bool {
+        matches!(self.connection_state, ConnectionState::Disconnected { .. })
+    }
+
+    fn connection_status(&self, _cx: &App) -> Option<one_core::tab_container::TabConnectionStatus> {
+        Some(tab_connection_status(&self.connection_state))
+    }
+
     fn try_close(
         &mut self,
         _tab_id: &str,
@@ -7086,14 +7118,15 @@ impl Render for SftpView {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundedDisconnectOutcome, CloseState, ConnectionGeneration, PendingTransfer,
-        SharedProgress, TransferAdmission, TransferClientPool, TransferClientPoolState,
-        TransferOperation, TransferQueue, TransferTask, TransferTaskState, acquire_transfer_client,
-        bounded_disconnect, is_valid_entry_name, join_remote_path,
+        BoundedDisconnectOutcome, CloseState, ConnectionGeneration, ConnectionState,
+        PendingTransfer, SharedProgress, TransferAdmission, TransferClientPool,
+        TransferClientPoolState, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
+        acquire_transfer_client, bounded_disconnect, is_valid_entry_name, join_remote_path,
         mark_server_copy_directory_replacements, server_copy_conflict_flags,
-        should_apply_local_listing, should_apply_remote_listing, transfer_error_summary,
-        upload_directory_conflict_policy,
+        should_apply_local_listing, should_apply_remote_listing, tab_connection_status,
+        transfer_error_summary, upload_directory_conflict_policy,
     };
+    use one_core::tab_container::TabConnectionStatus;
     use sftp::{DirectoryConflictPolicy, ServerCopyItem};
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
     use std::collections::HashMap;
@@ -7101,6 +7134,14 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn awaiting_credentials_uses_connecting_tab_status() {
+        assert_eq!(
+            TabConnectionStatus::Connecting,
+            tab_connection_status(&ConnectionState::AwaitingCredentials)
+        );
+    }
 
     fn transfer_task(id: usize) -> TransferTask {
         TransferTask {

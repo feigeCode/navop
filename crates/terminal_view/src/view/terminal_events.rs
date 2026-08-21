@@ -96,7 +96,25 @@ impl TerminalView {
                     sidebar.sync_file_manager_path(path, cx);
                 });
             }
+            TerminalModelEvent::LockStateChanged => {
+                cx.emit(TabContentEvent::StateChanged);
+                cx.notify();
+            }
         }
+
+        self.sync_connection_status_badge(cx);
+    }
+
+    /// Emit `TabContentEvent::StateChanged` when the terminal's connection
+    /// status transitions so the owning tab bar can refresh its status badge.
+    fn sync_connection_status_badge(&mut self, cx: &mut Context<Self>) {
+        let current = self.terminal_connection_status(cx);
+        if current == self.last_connection_status {
+            return;
+        }
+        self.last_connection_status = current;
+        cx.emit(TabContentEvent::StateChanged);
+        cx.notify();
     }
 
     pub(super) fn sync_credential_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {

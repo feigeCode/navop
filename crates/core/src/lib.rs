@@ -17,6 +17,7 @@ pub mod layout;
 pub mod license;
 pub mod llm;
 pub mod popup_window;
+pub mod session_lock;
 pub mod sidebar_contribution;
 pub mod storage;
 pub mod tab_actions;

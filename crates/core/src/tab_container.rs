@@ -26,7 +26,8 @@ use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme, Colorize as _, Disableable, ElementExt as _, Icon, IconName, IconSize,
-    InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, h_flex, v_flex,
+    InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, WindowExt as _, h_flex,
+    notification::Notification, v_flex,
 };
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -105,6 +106,75 @@ fn render_tab_title(title: SharedString, text_color: gpui::Hsla) -> AnyElement {
         .text_color(text_color)
         .text_ellipsis()
         .child(title)
+        .into_any_element()
+}
+
+/// SecureCRT-style connection status badges shown between the tab icon and the
+/// title: green check when connected, red no-entry when disconnected, plus a
+/// yellow lock when the connected session is also locked. Disconnected always
+/// wins over the lock badge.
+fn connection_status_badges(
+    status: Option<TabConnectionStatus>,
+    is_locked: bool,
+) -> Vec<(IconName, SharedString)> {
+    match status {
+        Some(TabConnectionStatus::Disconnected) => {
+            vec![(
+                IconName::StatusDisconnected,
+                t!("TabStatus.disconnected").into(),
+            )]
+        }
+        Some(TabConnectionStatus::Connected) if is_locked => {
+            vec![(
+                IconName::StatusConnectedLocked,
+                t!("TabStatus.connected_locked").into(),
+            )]
+        }
+        Some(TabConnectionStatus::Connected) => {
+            vec![(IconName::StatusConnected, t!("TabStatus.connected").into())]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn render_connection_status_badges(
+    status: Option<TabConnectionStatus>,
+    is_locked: bool,
+    badge_key: &str,
+) -> AnyElement {
+    let badges: Vec<AnyElement> = connection_status_badges(status, is_locked)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (icon, tooltip_text))| {
+            status_badge(
+                format!("{badge_key}-{index}"),
+                icon,
+                tooltip_text.to_string(),
+            )
+        })
+        .collect();
+    if badges.is_empty() {
+        return div().flex_shrink_0().into_any_element();
+    }
+    div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap_0p5()
+        .children(badges)
+        .into_any_element()
+}
+
+fn status_badge(id: String, icon: IconName, tooltip_text: String) -> AnyElement {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .size(px(16.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .child(Icon::new(icon).color().with_size(IconSize::Default))
         .into_any_element()
 }
 
@@ -225,6 +295,19 @@ pub enum TabOpenMode {
     #[default]
     Activate,
     Background,
+}
+
+/// Connection status of a tab's underlying session, surfaced as a badge on the
+/// tab bar (SecureCRT-style: green check when connected, red no-entry when
+/// disconnected).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabConnectionStatus {
+    /// The session is connected.
+    Connected,
+    /// The session is still being established.
+    Connecting,
+    /// The session has been terminated / lost its connection.
+    Disconnected,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,6 +481,45 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
         Vec::new()
     }
+
+    /// Whether this tab's session can be locked from the tab bar menu.
+    fn lockable(&self, cx: &App) -> bool {
+        false
+    }
+
+    /// Whether this tab's session is currently locked.
+    fn is_locked(&self, cx: &App) -> bool {
+        false
+    }
+
+    /// Whether this tab's underlying connection/session is disconnected.
+    fn is_disconnected(&self, cx: &App) -> bool {
+        false
+    }
+
+    /// Connection status shown as a badge on the tab bar. `None` (the default)
+    /// means this content has no connection status.
+    fn connection_status(&self, cx: &App) -> Option<TabConnectionStatus> {
+        None
+    }
+
+    /// Lock this tab's session. `password_hash` is the pre-computed hash of the
+    /// lock password. Returns whether the session was actually locked.
+    fn lock_session(
+        &mut self,
+        password_hash: &str,
+        hide_output: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        false
+    }
+
+    /// Unlock this tab's session when `password_hash` matches. Returns whether
+    /// the session was actually unlocked.
+    fn unlock_session(&mut self, password_hash: &str, cx: &mut Context<Self>) -> bool {
+        false
+    }
 }
 
 // ============================================================================
@@ -427,6 +549,36 @@ pub trait TabContentView: 'static + Send + Sync {
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution>;
     fn subscribe_events(&self, window: &mut Window, cx: &mut Context<TabContainer>)
     -> Subscription;
+
+    fn lockable(&self, cx: &App) -> bool {
+        false
+    }
+
+    fn is_locked(&self, cx: &App) -> bool {
+        false
+    }
+
+    fn is_disconnected(&self, cx: &App) -> bool {
+        false
+    }
+
+    fn connection_status(&self, cx: &App) -> Option<TabConnectionStatus> {
+        None
+    }
+
+    fn lock_session(
+        &self,
+        password_hash: &str,
+        hide_output: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        false
+    }
+
+    fn unlock_session(&self, password_hash: &str, cx: &mut App) -> bool {
+        false
+    }
 }
 
 /// Blanket implementation: Entity<T: TabContent> automatically implements TabContentView
@@ -498,6 +650,40 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
         self.read(cx).sidebar_contributions(cx)
+    }
+
+    fn lockable(&self, cx: &App) -> bool {
+        self.read(cx).lockable(cx)
+    }
+
+    fn is_locked(&self, cx: &App) -> bool {
+        self.read(cx).is_locked(cx)
+    }
+
+    fn is_disconnected(&self, cx: &App) -> bool {
+        self.read(cx).is_disconnected(cx)
+    }
+
+    fn connection_status(&self, cx: &App) -> Option<TabConnectionStatus> {
+        self.read(cx).connection_status(cx)
+    }
+
+    fn lock_session(
+        &self,
+        password_hash: &str,
+        hide_output: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let password_hash = password_hash.to_string();
+        self.update(cx, |this, cx| {
+            this.lock_session(&password_hash, hide_output, window, cx)
+        })
+    }
+
+    fn unlock_session(&self, password_hash: &str, cx: &mut App) -> bool {
+        let password_hash = password_hash.to_string();
+        self.update(cx, |this, cx| this.unlock_session(&password_hash, cx))
     }
 
     fn subscribe_events(
@@ -1472,6 +1658,14 @@ impl TabContainer {
             return Task::ready(false);
         }
 
+        if self.tabs[index].content().is_locked(cx) {
+            window.push_notification(
+                Notification::warning(t!("TabStatus.locked_close_blocked")),
+                cx,
+            );
+            return Task::ready(false);
+        }
+
         let tab_id = self.tabs[index].id();
 
         if self.closing_tabs.contains(&tab_id) {
@@ -1595,6 +1789,174 @@ impl TabContainer {
             }
             true
         })
+    }
+
+    /// Close all tabs whose underlying connection/session is disconnected.
+    pub fn close_disconnected_tabs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let tab_ids: Vec<String> = self
+            .tabs
+            .iter()
+            .filter(|t| t.content().is_disconnected(cx) && t.content().closeable(cx))
+            .map(|t| t.id().to_string())
+            .collect();
+
+        if tab_ids.is_empty() {
+            return Task::ready(true);
+        }
+
+        let entity = cx.entity();
+        let window_handle = window.window_handle();
+
+        cx.spawn(async move |_handle, cx| {
+            for tab_id in tab_ids {
+                let should_close = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
+                            this.set_active_index(index, window, cx);
+                            let content = this.tabs[index].content().clone();
+                            Some(content.try_close(&tab_id, window, cx))
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+                match should_close {
+                    Ok(Some(task)) => {
+                        let can_close = task.await;
+                        if !can_close {
+                            return false;
+                        }
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.do_remove_tab_by_id(&tab_id, window, cx);
+                            })
+                        });
+                    }
+                    Ok(None) => continue,
+                    Err(_) => return false,
+                }
+            }
+            true
+        })
+    }
+
+    /// Prompt for a lock password and lock the session (or all sessions).
+    pub fn start_lock_session(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lockable = self
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.content().lockable(cx) && !tab.content().is_locked(cx));
+        if !lockable {
+            return;
+        }
+
+        let entity = cx.entity();
+        let window_handle = window.window_handle();
+        let request_task = crate::session_lock::prompt_session_lock(window, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let Some(request) = request_task.await else {
+                return;
+            };
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                entity.update(cx, |this, cx| {
+                    this.apply_lock_request(&request, index, window, cx);
+                })
+            });
+        })
+        .detach();
+    }
+
+    /// Prompt for a password and unlock the session (or all matching sessions).
+    pub fn start_unlock_session(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let locked = self
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.content().lockable(cx) && tab.content().is_locked(cx));
+        if !locked {
+            return;
+        }
+
+        let entity = cx.entity();
+        let window_handle = window.window_handle();
+        let request_task = crate::session_lock::prompt_session_unlock(window, cx);
+
+        cx.spawn(async move |_this, cx| {
+            let Some(request) = request_task.await else {
+                return;
+            };
+            let _ = cx.update_window(window_handle, |_, _window, cx| {
+                entity.update(cx, |this, cx| {
+                    this.apply_unlock_request(&request, index, cx);
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn apply_lock_request(
+        &mut self,
+        request: &crate::session_lock::LockSessionRequest,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let targets: Vec<usize> = if request.lock_all {
+            self.tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, tab)| tab.content().lockable(cx) && !tab.content().is_locked(cx))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            vec![index]
+        };
+        for i in targets {
+            if let Some(tab) = self.tabs.get(i) {
+                tab.content()
+                    .lock_session(&request.password_hash, request.hide_output, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn apply_unlock_request(
+        &mut self,
+        request: &crate::session_lock::UnlockSessionRequest,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let targets: Vec<usize> = if request.unlock_all {
+            self.tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, tab)| tab.content().lockable(cx) && tab.content().is_locked(cx))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            vec![index]
+        };
+        for i in targets {
+            if let Some(tab) = self.tabs.get(i) {
+                tab.content().unlock_session(&request.password_hash, cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Close all tabs
@@ -3350,6 +3712,8 @@ impl TabContainer {
                         let pinned_title = pinned.title(cx);
                         let tooltip_title = pinned_title.clone();
                         let pinned_icon = pinned.content().icon(cx);
+                        let pinned_connection_status = pinned.content().connection_status(cx);
+                        let pinned_is_locked = pinned.content().is_locked(cx);
                         let is_pinned_active = self.active_pinned_index == Some(pinned_index);
                         let view_for_pinned = view.clone();
                         let top_padding = self.top_padding;
@@ -3391,6 +3755,11 @@ impl TabContainer {
                             .when_some(pinned_icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
+                            .child(render_connection_status_badges(
+                                pinned_connection_status,
+                                pinned_is_locked,
+                                &format!("pinned-status-{pinned_index}"),
+                            ))
                             .child(render_tab_title(pinned_title, text_color))
                     }),
             )
@@ -3450,6 +3819,8 @@ impl TabContainer {
                     .children(self.tabs.iter().enumerate().map(|(idx, tab)| {
                         let title = tab.title(cx);
                         let icon = tab.content().icon(cx);
+                        let connection_status = tab.content().connection_status(cx);
+                        let is_locked = tab.content().is_locked(cx);
                         let closeable = tab.content().closeable(cx);
                         let is_active = self.active_pinned_index.is_none() && idx == active_index;
                         let view_clone = view.clone();
@@ -3582,6 +3953,11 @@ impl TabContainer {
                             .when_some(icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
+                            .child(render_connection_status_badges(
+                                connection_status,
+                                is_locked,
+                                &format!("tab-status-{idx}"),
+                            ))
                             .child(match rename_input_for_tab {
                                 Some(input) => div()
                                     .flex_1()
@@ -3590,7 +3966,7 @@ impl TabContainer {
                                     .into_any_element(),
                                 None => render_tab_title(title_clone, text_color),
                             })
-                            .when(closeable, |el| {
+                            .when(closeable && !is_locked, |el| {
                                 let view_clone = view_clone.clone();
                                 el.child(
                                     div()
@@ -3645,6 +4021,23 @@ impl TabContainer {
                                     view_for_menu.read(cx).tabs.get(idx).is_some_and(|tab| {
                                         tab.content().content_key(cx) == "Terminal"
                                     });
+                                let lockable = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .map(|tab| tab.content().lockable(cx))
+                                    .unwrap_or(false);
+                                let locked = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .map(|tab| tab.content().is_locked(cx))
+                                    .unwrap_or(false);
+                                let has_disconnected = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .iter()
+                                    .any(|tab| tab.content().is_disconnected(cx));
 
                                 menu.item(
                                     PopupMenuItem::new(t!("TabContextMenu.rename_tab").to_string())
@@ -3670,6 +4063,30 @@ impl TabContainer {
                                         ),
                                     ),
                                 )
+                                .map(|menu| {
+                                    if !lockable {
+                                        return menu;
+                                    }
+                                    let label = if locked {
+                                        t!("TabContextMenu.unlock_session")
+                                    } else {
+                                        t!("TabContextMenu.lock_session")
+                                    };
+                                    menu.separator().item(
+                                        PopupMenuItem::new(label.to_string()).on_click(
+                                            window.listener_for(
+                                                &view_for_menu,
+                                                move |this, _, window, cx| {
+                                                    if locked {
+                                                        this.start_unlock_session(idx, window, cx);
+                                                    } else {
+                                                        this.start_lock_session(idx, window, cx);
+                                                    }
+                                                },
+                                            ),
+                                        ),
+                                    )
+                                })
                                 .item(
                                     PopupMenuItem::new(t!("TabContextMenu.close_tab").to_string())
                                         .disabled(!closeable)
@@ -3731,6 +4148,20 @@ impl TabContainer {
                                             &view_for_menu,
                                             move |this, _, window, cx| {
                                                 this.close_tabs_to_right(idx, window, cx).detach();
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.close_disconnected_tabs").to_string(),
+                                    )
+                                    .disabled(!has_disconnected)
+                                    .on_click(
+                                        window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, window, cx| {
+                                                this.close_disconnected_tabs(window, cx).detach();
                                             },
                                         ),
                                     ),
@@ -5050,5 +5481,40 @@ mod tests {
                 .expect("reconnected frame"),
             after_reconnect.tab_content
         );
+    }
+
+    #[test]
+    fn connection_status_badges_follow_securecrt_semantics() {
+        let icons = |status, locked| {
+            connection_status_badges(status, locked)
+                .into_iter()
+                .map(|(icon, _)| icon)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            icons(Some(TabConnectionStatus::Connected), false),
+            vec![IconName::StatusConnected]
+        );
+        assert_eq!(
+            icons(Some(TabConnectionStatus::Connected), true),
+            vec![IconName::StatusConnectedLocked],
+            "locked and connected is a single combined badge"
+        );
+        assert_eq!(
+            icons(Some(TabConnectionStatus::Disconnected), false),
+            vec![IconName::StatusDisconnected]
+        );
+        assert_eq!(
+            icons(Some(TabConnectionStatus::Disconnected), true),
+            vec![IconName::StatusDisconnected],
+            "disconnected must win over the lock badge"
+        );
+        assert_eq!(
+            icons(Some(TabConnectionStatus::Connecting), false),
+            Vec::<IconName>::new(),
+            "connecting shows no badge"
+        );
+        assert_eq!(icons(None, true), Vec::<IconName>::new());
     }
 }

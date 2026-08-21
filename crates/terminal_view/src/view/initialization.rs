@@ -251,6 +251,7 @@ impl TerminalView {
             history_prompt: HistoryPromptState::default(),
             shell_prompt_input_active: false,
             local_command_running: false,
+            last_connection_status: None,
             suggestion_debounce: None,
             recording_path_prompt_pending: false,
             recording_control_error: None,

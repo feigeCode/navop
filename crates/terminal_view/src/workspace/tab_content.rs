@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, EventEmitter, FocusHandle, Focusable, SharedString, Task, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    Task, Window,
 };
 use gpui_component::{Icon, IconName};
 use one_core::sidebar_contribution::SidebarContribution;
@@ -89,5 +90,54 @@ impl TabContent for TerminalWorkspace {
 
     fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
         Vec::new()
+    }
+
+    fn lockable(&self, cx: &App) -> bool {
+        self.active_pane().read(cx).session_lock_capable(cx)
+    }
+
+    fn is_locked(&self, cx: &App) -> bool {
+        self.panes
+            .values()
+            .any(|pane| pane.read(cx).is_session_locked(cx))
+    }
+
+    fn is_disconnected(&self, cx: &App) -> bool {
+        !self.panes.is_empty()
+            && self
+                .panes
+                .values()
+                .all(|pane| pane.read(cx).terminal_is_disconnected(cx))
+    }
+
+    fn connection_status(&self, cx: &App) -> Option<one_core::tab_container::TabConnectionStatus> {
+        self.active_pane().read(cx).terminal_connection_status(cx)
+    }
+
+    fn lock_session(
+        &mut self,
+        password_hash: &str,
+        hide_output: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let panes: Vec<Entity<TerminalView>> = self.panes.values().cloned().collect();
+        for pane in panes {
+            pane.update(cx, |pane, cx| {
+                pane.lock_pane_session(password_hash, hide_output, cx);
+            });
+        }
+        true
+    }
+
+    fn unlock_session(&mut self, password_hash: &str, cx: &mut Context<Self>) -> bool {
+        let panes: Vec<Entity<TerminalView>> = self.panes.values().cloned().collect();
+        let mut unlocked = false;
+        for pane in panes {
+            if pane.update(cx, |pane, cx| pane.unlock_pane_session(password_hash, cx)) {
+                unlocked = true;
+            }
+        }
+        unlocked
     }
 }
