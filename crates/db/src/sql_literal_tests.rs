@@ -51,6 +51,7 @@ fn formats_mysql_typed_values() {
         "X'deadbeef'",
         format(DatabaseType::MySQL, "BLOB", "0xDEADBEEF")
     );
+    assert_eq!("X''", format(DatabaseType::MySQL, "BLOB", ""));
     assert_eq!("'1'", format(DatabaseType::MySQL, "VARCHAR(20)", "1"));
     assert_eq!(
         "'1'' OR 1=1'",

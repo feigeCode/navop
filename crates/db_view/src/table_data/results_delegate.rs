@@ -440,14 +440,19 @@ impl EditorTableDelegate {
     /// This method handles tracking cell changes and updating row status.
     /// It's similar to `on_cell_edited` but can be called directly from external code.
     pub fn record_cell_change(&mut self, row_ix: usize, col_ix: usize, new_value: String) -> bool {
-        // 空字符串转换为 None (NULL)
-        let new_opt_value: Option<String> = if new_value.is_empty() {
-            None
-        } else {
-            Some(new_value)
-        };
+        let new_opt_value = self.edit_value(row_ix, col_ix, new_value);
 
         self.record_cell_change_value(row_ix, col_ix, new_opt_value)
+    }
+
+    fn edit_value(&self, row_ix: usize, col_ix: usize, new_value: String) -> Option<String> {
+        // An empty Base64 string is the lossless representation of zero bytes.
+        // SQL NULL remains an explicit operation through `record_cell_change_value`.
+        if self.is_binary_cell(row_ix, col_ix) || !new_value.is_empty() {
+            Some(new_value)
+        } else {
+            None
+        }
     }
 
     fn record_cell_change_value(
@@ -2088,12 +2093,7 @@ impl EditTableDelegate for EditorTableDelegate {
     ) -> bool {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
-        // 空字符串转换为 None (NULL)
-        let new_opt_value: Option<String> = if new_value.is_empty() {
-            None
-        } else {
-            Some(new_value.clone())
-        };
+        let new_opt_value = self.edit_value(actual_row, col_ix, new_value.clone());
 
         tracing::debug!(
             "on_cell_edited: row={}, col={}, new_value='{}', new_opt_value={:?}",
@@ -2955,6 +2955,44 @@ mod tests {
         assert!(delegate.cell_changes.is_empty());
         assert!(delegate.modified_cells.is_empty());
         assert_eq!(delegate.editable_cell_text(0, 0), "AQID");
+    }
+
+    #[test]
+    fn empty_binary_edit_is_distinct_from_null() {
+        let mut delegate = test_delegate(vec![vec![Some("binary display value".to_string())]]);
+        delegate
+            .binary_cells
+            .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
+
+        assert!(delegate.record_cell_change(0, 0, String::new()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some(""));
+        assert_eq!(
+            delegate.cell_changes.get(&(0, 0)),
+            Some(&(
+                Some("binary display value".to_string()),
+                Some(String::new())
+            ))
+        );
+
+        assert!(delegate.record_cell_change_value(0, 0, None));
+        assert_eq!(delegate.rows[0][0], None);
+        assert_eq!(
+            delegate.cell_changes.get(&(0, 0)),
+            Some(&(Some("binary display value".to_string()), None))
+        );
+    }
+
+    #[test]
+    fn unchanged_empty_binary_value_does_not_become_null() {
+        let mut delegate = test_delegate(vec![vec![Some(String::new())]]);
+        delegate
+            .binary_cells
+            .insert((0, 0), std::sync::Arc::new(Vec::new()));
+
+        assert!(!delegate.record_cell_change(0, 0, String::new()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some(""));
+        assert!(delegate.cell_changes.is_empty());
+        assert!(delegate.modified_cells.is_empty());
     }
 
     #[test]

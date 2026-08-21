@@ -411,6 +411,89 @@ pub fn strip_internal_compare_columns_if(
     response
 }
 
+/// Drops binary sidecars for MySQL TEXT-family columns whose schema says they
+/// use a non-binary character set.
+///
+/// Some MySQL-compatible servers report TEXT-family columns using the wire
+/// protocol's BLOB type and binary metadata. The driver then preserves the
+/// raw bytes in `binary_cells`, which is normally correct for a real BLOB but
+/// causes data comparison and sync SQL generation to treat LONGTEXT as a
+/// binary literal (`X'...'`).
+///
+/// This workaround is intentionally MySQL-specific and limited to the
+/// TEXT-family. Other databases can legitimately store a binary runtime value
+/// in a text-declared column (SQLite), while types such as ClickHouse `String`
+/// can contain arbitrary bytes. MySQL character columns using the `binary`
+/// character set must also keep their sidecars.
+pub(crate) fn strip_binary_cells_for_mysql_text_columns(
+    mut response: TableDataResponse,
+    database_type: &DatabaseType,
+    business_columns: &[ColumnInfo],
+) -> TableDataResponse {
+    if *database_type != DatabaseType::MySQL
+        || business_columns.is_empty()
+        || response.query_result.columns.len() != business_columns.len()
+        || response
+            .query_result
+            .columns
+            .iter()
+            .zip(business_columns)
+            .any(|(result_column, business_column)| {
+                !result_column
+                    .trim()
+                    .eq_ignore_ascii_case(business_column.name.trim())
+            })
+    {
+        return response;
+    }
+
+    let text_column_indices = business_columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, column)| is_mysql_text_column(column).then_some(index))
+        .collect::<std::collections::HashSet<_>>();
+    if text_column_indices.is_empty() {
+        return response;
+    }
+
+    response
+        .query_result
+        .binary_cells
+        .retain(|cell| !text_column_indices.contains(&cell.column_index));
+    response
+}
+
+pub(crate) fn normalize_compare_table_data_response(
+    response: TableDataResponse,
+    internal_rowid_alias: Option<&str>,
+    database_type: &DatabaseType,
+    business_columns: &[ColumnInfo],
+) -> TableDataResponse {
+    let response = if let Some(internal_rowid_alias) = internal_rowid_alias {
+        strip_internal_compare_columns_if(response, true, internal_rowid_alias, business_columns)
+    } else {
+        response
+    };
+    strip_binary_cells_for_mysql_text_columns(response, database_type, business_columns)
+}
+
+fn is_mysql_text_column(column: &ColumnInfo) -> bool {
+    if column
+        .charset
+        .as_deref()
+        .is_some_and(|charset| charset.trim().eq_ignore_ascii_case("binary"))
+    {
+        return false;
+    }
+
+    let normalized = column.data_type.trim().to_ascii_uppercase();
+    let base_type = normalized
+        .split(['(', ' ', '\t', '\r', '\n'])
+        .next()
+        .unwrap_or_default();
+    matches!(base_type, "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT")
+}
+
 /// Backwards-compatible wrapper for callers that already know the query
 /// contains the synthetic row-id column.
 pub fn strip_internal_compare_columns(response: TableDataResponse) -> TableDataResponse {
@@ -830,6 +913,171 @@ mod tests {
             super::super::binary_cell_bytes(rows[0].get("payload").unwrap()),
             Some(vec![0, 1, 2, 255])
         );
+    }
+
+    #[test]
+    fn longtext_binary_sidecar_is_ignored_for_data_compare_values() {
+        let mut result = response(
+            vec!["payload"],
+            vec![QueryColumnMeta::new("payload", "MYSQL_TYPE_LONG_BLOB")],
+            vec![vec![Some("true")]],
+        );
+        result.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 0,
+            bytes: b"true".to_vec(),
+        }];
+
+        let result = strip_binary_cells_for_mysql_text_columns(
+            result,
+            &DatabaseType::MySQL,
+            &[column("payload", "LONGTEXT")],
+        );
+        assert!(result.query_result.binary_cells.is_empty());
+
+        let rows = rows_from_query_result(&result.query_result);
+        assert_eq!(rows[0]["payload"], serde_json::json!("true"));
+        assert_eq!(
+            format_value_for_database(
+                &rows[0]["payload"],
+                Some("LONGTEXT"),
+                Some(DatabaseType::MySQL),
+            ),
+            "'true'"
+        );
+    }
+
+    #[test]
+    fn binary_sidecar_is_preserved_for_blob_columns() {
+        let mut result = response(
+            vec!["payload"],
+            vec![QueryColumnMeta::new("payload", "MYSQL_TYPE_BLOB")],
+            vec![vec![Some("0x0102")]],
+        );
+        result.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 0,
+            bytes: vec![1, 2],
+        }];
+
+        let result = strip_binary_cells_for_mysql_text_columns(
+            result,
+            &DatabaseType::MySQL,
+            &[column("payload", "LONGBLOB")],
+        );
+        assert_eq!(result.query_result.binary_cells.len(), 1);
+        let rows = rows_from_query_result(&result.query_result);
+        assert_eq!(
+            format_value_for_database(
+                &rows[0]["payload"],
+                Some("LONGBLOB"),
+                Some(DatabaseType::MySQL),
+            ),
+            "X'0102'"
+        );
+    }
+
+    #[test]
+    fn normalization_remaps_rowid_cells_before_dropping_text_sidecars() {
+        let mut result = response(
+            vec!["__rowid__", "id", "payload"],
+            vec![
+                QueryColumnMeta::new("__rowid__", "text"),
+                QueryColumnMeta::new("id", "bigint"),
+                QueryColumnMeta::new("payload", "longblob"),
+            ],
+            vec![vec![Some("row-1"), Some("1"), Some("true")]],
+        );
+        result.query_result.binary_cells = vec![
+            BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: b"row-1".to_vec(),
+            },
+            BinaryCell {
+                row_index: 0,
+                column_index: 2,
+                bytes: b"true".to_vec(),
+            },
+        ];
+
+        let result = normalize_compare_table_data_response(
+            result,
+            Some("__rowid__"),
+            &DatabaseType::MySQL,
+            &[column("id", "BIGINT"), column("payload", "LONGTEXT")],
+        );
+
+        assert_eq!(result.query_result.columns, vec!["id", "payload"]);
+        assert!(result.query_result.binary_cells.is_empty());
+    }
+
+    #[test]
+    fn non_mysql_text_declared_runtime_blob_keeps_binary_sidecar() {
+        let mut result = response(
+            vec!["payload"],
+            vec![QueryColumnMeta::new("payload", "blob")],
+            vec![vec![Some("true")]],
+        );
+        result.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 0,
+            bytes: b"true".to_vec(),
+        }];
+
+        let result = strip_binary_cells_for_mysql_text_columns(
+            result,
+            &DatabaseType::SQLite,
+            &[column("payload", "TEXT")],
+        );
+        assert_eq!(result.query_result.binary_cells.len(), 1);
+    }
+
+    #[test]
+    fn mysql_binary_charset_text_keeps_binary_sidecar() {
+        let mut result = response(
+            vec!["payload"],
+            vec![QueryColumnMeta::new("payload", "MYSQL_TYPE_LONG_BLOB")],
+            vec![vec![Some("true")]],
+        );
+        result.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 0,
+            bytes: b"true".to_vec(),
+        }];
+        let mut payload = column("payload", "LONGTEXT");
+        payload.charset = Some("binary".to_string());
+
+        let result =
+            strip_binary_cells_for_mysql_text_columns(result, &DatabaseType::MySQL, &[payload]);
+        assert_eq!(result.query_result.binary_cells.len(), 1);
+    }
+
+    #[test]
+    fn mysql_character_types_are_not_reclassified_by_the_text_workaround() {
+        for data_type in ["CHAR(8)", "VARCHAR(255)", "ENUM('a','b')", "SET('a','b')"] {
+            let mut result = response(
+                vec!["payload"],
+                vec![QueryColumnMeta::new("payload", "MYSQL_TYPE_VAR_STRING")],
+                vec![vec![Some("true")]],
+            );
+            result.query_result.binary_cells = vec![BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: b"true".to_vec(),
+            }];
+
+            let result = strip_binary_cells_for_mysql_text_columns(
+                result,
+                &DatabaseType::MySQL,
+                &[column("payload", data_type)],
+            );
+            assert_eq!(
+                result.query_result.binary_cells.len(),
+                1,
+                "the LONGTEXT workaround must not guess semantics for {data_type}"
+            );
+        }
     }
 
     #[test]
