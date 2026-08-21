@@ -565,6 +565,10 @@ ConnectionForm:
 
 # 设置面板
 Settings:
+  suggestion_popup:
+    en: Suggestion popup
+    zh-CN: 弹框候选词
+    zh-HK: 彈框候選詞
   title:
     en: Settings
     zh-CN: 设置
