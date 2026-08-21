@@ -583,10 +583,7 @@ mod tests {
 
         assert_eq!(view.cell(0, 0), Some(QueryCellRef::Null));
         assert_eq!(view.cell(0, 1), Some(QueryCellRef::Text("")));
-        assert_eq!(
-            view.cell(0, 2),
-            Some(QueryCellRef::Binary(&[0_u8, 0xff]))
-        );
+        assert_eq!(view.cell(0, 2), Some(QueryCellRef::Binary(&[0_u8, 0xff])));
         assert_eq!(view.cell(1, 0), None);
         assert_eq!(view.cell(0, 3), None);
     }

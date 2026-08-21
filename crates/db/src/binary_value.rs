@@ -85,10 +85,7 @@ mod tests {
         assert_eq!(parse_binary_input("base64:").unwrap(), b"");
         assert_eq!(parse_binary_input("hex:").unwrap(), b"");
         assert_eq!(parse_binary_input("text:").unwrap(), b"");
-        assert_eq!(
-            parse_binary_input("0x"),
-            Err(BinaryInputError::InvalidHex)
-        );
+        assert_eq!(parse_binary_input("0x"), Err(BinaryInputError::InvalidHex));
     }
 
     #[test]

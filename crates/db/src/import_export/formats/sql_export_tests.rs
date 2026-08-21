@@ -247,9 +247,64 @@ fn sql_dump_prefers_binary_sidecar_without_guessing_from_display_text() {
         "binary_data",
         &query_result,
         &mut wrote_header,
-    );
+    )
+    .expect("valid query result should render");
 
     assert!(output.contains("VALUES (X'0001ff', '0x0001ff');"));
+}
+
+#[test]
+fn sql_dump_preserves_null_empty_text_and_empty_binary() {
+    let query_result = QueryResult {
+        sql: "SELECT nullable, empty_text, empty_binary FROM t".to_string(),
+        columns: vec![
+            "nullable".to_string(),
+            "empty_text".to_string(),
+            "empty_binary".to_string(),
+        ],
+        column_meta: vec![
+            QueryColumnMeta::new("nullable", "TEXT"),
+            QueryColumnMeta::new("empty_text", "TEXT"),
+            QueryColumnMeta::new("empty_binary", "BLOB"),
+        ],
+        rows: vec![vec![None, Some(String::new()), None]],
+        binary_cells: vec![BinaryCell {
+            row_index: 0,
+            column_index: 2,
+            bytes: Vec::new(),
+        }],
+        elapsed_ms: 1,
+    };
+
+    let output = render_insert_statements(&MySqlPlugin::new(), "`t`", &query_result)
+        .expect("valid query result should render");
+
+    assert!(output.contains("VALUES (NULL, '', X'');"));
+}
+
+#[test]
+fn sql_dump_rejects_malformed_query_result() {
+    let query_result = QueryResult {
+        sql: "SELECT a, b FROM t".to_string(),
+        columns: vec!["a".to_string(), "b".to_string()],
+        column_meta: vec![
+            QueryColumnMeta::new("a", "TEXT"),
+            QueryColumnMeta::new("b", "TEXT"),
+        ],
+        rows: vec![vec![Some("only one cell".to_string())]],
+        binary_cells: vec![],
+        elapsed_ms: 1,
+    };
+
+    let error = render_insert_statements(&MySqlPlugin::new(), "`t`", &query_result)
+        .expect_err("short rows must fail instead of being treated as NULL");
+
+    assert!(
+        error
+            .to_string()
+            .contains("Invalid query result for SQL export")
+    );
+    assert!(error.to_string().contains("row 1 has 1 cells, expected 2"));
 }
 
 #[test]
@@ -269,7 +324,8 @@ fn mysql_sql_dump_formats_bit_values_as_unquoted_literals() {
         elapsed_ms: 1,
     };
 
-    let output = render_insert_statements(&MySqlPlugin::new(), "`test_bit`", &query_result);
+    let output = render_insert_statements(&MySqlPlugin::new(), "`test_bit`", &query_result)
+        .expect("valid query result should render");
 
     assert_eq!(
         concat!(

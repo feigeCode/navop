@@ -1,9 +1,7 @@
 use one_core::storage::DatabaseType;
 
 use crate::binary_value::parse_binary_input;
-use crate::sql_literal::{
-    parse_boolean, quote_string, strict_numeric_literal,
-};
+use crate::sql_literal::{parse_boolean, quote_string, strict_numeric_literal};
 use crate::sql_literal_types::{
     is_clickhouse_numeric_type, is_duckdb_numeric_type, is_mssql_numeric_type,
     is_mysql_numeric_type, is_oracle_numeric_type, is_postgres_numeric_type,

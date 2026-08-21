@@ -202,25 +202,22 @@ fn invalid_special_values_fall_back_to_escaped_strings() {
 
 #[test]
 fn binary_input_is_explicit_and_never_guessed_from_text_shape() {
-    for input in ["true", "text:true", "hex:74727565", "0x74727565", "base64:dHJ1ZQ=="] {
-        assert_eq!(
-            "X'74727565'",
-            format(DatabaseType::MySQL, "BLOB", input)
-        );
+    for input in [
+        "true",
+        "text:true",
+        "hex:74727565",
+        "0x74727565",
+        "base64:dHJ1ZQ==",
+    ] {
+        assert_eq!("X'74727565'", format(DatabaseType::MySQL, "BLOB", input));
     }
 
-    assert_eq!(
-        "X'41514944'",
-        format(DatabaseType::MySQL, "BLOB", "AQID")
-    );
+    assert_eq!("X'41514944'", format(DatabaseType::MySQL, "BLOB", "AQID"));
     assert_eq!(
         "X'010203'",
         format(DatabaseType::MySQL, "BLOB", "base64:AQID")
     );
-    assert_eq!(
-        "'true'",
-        format(DatabaseType::MySQL, "LONGTEXT", "true")
-    );
+    assert_eq!("'true'", format(DatabaseType::MySQL, "LONGTEXT", "true"));
 }
 
 #[test]

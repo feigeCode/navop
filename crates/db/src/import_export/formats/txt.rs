@@ -3,6 +3,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
+use super::csv::render_delimited_query_result;
 use super::import_execution::{ImportStatement, execute_import_statements};
 use super::{
     CsvFormatHandler, format_import_table_reference, format_import_text_value, load_import_columns,
@@ -24,24 +25,7 @@ impl TxtFormatHandler {
         qualifier: Option<char>,
         null_string: &str,
     ) -> Result<String> {
-        let needs_quote = field.is_empty()
-            || field == null_string
-            || field.contains(delimiter)
-            || field.contains('\n')
-            || field.contains('\r')
-            || qualifier.map(|q| field.contains(q)).unwrap_or(false);
-
-        if needs_quote {
-            let q = qualifier.ok_or_else(|| {
-                anyhow!(
-                    "TXT text qualifier is required to safely export empty, NULL-marker, delimited, or multiline text"
-                )
-            })?;
-            let escaped = field.replace(q, &format!("{}{}", q, q));
-            Ok(format!("{}{}{}", q, escaped, q))
-        } else {
-            Ok(field.to_string())
-        }
+        super::csv::escape_delimited_field("TXT", field, delimiter, qualifier, null_string)
     }
 
     fn import_config(config: &ImportConfig) -> CsvImportConfig {
@@ -269,41 +253,16 @@ impl FormatHandler for TxtFormatHandler {
                 if let Some(paginated_query) = &paginated_query {
                     paginated_query.strip_hidden_result_columns(&mut query_result)?;
                 }
-                let mut table_output = String::new();
-
-                if include_header {
-                    for (i, col) in query_result.columns.iter().enumerate() {
-                        if i > 0 {
-                            table_output.push(delimiter);
-                        }
-                        table_output.push_str(&Self::escape_txt_field(
-                            col,
-                            delimiter,
-                            qualifier,
-                            &null_string,
-                        )?);
-                    }
-                    table_output.push_str(&record_terminator);
-                }
-
                 let rows_count = query_result.rows.len() as u64;
-                for row in &query_result.rows {
-                    for (i, val) in row.iter().enumerate() {
-                        if i > 0 {
-                            table_output.push(delimiter);
-                        }
-                        match val {
-                            Some(v) => table_output.push_str(&Self::escape_txt_field(
-                                v,
-                                delimiter,
-                                qualifier,
-                                &null_string,
-                            )?),
-                            None => table_output.push_str(&null_string),
-                        }
-                    }
-                    table_output.push_str(&record_terminator);
-                }
+                let table_output = render_delimited_query_result(
+                    "TXT",
+                    &query_result,
+                    delimiter,
+                    qualifier,
+                    include_header,
+                    &record_terminator,
+                    &null_string,
+                )?;
 
                 total_rows += rows_count;
                 send_progress(ExportProgressEvent::DataExported {
@@ -339,7 +298,8 @@ impl FormatHandler for TxtFormatHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::TxtFormatHandler;
+    use super::{TxtFormatHandler, render_delimited_query_result};
+    use crate::executor::{BinaryCell, QueryColumnMeta, QueryResult};
 
     #[test]
     fn escape_txt_quotes_empty_and_literal_null_marker() {
@@ -356,5 +316,52 @@ mod tests {
             "NULL"
         );
         assert!(TxtFormatHandler::escape_txt_field("", '\t', None, "\\N").is_err());
+    }
+
+    #[test]
+    fn txt_render_preserves_null_and_empty_text() {
+        let result = QueryResult {
+            sql: String::new(),
+            columns: vec!["nullable".to_string(), "empty".to_string()],
+            column_meta: vec![
+                QueryColumnMeta::new("nullable", "TEXT"),
+                QueryColumnMeta::new("empty", "TEXT"),
+            ],
+            rows: vec![vec![None, Some(String::new())]],
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        };
+
+        let output =
+            render_delimited_query_result("TXT", &result, '\t', Some('"'), true, "\n", "\\N")
+                .expect("text-only TXT should render");
+
+        assert_eq!(output, "nullable\tempty\n\\N\t\"\"\n");
+    }
+
+    #[test]
+    fn txt_render_rejects_binary_sidecar_even_with_display_text() {
+        let result = QueryResult {
+            sql: String::new(),
+            columns: vec!["payload".to_string()],
+            column_meta: vec![QueryColumnMeta::new("payload", "BLOB")],
+            rows: vec![vec![Some("true".to_string())]],
+            binary_cells: vec![BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: b"true".to_vec(),
+            }],
+            elapsed_ms: 0,
+        };
+
+        let error =
+            render_delimited_query_result("TXT", &result, '\t', Some('"'), true, "\n", "\\N")
+                .expect_err("TXT has no binary wire encoding");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TXT export does not support binary cell at row 1, column 1")
+        );
     }
 }

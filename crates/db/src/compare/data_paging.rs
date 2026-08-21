@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    BinaryCell, ColumnInfo, FieldType, QueryColumnMeta, QueryResult, TableDataRequest,
-    TableDataResponse, plugin::DatabasePlugin,
+    BinaryCell, ColumnInfo, FieldType, QueryCellRef, QueryColumnMeta, QueryResult,
+    TableDataRequest, TableDataResponse, plugin::DatabasePlugin,
 };
 use one_core::storage::DatabaseType;
 
@@ -266,7 +266,7 @@ pub fn common_column_mappings(
         .collect()
 }
 
-pub fn rows_from_query_result(result: &QueryResult) -> Vec<RowData> {
+pub fn rows_from_query_result(result: &QueryResult) -> anyhow::Result<Vec<RowData>> {
     let mappings = result
         .columns
         .iter()
@@ -282,35 +282,42 @@ pub fn rows_from_query_result_with_mappings(
     result: &QueryResult,
     mappings: &[DataCompareColumnMapping],
     case_sensitive_identifiers: bool,
-) -> Vec<RowData> {
+) -> anyhow::Result<Vec<RowData>> {
+    let view = result
+        .typed_view()
+        .map_err(|error| anyhow::anyhow!("Invalid query result for data comparison: {error}"))?;
     let index_by_column = result
         .columns
         .iter()
         .enumerate()
         .map(|(index, column)| (identifier_key(column, case_sensitive_identifiers), index))
         .collect::<HashMap<_, _>>();
-    let binary_by_cell = result
-        .binary_cells
-        .iter()
-        .map(|cell| ((cell.row_index, cell.column_index), cell.bytes.as_slice()))
-        .collect::<HashMap<_, _>>();
-    result
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(row_index, row)| {
+    (0..result.rows.len())
+        .map(|row_index| {
             mappings
                 .iter()
-                .filter_map(|mapping| {
+                .map(|mapping| {
                     let index = *index_by_column
-                        .get(&identifier_key(&mapping.target, case_sensitive_identifiers))?;
-                    let value = row.get(index)?;
-                    let cell = value_to_cell(
-                        value.as_deref(),
-                        result.column_meta.get(index),
-                        binary_by_cell.get(&(row_index, index)).copied(),
-                    );
-                    Some((mapping.source.clone(), cell))
+                        .get(&identifier_key(&mapping.target, case_sensitive_identifiers))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "compare column mapping target {:?} is missing from query result",
+                                mapping.target
+                            )
+                        })?;
+                    let cell = match view.cell(row_index, index) {
+                        Some(QueryCellRef::Null) => {
+                            value_to_cell(None, result.column_meta.get(index), None)
+                        }
+                        Some(QueryCellRef::Text(value)) => {
+                            value_to_cell(Some(value), result.column_meta.get(index), None)
+                        }
+                        Some(QueryCellRef::Binary(bytes)) => {
+                            value_to_cell(None, result.column_meta.get(index), Some(bytes))
+                        }
+                        None => unreachable!("typed view validated row and column bounds"),
+                    };
+                    Ok((mapping.source.clone(), cell))
                 })
                 .collect()
         })
@@ -339,16 +346,12 @@ pub fn strip_internal_compare_columns_if(
         return response;
     }
 
-    let columns_len = response.query_result.columns.len();
-    if !response.query_result.column_meta.is_empty()
-        && response.query_result.column_meta.len() != columns_len
-    {
-        // A malformed/mismatched metadata response is unsafe to rewrite:
-        // preserving it lets the caller report the query/plugin problem
-        // instead of silently shifting cell coordinates.
+    if response.query_result.typed_view().is_err() {
+        // Preserve malformed payloads untouched so the typed conversion stage can report them.
         return response;
     }
 
+    let columns_len = response.query_result.columns.len();
     let keep_indices = (1..columns_len).collect::<Vec<_>>();
     if !business_columns.is_empty()
         && (keep_indices.len() != business_columns.len()
@@ -384,7 +387,7 @@ pub fn strip_internal_compare_columns_if(
         .map(|row| {
             keep_indices
                 .iter()
-                .map(|index| row.get(*index).cloned().unwrap_or(None))
+                .map(|index| row[*index].clone())
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -504,7 +507,15 @@ pub fn append_table_data_page(
     accumulated: &mut Option<TableDataResponse>,
     mut page: TableDataResponse,
 ) -> anyhow::Result<()> {
+    page.query_result
+        .typed_view()
+        .map_err(|error| anyhow::anyhow!("Invalid table data page: {error}"))?;
+
     if let Some(existing) = accumulated.as_mut() {
+        existing
+            .query_result
+            .typed_view()
+            .map_err(|error| anyhow::anyhow!("Invalid accumulated table data: {error}"))?;
         if page.total_count != existing.total_count {
             anyhow::bail!(
                 "table row count changed while paging: expected {}, got {}",
@@ -532,6 +543,19 @@ pub fn append_table_data_page(
                 combined_row_count
             );
         }
+        let adjusted_binary_cells = page
+            .query_result
+            .binary_cells
+            .into_iter()
+            .map(|mut cell| {
+                cell.row_index = cell.row_index.checked_add(row_offset).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "binary cell row index overflow while appending table data page"
+                    )
+                })?;
+                Ok(cell)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         existing
             .query_result
             .rows
@@ -539,11 +563,12 @@ pub fn append_table_data_page(
         existing
             .query_result
             .binary_cells
-            .extend(page.query_result.binary_cells.into_iter().map(|mut cell| {
-                cell.row_index += row_offset;
-                cell
-            }));
+            .extend(adjusted_binary_cells);
         existing.duration = existing.duration.saturating_add(page.duration);
+        existing
+            .query_result
+            .typed_view()
+            .map_err(|error| anyhow::anyhow!("Invalid combined table data: {error}"))?;
         return Ok(());
     }
 
@@ -882,7 +907,7 @@ mod tests {
             ]],
         );
 
-        let rows = rows_from_query_result(&result.query_result);
+        let rows = rows_from_query_result(&result.query_result).unwrap();
         assert_eq!(rows[0].get("id"), Some(&serde_json::json!(42)));
         assert_eq!(
             rows[0].get("amount").map(ToString::to_string).as_deref(),
@@ -904,7 +929,7 @@ mod tests {
             bytes: vec![0, 1, 2, 255],
         }];
 
-        let rows = rows_from_query_result(&result.query_result);
+        let rows = rows_from_query_result(&result.query_result).unwrap();
         assert_eq!(
             rows[0].get("payload"),
             Some(&binary_cell_value(&[0, 1, 2, 255]))
@@ -912,6 +937,50 @@ mod tests {
         assert_eq!(
             super::super::binary_cell_bytes(rows[0].get("payload").unwrap()),
             Some(vec![0, 1, 2, 255])
+        );
+    }
+
+    #[test]
+    fn rows_reject_malformed_query_result_shapes() {
+        let result = response(
+            vec!["id", "name"],
+            vec![
+                QueryColumnMeta::new("id", "bigint"),
+                QueryColumnMeta::new("name", "text"),
+            ],
+            vec![vec![Some("1")]],
+        );
+
+        let error = rows_from_query_result(&result.query_result)
+            .expect_err("short rows must fail instead of becoming NULL");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid query result for data comparison")
+        );
+        assert!(error.to_string().contains("row 1 has 1 cells, expected 2"));
+    }
+
+    #[test]
+    fn rows_reject_missing_mapping_targets() {
+        let result = response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "bigint")],
+            vec![vec![Some("1")]],
+        );
+        let mappings = vec![DataCompareColumnMapping {
+            source: "missing".to_string(),
+            target: "missing".to_string(),
+        }];
+
+        let error = rows_from_query_result_with_mappings(&result.query_result, &mappings, false)
+            .expect_err("missing mapping targets must not be silently skipped");
+
+        assert!(
+            error
+                .to_string()
+                .contains("mapping target \"missing\" is missing")
         );
     }
 
@@ -935,7 +1004,7 @@ mod tests {
         );
         assert!(result.query_result.binary_cells.is_empty());
 
-        let rows = rows_from_query_result(&result.query_result);
+        let rows = rows_from_query_result(&result.query_result).unwrap();
         assert_eq!(rows[0]["payload"], serde_json::json!("true"));
         assert_eq!(
             format_value_for_database(
@@ -966,7 +1035,7 @@ mod tests {
             &[column("payload", "LONGBLOB")],
         );
         assert_eq!(result.query_result.binary_cells.len(), 1);
-        let rows = rows_from_query_result(&result.query_result);
+        let rows = rows_from_query_result(&result.query_result).unwrap();
         assert_eq!(
             format_value_for_database(
                 &rows[0]["payload"],
@@ -1096,7 +1165,7 @@ mod tests {
             ]],
         );
 
-        let rows = rows_from_query_result(&result.query_result);
+        let rows = rows_from_query_result(&result.query_result).unwrap();
         assert!(rows[0]["large"].is_number());
         assert_eq!(rows[0]["large"].to_string(), "18446744073709551615");
         assert_eq!(rows[0]["positive"].to_string(), "42");
@@ -1121,7 +1190,7 @@ mod tests {
             ]],
         );
 
-        let rows = rows_from_query_result(&result.query_result);
+        let rows = rows_from_query_result(&result.query_result).unwrap();
         assert_eq!(rows[0]["date"], serde_json::json!("2024-01-01"));
         assert_eq!(rows[0]["time"], serde_json::json!("12:34:56"));
         assert_eq!(rows[0]["with_t"], rows[0]["with_space"]);
@@ -1529,6 +1598,69 @@ mod tests {
         let accumulated = accumulated.unwrap();
         assert_eq!(accumulated.query_result.rows.len(), 2);
         assert_eq!(accumulated.query_result.binary_cells[0].row_index, 1);
+    }
+
+    #[test]
+    fn appending_rejects_malformed_first_page() {
+        let malformed = response(
+            vec!["id", "name"],
+            vec![
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("name", "text"),
+            ],
+            vec![vec![Some("1")]],
+        );
+        let mut accumulated = None;
+
+        let error = append_table_data_page(&mut accumulated, malformed)
+            .expect_err("malformed pages must fail before accumulation");
+
+        assert!(error.to_string().contains("Invalid table data page"));
+        assert!(accumulated.is_none());
+    }
+
+    #[test]
+    fn appending_rejects_malformed_later_page_without_mutating_accumulator() {
+        let mut first = response(
+            vec!["id", "name"],
+            vec![
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("name", "text"),
+            ],
+            vec![vec![Some("1"), Some("first")]],
+        );
+        first.total_count = 2;
+        let mut malformed = response(
+            vec!["id", "name"],
+            vec![
+                QueryColumnMeta::new("id", "int"),
+                QueryColumnMeta::new("name", "text"),
+            ],
+            vec![vec![Some("2"), Some("second")]],
+        );
+        malformed.total_count = 2;
+        malformed.query_result.binary_cells = vec![
+            BinaryCell {
+                row_index: 0,
+                column_index: 1,
+                bytes: vec![1],
+            },
+            BinaryCell {
+                row_index: 0,
+                column_index: 1,
+                bytes: vec![2],
+            },
+        ];
+        let mut accumulated = None;
+        append_table_data_page(&mut accumulated, first).unwrap();
+
+        let error = append_table_data_page(&mut accumulated, malformed)
+            .expect_err("duplicate binary coordinates must fail");
+
+        assert!(error.to_string().contains("Invalid table data page"));
+        let accumulated = accumulated.expect("first page must remain intact");
+        assert_eq!(accumulated.query_result.rows.len(), 1);
+        assert!(accumulated.query_result.binary_cells.is_empty());
     }
 
     #[test]

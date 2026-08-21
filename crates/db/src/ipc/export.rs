@@ -20,7 +20,10 @@ pub async fn export_data_with_progress(
     config: &ExportConfig,
     progress_tx: Option<ExportProgressSender>,
 ) -> Result<ExportResult> {
-    if matches!(config.format, DataFormat::Sql | DataFormat::Xml) {
+    // The driver export wire protocol currently returns already-formatted bytes and does not
+    // declare how binary cells are represented. Keep all formats on the host formatter until the
+    // protocol has an explicit, round-trippable binary encoding/capability.
+    if !driver_export_has_explicit_binary_encoding(config.format) {
         return fallback_export(plugin, connection, config, progress_tx).await;
     }
     match export_via_driver(plugin, connection, config, progress_tx.clone()).await {
@@ -29,6 +32,16 @@ pub async fn export_data_with_progress(
             fallback_export(plugin, connection, config, progress_tx).await
         }
         Err(error) => Err(error),
+    }
+}
+
+fn driver_export_has_explicit_binary_encoding(format: DataFormat) -> bool {
+    match format {
+        DataFormat::Sql
+        | DataFormat::Json
+        | DataFormat::Csv
+        | DataFormat::Txt
+        | DataFormat::Xml => false,
     }
 }
 

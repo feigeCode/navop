@@ -1099,17 +1099,21 @@ pub fn build_data_compare_result(
             target: column.source.clone(),
         })
         .collect::<Vec<_>>();
+    let source_rows = rows_from_query_result_with_mappings(
+        &source_response.query_result,
+        &source_mappings,
+        case_sensitive_identifiers,
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid source comparison data: {error}"))?;
+    let target_rows = rows_from_query_result_with_mappings(
+        &target_response.query_result,
+        &columns,
+        case_sensitive_identifiers,
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid target comparison data: {error}"))?;
     let mut result = compare_data_rows(
-        rows_from_query_result_with_mappings(
-            &source_response.query_result,
-            &source_mappings,
-            case_sensitive_identifiers,
-        ),
-        rows_from_query_result_with_mappings(
-            &target_response.query_result,
-            &columns,
-            case_sensitive_identifiers,
-        ),
+        source_rows,
+        target_rows,
         DataCompareOptions {
             source_table: pair.source_table,
             target_table: pair.target_table,

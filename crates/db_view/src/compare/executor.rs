@@ -432,7 +432,7 @@ mod tests {
             elapsed_ms: 0,
         };
 
-        let rows = rows_from_query_result(&result);
+        let rows = rows_from_query_result(&result).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("id"), Some(&serde_json::json!(1)));
@@ -465,7 +465,7 @@ mod tests {
             elapsed_ms: 0,
         };
 
-        let rows = rows_from_query_result(&result);
+        let rows = rows_from_query_result(&result).unwrap();
 
         assert_eq!(rows[0].get("id"), Some(&serde_json::json!(42)));
         assert_eq!(rows[0].get("price"), Some(&serde_json::json!(19.5)));
@@ -487,7 +487,7 @@ mod tests {
             elapsed_ms: 0,
         };
 
-        let rows = rows_from_query_result(&result);
+        let rows = rows_from_query_result(&result).unwrap();
 
         assert_eq!(
             rows[0].get("price").map(ToString::to_string).as_deref(),

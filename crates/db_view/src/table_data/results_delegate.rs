@@ -351,7 +351,11 @@ impl EditorTableDelegate {
     ) -> bool {
         self.binary_cells
             .get(&(row_ix, col_ix))
-            .zip(value.as_deref().and_then(|value| parse_binary_input(value).ok()))
+            .zip(
+                value
+                    .as_deref()
+                    .and_then(|value| parse_binary_input(value).ok()),
+            )
             .is_some_and(|(original_bytes, value_bytes)| {
                 original_bytes.as_slice() == value_bytes.as_slice()
             })
@@ -2723,9 +2727,8 @@ impl EditorTableDelegate {
 mod tests {
     use super::{
         EditorTableDelegate, binary_cell_copy_text, binary_cell_image_format,
-        binary_download_file_name, binary_edit_values_equal,
-        normalize_row_search_query, normalize_sort_identifier, parse_primary_order_by_clause,
-        row_matches_search_query,
+        binary_download_file_name, binary_edit_values_equal, normalize_row_search_query,
+        normalize_sort_identifier, parse_primary_order_by_clause, row_matches_search_query,
     };
     use db::{ColumnInfo, binary_value::parse_binary_input};
     use gpui::SharedString;
@@ -2978,8 +2981,14 @@ mod tests {
         assert_eq!(parse_binary_input("hex:ABCD"), Ok(vec![0xab, 0xcd]));
         assert_eq!(parse_binary_input("0xABCD"), Ok(vec![0xab, 0xcd]));
         assert_eq!(parse_binary_input("0Xabcd"), Ok(vec![0xab, 0xcd]));
-        assert_eq!(parse_binary_input("0xABC"), Err(db::binary_value::BinaryInputError::InvalidHex));
-        assert_eq!(parse_binary_input("0x"), Err(db::binary_value::BinaryInputError::InvalidHex));
+        assert_eq!(
+            parse_binary_input("0xABC"),
+            Err(db::binary_value::BinaryInputError::InvalidHex)
+        );
+        assert_eq!(
+            parse_binary_input("0x"),
+            Err(db::binary_value::BinaryInputError::InvalidHex)
+        );
         assert!(binary_edit_values_equal(
             &Some("base64:q80=".to_string()),
             &Some("hex:abcd".to_string())
