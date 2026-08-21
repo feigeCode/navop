@@ -13,7 +13,7 @@ use tracing::{debug, error, info};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
-    SqlSource, apply_query_max_rows,
+    SqlSource,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -85,6 +85,19 @@ impl MssqlDbConnection {
             })
     }
 
+    fn is_character_column_type(column_type: ColumnType) -> bool {
+        matches!(
+            column_type,
+            ColumnType::BigVarChar
+                | ColumnType::BigChar
+                | ColumnType::NVarchar
+                | ColumnType::NChar
+                | ColumnType::Text
+                | ColumnType::NText
+                | ColumnType::Xml
+        )
+    }
+
     fn build_query_result(
         columns: Vec<String>,
         column_types: Vec<String>,
@@ -112,8 +125,9 @@ impl MssqlDbConnection {
             .map(|(row_index, row)| {
                 (0..columns.len())
                     .map(|i| {
+                        let column_type = row.columns()[i].column_type();
                         if matches!(
-                            row.columns()[i].column_type(),
+                            column_type,
                             ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image
                         ) {
                             if let Some(bytes) = row.try_get::<&[u8], _>(i).ok().flatten() {
@@ -124,6 +138,14 @@ impl MssqlDbConnection {
                                 });
                                 return Some(format!("0x{}", hex::encode(bytes)));
                             }
+                        }
+                        if Self::is_character_column_type(column_type) {
+                            return row
+                                .try_get::<&str, _>(i)
+                                .ok()
+                                .flatten()
+                                .map(str::to_owned)
+                                .or_else(|| Self::extract_value(row, i));
                         }
                         Self::extract_value(row, i)
                     })
@@ -239,6 +261,40 @@ impl MssqlDbConnection {
                     message: e.to_string(),
                 }))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_and_variable_character_types_are_text() {
+        for column_type in [
+            ColumnType::BigChar,
+            ColumnType::BigVarChar,
+            ColumnType::NChar,
+            ColumnType::NVarchar,
+            ColumnType::Text,
+            ColumnType::NText,
+            ColumnType::Xml,
+        ] {
+            assert!(
+                MssqlDbConnection::is_character_column_type(column_type),
+                "{column_type:?}"
+            );
+        }
+
+        for column_type in [
+            ColumnType::BigBinary,
+            ColumnType::BigVarBin,
+            ColumnType::Image,
+        ] {
+            assert!(
+                !MssqlDbConnection::is_character_column_type(column_type),
+                "{column_type:?}"
+            );
         }
     }
 }
@@ -420,12 +476,7 @@ impl DbConnection for MssqlDbConnection {
                     idx + 1,
                     statements.len()
                 );
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    sql,
-                    options.max_rows,
-                    plugin.is_query_statement(sql),
-                );
+                let sql_to_execute = plugin.apply_query_max_rows(sql, options.max_rows);
                 let result = Self::execute_single(client, sql_to_execute.as_ref()).await?;
 
                 let is_error = result.is_error();
@@ -561,12 +612,7 @@ impl DbConnection for MssqlDbConnection {
                 current += 1;
                 debug!("[MSSQL] Streaming statement {}", current);
 
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    &sql,
-                    options.max_rows,
-                    plugin.is_query_statement(&sql),
-                );
+                let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
                 let result = match Self::execute_single(client, sql_to_execute.as_ref()).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -645,12 +691,7 @@ impl DbConnection for MssqlDbConnection {
                     let current = index + 1;
                     debug!("[MSSQL] Streaming statement {}/{}", current, total);
 
-                    let sql_to_execute = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    );
+                    let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
                     let result = match Self::execute_single(client, sql_to_execute.as_ref()).await {
                         Ok(r) => r,
                         Err(e) => {

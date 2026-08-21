@@ -24,7 +24,7 @@ use tracing::{debug, error, info, warn};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
-    SqlSource, apply_query_max_rows,
+    SqlSource,
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
@@ -37,6 +37,234 @@ const NUMERIC_NEGATIVE: u16 = 0x4000;
 const NUMERIC_NAN: u16 = 0xC000;
 const NUMERIC_POSITIVE_INFINITY: u16 = 0xD000;
 const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
+
+/// Normalize character-length syntax emitted by some PostgreSQL-compatible
+/// databases before sending a statement to standard PostgreSQL.
+///
+/// The compatibility form `varchar(20 char)` is accepted by some servers but
+/// is invalid PostgreSQL syntax. This scanner deliberately leaves strings,
+/// quoted identifiers, comments, and dollar-quoted bodies untouched because
+/// those regions may contain arbitrary user data.
+fn normalize_postgres_compatibility_sql(sql: &str) -> std::borrow::Cow<'_, str> {
+    let bytes = sql.as_bytes();
+    let mut index = 0;
+    let mut normalized = None;
+    let mut copied_until = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'\'' {
+            index = skip_postgres_single_quote(bytes, index);
+            continue;
+        }
+        if bytes[index] == b'"' {
+            index = skip_postgres_quoted_identifier(bytes, index);
+            continue;
+        }
+        if bytes[index..].starts_with(b"--") {
+            index = skip_postgres_line_comment(bytes, index);
+            continue;
+        }
+        if bytes[index..].starts_with(b"/*") {
+            index = skip_postgres_block_comment(bytes, index);
+            continue;
+        }
+        if bytes[index] == b'$' {
+            if let Some(end) = skip_postgres_dollar_quote(bytes, index) {
+                index = end;
+                continue;
+            }
+        }
+        if !bytes[index].is_ascii_alphabetic() {
+            index += 1;
+            continue;
+        }
+
+        let Some((char_start, close_paren)) = postgres_compatibility_char_suffix_range(sql, index)
+        else {
+            index += 1;
+            continue;
+        };
+
+        if normalized.is_none() {
+            normalized = Some(String::with_capacity(sql.len()));
+        }
+        let output = normalized.as_mut().expect("normalized output initialized");
+        output.push_str(&sql[copied_until..char_start]);
+        copied_until = close_paren;
+        index = close_paren;
+    }
+
+    match normalized {
+        Some(mut normalized) => {
+            normalized.push_str(&sql[copied_until..]);
+            std::borrow::Cow::Owned(normalized)
+        }
+        None => std::borrow::Cow::Borrowed(sql),
+    }
+}
+
+fn postgres_compatibility_char_suffix_range(sql: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = sql.as_bytes();
+    if !is_postgres_word_boundary(bytes, start.checked_sub(1)) {
+        return None;
+    }
+
+    let first_word_end = bytes[start..]
+        .iter()
+        .position(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'_' | b'$'))
+        .map(|offset| start + offset)
+        .unwrap_or(bytes.len());
+    let first_word = &sql[start..first_word_end];
+    let mut type_end =
+        if first_word.eq_ignore_ascii_case("varchar") || first_word.eq_ignore_ascii_case("char") {
+            first_word_end
+        } else if first_word.eq_ignore_ascii_case("character") {
+            let varying_start = skip_postgres_ascii_whitespace(bytes, first_word_end);
+            let varying_end = varying_start.saturating_add("varying".len());
+            if varying_end <= bytes.len()
+                && sql[varying_start..varying_end].eq_ignore_ascii_case("varying")
+                && is_postgres_word_boundary(bytes, Some(varying_end))
+            {
+                varying_end
+            } else {
+                first_word_end
+            }
+        } else {
+            return None;
+        };
+
+    if !is_postgres_word_boundary(bytes, Some(type_end)) {
+        return None;
+    }
+    type_end = skip_postgres_ascii_whitespace(bytes, type_end);
+    if bytes.get(type_end) != Some(&b'(') {
+        return None;
+    }
+
+    let digit_start = skip_postgres_ascii_whitespace(bytes, type_end + 1);
+    let mut digit_end = digit_start;
+    while bytes
+        .get(digit_end)
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        digit_end += 1;
+    }
+    if digit_end == digit_start {
+        return None;
+    }
+
+    let char_start = skip_postgres_ascii_whitespace(bytes, digit_end);
+    let char_end = char_start.saturating_add("char".len());
+    if char_start == digit_end
+        || char_end > bytes.len()
+        || !sql[char_start..char_end].eq_ignore_ascii_case("char")
+        || !is_postgres_word_boundary(bytes, Some(char_end))
+    {
+        return None;
+    }
+
+    let close_paren = skip_postgres_ascii_whitespace(bytes, char_end);
+    if bytes.get(close_paren) == Some(&b')') {
+        Some((digit_end, close_paren))
+    } else {
+        None
+    }
+}
+
+fn skip_postgres_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        index += 1;
+    }
+    index
+}
+
+fn is_postgres_word_boundary(bytes: &[u8], index: Option<usize>) -> bool {
+    index
+        .and_then(|index| bytes.get(index))
+        .is_none_or(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'_' | b'$'))
+}
+
+fn skip_postgres_single_quote(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' if index + 1 < bytes.len() => index += 2,
+            b'\'' if bytes.get(index + 1) == Some(&b'\'') => index += 2,
+            b'\'' => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+fn skip_postgres_quoted_identifier(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            if bytes.get(index + 1) == Some(&b'"') {
+                index += 2;
+            } else {
+                return index + 1;
+            }
+        } else {
+            index += 1;
+        }
+    }
+    bytes.len()
+}
+
+fn skip_postgres_line_comment(bytes: &[u8], start: usize) -> usize {
+    bytes[start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map(|offset| start + offset + 1)
+        .unwrap_or(bytes.len())
+}
+
+fn skip_postgres_block_comment(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 2;
+    let mut depth = 1;
+    while index < bytes.len() && depth > 0 {
+        if bytes[index..].starts_with(b"/*") {
+            depth += 1;
+            index += 2;
+        } else if bytes[index..].starts_with(b"*/") {
+            depth -= 1;
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn skip_postgres_dollar_quote(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut tag_end = start + 1;
+    while tag_end < bytes.len() && bytes[tag_end] != b'$' {
+        let byte = bytes[tag_end];
+        if !byte.is_ascii_alphanumeric() && byte != b'_' {
+            return None;
+        }
+        tag_end += 1;
+    }
+    if bytes.get(tag_end) != Some(&b'$')
+        || (tag_end > start + 1
+            && !bytes[start + 1].is_ascii_alphabetic()
+            && bytes[start + 1] != b'_')
+    {
+        return None;
+    }
+
+    let tag = &bytes[start..=tag_end];
+    bytes[tag_end + 1..]
+        .windows(tag.len())
+        .position(|window| window == tag)
+        .map(|offset| tag_end + 1 + offset + tag.len())
+        .or(Some(bytes.len()))
+}
 
 #[derive(Debug)]
 struct PostgresNumeric(String);
@@ -405,6 +633,13 @@ impl PostgresDbConnection {
                 .ok()
                 .flatten()
                 .map(|v| v.to_string()),
+            // PostgreSQL's internal single-byte `"char"` type is distinct from
+            // SQL CHAR(n), which is reported as BPCHAR.
+            &Type::CHAR => row
+                .try_get::<_, Option<i8>>(index)
+                .ok()
+                .flatten()
+                .map(|v| char::from(v as u8).to_string()),
 
             // Floating point types
             &Type::FLOAT4 => row
@@ -920,12 +1155,8 @@ impl DbConnection for PostgresDbConnection {
                     continue;
                 }
 
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    sql,
-                    options.max_rows,
-                    plugin.is_query_statement(sql),
-                );
+                let sql_to_execute = plugin.apply_query_max_rows(sql, options.max_rows);
+                let sql_to_execute = normalize_postgres_compatibility_sql(sql_to_execute.as_ref());
                 let sql_to_execute = sql_to_execute.as_ref();
                 let sql_preview = if sql_to_execute.len() > 200 {
                     format!("{}...", truncate_str(sql_to_execute, 200))
@@ -1103,12 +1334,8 @@ impl DbConnection for PostgresDbConnection {
                     statements.len()
                 );
                 let start = Instant::now();
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    sql,
-                    options.max_rows,
-                    plugin.is_query_statement(sql),
-                );
+                let sql_to_execute = plugin.apply_query_max_rows(sql, options.max_rows);
+                let sql_to_execute = normalize_postgres_compatibility_sql(sql_to_execute.as_ref());
                 let sql_to_execute = sql_to_execute.as_ref();
                 let sql_preview = if sql_to_execute.len() > 200 {
                     format!("{}...", truncate_str(sql_to_execute, 200))
@@ -1424,12 +1651,9 @@ impl DbConnection for PostgresDbConnection {
                     };
 
                     current += 1;
-                    let sql_to_execute = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    );
+                    let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
+                    let sql_to_execute =
+                        normalize_postgres_compatibility_sql(sql_to_execute.as_ref());
                     let sql_to_execute = sql_to_execute.as_ref();
                     let sql_preview = if sql_to_execute.len() > 200 {
                         format!("{}...", truncate_str(sql_to_execute, 200))
@@ -1567,12 +1791,9 @@ impl DbConnection for PostgresDbConnection {
                     };
 
                     current += 1;
-                    let sql_to_execute = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    );
+                    let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
+                    let sql_to_execute =
+                        normalize_postgres_compatibility_sql(sql_to_execute.as_ref());
                     let sql_to_execute = sql_to_execute.as_ref();
                     let sql_preview = if sql_to_execute.len() > 200 {
                         format!("{}...", truncate_str(sql_to_execute, 200))
@@ -1682,12 +1903,9 @@ impl DbConnection for PostgresDbConnection {
 
                 for (index, sql) in statements.into_iter().enumerate() {
                     let current = index + 1;
-                    let sql_to_execute = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    );
+                    let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
+                    let sql_to_execute =
+                        normalize_postgres_compatibility_sql(sql_to_execute.as_ref());
                     let sql_to_execute = sql_to_execute.as_ref();
                     let sql_preview = if sql_to_execute.len() > 200 {
                         format!("{}...", truncate_str(sql_to_execute, 200))
@@ -1801,12 +2019,9 @@ impl DbConnection for PostgresDbConnection {
             } else {
                 for (index, sql) in statements.into_iter().enumerate() {
                     let current = index + 1;
-                    let sql_to_execute = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    );
+                    let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
+                    let sql_to_execute =
+                        normalize_postgres_compatibility_sql(sql_to_execute.as_ref());
                     let sql_to_execute = sql_to_execute.as_ref();
                     let sql_preview = if sql_to_execute.len() > 200 {
                         format!("{}...", truncate_str(sql_to_execute, 200))
@@ -1944,6 +2159,35 @@ mod tests {
 
         assert_eq!(decode_numeric(&large_integer).unwrap(), "100000000");
         assert_eq!(decode_numeric(&small_fraction).unwrap(), "0.00001234");
+    }
+
+    #[test]
+    fn normalize_postgres_compatibility_sql_removes_character_length_suffix() {
+        assert_eq!(
+            normalize_postgres_compatibility_sql(
+                "CREATE TABLE city (a varchar(20 char), b CHARACTER VARYING ( 30 CHAR ), c char(4 char), d character(5 CHAR));"
+            ),
+            "CREATE TABLE city (a varchar(20), b CHARACTER VARYING ( 30), c char(4), d character(5));"
+        );
+    }
+
+    #[test]
+    fn normalize_postgres_compatibility_sql_preserves_opaque_regions() {
+        let sql = r#"
+            -- varchar(20 char)
+            CREATE TABLE "varchar(20 char)" ("value" varchar(20 byte));
+            /* character(10 char) */
+            INSERT INTO t VALUES ('varchar(30 char)', $$character varying(40 char)$$);
+        "#;
+
+        assert_eq!(normalize_postgres_compatibility_sql(sql), sql);
+    }
+
+    #[test]
+    fn normalize_postgres_compatibility_sql_requires_character_length_form() {
+        let sql = "varchar(20 byte) varchar(20) varchar(20 chars) myvarchar(20 char)";
+
+        assert_eq!(normalize_postgres_compatibility_sql(sql), sql);
     }
 
     #[derive(Debug)]

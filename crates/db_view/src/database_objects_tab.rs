@@ -14,6 +14,7 @@ use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
 };
 use crate::table_copy_menu::append_table_copy_items;
+use db::DbNodeType::QueryFolder;
 use db::plugin_manifest::DatabaseActionId;
 use db::{
     DbNode, DbNodeType, GlobalDbState, ObjectView, ObjectViewColumn,
@@ -1223,11 +1224,15 @@ impl DatabaseObjects {
             Some(QUERY_ROW_KIND_SQL) => DbNodeType::NamedQuery,
             _ => args.db_node_type,
         };
-        let query_depth = args
-            .row_values
-            .get(QUERY_ROW_DEPTH_INDEX)
-            .and_then(|depth| depth.parse::<f32>().ok())
-            .unwrap_or(0.0);
+        let mut query_depth = 0.0;
+        if row_node_type == QueryFolder {
+            query_depth = args
+                .row_values
+                .get(QUERY_ROW_DEPTH_INDEX)
+                .and_then(|depth| depth.parse::<f32>().ok())
+                .unwrap_or(0.0);
+        }
+
         let mut row = h_flex()
             .w_full()
             .h(one_ui::table_row_height(cx))

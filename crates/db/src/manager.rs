@@ -890,13 +890,7 @@ struct StreamingExecutionRequest {
     opts: ExecOptions,
     tx: mpsc::Sender<StreamingProgress>,
     cache: Option<GlobalNodeCache>,
-    cache_invalidation: StreamingCacheInvalidation,
     cancellation: CancellationToken,
-}
-
-enum StreamingCacheInvalidation {
-    Script(String),
-    Connection,
 }
 
 impl StreamingExecutionRequest {
@@ -991,32 +985,6 @@ impl StreamingExecutionRequest {
         let cache = self.cache.as_ref()?;
         let current_database = self.config.database.as_deref().unwrap_or_default();
         let cache_ctx = CacheContext::from_config(&self.config);
-
-        // match &self.cache_invalidation {
-        //     StreamingCacheInvalidation::Script(script) => {
-        //         cache
-        //             .process_sql_for_invalidation(
-        //                 &self.config.id,
-        //                 script,
-        //                 current_database,
-        //                 self.schema.as_deref(),
-        //                 &self.config.database_type,
-        //                 Some(&cache_ctx),
-        //             )
-        //             .await
-        //     }
-        //     StreamingCacheInvalidation::Connection => {
-        //         // SQL files are parsed incrementally, so avoid loading the full file
-        //         // solely for DDL detection and invalidate the connection conservatively.
-        //         cache.invalidate_connection_metadata(&self.config.id).await;
-        //         cache.clear_connection_cache(&cache_ctx).await;
-        //         Some((
-        //             self.config.id.clone(),
-        //             current_database.to_string(),
-        //             self.schema.clone(),
-        //         ))
-        //     }
-        // }
 
         cache.invalidate_connection_metadata(&self.config.id).await;
         cache.clear_connection_cache(&cache_ctx).await;
@@ -1811,10 +1779,6 @@ impl GlobalDbState {
             opts.streaming = true;
         }
 
-        let cache_invalidation = match &source {
-            SqlSource::Script(script) => StreamingCacheInvalidation::Script(script.clone()),
-            SqlSource::File(_) => StreamingCacheInvalidation::Connection,
-        };
         let cache = cx.update(|cx| cx.try_global::<GlobalNodeCache>().cloned());
         let notifier = cx.update(|cx| cx.try_global::<GlobalConnectionNotifier>().cloned());
         let request = StreamingExecutionRequest {
@@ -1825,7 +1789,6 @@ impl GlobalDbState {
             opts,
             tx,
             cache,
-            cache_invalidation,
             cancellation,
         };
         let execution_task = Tokio::spawn(cx, request.run());
@@ -2407,10 +2370,7 @@ impl GlobalDbState {
                 {
                     debug!(
                         "Cache hit for columns: {}:{}:{:?}:{}",
-                        conn_id,
-                        db,
-                        sch,
-                        tbl
+                        conn_id, db, sch, tbl
                     );
                     return Ok(columns);
                 }
@@ -2487,10 +2447,7 @@ impl GlobalDbState {
                 {
                     debug!(
                         "Cache hit for indexes: {}:{}:{:?}:{}",
-                        conn_id,
-                        db,
-                        sch,
-                        tbl
+                        conn_id, db, sch, tbl
                     );
                     return Ok(indexes);
                 }
@@ -4134,9 +4091,6 @@ mod tests {
             opts: ExecOptions::default(),
             tx,
             cache: None,
-            cache_invalidation: StreamingCacheInvalidation::Script(
-                "SELECT pg_sleep(60)".to_string(),
-            ),
             cancellation: cancellation.clone(),
         };
         let execution = tokio::spawn(request.run());

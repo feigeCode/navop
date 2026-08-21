@@ -8,6 +8,7 @@ use crate::import_export::{
         CsvFormatHandler, JsonFormatHandler, SqlFormatHandler, TxtFormatHandler, XmlFormatHandler,
     },
 };
+use crate::max_rows::apply_query_max_rows;
 use crate::plugin_manifest::{
     DatabaseCapabilities, DatabaseUiCapabilities, DatabaseUiManifest, FormSelectOption,
     ReferenceDataKind,
@@ -412,6 +413,13 @@ pub trait DatabasePlugin: Send + Sync {
             }
         }
         is_query_statement_fallback(sql)
+    }
+
+    fn apply_query_max_rows(&self, sql: &str, max_rows: Option<usize>) -> String {
+        let Some(max_rows) = max_rows.filter(|rows| *rows > 0) else {
+            return sql.to_string();
+        };
+        apply_query_max_rows(&self.name(), sql, max_rows)
     }
 
     /// Split SQL text into statements using the database-specific parser.

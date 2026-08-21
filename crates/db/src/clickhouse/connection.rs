@@ -1,7 +1,6 @@
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
-    apply_query_max_rows,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -84,7 +83,7 @@ impl ClickHouseDbConnection {
                     .iter()
                     .map(|meta| QueryColumnMeta::new(meta.name.clone(), meta.data_type.clone()))
                     .collect();
-                let all_rows = Self::map_json_rows(&columns, result.data);
+                let all_rows = Self::map_json_rows(&column_meta, result.data);
 
                 debug!(
                     "[ClickHouse] Query completed: {} rows, {} columns, {}ms",
@@ -140,7 +139,7 @@ impl ClickHouseDbConnection {
     }
 
     fn map_json_rows(
-        columns: &[String],
+        columns: &[QueryColumnMeta],
         data: Vec<Vec<serde_json::Value>>,
     ) -> Vec<Vec<Option<String>>> {
         data.into_iter()
@@ -149,7 +148,14 @@ impl ClickHouseDbConnection {
                 for index in 0..columns.len() {
                     let value = row
                         .get(index)
-                        .and_then(|value| Self::json_value_to_string(value));
+                        .and_then(|value| Self::json_value_to_string(value))
+                        .map(|value| {
+                            if Self::is_fixed_string_type(&columns[index].db_type) {
+                                value.trim_end_matches('\0').to_string()
+                            } else {
+                                value
+                            }
+                        });
                     values.push(value);
                 }
                 values
@@ -165,6 +171,27 @@ impl ClickHouseDbConnection {
             serde_json::Value::String(text) => Some(text.clone()),
             serde_json::Value::Array(_) => Some(value.to_string()),
             serde_json::Value::Object(_) => Some(value.to_string()),
+        }
+    }
+
+    fn is_fixed_string_type(data_type: &str) -> bool {
+        let mut data_type = data_type.trim();
+        loop {
+            let Some(open) = data_type.find('(') else {
+                return false;
+            };
+            let wrapper = data_type[..open].trim();
+            if wrapper.eq_ignore_ascii_case("FixedString") {
+                return true;
+            }
+            if !matches!(
+                wrapper.to_ascii_uppercase().as_str(),
+                "NULLABLE" | "LOWCARDINALITY"
+            ) || !data_type.ends_with(')')
+            {
+                return false;
+            }
+            data_type = data_type[open + 1..data_type.len() - 1].trim();
         }
     }
 
@@ -190,6 +217,44 @@ struct ClickHouseJsonCompactResult {
     meta: Vec<ClickHouseJsonMeta>,
     #[serde(default)]
     data: Vec<Vec<serde_json::Value>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_string_padding_is_removed_from_display_and_edit_value() {
+        let columns = vec![QueryColumnMeta::new("code", "FixedString(8)")];
+        let rows = ClickHouseDbConnection::map_json_rows(
+            &columns,
+            vec![vec![serde_json::Value::String("abc\0\0\0\0\0".to_string())]],
+        );
+
+        assert_eq!(rows, vec![vec![Some("abc".to_string())]]);
+    }
+
+    #[test]
+    fn wrapped_fixed_string_padding_is_removed_but_regular_string_nul_is_preserved() {
+        assert!(ClickHouseDbConnection::is_fixed_string_type(
+            "Nullable(LowCardinality(FixedString(8)))"
+        ));
+
+        let columns = vec![
+            QueryColumnMeta::new("fixed", "LowCardinality(FixedString(4))"),
+            QueryColumnMeta::new("regular", "String"),
+        ];
+        let rows = ClickHouseDbConnection::map_json_rows(
+            &columns,
+            vec![vec![
+                serde_json::Value::String("a\0\0\0".to_string()),
+                serde_json::Value::String("a\0".to_string()),
+            ]],
+        );
+
+        assert_eq!(rows[0][0].as_deref(), Some("a"));
+        assert_eq!(rows[0][1].as_deref(), Some("a\0"));
+    }
 }
 
 #[async_trait]
@@ -315,12 +380,7 @@ impl DbConnection for ClickHouseDbConnection {
                 idx + 1,
                 statements.len()
             );
-            let sql_to_execute = apply_query_max_rows(
-                plugin.name(),
-                sql,
-                options.max_rows,
-                plugin.is_query_statement(sql),
-            );
+            let sql_to_execute = plugin.apply_query_max_rows(sql, options.max_rows);
             let result = Self::execute_single(client, sql_to_execute.as_ref()).await?;
 
             let is_error = result.is_error();
@@ -462,12 +522,7 @@ impl DbConnection for ClickHouseDbConnection {
                 current += 1;
                 debug!("[ClickHouse] Streaming statement {}", current);
 
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    &sql,
-                    options.max_rows,
-                    plugin.is_query_statement(&sql),
-                );
+                let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
                 let result = match Self::execute_single(client, sql_to_execute.as_ref()).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -515,12 +570,7 @@ impl DbConnection for ClickHouseDbConnection {
                 let current = index + 1;
                 debug!("[ClickHouse] Streaming statement {}/{}", current, total);
 
-                let sql_to_execute = apply_query_max_rows(
-                    plugin.name(),
-                    &sql,
-                    options.max_rows,
-                    plugin.is_query_statement(&sql),
-                );
+                let sql_to_execute = plugin.apply_query_max_rows(&sql, options.max_rows);
                 let result = match Self::execute_single(client, sql_to_execute.as_ref()).await {
                     Ok(r) => r,
                     Err(e) => {

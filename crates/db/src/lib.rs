@@ -31,6 +31,7 @@ pub mod types;
 pub mod clickhouse;
 #[cfg(feature = "builtin-duckdb")]
 pub mod duckdb;
+mod max_rows;
 pub mod mssql;
 pub mod mysql;
 pub mod oracle;

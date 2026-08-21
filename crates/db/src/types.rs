@@ -1296,6 +1296,21 @@ mod tests {
             FieldType::from_db_type("MYSQL_TYPE_TINY_BLOB"),
             FieldType::Binary
         );
+        for data_type in [
+            "CHAR(10)",
+            "BPCHAR",
+            "NCHAR(10)",
+            "BIGCHAR",
+            "MYSQL_TYPE_STRING",
+            "FixedString(10)",
+            "Nullable(FixedString(10))",
+        ] {
+            assert_eq!(
+                FieldType::from_db_type(data_type),
+                FieldType::Text,
+                "{data_type}"
+            );
+        }
         assert_eq!(FieldType::from_db_type("int4"), FieldType::Integer);
         assert_eq!(FieldType::from_db_type("float8"), FieldType::Decimal);
         assert_eq!(FieldType::from_db_type("Int4"), FieldType::Integer);

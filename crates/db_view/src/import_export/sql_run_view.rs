@@ -22,6 +22,8 @@ use std::rc::Rc;
 // 3. 当前 crate 导入（按模块分组）
 use db::{ExecOptions, GlobalDbState, SqlResult, SqlSource};
 
+const DEFAULT_STOP_ON_ERROR: bool = true;
+
 #[derive(Debug, Clone)]
 struct LogEntry {
     file: String,
@@ -67,7 +69,7 @@ impl SqlRunView {
             schema,
             file_path: cx.new(|cx| InputState::new(window, cx)),
             pending_file_path: cx.new(|_| None),
-            stop_on_error: cx.new(|_| false),
+            stop_on_error: cx.new(|_| DEFAULT_STOP_ON_ERROR),
 
             logs: cx.new(|_| Vec::new()),
             scroll_handle: VirtualListScrollHandle::new(),
@@ -111,6 +113,15 @@ impl SqlRunView {
 
     fn should_show_start_button(is_running: bool) -> bool {
         !is_running
+    }
+
+    fn execution_options(stop_on_error: bool) -> ExecOptions {
+        ExecOptions {
+            stop_on_error,
+            transactional: false,
+            max_rows: None,
+            streaming: false,
+        }
     }
 
     fn select_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -228,12 +239,7 @@ impl SqlRunView {
                 );
 
                 let conn_id = connection_id.clone();
-                let opts = ExecOptions {
-                    stop_on_error,
-                    transactional: false,
-                    max_rows: None,
-                    streaming: false,
-                };
+                let opts = Self::execution_options(stop_on_error);
 
                 let rx_result = global_state.execute_streaming(
                     cx,
@@ -712,5 +718,15 @@ mod tests {
     #[test]
     fn start_button_is_hidden_while_sql_run_is_running() {
         assert!(!SqlRunView::should_show_start_button(true));
+    }
+
+    #[test]
+    fn sql_file_run_stops_on_first_error_by_default() {
+        let options = SqlRunView::execution_options(DEFAULT_STOP_ON_ERROR);
+
+        assert!(options.stop_on_error);
+        assert!(!options.transactional);
+        assert!(options.max_rows.is_none());
+        assert!(!options.streaming);
     }
 }

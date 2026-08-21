@@ -10,7 +10,7 @@ use tracing::{debug, error, info};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
-    SqlSource, apply_query_max_rows,
+    SqlSource,
 };
 use crate::{DatabasePlugin, format_message, truncate_str};
 use one_core::storage::DbConnectionConfig;
@@ -328,13 +328,7 @@ impl DbConnection for SqliteDbConnection {
         let executable = statements
             .into_iter()
             .map(|sql| {
-                let executable_sql = apply_query_max_rows(
-                    plugin.name(),
-                    &sql,
-                    options.max_rows,
-                    plugin.is_query_statement(&sql),
-                )
-                .into_owned();
+                let executable_sql = plugin.apply_query_max_rows(&sql, options.max_rows);
                 (sql, executable_sql)
             })
             .collect::<Vec<_>>();
@@ -488,13 +482,7 @@ impl DbConnection for SqliteDbConnection {
                     current += 1;
                     debug!("[SQLite] Streaming TX statement {}", current);
                     let start = Instant::now();
-                    let sql_owned = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    )
-                    .into_owned();
+                    let sql_owned = plugin.apply_query_max_rows(&sql, options.max_rows);
                     let connection = Arc::clone(&self.connection);
 
                     let result = spawn_blocking(move || {
@@ -572,13 +560,7 @@ impl DbConnection for SqliteDbConnection {
                     current += 1;
                     debug!("[SQLite] Streaming statement {}", current);
                     let start = Instant::now();
-                    let sql_owned = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    )
-                    .into_owned();
+                    let sql_owned = plugin.apply_query_max_rows(&sql, options.max_rows);
                     let connection = Arc::clone(&self.connection);
 
                     let result = spawn_blocking(move || {
@@ -641,13 +623,7 @@ impl DbConnection for SqliteDbConnection {
                     let current = index + 1;
                     debug!("[SQLite] Streaming TX statement {}/{}", current, total);
                     let start = Instant::now();
-                    let sql_owned = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    )
-                    .into_owned();
+                    let sql_owned = plugin.apply_query_max_rows(&sql, options.max_rows);
                     let connection = Arc::clone(&self.connection);
 
                     let result = spawn_blocking(move || {
@@ -701,13 +677,7 @@ impl DbConnection for SqliteDbConnection {
                     let current = index + 1;
                     debug!("[SQLite] Streaming statement {}/{}", current, total);
                     let start = Instant::now();
-                    let sql_owned = apply_query_max_rows(
-                        plugin.name(),
-                        &sql,
-                        options.max_rows,
-                        plugin.is_query_statement(&sql),
-                    )
-                    .into_owned();
+                    let sql_owned = plugin.apply_query_max_rows(&sql, options.max_rows);
                     let connection = Arc::clone(&self.connection);
 
                     let result = spawn_blocking(move || {

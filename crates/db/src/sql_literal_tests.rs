@@ -79,6 +79,11 @@ fn formats_postgres_typed_values() {
         format(DatabaseType::PostgreSQL, "numeric(10,2)", "12.50")
     );
     assert_eq!("'1'", format(DatabaseType::PostgreSQL, "varchar", "1"));
+    assert_eq!(
+        "'A''B'",
+        format(DatabaseType::PostgreSQL, "character(8)", "A'B")
+    );
+    assert_eq!("'A'", format(DatabaseType::PostgreSQL, "bpchar", "A"));
 }
 
 #[test]
@@ -98,6 +103,8 @@ fn formats_mssql_typed_values() {
     );
     assert_eq!("42", format(DatabaseType::MSSQL, "int", "42"));
     assert_eq!("'1'", format(DatabaseType::MSSQL, "varchar(10)", "1"));
+    assert_eq!("'A''B'", format(DatabaseType::MSSQL, "char(8)", "A'B"));
+    assert_eq!("N'中文'", format(DatabaseType::MSSQL, "nchar(8)", "中文"));
 }
 
 #[test]

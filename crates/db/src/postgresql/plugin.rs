@@ -86,9 +86,6 @@ pub struct PostgresPlugin;
 static POSTGRESQL_UI_MANIFEST: LazyLock<DatabaseUiManifest> =
     LazyLock::new(build_postgresql_ui_manifest);
 
-const POSTGRESQL_EXPORT_EXCLUDED_TABLES: &[&str] =
-    &["sys_stat_statements", "sys_stat_statements_all"];
-
 impl PostgresPlugin {
     pub fn new() -> Self {
         Self
@@ -100,20 +97,6 @@ impl PostgresPlugin {
         } else {
             format!("'{}'", comment.replace('\'', "''"))
         }
-    }
-
-    fn is_export_excluded_table(table: &str) -> bool {
-        POSTGRESQL_EXPORT_EXCLUDED_TABLES
-            .iter()
-            .any(|excluded| table.eq_ignore_ascii_case(excluded))
-    }
-
-    fn export_config_without_excluded_tables(config: &ExportConfig) -> ExportConfig {
-        let mut filtered = config.clone();
-        filtered
-            .tables
-            .retain(|table| !Self::is_export_excluded_table(table));
-        filtered
     }
 
     fn table_comment_sql(&self, table_name: &str, comment: &str) -> String {
@@ -220,7 +203,37 @@ impl PostgresPlugin {
             other => other,
         };
 
+        let suffix = match short_name {
+            "varchar" | "char" => Self::normalize_character_length_suffix(suffix),
+            _ => suffix.to_string(),
+        };
+
         format!("{}{}", short_name, suffix)
+    }
+
+    fn normalize_character_length_suffix(suffix: &str) -> String {
+        let Some(close_paren) = suffix.find(')') else {
+            return suffix.to_string();
+        };
+        let Some(modifier) = suffix.get(1..close_paren) else {
+            return suffix.to_string();
+        };
+        let mut parts = modifier.split_whitespace();
+        let Some(length) = parts.next() else {
+            return suffix.to_string();
+        };
+        let Some(length_semantics) = parts.next() else {
+            return suffix.to_string();
+        };
+
+        if parts.next().is_some()
+            || !length.chars().all(|character| character.is_ascii_digit())
+            || !length_semantics.eq_ignore_ascii_case("char")
+        {
+            return suffix.to_string();
+        }
+
+        format!("({length}){}", &suffix[close_paren + 1..])
     }
 
     async fn get_routine_definition(
@@ -1565,13 +1578,10 @@ impl DatabasePlugin for PostgresPlugin {
             "SELECT
                 c.relname AS tablename,
                 n.nspname AS schemaname,
-                obj_description(c.oid, 'pg_class') AS table_comment,
-                c.relkind AS relation_kind
+                obj_description(c.oid, 'pg_class') AS table_comment
              FROM pg_class c
              JOIN pg_namespace n ON c.relnamespace = n.oid
-             WHERE n.nspname = '{}'
-               AND c.relkind IN ('r', 'p', 'v', 'm')
-             ORDER BY c.relname",
+             WHERE n.nspname = '{}' AND c.relkind = 'r'",
             schema_val.replace("'", "''")
         );
 
@@ -1584,22 +1594,15 @@ impl DatabasePlugin for PostgresPlugin {
             let tables: Vec<TableInfo> = query_result
                 .rows
                 .iter()
-                .map(|row| {
-                    let object_type = match row.get(3).and_then(|v| v.as_deref()) {
-                        Some("v") | Some("m") => TableObjectType::View,
-                        _ => TableObjectType::Table,
-                    };
-
-                    TableInfo {
-                        name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        object_type,
-                        schema: row.get(1).and_then(|v| v.clone()),
-                        comment: row.get(2).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
-                        engine: None,
-                        create_time: None,
-                        charset: None,
-                        collation: None,
-                    }
+                .map(|row| TableInfo {
+                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+                    object_type: TableObjectType::Table,
+                    schema: row.get(1).and_then(|v| v.clone()),
+                    comment: row.get(2).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
+                    engine: None,
+                    create_time: None,
+                    charset: None,
+                    collation: None,
                 })
                 .collect();
 
@@ -1653,7 +1656,7 @@ impl DatabasePlugin for PostgresPlugin {
              JOIN pg_namespace n ON c.relnamespace = n.oid
              LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
              WHERE n.nspname = '{}'
-               AND c.relkind IN ('r', 'p', 'v', 'm')
+               AND c.relkind = 'r'
              ORDER BY c.relname",
             safe_schema
         );
@@ -3269,14 +3272,8 @@ ORDER BY rolname;"#
         config: &ExportConfig,
         progress_tx: Option<ExportProgressSender>,
     ) -> Result<ExportResult> {
-        let filtered_config = Self::export_config_without_excluded_tables(config);
-        crate::plugin::default_export_data_with_progress(
-            self,
-            connection,
-            &filtered_config,
-            progress_tx,
-        )
-        .await
+        crate::plugin::default_export_data_with_progress(self, connection, &config, progress_tx)
+            .await
     }
 }
 
@@ -3307,25 +3304,30 @@ mod tests {
     }
 
     #[test]
-    fn postgres_export_excludes_stat_statement_tables() {
-        let config = ExportConfig {
-            tables: vec![
-                "users".to_string(),
-                "sys_stat_statements".to_string(),
-                "orders".to_string(),
-                "sys_stat_statements_all".to_string(),
-                "SYS_STAT_STATEMENTS".to_string(),
-            ],
-            ..ExportConfig::default()
-        };
-
-        let filtered = PostgresPlugin::export_config_without_excluded_tables(&config);
-
-        assert_eq!(filtered.tables, vec!["users", "orders"]);
+    fn postgres_type_normalization_removes_character_length_semantics() {
         assert_eq!(
-            config.tables.len(),
-            5,
-            "filtering must not mutate the caller's export config"
+            PostgresPlugin::normalize_type_name("character varying(500 char)"),
+            "varchar(500)"
+        );
+        assert_eq!(
+            PostgresPlugin::normalize_type_name("varchar(20 CHAR)"),
+            "varchar(20)"
+        );
+        assert_eq!(
+            PostgresPlugin::normalize_type_name("character(10 char)"),
+            "char(10)"
+        );
+    }
+
+    #[test]
+    fn postgres_type_normalization_preserves_other_modifiers() {
+        assert_eq!(
+            PostgresPlugin::normalize_type_name("numeric(10, 2)"),
+            "numeric(10, 2)"
+        );
+        assert_eq!(
+            PostgresPlugin::normalize_type_name("varchar(20 byte)"),
+            "varchar(20 byte)"
         );
     }
 
