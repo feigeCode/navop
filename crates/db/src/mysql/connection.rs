@@ -213,6 +213,36 @@ impl MysqlDbConnection {
         }
     }
 
+    /// Convert one owned wire value into its compatibility display value and,
+    /// when applicable, a lossless binary sidecar.
+    ///
+    /// Binary values are never inferred to be text merely because their bytes
+    /// happen to form valid UTF-8. Their display string is a bounded hex
+    /// preview, while the owned byte buffer is moved into the sidecar without a
+    /// full-payload clone. Direct table queries can later reclassify a
+    /// misreported MySQL TEXT-family value using authoritative schema metadata.
+    fn extract_query_cell(
+        value: Value,
+        column: Option<&mysql_async::Column>,
+    ) -> (Option<String>, Option<Vec<u8>>) {
+        let Some(column) = column else {
+            return (Self::extract_value(&value), None);
+        };
+
+        if Self::is_binary_wire_value(
+            column.column_type(),
+            column.flags(),
+            column.character_set(),
+        ) {
+            if let Value::Bytes(bytes) = value {
+                let display = Some(Self::format_as_hex(&bytes));
+                return (display, Some(bytes));
+            }
+        }
+
+        (Self::extract_column_value(&value, column), None)
+    }
+
     fn is_valid_utf8_text(bytes: &[u8]) -> bool {
         match std::str::from_utf8(bytes) {
             Ok(s) => s
@@ -360,25 +390,21 @@ impl MysqlDbConnection {
                 break;
             };
             let row_index = all_rows.len();
-            let row_data: Vec<Option<String>> = (0..row.len())
-                .map(|i| {
-                    let Some(column) = columns_arc.get(i) else {
-                        return Self::extract_value(&row[i]);
-                    };
-                    if Self::is_binary_wire_value(
-                        column.column_type(),
-                        column.flags(),
-                        column.character_set(),
-                    ) {
-                        if let Value::Bytes(bytes) = &row[i] {
-                            binary_cells.push(BinaryCell {
-                                row_index,
-                                column_index: i,
-                                bytes: bytes.clone(),
-                            });
-                        }
+            let row_data = row
+                .unwrap()
+                .into_iter()
+                .enumerate()
+                .map(|(column_index, value)| {
+                    let (display, binary) =
+                        Self::extract_query_cell(value, columns_arc.get(column_index));
+                    if let Some(bytes) = binary {
+                        binary_cells.push(BinaryCell {
+                            row_index,
+                            column_index,
+                            bytes,
+                        });
                     }
-                    Self::extract_column_value(&row[i], column)
+                    display
                 })
                 .collect();
             all_rows.push(row_data);
@@ -1327,6 +1353,39 @@ mod tests {
                 "{column_type:?} must remain a typed non-binary value"
             );
         }
+    }
+
+    #[test]
+    fn binary_query_cell_moves_exact_bytes_into_a_bounded_preview_sidecar() {
+        use mysql_async::consts::{ColumnFlags, ColumnType};
+
+        let column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_LONG_BLOB)
+            .with_flags(ColumnFlags::BINARY_FLAG | ColumnFlags::BLOB_FLAG)
+            .with_character_set(MysqlDbConnection::MYSQL_BINARY_COLLATION_ID);
+        let bytes = "文".repeat(800).into_bytes();
+
+        let (display, binary) =
+            MysqlDbConnection::extract_query_cell(Value::Bytes(bytes.clone()), Some(&column));
+
+        let display = display.expect("binary cell should keep a display preview");
+        assert!(display.ends_with(&format!("... ({} bytes)", bytes.len())));
+        assert!(display.len() < bytes.len());
+        assert_eq!(binary.as_deref(), Some(bytes.as_slice()));
+    }
+
+    #[test]
+    fn ordinary_text_query_cell_is_not_promoted_to_binary() {
+        use mysql_async::consts::ColumnType;
+
+        let column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_LONG_BLOB)
+            .with_character_set(45);
+        let bytes = "文".repeat(800).into_bytes();
+
+        let (display, binary) =
+            MysqlDbConnection::extract_query_cell(Value::Bytes(bytes.clone()), Some(&column));
+
+        assert_eq!(display.as_deref(), std::str::from_utf8(&bytes).ok());
+        assert!(binary.is_none());
     }
 
     #[test]

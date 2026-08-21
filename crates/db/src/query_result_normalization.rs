@@ -99,44 +99,98 @@ pub fn normalize_query_result_binary_semantics(
     }
 
     let schema_mapping = project_schema_columns(&query_result.columns, schema_columns)?;
-    let text_column_indices = schema_mapping
+    let text_decoders = schema_mapping
         .iter()
-        .enumerate()
-        .filter_map(|(index, column)| {
-            mysql_schema_column_is_character_text(column).then_some(index)
+        .map(|column| {
+            mysql_schema_column_is_character_text(column)
+                .then(|| mysql_text_decoder(column))
+                .flatten()
         })
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
 
-    if text_column_indices.is_empty() || query_result.binary_cells.is_empty() {
+    if query_result.binary_cells.is_empty() {
         apply_schema_column_metadata(query_result, &schema_mapping);
         return Ok(());
     }
 
-    let decoded_text_cells = query_result
-        .binary_cells
-        .iter()
-        .filter(|cell| text_column_indices.contains(&cell.column_index))
-        .map(|cell| {
-            let column = &schema_mapping[cell.column_index];
-            decode_mysql_text_bytes(column, &cell.bytes, cell.row_index, cell.column_index)
-                .map(|text| (cell.row_index, cell.column_index, text))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    apply_schema_column_metadata(query_result, &schema_mapping);
-    for (row_index, column_index, text) in decoded_text_cells {
-        query_result.rows[row_index][column_index] = Some(text);
-    }
-
-    let mut retained_binary_cells = Vec::with_capacity(query_result.binary_cells.len());
-    for cell in query_result.binary_cells.drain(..) {
-        if !text_column_indices.contains(&cell.column_index) {
-            retained_binary_cells.push(cell);
+    // Validate the entire page before mutating it, preserving atomic failure
+    // semantics without retaining another full page of decoded LONGTEXT
+    // strings. Unsupported or missing charsets deliberately have no decoder:
+    // their exact bytes remain in the sidecar instead of failing the query or
+    // applying a lossy conversion.
+    for cell in &query_result.binary_cells {
+        if let Some(decoder) = text_decoders[cell.column_index] {
+            decoder.validate(
+                &schema_mapping[cell.column_index],
+                &cell.bytes,
+                cell.row_index,
+                cell.column_index,
+            )?;
         }
     }
-    query_result.binary_cells = retained_binary_cells;
+
+    apply_schema_column_metadata(query_result, &schema_mapping);
+
+    let rows = &mut query_result.rows;
+    query_result.binary_cells.retain_mut(|cell| {
+        let Some(decoder) = text_decoders[cell.column_index] else {
+            return true;
+        };
+
+        let bytes = std::mem::take(&mut cell.bytes);
+        rows[cell.row_index][cell.column_index] = Some(decoder.decode_validated(bytes));
+        false
+    });
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum MySqlTextDecoder {
+    Utf8,
+    Ascii,
+    Encoding(&'static Encoding),
+}
+
+impl MySqlTextDecoder {
+    fn validate(
+        self,
+        column: &ColumnInfo,
+        bytes: &[u8],
+        row_index: usize,
+        column_index: usize,
+    ) -> Result<(), QueryResultNormalizationError> {
+        let is_valid = match self {
+            Self::Utf8 => std::str::from_utf8(bytes).is_ok(),
+            Self::Ascii => bytes.iter().all(u8::is_ascii),
+            Self::Encoding(encoding) => encoding
+                .decode_without_bom_handling_and_without_replacement(bytes)
+                .is_some(),
+        };
+
+        if is_valid {
+            Ok(())
+        } else {
+            Err(QueryResultNormalizationError::InvalidTextEncoding {
+                row_index,
+                column_index,
+                column_name: column.name.clone(),
+                charset: mysql_text_charset(column).unwrap_or_else(|| "<missing>".to_string()),
+            })
+        }
+    }
+
+    fn decode_validated(self, bytes: Vec<u8>) -> String {
+        match self {
+            Self::Utf8 | Self::Ascii => {
+                String::from_utf8(bytes).expect("MySQL text bytes were validated before commit")
+            }
+            Self::Encoding(encoding) => encoding
+                .decode_without_bom_handling_and_without_replacement(&bytes)
+                .expect("MySQL text bytes were validated before commit")
+                .into_owned(),
+        }
+    }
 }
 
 /// Project authoritative table schema columns into query-result column order.
@@ -202,52 +256,19 @@ fn apply_schema_column_metadata(query_result: &mut QueryResult, schema_columns: 
         .collect();
 }
 
-fn decode_mysql_text_bytes(
-    column: &ColumnInfo,
-    bytes: &[u8],
-    row_index: usize,
-    column_index: usize,
-) -> Result<String, QueryResultNormalizationError> {
-    let charset = mysql_text_charset(column).ok_or_else(|| {
-        QueryResultNormalizationError::UnsupportedTextCharset {
-            row_index,
-            column_index,
-            column_name: column.name.clone(),
-            charset: "<missing>".to_string(),
-        }
-    })?;
-
-    let invalid = || QueryResultNormalizationError::InvalidTextEncoding {
-        row_index,
-        column_index,
-        column_name: column.name.clone(),
-        charset: charset.clone(),
-    };
-
-    match charset.as_str() {
-        "utf8" | "utf8mb3" | "utf8mb4" => std::str::from_utf8(bytes)
-            .map(str::to_string)
-            .map_err(|_| invalid()),
-        "ascii" => {
-            if bytes.iter().all(u8::is_ascii) {
-                Ok(bytes.iter().map(|byte| char::from(*byte)).collect())
-            } else {
-                Err(invalid())
-            }
-        }
-        "latin1" => decode_with_encoding(WINDOWS_1252, bytes).ok_or_else(invalid),
-        "gbk" | "gb2312" => decode_with_encoding(GBK, bytes).ok_or_else(invalid),
-        "gb18030" => decode_with_encoding(GB18030, bytes).ok_or_else(invalid),
-        "big5" => decode_with_encoding(BIG5, bytes).ok_or_else(invalid),
-        "sjis" | "cp932" => decode_with_encoding(SHIFT_JIS, bytes).ok_or_else(invalid),
-        "ujis" | "eucjpms" => decode_with_encoding(EUC_JP, bytes).ok_or_else(invalid),
-        "euckr" => decode_with_encoding(EUC_KR, bytes).ok_or_else(invalid),
-        _ => Err(QueryResultNormalizationError::UnsupportedTextCharset {
-            row_index,
-            column_index,
-            column_name: column.name.clone(),
-            charset,
-        }),
+fn mysql_text_decoder(column: &ColumnInfo) -> Option<MySqlTextDecoder> {
+    match mysql_text_charset(column)?.as_str() {
+        "utf8" | "utf8mb3" | "utf8mb4" => Some(MySqlTextDecoder::Utf8),
+        "ascii" => Some(MySqlTextDecoder::Ascii),
+        // MySQL documents `latin1` as Windows cp1252, not ISO-8859-1.
+        "latin1" => Some(MySqlTextDecoder::Encoding(WINDOWS_1252)),
+        "gbk" | "gb2312" => Some(MySqlTextDecoder::Encoding(GBK)),
+        "gb18030" => Some(MySqlTextDecoder::Encoding(GB18030)),
+        "big5" => Some(MySqlTextDecoder::Encoding(BIG5)),
+        "sjis" | "cp932" => Some(MySqlTextDecoder::Encoding(SHIFT_JIS)),
+        "ujis" | "eucjpms" => Some(MySqlTextDecoder::Encoding(EUC_JP)),
+        "euckr" => Some(MySqlTextDecoder::Encoding(EUC_KR)),
+        _ => None,
     }
 }
 
@@ -267,12 +288,6 @@ fn mysql_text_charset(column: &ColumnInfo) -> Option<String> {
                 .and_then(|collation| collation.split('_').next())
                 .map(str::to_ascii_lowercase)
         })
-}
-
-fn decode_with_encoding(encoding: &'static Encoding, bytes: &[u8]) -> Option<String> {
-    encoding
-        .decode_without_bom_handling_and_without_replacement(bytes)
-        .map(|text| text.into_owned())
 }
 
 fn mysql_schema_column_is_character_text(column: &ColumnInfo) -> bool {
@@ -780,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_or_missing_text_charset_does_not_mutate_the_result() {
+    fn unsupported_or_missing_text_charset_keeps_lossless_sidecar_without_failing() {
         for charset in [None, Some("utf16")] {
             let mut schema_column = column("payload", "LONGTEXT");
             schema_column.charset = charset.map(str::to_string);
@@ -794,21 +809,109 @@ mod tests {
                     bytes: b"text".to_vec(),
                 }],
             );
-            let before = result.clone();
 
-            let error = normalize_query_result_binary_semantics(
+            normalize_query_result_binary_semantics(
                 &mut result,
                 &DatabaseType::MySQL,
                 &[schema_column],
             )
-            .unwrap_err();
+            .unwrap();
 
-            assert!(matches!(
-                error,
-                QueryResultNormalizationError::UnsupportedTextCharset { .. }
-            ));
-            assert_result_unchanged(&result, &before);
+            assert_eq!(result.rows[0][0].as_deref(), Some("old"));
+            assert_eq!(result.binary_cells[0].bytes, b"text");
+            assert_eq!(result.column_meta[0].db_type, "LONGTEXT");
+            assert_eq!(result.column_meta[0].field_type, FieldType::LongText);
         }
+    }
+
+    #[test]
+    fn supported_text_is_decoded_when_another_text_column_charset_is_unsupported() {
+        let mut unsupported = column("legacy", "LONGTEXT");
+        unsupported.charset = Some("utf16".to_string());
+        unsupported.collation = None;
+        let mut result = result(
+            &["payload", "legacy"],
+            vec![vec![Some("old payload"), Some("old legacy")]],
+            vec![
+                BinaryCell {
+                    row_index: 0,
+                    column_index: 0,
+                    bytes: b"true".to_vec(),
+                },
+                BinaryCell {
+                    row_index: 0,
+                    column_index: 1,
+                    bytes: vec![0xff, 0xfe],
+                },
+            ],
+        );
+
+        normalize_query_result_binary_semantics(
+            &mut result,
+            &DatabaseType::MySQL,
+            &[column("payload", "LONGTEXT"), unsupported],
+        )
+        .unwrap();
+
+        assert_eq!(result.rows[0][0].as_deref(), Some("true"));
+        assert_eq!(result.rows[0][1].as_deref(), Some("old legacy"));
+        assert_eq!(
+            result.binary_cells,
+            vec![BinaryCell {
+                row_index: 0,
+                column_index: 1,
+                bytes: vec![0xff, 0xfe],
+            }]
+        );
+    }
+
+    #[test]
+    fn mysql_longtext_with_nul_is_decoded_without_truncation() {
+        let mut result = result(
+            &["payload"],
+            vec![vec![Some("0x610062")]],
+            vec![BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: b"a\0b".to_vec(),
+            }],
+        );
+
+        normalize_query_result_binary_semantics(
+            &mut result,
+            &DatabaseType::MySQL,
+            &[column("payload", "LONGTEXT")],
+        )
+        .unwrap();
+
+        assert!(result.binary_cells.is_empty());
+        assert_eq!(result.rows[0][0].as_deref(), Some("a\0b"));
+    }
+
+    #[test]
+    fn mysql_latin1_uses_mysql_windows_1252_mapping() {
+        let mut schema_column = column("payload", "LONGTEXT");
+        schema_column.charset = Some("latin1".to_string());
+        schema_column.collation = Some("latin1_swedish_ci".to_string());
+        let mut result = result(
+            &["payload"],
+            vec![vec![Some("0x80")]],
+            vec![BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: vec![0x80],
+            }],
+        );
+
+        normalize_query_result_binary_semantics(
+            &mut result,
+            &DatabaseType::MySQL,
+            &[schema_column],
+        )
+        .unwrap();
+
+        assert!(result.binary_cells.is_empty());
+        assert_eq!(result.rows[0][0].as_deref(), Some("€"));
     }
 
     #[test]
