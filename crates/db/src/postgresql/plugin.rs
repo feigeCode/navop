@@ -3528,35 +3528,11 @@ mod tests {
                 .push(query.to_string());
 
             let rows = if query.contains("table_comment") {
-                vec![
-                    vec![
-                        Some("users".to_string()),
-                        Some("public".to_string()),
-                        Some("postgres".to_string()),
-                        Some("Application users".to_string()),
-                        Some("42".to_string()),
-                        Some("16 kB".to_string()),
-                        Some("r".to_string()),
-                    ],
-                    vec![
-                        Some("active_users".to_string()),
-                        Some("public".to_string()),
-                        Some("postgres".to_string()),
-                        Some("Active users".to_string()),
-                        Some("-1".to_string()),
-                        Some("0 bytes".to_string()),
-                        Some("v".to_string()),
-                    ],
-                    vec![
-                        Some("daily_users".to_string()),
-                        Some("public".to_string()),
-                        Some("postgres".to_string()),
-                        Some("Daily users".to_string()),
-                        Some("10".to_string()),
-                        Some("8192 bytes".to_string()),
-                        Some("m".to_string()),
-                    ],
-                ]
+                vec![vec![
+                    Some("users".to_string()),
+                    Some("public".to_string()),
+                    Some("Application users".to_string()),
+                ]]
             } else if query.contains("column_name") {
                 vec![vec![
                     Some("id".to_string()),
@@ -3958,20 +3934,17 @@ mod tests {
             .await
             .expect("list tables");
 
-        assert_eq!(3, tables.len());
+        assert_eq!(1, tables.len());
         assert_eq!(crate::TableObjectType::Table, tables[0].object_type);
-        assert_eq!(crate::TableObjectType::View, tables[1].object_type);
-        assert_eq!(crate::TableObjectType::View, tables[2].object_type);
         assert_eq!(Some("Application users"), tables[0].comment.as_deref());
-        assert_eq!(Some("Active users"), tables[1].comment.as_deref());
         let queries = connection.queries();
         let table_query = queries
             .iter()
             .find(|query| query.contains("table_comment"))
             .expect("table metadata query");
         assert!(table_query.contains("obj_description(c.oid, 'pg_class')"));
-        assert!(table_query.contains("c.relkind IN ('r', 'p', 'v', 'm')"));
-        assert!(table_query.contains("c.relkind AS relation_kind"));
+        assert!(table_query.contains("c.relkind = 'r'"));
+        assert!(!table_query.contains("c.relkind IN"));
     }
 
     #[tokio::test]

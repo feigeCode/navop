@@ -30,6 +30,8 @@ use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use ai_chat_view::AskAiButton;
+use db::cache_manager::GlobalNodeCache;
+use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use parking_lot::Mutex;
@@ -614,11 +616,13 @@ impl SqlResultTabContainer {
         });
 
         cx.spawn(async move |cx: &mut AsyncApp| {
-            let (global_state, max_rows) = cx.update(|cx| {
+            let (global_state, max_rows, cache, notifier) = cx.update(|cx| {
                 let global_state = cx.global::<GlobalDbState>().clone();
                 let sql_query_max_rows = AppSettings::current(cx).sql_query_max_rows;
                 let max_rows = (sql_query_max_rows > 0).then_some(sql_query_max_rows as usize);
-                (global_state, max_rows)
+                let cache = cx.try_global::<GlobalNodeCache>().cloned();
+                let notifier = cx.try_global::<GlobalConnectionNotifier>().cloned();
+                (global_state, max_rows, cache, notifier)
             });
             let exec_opts = db::ExecOptions {
                 stop_on_error: false,
@@ -628,10 +632,35 @@ impl SqlResultTabContainer {
             let session_id = request.session_id.clone();
             let sql = request.sql.clone();
             let execution_state = global_state.clone();
+            let invalidation_state = global_state.clone();
+            let invalidation_connection_id = request.connection_id.clone();
+            let invalidation_database = request.database.clone();
+            let invalidation_schema = request.schema.clone();
+            let invalidation_sql = request.sql.clone();
+            let cancellation_cache = cache.clone();
+            let cancellation_connection_id = invalidation_connection_id.clone();
+            let cancellation_database = invalidation_database.clone();
+            let cancellation_schema = invalidation_schema.clone();
+            let cancellation_sql = invalidation_sql.clone();
             let execution_task = Tokio::spawn_result(cx, async move {
-                execution_state
+                let result = execution_state
                     .execute_session(session_id, sql, Some(exec_opts))
-                    .await
+                    .await;
+                let ddl_info = match cache {
+                    Some(cache) => {
+                        invalidation_state
+                            .invalidate_sql_cache(
+                                &cache,
+                                &invalidation_connection_id,
+                                &invalidation_sql,
+                                invalidation_database.as_deref(),
+                                invalidation_schema.as_deref(),
+                            )
+                            .await
+                    }
+                    None => None,
+                };
+                Ok((result, ddl_info))
             });
             let execution_result = tokio::select! {
                 biased;
@@ -648,8 +677,52 @@ impl SqlResultTabContainer {
                         error
                     );
                 }
+                let ddl_info = match cancellation_cache {
+                    Some(cache) => {
+                        global_state
+                            .invalidate_sql_cache(
+                                &cache,
+                                &cancellation_connection_id,
+                                &cancellation_sql,
+                                cancellation_database.as_deref(),
+                                cancellation_schema.as_deref(),
+                            )
+                            .await
+                    }
+                    None => None,
+                };
+                if let Some((connection_id, database, schema)) = ddl_info
+                    && let Some(notifier) = notifier
+                {
+                    cx.update(|cx| {
+                        notifier.0.update(cx, |_, cx| {
+                            cx.emit(ConnectionDataEvent::SchemaChanged {
+                                connection_id,
+                                database,
+                                schema,
+                            });
+                        });
+                    });
+                }
                 return None;
             };
+            let (execution_result, ddl_info) = match execution_result {
+                Ok(result) => result,
+                Err(error) => (Err(error), None),
+            };
+            if let Some((connection_id, database, schema)) = ddl_info {
+                if let Some(notifier) = notifier {
+                    cx.update(|cx| {
+                        notifier.0.update(cx, |_, cx| {
+                            cx.emit(ConnectionDataEvent::SchemaChanged {
+                                connection_id,
+                                database,
+                                schema,
+                            });
+                        });
+                    });
+                }
+            }
             let results = match execution_result {
                 Ok(results) => results,
                 Err(error) => vec![SqlResult::Error(SqlErrorInfo {

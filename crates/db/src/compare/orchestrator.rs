@@ -258,27 +258,17 @@ impl GlobalDbState {
 
 async fn load_schema_routines(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<&str>,
     case_sensitive_identifiers: bool,
 ) -> anyhow::Result<Vec<RoutineSchema>> {
     let functions = db_state
-        .list_functions_in_schema(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema.map(str::to_string),
-        )
+        .list_functions_in_schema_direct(connection_id, database, schema.map(str::to_string))
         .await?;
     let procedures = db_state
-        .list_procedures_in_schema(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema.map(str::to_string),
-        )
+        .list_procedures_in_schema_direct(connection_id, database, schema.map(str::to_string))
         .await?;
 
     Ok(functions
@@ -304,18 +294,13 @@ async fn load_schema_routines(
 
 async fn load_schema_triggers(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<&str>,
 ) -> anyhow::Result<Vec<TriggerSchema>> {
     Ok(db_state
-        .list_triggers_in_schema(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema.map(str::to_string),
-        )
+        .list_triggers_in_schema_direct(connection_id, database, schema.map(str::to_string))
         .await?
         .into_iter()
         .map(|trigger| trigger_schema_from_metadata(trigger, schema))
@@ -367,7 +352,7 @@ fn trigger_schema_from_metadata(
 
 async fn load_schema_tables(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     connection_id: String,
     database: String,
     schema: Option<String>,
@@ -379,7 +364,7 @@ async fn load_schema_tables(
 ) -> anyhow::Result<LoadedSchemaTables> {
     report(CompareTaskEvent::LoadingTableList { side });
     let tables = db_state
-        .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
+        .list_tables_direct(&connection_id, &database, schema.clone())
         .await?;
     let tables = filter_schema_tables(
         tables,
@@ -401,15 +386,9 @@ async fn load_schema_tables(
             table_index: index + 1,
             total_tables,
         });
-        let result = load_single_table_schema(
-            db_state,
-            cx,
-            &connection_id,
-            &database,
-            schema.clone(),
-            table,
-        )
-        .await;
+        let result =
+            load_single_table_schema(db_state, &connection_id, &database, schema.clone(), table)
+                .await;
         if let Some(message) =
             record_schema_table_result(&mut loaded, side, table_name.clone(), result)
         {
@@ -447,7 +426,6 @@ fn filter_schema_tables(
 
 async fn load_single_table_schema(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<String>,
@@ -455,13 +433,7 @@ async fn load_single_table_schema(
 ) -> anyhow::Result<TableSchema> {
     let table_name = table.name.clone();
     let columns = db_state
-        .list_columns(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema.clone(),
-            table_name.clone(),
-        )
+        .list_columns_direct(connection_id, database, schema.clone(), &table_name)
         .await?;
 
     // View definition diff is not implemented yet. Preserve the object kind
@@ -471,22 +443,10 @@ async fn load_single_table_schema(
         (Vec::new(), Vec::new())
     } else {
         let indexes = db_state
-            .list_indexes(
-                cx,
-                connection_id.to_string(),
-                database.to_string(),
-                schema.clone(),
-                table_name.clone(),
-            )
+            .list_indexes_direct(connection_id, database, schema.clone(), &table_name)
             .await?;
         let foreign_keys = db_state
-            .list_foreign_keys(
-                cx,
-                connection_id.to_string(),
-                database.to_string(),
-                schema,
-                table_name,
-            )
+            .list_foreign_keys_direct(connection_id, database, schema, &table_name)
             .await?;
         (indexes, foreign_keys)
     };

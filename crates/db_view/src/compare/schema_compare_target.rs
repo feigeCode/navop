@@ -436,7 +436,7 @@ impl SchemaCompareWindow {
         let schema = (!schema_name.trim().is_empty()).then_some(schema_name);
         cx.spawn(async move |_, cx: &mut AsyncApp| {
             let result = db_state
-                .list_tables(cx, connection_id, database_name, schema)
+                .list_tables_direct(&connection_id, &database_name, schema)
                 .await
                 .map(|tables| {
                     tables

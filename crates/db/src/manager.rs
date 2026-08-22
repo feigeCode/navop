@@ -886,6 +886,10 @@ struct StreamingExecutionRequest {
     state: GlobalDbState,
     config: DbConnectionConfig,
     source: Option<SqlSource>,
+    /// Keep the original source available after `execute_on_session` consumes
+    /// the execution source. Script sources can use precise DDL invalidation;
+    /// file sources must retain the conservative connection-wide behavior.
+    invalidation_source: SqlSource,
     schema: Option<String>,
     opts: ExecOptions,
     tx: mpsc::Sender<StreamingProgress>,
@@ -936,11 +940,14 @@ impl StreamingExecutionRequest {
             _ = cancellation.cancelled() => None,
             result = self.execute_on_session(&session_id, plugin.as_ref()) => Some(result),
         };
-        let _ = self
+        if let Err(error) = self
             .state
             .connection_manager
             .close_session(&session_id)
-            .await;
+            .await
+        {
+            warn!("Failed to close streaming session {session_id}: {error}");
+        }
 
         if let Some(Err(error)) = exec_result {
             error!("Streaming execution error: {error}");
@@ -986,13 +993,29 @@ impl StreamingExecutionRequest {
         let current_database = self.config.database.as_deref().unwrap_or_default();
         let cache_ctx = CacheContext::from_config(&self.config);
 
-        cache.invalidate_connection_metadata(&self.config.id).await;
-        cache.clear_connection_cache(&cache_ctx).await;
-        Some((
-            self.config.id.clone(),
-            current_database.to_string(),
-            self.schema.clone(),
-        ))
+        match &self.invalidation_source {
+            SqlSource::Script(sql) => {
+                cache
+                    .process_sql_for_invalidation(
+                        &self.config.id,
+                        sql,
+                        current_database,
+                        self.schema.as_deref(),
+                        &self.config.database_type,
+                        Some(&cache_ctx),
+                    )
+                    .await
+            }
+            SqlSource::File(_) => {
+                cache.invalidate_connection_metadata(&self.config.id).await;
+                cache.clear_connection_cache(&cache_ctx).await;
+                Some((
+                    self.config.id.clone(),
+                    current_database.to_string(),
+                    self.schema.clone(),
+                ))
+            }
+        }
     }
 }
 
@@ -1014,6 +1037,55 @@ async fn send_streaming_error(
 }
 
 impl GlobalDbState {
+    /// Invalidate metadata for SQL executed on a caller-owned session.
+    ///
+    /// Session-bound execution cannot use `execute_with_session_internal` because
+    /// that method owns the session lifecycle. Keep cache invalidation separate so
+    /// manual-transaction callers can use the same DDL parser and invalidator.
+    pub async fn invalidate_sql_cache(
+        &self,
+        cache: &GlobalNodeCache,
+        connection_id: &str,
+        script: &str,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Option<(String, String, Option<String>)> {
+        let config = self.get_config(connection_id)?;
+        let cache_ctx = CacheContext::from_config(&config);
+        let current_database = database.or(config.database.as_deref()).unwrap_or_default();
+        cache
+            .process_sql_for_invalidation(
+                connection_id,
+                script,
+                current_database,
+                schema,
+                &config.database_type,
+                Some(&cache_ctx),
+            )
+            .await
+    }
+
+    async fn finish_direct_metadata_session<T>(
+        &self,
+        session_id: &str,
+        result: anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let cleanup = self.connection_manager.release_session(session_id).await;
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(anyhow::anyhow!(
+                "Failed to release metadata session: {error}"
+            )),
+            (Err(error), Err(cleanup_error)) => {
+                tracing::warn!(
+                    "Failed to release metadata session after metadata query error: {cleanup_error}"
+                );
+                Err(error)
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self::with_config_resolver(ConnectionConfigResolver::default())
     }
@@ -1495,8 +1567,8 @@ impl GlobalDbState {
                 .map_err(|e| anyhow::anyhow!("{}", e))
         }
         .await;
-        self.connection_manager.close_session(&session_id).await?;
-        result
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
     }
 
     pub async fn list_schemas_direct(
@@ -1529,8 +1601,8 @@ impl GlobalDbState {
                 .map_err(|e| anyhow::anyhow!("{}", e))
         }
         .await;
-        self.connection_manager.close_session(&session_id).await?;
-        result
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
     }
 
     /// Build table-designer DDL SQL on an async path.
@@ -1781,10 +1853,12 @@ impl GlobalDbState {
 
         let cache = cx.update(|cx| cx.try_global::<GlobalNodeCache>().cloned());
         let notifier = cx.update(|cx| cx.try_global::<GlobalConnectionNotifier>().cloned());
+        let invalidation_source = source.clone();
         let request = StreamingExecutionRequest {
             state: self.clone(),
             config,
             source: Some(source),
+            invalidation_source,
             schema,
             opts,
             tx,
@@ -3020,7 +3094,9 @@ impl GlobalDbState {
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
         let mut config = config.clone();
-        config.database = Some(database.to_string());
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
 
         let plugin = self.get_plugin(&config.database_type)?;
         let session_id = self
@@ -3028,7 +3104,7 @@ impl GlobalDbState {
             .create_session(config, &self.db_manager)
             .await?;
 
-        let result = {
+        let result = async {
             let mut guard = self
                 .connection_manager
                 .get_session_connection(&session_id)
@@ -3040,14 +3116,11 @@ impl GlobalDbState {
                 .list_tables(conn, database, schema)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))
-        };
+        }
+        .await;
 
-        self.connection_manager
-            .release_session(&session_id)
+        self.finish_direct_metadata_session(&session_id, result)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        result
     }
 
     /// Pure async version of `list_columns` — can be called from any tokio context
@@ -3063,7 +3136,9 @@ impl GlobalDbState {
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
         let mut config = config.clone();
-        config.database = Some(database.to_string());
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
 
         let plugin = self.get_plugin(&config.database_type)?;
         let session_id = self
@@ -3071,7 +3146,7 @@ impl GlobalDbState {
             .create_session(config, &self.db_manager)
             .await?;
 
-        let result = {
+        let result = async {
             let mut guard = self
                 .connection_manager
                 .get_session_connection(&session_id)
@@ -3083,14 +3158,218 @@ impl GlobalDbState {
                 .list_columns(conn, database, schema, table)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))
-        };
+        }
+        .await;
 
-        self.connection_manager
-            .release_session(&session_id)
+        self.finish_direct_metadata_session(&session_id, result)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
 
-        result
+    /// Pure async version of `list_indexes` — can be called from any tokio context
+    /// without `AsyncApp`. Skips `GlobalNodeCache`.
+    pub async fn list_indexes_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+        table: &str,
+    ) -> anyhow::Result<Vec<crate::types::IndexInfo>> {
+        let config = self
+            .get_config(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        let mut config = config.clone();
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
+
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_indexes(conn, database, schema, table)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
+    }
+
+    /// Pure async version of `list_foreign_keys` — can be called from any tokio
+    /// context without `AsyncApp`. Skips `GlobalNodeCache`.
+    pub async fn list_foreign_keys_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+        table: &str,
+    ) -> anyhow::Result<Vec<crate::types::ForeignKeyDefinition>> {
+        let config = self
+            .get_config(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        let mut config = config.clone();
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
+
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_foreign_keys(conn, database, schema, table)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
+    }
+
+    /// Pure async version of `list_functions_in_schema` — skips all metadata
+    /// cache reads and writes.
+    pub async fn list_functions_in_schema_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        let config = self
+            .get_config(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        let mut config = config.clone();
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
+
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_functions_in_schema(conn, database, schema)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
+    }
+
+    /// Pure async version of `list_procedures_in_schema` — skips all metadata
+    /// cache reads and writes.
+    pub async fn list_procedures_in_schema_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        let config = self
+            .get_config(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        let mut config = config.clone();
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
+
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_procedures_in_schema(conn, database, schema)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
+    }
+
+    /// Pure async version of `list_triggers_in_schema` — skips all metadata
+    /// cache reads and writes.
+    pub async fn list_triggers_in_schema_direct(
+        &self,
+        connection_id: &str,
+        database: &str,
+        schema: Option<String>,
+    ) -> anyhow::Result<Vec<crate::types::TriggerInfo>> {
+        let config = self
+            .get_config(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        let mut config = config.clone();
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.to_string());
+        }
+
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_triggers_in_schema(conn, database, schema)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
     }
 
     /// Pure async SQL execution version — can be called from any tokio context
@@ -3121,7 +3400,7 @@ impl GlobalDbState {
             .create_session(config, &self.db_manager)
             .await?;
 
-        let result = {
+        let result = async {
             let mut guard = self
                 .connection_manager
                 .get_session_connection(&session_id)
@@ -3138,10 +3417,12 @@ impl GlobalDbState {
 
             conn.execute(plugin.as_ref(), script, opts.unwrap_or_default())
                 .await
-        };
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
 
-        self.connection_manager.close_session(&session_id).await?;
-        result.map_err(|e| anyhow::anyhow!("{}", e))
+        self.finish_direct_metadata_session(&session_id, result)
+            .await
     }
 
     /// 获取数据库的比较能力
@@ -4083,10 +4364,12 @@ mod tests {
 
         let cancellation = CancellationToken::new();
         let (tx, mut progress) = mpsc::channel(1);
+        let source = SqlSource::Script("SELECT pg_sleep(60)".to_string());
         let request = StreamingExecutionRequest {
             state: state.clone(),
             config: config.clone(),
-            source: Some(SqlSource::Script("SELECT pg_sleep(60)".to_string())),
+            source: Some(source.clone()),
+            invalidation_source: source,
             schema: Some("public".to_string()),
             opts: ExecOptions::default(),
             tx,

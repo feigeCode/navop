@@ -395,26 +395,20 @@ fn map_missing_target_columns(
 
 async fn load_table_columns(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<String>,
     table: &str,
 ) -> anyhow::Result<Vec<ColumnInfo>> {
     db_state
-        .list_columns(
-            cx,
-            connection_id.to_string(),
-            database.to_string(),
-            schema,
-            table.to_string(),
-        )
+        .list_columns_direct(connection_id, database, schema, table)
         .await
 }
 
 async fn target_table_info(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<String>,
@@ -422,7 +416,7 @@ async fn target_table_info(
     case_sensitive_identifiers: bool,
 ) -> anyhow::Result<Option<TableInfo>> {
     let tables = db_state
-        .list_tables(cx, connection_id.to_string(), database.to_string(), schema)
+        .list_tables_direct(connection_id, database, schema)
         .await?;
     Ok(matching_table(&tables, table, case_sensitive_identifiers).cloned())
 }
@@ -938,14 +932,13 @@ pub fn record_dependency_metadata_failure(
 
 async fn load_target_table_lookup(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     params: &super::DataCompareParams,
 ) -> anyhow::Result<HashMap<String, String>> {
     let tables = db_state
-        .list_tables(
-            cx,
-            params.target_connection_id.clone(),
-            params.target_database.clone(),
+        .list_tables_direct(
+            &params.target_connection_id,
+            &params.target_database,
             params.target_schema.clone(),
         )
         .await?;
@@ -962,17 +955,16 @@ async fn load_target_table_lookup(
 
 async fn load_target_foreign_keys(
     db_state: &GlobalDbState,
-    cx: &mut AsyncApp,
+    _cx: &mut AsyncApp,
     params: &super::DataCompareParams,
     table: &str,
 ) -> anyhow::Result<Vec<ForeignKeyDefinition>> {
     db_state
-        .list_foreign_keys(
-            cx,
-            params.target_connection_id.clone(),
-            params.target_database.clone(),
+        .list_foreign_keys_direct(
+            &params.target_connection_id,
+            &params.target_database,
             params.target_schema.clone(),
-            table.to_string(),
+            table,
         )
         .await
 }

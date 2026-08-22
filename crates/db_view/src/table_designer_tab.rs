@@ -1075,32 +1075,25 @@ impl TableDesigner {
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let columns_result = global_state
-                .list_columns(
-                    cx,
-                    connection_id.clone(),
-                    database_name.clone(),
+                .list_columns_direct(
+                    &connection_id,
+                    &database_name,
                     schema_name.clone(),
-                    table_name.clone(),
+                    &table_name,
                 )
                 .await;
 
             let indexes_result = global_state
-                .list_indexes(
-                    cx,
-                    connection_id.clone(),
-                    database_name.clone(),
+                .list_indexes_direct(
+                    &connection_id,
+                    &database_name,
                     schema_name.clone(),
-                    table_name.clone(),
+                    &table_name,
                 )
                 .await;
 
             let tables_result = global_state
-                .list_tables(
-                    cx,
-                    connection_id.clone(),
-                    database_name.clone(),
-                    schema_name.clone(),
-                )
+                .list_tables_direct(&connection_id, &database_name, schema_name.clone())
                 .await;
 
             tracing::warn!(

@@ -1,14 +1,11 @@
 use super::DataCompareResult;
 
-pub const DEFAULT_DATA_COMPARE_MAX_ROWS_PER_TABLE: usize = 1_000_000;
-pub const DEFAULT_DATA_COMPARE_MAX_PAGES_PER_TABLE: usize = 100;
-
-/// Safety limits for one side of one table comparison.
+/// Optional safety limits for one side of one table comparison.
 ///
-/// Data comparison still pages until the exact COUNT is reached whenever the
-/// table fits within these limits. Reaching a configured limit returns a
-/// partial result marked as truncated; the batch-level sync-plan builder then
-/// disables SQL generation for the entire batch.
+/// Limits are opt-in because a normal comparison must preserve complete
+/// difference information. When callers explicitly configure a limit, reaching
+/// it returns a partial result marked as truncated and disables sync SQL for the
+/// batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataCompareLimits {
     pub max_rows_per_table: Option<usize>,
@@ -26,10 +23,7 @@ impl DataCompareLimits {
 
 impl Default for DataCompareLimits {
     fn default() -> Self {
-        Self {
-            max_rows_per_table: Some(DEFAULT_DATA_COMPARE_MAX_ROWS_PER_TABLE),
-            max_pages_per_table: Some(DEFAULT_DATA_COMPARE_MAX_PAGES_PER_TABLE),
-        }
+        Self::unlimited()
     }
 }
 
@@ -175,6 +169,11 @@ mod tests {
             target_truncated,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn data_compare_limits_default_to_complete_comparison() {
+        assert_eq!(DataCompareLimits::default(), DataCompareLimits::unlimited());
     }
 
     #[test]

@@ -39,10 +39,10 @@ pub(crate) fn load_databases_then<T: 'static>(
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = if policy.schema_as_database {
             db_state
-                .list_schemas(cx, connection_id, String::new())
+                .list_schemas_direct(connection_id, String::new())
                 .await
         } else {
-            db_state.list_databases(cx, connection_id).await
+            db_state.list_databases_direct(connection_id).await
         };
         let loaded = result.is_ok();
         update_string_select_async(result, database.select, preferred, status, cx);
@@ -91,7 +91,7 @@ pub(crate) fn load_schemas_then<T: 'static>(
     let mut after_load = Some(after_load);
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = db_state
-            .list_schemas(cx, connection_id, database_name)
+            .list_schemas_direct(connection_id, database_name)
             .await;
         let loaded = result.is_ok();
         update_string_select_async(result, schema.select, preferred, status, cx);

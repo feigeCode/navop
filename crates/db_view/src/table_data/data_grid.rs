@@ -844,7 +844,7 @@ impl DataGrid {
         let expected_generation = data_generation.load(Ordering::Acquire);
         cx.spawn(async move |cx: &mut AsyncApp| {
             let result = global_state
-                .list_columns(cx, connection_id, database_name, schema_name, table_name)
+                .list_columns_direct(&connection_id, &database_name, schema_name, &table_name)
                 .await;
 
             if let Ok(cols) = result {
@@ -1109,7 +1109,12 @@ impl DataGrid {
                     });
 
                     match global_state
-                        .list_columns(cx, connection_id, database_name, schema_name, table_name)
+                        .list_columns_direct(
+                            &connection_id,
+                            &database_name,
+                            schema_name,
+                            &table_name,
+                        )
                         .await
                     {
                         Ok(column_meta) => {
@@ -1241,12 +1246,11 @@ impl DataGrid {
 
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let columns_result = global_state
-                    .list_columns(
-                        cx,
-                        connection_id_for_columns,
-                        database_name_for_columns,
+                    .list_columns_direct(
+                        &connection_id_for_columns,
+                        &database_name_for_columns,
                         schema_name_for_columns,
-                        table_name_for_columns,
+                        &table_name_for_columns,
                     )
                     .await;
 
@@ -1595,12 +1599,11 @@ impl DataGrid {
                     .await?;
                 if editable {
                     let column_meta = global_state
-                        .list_columns(
-                            cx,
-                            connection_id.clone(),
-                            database_name.clone(),
+                        .list_columns_direct(
+                            &connection_id,
+                            &database_name,
                             schema_name.clone(),
-                            table_name.clone(),
+                            &table_name,
                         )
                         .await?;
                     return Ok((sql_result, Some(column_meta)));
@@ -2329,12 +2332,11 @@ impl DataGrid {
             let mut index_infos = vec![];
             if need_index_infos {
                 let index_infos_result = global_state
-                    .list_indexes(
-                        cx,
-                        connection_id.clone(),
-                        database_name.clone(),
+                    .list_indexes_direct(
+                        &connection_id,
+                        &database_name,
                         schema_name.clone(),
-                        table_name.clone(),
+                        &table_name,
                     )
                     .await;
                 index_infos = match index_infos_result {
@@ -2462,12 +2464,11 @@ impl DataGrid {
             let mut index_infos = vec![];
             if need_index_infos {
                 let index_infos_result = global_state
-                    .list_indexes(
-                        cx,
-                        connection_id.clone(),
-                        database_name.clone(),
+                    .list_indexes_direct(
+                        &connection_id,
+                        &database_name,
                         schema_name.clone(),
-                        table_name.clone(),
+                        &table_name,
                     )
                     .await;
                 index_infos = match index_infos_result {
@@ -2590,12 +2591,11 @@ impl DataGrid {
             let mut index_infos = vec![];
             if need_index_infos {
                 let index_infos_result = global_state
-                    .list_indexes(
-                        cx,
-                        connection_id.clone(),
-                        database_name.clone(),
+                    .list_indexes_direct(
+                        &connection_id,
+                        &database_name,
                         schema_name.clone(),
-                        table_name.clone(),
+                        &table_name,
                     )
                     .await;
                 index_infos = match index_infos_result {
