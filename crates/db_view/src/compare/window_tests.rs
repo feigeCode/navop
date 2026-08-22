@@ -6,7 +6,7 @@ use one_core::storage::DatabaseType;
 use rust_i18n::t;
 
 use crate::compare::compare_result_feedback::{
-    data_compare_failure_issues, hide_data_compare_failure_warnings,
+    compare_issue_copy_text, data_compare_failure_issues, hide_data_compare_failure_warnings,
     hide_schema_compare_failure_warnings, schema_compare_failure_issues,
 };
 use crate::compare::sync_statement_picker::{
@@ -66,6 +66,30 @@ fn schema_compare_failure_issues_include_localized_side() {
     assert_eq!(Some(t!("Compare.target").to_string()), issues[1].badge);
     assert_eq!("orders", issues[1].title);
     assert_eq!("target unavailable", issues[1].detail);
+}
+
+#[test]
+fn compare_issue_copy_text_includes_badge_title_and_detail() {
+    let data_issue = data_compare_failure_issues(&[db::compare::DataCompareTableFailure {
+        table: "users".to_string(),
+        error: "permission denied".to_string(),
+    }])
+    .remove(0);
+    let schema_issue = schema_compare_failure_issues(&[db::compare::SchemaCompareTableFailure {
+        side: db::compare::CompareSchemaSide::Source,
+        table: "orders".to_string(),
+        error: "source unavailable".to_string(),
+    }])
+    .remove(0);
+
+    assert_eq!(
+        "users\npermission denied",
+        compare_issue_copy_text(&data_issue)
+    );
+    assert_eq!(
+        format!("{} orders\nsource unavailable", t!("Compare.source")),
+        compare_issue_copy_text(&schema_issue)
+    );
 }
 
 #[test]

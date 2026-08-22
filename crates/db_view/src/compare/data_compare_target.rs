@@ -15,7 +15,7 @@ use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::compare::compare_result_feedback::{
-    data_compare_failure_issues, failure_details_panel, hide_data_compare_failure_warnings,
+    failure_details_panel, hide_data_compare_failure_warnings,
 };
 use crate::compare::data_compare_window::DataCompareWindow;
 use crate::compare::data_diff_detail::data_diff_detail_panel;
@@ -408,7 +408,7 @@ impl DataCompareWindow {
                         count = result.table_failures.len()
                     )
                     .to_string(),
-                    data_compare_failure_issues(&result.table_failures),
+                    result.table_failures.len(),
                 )
             });
         let dependency_metadata_warning = self
@@ -466,12 +466,13 @@ impl DataCompareWindow {
             .when_some(missing_target, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))
             })
-            .when_some(failed_tables, |this, (summary, issues)| {
+            .when_some(failed_tables, |this, (summary, issue_count)| {
                 this.child(failure_details_panel(
                     "data-compare-failures",
                     "toggle-data-compare-failures",
                     summary,
-                    issues,
+                    issue_count,
+                    self.failure_details_list.clone(),
                     self.failure_details_expanded.clone(),
                     cx,
                 ))

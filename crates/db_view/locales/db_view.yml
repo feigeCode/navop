@@ -3561,6 +3561,10 @@ Compare:
     en: "Compare Issues (%{count})"
     zh-CN: "比较问题（%{count}）"
     zh-HK: "比較問題（%{count}）"
+  compare_issue_copied:
+    en: Compare issue copied
+    zh-CN: 比较问题已复制
+    zh-HK: 比較問題已複製
   sync_plan_warnings:
     en: "Sync Plan Warnings (%{count})"
     zh-CN: "同步计划警告（%{count}）"

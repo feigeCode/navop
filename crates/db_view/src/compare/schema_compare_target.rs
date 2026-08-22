@@ -22,7 +22,7 @@ use rust_i18n::t;
 use std::collections::HashSet;
 
 use crate::compare::compare_result_feedback::{
-    failure_details_panel, hide_schema_compare_failure_warnings, schema_compare_failure_issues,
+    failure_details_panel, hide_schema_compare_failure_warnings,
 };
 use crate::compare::schema_compare_window::SchemaCompareWindow;
 use crate::compare::sync_statement_picker::{
@@ -257,7 +257,7 @@ impl SchemaCompareWindow {
                         count = result.table_failures.len()
                     )
                     .to_string(),
-                    schema_compare_failure_issues(&result.table_failures),
+                    result.table_failures.len(),
                 )
             });
         let progress = self.progress.read(cx).clone();
@@ -305,12 +305,13 @@ impl SchemaCompareWindow {
             .when(self.result.read(cx).is_some(), |this| {
                 this.child(schema_diff_panel(self.schema_diff_list.clone(), cx))
             })
-            .when_some(failed_tables, |this, (summary, issues)| {
+            .when_some(failed_tables, |this, (summary, issue_count)| {
                 this.child(failure_details_panel(
                     "schema-compare-failures",
                     "toggle-schema-compare-failures",
                     summary,
-                    issues,
+                    issue_count,
+                    self.failure_details_list.clone(),
                     self.failure_details_expanded.clone(),
                     cx,
                 ))
