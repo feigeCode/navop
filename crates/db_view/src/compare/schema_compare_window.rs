@@ -95,6 +95,8 @@ pub struct SchemaCompareWindow {
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
     pub(super) sync_statement_list: SyncStatementListState,
+    pub(super) failure_details_expanded: Entity<bool>,
+    pub(super) sync_warnings_expanded: Entity<bool>,
     pub(super) sync_sql_editor: Entity<InputState>,
     sync_sql_dirty: bool,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
@@ -229,6 +231,8 @@ impl SchemaCompareWindow {
                 sync_plan: cx.new(|_| None),
                 selected_statement_ids,
                 sync_statement_list,
+                failure_details_expanded: cx.new(|_| true),
+                sync_warnings_expanded: cx.new(|_| false),
                 execution_log: cx.new(|_| Vec::new()),
                 execution_log_scroll,
                 sync_sql_dirty: false,
@@ -728,6 +732,14 @@ impl SchemaCompareWindow {
             cx.notify();
         });
         clear_sync_statement_list(&self.sync_statement_list, cx);
+        self.failure_details_expanded.update(cx, |expanded, cx| {
+            *expanded = true;
+            cx.notify();
+        });
+        self.sync_warnings_expanded.update(cx, |expanded, cx| {
+            *expanded = false;
+            cx.notify();
+        });
         self.sync_sql_editor.update(cx, |state, cx| {
             state.set_value(String::new(), window, cx);
         });

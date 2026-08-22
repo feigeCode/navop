@@ -3557,6 +3557,14 @@ Compare:
     en: "%{count} table(s) failed to compare and were excluded from the sync plan."
     zh-CN: "%{count} 张表比较失败，已从同步计划中排除"
     zh-HK: "%{count} 張表比較失敗，已從同步計劃中排除"
+  compare_issues:
+    en: "Compare Issues (%{count})"
+    zh-CN: "比较问题（%{count}）"
+    zh-HK: "比較問題（%{count}）"
+  sync_plan_warnings:
+    en: "Sync Plan Warnings (%{count})"
+    zh-CN: "同步计划警告（%{count}）"
+    zh-HK: "同步計劃警告（%{count}）"
   data_compare_dependency_metadata_failed_note:
     en: Dependency metadata could not be loaded completely. Compare results were preserved, but sync SQL generation and execution are disabled because statement ordering cannot be guaranteed.
     zh-CN: 依赖元数据未能完整加载。比较结果已保留，但由于无法保证同步语句顺序，已禁止生成和执行同步 SQL

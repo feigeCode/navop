@@ -438,13 +438,15 @@ fn data_compare_batch_failure_warnings(result: &DataCompareBatchResult) -> Vec<S
     result
         .table_failures
         .iter()
-        .map(|failure| {
-            format!(
-                "Table `{}` failed to compare and was excluded from the sync plan: {}",
-                failure.table, failure.error
-            )
-        })
+        .map(data_compare_table_failure_warning)
         .collect()
+}
+
+pub fn data_compare_table_failure_warning(failure: &super::DataCompareTableFailure) -> String {
+    format!(
+        "Table `{}` failed to compare and was excluded from the sync plan: {}",
+        failure.table, failure.error
+    )
 }
 
 fn data_compare_batch_warnings(result: &DataCompareBatchResult) -> Vec<String> {
@@ -2688,12 +2690,12 @@ pub(super) fn blocked_schema_sync_plan(result: &SchemaCompareResult) -> SyncPlan
     let warnings = std::iter::once(
         "Schema compare result is incomplete; sync SQL generation is disabled.".to_string(),
     )
-    .chain(result.table_failures.iter().map(|failure| {
-        format!(
-            "{:?} table `{}` failed to compare and was excluded: {}",
-            failure.side, failure.table, failure.error
-        )
-    }))
+    .chain(
+        result
+            .table_failures
+            .iter()
+            .map(schema_compare_table_failure_warning),
+    )
     .collect();
 
     SyncPlan {
@@ -2704,6 +2706,13 @@ pub(super) fn blocked_schema_sync_plan(result: &SchemaCompareResult) -> SyncPlan
         warnings,
         sql_text: String::new(),
     }
+}
+
+pub fn schema_compare_table_failure_warning(failure: &super::SchemaCompareTableFailure) -> String {
+    format!(
+        "{:?} table `{}` failed to compare and was excluded: {}",
+        failure.side, failure.table, failure.error
+    )
 }
 
 fn table_diff_involves_view(table_diff: &super::TableDiff) -> bool {
