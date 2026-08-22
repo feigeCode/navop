@@ -82,4 +82,21 @@ mod tests {
 
         assert_eq!(status, decoded);
     }
+
+    #[test]
+    fn importer_capabilities_defaults_manual_directory_fields() {
+        let decoded: ImporterCapabilities = serde_json::from_str(
+            r#"{
+                "supports_scan": true,
+                "supports_password_import": false,
+                "supports_manual_file_pick": true,
+                "manual_file_pick_prompt": "Choose a configuration file",
+                "supports_incremental_preview": false
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!decoded.supports_manual_directory_pick);
+        assert!(decoded.manual_directory_pick_prompt.is_none());
+    }
 }

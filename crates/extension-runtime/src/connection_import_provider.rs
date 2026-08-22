@@ -330,6 +330,7 @@ fn runtime_id(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> Strin
 
 fn descriptor(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> ImporterDescriptor {
     let manual_file_pick_prompt = manual_file_pick_prompt(contrib);
+    let manual_directory_pick_prompt = manual_directory_pick_prompt(contrib);
     ImporterDescriptor {
         id: format!("{}/{}", manifest.id, contrib.id),
         display_name: contrib.display_name.clone(),
@@ -350,7 +351,9 @@ fn descriptor(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> Impor
             supports_scan: true,
             supports_password_import: false,
             supports_manual_file_pick: manual_file_pick_prompt.is_some(),
+            supports_manual_directory_pick: contrib.manual_file_pick.supports_directories,
             manual_file_pick_prompt,
+            manual_directory_pick_prompt,
             supports_incremental_preview: false,
         },
     }
@@ -360,6 +363,16 @@ fn manual_file_pick_prompt(contrib: &ConnectionImporterContrib) -> Option<String
     contrib
         .manual_file_pick
         .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(str::to_string)
+}
+
+fn manual_directory_pick_prompt(contrib: &ConnectionImporterContrib) -> Option<String> {
+    contrib
+        .manual_file_pick
+        .directory_prompt
         .as_deref()
         .map(str::trim)
         .filter(|prompt| !prompt.is_empty())

@@ -196,6 +196,10 @@ pub struct ConnectionImporterContrib {
 pub struct ManualFilePickContrib {
     #[serde(default)]
     pub prompt: Option<String>,
+    #[serde(default, rename = "supportsDirectories")]
+    pub supports_directories: bool,
+    #[serde(default, rename = "directoryPrompt")]
+    pub directory_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

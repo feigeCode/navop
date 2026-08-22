@@ -114,7 +114,7 @@ impl ConnectionImportWindow {
     fn render_sources(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .flex_none()
-            .w(px(260.0))
+            .w(px(320.0))
             .h_full()
             .min_h_0()
             .border_r_1()
@@ -128,6 +128,12 @@ impl ConnectionImportWindow {
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("Home.ConnectionImport.sources").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.ConnectionImport.sources_scan_hint").to_string()),
             )
             .children(
                 self.model
