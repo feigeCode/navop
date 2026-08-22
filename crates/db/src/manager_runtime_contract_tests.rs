@@ -53,3 +53,66 @@ fn import_core_rejects_missing_tokio_runtime_before_connection_lookup() {
         error.to_string()
     );
 }
+
+#[test]
+fn create_session_direct_rejects_missing_tokio_runtime_before_connection_lookup() {
+    let state = GlobalDbState::new();
+    let error =
+        poll_once(state.create_session_direct("missing-session-connection".to_string(), None));
+
+    assert_eq!(
+        "database session creation requires the application Tokio runtime",
+        error.to_string()
+    );
+}
+
+#[test]
+fn list_databases_direct_rejects_missing_tokio_runtime_before_connection_lookup() {
+    let state = GlobalDbState::new();
+    let error = poll_once(state.list_databases_direct("missing-database-connection".to_string()));
+
+    assert_eq!(
+        "database metadata query requires the application Tokio runtime",
+        error.to_string()
+    );
+}
+
+#[test]
+fn list_schemas_direct_rejects_missing_tokio_runtime_before_connection_lookup() {
+    let state = GlobalDbState::new();
+    let error = poll_once(state.list_schemas_direct(
+        "missing-schema-connection".to_string(),
+        "missing-database".to_string(),
+    ));
+
+    assert_eq!(
+        "database metadata query requires the application Tokio runtime",
+        error.to_string()
+    );
+}
+
+#[test]
+fn execute_session_rejects_missing_tokio_runtime_before_session_lookup() {
+    let state = GlobalDbState::new();
+    let error = poll_once(state.execute_session(
+        "missing-session".to_string(),
+        "select 1".to_string(),
+        None,
+    ));
+
+    assert_eq!(
+        "database session execution requires the application Tokio runtime",
+        error.to_string()
+    );
+}
+
+#[test]
+fn close_session_direct_rejects_missing_tokio_runtime_before_session_lookup() {
+    let state = GlobalDbState::new();
+    let error = poll_once(state.close_session_direct("missing-session"));
+
+    assert_eq!(
+        "database session close requires the application Tokio runtime",
+        error.to_string()
+    );
+}

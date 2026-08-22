@@ -189,6 +189,38 @@ fn result_set_export_exec_options() -> ExecOptions {
     }
 }
 
+async fn list_columns_direct_on_runtime(
+    cx: &mut AsyncApp,
+    global_state: GlobalDbState,
+    connection_id: String,
+    database_name: String,
+    schema_name: Option<String>,
+    table_name: String,
+) -> anyhow::Result<Vec<ColumnInfo>> {
+    Tokio::spawn_result(cx, async move {
+        global_state
+            .list_columns_direct(&connection_id, &database_name, schema_name, &table_name)
+            .await
+    })
+    .await
+}
+
+async fn list_indexes_direct_on_runtime(
+    cx: &mut AsyncApp,
+    global_state: GlobalDbState,
+    connection_id: String,
+    database_name: String,
+    schema_name: Option<String>,
+    table_name: String,
+) -> anyhow::Result<Vec<IndexInfo>> {
+    Tokio::spawn_result(cx, async move {
+        global_state
+            .list_indexes_direct(&connection_id, &database_name, schema_name, &table_name)
+            .await
+    })
+    .await
+}
+
 async fn execute_sql_result_export(
     global_state: GlobalDbState,
     request: SqlResultExportRequest,
@@ -843,9 +875,15 @@ impl DataGrid {
         let data_generation = self.data_generation.clone();
         let expected_generation = data_generation.load(Ordering::Acquire);
         cx.spawn(async move |cx: &mut AsyncApp| {
-            let result = global_state
-                .list_columns_direct(&connection_id, &database_name, schema_name, &table_name)
-                .await;
+            let result = list_columns_direct_on_runtime(
+                cx,
+                global_state,
+                connection_id,
+                database_name,
+                schema_name,
+                table_name,
+            )
+            .await;
 
             if let Ok(cols) = result {
                 cx.update(|cx| {
@@ -1108,14 +1146,15 @@ impl DataGrid {
                         });
                     });
 
-                    match global_state
-                        .list_columns_direct(
-                            &connection_id,
-                            &database_name,
-                            schema_name,
-                            &table_name,
-                        )
-                        .await
+                    match list_columns_direct_on_runtime(
+                        cx,
+                        global_state,
+                        connection_id,
+                        database_name,
+                        schema_name,
+                        table_name,
+                    )
+                    .await
                     {
                         Ok(column_meta) => {
                             cx.update(|cx| {
@@ -1245,14 +1284,15 @@ impl DataGrid {
             let table_name_for_columns = self.config.table_name.clone();
 
             cx.spawn(async move |cx: &mut AsyncApp| {
-                let columns_result = global_state
-                    .list_columns_direct(
-                        &connection_id_for_columns,
-                        &database_name_for_columns,
-                        schema_name_for_columns,
-                        &table_name_for_columns,
-                    )
-                    .await;
+                let columns_result = list_columns_direct_on_runtime(
+                    cx,
+                    global_state,
+                    connection_id_for_columns,
+                    database_name_for_columns,
+                    schema_name_for_columns,
+                    table_name_for_columns,
+                )
+                .await;
 
                 match columns_result {
                     Ok(columns) => {
@@ -1598,14 +1638,15 @@ impl DataGrid {
                     )
                     .await?;
                 if editable {
-                    let column_meta = global_state
-                        .list_columns_direct(
-                            &connection_id,
-                            &database_name,
-                            schema_name.clone(),
-                            &table_name,
-                        )
-                        .await?;
+                    let column_meta = list_columns_direct_on_runtime(
+                        cx,
+                        global_state.clone(),
+                        connection_id.clone(),
+                        database_name.clone(),
+                        schema_name.clone(),
+                        table_name.clone(),
+                    )
+                    .await?;
                     return Ok((sql_result, Some(column_meta)));
                 }
                 Ok((sql_result, None))
@@ -2331,14 +2372,15 @@ impl DataGrid {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let mut index_infos = vec![];
             if need_index_infos {
-                let index_infos_result = global_state
-                    .list_indexes_direct(
-                        &connection_id,
-                        &database_name,
-                        schema_name.clone(),
-                        &table_name,
-                    )
-                    .await;
+                let index_infos_result = list_indexes_direct_on_runtime(
+                    cx,
+                    global_state.clone(),
+                    connection_id.clone(),
+                    database_name.clone(),
+                    schema_name.clone(),
+                    table_name.clone(),
+                )
+                .await;
                 index_infos = match index_infos_result {
                     Ok(infos) => infos,
                     Err(err) => {
@@ -2463,14 +2505,15 @@ impl DataGrid {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let mut index_infos = vec![];
             if need_index_infos {
-                let index_infos_result = global_state
-                    .list_indexes_direct(
-                        &connection_id,
-                        &database_name,
-                        schema_name.clone(),
-                        &table_name,
-                    )
-                    .await;
+                let index_infos_result = list_indexes_direct_on_runtime(
+                    cx,
+                    global_state.clone(),
+                    connection_id.clone(),
+                    database_name.clone(),
+                    schema_name.clone(),
+                    table_name.clone(),
+                )
+                .await;
                 index_infos = match index_infos_result {
                     Ok(infos) => infos,
                     Err(err) => {
@@ -2590,14 +2633,15 @@ impl DataGrid {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let mut index_infos = vec![];
             if need_index_infos {
-                let index_infos_result = global_state
-                    .list_indexes_direct(
-                        &connection_id,
-                        &database_name,
-                        schema_name.clone(),
-                        &table_name,
-                    )
-                    .await;
+                let index_infos_result = list_indexes_direct_on_runtime(
+                    cx,
+                    global_state,
+                    connection_id,
+                    database_name,
+                    schema_name,
+                    table_name,
+                )
+                .await;
                 index_infos = match index_infos_result {
                     Ok(index_infos) => index_infos,
                     Err(err) => {

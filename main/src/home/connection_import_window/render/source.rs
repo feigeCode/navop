@@ -64,6 +64,20 @@ pub(super) fn render_source_row(
                         .whitespace_nowrap()
                         .child(source.descriptor.display_name.clone()),
                 )
+                .when_some(
+                    source.descriptor.description.clone(),
+                    |this, description| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(description),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .text_xs()

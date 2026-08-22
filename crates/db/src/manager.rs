@@ -1578,6 +1578,7 @@ impl GlobalDbState {
         connection_id: String,
         database: Option<String>,
     ) -> anyhow::Result<String> {
+        require_tokio_runtime("database session creation")?;
         let mut config = self
             .get_config(&connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -1652,6 +1653,7 @@ impl GlobalDbState {
         script: String,
         opts: Option<ExecOptions>,
     ) -> anyhow::Result<Vec<SqlResult>> {
+        require_tokio_runtime("database session execution")?;
         let config = self
             .connection_manager
             .get_session_config(&session_id)
@@ -1699,6 +1701,7 @@ impl GlobalDbState {
         session_id: &str,
         request: crate::types::TableDataRequest,
     ) -> anyhow::Result<crate::types::TableDataResponse> {
+        require_tokio_runtime("database session query")?;
         let config = self
             .connection_manager
             .get_session_config(session_id)
@@ -1742,6 +1745,7 @@ impl GlobalDbState {
         session_id: String,
         schema: String,
     ) -> anyhow::Result<()> {
+        require_tokio_runtime("database session schema switch")?;
         let mut guard = self
             .connection_manager
             .get_session_connection(&session_id)
@@ -1758,6 +1762,7 @@ impl GlobalDbState {
         &self,
         connection_id: String,
     ) -> anyhow::Result<Vec<String>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(&connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -1789,6 +1794,7 @@ impl GlobalDbState {
         connection_id: String,
         database: String,
     ) -> anyhow::Result<Vec<String>> {
+        require_tokio_runtime("database metadata query")?;
         let mut config = self
             .get_config(&connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -2182,6 +2188,7 @@ impl GlobalDbState {
     }
 
     pub async fn close_session_direct(&self, session_id: &str) -> anyhow::Result<()> {
+        require_tokio_runtime("database session close")?;
         self.connection_manager
             .close_session(session_id)
             .await
@@ -3305,6 +3312,7 @@ impl GlobalDbState {
         database: &str,
         schema: Option<String>,
     ) -> anyhow::Result<Vec<crate::types::TableInfo>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3347,6 +3355,7 @@ impl GlobalDbState {
         schema: Option<String>,
         table: &str,
     ) -> anyhow::Result<Vec<crate::types::ColumnInfo>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3389,6 +3398,7 @@ impl GlobalDbState {
         schema: Option<String>,
         table: &str,
     ) -> anyhow::Result<Vec<crate::types::IndexInfo>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3431,6 +3441,7 @@ impl GlobalDbState {
         schema: Option<String>,
         table: &str,
     ) -> anyhow::Result<Vec<crate::types::ForeignKeyDefinition>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3469,6 +3480,7 @@ impl GlobalDbState {
         &self,
         request: crate::types::DirectTableMetadataRequest,
     ) -> anyhow::Result<crate::types::DirectTableMetadata> {
+        require_tokio_runtime("database metadata query")?;
         let mut config = self
             .get_config(&request.connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", request.connection_id))?
@@ -3546,6 +3558,7 @@ impl GlobalDbState {
         database: &str,
         schema: Option<String>,
     ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3587,6 +3600,7 @@ impl GlobalDbState {
         database: &str,
         schema: Option<String>,
     ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3628,6 +3642,7 @@ impl GlobalDbState {
         database: &str,
         schema: Option<String>,
     ) -> anyhow::Result<Vec<crate::types::TriggerInfo>> {
+        require_tokio_runtime("database metadata query")?;
         let config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
@@ -3671,6 +3686,7 @@ impl GlobalDbState {
         schema: Option<String>,
         opts: Option<ExecOptions>,
     ) -> anyhow::Result<Vec<SqlResult>> {
+        require_tokio_runtime("database script execution")?;
         let mut config = self
             .get_config(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?

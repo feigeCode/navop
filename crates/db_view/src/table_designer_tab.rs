@@ -41,6 +41,7 @@ use db::types::{
     ParsedColumnType, TableDesign, TableInfo, TableOptions,
 };
 use gpui_component::select::SearchableVec;
+use one_core::gpui_tokio::Tokio;
 use one_core::storage::DatabaseType;
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use rust_i18n::t;
@@ -1074,27 +1075,52 @@ impl TableDesigner {
         let table_comment_input = self.table_comment_input.clone();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let columns_result = global_state
-                .list_columns_direct(
-                    &connection_id,
-                    &database_name,
-                    schema_name.clone(),
-                    &table_name,
-                )
-                .await;
+            let query_result = Tokio::spawn_result(cx, async move {
+                let columns_result = global_state
+                    .list_columns_direct(
+                        &connection_id,
+                        &database_name,
+                        schema_name.clone(),
+                        &table_name,
+                    )
+                    .await;
 
-            let indexes_result = global_state
-                .list_indexes_direct(
-                    &connection_id,
-                    &database_name,
-                    schema_name.clone(),
-                    &table_name,
-                )
-                .await;
+                let indexes_result = global_state
+                    .list_indexes_direct(
+                        &connection_id,
+                        &database_name,
+                        schema_name.clone(),
+                        &table_name,
+                    )
+                    .await;
 
-            let tables_result = global_state
-                .list_tables_direct(&connection_id, &database_name, schema_name.clone())
-                .await;
+                let tables_result = global_state
+                    .list_tables_direct(&connection_id, &database_name, schema_name.clone())
+                    .await;
+
+                Ok((
+                    columns_result,
+                    indexes_result,
+                    tables_result,
+                    schema_name,
+                    table_name,
+                ))
+            })
+            .await;
+
+            let (columns_result, indexes_result, tables_result, schema_name, table_name) =
+                match query_result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "table_designer_diag",
+                            seq = load_seq,
+                            error = %error,
+                            "[table_designer_diag] load_table_structure Tokio task failed"
+                        );
+                        return;
+                    }
+                };
 
             tracing::warn!(
                 target: "table_designer_diag",

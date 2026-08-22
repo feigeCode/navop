@@ -17,6 +17,7 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
+use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use std::collections::HashSet;
 
@@ -435,16 +436,19 @@ impl SchemaCompareWindow {
         let db_state = cx.global::<GlobalDbState>().clone();
         let schema = (!schema_name.trim().is_empty()).then_some(schema_name);
         cx.spawn(async move |_, cx: &mut AsyncApp| {
-            let result = db_state
-                .list_tables_direct(&connection_id, &database_name, schema)
-                .await
-                .map(|tables| {
-                    tables
-                        .into_iter()
-                        .filter(|table| table.object_type == TableObjectType::Table)
-                        .map(|table| table.name)
-                        .collect::<Vec<_>>()
-                });
+            let result = Tokio::spawn_result(cx, async move {
+                db_state
+                    .list_tables_direct(&connection_id, &database_name, schema)
+                    .await
+                    .map(|tables| {
+                        tables
+                            .into_iter()
+                            .filter(|table| table.object_type == TableObjectType::Table)
+                            .map(|table| table.name)
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .await;
             let _ = cx.update(|cx| match result {
                 Ok(tables) => {
                     let count = tables.len();

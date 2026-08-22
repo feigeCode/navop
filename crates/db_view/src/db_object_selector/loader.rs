@@ -1,6 +1,7 @@
 use db::GlobalDbState;
 use gpui::{AppContext, AsyncApp, Context, Entity};
 use gpui_component::{IndexPath, select::SearchableVec};
+use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 
 use crate::compare::window_ui::register_connection_for_compare;
@@ -37,13 +38,16 @@ pub(crate) fn load_databases_then<T: 'static>(
     let view = cx.entity().clone();
     let mut after_load = Some(after_load);
     cx.spawn(async move |_, cx: &mut AsyncApp| {
-        let result = if policy.schema_as_database {
-            db_state
-                .list_schemas_direct(connection_id, String::new())
-                .await
-        } else {
-            db_state.list_databases_direct(connection_id).await
-        };
+        let result = Tokio::spawn_result(cx, async move {
+            if policy.schema_as_database {
+                db_state
+                    .list_schemas_direct(connection_id, String::new())
+                    .await
+            } else {
+                db_state.list_databases_direct(connection_id).await
+            }
+        })
+        .await;
         let loaded = result.is_ok();
         update_string_select_async(result, database.select, preferred, status, cx);
         if loaded {
@@ -90,9 +94,12 @@ pub(crate) fn load_schemas_then<T: 'static>(
     let view = cx.entity().clone();
     let mut after_load = Some(after_load);
     cx.spawn(async move |_, cx: &mut AsyncApp| {
-        let result = db_state
-            .list_schemas_direct(connection_id, database_name)
-            .await;
+        let result = Tokio::spawn_result(cx, async move {
+            db_state
+                .list_schemas_direct(connection_id, database_name)
+                .await
+        })
+        .await;
         let loaded = result.is_ok();
         update_string_select_async(result, schema.select, preferred, status, cx);
         if loaded {

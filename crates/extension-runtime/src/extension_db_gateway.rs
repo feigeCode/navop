@@ -104,8 +104,7 @@ impl ExtensionDbGateway {
             return Ok(());
         }
         self.db_state
-            .connection_manager
-            .close_session(session.session_id())
+            .close_session_direct(session.session_id())
             .await
             .map_err(|error| DbError::query_failed(error.to_string()))?;
         session.close();
