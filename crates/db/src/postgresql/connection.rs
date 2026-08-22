@@ -2,7 +2,7 @@ use std::fs;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
@@ -13,6 +13,7 @@ use rustls::{
     Error as RustlsError, RootCertStore, SignatureScheme,
 };
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio_postgres::{
     Client, Config, NoTls, Row, Statement,
     config::SslMode,
@@ -37,6 +38,10 @@ const NUMERIC_NEGATIVE: u16 = 0x4000;
 const NUMERIC_NAN: u16 = 0xC000;
 const NUMERIC_POSITIVE_INFINITY: u16 = 0xD000;
 const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
+const CONNECT_MAX_ATTEMPTS: usize = 2;
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(250);
+const CONNECT_RETRY_MAX_FAILURE_ELAPSED: Duration = Duration::from_secs(5);
+const CONNECT_RETRY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Normalize character-length syntax emitted by some PostgreSQL-compatible
 /// databases before sending a statement to standard PostgreSQL.
@@ -815,6 +820,80 @@ impl PostgresDbConnection {
         false
     }
 
+    fn should_retry_connect_error(error: &tokio_postgres::Error) -> bool {
+        if error.as_db_error().is_some() {
+            return false;
+        }
+
+        Self::is_transient_connect_error(error)
+    }
+
+    fn is_transient_connect_error(error: &(dyn std::error::Error + 'static)) -> bool {
+        let mut current = Some(error);
+        while let Some(err) = current {
+            if let Some(io_error) = err.downcast_ref::<std::io::Error>() {
+                if matches!(
+                    io_error.kind(),
+                    std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::WouldBlock
+                ) {
+                    return true;
+                }
+            }
+
+            let message = err.to_string().to_ascii_lowercase();
+            if message.contains("error communicating with the server")
+                || message.contains("error connecting to server")
+                || message.contains("connection closed")
+                || message.contains("connection reset")
+                || message.contains("connection aborted")
+                || message.contains("broken pipe")
+                || message.contains("unexpected eof")
+                || message.contains("early eof")
+                || message.contains("connection refused")
+                || message.contains("timeout waiting for server")
+                || message.contains("timed out")
+                || message.contains("network is unreachable")
+                || message.contains("host is unreachable")
+                || message.contains("temporary failure in name resolution")
+            {
+                return true;
+            }
+            current = err.source();
+        }
+        false
+    }
+
+    fn error_chain(error: &dyn std::error::Error) -> String {
+        let mut messages = Vec::new();
+        let mut current = Some(error);
+        while let Some(err) = current {
+            let message = err.to_string();
+            if messages.last() != Some(&message) {
+                messages.push(message);
+            }
+            current = err.source();
+        }
+        messages.join(" -> ")
+    }
+
+    fn config_for_connect_retry(pg_config: &Config) -> Config {
+        let mut retry_config = pg_config.clone();
+        let retry_timeout = pg_config
+            .get_connect_timeout()
+            .copied()
+            .unwrap_or(CONNECT_RETRY_ATTEMPT_TIMEOUT)
+            .min(CONNECT_RETRY_ATTEMPT_TIMEOUT);
+        retry_config.connect_timeout(retry_timeout);
+        retry_config
+    }
+
     fn format_server_error_message(
         message: &str,
         code: &str,
@@ -920,6 +999,39 @@ impl PostgresDbConnection {
         Ok(client)
     }
 
+    async fn connect_without_tls_with_retry(
+        pg_config: &Config,
+        ssl_mode: SslMode,
+    ) -> Result<Client, tokio_postgres::Error> {
+        let attempt_started = Instant::now();
+        let error = match Self::connect_without_tls(pg_config).await {
+            Ok(client) => return Ok(client),
+            Err(error) => error,
+        };
+        let attempt_elapsed = attempt_started.elapsed();
+        if attempt_elapsed > CONNECT_RETRY_MAX_FAILURE_ELAPSED
+            || !Self::should_retry_connect_error(&error)
+        {
+            return Err(error);
+        }
+
+        let retry_config = Self::config_for_connect_retry(pg_config);
+        warn!(
+            "[PostgreSQL] Transient connection failure, retrying: attempt=1/{} ssl_mode={:?} attempt_elapsed={}ms delay={}ms retry_timeout={}ms error_chain={}",
+            CONNECT_MAX_ATTEMPTS,
+            ssl_mode,
+            attempt_elapsed.as_millis(),
+            CONNECT_RETRY_DELAY.as_millis(),
+            retry_config
+                .get_connect_timeout()
+                .expect("retry config always has a connect timeout")
+                .as_millis(),
+            Self::error_chain(&error)
+        );
+        sleep(CONNECT_RETRY_DELAY).await;
+        Self::connect_without_tls(&retry_config).await
+    }
+
     async fn connect_with_tls(
         pg_config: &Config,
         tls_connector: MakeRustlsConnect,
@@ -934,6 +1046,40 @@ impl PostgresDbConnection {
             }
         });
         Ok(client)
+    }
+
+    async fn connect_with_tls_retry(
+        pg_config: &Config,
+        tls_connector: MakeRustlsConnect,
+        ssl_mode: SslMode,
+    ) -> Result<Client, tokio_postgres::Error> {
+        let attempt_started = Instant::now();
+        let error = match Self::connect_with_tls(pg_config, tls_connector.clone()).await {
+            Ok(client) => return Ok(client),
+            Err(error) => error,
+        };
+        let attempt_elapsed = attempt_started.elapsed();
+        if attempt_elapsed > CONNECT_RETRY_MAX_FAILURE_ELAPSED
+            || !Self::should_retry_connect_error(&error)
+        {
+            return Err(error);
+        }
+
+        let retry_config = Self::config_for_connect_retry(pg_config);
+        warn!(
+            "[PostgreSQL] Transient connection failure, retrying: attempt=1/{} ssl_mode={:?} attempt_elapsed={}ms delay={}ms retry_timeout={}ms error_chain={}",
+            CONNECT_MAX_ATTEMPTS,
+            ssl_mode,
+            attempt_elapsed.as_millis(),
+            CONNECT_RETRY_DELAY.as_millis(),
+            retry_config
+                .get_connect_timeout()
+                .expect("retry config always has a connect timeout")
+                .as_millis(),
+            Self::error_chain(&error)
+        );
+        sleep(CONNECT_RETRY_DELAY).await;
+        Self::connect_with_tls(&retry_config, tls_connector).await
     }
 }
 
@@ -999,12 +1145,13 @@ impl DbConnection for PostgresDbConnection {
         let client = match ssl_mode {
             SslMode::Disable => {
                 let connect_without_tls_started = Instant::now();
-                let client = Self::connect_without_tls(&pg_config)
+                let client = Self::connect_without_tls_with_retry(&pg_config, ssl_mode)
                     .await
                     .map_err(|error| {
                         error!(
-                            "[PostgreSQL] Connection failed: {}",
-                            Self::postgres_error_message(&error)
+                            "[PostgreSQL] Connection failed: {} (error_chain={})",
+                            Self::postgres_error_message(&error),
+                            Self::error_chain(&error)
                         );
                         Self::connection_error(error)
                     })?;
@@ -1022,7 +1169,7 @@ impl DbConnection for PostgresDbConnection {
                     tls_connector_started.elapsed().as_millis()
                 );
                 let tls_connect_started = Instant::now();
-                match Self::connect_with_tls(&pg_config, tls_connector).await {
+                match Self::connect_with_tls_retry(&pg_config, tls_connector, ssl_mode).await {
                     Ok(client) => {
                         info!(
                             "[PostgreSQL][Timing] connect_with_tls={}ms ssl_mode=Prefer",
@@ -1033,8 +1180,9 @@ impl DbConnection for PostgresDbConnection {
                     Err(error) if Self::should_retry_without_tls(&error) => {
                         let error_message = Self::postgres_error_message(&error);
                         warn!(
-                            "[PostgreSQL] TLS connect failed in prefer mode, retrying without TLS: {}",
-                            error_message
+                            "[PostgreSQL] TLS connect failed in prefer mode, retrying without TLS: {} (error_chain={})",
+                            error_message,
+                            Self::error_chain(&error)
                         );
                         info!(
                             "[PostgreSQL][Timing] connect_with_tls_failed={}ms ssl_mode=Prefer reason={}",
@@ -1042,15 +1190,16 @@ impl DbConnection for PostgresDbConnection {
                             error_message
                         );
                         let retry_started = Instant::now();
-                        let client = Self::connect_without_tls(&pg_config).await.map_err(
-                            |retry_error| {
+                        let client = Self::connect_without_tls_with_retry(&pg_config, ssl_mode)
+                            .await
+                            .map_err(|retry_error| {
                                 error!(
-                                    "[PostgreSQL] Non-TLS retry after TLS failure also failed: {}",
-                                    Self::postgres_error_message(&retry_error)
+                                    "[PostgreSQL] Non-TLS retry after TLS failure also failed: {} (error_chain={})",
+                                    Self::postgres_error_message(&retry_error),
+                                    Self::error_chain(&retry_error)
                                 );
                                 Self::connection_error(retry_error)
-                            },
-                        )?;
+                            })?;
                         info!(
                             "[PostgreSQL][Timing] retry_without_tls={}ms ssl_mode=Prefer",
                             retry_started.elapsed().as_millis()
@@ -1059,8 +1208,9 @@ impl DbConnection for PostgresDbConnection {
                     }
                     Err(error) => {
                         error!(
-                            "[PostgreSQL] Connection failed: {}",
-                            Self::postgres_error_message(&error)
+                            "[PostgreSQL] Connection failed: {} (error_chain={})",
+                            Self::postgres_error_message(&error),
+                            Self::error_chain(&error)
                         );
                         return Err(Self::connection_error(error));
                     }
@@ -1075,12 +1225,13 @@ impl DbConnection for PostgresDbConnection {
                     ssl_mode
                 );
                 let tls_connect_started = Instant::now();
-                let client = Self::connect_with_tls(&pg_config, tls_connector)
+                let client = Self::connect_with_tls_retry(&pg_config, tls_connector, ssl_mode)
                     .await
                     .map_err(|error| {
                         error!(
-                            "[PostgreSQL] Connection failed: {}",
-                            Self::postgres_error_message(&error)
+                            "[PostgreSQL] Connection failed: {} (error_chain={})",
+                            Self::postgres_error_message(&error),
+                            Self::error_chain(&error)
                         );
                         Self::connection_error(error)
                     })?;
@@ -2321,6 +2472,81 @@ mod tests {
         let error = std::io::Error::other("password authentication failed for user postgres");
 
         assert!(!PostgresDbConnection::should_retry_without_tls(&error));
+    }
+
+    #[test]
+    fn transient_connect_errors_include_early_disconnects() {
+        for error in [
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early eof"),
+            std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset by peer",
+            ),
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "operation timed out"),
+        ] {
+            assert!(PostgresDbConnection::is_transient_connect_error(&error));
+        }
+    }
+
+    #[test]
+    fn transient_connect_errors_include_tokio_postgres_io_message() {
+        let error = std::io::Error::other("error communicating with the server");
+
+        assert!(PostgresDbConnection::is_transient_connect_error(&error));
+    }
+
+    #[test]
+    fn transient_connect_errors_exclude_authentication_failures() {
+        let error = std::io::Error::other("password authentication failed for user postgres");
+
+        assert!(!PostgresDbConnection::is_transient_connect_error(&error));
+    }
+
+    #[test]
+    fn connect_retry_caps_long_configured_timeout() {
+        let mut config = Config::new();
+        config.connect_timeout(Duration::from_secs(40));
+
+        let retry_config = PostgresDbConnection::config_for_connect_retry(&config);
+
+        assert_eq!(
+            retry_config.get_connect_timeout(),
+            Some(&CONNECT_RETRY_ATTEMPT_TIMEOUT)
+        );
+    }
+
+    #[test]
+    fn connect_retry_preserves_shorter_configured_timeout() {
+        let mut config = Config::new();
+        let configured_timeout = Duration::from_secs(2);
+        config.connect_timeout(configured_timeout);
+
+        let retry_config = PostgresDbConnection::config_for_connect_retry(&config);
+
+        assert_eq!(
+            retry_config.get_connect_timeout(),
+            Some(&configured_timeout)
+        );
+    }
+
+    #[test]
+    fn connect_retry_adds_timeout_when_not_configured() {
+        let config = Config::new();
+
+        let retry_config = PostgresDbConnection::config_for_connect_retry(&config);
+
+        assert_eq!(
+            retry_config.get_connect_timeout(),
+            Some(&CONNECT_RETRY_ATTEMPT_TIMEOUT)
+        );
+    }
+
+    #[test]
+    fn error_chain_includes_nested_cause() {
+        let source = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early eof");
+        let error = std::io::Error::other(source);
+
+        assert_eq!(PostgresDbConnection::error_chain(&error), "early eof");
     }
 
     #[test]
