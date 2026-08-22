@@ -2,11 +2,7 @@ use gpui::{
     AnyElement, ColorExt as _, FontWeight, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, Sizable, StyledExt,
-    button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IconName, IconSize, Sizable, StyledExt, button::{Button, ButtonVariants as _}, h_flex, v_flex, InteractiveElementExt};
 use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
@@ -246,7 +242,7 @@ impl HomePage {
             .bg(cx.theme().background)
             .cursor_pointer()
             .hover(move |style| style.bg(hover_background).border_color(hover_border))
-            .on_click(
+            .on_double_click(
                 window.listener_for(&cx.entity(), move |home, _, window, cx| {
                     home.open_connection_from_quick(&open_connection, window, cx);
                 }),
