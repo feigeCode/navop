@@ -1236,6 +1236,14 @@ QuickCommand:
     en: Enter command
     zh-CN: 输入命令
     zh-HK: 輸入命令
+  auto_run:
+    en: Execute on click
+    zh-CN: 点击执行
+    zh-HK: 點擊執行
+  auto_run_hint:
+    en: Send Enter automatically after triggering the command
+    zh-CN: 触发后自动发送回车执行命令
+    zh-HK: 觸發後自動傳送回車執行命令
   shortcut:
     en: Shortcut
     zh-CN: 快捷键
