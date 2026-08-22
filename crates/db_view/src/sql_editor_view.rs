@@ -1,6 +1,7 @@
 use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::{SqlEditor, SqlSchema};
-use crate::sql_result_tab::{SessionSqlRun, SqlResultTabContainer};
+use crate::sql_result_tab::{SessionSchemaInvalidation, SessionSqlRun, SqlResultTabContainer};
+use db::cache_manager::{GlobalNodeCache, SchemaInvalidationPlan};
 use db::{DbManager, GlobalDbState, StreamingSqlParser, format_sql};
 use futures::channel::oneshot;
 use gpui::prelude::*;
@@ -17,6 +18,8 @@ use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, Sel
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
 };
+use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
+use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::storage::{DatabaseType, QueryDirectoryScope, default_query_directory};
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
@@ -535,11 +538,12 @@ impl SqlExecutionScope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct ManualTransactionSession {
     session_id: String,
     database: Option<String>,
     schema: Option<String>,
+    pending_invalidation: Arc<Mutex<SchemaInvalidationPlan>>,
 }
 
 struct ManualTransactionPrepare<'a> {
@@ -554,6 +558,7 @@ impl ManualTransactionSession {
             session_id,
             database,
             schema,
+            pending_invalidation: Arc::new(Mutex::new(SchemaInvalidationPlan::default())),
         }
     }
 
@@ -567,6 +572,31 @@ impl ManualTransactionSession {
 
     fn matches_execution_scope(&self, scope: &SqlExecutionScope) -> bool {
         self.matches_scope(scope.database.as_deref(), scope.schema.as_deref())
+    }
+
+    fn pending_invalidation(&self) -> Arc<Mutex<SchemaInvalidationPlan>> {
+        self.pending_invalidation.clone()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManualTransactionInvalidationMode {
+    Immediate,
+    Deferred,
+}
+
+fn manual_transaction_invalidation_mode(
+    database_type: &DatabaseType,
+) -> ManualTransactionInvalidationMode {
+    match database_type {
+        DatabaseType::PostgreSQL
+        | DatabaseType::SQLite
+        | DatabaseType::DuckDB
+        | DatabaseType::MSSQL => ManualTransactionInvalidationMode::Deferred,
+        DatabaseType::MySQL
+        | DatabaseType::Oracle
+        | DatabaseType::ClickHouse
+        | DatabaseType::External { .. } => ManualTransactionInvalidationMode::Immediate,
     }
 }
 
@@ -1666,7 +1696,15 @@ impl SqlEditorTab {
                 window.push_notification(t!("Query.transaction_scope_changed").to_string(), cx);
                 return;
             }
-            self.run_manual_sql_on_session(sql, session.session_id().to_string(), scope, cx);
+            let schema_invalidation =
+                self.session_schema_invalidation(session.pending_invalidation());
+            self.run_manual_sql_on_session(
+                sql,
+                session.session_id().to_string(),
+                scope,
+                schema_invalidation,
+                cx,
+            );
             return;
         }
 
@@ -1678,6 +1716,7 @@ impl SqlEditorTab {
         sql: String,
         session_id: String,
         scope: SqlExecutionScope,
+        schema_invalidation: SessionSchemaInvalidation,
         cx: &mut App,
     ) {
         let request = SessionSqlRun {
@@ -1687,10 +1726,23 @@ impl SqlEditorTab {
             database: scope.database,
             schema: scope.schema,
             database_type: self.database_type.clone(),
+            schema_invalidation,
         };
         self.sql_result_tab_container.update(cx, |container, cx| {
             container.handle_run_query_with_session(request, cx);
         });
+    }
+
+    fn session_schema_invalidation(
+        &self,
+        pending: Arc<Mutex<SchemaInvalidationPlan>>,
+    ) -> SessionSchemaInvalidation {
+        match manual_transaction_invalidation_mode(&self.database_type) {
+            ManualTransactionInvalidationMode::Immediate => SessionSchemaInvalidation::Immediate,
+            ManualTransactionInvalidationMode::Deferred => {
+                SessionSchemaInvalidation::Deferred(pending)
+            }
+        }
     }
 
     fn start_manual_transaction_and_run(
@@ -1724,7 +1776,7 @@ impl SqlEditorTab {
                 session_id: &session_id,
             };
             if let Err(error) =
-                Self::prepare_manual_transaction_session(&global_state, prepare).await
+                Self::prepare_manual_transaction_session(&global_state, prepare, cx).await
             {
                 let _ = global_state.close_session(cx, session_id).await;
                 Self::notify_async(
@@ -1735,12 +1787,21 @@ impl SqlEditorTab {
             }
 
             let _ = entity.update(cx, |this, cx| {
-                this.manual_transaction = Some(ManualTransactionSession::new(
+                let session = ManualTransactionSession::new(
                     session_id.clone(),
                     scope.database.clone(),
                     scope.schema.clone(),
-                ));
-                this.run_manual_sql_on_session(sql.clone(), session_id.clone(), scope.clone(), cx);
+                );
+                let schema_invalidation =
+                    this.session_schema_invalidation(session.pending_invalidation());
+                this.manual_transaction = Some(session);
+                this.run_manual_sql_on_session(
+                    sql.clone(),
+                    session_id.clone(),
+                    scope.clone(),
+                    schema_invalidation,
+                    cx,
+                );
                 cx.notify();
             });
             Self::notify_async(cx, t!("Query.transaction_started").to_string());
@@ -1751,27 +1812,35 @@ impl SqlEditorTab {
     async fn prepare_manual_transaction_session(
         global_state: &GlobalDbState,
         prepare: ManualTransactionPrepare<'_>,
+        cx: &mut AsyncApp,
     ) -> anyhow::Result<()> {
-        if let Some(schema) = &prepare.scope.schema {
-            global_state
-                .switch_session_schema(prepare.session_id.to_string(), schema.clone())
-                .await?;
-        }
-        if let Some(begin_sql) =
+        let global_state = global_state.clone();
+        let schema = prepare.scope.schema.clone();
+        let session_id = prepare.session_id.to_string();
+        let begin_sql =
             manual_transaction_control_sql(prepare.database_type, ManualTransactionAction::Begin)
-        {
-            let result = global_state
-                .execute_session(
-                    prepare.session_id.to_string(),
-                    begin_sql.to_string(),
-                    Some(manual_transaction_control_options()),
-                )
-                .await;
-            if transaction_control_failed(&result) {
-                return Err(anyhow::anyhow!("BEGIN failed"));
+                .map(str::to_string);
+        Tokio::spawn_result(cx, async move {
+            if let Some(schema) = schema {
+                global_state
+                    .switch_session_schema(session_id.clone(), schema)
+                    .await?;
             }
-        }
-        Ok(())
+            if let Some(begin_sql) = begin_sql {
+                let result = global_state
+                    .execute_session(
+                        session_id,
+                        begin_sql,
+                        Some(manual_transaction_control_options()),
+                    )
+                    .await;
+                if transaction_control_failed(&result) {
+                    return Err(anyhow::anyhow!("BEGIN failed"));
+                }
+            }
+            Ok(())
+        })
+        .await
     }
 
     fn handle_commit_transaction(
@@ -1808,9 +1877,13 @@ impl SqlEditorTab {
         };
 
         let global_state = cx.global::<GlobalDbState>().clone();
+        let cache = cx.try_global::<GlobalNodeCache>().cloned();
+        let notifier = cx.try_global::<GlobalConnectionNotifier>().cloned();
+        let connection_id = self.connection_id.clone();
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = global_state
-                .execute_session(
+                .execute_session_on_runtime(
+                    cx,
                     session.session_id().to_string(),
                     sql.to_string(),
                     Some(manual_transaction_control_options()),
@@ -1819,6 +1892,28 @@ impl SqlEditorTab {
             if transaction_control_failed(&result) {
                 Self::notify_async(cx, t!("Query.transaction_control_failed").to_string());
                 return;
+            }
+
+            if action == ManualTransactionAction::Commit {
+                let pending = std::mem::take(&mut *session.pending_invalidation.lock());
+                if let Some(cache) = cache {
+                    let scopes = global_state
+                        .apply_sql_cache_invalidation_plan(&cache, &connection_id, &pending)
+                        .await;
+                    if let Some(notifier) = notifier {
+                        for (connection_id, database, schema) in scopes {
+                            let _ = cx.update(|cx| {
+                                notifier.0.update(cx, |_, cx| {
+                                    cx.emit(ConnectionDataEvent::SchemaChanged {
+                                        connection_id,
+                                        database,
+                                        schema,
+                                    });
+                                });
+                            });
+                        }
+                    }
+                }
             }
 
             let _ = global_state
@@ -2707,11 +2802,12 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManualTransactionAction, ManualTransactionSession, QueryFileNameError, QueryToolbarAction,
-        RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
-        SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment,
-        can_switch_query_connection, initial_database_select_value,
-        is_current_query_context_generation, manual_transaction_control_sql,
+        ManualTransactionAction, ManualTransactionInvalidationMode, ManualTransactionSession,
+        QueryFileNameError, QueryToolbarAction, RUN_ALL_QUERY_KEY_BINDINGS,
+        RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SQL_EDITOR_CONTEXT,
+        SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment, can_switch_query_connection,
+        initial_database_select_value, is_current_query_context_generation,
+        manual_transaction_control_sql, manual_transaction_invalidation_mode,
         query_connection_context_label, query_connection_ids, query_file_path_for_name,
         query_toolbar_action, should_render_schema_select, sql_text_for_run_all,
         sql_text_for_run_current, sql_text_for_run_cursor_statement, sql_text_for_toolbar_run,
@@ -3217,6 +3313,35 @@ mod tests {
         assert!(!session.matches_scope(Some("analytics"), Some("public")));
         assert!(!session.matches_scope(Some("app_db"), Some("private")));
         assert!(!session.matches_scope(None, Some("public")));
+    }
+
+    #[test]
+    fn manual_transaction_invalidation_respects_database_ddl_semantics() {
+        for database_type in [DatabaseType::MySQL, DatabaseType::Oracle] {
+            assert_eq!(
+                ManualTransactionInvalidationMode::Immediate,
+                manual_transaction_invalidation_mode(&database_type)
+            );
+        }
+        for database_type in [
+            DatabaseType::PostgreSQL,
+            DatabaseType::SQLite,
+            DatabaseType::DuckDB,
+            DatabaseType::MSSQL,
+        ] {
+            assert_eq!(
+                ManualTransactionInvalidationMode::Deferred,
+                manual_transaction_invalidation_mode(&database_type)
+            );
+        }
+    }
+
+    #[test]
+    fn manual_transaction_starts_with_empty_pending_invalidation() {
+        let session =
+            ManualTransactionSession::new("session-1".to_string(), None, Some("public".into()));
+
+        assert!(session.pending_invalidation().lock().is_empty());
     }
 
     #[test]

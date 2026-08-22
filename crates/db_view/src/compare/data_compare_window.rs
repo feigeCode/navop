@@ -33,11 +33,12 @@ use crate::compare::target_picker::{
     StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
 };
 use crate::compare::window_params::{
-    DataCompareSelection, data_compare_params, data_compare_target_tables_for_selection,
+    DataCompareSelection, DataCompareSettings, data_compare_params,
+    data_compare_target_tables_for_selection, parse_optional_positive_limit,
 };
 use crate::compare::window_ui::{
     CompareStep, ConnectionSelectItem, SyncSqlExecutionLogEntry, clear_sync_sql_execution_log,
-    close_button, connection_select_state, ignore_identifier_case_option,
+    close_button, connection_select_state, ignore_identifier_case_option, input_row,
     register_connection_for_compare, reset_sync_sql_execution_log, selected_connection_id,
     sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
     sync_sql_execution_log_panel, sync_sql_execution_options_row,
@@ -74,6 +75,8 @@ pub struct DataCompareWindow {
     pub(super) selected_target_tables: Entity<HashSet<String>>,
     pub(super) target_table_list: TableSelectionListState,
     pub(super) key_columns: Entity<InputState>,
+    max_rows_per_table: Entity<InputState>,
+    max_pages_per_table: Entity<InputState>,
     pub(super) ignore_identifier_case: Entity<bool>,
     pub(super) result: Entity<Option<Arc<DataCompareBatchResult>>>,
     pub(super) data_diff_list: DataDiffListState,
@@ -147,6 +150,12 @@ impl DataCompareWindow {
             cx.new(|cx| InputState::new(window, cx).default_value(default_table.clone()));
         let target_table_select = string_select_state(default_table.clone(), window, cx);
         let key_columns = cx.new(|cx| InputState::new(window, cx).placeholder("id, tenant_id"));
+        let max_rows_per_table = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("Compare.limit_optional").to_string())
+        });
+        let max_pages_per_table = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("Compare.limit_optional").to_string())
+        });
         let ignore_identifier_case = cx.new(|_| true);
         let sync_sql_editor = sync_sql_editor_state(window, cx);
         let execution_log_scroll = ScrollHandle::new();
@@ -190,6 +199,8 @@ impl DataCompareWindow {
                 selected_target_tables,
                 target_table_list,
                 key_columns,
+                max_rows_per_table,
+                max_pages_per_table,
                 ignore_identifier_case,
                 sync_sql_editor,
                 result: cx.new(|_| None),
@@ -626,13 +637,27 @@ impl DataCompareWindow {
         cx.notify();
     }
 
-    fn build_params(&self, cx: &mut Context<Self>) -> Result<DataCompareParams, &'static str> {
+    fn build_params(&self, cx: &mut Context<Self>) -> Result<DataCompareParams, String> {
+        let max_rows = self.max_rows_per_table.read(cx).text().to_string();
+        let max_pages = self.max_pages_per_table.read(cx).text().to_string();
+        let invalid_limit = || t!("Compare.invalid_compare_limit").to_string();
+        let max_rows_per_table =
+            parse_optional_positive_limit(&max_rows).map_err(|_| invalid_limit())?;
+        let max_pages_per_table =
+            parse_optional_positive_limit(&max_pages).map_err(|_| invalid_limit())?;
         data_compare_params(
             self.source_selection(cx),
             self.target_selection(cx),
-            self.key_columns.read(cx).text().to_string(),
-            !*self.ignore_identifier_case.read(cx),
+            DataCompareSettings {
+                key_columns: self.key_columns.read(cx).text().to_string(),
+                case_sensitive_identifiers: !*self.ignore_identifier_case.read(cx),
+                limits: crate::compare::DataCompareLimits {
+                    max_rows_per_table,
+                    max_pages_per_table,
+                },
+            },
         )
+        .map_err(str::to_string)
     }
 
     fn start_execute_sync_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -958,7 +983,25 @@ impl Render for DataCompareWindow {
                                     "data-compare-ignore-identifier-case",
                                     self.ignore_identifier_case.clone(),
                                     cx,
-                                )),
+                                ))
+                                .child(
+                                    h_flex()
+                                        .gap_4()
+                                        .child(div().flex_1().min_w_0().child(input_row(
+                                            t!("Compare.max_rows_per_table").to_string(),
+                                            &self.max_rows_per_table,
+                                        )))
+                                        .child(div().flex_1().min_w_0().child(input_row(
+                                            t!("Compare.max_pages_per_table").to_string(),
+                                            &self.max_pages_per_table,
+                                        ))),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("Compare.compare_limit_hint").to_string()),
+                                ),
                         )
                     })
                     .when(self.current_step == CompareStep::SqlPreview, |this| {

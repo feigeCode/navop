@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
 use gpui::AsyncApp;
+use one_core::gpui_tokio::Tokio;
 
 use crate::{
-    ColumnInfo, ForeignKeyDefinition, FunctionInfo, GlobalDbState, IndexInfo, TableInfo,
-    TableObjectType, TriggerInfo,
+    ColumnInfo, DirectTableMetadataRequest, ForeignKeyDefinition, FunctionInfo, GlobalDbState,
+    IndexInfo, TableInfo, TableObjectType, TriggerInfo,
 };
 
 use super::{
@@ -258,18 +259,27 @@ impl GlobalDbState {
 
 async fn load_schema_routines(
     db_state: &GlobalDbState,
-    _cx: &mut AsyncApp,
+    cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<&str>,
     case_sensitive_identifiers: bool,
 ) -> anyhow::Result<Vec<RoutineSchema>> {
-    let functions = db_state
-        .list_functions_in_schema_direct(connection_id, database, schema.map(str::to_string))
-        .await?;
-    let procedures = db_state
-        .list_procedures_in_schema_direct(connection_id, database, schema.map(str::to_string))
-        .await?;
+    let db_state = db_state.clone();
+    let connection_id = connection_id.to_string();
+    let database = database.to_string();
+    let fallback_schema = schema.map(str::to_string);
+    let query_schema = fallback_schema.clone();
+    let (functions, procedures) = Tokio::spawn_result(cx, async move {
+        let functions = db_state
+            .list_functions_in_schema_direct(&connection_id, &database, query_schema.clone())
+            .await?;
+        let procedures = db_state
+            .list_procedures_in_schema_direct(&connection_id, &database, query_schema)
+            .await?;
+        Ok((functions, procedures))
+    })
+    .await?;
 
     Ok(functions
         .into_iter()
@@ -277,7 +287,7 @@ async fn load_schema_routines(
             routine_schema_from_metadata(
                 RoutineKind::Function,
                 routine,
-                schema,
+                fallback_schema.as_deref(),
                 case_sensitive_identifiers,
             )
         })
@@ -285,7 +295,7 @@ async fn load_schema_routines(
             routine_schema_from_metadata(
                 RoutineKind::Procedure,
                 routine,
-                schema,
+                fallback_schema.as_deref(),
                 case_sensitive_identifiers,
             )
         }))
@@ -294,17 +304,25 @@ async fn load_schema_routines(
 
 async fn load_schema_triggers(
     db_state: &GlobalDbState,
-    _cx: &mut AsyncApp,
+    cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<&str>,
 ) -> anyhow::Result<Vec<TriggerSchema>> {
-    Ok(db_state
-        .list_triggers_in_schema_direct(connection_id, database, schema.map(str::to_string))
-        .await?
-        .into_iter()
-        .map(|trigger| trigger_schema_from_metadata(trigger, schema))
-        .collect())
+    let db_state = db_state.clone();
+    let connection_id = connection_id.to_string();
+    let database = database.to_string();
+    let fallback_schema = schema.map(str::to_string);
+    let query_schema = fallback_schema.clone();
+    Ok(Tokio::spawn_result(cx, async move {
+        db_state
+            .list_triggers_in_schema_direct(&connection_id, &database, query_schema)
+            .await
+    })
+    .await?
+    .into_iter()
+    .map(|trigger| trigger_schema_from_metadata(trigger, fallback_schema.as_deref()))
+    .collect())
 }
 
 fn routine_schema_from_metadata(
@@ -352,7 +370,7 @@ fn trigger_schema_from_metadata(
 
 async fn load_schema_tables(
     db_state: &GlobalDbState,
-    _cx: &mut AsyncApp,
+    cx: &mut AsyncApp,
     connection_id: String,
     database: String,
     schema: Option<String>,
@@ -363,9 +381,16 @@ async fn load_schema_tables(
     report: &mut impl FnMut(CompareTaskEvent),
 ) -> anyhow::Result<LoadedSchemaTables> {
     report(CompareTaskEvent::LoadingTableList { side });
-    let tables = db_state
-        .list_tables_direct(&connection_id, &database, schema.clone())
-        .await?;
+    let query_state = db_state.clone();
+    let query_connection_id = connection_id.clone();
+    let query_database = database.clone();
+    let query_schema = schema.clone();
+    let tables = Tokio::spawn_result(cx, async move {
+        query_state
+            .list_tables_direct(&query_connection_id, &query_database, query_schema)
+            .await
+    })
+    .await?;
     let tables = filter_schema_tables(
         tables,
         selected_tables,
@@ -386,9 +411,15 @@ async fn load_schema_tables(
             table_index: index + 1,
             total_tables,
         });
-        let result =
-            load_single_table_schema(db_state, &connection_id, &database, schema.clone(), table)
-                .await;
+        let result = load_single_table_schema(
+            db_state,
+            cx,
+            &connection_id,
+            &database,
+            schema.clone(),
+            table,
+        )
+        .await;
         if let Some(message) =
             record_schema_table_result(&mut loaded, side, table_name.clone(), result)
         {
@@ -426,36 +457,33 @@ fn filter_schema_tables(
 
 async fn load_single_table_schema(
     db_state: &GlobalDbState,
+    cx: &mut AsyncApp,
     connection_id: &str,
     database: &str,
     schema: Option<String>,
     table: TableInfo,
 ) -> anyhow::Result<TableSchema> {
     let table_name = table.name.clone();
-    let columns = db_state
-        .list_columns_direct(connection_id, database, schema.clone(), &table_name)
-        .await?;
-
-    // View definition diff is not implemented yet. Preserve the object kind
-    // and its visible columns, but do not ask drivers for table-only metadata
-    // that may be unsupported for views.
-    let (indexes, foreign_keys) = if table.object_type == TableObjectType::View {
-        (Vec::new(), Vec::new())
-    } else {
-        let indexes = db_state
-            .list_indexes_direct(connection_id, database, schema.clone(), &table_name)
-            .await?;
-        let foreign_keys = db_state
-            .list_foreign_keys_direct(connection_id, database, schema, &table_name)
-            .await?;
-        (indexes, foreign_keys)
+    let query_state = db_state.clone();
+    let connection_id = connection_id.to_string();
+    let database = database.to_string();
+    let request = DirectTableMetadataRequest {
+        connection_id,
+        database,
+        schema,
+        table: table_name,
+        include_table_metadata: table.object_type != TableObjectType::View,
     };
+    let metadata = Tokio::spawn_result(cx, async move {
+        query_state.load_table_metadata_direct(request).await
+    })
+    .await?;
 
     Ok(table_schema_from_metadata(
         table,
-        columns,
-        indexes,
-        foreign_keys,
+        metadata.columns,
+        metadata.indexes,
+        metadata.foreign_keys,
     ))
 }
 

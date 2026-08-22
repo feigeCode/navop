@@ -9,8 +9,8 @@ use crate::compare::sync_statement_picker::{
     selected_sync_execution_snapshot, selected_sync_sql_text_for_ids,
 };
 use crate::compare::window_params::{
-    DataCompareSelection, SchemaCompareSelection, SchemaCompareSettings, data_compare_params,
-    data_compare_same_name_mappings, data_compare_target_tables_for_selection,
+    DataCompareSelection, DataCompareSettings, SchemaCompareSelection, SchemaCompareSettings,
+    data_compare_params, data_compare_same_name_mappings, data_compare_target_tables_for_selection,
     schema_compare_params, split_columns,
 };
 use crate::compare::window_ui::{
@@ -18,6 +18,17 @@ use crate::compare::window_ui::{
     sync_sql_execution_success_log_entry,
 };
 use crate::compare::{DataCompareWindow, SchemaCompareWindow};
+
+fn data_compare_settings(
+    key_columns: &str,
+    case_sensitive_identifiers: bool,
+) -> DataCompareSettings {
+    DataCompareSettings {
+        key_columns: key_columns.to_string(),
+        case_sensitive_identifiers,
+        limits: Default::default(),
+    }
+}
 
 #[test]
 fn data_compare_popup_title_uses_source_table() {
@@ -290,8 +301,7 @@ fn data_compare_params_use_editable_source_selection() {
             schema: "target_schema".to_string(),
             tables: vec!["target_table".to_string()],
         },
-        "id, tenant_id".to_string(),
-        false,
+        data_compare_settings("id, tenant_id", false),
     )
     .unwrap();
 
@@ -383,8 +393,7 @@ fn data_compare_params_build_multiple_case_insensitive_table_pairs() {
             schema: String::new(),
             tables: vec!["order_items".to_string(), "users".to_string()],
         },
-        "id".to_string(),
-        false,
+        data_compare_settings("id", false),
     )
     .unwrap();
 
@@ -415,8 +424,7 @@ fn data_compare_params_pairs_unmatched_source_tables_to_same_target_name() {
             schema: String::new(),
             tables: vec!["users".to_string()],
         },
-        "id".to_string(),
-        false,
+        data_compare_settings("id", false),
     )
     .unwrap();
 
@@ -444,8 +452,7 @@ fn data_compare_params_allows_empty_target_table_selection() {
             schema: String::new(),
             tables: vec![],
         },
-        "id".to_string(),
-        false,
+        data_compare_settings("id", false),
     )
     .unwrap();
 
@@ -473,8 +480,7 @@ fn data_compare_params_pairs_case_sensitive_misses_to_same_target_name() {
             schema: String::new(),
             tables: vec!["users".to_string(), "Orders".to_string()],
         },
-        "id".to_string(),
-        true,
+        data_compare_settings("id", true),
     )
     .unwrap();
 
@@ -485,6 +491,36 @@ fn data_compare_params_pairs_case_sensitive_misses_to_same_target_name() {
         .collect::<Vec<_>>();
 
     assert_eq!(pairs, vec![("Users", "Users"), ("Orders", "Orders")]);
+}
+
+#[test]
+fn data_compare_params_preserve_explicit_limits() {
+    let params = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string()],
+        },
+        DataCompareSettings {
+            key_columns: "id".to_string(),
+            case_sensitive_identifiers: false,
+            limits: db::compare::DataCompareLimits {
+                max_rows_per_table: Some(100),
+                max_pages_per_table: Some(3),
+            },
+        },
+    )
+    .unwrap();
+
+    assert_eq!(Some(100), params.limits.max_rows_per_table);
+    assert_eq!(Some(3), params.limits.max_pages_per_table);
 }
 
 #[test]

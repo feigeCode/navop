@@ -3345,6 +3345,26 @@ Compare:
     en: Key Columns
     zh-CN: 主键列
     zh-HK: 主鍵欄位
+  max_rows_per_table:
+    en: Max rows/table
+    zh-CN: 每表最大行数
+    zh-HK: 每表最大行數
+  max_pages_per_table:
+    en: Max pages/table
+    zh-CN: 每表最大页数
+    zh-HK: 每表最大頁數
+  limit_optional:
+    en: Optional
+    zh-CN: 可选
+    zh-HK: 可選
+  invalid_compare_limit:
+    en: Compare limits must be positive whole numbers
+    zh-CN: 比较限制必须是正整数
+    zh-HK: 比較限制必須是正整數
+  compare_limit_hint:
+    en: Leave both limits empty for a complete comparison. Limits reduce resource use, but may produce incomplete results and disable synchronization SQL.
+    zh-CN: 两项均留空将执行完整比较。设置限制可降低资源消耗，但结果可能不完整，并会禁用同步 SQL。
+    zh-HK: 兩項均留空將執行完整比較。設定限制可降低資源消耗，但結果可能不完整，並會停用同步 SQL。
   source_tables:
     en: Source Tables
     zh-CN: 源表

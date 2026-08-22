@@ -30,7 +30,7 @@ use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use ai_chat_view::AskAiButton;
-use db::cache_manager::GlobalNodeCache;
+use db::cache_manager::{GlobalNodeCache, SchemaInvalidationPlan};
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
@@ -107,6 +107,34 @@ pub(crate) struct SessionSqlRun {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub database_type: one_core::storage::DatabaseType,
+    pub schema_invalidation: SessionSchemaInvalidation,
+}
+
+#[derive(Clone)]
+pub(crate) enum SessionSchemaInvalidation {
+    Immediate,
+    Deferred(Arc<Mutex<SchemaInvalidationPlan>>),
+}
+
+fn emit_schema_changed_events(
+    cx: &mut AsyncApp,
+    notifier: Option<&GlobalConnectionNotifier>,
+    scopes: Vec<(String, String, Option<String>)>,
+) {
+    let Some(notifier) = notifier else {
+        return;
+    };
+    for (connection_id, database, schema) in scopes {
+        let _ = cx.update(|cx| {
+            notifier.0.update(cx, |_, cx| {
+                cx.emit(ConnectionDataEvent::SchemaChanged {
+                    connection_id,
+                    database,
+                    schema,
+                });
+            });
+        });
+    }
 }
 
 impl StatementListData {
@@ -632,35 +660,10 @@ impl SqlResultTabContainer {
             let session_id = request.session_id.clone();
             let sql = request.sql.clone();
             let execution_state = global_state.clone();
-            let invalidation_state = global_state.clone();
-            let invalidation_connection_id = request.connection_id.clone();
-            let invalidation_database = request.database.clone();
-            let invalidation_schema = request.schema.clone();
-            let invalidation_sql = request.sql.clone();
-            let cancellation_cache = cache.clone();
-            let cancellation_connection_id = invalidation_connection_id.clone();
-            let cancellation_database = invalidation_database.clone();
-            let cancellation_schema = invalidation_schema.clone();
-            let cancellation_sql = invalidation_sql.clone();
             let execution_task = Tokio::spawn_result(cx, async move {
-                let result = execution_state
+                Ok(execution_state
                     .execute_session(session_id, sql, Some(exec_opts))
-                    .await;
-                let ddl_info = match cache {
-                    Some(cache) => {
-                        invalidation_state
-                            .invalidate_sql_cache(
-                                &cache,
-                                &invalidation_connection_id,
-                                &invalidation_sql,
-                                invalidation_database.as_deref(),
-                                invalidation_schema.as_deref(),
-                            )
-                            .await
-                    }
-                    None => None,
-                };
-                Ok((result, ddl_info))
+                    .await)
             });
             let execution_result = tokio::select! {
                 biased;
@@ -677,52 +680,20 @@ impl SqlResultTabContainer {
                         error
                     );
                 }
-                let ddl_info = match cancellation_cache {
-                    Some(cache) => {
-                        global_state
-                            .invalidate_sql_cache(
-                                &cache,
-                                &cancellation_connection_id,
-                                &cancellation_sql,
-                                cancellation_database.as_deref(),
-                                cancellation_schema.as_deref(),
-                            )
-                            .await
-                    }
-                    None => None,
-                };
-                if let Some((connection_id, database, schema)) = ddl_info
-                    && let Some(notifier) = notifier
-                {
-                    cx.update(|cx| {
-                        notifier.0.update(cx, |_, cx| {
-                            cx.emit(ConnectionDataEvent::SchemaChanged {
-                                connection_id,
-                                database,
-                                schema,
-                            });
-                        });
-                    });
+                if let Some(cache) = cache {
+                    let plan = global_state.conservative_sql_cache_invalidation_plan(
+                        &request.connection_id,
+                        request.database.as_deref(),
+                        request.schema.as_deref(),
+                    );
+                    let scopes = global_state
+                        .apply_sql_cache_invalidation_plan(&cache, &request.connection_id, &plan)
+                        .await;
+                    emit_schema_changed_events(cx, notifier.as_ref(), scopes);
                 }
                 return None;
             };
-            let (execution_result, ddl_info) = match execution_result {
-                Ok(result) => result,
-                Err(error) => (Err(error), None),
-            };
-            if let Some((connection_id, database, schema)) = ddl_info {
-                if let Some(notifier) = notifier {
-                    cx.update(|cx| {
-                        notifier.0.update(cx, |_, cx| {
-                            cx.emit(ConnectionDataEvent::SchemaChanged {
-                                connection_id,
-                                database,
-                                schema,
-                            });
-                        });
-                    });
-                }
-            }
+            let execution_result = execution_result.unwrap_or_else(Err);
             let results = match execution_result {
                 Ok(results) => results,
                 Err(error) => vec![SqlResult::Error(SqlErrorInfo {
@@ -730,6 +701,40 @@ impl SqlResultTabContainer {
                     message: error.to_string(),
                 })],
             };
+            if let Some(cache) = cache {
+                let mut plan = SchemaInvalidationPlan::default();
+                for result in &results {
+                    let sql = match result {
+                        SqlResult::Query(result) => Some(result.sql.as_str()),
+                        SqlResult::Exec(result) => Some(result.sql.as_str()),
+                        SqlResult::Error(_) => None,
+                    };
+                    if let Some(sql) = sql.filter(|sql| !sql.trim().is_empty()) {
+                        plan.merge(global_state.plan_sql_cache_invalidation(
+                            &cache,
+                            &request.connection_id,
+                            sql,
+                            request.database.as_deref(),
+                            request.schema.as_deref(),
+                        ));
+                    }
+                }
+                match &request.schema_invalidation {
+                    SessionSchemaInvalidation::Immediate => {
+                        let scopes = global_state
+                            .apply_sql_cache_invalidation_plan(
+                                &cache,
+                                &request.connection_id,
+                                &plan,
+                            )
+                            .await;
+                        emit_schema_changed_events(cx, notifier.as_ref(), scopes);
+                    }
+                    SessionSchemaInvalidation::Deferred(pending) => {
+                        pending.lock().merge(plan);
+                    }
+                }
+            }
             let has_query_result = results
                 .iter()
                 .any(|result| matches!(result, SqlResult::Query(_)));

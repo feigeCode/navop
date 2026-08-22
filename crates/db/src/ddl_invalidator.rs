@@ -18,7 +18,7 @@ use one_core::storage::DatabaseType;
 const DDL_KEYWORDS: &[&str] = &["CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME"];
 
 /// DDL 事件类型
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DdlEvent {
     /// 创建表
     CreateTable {

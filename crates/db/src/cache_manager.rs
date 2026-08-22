@@ -22,6 +22,134 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaInvalidationScope {
+    pub database: String,
+    pub schema: Option<String>,
+}
+
+impl SchemaInvalidationScope {
+    fn from_event(event: &DdlEvent) -> Self {
+        let (database, schema) = match event {
+            DdlEvent::CreateTable {
+                database, schema, ..
+            }
+            | DdlEvent::AlterTable {
+                database, schema, ..
+            }
+            | DdlEvent::DropTable {
+                database, schema, ..
+            }
+            | DdlEvent::TruncateTable {
+                database, schema, ..
+            }
+            | DdlEvent::RenameTable {
+                database, schema, ..
+            }
+            | DdlEvent::CreateIndex {
+                database, schema, ..
+            }
+            | DdlEvent::DropIndex {
+                database, schema, ..
+            }
+            | DdlEvent::CreateView {
+                database, schema, ..
+            }
+            | DdlEvent::DropView {
+                database, schema, ..
+            }
+            | DdlEvent::CreateTrigger {
+                database, schema, ..
+            }
+            | DdlEvent::DropTrigger {
+                database, schema, ..
+            }
+            | DdlEvent::CreateSequence {
+                database, schema, ..
+            }
+            | DdlEvent::DropSequence {
+                database, schema, ..
+            } => (database.clone(), schema.clone()),
+            DdlEvent::CreateSchema { database, schema }
+            | DdlEvent::DropSchema { database, schema } => (database.clone(), Some(schema.clone())),
+            DdlEvent::CreateDatabase { database } | DdlEvent::DropDatabase { database } => {
+                (database.clone(), None)
+            }
+            DdlEvent::CreateFunction { database, .. }
+            | DdlEvent::DropFunction { database, .. }
+            | DdlEvent::CreateProcedure { database, .. }
+            | DdlEvent::DropProcedure { database, .. } => (database.clone(), None),
+        };
+
+        Self { database, schema }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaInvalidationPlan {
+    events: Vec<DdlEvent>,
+    connection_wide: bool,
+    fallback_scope: Option<SchemaInvalidationScope>,
+}
+
+impl SchemaInvalidationPlan {
+    pub fn from_events(events: Vec<DdlEvent>) -> Self {
+        let mut plan = Self::default();
+        plan.extend_events(events);
+        plan
+    }
+
+    pub fn conservative_connection_wide(database: String, schema: Option<String>) -> Self {
+        Self {
+            events: Vec::new(),
+            connection_wide: true,
+            fallback_scope: Some(SchemaInvalidationScope { database, schema }),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty() && !self.connection_wide
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.extend_events(other.events);
+        self.connection_wide |= other.connection_wide;
+        if self.fallback_scope.is_none() {
+            self.fallback_scope = other.fallback_scope;
+        }
+    }
+
+    pub fn scopes(&self) -> Vec<SchemaInvalidationScope> {
+        if self.connection_wide {
+            return self.fallback_scope.iter().cloned().collect();
+        }
+
+        let mut scopes = Vec::new();
+        for event in &self.events {
+            let scope = SchemaInvalidationScope::from_event(event);
+            if !scopes.contains(&scope) {
+                scopes.push(scope);
+            }
+        }
+        scopes
+    }
+
+    fn extend_events(&mut self, events: impl IntoIterator<Item = DdlEvent>) {
+        for event in events {
+            if !self.events.contains(&event) {
+                self.events.push(event);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SqlInvalidationContext<'a> {
+    pub database: &'a str,
+    pub schema: Option<&'a str>,
+    pub database_type: &'a DatabaseType,
+}
+
 /// 全局缓存状态
 #[derive(Clone)]
 pub struct GlobalNodeCache {
@@ -431,6 +559,46 @@ impl GlobalNodeCache {
         self.ddl_invalidator.invalidate(connection_id, &event).await;
     }
 
+    pub fn plan_sql_invalidation(
+        &self,
+        sql: &str,
+        context: SqlInvalidationContext<'_>,
+    ) -> SchemaInvalidationPlan {
+        SchemaInvalidationPlan::from_events(DdlInvalidator::parse_ddl_events_for_database(
+            sql,
+            context.database,
+            context.schema,
+            context.database_type,
+        ))
+    }
+
+    pub async fn apply_invalidation_plan(
+        &self,
+        connection_id: &str,
+        plan: &SchemaInvalidationPlan,
+        cache_ctx: Option<&CacheContext>,
+    ) -> Vec<SchemaInvalidationScope> {
+        if plan.is_empty() {
+            return Vec::new();
+        }
+
+        if plan.connection_wide {
+            self.metadata_cache
+                .invalidate_connection(connection_id)
+                .await;
+        } else {
+            for event in &plan.events {
+                self.ddl_invalidator.invalidate(connection_id, event).await;
+            }
+        }
+
+        if let Some(ctx) = cache_ctx {
+            self.node_cache.clear_connection_cache(ctx).await;
+        }
+
+        plan.scopes()
+    }
+
     /// 解析 SQL 并触发 DDL 失效（MetadataCache + NodeCache）
     ///
     /// 返回解析到的 DDL 事件信息（connection_id, database, schema），供调用方发射 SchemaChanged 事件。
@@ -444,85 +612,19 @@ impl GlobalNodeCache {
         database_type: &DatabaseType,
         cache_ctx: Option<&CacheContext>,
     ) -> Option<(String, String, Option<String>)> {
-        let events = DdlInvalidator::parse_ddl_events_for_database(
+        let plan = self.plan_sql_invalidation(
             sql,
-            current_database,
-            current_schema,
-            database_type,
+            SqlInvalidationContext {
+                database: current_database,
+                schema: current_schema,
+                database_type,
+            },
         );
-
-        if events.is_empty() {
-            return None;
-        }
-
-        // 提取第一个事件的 database 和 schema 信息用于返回
-        let (database, schema) = Self::extract_ddl_scope(&events[0]);
-
-        // 同步失效 MetadataCache（处理所有事件）
-        for event in &events {
-            self.ddl_invalidator.invalidate(connection_id, event).await;
-        }
-
-        // 同步失效 NodeCache
-        if let Some(ctx) = cache_ctx {
-            self.node_cache.clear_connection_cache(ctx).await;
-        }
-
-        Some((connection_id.to_string(), database, schema))
-    }
-
-    /// 从 DDL 事件中提取数据库和 schema 信息
-    fn extract_ddl_scope(event: &DdlEvent) -> (String, Option<String>) {
-        match event {
-            DdlEvent::CreateTable {
-                database, schema, ..
-            }
-            | DdlEvent::AlterTable {
-                database, schema, ..
-            }
-            | DdlEvent::DropTable {
-                database, schema, ..
-            }
-            | DdlEvent::TruncateTable {
-                database, schema, ..
-            }
-            | DdlEvent::RenameTable {
-                database, schema, ..
-            }
-            | DdlEvent::CreateIndex {
-                database, schema, ..
-            }
-            | DdlEvent::DropIndex {
-                database, schema, ..
-            }
-            | DdlEvent::CreateView {
-                database, schema, ..
-            }
-            | DdlEvent::DropView {
-                database, schema, ..
-            }
-            | DdlEvent::CreateTrigger {
-                database, schema, ..
-            }
-            | DdlEvent::DropTrigger {
-                database, schema, ..
-            }
-            | DdlEvent::CreateSequence {
-                database, schema, ..
-            }
-            | DdlEvent::DropSequence {
-                database, schema, ..
-            } => (database.clone(), schema.clone()),
-            DdlEvent::CreateSchema { database, schema }
-            | DdlEvent::DropSchema { database, schema } => (database.clone(), Some(schema.clone())),
-            DdlEvent::CreateDatabase { database } | DdlEvent::DropDatabase { database } => {
-                (database.clone(), None)
-            }
-            DdlEvent::CreateFunction { database, .. }
-            | DdlEvent::DropFunction { database, .. }
-            | DdlEvent::CreateProcedure { database, .. }
-            | DdlEvent::DropProcedure { database, .. } => (database.clone(), None),
-        }
+        self.apply_invalidation_plan(connection_id, &plan, cache_ctx)
+            .await
+            .into_iter()
+            .next()
+            .map(|scope| (connection_id.to_string(), scope.database, scope.schema))
     }
 
     /// 使表相关缓存失效
@@ -1050,3 +1152,59 @@ pub trait CachedDatabaseOps {
 
 // 为所有实现 DatabasePlugin 的类型自动实现 CachedDatabaseOps
 impl<T: crate::plugin::DatabasePlugin + ?Sized> CachedDatabaseOps for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_table(database: &str, schema: &str, table: &str) -> DdlEvent {
+        DdlEvent::CreateTable {
+            database: database.to_string(),
+            schema: Some(schema.to_string()),
+            table: table.to_string(),
+        }
+    }
+
+    #[test]
+    fn schema_invalidation_plan_merge_deduplicates_events_and_scopes() {
+        let mut plan =
+            SchemaInvalidationPlan::from_events(vec![create_table("app", "public", "users")]);
+        plan.merge(SchemaInvalidationPlan::from_events(vec![
+            create_table("app", "public", "users"),
+            create_table("app", "audit", "logs"),
+        ]));
+
+        assert_eq!(plan.events.len(), 2);
+        assert_eq!(
+            plan.scopes(),
+            vec![
+                SchemaInvalidationScope {
+                    database: "app".to_string(),
+                    schema: Some("public".to_string()),
+                },
+                SchemaInvalidationScope {
+                    database: "app".to_string(),
+                    schema: Some("audit".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn conservative_schema_invalidation_plan_keeps_notification_scope() {
+        let plan = SchemaInvalidationPlan::conservative_connection_wide(
+            "app".to_string(),
+            Some("public".to_string()),
+        );
+
+        assert!(!plan.is_empty());
+        assert!(plan.connection_wide);
+        assert_eq!(
+            plan.scopes(),
+            vec![SchemaInvalidationScope {
+                database: "app".to_string(),
+                schema: Some("public".to_string()),
+            }]
+        );
+    }
+}

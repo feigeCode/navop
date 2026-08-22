@@ -250,6 +250,24 @@ pub struct IndexInfo {
     pub index_type: Option<String>,
 }
 
+/// Parameters for loading all metadata needed to compare one table-like object.
+#[derive(Debug, Clone)]
+pub struct DirectTableMetadataRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub schema: Option<String>,
+    pub table: String,
+    pub include_table_metadata: bool,
+}
+
+/// Metadata loaded from one direct database session.
+#[derive(Debug, Clone, Default)]
+pub struct DirectTableMetadata {
+    pub columns: Vec<ColumnInfo>,
+    pub indexes: Vec<IndexInfo>,
+    pub foreign_keys: Vec<ForeignKeyDefinition>,
+}
+
 /// Table information with description/metadata
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
