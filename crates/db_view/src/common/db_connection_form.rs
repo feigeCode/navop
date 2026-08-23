@@ -8,7 +8,7 @@ use connection_form::team::{
     team_label, team_management_enabled,
 };
 use connection_form::{
-    SshAuthOption,
+    SshAuthOption, SshConnectionSelectItem,
     credential::{
         CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
         CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
@@ -144,45 +144,6 @@ impl WorkspaceSelectItem {
 }
 
 impl SelectItem for WorkspaceSelectItem {
-    type Value = Option<i64>;
-
-    fn title(&self) -> SharedString {
-        self.name.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-}
-
-/// SSH connection select item for tunnel reuse.
-#[derive(Clone, Debug)]
-pub struct SshConnectionSelectItem {
-    pub id: Option<i64>,
-    pub name: String,
-}
-
-impl SshConnectionSelectItem {
-    pub fn none() -> Self {
-        Self {
-            id: None,
-            name: t!("ConnectionForm.ssh_connection_manual").to_string(),
-        }
-    }
-
-    pub fn from_connection(connection: &StoredConnection) -> Self {
-        let id = connection.id;
-        let host = connection.to_ssh_params().ok().map(|params| params.host);
-        let name = match host.as_deref().filter(|host| !host.trim().is_empty()) {
-            Some(host) => format!("{} ({})", connection.name, host),
-            None => connection.name.clone(),
-        };
-
-        Self { id, name }
-    }
-}
-
-impl SelectItem for SshConnectionSelectItem {
     type Value = Option<i64>;
 
     fn title(&self) -> SharedString {
@@ -1139,15 +1100,15 @@ impl DbFormConfig {
 }
 
 fn ssh_auth_requires_password(auth_type: &str) -> bool {
-    normalized_ssh_auth_type(auth_type) == "password"
+    normalized_ssh_auth_type(auth_type) == SshAuthOption::Password.value()
 }
 
 fn ssh_auth_requires_private_key(auth_type: &str) -> bool {
-    normalized_ssh_auth_type(auth_type) == "private_key"
+    normalized_ssh_auth_type(auth_type) == SshAuthOption::PrivateKey.value()
 }
 
 fn ssh_auth_requires_private_key_content(auth_type: &str) -> bool {
-    normalized_ssh_auth_type(auth_type) == "private_key_content"
+    normalized_ssh_auth_type(auth_type) == SshAuthOption::PrivateKeyContent.value()
 }
 
 const REQUIRED_HOST_SSH_FIELD_NAMES: &[&str] = &[
@@ -3031,17 +2992,20 @@ impl DbConnectionForm {
                                 }),
                             )),
                     )
-                    .when(ssh_auth_type == "password", |form| {
+                    .when(ssh_auth_type == SshAuthOption::Password.value(), |form| {
                         form.child(self.render_field_by_name("ssh_password", cx))
                     })
-                    .when(ssh_auth_type == "private_key", |form| {
+                    .when(ssh_auth_type == SshAuthOption::PrivateKey.value(), |form| {
                         form.child(self.render_field_by_name("ssh_private_key_path", cx))
                             .child(self.render_field_by_name("ssh_private_key_passphrase", cx))
                     })
-                    .when(ssh_auth_type == "private_key_content", |form| {
-                        form.child(self.render_field_by_name("ssh_private_key_content", cx))
-                            .child(self.render_field_by_name("ssh_private_key_passphrase", cx))
-                    })
+                    .when(
+                        ssh_auth_type == SshAuthOption::PrivateKeyContent.value(),
+                        |form| {
+                            form.child(self.render_field_by_name("ssh_private_key_content", cx))
+                                .child(self.render_field_by_name("ssh_private_key_passphrase", cx))
+                        },
+                    )
                 })
                 .child(self.render_field_by_name("ssh_target_host", cx))
                 .child(self.render_field_by_name("ssh_target_port", cx))

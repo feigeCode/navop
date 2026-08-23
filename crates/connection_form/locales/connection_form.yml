@@ -1,6 +1,38 @@
 _version: 2
 
 ConnectionForm:
+  ssh_tunnel_enabled:
+    en: Enable SSH Tunnel
+    zh-CN: 启用 SSH 隧道
+    zh-HK: 啟用 SSH 通道
+  ssh_connection_id:
+    en: Reuse SSH Connection
+    zh-CN: 引用 SSH 连接
+    zh-HK: 引用 SSH 連線
+  ssh_connection_manual:
+    en: Manual SSH Settings
+    zh-CN: 手动填写 SSH
+    zh-HK: 手動填寫 SSH
+  ssh_host:
+    en: SSH Host
+    zh-CN: SSH 主机
+    zh-HK: SSH 主機
+  ssh_port:
+    en: SSH Port
+    zh-CN: SSH 端口
+    zh-HK: SSH 端口
+  ssh_username:
+    en: SSH Username
+    zh-CN: SSH 用户名
+    zh-HK: SSH 使用者名稱
+  ssh_password:
+    en: SSH Password
+    zh-CN: SSH 密码
+    zh-HK: SSH 密碼
+  ssh_auth_type:
+    en: SSH Auth Type
+    zh-CN: SSH 认证类型
+    zh-HK: SSH 驗證類型
   ssh_auth_password:
     en: Password
     zh-CN: 密码
@@ -25,6 +57,42 @@ ConnectionForm:
     en: Auto Public Key
     zh-CN: 自动公钥
     zh-HK: 自動公鑰
+  ssh_private_key_path:
+    en: Private Key Path
+    zh-CN: 私钥路径
+    zh-HK: 私鑰路徑
+  ssh_private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
+  ssh_private_key_content_placeholder:
+    en: Paste OpenSSH or PuTTY private key content
+    zh-CN: 粘贴 OpenSSH 或 PuTTY 私钥内容
+    zh-HK: 貼上 OpenSSH 或 PuTTY 私鑰內容
+  ssh_private_key_passphrase:
+    en: Key Passphrase
+    zh-CN: 私钥口令
+    zh-HK: 私鑰口令
+  ssh_target_host:
+    en: Tunnel Target Host
+    zh-CN: 隧道目标主机
+    zh-HK: 通道目標主機
+  ssh_target_port:
+    en: Tunnel Target Port
+    zh-CN: 隧道目标端口
+    zh-HK: 通道目標端口
+  ssh_timeout:
+    en: SSH timeout (seconds)
+    zh-CN: SSH 超时（秒）
+    zh-HK: SSH 逾時（秒）
+  enter_password:
+    en: Enter password
+    zh-CN: 输入密码
+    zh-HK: 輸入密碼
+  enter_passphrase:
+    en: Enter passphrase
+    zh-CN: 输入私钥口令
+    zh-HK: 輸入私鑰口令
 
 TeamSync:
   personal:
