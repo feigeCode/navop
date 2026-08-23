@@ -271,6 +271,13 @@ impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy {
             connection,
             protocol,
         } = *self;
+        if protocol == RemoteDesktopProtocol::Rdp && remote_desktop::windows_native_rdp_compiled() {
+            // Windows 原生 RDP 与 gpui-rdp-smoke 一致：在独立全屏窗口中
+            // 承载原生 ActiveX child（覆盖整个客户区），避免在主窗口 tab
+            // 内嵌时被 DirectComposition visual 盖住而白屏。
+            home.open_remote_desktop_fullscreen_window(&connection, window, cx);
+            return;
+        }
         extension_runtime::remote_desktop_provider_install::open_remote_desktop_connection_with_provider_guard(
             home, connection, protocol, mode, window, cx,
         );
@@ -292,6 +299,27 @@ impl ConnectionOpenStrategy for NoopOpenStrategy {
 mod tests {
     use super::mongodb_driver_id;
     use one_core::storage::{MongoDBParams, MongoDriverVariant, StoredConnection};
+
+    #[test]
+    fn native_rdp_opens_in_an_independent_window_like_gpui_rdp_smoke() {
+        let source = include_str!("home_strategy.rs").replace("\r\n", "\n");
+        let start = source
+            .find("impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy")
+            .expect("remote desktop open strategy");
+        let end = source[start..]
+            .find("impl ConnectionOpenStrategy for NoopOpenStrategy")
+            .map(|offset| start + offset)
+            .expect("next strategy");
+        let strategy = &source[start..end];
+
+        assert!(strategy.contains("protocol == RemoteDesktopProtocol::Rdp"));
+        assert!(strategy.contains("remote_desktop::windows_native_rdp_compiled()"));
+        assert!(
+            strategy
+                .contains("home.open_remote_desktop_fullscreen_window(&connection, window, cx)")
+        );
+        assert!(strategy.contains("open_remote_desktop_connection_with_provider_guard("));
+    }
 
     #[test]
     fn mongodb_driver_id_follows_the_saved_variant() {
