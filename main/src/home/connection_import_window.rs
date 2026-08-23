@@ -85,12 +85,9 @@ impl ConnectionImportWindow {
             let scan_result = {
                 let ids = importer_ids.clone();
                 let task = Tokio::spawn(cx, async move { scan_import_sources(ids).await });
-                match task.await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        Err(t!("Home.ConnectionImport.scan_task_failed", error = error).to_string())
-                    }
-                }
+                task.await.unwrap_or_else(|error| {
+                    Err(t!("Home.ConnectionImport.scan_task_failed", error = error).to_string())
+                })
             };
             let reports = match scan_result {
                 Ok(reports) => reports,
@@ -118,12 +115,9 @@ impl ConnectionImportWindow {
             let preview_result = {
                 let ids = preview_ids.clone();
                 let task = Tokio::spawn(cx, async move { preview_import_records(ids, true).await });
-                match task.await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        Err(t!("Home.ConnectionImport.scan_task_failed", error = error).to_string())
-                    }
-                }
+                task.await.unwrap_or_else(|error| {
+                    Err(t!("Home.ConnectionImport.scan_task_failed", error = error).to_string())
+                })
             };
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;
@@ -178,14 +172,11 @@ impl ConnectionImportWindow {
                 let task = Tokio::spawn(cx, async move {
                     preview_import_records_from_files(id, selected_paths, true).await
                 });
-                match task.await {
-                    Ok(result) => result,
-                    Err(error) => Err(t!(
+                task.await.unwrap_or_else(|error| Err(t!(
                         "Home.ConnectionImport.file_parse_task_failed",
                         error = error
                     )
-                    .to_string()),
-                }
+                    .to_string()))
             };
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;
@@ -247,14 +238,11 @@ impl ConnectionImportWindow {
                 let task = Tokio::spawn(cx, async move {
                     preview_import_records_from_files(id, selected_paths, true).await
                 });
-                match task.await {
-                    Ok(result) => result,
-                    Err(error) => Err(t!(
+                task.await.unwrap_or_else(|error| Err(t!(
                         "Home.ConnectionImport.directory_scan_task_failed",
                         error = error
                     )
-                    .to_string()),
-                }
+                    .to_string()))
             };
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;

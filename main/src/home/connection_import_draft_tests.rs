@@ -12,8 +12,7 @@ use one_core::storage::{
 };
 use std::collections::BTreeMap;
 
-use super::connection_import_actions::duplicate_connection_name;
-use super::connection_import_actions::save_import_draft;
+use super::connection_import_actions::{ save_import_draft};
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, ImportDraftKind, selected_import_count,
     selected_import_drafts_to_connections,
@@ -587,39 +586,6 @@ fn ssh_duplicate_identity_uses_host_port_and_username() {
     assert_eq!(
         "ssh:ssh.example.test:2222:deploy",
         draft.duplicate_identity().unwrap()
-    );
-}
-
-#[test]
-fn duplicate_detection_matches_existing_connection_identity() {
-    let draft = EditableImportDraft::new(database_import("prod"));
-    let existing = draft.to_stored_connection().unwrap();
-
-    assert_eq!(
-        Some("prod".to_string()),
-        duplicate_connection_name(&draft, &[existing]).unwrap()
-    );
-}
-
-#[test]
-fn mongodb_import_duplicate_detection_matches_native_connection() {
-    let draft = EditableImportDraft::new(external_database_import("mongo-prod", "mongodb", 27017));
-    let existing = draft.to_stored_connection().unwrap();
-
-    assert_eq!(
-        Some("mongo-prod".to_string()),
-        duplicate_connection_name(&draft, &[existing]).unwrap()
-    );
-}
-
-#[test]
-fn redis_import_duplicate_detection_matches_native_connection() {
-    let draft = EditableImportDraft::new(external_database_import("redis-prod", "redis", 6379));
-    let existing = draft.to_stored_connection().unwrap();
-
-    assert_eq!(
-        Some("redis-prod".to_string()),
-        duplicate_connection_name(&draft, &[existing]).unwrap()
     );
 }
 

@@ -78,14 +78,7 @@ pub(crate) async fn preview_import_records_from_files(
     .map_err(|error| error.to_string())
 }
 
-pub(crate) fn duplicate_connection_name(
-    draft: &EditableImportDraft,
-    existing: &[StoredConnection],
-) -> Result<Option<String>, String> {
-    Ok(duplicate_connection(draft, existing)?.map(|connection| connection.name.clone()))
-}
-
-fn duplicate_connection<'a>(
+pub(crate) fn duplicate_connection<'a>(
     draft: &EditableImportDraft,
     existing: &'a [StoredConnection],
 ) -> Result<Option<&'a StoredConnection>, String> {
@@ -267,7 +260,7 @@ fn ssh_group_workspace_id(
     workspace_path_id(&group_path, storage)
 }
 
-fn composite_extensions_root() -> Result<std::path::PathBuf, String> {
+fn composite_extensions_root() -> Result<PathBuf, String> {
     let root = extensions_root()
         .ok_or_else(|| t!("Home.ConnectionImport.extension_directory_unavailable").to_string())?;
     Ok(root.join(ExtensionKind::Composite.dir_name()))
