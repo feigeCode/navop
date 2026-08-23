@@ -93,6 +93,31 @@ where
     });
 }
 
+pub(crate) fn mark_windows_native_rdp_detached_async(
+    registration: WindowsRdpRegistration,
+    cx: &gpui::AsyncApp,
+) -> WindowsNativeRdpTerminalDispatch {
+    let result = try_update_windows_native_rdp_shutdown(cx, |controller, _| {
+        if let Some(owner) = controller.owners.get_mut(&registration) {
+            *owner = WindowsNativeRdpOwner::Detached;
+        } else {
+            tracing::warn!(
+                token = registration.token(),
+                generation = registration.generation(),
+                "Windows native RDP registration lost before detached cleanup"
+            );
+        }
+    });
+    if result.is_none() {
+        tracing::error!(
+            token = registration.token(),
+            generation = registration.generation(),
+            "Windows native RDP detached dispatcher rejected ownership transfer"
+        );
+    }
+    WindowsNativeRdpTerminalDispatch::from_option(result)
+}
+
 fn record_terminal(
     controller: &mut GlobalWindowsNativeRdpShutdown,
     registration: WindowsRdpRegistration,

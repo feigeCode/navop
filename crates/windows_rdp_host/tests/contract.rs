@@ -1851,8 +1851,8 @@ fn product_native_rdp_uses_a_true_child_overlay_without_implicit_show() {
 fn product_native_rdp_hosts_active_x_below_the_overlay() {
     assert_tokens_in_scope(
         "crates/remote_desktop_view/src/view/windows_native.rs",
-        "pub(crate) fn create(",
-        "\n    pub(crate) fn generation",
+        "pub(crate) fn create_with_owner(",
+        "\n    pub(crate) fn create(",
         &[
             "WindowsNativeOverlay::create(owner, generation)?",
             "WindowsRdpParentWindow::from_raw(overlay.hwnd())",
@@ -2415,6 +2415,45 @@ fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
             "copies the endpoint into a temporary COM string",
             "does not retain data after the call returns",
         ],
+    );
+}
+
+#[test]
+fn native_unsupported_resource_and_gateway_requests_fail_closed() {
+    let runtime_policy = &format!("{HOST_CRATE}/native/connection_policy_runtime.cpp");
+    assert_contains_all(
+        runtime_policy,
+        &[
+            "if ((options.resource_flags & NAVOP_RDP_RESOURCE_FLAG_CAMERAS) != 0)",
+            "connect.resource.cameras.unavailable",
+            "NAVOP_RDP_RESULT_UNAVAILABLE",
+        ],
+    );
+    assert_excludes_all(runtime_policy, &["connect.resource.cameras.unsupported"]);
+
+    let gateway_policy = &format!("{HOST_CRATE}/native/connection_policy_gateway.cpp");
+    let gateway_contents = read(gateway_policy);
+    let disabled_end = gateway_contents
+        .find("if (options.gateway_mode == NAVOP_RDP_GATEWAY_MODE_NONE)")
+        .expect("gateway disabled branch must remain explicit");
+    let bypass_check = gateway_contents
+        .find("if ((options.gateway_flags & NAVOP_RDP_GATEWAY_FLAG_BYPASS_LOCAL) != 0)")
+        .expect("gateway bypass-local check must remain explicit");
+    assert!(
+        disabled_end < bypass_check,
+        "disabled gateway must short-circuit before bypass-local rejection"
+    );
+    assert_contains_all(
+        gateway_policy,
+        &[
+            "connect.gateway.bypass_local.unavailable",
+            "return record_last_error(",
+            "NAVOP_RDP_RESULT_UNAVAILABLE",
+        ],
+    );
+    assert_excludes_all(
+        gateway_policy,
+        &["connect.gateway.bypass_local.best_effort"],
     );
 }
 

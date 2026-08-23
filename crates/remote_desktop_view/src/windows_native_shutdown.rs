@@ -129,8 +129,8 @@ mod platform;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 pub(crate) use platform::{
     detached_cleanup_deadline, init, mark_windows_native_rdp_detached,
-    record_windows_native_rdp_terminal, record_windows_native_rdp_terminal_async,
-    register_windows_native_rdp,
+    mark_windows_native_rdp_detached_async, record_windows_native_rdp_terminal,
+    record_windows_native_rdp_terminal_async, register_windows_native_rdp,
 };
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 pub use platform::{fail_closed_windows_native_rdp_for_platform_quit, shutdown_windows_native_rdp};

@@ -165,6 +165,9 @@ fn localized_fallback_reason(reason: presentation::WindowsNativeRdpUnavailableRe
         presentation::WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing => {
             t!("RemoteDesktop.fallback_required_interface_missing").to_string()
         }
+        presentation::WindowsNativeRdpUnavailableReason::SharedFoldersUnsupported => {
+            t!("RemoteDesktop.fallback_shared_folders_unsupported").to_string()
+        }
     }
 }
 

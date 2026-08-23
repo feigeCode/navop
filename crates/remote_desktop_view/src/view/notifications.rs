@@ -1,3 +1,5 @@
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+use gpui::{App, EntityId};
 use gpui::{Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use remote_desktop::{
@@ -5,12 +7,18 @@ use remote_desktop::{
     RemoteDesktopReconnectReason,
 };
 use rust_i18n::t;
+#[cfg(all(feature = "windows-native-rdp", any(test, target_os = "windows")))]
+use windows_rdp_host::{WindowsRdpDiagnosticCategory, WindowsRdpLogonErrorKind};
 
 use super::RemoteDesktopView;
+#[cfg(all(feature = "windows-native-rdp", any(test, target_os = "windows")))]
+use super::native_events::NativeRdpNotificationRequest;
 
 pub(super) struct RemoteDesktopReconnectNotification;
 pub(super) struct RemoteDesktopClipboardNotification;
 pub(super) struct RemoteDesktopSessionNotification;
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+pub(super) struct RemoteDesktopNativeRdpNotification;
 
 impl RemoteDesktopView {
     pub(super) fn notify_reconnecting(
@@ -128,6 +136,107 @@ impl RemoteDesktopView {
                 cx,
             );
         });
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn localized_windows_native_rdp_notification(request: NativeRdpNotificationRequest) -> String {
+    let locale = rust_i18n::locale();
+    localized_windows_native_rdp_notification_for_locale(locale.as_ref(), request)
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+pub(super) fn defer_windows_native_rdp_notification(
+    request: NativeRdpNotificationRequest,
+    entity_id: EntityId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let message = localized_windows_native_rdp_notification(request);
+    let notification_id = (request.notification_key(), entity_id);
+    window.defer(cx, move |window, cx| {
+        window.push_notification(
+            Notification::error(message)
+                .id1::<RemoteDesktopNativeRdpNotification>(notification_id)
+                .autohide(true),
+            cx,
+        );
+    });
+}
+
+#[cfg(all(feature = "windows-native-rdp", any(test, target_os = "windows")))]
+pub(super) fn localized_windows_native_rdp_notification_for_locale(
+    locale: &str,
+    request: NativeRdpNotificationRequest,
+) -> String {
+    match request {
+        NativeRdpNotificationRequest::FatalError { .. } => {
+            t!("RemoteDesktop.native_fatal_error", locale = locale).to_string()
+        }
+        NativeRdpNotificationRequest::LogonError {
+            kind: WindowsRdpLogonErrorKind::BadCredentials,
+            ..
+        } => t!(
+            "RemoteDesktop.native_logon_error_bad_credentials",
+            locale = locale
+        )
+        .to_string(),
+        NativeRdpNotificationRequest::LogonError {
+            kind: WindowsRdpLogonErrorKind::PasswordChangeRequired,
+            ..
+        } => t!(
+            "RemoteDesktop.native_logon_error_password_change_required",
+            locale = locale
+        )
+        .to_string(),
+        NativeRdpNotificationRequest::LogonError { .. } => {
+            t!("RemoteDesktop.native_logon_error_generic", locale = locale).to_string()
+        }
+        NativeRdpNotificationRequest::Disconnected {
+            category: WindowsRdpDiagnosticCategory::Authentication,
+            ..
+        } => t!(
+            "RemoteDesktop.native_disconnected_authentication",
+            locale = locale
+        )
+        .to_string(),
+        NativeRdpNotificationRequest::Disconnected {
+            category: WindowsRdpDiagnosticCategory::CertificateOrSecurity,
+            ..
+        } => t!(
+            "RemoteDesktop.native_disconnected_security",
+            locale = locale
+        )
+        .to_string(),
+        NativeRdpNotificationRequest::Disconnected {
+            category: WindowsRdpDiagnosticCategory::Gateway,
+            ..
+        } => t!("RemoteDesktop.native_disconnected_gateway", locale = locale).to_string(),
+        NativeRdpNotificationRequest::Disconnected {
+            category: WindowsRdpDiagnosticCategory::ServerPolicy,
+            ..
+        } => t!(
+            "RemoteDesktop.native_disconnected_server_policy",
+            locale = locale
+        )
+        .to_string(),
+        NativeRdpNotificationRequest::Disconnected {
+            category: WindowsRdpDiagnosticCategory::Network,
+            ..
+        } => t!("RemoteDesktop.native_disconnected_network", locale = locale).to_string(),
+        NativeRdpNotificationRequest::Disconnected {
+            category: WindowsRdpDiagnosticCategory::NativeUnavailable,
+            ..
+        } => t!(
+            "RemoteDesktop.native_disconnected_native_unavailable",
+            locale = locale
+        )
+        .to_string(),
+        NativeRdpNotificationRequest::Disconnected {
+            category:
+                WindowsRdpDiagnosticCategory::UserInitiated | WindowsRdpDiagnosticCategory::Unknown,
+            ..
+        } => t!("RemoteDesktop.native_disconnected_unknown", locale = locale).to_string(),
     }
 }
 

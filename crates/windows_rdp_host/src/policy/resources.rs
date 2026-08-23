@@ -1,3 +1,4 @@
+use crate::error::WindowsRdpHostError;
 use crate::ffi::{
     RESOURCE_FLAG_CAMERAS, RESOURCE_FLAG_CLIPBOARD, RESOURCE_FLAG_DRIVES,
     RESOURCE_FLAG_DYNAMIC_DEVICES, RESOURCE_FLAG_DYNAMIC_DRIVES, RESOURCE_FLAG_MICROPHONES,
@@ -39,6 +40,13 @@ impl Default for WindowsRdpResourcePolicy {
 }
 
 impl WindowsRdpResourcePolicy {
+    pub(crate) fn validate(&self) -> Result<(), WindowsRdpHostError> {
+        if self.cameras {
+            return Err(WindowsRdpHostError::Unavailable);
+        }
+        Ok(())
+    }
+
     pub(crate) fn flags(&self) -> u32 {
         collect_flags([
             (self.clipboard, RESOURCE_FLAG_CLIPBOARD),

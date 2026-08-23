@@ -166,11 +166,14 @@ NavopRdpResult configure_gateway_policy(
         return result;
     }
 
-    // BYPASS_LOCAL has no reliable standalone ActiveX property; auto-detect
-    // usage above is the closest supported expression and the flag is
-    // recorded as best-effort/unsupported.
+    // BYPASS_LOCAL has no reliable standalone ActiveX property. Do not
+    // silently approximate it with GatewayUsageMethod: callers must either
+    // disable the flag or receive an explicit unavailable result.
     if ((options.gateway_flags & NAVOP_RDP_GATEWAY_FLAG_BYPASS_LOCAL) != 0) {
-        trace_native_stage("connect.gateway.bypass_local.best_effort");
+        trace_native_stage("connect.gateway.bypass_local.unavailable");
+        return record_last_error(
+            context.owner,
+            NAVOP_RDP_RESULT_UNAVAILABLE);
     }
     return NAVOP_RDP_RESULT_OK;
 }

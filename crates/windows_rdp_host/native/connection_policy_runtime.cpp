@@ -160,9 +160,14 @@ NavopRdpResult configure_resource_policy(
     }
 
     // Cameras need the IMsRdpClientNonScriptable camera collection, which the
-    // current ABI does not transport; the flag is consumed as unsupported.
+    // current ABI does not transport. Never consume this request as success:
+    // the Rust policy validator is the first line of defense and this native
+    // check keeps the ABI fail-closed if a caller bypasses that validator.
     if ((options.resource_flags & NAVOP_RDP_RESOURCE_FLAG_CAMERAS) != 0) {
-        trace_native_stage("connect.resource.cameras.unsupported");
+        trace_native_stage("connect.resource.cameras.unavailable");
+        return record_last_error(
+            context.owner,
+            NAVOP_RDP_RESULT_UNAVAILABLE);
     }
     // Microphones are consumed by the audio policy through
     // AudioCaptureRedirectionMode (see configure_audio_redirection).

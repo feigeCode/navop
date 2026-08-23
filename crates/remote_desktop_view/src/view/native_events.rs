@@ -1,6 +1,7 @@
 use windows_rdp_host::{
-    WindowsRdpDisconnectReason, WindowsRdpEvent, WindowsRdpFatalError, WindowsRdpHost,
-    WindowsRdpLogonError, WindowsRdpRawEvent, WindowsRdpWarning,
+    WindowsRdpDiagnosticCategory, WindowsRdpDisconnectReason, WindowsRdpEvent,
+    WindowsRdpFatalError, WindowsRdpHost, WindowsRdpLogonError, WindowsRdpLogonErrorKind,
+    WindowsRdpRawEvent, WindowsRdpWarning,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +53,81 @@ pub(super) enum NativeRdpUiEffect {
     Unknown {
         event: WindowsRdpRawEvent,
     },
+}
+
+/// Owned, localized-at-the-UI-boundary notification request.
+///
+/// This deliberately carries only stable classifications and the native
+/// generation. Raw event codes, payloads, native diagnostic strings, paths,
+/// credentials, COM interfaces, and HRESULT values must remain in diagnostics
+/// and logs rather than leaking into user-facing notifications.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeRdpNotificationRequest {
+    FatalError {
+        generation: u64,
+    },
+    LogonError {
+        generation: u64,
+        kind: WindowsRdpLogonErrorKind,
+    },
+    Disconnected {
+        generation: u64,
+        category: WindowsRdpDiagnosticCategory,
+    },
+}
+
+impl NativeRdpNotificationRequest {
+    pub(super) const fn generation(self) -> u64 {
+        match self {
+            Self::FatalError { generation }
+            | Self::LogonError { generation, .. }
+            | Self::Disconnected { generation, .. } => generation,
+        }
+    }
+
+    pub(super) const fn notification_key(self) -> &'static str {
+        match self {
+            Self::FatalError { .. } => "remote-desktop-native-rdp-fatal",
+            Self::LogonError { .. } => "remote-desktop-native-rdp-logon",
+            Self::Disconnected { .. } => "remote-desktop-native-rdp-disconnected",
+        }
+    }
+}
+
+pub(super) fn notification_request(
+    effect: &NativeRdpUiEffect,
+) -> Option<NativeRdpNotificationRequest> {
+    match effect {
+        NativeRdpUiEffect::FatalError { generation, .. } => {
+            Some(NativeRdpNotificationRequest::FatalError {
+                generation: *generation,
+            })
+        }
+        NativeRdpUiEffect::LogonError { generation, error } => {
+            Some(NativeRdpNotificationRequest::LogonError {
+                generation: *generation,
+                kind: error.kind(),
+            })
+        }
+        NativeRdpUiEffect::Disconnected { generation, reason }
+            if reason.category() != WindowsRdpDiagnosticCategory::UserInitiated =>
+        {
+            Some(NativeRdpNotificationRequest::Disconnected {
+                generation: *generation,
+                category: reason.category(),
+            })
+        }
+        NativeRdpUiEffect::CloseConfirmed
+        | NativeRdpUiEffect::FocusReleased
+        | NativeRdpUiEffect::Connecting { .. }
+        | NativeRdpUiEffect::Connected { .. }
+        | NativeRdpUiEffect::LoginComplete { .. }
+        | NativeRdpUiEffect::Reconnecting { .. }
+        | NativeRdpUiEffect::Reconnected { .. }
+        | NativeRdpUiEffect::Warning { .. }
+        | NativeRdpUiEffect::Disconnected { .. }
+        | NativeRdpUiEffect::Unknown { .. } => None,
+    }
 }
 
 pub(super) fn diagnostic_text(effect: &NativeRdpUiEffect) -> Option<String> {
@@ -549,6 +625,66 @@ mod tests {
                     .to_owned()
             ),
             diagnostic_text(&NativeRdpUiEffect::Unknown {
+                event: raw(8, 99, -7, [0; 12]),
+            })
+        );
+    }
+
+    #[test]
+    fn user_notifications_keep_only_stable_owned_classifications() {
+        assert_eq!(
+            Some(NativeRdpNotificationRequest::FatalError { generation: 8 }),
+            notification_request(&NativeRdpUiEffect::FatalError {
+                generation: 8,
+                error: WindowsRdpFatalError::from_native_code(100),
+            })
+        );
+        assert_eq!(
+            Some(NativeRdpNotificationRequest::LogonError {
+                generation: 8,
+                kind: WindowsRdpLogonErrorKind::BadCredentials,
+            }),
+            notification_request(&NativeRdpUiEffect::LogonError {
+                generation: 8,
+                error: WindowsRdpLogonError::from_native_code(-1_073_741_715),
+            })
+        );
+        assert_eq!(
+            Some(NativeRdpNotificationRequest::Disconnected {
+                generation: 8,
+                category: WindowsRdpDiagnosticCategory::Network,
+            }),
+            notification_request(&NativeRdpUiEffect::Disconnected {
+                generation: 8,
+                reason: WindowsRdpDisconnectReason::new(
+                    WindowsRdpDiagnosticCategory::Network,
+                    2308,
+                    Some(262),
+                ),
+            })
+        );
+
+        assert_eq!(
+            None,
+            notification_request(&NativeRdpUiEffect::Disconnected {
+                generation: 8,
+                reason: WindowsRdpDisconnectReason::new(
+                    WindowsRdpDiagnosticCategory::UserInitiated,
+                    1,
+                    None,
+                ),
+            })
+        );
+        assert_eq!(
+            None,
+            notification_request(&NativeRdpUiEffect::Warning {
+                generation: 8,
+                warning: WindowsRdpWarning::from_native_code(1),
+            })
+        );
+        assert_eq!(
+            None,
+            notification_request(&NativeRdpUiEffect::Unknown {
                 event: raw(8, 99, -7, [0; 12]),
             })
         );

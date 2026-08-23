@@ -703,13 +703,13 @@ fn validate_connection_options(options: &NavopRdpConnectionOptions) -> NativeRes
     }
 
     if !matches!(options.display_mode, 0 | 1)
-        || !matches!(options.audio_mode, 0 | 1 | 2)
-        || !matches!(options.audio_quality, 0 | 1 | 2)
-        || !matches!(options.keyboard_hook_mode, 0 | 1 | 2)
+        || !matches!(options.audio_mode, 0..=2)
+        || !matches!(options.audio_quality, 0..=2)
+        || !matches!(options.keyboard_hook_mode, 0..=2)
         || !(0..=4).contains(&options.performance_preset)
         || !(0..=6).contains(&options.network_connection_type)
         || !(0..=2).contains(&options.authentication_level)
-        || !matches!(options.gateway_mode, 0 | 1 | 2)
+        || !matches!(options.gateway_mode, 0..=2)
         || !matches!(options.gateway_credential_source, 0 | 1 | 4)
         || !(100..=500).contains(&options.desktop_scale_factor)
         || !matches!(options.device_scale_factor, 100 | 140 | 180)

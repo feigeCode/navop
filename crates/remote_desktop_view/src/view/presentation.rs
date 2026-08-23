@@ -1391,6 +1391,7 @@ pub(crate) enum WindowsNativeRdpUnavailableReason {
     ProbeReportedUnavailable,
     ClassNotRegistered,
     RequiredInterfaceMissing,
+    SharedFoldersUnsupported,
 }
 
 /// A stable, non-fallback classification for failures while probing the native

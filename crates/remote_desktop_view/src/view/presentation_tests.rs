@@ -326,6 +326,7 @@ fn windows_auto_falls_back_to_canvas_only_for_pre_connect_unavailability() {
         WindowsNativeRdpUnavailableReason::ProbeReportedUnavailable,
         WindowsNativeRdpUnavailableReason::ClassNotRegistered,
         WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing,
+        WindowsNativeRdpUnavailableReason::SharedFoldersUnsupported,
     ] {
         assert_eq!(
             Ok(selection(RemoteDesktopPresentation::Canvas, Some(reason))),
@@ -360,6 +361,7 @@ fn explicit_windows_native_reports_unavailable_instead_of_falling_back() {
         WindowsNativeRdpUnavailableReason::ProbeReportedUnavailable,
         WindowsNativeRdpUnavailableReason::ClassNotRegistered,
         WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing,
+        WindowsNativeRdpUnavailableReason::SharedFoldersUnsupported,
     ] {
         assert_eq!(
             Err(RemoteDesktopPresentationError::NativeUnavailable(reason)),

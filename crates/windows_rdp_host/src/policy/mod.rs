@@ -35,6 +35,7 @@ pub struct WindowsRdpConnectionPolicy {
 impl WindowsRdpConnectionPolicy {
     pub(crate) fn validate(&self) -> Result<(), WindowsRdpHostError> {
         self.display.validate()?;
+        self.resources.validate()?;
         self.security.validate()?;
         self.gateway.validate()?;
         self.reconnect.validate()

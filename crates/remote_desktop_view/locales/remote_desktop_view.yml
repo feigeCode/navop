@@ -53,6 +53,54 @@ RemoteDesktop:
     en: Windows native RDP does not support the configured SOCKS/HTTP proxy yet. Use the IronRDP backend instead.
     zh-CN: Windows 原生 RDP 暂不支持已配置的 SOCKS/HTTP 代理，请改用 IronRDP 后端。
     zh-HK: Windows 原生 RDP 暫不支援已設定的 SOCKS/HTTP 代理，請改用 IronRDP 後端。
+  native_shared_folders_unsupported:
+    en: Windows native RDP does not support selected shared folders yet. Use the IronRDP backend instead.
+    zh-CN: Windows 原生 RDP 暂不支持已选择的共享文件夹，请改用 IronRDP 后端。
+    zh-HK: Windows 原生 RDP 暫不支援已選取的共用資料夾，請改用 IronRDP 後端。
+  native_fatal_error:
+    en: Windows native RDP encountered a fatal error and disconnected.
+    zh-CN: Windows 原生 RDP 遇到严重错误并已断开连接。
+    zh-HK: Windows 原生 RDP 遇到嚴重錯誤並已中斷連線。
+  native_logon_error_bad_credentials:
+    en: Windows native RDP sign-in failed. Check the username, password, and domain.
+    zh-CN: Windows 原生 RDP 登录失败，请检查用户名、密码和域。
+    zh-HK: Windows 原生 RDP 登入失敗，請檢查使用者名稱、密碼和網域。
+  native_logon_error_password_change_required:
+    en: Windows native RDP requires the account password to be changed before sign-in.
+    zh-CN: Windows 原生 RDP 要求先更改账户密码，然后才能登录。
+    zh-HK: Windows 原生 RDP 要求先變更帳戶密碼，然後才能登入。
+  native_logon_error_generic:
+    en: The remote server rejected the Windows native RDP sign-in.
+    zh-CN: 远程服务器拒绝了 Windows 原生 RDP 登录。
+    zh-HK: 遠端伺服器拒絕了 Windows 原生 RDP 登入。
+  native_disconnected_authentication:
+    en: Windows native RDP disconnected because authentication failed.
+    zh-CN: Windows 原生 RDP 因身份验证失败而断开连接。
+    zh-HK: Windows 原生 RDP 因身份驗證失敗而中斷連線。
+  native_disconnected_security:
+    en: Windows native RDP disconnected because the certificate or security negotiation failed.
+    zh-CN: Windows 原生 RDP 因证书或安全协商失败而断开连接。
+    zh-HK: Windows 原生 RDP 因憑證或安全性協商失敗而中斷連線。
+  native_disconnected_gateway:
+    en: Windows native RDP disconnected because the Remote Desktop Gateway failed.
+    zh-CN: Windows 原生 RDP 因远程桌面网关失败而断开连接。
+    zh-HK: Windows 原生 RDP 因遠端桌面閘道失敗而中斷連線。
+  native_disconnected_server_policy:
+    en: Windows native RDP was disconnected by remote server policy.
+    zh-CN: Windows 原生 RDP 已被远程服务器策略断开。
+    zh-HK: Windows 原生 RDP 已被遠端伺服器原則中斷。
+  native_disconnected_network:
+    en: Windows native RDP disconnected because the network connection was lost.
+    zh-CN: Windows 原生 RDP 因网络连接丢失而断开。
+    zh-HK: Windows 原生 RDP 因網路連線遺失而中斷。
+  native_disconnected_native_unavailable:
+    en: Windows native RDP disconnected because the Windows RDP component became unavailable.
+    zh-CN: Windows 原生 RDP 因 Windows RDP 组件不可用而断开连接。
+    zh-HK: Windows 原生 RDP 因 Windows RDP 元件不可用而中斷連線。
+  native_disconnected_unknown:
+    en: Windows native RDP disconnected unexpectedly.
+    zh-CN: Windows 原生 RDP 意外断开连接。
+    zh-HK: Windows 原生 RDP 意外中斷連線。
   backend_selecting:
     en: Selecting
     zh-CN: 正在选择
@@ -89,6 +137,10 @@ RemoteDesktop:
     en: The Windows RDP component is missing a required interface
     zh-CN: Windows RDP 组件缺少必需接口
     zh-HK: Windows RDP 元件缺少必要介面
+  fallback_shared_folders_unsupported:
+    en: Windows native RDP does not support selected shared folders
+    zh-CN: Windows 原生 RDP 不支持已选择的共享文件夹
+    zh-HK: Windows 原生 RDP 不支援已選取的共用資料夾
   use_canvas:
     en: Retry with IronRDP
     zh-CN: 使用 IronRDP 重试

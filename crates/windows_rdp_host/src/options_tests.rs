@@ -4,9 +4,8 @@ use crate::ffi::{
     CONNECTION_FLAG_AUTO_RECONNECT, DISPLAY_FLAG_SMART_SIZING, DISPLAY_FLAG_SPAN_MONITORS,
     DISPLAY_FLAG_USE_MULTIMON, INPUT_FLAG_ENABLE_WINDOWS_KEY, INPUT_FLAG_GRAB_FOCUS_ON_CONNECT,
     PERFORMANCE_FLAG_BITMAP_CACHE, PERFORMANCE_FLAG_DESKTOP_COMPOSITION,
-    PERFORMANCE_FLAG_FONT_SMOOTHING, RESOURCE_FLAG_CAMERAS, RESOURCE_FLAG_CLIPBOARD,
-    RESOURCE_FLAG_DRIVES, RESOURCE_FLAG_MICROPHONES, SECURITY_FLAG_ENABLE_CREDSSP,
-    SECURITY_FLAG_ENCRYPTION_ENABLED,
+    PERFORMANCE_FLAG_FONT_SMOOTHING, RESOURCE_FLAG_CLIPBOARD, RESOURCE_FLAG_DRIVES,
+    RESOURCE_FLAG_MICROPHONES, SECURITY_FLAG_ENABLE_CREDSSP, SECURITY_FLAG_ENCRYPTION_ENABLED,
 };
 use crate::policy::{
     WindowsRdpAudioMode, WindowsRdpAudioPolicy, WindowsRdpAudioQuality, WindowsRdpConnectionPolicy,
@@ -150,7 +149,6 @@ fn complete_policy_maps_to_native_fields() {
         resources: WindowsRdpResourcePolicy {
             clipboard: true,
             drives: true,
-            cameras: true,
             microphones: true,
             ..Default::default()
         },
@@ -185,7 +183,7 @@ fn complete_policy_maps_to_native_fields() {
         },
         gateway: WindowsRdpGatewayPolicy {
             mode: WindowsRdpGatewayMode::Explicit,
-            bypass_local: true,
+            bypass_local: false,
             credential_source: WindowsRdpGatewayCredentialSource::Any,
             hostname: Some("gateway.example".to_owned()),
         },
@@ -214,10 +212,7 @@ fn complete_policy_maps_to_native_fields() {
     );
     assert_eq!(
         native.native.resource_flags,
-        RESOURCE_FLAG_CLIPBOARD
-            | RESOURCE_FLAG_DRIVES
-            | RESOURCE_FLAG_CAMERAS
-            | RESOURCE_FLAG_MICROPHONES
+        RESOURCE_FLAG_CLIPBOARD | RESOURCE_FLAG_DRIVES | RESOURCE_FLAG_MICROPHONES
     );
     assert_eq!(native.native.audio_mode, WindowsRdpAudioMode::Remote as u32);
     assert_eq!(
@@ -251,9 +246,55 @@ fn complete_policy_maps_to_native_fields() {
 }
 
 #[test]
+fn policy_rejects_unimplemented_camera_redirection() {
+    let base = valid_options("rdp.example").expect("valid connection options");
+    let mut policy = WindowsRdpConnectionPolicy::default();
+    policy.resources.cameras = true;
+
+    assert!(matches!(
+        base.with_policy(policy).as_native(),
+        Err(WindowsRdpHostError::Unavailable)
+    ));
+}
+
+#[test]
+fn gateway_bypass_local_is_only_accepted_while_gateway_is_disabled() {
+    let base = valid_options("rdp.example").expect("valid connection options");
+
+    let disabled = WindowsRdpConnectionPolicy::default();
+    assert!(disabled.gateway.bypass_local);
+    assert!(base.clone().with_policy(disabled).as_native().is_ok());
+
+    for mode in [
+        WindowsRdpGatewayMode::Explicit,
+        WindowsRdpGatewayMode::AutoDetect,
+    ] {
+        let mut unsupported = WindowsRdpConnectionPolicy::default();
+        unsupported.gateway.mode = mode;
+        unsupported.gateway.hostname =
+            (mode == WindowsRdpGatewayMode::Explicit).then(|| "gateway.example".to_owned());
+        assert!(matches!(
+            base.clone().with_policy(unsupported).as_native(),
+            Err(WindowsRdpHostError::Unavailable)
+        ));
+
+        let mut supported = WindowsRdpConnectionPolicy::default();
+        supported.gateway.mode = mode;
+        supported.gateway.bypass_local = false;
+        supported.gateway.hostname =
+            (mode == WindowsRdpGatewayMode::Explicit).then(|| "gateway.example".to_owned());
+        assert!(
+            base.clone().with_policy(supported).as_native().is_ok(),
+            "{mode:?} gateway without bypass-local should remain valid"
+        );
+    }
+}
+
+#[test]
 fn gateway_hostname_is_borrowed_for_the_native_call_lifetime() {
     let mut policy = WindowsRdpConnectionPolicy::default();
     policy.gateway.mode = WindowsRdpGatewayMode::Explicit;
+    policy.gateway.bypass_local = false;
     policy.gateway.hostname = Some("网关.example".to_owned());
     let options = valid_options("rdp.example")
         .expect("valid connection options")

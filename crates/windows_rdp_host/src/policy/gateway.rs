@@ -71,6 +71,9 @@ impl WindowsRdpGatewayPolicy {
         if hostname.is_some_and(invalid_hostname) {
             return Err(WindowsRdpHostError::InvalidArgument);
         }
+        if self.mode != WindowsRdpGatewayMode::Disabled && self.bypass_local {
+            return Err(WindowsRdpHostError::Unavailable);
+        }
         Ok(())
     }
 }
