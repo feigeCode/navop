@@ -21,6 +21,9 @@ use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use std::collections::HashSet;
 
+use crate::compare::compare_result_feedback::{
+    failure_details_panel, hide_schema_compare_failure_warnings,
+};
 use crate::compare::schema_compare_window::SchemaCompareWindow;
 use crate::compare::sync_statement_picker::{
     selected_sync_sql_summary_for_ids, sync_statement_empty_picker, sync_statement_picker,
@@ -248,11 +251,14 @@ impl SchemaCompareWindow {
             .as_ref()
             .filter(|result| result.has_failed_tables())
             .map(|result| {
-                t!(
-                    "Compare.schema_compare_table_failed_note",
-                    count = result.table_failures.len()
+                (
+                    t!(
+                        "Compare.schema_compare_table_failed_note",
+                        count = result.table_failures.len()
+                    )
+                    .to_string(),
+                    result.table_failures.len(),
                 )
-                .to_string()
             });
         let progress = self.progress.read(cx).clone();
         let show_empty = self.result.read(cx).is_none() && progress.is_none();
@@ -299,8 +305,16 @@ impl SchemaCompareWindow {
             .when(self.result.read(cx).is_some(), |this| {
                 this.child(schema_diff_panel(self.schema_diff_list.clone(), cx))
             })
-            .when_some(failed_tables, |this, note| {
-                this.child(div().text_xs().text_color(cx.theme().warning).child(note))
+            .when_some(failed_tables, |this, (summary, issue_count)| {
+                this.child(failure_details_panel(
+                    "schema-compare-failures",
+                    "toggle-schema-compare-failures",
+                    summary,
+                    issue_count,
+                    self.failure_details_list.clone(),
+                    self.failure_details_expanded.clone(),
+                    cx,
+                ))
             })
             .when_some(sync_summary, |this, sync_summary| {
                 this.child(div().text_sm().child(sync_summary))
@@ -308,7 +322,10 @@ impl SchemaCompareWindow {
     }
 
     pub(super) fn render_sync_statement_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let plan = self.sync_plan.read(cx).clone();
+        let mut plan = self.sync_plan.read(cx).clone();
+        if let (Some(plan), Some(result)) = (plan.as_mut(), self.result.read(cx).as_ref()) {
+            hide_schema_compare_failure_warnings(plan, &result.table_failures);
+        }
         let show_empty = plan.is_none();
 
         v_flex()
@@ -323,6 +340,7 @@ impl SchemaCompareWindow {
                     plan,
                     self.selected_statement_ids.clone(),
                     self.sync_statement_list.clone(),
+                    self.sync_warnings_expanded.clone(),
                     cx,
                 ))
             })

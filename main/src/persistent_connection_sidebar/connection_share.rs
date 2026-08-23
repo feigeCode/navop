@@ -324,6 +324,7 @@ fn ssh_auth_key(auth: &SshAuthMethod) -> &'static str {
             "Connection.Share.auth_private_key"
         }
         SshAuthMethod::Agent => "Connection.Share.auth_agent",
+        SshAuthMethod::Pageant => "Connection.Share.auth_pageant",
         SshAuthMethod::AutoPublicKey => "Connection.Share.auth_auto_public_key",
     }
 }

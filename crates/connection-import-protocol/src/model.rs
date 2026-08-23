@@ -37,7 +37,11 @@ pub struct ImporterCapabilities {
     pub supports_password_import: bool,
     pub supports_manual_file_pick: bool,
     #[serde(default)]
+    pub supports_manual_directory_pick: bool,
+    #[serde(default)]
     pub manual_file_pick_prompt: Option<String>,
+    #[serde(default)]
+    pub manual_directory_pick_prompt: Option<String>,
     pub supports_incremental_preview: bool,
 }
 

@@ -5,6 +5,10 @@ use db::{DbNode, DbNodeType};
 use one_core::storage::DatabaseType;
 use rust_i18n::t;
 
+use crate::compare::compare_result_feedback::{
+    compare_issue_copy_text, data_compare_failure_issues, hide_data_compare_failure_warnings,
+    hide_schema_compare_failure_warnings, schema_compare_failure_issues,
+};
 use crate::compare::sync_statement_picker::{
     selected_sync_execution_snapshot, selected_sync_sql_text_for_ids,
 };
@@ -18,6 +22,120 @@ use crate::compare::window_ui::{
     sync_sql_execution_success_log_entry,
 };
 use crate::compare::{DataCompareWindow, SchemaCompareWindow};
+
+#[test]
+fn data_compare_failure_issues_preserve_table_error_and_order() {
+    let issues = data_compare_failure_issues(&[
+        db::compare::DataCompareTableFailure {
+            table: "users".to_string(),
+            error: "permission denied".to_string(),
+        },
+        db::compare::DataCompareTableFailure {
+            table: "orders".to_string(),
+            error: "timeout".to_string(),
+        },
+    ]);
+
+    assert_eq!(2, issues.len());
+    assert_eq!("users", issues[0].title);
+    assert_eq!("permission denied", issues[0].detail);
+    assert_eq!(None, issues[0].badge);
+    assert_eq!("orders", issues[1].title);
+    assert_eq!("timeout", issues[1].detail);
+}
+
+#[test]
+fn schema_compare_failure_issues_include_localized_side() {
+    let issues = schema_compare_failure_issues(&[
+        db::compare::SchemaCompareTableFailure {
+            side: db::compare::CompareSchemaSide::Source,
+            table: "users".to_string(),
+            error: "source unavailable".to_string(),
+        },
+        db::compare::SchemaCompareTableFailure {
+            side: db::compare::CompareSchemaSide::Target,
+            table: "orders".to_string(),
+            error: "target unavailable".to_string(),
+        },
+    ]);
+
+    assert_eq!(2, issues.len());
+    assert_eq!(Some(t!("Compare.source").to_string()), issues[0].badge);
+    assert_eq!("users", issues[0].title);
+    assert_eq!("source unavailable", issues[0].detail);
+    assert_eq!(Some(t!("Compare.target").to_string()), issues[1].badge);
+    assert_eq!("orders", issues[1].title);
+    assert_eq!("target unavailable", issues[1].detail);
+}
+
+#[test]
+fn compare_issue_copy_text_includes_badge_title_and_detail() {
+    let data_issue = data_compare_failure_issues(&[db::compare::DataCompareTableFailure {
+        table: "users".to_string(),
+        error: "permission denied".to_string(),
+    }])
+    .remove(0);
+    let schema_issue = schema_compare_failure_issues(&[db::compare::SchemaCompareTableFailure {
+        side: db::compare::CompareSchemaSide::Source,
+        table: "orders".to_string(),
+        error: "source unavailable".to_string(),
+    }])
+    .remove(0);
+
+    assert_eq!(
+        "users\npermission denied",
+        compare_issue_copy_text(&data_issue)
+    );
+    assert_eq!(
+        format!("{} orders\nsource unavailable", t!("Compare.source")),
+        compare_issue_copy_text(&schema_issue)
+    );
+}
+
+#[test]
+fn compare_failure_warnings_move_out_of_sync_plan_without_hiding_other_warnings() {
+    let data_failure = db::compare::DataCompareTableFailure {
+        table: "users".to_string(),
+        error: "permission denied".to_string(),
+    };
+    let schema_failure = db::compare::SchemaCompareTableFailure {
+        side: db::compare::CompareSchemaSide::Target,
+        table: "orders".to_string(),
+        error: "timeout".to_string(),
+    };
+    let retained_warning = "Destructive statement requires confirmation.".to_string();
+    let mut data_plan = sync_plan_with_warnings(vec![
+        db::compare::data_compare_table_failure_warning(&data_failure),
+        retained_warning.clone(),
+    ]);
+    let mut schema_plan = sync_plan_with_warnings(vec![
+        retained_warning.clone(),
+        db::compare::schema_compare_table_failure_warning(&schema_failure),
+    ]);
+
+    hide_data_compare_failure_warnings(&mut data_plan, &[data_failure]);
+    hide_schema_compare_failure_warnings(&mut schema_plan, &[schema_failure]);
+
+    assert_eq!(vec![retained_warning.clone()], data_plan.warnings);
+    assert_eq!(vec![retained_warning], schema_plan.warnings);
+}
+
+fn sync_plan_with_warnings(warnings: Vec<String>) -> SyncPlan {
+    SyncPlan {
+        id: "plan".to_string(),
+        target_table: "target".to_string(),
+        statements: Vec::new(),
+        summary: SyncPlanSummary {
+            insert_count: 0,
+            update_count: 0,
+            delete_count: 0,
+            ddl_count: 0,
+            total_count: 0,
+        },
+        warnings,
+        sql_text: String::new(),
+    }
+}
 
 fn data_compare_settings(
     key_columns: &str,

@@ -18,37 +18,39 @@ use fixtures::{
 #[test]
 fn connection_import_provider_lists_manifest_importers_with_scoped_ids() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let extension_dir = tmp.path().join("navicat");
+    let extension_dir = tmp.path().join("securecrt");
     fs::create_dir_all(&extension_dir).unwrap();
     fs::write(
         extension_dir.join("extension.json"),
         r#"{
             "schema_version": 1,
-            "id": "com.onetcli.importer.navicat",
-            "name": "Navicat Importer",
+            "id": "com.onetcli.importer.securecrt",
+            "name": "SecureCRT Importer",
             "version": "0.1.0",
             "engines": { "onetcli": ">=0.7.0" },
             "runtime": {
                 "wasm": [{
-                    "id": "navicat-importer",
-                    "module": "wasm/navicat_importer.wasm",
+                    "id": "securecrt-importer",
+                    "module": "wasm/securecrt_importer.wasm",
                     "kind": "component"
                 }]
             },
             "contributes": {
                 "connectionImporters": [{
-                    "id": "navicat",
-                    "runtimeId": "navicat-importer",
-                    "displayName": "Navicat",
-                    "outputKinds": ["database"],
+                    "id": "securecrt",
+                    "runtimeId": "securecrt-importer",
+                    "displayName": "SecureCRT",
+                    "outputKinds": ["ssh", "quick-command"],
                     "platforms": ["macos"],
                     "manualFilePick": {
-                        "prompt": "选择 Navicat 导出的 connection.ncx 文件"
+                        "prompt": "选择 SecureCRT XML/INI 文件",
+                        "supportsDirectories": true,
+                        "directoryPrompt": "选择 SecureCRT Config 配置根目录"
                     },
                     "candidateFiles": [{
-                        "id": "navicat-conn",
+                        "id": "securecrt-config",
                         "platform": "macos",
-                        "path": "~/Library/Navicat/conn.plist"
+                        "path": "~/Library/Application Support/VanDyke/SecureCRT/Config"
                     }]
                 }]
             }
@@ -61,11 +63,11 @@ fn connection_import_provider_lists_manifest_importers_with_scoped_ids() {
 
     assert_eq!(1, importers.len());
     assert_eq!(
-        "com.onetcli.importer.navicat/navicat",
+        "com.onetcli.importer.securecrt/securecrt",
         importers[0].descriptor.id
     );
-    assert_eq!("Navicat", importers[0].descriptor.display_name);
-    assert_eq!("navicat-importer", importers[0].runtime_id);
+    assert_eq!("SecureCRT", importers[0].descriptor.display_name);
+    assert_eq!("securecrt-importer", importers[0].runtime_id);
     assert_eq!(extension_dir, importers[0].extension_dir);
     assert!(
         importers[0]
@@ -73,12 +75,26 @@ fn connection_import_provider_lists_manifest_importers_with_scoped_ids() {
             .capabilities
             .supports_manual_file_pick
     );
+    assert!(
+        importers[0]
+            .descriptor
+            .capabilities
+            .supports_manual_directory_pick
+    );
     assert_eq!(
-        Some("选择 Navicat 导出的 connection.ncx 文件"),
+        Some("选择 SecureCRT XML/INI 文件"),
         importers[0]
             .descriptor
             .capabilities
             .manual_file_pick_prompt
+            .as_deref()
+    );
+    assert_eq!(
+        Some("选择 SecureCRT Config 配置根目录"),
+        importers[0]
+            .descriptor
+            .capabilities
+            .manual_directory_pick_prompt
             .as_deref()
     );
 }

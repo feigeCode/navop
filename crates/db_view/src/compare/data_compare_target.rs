@@ -14,6 +14,9 @@ use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use std::collections::HashSet;
 
+use crate::compare::compare_result_feedback::{
+    failure_details_panel, hide_data_compare_failure_warnings,
+};
 use crate::compare::data_compare_window::DataCompareWindow;
 use crate::compare::data_diff_detail::data_diff_detail_panel;
 use crate::compare::sync_statement_picker::{
@@ -399,11 +402,14 @@ impl DataCompareWindow {
             .as_ref()
             .filter(|result| result.has_failed_tables())
             .map(|result| {
-                t!(
-                    "Compare.data_compare_table_failed_note",
-                    count = result.table_failures.len()
+                (
+                    t!(
+                        "Compare.data_compare_table_failed_note",
+                        count = result.table_failures.len()
+                    )
+                    .to_string(),
+                    result.table_failures.len(),
                 )
-                .to_string()
             });
         let dependency_metadata_warning = self
             .result
@@ -460,8 +466,16 @@ impl DataCompareWindow {
             .when_some(missing_target, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))
             })
-            .when_some(failed_tables, |this, note| {
-                this.child(div().text_xs().text_color(cx.theme().warning).child(note))
+            .when_some(failed_tables, |this, (summary, issue_count)| {
+                this.child(failure_details_panel(
+                    "data-compare-failures",
+                    "toggle-data-compare-failures",
+                    summary,
+                    issue_count,
+                    self.failure_details_list.clone(),
+                    self.failure_details_expanded.clone(),
+                    cx,
+                ))
             })
             .when_some(dependency_metadata_warning, |this, note| {
                 this.child(div().text_xs().text_color(cx.theme().warning).child(note))
@@ -472,7 +486,10 @@ impl DataCompareWindow {
     }
 
     pub(super) fn render_sync_statement_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let plan = self.sync_plan.read(cx).clone();
+        let mut plan = self.sync_plan.read(cx).clone();
+        if let (Some(plan), Some(result)) = (plan.as_mut(), self.result.read(cx).as_ref()) {
+            hide_data_compare_failure_warnings(plan, &result.table_failures);
+        }
         let show_empty = plan.is_none();
 
         v_flex()
@@ -487,6 +504,7 @@ impl DataCompareWindow {
                     plan,
                     self.selected_statement_ids.clone(),
                     self.sync_statement_list.clone(),
+                    self.sync_warnings_expanded.clone(),
                     cx,
                 ))
             })

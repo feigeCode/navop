@@ -290,6 +290,7 @@ fn build_ssh_auth(auth_method: &SshAuthMethod) -> SshAuth {
             certificate_path: None,
         },
         SshAuthMethod::Agent => SshAuth::Agent,
+        SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
     }
 }

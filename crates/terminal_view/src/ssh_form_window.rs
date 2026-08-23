@@ -1,3 +1,4 @@
+pub use connection_form::SshAuthOption as AuthMethodSelection;
 use connection_form::credential::{
     CredentialCapabilities, CredentialField, CredentialPickerConfig, CredentialPickerEvent,
     CredentialReferencePicker, create_credential_picker, resolve_ssh_for_runtime,
@@ -267,25 +268,15 @@ struct JumpMfaInput {
     input: Entity<InputState>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum AuthMethodSelection {
-    #[default]
-    Password,
-    PrivateKey,
-    PrivateKeyContent,
-    Agent,
-    AutoPublicKey,
-}
-
 fn credential_capabilities_for_auth(auth_method: AuthMethodSelection) -> CredentialCapabilities {
     match auth_method {
         AuthMethodSelection::Password => CredentialCapabilities::ssh_password(),
         AuthMethodSelection::PrivateKey | AuthMethodSelection::PrivateKeyContent => {
             CredentialCapabilities::ssh_private_key()
         }
-        AuthMethodSelection::Agent | AuthMethodSelection::AutoPublicKey => {
-            CredentialCapabilities::username_only()
-        }
+        AuthMethodSelection::Agent
+        | AuthMethodSelection::Pageant
+        | AuthMethodSelection::AutoPublicKey => CredentialCapabilities::username_only(),
     }
 }
 
@@ -494,6 +485,7 @@ fn build_jump_auth_method(
             },
         },
         AuthMethodSelection::Agent => SshAuthMethod::Agent,
+        AuthMethodSelection::Pageant => SshAuthMethod::Pageant,
         AuthMethodSelection::AutoPublicKey => SshAuthMethod::AutoPublicKey,
     }
 }
@@ -730,6 +722,9 @@ impl SshFormWindow {
                     SshAuthMethod::Agent => {
                         auth_method = AuthMethodSelection::Agent;
                     }
+                    SshAuthMethod::Pageant => {
+                        auth_method = AuthMethodSelection::Pageant;
+                    }
                     SshAuthMethod::AutoPublicKey => {
                         auth_method = AuthMethodSelection::AutoPublicKey;
                     }
@@ -806,6 +801,9 @@ impl SshFormWindow {
                         }
                         SshAuthMethod::Agent => {
                             jump_auth_method = AuthMethodSelection::Agent;
+                        }
+                        SshAuthMethod::Pageant => {
+                            jump_auth_method = AuthMethodSelection::Pageant;
                         }
                         SshAuthMethod::AutoPublicKey => {
                             jump_auth_method = AuthMethodSelection::AutoPublicKey;
@@ -1041,6 +1039,7 @@ impl SshFormWindow {
                 }
             }
             AuthMethodSelection::Agent => SshAuthMethod::Agent,
+            AuthMethodSelection::Pageant => SshAuthMethod::Pageant,
             AuthMethodSelection::AutoPublicKey => SshAuthMethod::AutoPublicKey,
         };
 
@@ -1231,6 +1230,7 @@ impl SshFormWindow {
                 certificate_path: None,
             },
             SshAuthMethod::Agent => SshAuth::Agent,
+            SshAuthMethod::Pageant => SshAuth::Pageant,
             SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
         };
 
@@ -1255,6 +1255,7 @@ impl SshFormWindow {
                     certificate_path: None,
                 },
                 SshAuthMethod::Agent => SshAuth::Agent,
+                SshAuthMethod::Pageant => SshAuth::Pageant,
                 SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
             };
             JumpServerConnectConfig {
@@ -1983,6 +1984,18 @@ impl SshFormWindow {
                                     })),
                             )
                             .child(
+                                Radio::new("pageant")
+                                    .label(t!("SSH.pageant").to_string())
+                                    .checked(auth_method == AuthMethodSelection::Pageant)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::Pageant,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
                                 Radio::new("auto-publickey")
                                     .label(t!("SSH.auto_publickey").to_string())
                                     .checked(auth_method == AuthMethodSelection::AutoPublicKey)
@@ -2427,6 +2440,18 @@ impl SshFormWindow {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_jump_auth_method(
                                             AuthMethodSelection::Agent,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Radio::new("jump-pageant")
+                                    .label(t!("SSH.pageant").to_string())
+                                    .checked(jump_auth_method == AuthMethodSelection::Pageant)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::Pageant,
                                             window,
                                             cx,
                                         );
@@ -2955,6 +2980,10 @@ mod tests {
             CredentialCapabilities::username_only()
         );
         assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::Pageant),
+            CredentialCapabilities::username_only()
+        );
+        assert_eq!(
             credential_capabilities_for_auth(AuthMethodSelection::AutoPublicKey),
             CredentialCapabilities::username_only()
         );
@@ -3450,6 +3479,19 @@ mod tests {
                 passphrase: Some(passphrase),
             } if key_path == "/home/me/.ssh/bastion" && passphrase == "secret"
         ));
+    }
+
+    #[test]
+    fn jump_auth_builder_supports_pageant() {
+        let auth = build_jump_auth_method(
+            AuthMethodSelection::Pageant,
+            "ignored".to_string(),
+            "ignored-path".to_string(),
+            "ignored-key".to_string(),
+            "ignored-passphrase".to_string(),
+        );
+
+        assert!(matches!(auth, SshAuthMethod::Pageant));
     }
 
     #[test]

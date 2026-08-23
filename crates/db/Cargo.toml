@@ -12,6 +12,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 connection_tunnel.workspace = true
+connection-form.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

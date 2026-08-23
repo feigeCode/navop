@@ -21,6 +21,10 @@ use gpui_component::{
 use rust_i18n::t;
 use tokio::sync::mpsc;
 
+use crate::compare::compare_result_feedback::{
+    CompareIssueListState, clear_compare_issue_list, compare_issue_list_state,
+    refresh_compare_issue_list, schema_compare_failure_issues,
+};
 use crate::compare::schema_compare_target::{
     SchemaDiffListState, clear_schema_diff_list, refresh_schema_diff_list, schema_diff_list_state,
 };
@@ -95,6 +99,9 @@ pub struct SchemaCompareWindow {
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
     pub(super) sync_statement_list: SyncStatementListState,
+    pub(super) failure_details_list: CompareIssueListState,
+    pub(super) failure_details_expanded: Entity<bool>,
+    pub(super) sync_warnings_expanded: Entity<bool>,
     pub(super) sync_sql_editor: Entity<InputState>,
     sync_sql_dirty: bool,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
@@ -185,6 +192,8 @@ impl SchemaCompareWindow {
             let schema_diff_list = schema_diff_list_state(window, cx);
             let sync_statement_list =
                 sync_statement_list_state(selected_statement_ids.clone(), window, cx);
+            let failure_details_list =
+                compare_issue_list_state("schema-compare-failures", window, cx);
             let selected_source_tables = cx.new({
                 let default_selected_tables = default_selected_tables.clone();
                 move |_| default_selected_tables.clone()
@@ -229,6 +238,9 @@ impl SchemaCompareWindow {
                 sync_plan: cx.new(|_| None),
                 selected_statement_ids,
                 sync_statement_list,
+                failure_details_list,
+                failure_details_expanded: cx.new(|_| true),
+                sync_warnings_expanded: cx.new(|_| false),
                 execution_log: cx.new(|_| Vec::new()),
                 execution_log_scroll,
                 sync_sql_dirty: false,
@@ -436,6 +448,11 @@ impl SchemaCompareWindow {
                         ) {
                             Ok(plan) => {
                                 let selected_ids = default_selected_statement_ids(&plan);
+                                refresh_compare_issue_list(
+                                    &view.failure_details_list,
+                                    schema_compare_failure_issues(&result.table_failures),
+                                    cx,
+                                );
                                 refresh_schema_diff_list(&view.schema_diff_list, &result, cx);
                                 refresh_sync_statement_list(&view.sync_statement_list, &plan, cx);
                                 view.result.update(cx, |slot, cx| {
@@ -461,6 +478,11 @@ impl SchemaCompareWindow {
                                 );
                             }
                             Err(error) => {
+                                refresh_compare_issue_list(
+                                    &view.failure_details_list,
+                                    schema_compare_failure_issues(&result.table_failures),
+                                    cx,
+                                );
                                 refresh_schema_diff_list(&view.schema_diff_list, &result, cx);
                                 view.result.update(cx, |slot, cx| {
                                     *slot = Some(result);
@@ -554,6 +576,7 @@ impl SchemaCompareWindow {
             cx.notify();
         });
         clear_schema_diff_list(&self.schema_diff_list, cx);
+        clear_compare_issue_list(&self.failure_details_list, cx);
         self.sync_plan.update(cx, |slot, cx| {
             *slot = None;
             cx.notify();
@@ -715,6 +738,7 @@ impl SchemaCompareWindow {
             cx.notify();
         });
         clear_schema_diff_list(&self.schema_diff_list, cx);
+        clear_compare_issue_list(&self.failure_details_list, cx);
         self.sync_plan.update(cx, |slot, cx| {
             *slot = None;
             cx.notify();
@@ -728,6 +752,14 @@ impl SchemaCompareWindow {
             cx.notify();
         });
         clear_sync_statement_list(&self.sync_statement_list, cx);
+        self.failure_details_expanded.update(cx, |expanded, cx| {
+            *expanded = true;
+            cx.notify();
+        });
+        self.sync_warnings_expanded.update(cx, |expanded, cx| {
+            *expanded = false;
+            cx.notify();
+        });
         self.sync_sql_editor.update(cx, |state, cx| {
             state.set_value(String::new(), window, cx);
         });

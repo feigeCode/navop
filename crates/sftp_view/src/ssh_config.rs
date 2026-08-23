@@ -127,6 +127,7 @@ fn ssh_auth(method: SshAuthMethod) -> SshAuth {
             certificate_path: None,
         },
         SshAuthMethod::Agent => SshAuth::Agent,
+        SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
     }
 }

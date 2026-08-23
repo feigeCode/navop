@@ -18,13 +18,21 @@ pub(super) fn render_source_row(
 ) -> AnyElement {
     let importer_id = source.descriptor.id.clone();
     let file_importer_id = importer_id.clone();
+    let directory_importer_id = importer_id.clone();
     let file_pick_prompt = source
         .descriptor
         .capabilities
         .manual_file_pick_prompt
         .clone()
         .unwrap_or_else(|| t!("Home.ConnectionImport.choose_import_file").to_string());
+    let directory_pick_prompt = source
+        .descriptor
+        .capabilities
+        .manual_directory_pick_prompt
+        .clone()
+        .unwrap_or_else(|| t!("Home.ConnectionImport.choose_import_directory").to_string());
     let file_pick_tooltip = file_pick_prompt.clone();
+    let directory_pick_tooltip = directory_pick_prompt.clone();
     let status_text = source
         .preview_error
         .clone()
@@ -95,13 +103,36 @@ pub(super) fn render_source_row(
                 this.child(
                     Button::new(format!("import-source-file-{file_importer_id}"))
                         .small()
-                        .icon(IconName::FolderOpen)
+                        .icon(IconName::File)
                         .tooltip(file_pick_tooltip)
                         .disabled(scanning || !source.selectable)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.import_source_file(
                                 file_importer_id.clone(),
                                 file_pick_prompt.clone(),
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+            },
+        )
+        .when(
+            source
+                .descriptor
+                .capabilities
+                .supports_manual_directory_pick,
+            |this| {
+                this.child(
+                    Button::new(format!("import-source-directory-{directory_importer_id}"))
+                        .small()
+                        .icon(IconName::FolderOpen)
+                        .tooltip(directory_pick_tooltip)
+                        .disabled(scanning || !source.selectable)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.import_source_directory(
+                                directory_importer_id.clone(),
+                                directory_pick_prompt.clone(),
                                 window,
                                 cx,
                             );

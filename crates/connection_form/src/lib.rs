@@ -2,4 +2,7 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod credential;
+pub mod ssh_auth;
 pub mod team;
+
+pub use ssh_auth::{SshAuthOption, normalize_ssh_auth_type};

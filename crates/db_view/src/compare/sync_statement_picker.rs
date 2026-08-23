@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use db::compare::{SyncPlan, SyncStatement, SyncStatementKind};
 use gpui::{
     App, AppContext, ColorExt, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
+    Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt,
@@ -11,6 +11,7 @@ use gpui_component::{
     checkbox::Checkbox,
     h_flex,
     list::{List, ListDelegate, ListItem, ListState},
+    scroll::ScrollableElement,
     tag::Tag,
     v_flex,
 };
@@ -168,6 +169,7 @@ pub(super) fn sync_statement_picker(
     plan: SyncPlan,
     selected_ids: Entity<HashSet<String>>,
     list_state: SyncStatementListState,
+    warnings_expanded: Entity<bool>,
     cx: &App,
 ) -> impl IntoElement {
     let all_ids: Vec<String> = plan.statements.iter().map(|s| s.id.clone()).collect();
@@ -178,6 +180,7 @@ pub(super) fn sync_statement_picker(
         .map(|s| s.id.clone())
         .collect();
     let plan_warnings = plan.warnings.clone();
+    let warnings_are_expanded = *warnings_expanded.read(cx);
 
     v_flex()
         .flex_1()
@@ -185,30 +188,12 @@ pub(super) fn sync_statement_picker(
         .gap_1()
         .child(picker_header(all_ids, safe_ids, selected_ids.clone()))
         .when(!plan_warnings.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .id("sync-plan-warnings")
-                    .max_h(px(96.0))
-                    .gap_1()
-                    .p_2()
-                    .border_1()
-                    .border_color(cx.theme().warning.opacity(0.45))
-                    .rounded_md()
-                    .bg(cx.theme().warning.opacity(0.08))
-                    .overflow_y_scroll()
-                    .children(
-                        plan_warnings
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, warning)| {
-                                div()
-                                    .id(("sync-plan-warning", index))
-                                    .text_xs()
-                                    .text_color(cx.theme().warning)
-                                    .child(warning)
-                            }),
-                    ),
-            )
+            this.child(sync_plan_warnings_panel(
+                plan_warnings,
+                warnings_are_expanded,
+                warnings_expanded,
+                cx,
+            ))
         })
         .child(
             v_flex()
@@ -220,6 +205,71 @@ pub(super) fn sync_statement_picker(
                 .overflow_hidden()
                 .child(List::new(&list_state).size_full()),
         )
+}
+
+fn sync_plan_warnings_panel(
+    warnings: Vec<String>,
+    expanded: bool,
+    expanded_state: Entity<bool>,
+    cx: &App,
+) -> impl IntoElement {
+    let warning_count = warnings.len();
+
+    v_flex()
+        .id("sync-plan-warnings")
+        .flex_none()
+        .gap_1()
+        .p_1()
+        .border_1()
+        .border_color(cx.theme().warning.opacity(0.45))
+        .rounded_md()
+        .bg(cx.theme().warning.opacity(0.08))
+        .child(
+            h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    Button::new("toggle-sync-plan-warnings")
+                        .icon(if expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall()
+                        .ghost()
+                        .on_click(move |_, _, cx| {
+                            expanded_state.update(cx, |expanded, cx| {
+                                *expanded = !*expanded;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(cx.theme().warning)
+                        .child(t!("Compare.sync_plan_warnings", count = warning_count).to_string()),
+                ),
+        )
+        .when(expanded, |this| {
+            this.child(
+                v_flex()
+                    .id("sync-plan-warning-details")
+                    .max_h(px(112.0))
+                    .gap_1()
+                    .px_2()
+                    .pb_1()
+                    .overflow_y_scrollbar()
+                    .children(warnings.into_iter().enumerate().map(|(index, warning)| {
+                        div()
+                            .id(("sync-plan-warning", index))
+                            .text_xs()
+                            .text_color(cx.theme().warning)
+                            .child(warning)
+                    })),
+            )
+        })
 }
 
 fn picker_header(

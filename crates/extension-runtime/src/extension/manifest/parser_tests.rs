@@ -114,6 +114,8 @@ fn manifest_parses_connection_importers() {
         Some("选择 Navicat 导出的 connection.ncx 文件"),
         importer.manual_file_pick.prompt.as_deref()
     );
+    assert!(!importer.manual_file_pick.supports_directories);
+    assert!(importer.manual_file_pick.directory_prompt.is_none());
     assert_eq!(1, importer.candidate_files.len());
     assert_eq!("navicat-macos-cc-conn", importer.candidate_files[0].id);
     assert_eq!("macos", importer.candidate_files[0].platform);

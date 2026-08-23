@@ -1,3 +1,4 @@
+mod compare_result_feedback;
 pub mod data_compare_dialog;
 mod data_compare_target;
 pub mod data_compare_window;

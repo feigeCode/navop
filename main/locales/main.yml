@@ -303,10 +303,18 @@ Home:
       en: Select a source, then click Scan
       zh-CN: 选择来源后点击扫描
       zh-HK: 選擇來源後點擊掃描
+    sources_scan_hint:
+      en: Navop automatically scans each application's default configuration directories. If nothing is found, choose the relevant directory to scan manually; some importers also support selecting configuration files.
+      zh-CN: Navop 会自动扫描各应用的默认配置目录。如果没有找到配置，请选择相关目录手动扫描；部分应用也支持选择配置文件。
+      zh-HK: Navop 會自動掃描各應用程式的預設設定目錄。如果找不到設定，請選擇相關目錄手動掃描；部分匯入工具也支援選擇設定檔。
     choose_import_file:
       en: Choose Import File
       zh-CN: 选择导入文件
       zh-HK: 選擇匯入檔案
+    choose_import_directory:
+      en: Choose Import Directory
+      zh-CN: 选择导入目录
+      zh-HK: 選擇匯入目錄
     available_count:
       en: "%{count} available"
       zh-CN: "可导入 %{count} 条"
@@ -391,6 +399,10 @@ Home:
       en: "Import file parsing task failed: %{error}"
       zh-CN: "导入文件解析任务失败：%{error}"
       zh-HK: "匯入檔案解析工作失敗：%{error}"
+    directory_scan_task_failed:
+      en: "Import directory scan task failed: %{error}"
+      zh-CN: "导入目录扫描任务失败：%{error}"
+      zh-HK: "匯入目錄掃描工作失敗：%{error}"
     no_importable_connections:
       en: No importable connections were found
       zh-CN: 未解析到可导入连接
@@ -1644,6 +1656,10 @@ Connection:
       en: SSH Agent
       zh-CN: SSH Agent
       zh-HK: SSH Agent
+    auth_pageant:
+      en: Pageant (Windows)
+      zh-CN: Pageant（Windows）
+      zh-HK: Pageant（Windows）
     auth_auto_public_key:
       en: Automatic Public Key
       zh-CN: 自动公钥

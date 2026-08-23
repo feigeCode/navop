@@ -184,6 +184,75 @@ impl ConnectionImportWindow {
         .detach();
     }
 
+    fn import_source_directory(
+        &mut self,
+        importer_id: String,
+        prompt: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.scanning {
+            return;
+        }
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: true,
+            prompt: Some(prompt.into()),
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            if paths.is_empty() {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.scanning = true;
+                this.status_message = None;
+                cx.notify();
+            });
+            let result = {
+                let id = importer_id.clone();
+                let selected_paths: Vec<PathBuf> = paths.into_iter().collect();
+                let task = Tokio::spawn(cx, async move {
+                    preview_import_records_from_files(id, selected_paths, true).await
+                });
+                match task.await {
+                    Ok(result) => result,
+                    Err(error) => Err(t!(
+                        "Home.ConnectionImport.directory_scan_task_failed",
+                        error = error
+                    )
+                    .to_string()),
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.scanning = false;
+                match result {
+                    Ok(preview) => {
+                        let is_empty = preview.records.is_empty() && preview.errors.is_empty();
+                        let error_message =
+                            preview.errors.first().map(|error| error.message.clone());
+                        this.model.apply_preview_records(preview.records);
+                        this.model.apply_preview_errors(
+                            std::slice::from_ref(&importer_id),
+                            preview.errors,
+                        );
+                        this.status_message = error_message.or_else(|| {
+                            is_empty.then(|| {
+                                t!("Home.ConnectionImport.no_importable_connections").to_string()
+                            })
+                        });
+                    }
+                    Err(error) => this.status_message = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn save_row(&mut self, record_id: String, cx: &mut Context<Self>) {
         let Some(draft) = self.model.draft(&record_id) else {
             return;

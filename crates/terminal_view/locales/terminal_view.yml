@@ -229,6 +229,10 @@ SSH:
     en: SSH Agent
     zh-CN: SSH Agent
     zh-HK: SSH Agent
+  pageant:
+    en: Pageant (Windows)
+    zh-CN: Pageant（Windows）
+    zh-HK: Pageant（Windows）
   auto_publickey:
     en: Auto Public Key
     zh-CN: 自动公钥认证
@@ -282,9 +286,9 @@ SSH:
     zh-CN: 终端类型
     zh-HK: 終端類型
   auto_publickey_hint:
-    en: Try SSH Agent first, then default private keys under ~/.ssh.
-    zh-CN: 将优先尝试 SSH Agent，若不可用则尝试 ~/.ssh 下的默认私钥。
-    zh-HK: 將優先嘗試 SSH Agent，若不可用則嘗試 ~/.ssh 下的預設私鑰。
+    en: Try available SSH agents first (including Pageant on Windows), then default private keys under ~/.ssh.
+    zh-CN: 将优先尝试可用的 SSH Agent（Windows 上包括 Pageant），再尝试 ~/.ssh 下的默认私钥。
+    zh-HK: 將優先嘗試可用的 SSH Agent（Windows 上包括 Pageant），再嘗試 ~/.ssh 下的預設私鑰。
   auto_publickey_next_step:
     en: Please load SSH Agent or switch to "Private Key" mode to specify a key file manually
     zh-CN: 请加载 SSH Agent，或切换为「私钥文件」模式手动指定私钥

@@ -1,13 +1,17 @@
 //! MongoDB 连接表单窗口
 
-use connection_form::credential::{
-    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
-};
 use connection_form::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
     refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
     team_management_enabled,
+};
+use connection_form::{
+    SshAuthOption,
+    credential::{
+        CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
+        CredentialReferencePicker, create_credential_picker, resolve_connection_for_runtime,
+    },
+    normalize_ssh_auth_type,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -1185,10 +1189,7 @@ impl MongoFormWindow {
             .read(cx)
             .selected_value()
             .is_some_and(|value| value.is_some());
-        let auth_type = match self.ssh_auth_type.as_str() {
-            "private_key_material" => "private_key_content",
-            value => value,
-        };
+        let auth_type = normalize_ssh_auth_type(&self.ssh_auth_type);
 
         v_flex()
             .gap_2()
@@ -1221,55 +1222,20 @@ impl MongoFormWindow {
                         &t!("ConnectionForm.ssh_username"),
                         Input::new(&self.ssh_username_input),
                     ))
-                    .child(
-                        self.render_form_row(
-                            &t!("ConnectionForm.ssh_auth_type"),
-                            h_flex()
-                                .flex_wrap()
-                                .gap_4()
-                                .child(
-                                    Radio::new("mongo-ssh-auth-password")
-                                        .label(t!("ConnectionForm.ssh_auth_password").to_string())
-                                        .checked(auth_type == "password")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.ssh_auth_type = "password".to_string();
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    Radio::new("mongo-ssh-auth-private-key")
-                                        .label(
-                                            t!("ConnectionForm.ssh_auth_private_key").to_string(),
-                                        )
-                                        .checked(auth_type == "private_key")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.ssh_auth_type = "private_key".to_string();
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    Radio::new("mongo-ssh-auth-private-key-content")
-                                        .label(
-                                            t!("ConnectionForm.ssh_auth_private_key_content")
-                                                .to_string(),
-                                        )
-                                        .checked(auth_type == "private_key_content")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.ssh_auth_type = "private_key_content".to_string();
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    Radio::new("mongo-ssh-auth-agent")
-                                        .label(t!("ConnectionForm.ssh_auth_agent").to_string())
-                                        .checked(auth_type == "agent")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.ssh_auth_type = "agent".to_string();
-                                            cx.notify();
-                                        })),
-                                ),
+                    .child(self.render_form_row(
+                        &t!("ConnectionForm.ssh_auth_type"),
+                        h_flex().flex_wrap().gap_4().children(
+                            SshAuthOption::ALL.iter().copied().map(|option| {
+                                Radio::new(format!("mongo-ssh-auth-{}", option.value()))
+                                    .label(option.label())
+                                    .checked(auth_type == option.value())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.ssh_auth_type = option.value().to_string();
+                                        cx.notify();
+                                    }))
+                            }),
                         ),
-                    )
+                    ))
                     .when(auth_type == "password", |this| {
                         this.child(self.render_form_row(
                             &t!("ConnectionForm.ssh_password"),

@@ -1,5 +1,31 @@
 _version: 2
 
+ConnectionForm:
+  ssh_auth_password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  ssh_auth_private_key:
+    en: Private Key
+    zh-CN: 私钥
+    zh-HK: 私鑰
+  ssh_auth_private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
+  ssh_auth_agent:
+    en: SSH Agent
+    zh-CN: SSH Agent
+    zh-HK: SSH Agent
+  ssh_auth_pageant:
+    en: Pageant (Windows)
+    zh-CN: Pageant（Windows）
+    zh-HK: Pageant（Windows）
+  ssh_auth_auto_public_key:
+    en: Auto Public Key
+    zh-CN: 自动公钥
+    zh-HK: 自動公鑰
+
 TeamSync:
   personal:
     en: Personal
