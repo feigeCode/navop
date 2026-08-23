@@ -17,8 +17,8 @@ use crate::import_export::{
 };
 use crate::manifest_helpers::{
     DatabaseActionDescriptorExt, action, action_with_scope, field, option,
-    schema_preference_fields, ssh_auth_rules, ssh_enabled_rules, ssh_field, ssh_number_field,
-    ssh_password_field, tab, yes_no_options,
+    schema_preference_fields, ssh_auth_options, ssh_auth_rules, ssh_enabled_rules, ssh_field,
+    ssh_number_field, ssh_password_field, tab, yes_no_options,
 };
 use crate::oracle::connection::OracleDbConnection;
 use crate::plugin::{
@@ -753,11 +753,7 @@ fn oracle_connection_form() -> DatabaseFormManifest {
                     )
                     .optional()
                     .with_default("password")
-                    .with_options(vec![
-                        option("password", "ConnectionForm.ssh_auth_password"),
-                        option("private_key", "ConnectionForm.ssh_auth_private_key"),
-                        option("agent", "ConnectionForm.ssh_auth_agent"),
-                    ])
+                    .with_options(ssh_auth_options())
                     .with_visibility(ssh_enabled_rules()),
                     ssh_password_field(
                         "ssh_password",

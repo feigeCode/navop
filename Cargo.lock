@@ -3007,6 +3007,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clickhouse",
+ "connection-form",
  "connection_tunnel",
  "dashmap 5.5.3",
  "duckdb",

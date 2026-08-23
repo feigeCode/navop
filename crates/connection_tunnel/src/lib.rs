@@ -251,6 +251,7 @@ fn optional_value(value: &Option<String>) -> Option<String> {
 fn build_auth(config: &SshTunnelConfig) -> Result<SshAuth, TunnelError> {
     match config.auth_type.trim().to_ascii_lowercase().as_str() {
         "agent" => Ok(SshAuth::Agent),
+        "pageant" => Ok(SshAuth::Pageant),
         "auto_publickey" | "auto_public_key" => Ok(SshAuth::AutoPublicKey),
         "private_key" => Ok(SshAuth::PrivateKey {
             key_path: required_value(

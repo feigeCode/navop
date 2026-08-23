@@ -423,6 +423,14 @@ ConnectionForm:
     en: SSH Agent
     zh-CN: SSH Agent
     zh-HK: SSH Agent
+  ssh_auth_pageant:
+    en: Pageant (Windows)
+    zh-CN: Pageant（Windows）
+    zh-HK: Pageant（Windows）
+  ssh_auth_auto_public_key:
+    en: Auto Public Key
+    zh-CN: 自动公钥
+    zh-HK: 自動公鑰
   ssh_private_key_path:
     en: Private Key Path
     zh-CN: 私钥路径

@@ -1656,6 +1656,10 @@ Connection:
       en: SSH Agent
       zh-CN: SSH Agent
       zh-HK: SSH Agent
+    auth_pageant:
+      en: Pageant (Windows)
+      zh-CN: Pageant（Windows）
+      zh-HK: Pageant（Windows）
     auth_auto_public_key:
       en: Automatic Public Key
       zh-CN: 自动公钥

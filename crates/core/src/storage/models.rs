@@ -631,6 +631,7 @@ pub enum SshAuthMethod {
         passphrase: Option<String>,
     },
     Agent,
+    Pageant,
     AutoPublicKey,
 }
 
@@ -754,6 +755,13 @@ impl RedisParams {
             }
             SshAuthMethod::Agent => {
                 tunnel.auth_type = "agent".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::Pageant => {
+                tunnel.auth_type = "pageant".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = None;
                 tunnel.private_key_content = None;
@@ -890,6 +898,13 @@ impl MongoDBParams {
             }
             SshAuthMethod::Agent => {
                 tunnel.auth_type = "agent".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::Pageant => {
+                tunnel.auth_type = "pageant".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = None;
                 tunnel.private_key_content = None;
@@ -1406,6 +1421,10 @@ impl DbConnectionConfig {
             SshAuthMethod::Agent => {
                 self.extra_params
                     .insert("ssh_auth_type".to_string(), "agent".to_string());
+            }
+            SshAuthMethod::Pageant => {
+                self.extra_params
+                    .insert("ssh_auth_type".to_string(), "pageant".to_string());
             }
             SshAuthMethod::AutoPublicKey => {
                 self.extra_params
@@ -3089,6 +3108,17 @@ mod serial_tests {
         let parsed: SshAuthMethod =
             serde_json::from_str(&json).expect("Agent 认证方式应可反序列化");
         assert!(matches!(parsed, SshAuthMethod::Agent));
+    }
+
+    #[test]
+    fn ssh_auth_method_pageant_serialize_deserialize() {
+        let auth = SshAuthMethod::Pageant;
+        let json = serde_json::to_string(&auth).expect("Pageant 认证方式应可序列化");
+        assert_eq!(json, "\"Pageant\"");
+
+        let parsed: SshAuthMethod =
+            serde_json::from_str(&json).expect("Pageant 认证方式应可反序列化");
+        assert!(matches!(parsed, SshAuthMethod::Pageant));
     }
 
     #[test]

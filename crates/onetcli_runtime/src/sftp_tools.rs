@@ -283,6 +283,7 @@ fn auth_from_method(auth: &SshAuthMethod) -> SshAuth {
             certificate_path: None,
         },
         SshAuthMethod::Agent => SshAuth::Agent,
+        SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
     }
 }

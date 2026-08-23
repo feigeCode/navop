@@ -54,6 +54,7 @@ fn build_ssh_auth(
 ) -> Result<SshAuth, RedisError> {
     match tunnel_config.auth_type.trim().to_ascii_lowercase().as_str() {
         "agent" => Ok(SshAuth::Agent),
+        "pageant" => Ok(SshAuth::Pageant),
         "auto_publickey" | "auto_public_key" => Ok(SshAuth::AutoPublicKey),
         "private_key" => {
             let key_path = tunnel_config

@@ -8,6 +8,7 @@ use crate::schema_preferences::{
     DEFAULT_SCHEMA_PARAM, SCHEMA_FILTER_EXCLUDE_PARAM, SCHEMA_FILTER_INCLUDE_PARAM,
     SCHEMA_FILTER_MODE_PARAM,
 };
+use connection_form::SshAuthOption;
 
 pub(crate) fn tab(
     id: &str,
@@ -100,6 +101,13 @@ pub(crate) fn option(value: &str, label_i18n_key: &str) -> FormSelectOption {
         value: value.into(),
         label_i18n_key: label_i18n_key.into(),
     }
+}
+
+pub(crate) fn ssh_auth_options() -> Vec<FormSelectOption> {
+    SshAuthOption::TUNNEL
+        .iter()
+        .map(|auth_option| option(auth_option.value(), auth_option.label_i18n_key()))
+        .collect()
 }
 
 pub(crate) fn action(

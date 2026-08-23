@@ -356,6 +356,7 @@ enum AuthenticationKey {
         credential: CredentialRevision,
     },
     Agent(CredentialRevision),
+    Pageant(CredentialRevision),
     AutoPublicKey(CredentialRevision),
 }
 
@@ -379,6 +380,7 @@ impl AuthenticationKey {
                 credential,
             },
             SshAuth::Agent => Self::Agent(credential),
+            SshAuth::Pageant => Self::Pageant(credential),
             SshAuth::AutoPublicKey => Self::AutoPublicKey(credential),
         }
     }
@@ -389,6 +391,7 @@ impl AuthenticationKey {
             Self::PrivateKey { .. } => "private-key",
             Self::PrivateKeyContent { .. } => "private-key-content",
             Self::Agent(_) => "agent",
+            Self::Pageant(_) => "pageant",
             Self::AutoPublicKey(_) => "auto-public-key",
         }
     }

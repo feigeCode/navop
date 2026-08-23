@@ -277,6 +277,7 @@ pub enum SshAuth {
         certificate_path: Option<String>,
     },
     Agent,
+    Pageant,
     AutoPublicKey,
 }
 
@@ -715,6 +716,9 @@ where
             }
         }
         SshAuth::Agent => authenticate_with_agent(session, username, hash_alg, &messages).await?,
+        SshAuth::Pageant => {
+            authenticate_with_pageant(session, username, hash_alg, &messages).await?
+        }
         SshAuth::AutoPublicKey => unreachable!("AutoPublicKey 应由高层认证编排处理"),
     }
     Ok(())
@@ -910,6 +914,8 @@ fn expand_auto_publickey_auth_with_default_keys(
     default_keys: impl IntoIterator<Item = String>,
 ) -> Vec<SshAuth> {
     let mut auth_candidates = vec![SshAuth::Agent];
+    #[cfg(windows)]
+    auth_candidates.push(SshAuth::Pageant);
     auth_candidates.extend(
         default_keys
             .into_iter()
@@ -1042,6 +1048,68 @@ where
     }
 }
 
+struct AgentAuthContext<'a> {
+    username: &'a str,
+    hash_alg: Option<HashAlg>,
+    messages: &'a AuthFailureMessages,
+}
+
+async fn authenticate_with_agent_client<H, S>(
+    session: &mut client::Handle<H>,
+    mut agent: agent::client::AgentClient<S>,
+    context: AgentAuthContext<'_>,
+) -> Result<()>
+where
+    H: client::Handler,
+    S: agent::client::AgentStream + Send + Unpin,
+{
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|error| anyhow::anyhow!("{}: {}", context.messages.agent_connect_failed, error))?;
+    if identities.is_empty() {
+        anyhow::bail!(context.messages.agent_no_identities.clone());
+    }
+
+    let mut last_error = None;
+    for identity in identities {
+        match session
+            .authenticate_publickey_with(
+                context.username,
+                identity.public_key().into_owned(),
+                context.hash_alg,
+                &mut agent,
+            )
+            .await
+        {
+            Ok(result) if result.success() => return Ok(()),
+            Ok(_) => {}
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+
+    match last_error {
+        Some(error) => anyhow::bail!("{}: {}", context.messages.agent_auth_failed, error),
+        None => anyhow::bail!(context.messages.agent_auth_failed.clone()),
+    }
+}
+
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowsAgentBackend {
+    OpenSsh,
+    Pageant,
+}
+
+#[cfg(any(windows, test))]
+const fn windows_agent_backend_for_auth(auth: &SshAuth) -> Option<WindowsAgentBackend> {
+    match auth {
+        SshAuth::Agent => Some(WindowsAgentBackend::OpenSsh),
+        SshAuth::Pageant => Some(WindowsAgentBackend::Pageant),
+        _ => None,
+    }
+}
+
 #[cfg(unix)]
 async fn authenticate_with_agent<H>(
     session: &mut client::Handle<H>,
@@ -1052,39 +1120,17 @@ async fn authenticate_with_agent<H>(
 where
     H: client::Handler,
 {
-    let mut agent = connect_agent_client(messages).await?;
-
-    let identities = agent
-        .request_identities()
-        .await
-        .map_err(|e| anyhow::anyhow!("{}: {}", messages.agent_connect_failed, e))?;
-    if identities.is_empty() {
-        anyhow::bail!(messages.agent_no_identities.clone());
-    }
-
-    let mut last_error = None;
-    for identity in identities {
-        match session
-            .authenticate_publickey_with(
-                username,
-                identity.public_key().into_owned(),
-                hash_alg,
-                &mut agent,
-            )
-            .await
-        {
-            Ok(result) if result.success() => return Ok(()),
-            Ok(_) => continue,
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-    }
-
-    if let Some(err) = last_error {
-        anyhow::bail!("{}: {}", messages.agent_auth_failed, err);
-    }
-    anyhow::bail!(messages.agent_auth_failed.clone());
+    let agent = connect_agent_client(messages).await?;
+    authenticate_with_agent_client(
+        session,
+        agent,
+        AgentAuthContext {
+            username,
+            hash_alg,
+            messages,
+        },
+    )
+    .await
 }
 
 #[cfg(unix)]
@@ -1097,6 +1143,25 @@ async fn connect_agent_client(
 }
 
 #[cfg(windows)]
+async fn connect_windows_agent_client(
+    backend: WindowsAgentBackend,
+    messages: &AuthFailureMessages,
+) -> Result<agent::client::AgentClient<Box<dyn agent::client::AgentStream + Send + Unpin + 'static>>>
+{
+    match backend {
+        WindowsAgentBackend::OpenSsh => {
+            agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
+                .await
+                .map(|client| client.dynamic())
+        }
+        WindowsAgentBackend::Pageant => agent::client::AgentClient::connect_pageant()
+            .await
+            .map(|client| client.dynamic()),
+    }
+    .map_err(|error| anyhow::anyhow!("{}: {}", messages.agent_connect_failed, error))
+}
+
+#[cfg(windows)]
 async fn authenticate_with_agent<H>(
     session: &mut client::Handle<H>,
     username: &str,
@@ -1106,42 +1171,40 @@ async fn authenticate_with_agent<H>(
 where
     H: client::Handler,
 {
-    let mut agent =
-        russh::keys::agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
-            .await
-            .map_err(|e| anyhow::anyhow!("{}: {}", messages.agent_connect_failed, e))?;
+    let agent = connect_windows_agent_client(WindowsAgentBackend::OpenSsh, messages).await?;
+    authenticate_with_agent_client(
+        session,
+        agent,
+        AgentAuthContext {
+            username,
+            hash_alg,
+            messages,
+        },
+    )
+    .await
+}
 
-    let identities = agent
-        .request_identities()
-        .await
-        .map_err(|e| anyhow::anyhow!("{}: {}", messages.agent_connect_failed, e))?;
-    if identities.is_empty() {
-        anyhow::bail!(messages.agent_no_identities.clone());
-    }
-
-    let mut last_error = None;
-    for identity in identities {
-        match session
-            .authenticate_publickey_with(
-                username,
-                identity.public_key().into_owned(),
-                hash_alg,
-                &mut agent,
-            )
-            .await
-        {
-            Ok(result) if result.success() => return Ok(()),
-            Ok(_) => continue,
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-    }
-
-    if let Some(err) = last_error {
-        anyhow::bail!("{}: {}", messages.agent_auth_failed, err);
-    }
-    anyhow::bail!(messages.agent_auth_failed.clone());
+#[cfg(windows)]
+async fn authenticate_with_pageant<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    hash_alg: Option<HashAlg>,
+    messages: &AuthFailureMessages,
+) -> Result<()>
+where
+    H: client::Handler,
+{
+    let agent = connect_windows_agent_client(WindowsAgentBackend::Pageant, messages).await?;
+    authenticate_with_agent_client(
+        session,
+        agent,
+        AgentAuthContext {
+            username,
+            hash_alg,
+            messages,
+        },
+    )
+    .await
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1155,6 +1218,19 @@ where
     H: client::Handler,
 {
     anyhow::bail!(messages.agent_connect_failed.clone());
+}
+
+#[cfg(not(windows))]
+async fn authenticate_with_pageant<H>(
+    _session: &mut client::Handle<H>,
+    _username: &str,
+    _hash_alg: Option<HashAlg>,
+    _messages: &AuthFailureMessages,
+) -> Result<()>
+where
+    H: client::Handler,
+{
+    anyhow::bail!("Pageant authentication is only supported on Windows");
 }
 
 #[cfg(test)]
@@ -1180,6 +1256,18 @@ mod tests {
             keyboard_interactive_failed: "keyboard_interactive_failed".to_string(),
             keyboard_interactive_cancelled: "keyboard_interactive_cancelled".to_string(),
         }
+    }
+
+    #[test]
+    fn windows_agent_backend_is_explicit_for_each_auth_method() {
+        assert_eq!(
+            windows_agent_backend_for_auth(&SshAuth::Agent),
+            Some(WindowsAgentBackend::OpenSsh)
+        );
+        assert_eq!(
+            windows_agent_backend_for_auth(&SshAuth::Pageant),
+            Some(WindowsAgentBackend::Pageant)
+        );
     }
 
     #[cfg(unix)]
