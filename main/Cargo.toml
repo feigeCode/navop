@@ -81,7 +81,7 @@ gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 
 [features]
-default = ["wasm-components", "embedded-webview"]
+default = ["wasm-components", "embedded-webview", "windows-native-rdp"]
 api-testing = ["dep:api_tools"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
