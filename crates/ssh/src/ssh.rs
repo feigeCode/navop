@@ -1101,7 +1101,8 @@ enum WindowsAgentBackend {
     Pageant,
 }
 
-#[cfg(any(windows, test))]
+// 仅测试使用：Windows 下认证入口直接以 Agent/Pageant 枚举分发
+#[cfg(test)]
 const fn windows_agent_backend_for_auth(auth: &SshAuth) -> Option<WindowsAgentBackend> {
     match auth {
         SshAuth::Agent => Some(WindowsAgentBackend::OpenSsh),
