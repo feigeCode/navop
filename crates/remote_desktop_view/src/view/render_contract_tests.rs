@@ -1444,6 +1444,34 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
 }
 
 #[test]
+fn standalone_window_starts_active_with_native_focus_requested() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let new_body = function_body(
+        &view,
+        "pub fn new(",
+        "fn cancel_presentation_pacing",
+    );
+
+    let standalone = new_body
+        .find("let standalone_window = config.tab_index.is_none();")
+        .expect("standalone window detection");
+    let tab_active = new_body
+        .find("tab_active: standalone_window,")
+        .expect("standalone windows start active");
+    let focus_requested = new_body
+        .find("windows_native_focus_requested: standalone_window,")
+        .expect("standalone windows request native focus");
+    assert!(
+        standalone < tab_active && tab_active < focus_requested,
+        "standalone detection must precede both activation intents"
+    );
+    assert!(
+        !new_body[standalone..tab_active].contains("tab_active: false"),
+        "initialization must never hard-code the inactive tab state"
+    );
+}
+
+#[test]
 fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cursor() {
     let input = include_str!("input.rs");
     let move_start = input

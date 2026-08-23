@@ -271,13 +271,8 @@ impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy {
             connection,
             protocol,
         } = *self;
-        if protocol == RemoteDesktopProtocol::Rdp && remote_desktop::windows_native_rdp_compiled() {
-            // Windows 原生 RDP 与 gpui-rdp-smoke 一致：在独立全屏窗口中
-            // 承载原生 ActiveX child（覆盖整个客户区），避免在主窗口 tab
-            // 内嵌时被 DirectComposition visual 盖住而白屏。
-            home.open_remote_desktop_fullscreen_window(&connection, window, cx);
-            return;
-        }
+        // 双击等常规打开一律走 tab；独立全屏窗口仅保留在连接的右键菜单里
+        // （Connection.open_in_fullscreen_window）。
         extension_runtime::remote_desktop_provider_install::open_remote_desktop_connection_with_provider_guard(
             home, connection, protocol, mode, window, cx,
         );
@@ -301,7 +296,7 @@ mod tests {
     use one_core::storage::{MongoDBParams, MongoDriverVariant, StoredConnection};
 
     #[test]
-    fn native_rdp_opens_in_an_independent_window_like_gpui_rdp_smoke() {
+    fn remote_desktop_double_click_opens_in_a_tab() {
         let source = include_str!("home_strategy.rs").replace("\r\n", "\n");
         let start = source
             .find("impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy")
@@ -312,13 +307,14 @@ mod tests {
             .expect("next strategy");
         let strategy = &source[start..end];
 
-        assert!(strategy.contains("protocol == RemoteDesktopProtocol::Rdp"));
-        assert!(strategy.contains("remote_desktop::windows_native_rdp_compiled()"));
         assert!(
-            strategy
-                .contains("home.open_remote_desktop_fullscreen_window(&connection, window, cx)")
+            strategy.contains("open_remote_desktop_connection_with_provider_guard("),
+            "double-click must open the remote desktop in a tab"
         );
-        assert!(strategy.contains("open_remote_desktop_connection_with_provider_guard("));
+        assert!(
+            !strategy.contains("open_remote_desktop_fullscreen_window"),
+            "the fullscreen window must stay behind the context-menu action"
+        );
     }
 
     #[test]
