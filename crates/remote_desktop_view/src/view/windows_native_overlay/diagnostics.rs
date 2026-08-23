@@ -21,6 +21,12 @@ const MAX_ANCESTRY_DEPTH: usize = 64;
 const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 const RDP_OUTPUT_CLASS: &str = "OPWindowClass";
+const OVERLAY_DIAGNOSTICS_ENV: &str = "NAVOP_REMOTE_DESKTOP_DIAGNOSTICS";
+
+fn overlay_diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os(OVERLAY_DIAGNOSTICS_ENV).is_some())
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct DiagnosticContext<'a> {
@@ -29,6 +35,9 @@ pub(super) struct DiagnosticContext<'a> {
 }
 
 pub(super) fn log_created(overlay: &WindowsNativeOverlay) {
+    if !overlay_diagnostics_enabled() {
+        return;
+    }
     let (owner_style, owner_ex_style) = window_styles(overlay.owner);
     let (style, ex_style) = window_styles(overlay.window);
     let parent = unsafe { GetParent(window_pointer(overlay.window)) } as usize;
@@ -54,6 +63,9 @@ pub(super) fn log_bounds(
     requested: WindowsNativeOverlayBounds,
     clipped: Option<WindowsNativeOverlayBounds>,
 ) {
+    if !overlay_diagnostics_enabled() {
+        return;
+    }
     let observed = observed_client_bounds(overlay);
     let window = window_pointer(overlay.window);
     let first = unsafe { GetWindow(window, GW_HWNDFIRST) } as usize;
@@ -95,6 +107,9 @@ pub(super) fn log_bounds(
 }
 
 pub(super) fn log_visibility(overlay: &WindowsNativeOverlay, stage: &'static str) {
+    if !overlay_diagnostics_enabled() {
+        return;
+    }
     let owner_window = window_pointer(overlay.owner);
     let window = window_pointer(overlay.window);
     tracing::info!(
@@ -113,6 +128,9 @@ pub(super) fn log_visibility(overlay: &WindowsNativeOverlay, stage: &'static str
 }
 
 pub(super) fn log_composition_diagnostics(overlay: &WindowsNativeOverlay, reason: &'static str) {
+    if !overlay_diagnostics_enabled() {
+        return;
+    }
     let context = DiagnosticContext { overlay, reason };
     let owner = window_pointer(overlay.owner);
     let window = window_pointer(overlay.window);
