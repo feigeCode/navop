@@ -215,6 +215,10 @@ impl NativeRdpEventState {
         *self = Self::new(generation);
     }
 
+    pub(super) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(super) const fn close_confirmed(&self) -> bool {
         self.close_confirmed
     }

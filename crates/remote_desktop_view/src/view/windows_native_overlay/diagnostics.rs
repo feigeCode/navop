@@ -72,7 +72,7 @@ pub(super) fn log_bounds(
             None
         }
     };
-    tracing::info!(
+    tracing::debug!(
         stage = "overlay_bounds",
         generation = overlay.generation,
         owner_hwnd = overlay.owner,

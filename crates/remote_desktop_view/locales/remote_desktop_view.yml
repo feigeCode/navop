@@ -257,10 +257,6 @@ RemoteDesktopForm:
     en: RDP backend
     zh-CN: RDP 后端
     zh-HK: RDP 後端
-  backend_auto:
-    en: Auto
-    zh-CN: 自动
-    zh-HK: 自動
   backend_windows_native:
     en: Windows native RDP (MSTSC)
     zh-CN: Windows 原生 RDP（MSTSC）

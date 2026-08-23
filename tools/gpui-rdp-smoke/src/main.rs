@@ -43,6 +43,9 @@ fn run(config: Config) -> ExitCode {
     // than GPUI's DirectComposition swap-chain presentation.
     unsafe {
         env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+        // Keep the native presentation stage traces so the smoke tool still
+        // produces the diagnostic output its README workflow relies on.
+        env::set_var("NAVOP_REMOTE_DESKTOP_DIAGNOSTICS", "1");
     }
     println!("presentation: GPUI DirectComposition disabled for native child HWND hosting");
     windows_app::run(config);

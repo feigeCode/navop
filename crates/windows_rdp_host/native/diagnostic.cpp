@@ -2,11 +2,22 @@
 
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 
 namespace {
 
 constexpr const char* kTracePrefix = "RDP_NATIVE_TRACE";
 constexpr char kReplacementCharacter[] = "\xEF\xBF\xBD";
+
+// Native stage traces are diagnostics for white-screen / z-order issues and
+// run on every presentation-state poll. Keep them off by default so normal
+// operation does not flood stderr; set `NAVOP_REMOTE_DESKTOP_DIAGNOSTICS`
+// (the same switch as the Rust-side remote desktop diagnostics) to re-enable.
+bool native_trace_enabled() noexcept {
+    static const bool enabled =
+        std::getenv("NAVOP_REMOTE_DESKTOP_DIAGNOSTICS") != nullptr;
+    return enabled;
+}
 
 void flush_trace() noexcept {
     std::fflush(stderr);
@@ -126,6 +137,9 @@ void write_utf16(const uint16_t* text, uint32_t text_len) noexcept {
 }  // namespace
 
 void trace_native_stage(const char* stage) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s\n",
@@ -137,6 +151,9 @@ void trace_native_stage(const char* stage) noexcept {
 void trace_native_hresult(
     const char* stage,
     int32_t hresult) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s hresult=0x%08" PRIX32 "\n",
@@ -149,6 +166,9 @@ void trace_native_hresult(
 void trace_native_result(
     const char* stage,
     NavopRdpResult result) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s result=%" PRId32 "\n",
@@ -161,6 +181,9 @@ void trace_native_result(
 void trace_native_win32(
     const char* stage,
     uint32_t win32_code) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s win32=0x%08" PRIX32 "\n",
@@ -173,6 +196,9 @@ void trace_native_win32(
 void trace_native_pointer(
     const char* stage,
     uintptr_t pointer) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s pointer=0x%" PRIXPTR "\n",
@@ -188,6 +214,9 @@ void trace_native_rect(
     int32_t top,
     int32_t right,
     int32_t bottom) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s rect={left=%" PRId32 ",top=%" PRId32
@@ -215,6 +244,9 @@ void trace_native_window(
     int32_t bottom,
     const uint16_t* class_name,
     uint32_t class_name_len) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s index=%" PRIu32 " pointer=0x%" PRIXPTR
@@ -246,6 +278,9 @@ void trace_native_utf16(
     int32_t hresult,
     const uint16_t* text,
     uint32_t text_len) noexcept {
+    if (!native_trace_enabled()) {
+        return;
+    }
     std::fprintf(
         stderr,
         "%s stage=%s hresult=0x%08" PRIX32 " text=\"",

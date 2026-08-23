@@ -261,6 +261,21 @@ impl AssetSource for AppAssets {
 fn main() {
     env_file::load_env_files();
 
+    // GPUI 的 Windows 平台默认通过 DirectComposition visual 呈现窗口内容，
+    // 该 visual 会盖住传统 child HWND（例如 RDP ActiveX 控件），即使连接
+    // 成功、child 可见，远端桌面区域也表现为白屏。原生 RDP 后端必须在
+    // platform 单例构造之前让 GPUI 走经典 HWND swap-chain 路径，与
+    // `tools/gpui-rdp-smoke` 保持一致；该环境变量只在构造时读取一次。
+    // 使用共享编译期标记（`remote_desktop_view/windows-native-rdp` 也会
+    // 启用它），而不是 main 自身的 feature，保证两种 feature 写法都生效。
+    if remote_desktop::windows_native_rdp_compiled() {
+        // SAFETY: 进程尚未创建 GPUI platform，也没有任何线程会读取该
+        // 环境变量；与 smoke 工具在进程首部执行相同操作。
+        unsafe {
+            std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+        }
+    }
+
     if update::handle_update_command() {
         return;
     }
@@ -512,6 +527,24 @@ mod embedded_cli_removal_tests {
 
         assert!(gate < application);
         assert!(source.contains("SingleInstanceOutcome::Forwarded => return"));
+    }
+
+    #[test]
+    fn windows_native_rdp_disables_direct_composition_before_application_creation() {
+        let source = include_str!("main.rs");
+        let marker = source
+            .find("remote_desktop::windows_native_rdp_compiled()")
+            .expect("windows-native-rdp capability marker");
+        let setter = source
+            .find("GPUI_DISABLE_DIRECT_COMPOSITION")
+            .expect("windows-native-rdp must disable GPUI DirectComposition");
+        let application = source
+            .find("gpui_platform::application()")
+            .expect("GPUI application creation");
+
+        assert!(marker < setter);
+        assert!(setter < application);
+        assert!(source.contains("std::env::set_var(\"GPUI_DISABLE_DIRECT_COMPOSITION\", \"1\")"));
     }
 
     #[test]

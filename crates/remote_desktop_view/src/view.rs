@@ -113,14 +113,25 @@ struct WindowsNativeOperation {
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-struct WindowsNativeCloseOperation {
+pub(crate) struct WindowsNativeCloseOperation {
     registration: windows_rdp_host::WindowsRdpRegistration,
     native: windows_native::WindowsNativeAdapter,
     event_state: native_events::NativeRdpEventState,
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-enum WindowsNativeCloseTake {
+impl WindowsNativeCloseOperation {
+    /// Consumes the close operation and returns the adapter for intentional
+    /// leak-quarantine when a shutdown deadline hits. Leaking performs no COM
+    /// calls; pending callbacks must never observe a dropped host during
+    /// teardown.
+    pub(crate) fn into_leaked_adapter(self) -> windows_native::WindowsNativeAdapter {
+        self.native
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+pub(crate) enum WindowsNativeCloseTake {
     Pending,
     Closed,
     Failed,
@@ -201,7 +212,7 @@ enum SessionResetReason {
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WindowsNativeCloseRetryMode {
+pub(crate) enum WindowsNativeCloseRetryMode {
     WaitForConfirmation,
     ForceClose,
 }
@@ -302,7 +313,8 @@ fn prepare_windows_native_connection(
     let mut native = windows_native::WindowsNativeAdapter::create_with_owner(
         owner.map_err(WindowsNativePrepareFailure::Create)?,
         generation,
-    );
+    )
+    .map_err(WindowsNativePrepareFailure::Create)?;
     if let Err(error) = native.update_bounds(bounds, point(px(0.0), px(0.0)), scale_factor) {
         return Err(WindowsNativePrepareFailure::Bounds { native, error });
     }
@@ -1823,7 +1835,7 @@ impl RemoteDesktopView {
         cx: &mut Context<Self>,
     ) -> WindowsNativeOperationCommitResult {
         let WindowsNativeOperationResult {
-            mut operation,
+            operation,
             effects,
             requested_focus,
             display_completion,
@@ -2152,7 +2164,7 @@ impl RemoteDesktopView {
     /// Pure-Rust commit after a close operation reached its terminal outcome:
     /// clears the matching in-flight marker so a fresh attach is admitted again.
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-    fn finish_windows_native_close_in_view(
+    pub(crate) fn finish_windows_native_close_in_view(
         this: &WeakEntity<RemoteDesktopView>,
         registration: windows_rdp_host::WindowsRdpRegistration,
         cx: &mut gpui::AsyncApp,
@@ -2163,38 +2175,6 @@ impl RemoteDesktopView {
             }
             cx.notify();
         });
-    }
-
-    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-    pub(crate) fn quarantine_windows_native_for_shutdown(
-        &mut self,
-        registration: windows_rdp_host::WindowsRdpRegistration,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !(self.windows_native_registration == Some(registration)
-            && self
-                .windows_native
-                .as_ref()
-                .is_some_and(|native| native.generation() == registration.generation()))
-        {
-            return false;
-        }
-
-        let native = self
-            .windows_native
-            .take()
-            .expect("matching registration must own an adapter");
-        self.windows_native_display.reset();
-        self.native_event_state.take();
-        let stored_registration = self.windows_native_registration.take();
-        debug_assert_eq!(stored_registration, Some(registration));
-        let _ = Box::leak(Box::new(native));
-        crate::windows_native_shutdown::record_windows_native_rdp_terminal(
-            registration,
-            windows_rdp_host::WindowsRdpTerminalOutcome::TimedOutLeaked,
-            cx,
-        );
-        true
     }
 
 }
@@ -2208,7 +2188,7 @@ impl RemoteDesktopView {
 /// callbacks never run into a dropped host, and the registration is terminally
 /// recorded as `TimedOutLeaked`.
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-async fn close_windows_native_operation(
+pub(crate) async fn close_windows_native_operation(
     this: &WeakEntity<RemoteDesktopView>,
     mut operation: WindowsNativeCloseOperation,
     initial_mode: WindowsNativeCloseRetryMode,

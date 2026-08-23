@@ -109,23 +109,24 @@ fn record_stalled_detached_owner(
     record_windows_native_rdp_terminal_async(registration, WindowsRdpTerminalOutcome::OwnerLost, cx)
 }
 
-fn poll_view_owner(
+/// Two-phase view-owner close: the entity borrow only performs the pure-Rust
+/// ownership take (phase A); every native COM/Win32 call runs after the update
+/// closure returns (phase B) and the terminal outcome is recorded through the
+/// shared registry (phase C).
+async fn poll_view_owner(
     owner: &gpui::WeakEntity<crate::view::RemoteDesktopView>,
     registration: WindowsRdpRegistration,
+    drain_deadline: Instant,
     deadline_elapsed: bool,
     cx: &mut gpui::AsyncApp,
 ) -> WindowsNativeRdpTerminalDispatch {
-    let result = owner.update(cx, |view, cx| {
-        if deadline_elapsed {
-            view.quarantine_windows_native_for_shutdown(registration, cx)
-        } else {
-            view.force_close_windows_native_for_shutdown(registration, cx);
-            true
-        }
-    });
-    match result {
-        Ok(true) => WindowsNativeRdpTerminalDispatch::Delivered,
-        Ok(false) => record_mismatched_view_owner(registration, deadline_elapsed, cx),
+    use crate::view::WindowsNativeCloseTake;
+
+    // Phase A: pure ownership transfer inside the borrow.
+    let taken =
+        owner.update(cx, |view, _| view.take_windows_native_close_operation(registration));
+    let taken = match taken {
+        Ok(taken) => taken,
         Err(error) => {
             tracing::debug!(
                 ?error,
@@ -133,7 +134,62 @@ fn poll_view_owner(
                 generation = registration.generation(),
                 "Windows native RDP view released while shutdown drain was polling"
             );
-            record_released_view_owner(registration, deadline_elapsed, cx)
+            return record_released_view_owner(registration, deadline_elapsed, cx);
+        }
+    };
+    match taken {
+        // Nothing left to close (or a close task already owns the adapter and
+        // its terminal outcome).
+        WindowsNativeCloseTake::Closed => WindowsNativeRdpTerminalDispatch::Delivered,
+        // A maintenance operation temporarily owns the adapter; its commit (or
+        // rejected-commit cleanup) owns the terminal outcome. Retry on the
+        // next drain poll instead of double-closing.
+        WindowsNativeCloseTake::Pending => {
+            if deadline_elapsed {
+                tracing::error!(
+                    token = registration.token(),
+                    generation = registration.generation(),
+                    "Windows native RDP shutdown drain deadline hit while a maintenance \
+                     operation owns the adapter; deferring to its own cleanup"
+                );
+            }
+            WindowsNativeRdpTerminalDispatch::Delivered
+        }
+        WindowsNativeCloseTake::Failed => {
+            record_mismatched_view_owner(registration, deadline_elapsed, cx)
+        }
+        WindowsNativeCloseTake::Ready(operation) => {
+            if deadline_elapsed {
+                // Leaking performs no COM calls; pending callbacks must never
+                // observe a dropped host during teardown.
+                let _ = Box::leak(Box::new(operation.into_leaked_adapter()));
+                tracing::error!(
+                    token = registration.token(),
+                    generation = registration.generation(),
+                    "Windows native RDP shutdown drain deadline hit before close; \
+                     quarantining the adapter as timed-out-leaked"
+                );
+                let dispatch = record_windows_native_rdp_terminal_async(
+                    registration,
+                    WindowsRdpTerminalOutcome::TimedOutLeaked,
+                    cx,
+                );
+                crate::view::RemoteDesktopView::finish_windows_native_close_in_view(
+                    owner, registration, cx,
+                );
+                return dispatch;
+            }
+            // Phase B: borrow-free force close bounded by the drain deadline.
+            // The runner records the terminal outcome (phase C) itself.
+            crate::view::close_windows_native_operation(
+                owner,
+                operation,
+                crate::view::WindowsNativeCloseRetryMode::ForceClose,
+                drain_deadline,
+                cx,
+            )
+            .await;
+            WindowsNativeRdpTerminalDispatch::Delivered
         }
     }
 }
@@ -170,9 +226,10 @@ fn record_released_view_owner(
     WindowsNativeRdpTerminalDispatch::Delivered
 }
 
-fn poll_registration(
+async fn poll_registration(
     registration: WindowsRdpRegistration,
     owner: Option<&WindowsNativeRdpOwner>,
+    deadline: Instant,
     deadline_elapsed: bool,
     cx: &mut gpui::AsyncApp,
 ) -> WindowsNativeRdpTerminalDispatch {
@@ -182,7 +239,7 @@ fn poll_registration(
             record_stalled_detached_owner(registration, deadline_elapsed, cx)
         }
         Some(WindowsNativeRdpOwner::View(owner)) => {
-            poll_view_owner(owner, registration, deadline_elapsed, cx)
+            poll_view_owner(owner, registration, deadline, deadline_elapsed, cx).await
         }
     }
 }
@@ -211,9 +268,11 @@ async fn drain(
             if poll_registration(
                 registration,
                 snapshot.owners.get(&registration),
+                snapshot.deadline,
                 deadline_elapsed,
                 cx,
             )
+            .await
             .was_rejected()
             {
                 tracing::error!(

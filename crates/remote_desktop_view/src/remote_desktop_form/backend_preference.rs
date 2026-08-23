@@ -2,9 +2,8 @@
 use one_core::storage::RemoteDesktopBackendPreference;
 
 #[cfg(windows)]
-pub(super) const fn backend_preferences() -> [RemoteDesktopBackendPreference; 3] {
+pub(super) const fn backend_preferences() -> [RemoteDesktopBackendPreference; 2] {
     [
-        RemoteDesktopBackendPreference::Auto,
         RemoteDesktopBackendPreference::WindowsNative,
         RemoteDesktopBackendPreference::Canvas,
     ]
@@ -32,10 +31,9 @@ mod tests {
     }
 
     #[test]
-    fn form_offers_each_backend_preference_without_collapsing_auto() {
+    fn form_offers_only_windows_native_and_ironrdp_backends() {
         assert_eq!(
             [
-                RemoteDesktopBackendPreference::Auto,
                 RemoteDesktopBackendPreference::WindowsNative,
                 RemoteDesktopBackendPreference::Canvas,
             ],
