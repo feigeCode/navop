@@ -1,18 +1,18 @@
 use db::compare::{
-    data_compare_table_failure_warning, schema_compare_table_failure_warning, CompareSchemaSide, DataCompareTableFailure,
-    SchemaCompareTableFailure, SyncPlan,
+    CompareSchemaSide, DataCompareTableFailure, SchemaCompareTableFailure, SyncPlan,
+    data_compare_table_failure_warning, schema_compare_table_failure_warning,
 };
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, ClipboardItem, ColorExt, Context,
-    Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window,
+    App, AppContext, ClipboardItem, ColorExt, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants}, h_flex, list::{List, ListDelegate, ListItem, ListState}, notification::Notification, v_flex, ActiveTheme,
-    IconName,
-    IndexPath,
-    Sizable,
-    StyledExt,
-    WindowExt,
+    ActiveTheme, IconName, IndexPath, Sizable, StyledExt, WindowExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    list::{List, ListDelegate, ListItem, ListState},
+    notification::Notification,
+    v_flex,
 };
 use rust_i18n::t;
 
