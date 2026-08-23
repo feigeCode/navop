@@ -19,7 +19,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 数据库工作区改进：MySQL/PostgreSQL 表信息视图新增表大小、索引数等信息；SQL 导出保留 Schema 元数据并支持使用当前选中的数据库；二进制与文本值（含 MySQL BIT、文本 sidecar、空二进制）在显示、编辑、导入导出等数据工作流中得到更好保留；修复字符类型显示与编辑问题。
 - 数据库比较功能优化：改进结果布局与差异浏览，差异详情列表采用虚拟化渲染，比较问题区域支持滚动查看。
 - 连接表单统一 SSH 隧道配置，减少重复填写。
-- Windows 原生 RDP 全面重构初始化与关闭生命周期，修复白屏与崩溃问题，默认在独立全屏窗口打开，并仅保留 Windows 原生 MSTSC 与 IronRDP 后端。
+- Windows 原生 RDP 全面重构初始化与关闭生命周期，修复白屏与崩溃问题，默认在标签页中打开，独立全屏窗口改为从连接右键菜单打开且默认激活呈现，并仅保留 Windows 原生 MSTSC 与 IronRDP 后端。
 - 其他改进：窗口跨显示器恢复位置、SFTP 支持延迟凭据提示、PostgreSQL 瞬时连接失败自动重试、RDP 标准化 Windows 剪贴板文件路径、首页快速打开连接改为双击触发、补充国际化文案。
 
 #### 修复与优化
@@ -44,7 +44,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Improved the database workspace: MySQL/PostgreSQL table views now show table sizes and index counts; SQL exports preserve schema metadata and can use the currently selected database; binary and text values (including MySQL BIT, text sidecars, and empty binary) are better preserved across display, editing, import, and export workflows; fixed character-type display and editing.
 - Improved database comparison with better result layout and diff browsing, virtualized diff-detail lists, and scrollable comparison issues.
 - Unified the SSH tunnel form in connection forms to reduce repeated configuration.
-- Rebuilt Windows native RDP initialization and shutdown lifecycle to fix white screens and crashes, opening in a dedicated fullscreen window by default and keeping only the Windows-native MSTSC and IronRDP backends.
+- Rebuilt Windows native RDP initialization and shutdown lifecycle to fix white screens and crashes, opening in a tab by default, with a dedicated fullscreen window available from the connection context menu that starts as the active presentation, and keeping only the Windows-native MSTSC and IronRDP backends.
 - Other improvements: window placement is restored across displays, SFTP prompts for delayed credentials, PostgreSQL retries transient connection failures, RDP normalizes Windows clipboard file paths, quick-open on the home page now triggers on double-click, and additional i18n text was added.
 
 #### Fixes and Improvements
