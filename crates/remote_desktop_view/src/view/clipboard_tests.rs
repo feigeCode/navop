@@ -144,7 +144,7 @@ fn remote_clipboard_paths_normalize_windows_verbatim_prefixes() {
 
     let received_string = received.to_string_lossy().into_owned();
     let prefix_string = if received_string.starts_with(r"\\?\") {
-        received_string
+        received_string.clone()
     } else {
         format!(r"\\?\{}", received_string)
     };
