@@ -1,18 +1,18 @@
 use db::compare::{
-    CompareSchemaSide, DataCompareTableFailure, SchemaCompareTableFailure, SyncPlan,
-    data_compare_table_failure_warning, schema_compare_table_failure_warning,
+    data_compare_table_failure_warning, schema_compare_table_failure_warning, CompareSchemaSide, DataCompareTableFailure,
+    SchemaCompareTableFailure, SyncPlan,
 };
 use gpui::{
-    App, AppContext, ClipboardItem, ColorExt, Context, Entity, InteractiveElement, IntoElement,
-    ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
+    div, prelude::FluentBuilder, px, App, AppContext, ClipboardItem, ColorExt, Context,
+    Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, StyledExt, WindowExt,
-    button::{Button, ButtonVariants},
-    h_flex,
-    list::{List, ListDelegate, ListItem, ListState},
-    notification::Notification,
-    v_flex,
+    button::{Button, ButtonVariants}, h_flex, list::{List, ListDelegate, ListItem, ListState}, notification::Notification, v_flex, ActiveTheme,
+    IconName,
+    IndexPath,
+    Sizable,
+    StyledExt,
+    WindowExt,
 };
 use rust_i18n::t;
 
@@ -281,11 +281,6 @@ impl ListDelegate for CompareIssueListDelegate {
                                 .child(issue.detail),
                         ),
                 )
-                .suffix(|_, cx| {
-                    Icon::new(IconName::Copy)
-                        .small()
-                        .text_color(cx.theme().muted_foreground)
-                })
                 .on_click(move |_, window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
                     window.push_notification(
