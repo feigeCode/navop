@@ -217,6 +217,7 @@ impl RemoteDesktopFormWindow {
 
     #[cfg(windows)]
     fn render_backend_preference_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let native_available = super::backend_preference::windows_native_rdp_available();
         let selected_index = super::backend_preference::backend_preferences()
             .iter()
             .position(|preference| *preference == self.backend_preference);
@@ -237,12 +238,16 @@ impl RemoteDesktopFormWindow {
                     Radio::new("remote-desktop-backend-auto")
                         .label(t!("RemoteDesktopForm.backend_auto").to_string()),
                     Radio::new("remote-desktop-backend-windows-native")
-                        .label(format!(
-                            "{} ({})",
-                            t!("RemoteDesktopForm.backend_windows_native"),
-                            t!("RemoteDesktopForm.backend_windows_native_status")
-                        ))
-                        .disabled(true),
+                        .label(if native_available {
+                            t!("RemoteDesktopForm.backend_windows_native").to_string()
+                        } else {
+                            format!(
+                                "{} ({})",
+                                t!("RemoteDesktopForm.backend_windows_native"),
+                                t!("RemoteDesktopForm.backend_windows_native_status")
+                            )
+                        })
+                        .disabled(!native_available),
                     Radio::new("remote-desktop-backend-ironrdp")
                         .label(t!("RemoteDesktopForm.backend_ironrdp").to_string()),
                 ]),
@@ -350,7 +355,8 @@ mod tests {
         assert!(render_source.contains("RemoteDesktopForm.label_backend_preference"));
         assert!(render_source.contains("RadioGroup::horizontal"));
         assert!(render_source.contains("remote-desktop-backend-windows-native"));
-        assert!(render_source.contains(".disabled(true)"));
+        assert!(render_source.contains(".disabled(!native_available)"));
+        assert!(render_source.contains("windows_native_rdp_available"));
         assert!(render_source.contains("RemoteDesktopForm.backend_windows_native_status"));
         assert!(render_source.contains("remote-desktop-backend-ironrdp"));
         assert!(!render_source.contains("Select::new(&self.backend_preference_select)"));

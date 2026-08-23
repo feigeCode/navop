@@ -137,6 +137,7 @@ fn native_cpp_build(out_dir: &Path) -> cc::Build {
         .flag("/EHsc")
         .flag("/std:c++17")
         .flag("/permissive-")
+        .flag("/utf-8")
         .flag("/W4")
         .flag("/WX")
         .define("UNICODE", None)
