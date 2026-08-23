@@ -781,7 +781,7 @@ mod native_driver_feature_contract_tests {
     }
 
     #[test]
-    fn windows_native_rdp_feature_is_declared_and_default_off() {
+    fn windows_native_rdp_feature_is_declared_and_enabled_by_default() {
         let main_manifest = include_str!("../Cargo.toml");
         let remote_desktop_view_manifest =
             include_str!("../../crates/remote_desktop_view/Cargo.toml");
@@ -800,7 +800,10 @@ mod native_driver_feature_contract_tests {
             main_features
                 .contains("windows-native-rdp = [\"remote_desktop_view/windows-native-rdp\"]")
         );
-        assert!(!main_default.contains("windows-native-rdp"));
+        assert!(
+            main_default.contains("windows-native-rdp"),
+            "the Windows native RDP backend must be part of the default build"
+        );
         assert!(
             remote_desktop_view_features.contains(
                 "windows-native-rdp = [\"dep:raw-window-handle\", \"dep:windows_rdp_host\"]"
