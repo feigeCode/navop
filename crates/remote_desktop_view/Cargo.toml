@@ -39,7 +39,11 @@ tempfile = "3"
 
 [features]
 default = []
-windows-native-rdp = ["dep:raw-window-handle", "dep:windows_rdp_host"]
+windows-native-rdp = [
+    "dep:raw-window-handle",
+    "dep:windows_rdp_host",
+    "remote_desktop/windows-native-rdp",
+]
 
 [lints]
 workspace = true

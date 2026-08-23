@@ -20,6 +20,7 @@ use crate::extension_downloader::{
     download_marketplace_entry_to_staging_with_progress, fetch_default_manifest_url,
     fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
 };
+use one_core::storage::RemoteDesktopBackendPreference;
 use one_core::storage::StoredConnection;
 use one_core::tab_container::TabOpenMode;
 
@@ -94,9 +95,10 @@ pub fn run_with_remote_desktop_provider_guard<T, F>(
     T: 'static,
     F: FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
 {
-    if remote_desktop::RemoteDesktopProviderRegistry::load_default()
-        .find(protocol)
-        .is_some()
+    if connection_skips_remote_desktop_provider_guard(&connection, protocol)
+        || remote_desktop::RemoteDesktopProviderRegistry::load_default()
+            .find(protocol)
+            .is_some()
     {
         on_ready(target, window, cx);
         return;
@@ -111,6 +113,31 @@ pub fn run_with_remote_desktop_provider_guard<T, F>(
         cx,
         on_ready,
     );
+}
+
+/// Whether opening `connection` can proceed without the helper-based remote
+/// desktop provider extension.
+///
+/// The Windows native MSTSC backend embeds the RDP control directly in the
+/// app process and never spawns the `onetcli-rdp-helper` process, so
+/// requiring that helper to be installed just to open the connection would
+/// mislead users into downloading an extension they do not need. Connections
+/// with an explicit WindowsNative backend preference (on a build that
+/// actually compiled the native backend, without a SOCKS/HTTP proxy that
+/// would force a Canvas fallback) skip the provider guard.
+fn connection_skips_remote_desktop_provider_guard(
+    connection: &StoredConnection,
+    protocol: RemoteDesktopProtocol,
+) -> bool {
+    remote_desktop::windows_native_rdp_compiled()
+        && matches!(protocol, RemoteDesktopProtocol::Rdp)
+        && connection
+            .to_remote_desktop_params()
+            .map(|params| {
+                params.backend_preference == RemoteDesktopBackendPreference::WindowsNative
+                    && params.proxy.is_none()
+            })
+            .unwrap_or(false)
 }
 
 fn prompt_install_provider_with_completion<T, F>(
@@ -272,6 +299,9 @@ mod tests {
 
     use futures::FutureExt;
     use gpui::http_client::{self, AsyncBody, HttpClient, Url, http};
+    use one_core::storage::{
+        ProxyConfig, ProxyType, RemoteDesktopBackendPreference, StoredConnection,
+    };
     use remote_desktop::RemoteDesktopProtocol;
 
     use crate::extension::{
@@ -289,6 +319,132 @@ mod tests {
             "vnc",
             super::required_provider_for_protocol(RemoteDesktopProtocol::Vnc)
         );
+    }
+
+    #[test]
+    fn provider_guard_skipped_only_for_native_rdp_without_proxy() {
+        // The guard must follow the shared compile-time marker rather than a
+        // local feature: `remote_desktop_view/windows-native-rdp` enables
+        // `remote_desktop/windows-native-rdp`, which this predicate reads.
+        let connection = StoredConnection::new_remote_desktop(
+            "native".to_string(),
+            remote_desktop_params(RemoteDesktopBackendPreference::WindowsNative, None),
+            None,
+        );
+
+        assert_eq!(
+            remote_desktop::windows_native_rdp_compiled(),
+            super::connection_skips_remote_desktop_provider_guard(
+                &connection,
+                RemoteDesktopProtocol::Rdp
+            )
+        );
+    }
+
+    #[test]
+    fn provider_guard_kept_for_canvas_preference() {
+        let connection = StoredConnection::new_remote_desktop(
+            "canvas".to_string(),
+            remote_desktop_params(RemoteDesktopBackendPreference::Canvas, None),
+            None,
+        );
+
+        assert!(!super::connection_skips_remote_desktop_provider_guard(
+            &connection,
+            RemoteDesktopProtocol::Rdp
+        ));
+    }
+
+    #[test]
+    fn provider_guard_kept_for_auto_preference() {
+        // Auto may fall back to the Canvas (helper) presentation when the
+        // native backend is unavailable, so the provider guard stays on.
+        let connection = StoredConnection::new_remote_desktop(
+            "auto".to_string(),
+            remote_desktop_params(RemoteDesktopBackendPreference::Auto, None),
+            None,
+        );
+
+        assert!(!super::connection_skips_remote_desktop_provider_guard(
+            &connection,
+            RemoteDesktopProtocol::Rdp
+        ));
+    }
+
+    #[test]
+    fn provider_guard_kept_when_proxy_is_configured() {
+        // A SOCKS/HTTP proxy forces the Canvas (helper) presentation even
+        // with an explicit WindowsNative preference, so the helper must be
+        // installed before the connection can open.
+        let connection = StoredConnection::new_remote_desktop(
+            "proxied".to_string(),
+            remote_desktop_params(
+                RemoteDesktopBackendPreference::WindowsNative,
+                Some(ProxyConfig {
+                    proxy_type: ProxyType::Socks5,
+                    host: "127.0.0.1".to_string(),
+                    port: 7897,
+                    username: None,
+                    password: None,
+                    credential_reference: None,
+                }),
+            ),
+            None,
+        );
+
+        assert!(!super::connection_skips_remote_desktop_provider_guard(
+            &connection,
+            RemoteDesktopProtocol::Rdp
+        ));
+    }
+
+    #[test]
+    fn provider_guard_kept_for_vnc_protocol() {
+        let connection = StoredConnection::new_remote_desktop(
+            "vnc".to_string(),
+            remote_desktop_params(RemoteDesktopBackendPreference::WindowsNative, None),
+            None,
+        );
+
+        assert!(!super::connection_skips_remote_desktop_provider_guard(
+            &connection,
+            RemoteDesktopProtocol::Vnc
+        ));
+    }
+
+    #[test]
+    fn provider_guard_kept_for_unparseable_params() {
+        let mut connection = StoredConnection::new_remote_desktop(
+            "broken".to_string(),
+            remote_desktop_params(RemoteDesktopBackendPreference::WindowsNative, None),
+            None,
+        );
+        connection.params = "not-json".to_string();
+
+        assert!(!super::connection_skips_remote_desktop_provider_guard(
+            &connection,
+            RemoteDesktopProtocol::Rdp
+        ));
+    }
+
+    fn remote_desktop_params(
+        backend_preference: RemoteDesktopBackendPreference,
+        proxy: Option<ProxyConfig>,
+    ) -> one_core::storage::RemoteDesktopParams {
+        one_core::storage::RemoteDesktopParams {
+            protocol: one_core::storage::RemoteDesktopProtocol::Rdp,
+            host: "127.0.0.1".to_string(),
+            port: 3389,
+            username: None,
+            password: None,
+            credential_reference: None,
+            domain: None,
+            read_only: false,
+            audio_playback: false,
+            proxy,
+            backend_preference,
+            rdp: None,
+        }
     }
 
     #[test]

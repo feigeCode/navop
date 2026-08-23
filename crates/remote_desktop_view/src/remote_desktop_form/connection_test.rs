@@ -13,7 +13,7 @@ use gpui_component::{
 };
 use one_core::{
     gpui_tokio::Tokio,
-    storage::{RemoteDesktopProtocol, StoredConnection},
+    storage::{RemoteDesktopBackendPreference, RemoteDesktopProtocol, StoredConnection},
 };
 use rust_i18n::t;
 
@@ -24,6 +24,9 @@ const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ConnectionTestResult {
     Success,
+    /// The native RDP backend only probes TCP reachability; credentials are
+    /// validated when the actual session starts.
+    NativeReachable,
     Failure(String),
 }
 
@@ -104,17 +107,24 @@ impl RemoteDesktopFormWindow {
         cx.notify();
 
         let options = remote_desktop::RemoteDesktopConnectionOptions::from_storage_params(params);
+        let uses_native_test = should_use_native_connection_test(&options);
         let window_handle = window.window_handle();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let spawn_result = Tokio::spawn_result(cx, async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    remote_desktop::test_connection(options, CONNECTION_TEST_TIMEOUT)
+                    if uses_native_test {
+                        test_native_rdp_reachability(&options, CONNECTION_TEST_TIMEOUT)
+                    } else {
+                        remote_desktop::test_connection(options, CONNECTION_TEST_TIMEOUT)
+                            .map_err(|failure| failure.to_string())
+                    }
                 })
                 .await?;
-                result.map_err(anyhow::Error::new)
+                result.map_err(anyhow::Error::msg)
             })
             .await;
             let result = match spawn_result {
+                Ok(()) if uses_native_test => ConnectionTestResult::NativeReachable,
                 Ok(()) => ConnectionTestResult::Success,
                 Err(error) => ConnectionTestResult::Failure(error.to_string()),
             };
@@ -136,12 +146,23 @@ impl RemoteDesktopFormWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         match result {
-            ConnectionTestResult::Success => h_flex().justify_center().px_6().pb_2().child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().success)
-                    .child(t!("RemoteDesktopForm.credentials_valid").to_string()),
-            ),
+            ConnectionTestResult::Success | ConnectionTestResult::NativeReachable => h_flex()
+                .justify_center()
+                .px_6()
+                .pb_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().success)
+                        .child(
+                            if matches!(result, ConnectionTestResult::NativeReachable) {
+                                t!("RemoteDesktopForm.native_reachable")
+                            } else {
+                                t!("RemoteDesktopForm.credentials_valid")
+                            }
+                            .to_string(),
+                        ),
+                ),
             ConnectionTestResult::Failure(reason) => h_flex().px_6().pb_2().child(
                 div()
                     .w_full()
@@ -204,9 +225,86 @@ impl RemoteDesktopFormWindow {
     }
 }
 
+/// Whether the connection test should probe the target with a plain TCP
+/// reachability check instead of launching the helper-based backend.
+///
+/// The Windows native MSTSC backend embeds the RDP control directly in the
+/// app process and never spawns the `onetcli-rdp-helper` process, so
+/// requiring that helper to be installed just to test the connection would
+/// mislead users into downloading an extension they do not need. When the
+/// user has explicitly selected the native backend (and the build actually
+/// compiled it, and no SOCKS/HTTP proxy is configured — native RDP cannot
+/// tunnel through a proxy), we probe the destination with a lightweight TCP
+/// connect instead.
+fn should_use_native_connection_test(
+    options: &remote_desktop::RemoteDesktopConnectionOptions,
+) -> bool {
+    cfg!(all(feature = "windows-native-rdp", target_os = "windows"))
+        && options.backend_preference == RemoteDesktopBackendPreference::WindowsNative
+        && options.proxy.is_none()
+}
+
+/// Probe the RDP destination with a TCP connect. This verifies that the host
+/// resolves and the RDP port is reachable, which is the closest side-effect
+/// free check available for the native MSTSC backend: a real credential
+/// validation would require starting an actual RDP session.
+fn test_native_rdp_reachability(
+    options: &remote_desktop::RemoteDesktopConnectionOptions,
+    timeout: Duration,
+) -> Result<(), String> {
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let (host, port) = remote_desktop::backend::parse_destination(&options.destination)
+        .map_err(|error| error.to_string())?;
+
+    let socket_addrs = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("failed to resolve {host}:{port}: {error}"))?;
+
+    let mut last_error = None::<String>;
+    for socket_addr in socket_addrs {
+        match TcpStream::connect_timeout(&socket_addr, timeout) {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_error = Some(format!("{host}:{port} ({socket_addr}): {error}"));
+            }
+        }
+    }
+
+    Err(match last_error {
+        Some(detail) => format!("could not connect to {host}:{port}: {detail}"),
+        None => format!("could not resolve any address for {host}:{port}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionTestResult, ConnectionTestState};
+    use super::{
+        ConnectionTestResult, ConnectionTestState, CONNECTION_TEST_TIMEOUT,
+        should_use_native_connection_test, test_native_rdp_reachability,
+    };
+    use one_core::storage::RemoteDesktopBackendPreference;
+
+    fn native_test_options(
+        backend: RemoteDesktopBackendPreference,
+    ) -> remote_desktop::RemoteDesktopConnectionOptions {
+        remote_desktop::RemoteDesktopConnectionOptions::from_storage_params(
+            one_core::storage::RemoteDesktopParams {
+                protocol: one_core::storage::RemoteDesktopProtocol::Rdp,
+                host: "127.0.0.1".to_string(),
+                port: 3389,
+                username: None,
+                password: None,
+                credential_reference: None,
+                domain: None,
+                read_only: false,
+                audio_playback: false,
+                proxy: None,
+                backend_preference: backend,
+                rdp: None,
+            },
+        )
+    }
 
     #[test]
     fn repeated_begin_is_rejected_while_test_is_running() {
@@ -247,5 +345,54 @@ mod tests {
 
         assert_eq!(Some(2), state.begin());
         assert_eq!(None, state.result());
+    }
+
+    #[test]
+    fn native_connection_test_selected_for_windows_native_preference() {
+        let options = native_test_options(RemoteDesktopBackendPreference::WindowsNative);
+
+        assert_eq!(
+            should_use_native_connection_test(&options),
+            cfg!(all(feature = "windows-native-rdp", target_os = "windows"))
+        );
+    }
+
+    #[test]
+    fn native_connection_test_skipped_for_canvas_preference() {
+        let options = native_test_options(RemoteDesktopBackendPreference::Canvas);
+
+        assert!(!should_use_native_connection_test(&options));
+    }
+
+    #[test]
+    fn native_connection_test_skipped_for_auto_preference() {
+        // Auto may fall back to Canvas (helper) when the native probe is
+        // unavailable, so the connection test stays on the helper path.
+        let options = native_test_options(RemoteDesktopBackendPreference::Auto);
+
+        assert!(!should_use_native_connection_test(&options));
+    }
+
+    #[test]
+    fn native_reachability_reports_missing_port() {
+        let mut options = native_test_options(RemoteDesktopBackendPreference::WindowsNative);
+        options.destination = "just-a-host".to_string();
+
+        let error = test_native_rdp_reachability(&options, CONNECTION_TEST_TIMEOUT)
+            .expect_err("destination without a port must fail");
+
+        assert!(error.contains("port"));
+    }
+
+    #[test]
+    fn native_reachability_reports_unreachable_host() {
+        let mut options = native_test_options(RemoteDesktopBackendPreference::WindowsNative);
+        // RFC 5737 TEST-NET-1 address: guaranteed not to route.
+        options.destination = "192.0.2.1:3389".to_string();
+
+        let error = test_native_rdp_reachability(&options, std::time::Duration::from_millis(300))
+            .expect_err("test address must not accept connections");
+
+        assert!(error.contains("192.0.2.1"));
     }
 }

@@ -257,6 +257,10 @@ RemoteDesktopForm:
     en: Credentials are valid
     zh-CN: 凭据有效
     zh-HK: 憑據有效
+  native_reachable:
+    en: "Host is reachable (native RDP connects without a pre-check of credentials)"
+    zh-CN: 主机可达（原生 RDP 模式无需安装插件，凭据在连接时验证）
+    zh-HK: 主機可達（原生 RDP 模式無需安裝插件，憑據在連線時驗證）
     
 # 连接表单通用字段
 ConnectionForm:

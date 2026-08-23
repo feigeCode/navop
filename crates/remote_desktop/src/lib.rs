@@ -46,6 +46,20 @@ pub use provider_registry::{
 };
 pub use runtime::RemoteDesktopRuntime;
 
+/// Whether the Windows native MSTSC presentation backend was compiled into
+/// this build.
+///
+/// The actual native implementation lives in `remote_desktop_view` (behind
+/// its `windows-native-rdp` feature), but that feature also enables this
+/// crate's marker feature so lower-level crates — such as the
+/// extension-runtime provider guard that decides whether the
+/// `onetcli-rdp-helper` extension is required — can check native
+/// availability without threading the feature through every dependent.
+#[must_use]
+pub fn windows_native_rdp_compiled() -> bool {
+    cfg!(all(feature = "windows-native-rdp", target_os = "windows"))
+}
+
 #[cfg(test)]
 mod provider_registry_tests {
     use std::fs;

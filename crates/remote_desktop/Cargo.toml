@@ -21,5 +21,12 @@ process-util = { workspace = true }
 proptest = { workspace = true }
 tempfile = "3"
 
+[features]
+# Marker feature: enabled by `remote_desktop_view/windows-native-rdp` so that
+# other crates (e.g. extension-runtime's provider guard) can ask at runtime
+# whether the Windows native MSTSC backend was compiled into this build,
+# without each of them needing to re-declare and re-thread the feature.
+windows-native-rdp = []
+
 [lints]
 workspace = true

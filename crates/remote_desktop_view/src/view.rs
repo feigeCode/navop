@@ -132,11 +132,130 @@ enum WindowsNativeCloseRetryMode {
     ForceClose,
 }
 
+/// Pure-Rust snapshot of everything the Windows native RDP COM stages need.
+///
+/// Built while the App borrow is held (Phase 1) so that every subsequent
+/// ActiveX/COM call (host creation, bounds update, credentials, connect) can
+/// run without any App borrow: those calls pump Win32 messages, and the pump
+/// can dispatch pending GPUI foreground tasks that re-borrow the App.
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-#[derive(Debug)]
-enum WindowsNativePresentationCreateError {
-    ProxyUnsupported,
-    Adapter(windows_native::WindowsNativeAdapterCreateError),
+struct WindowsNativePresentationInputs {
+    owner: Result<usize, windows_native::WindowsNativeAdapterCreateError>,
+    generation: u64,
+    bounds: Bounds<Pixels>,
+    scale_factor: f32,
+    options: RemoteDesktopConnectionOptions,
+    desktop_size: (u32, u32),
+}
+
+/// Failure modes of the borrow-free COM preparation stage (Phase 2).
+///
+/// These all happen before the host is registered for shutdown drain, so
+/// cleanup uses the unregistered failure path.
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+enum WindowsNativePrepareFailure {
+    Create(windows_native::WindowsNativeAdapterCreateError),
+    Bounds {
+        native: windows_native::WindowsNativeAdapter,
+        error: anyhow::Error,
+    },
+    Endpoint {
+        native: windows_native::WindowsNativeAdapter,
+        error: anyhow::Error,
+    },
+    ConnectionOptions {
+        native: windows_native::WindowsNativeAdapter,
+        error: windows_rdp_host::WindowsRdpHostError,
+    },
+    Credentials {
+        native: windows_native::WindowsNativeAdapter,
+        error: windows_rdp_host::WindowsRdpHostError,
+    },
+}
+
+/// Phase 2 of the Windows native RDP initialization: creates the ActiveX
+/// host and prepares the connection WITHOUT holding any App borrow.
+///
+/// Every call in here — `create_with_owner` (CreateWindowEx,
+/// `AtlAxCreateControl`, `CoCreateInstance`), `update_bounds`,
+/// `apply_credentials` — pumps Win32 messages. If the App borrow were held
+/// across any of them, the pump could dispatch a pending GPUI foreground
+/// task that re-borrows the App and panics with "RefCell already borrowed".
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn prepare_windows_native_connection(
+    inputs: WindowsNativePresentationInputs,
+) -> Result<
+    (
+        windows_native::WindowsNativeAdapter,
+        windows_rdp_host::WindowsRdpConnectionOptions,
+    ),
+    WindowsNativePrepareFailure,
+> {
+    let WindowsNativePresentationInputs {
+        owner,
+        generation,
+        bounds,
+        scale_factor,
+        options,
+        desktop_size,
+    } = inputs;
+
+    let mut native = windows_native::WindowsNativeAdapter::create_with_owner(
+        owner.map_err(WindowsNativePrepareFailure::Create)?,
+        generation,
+    );
+    if let Err(error) = native.update_bounds(bounds, point(px(0.0), px(0.0)), scale_factor) {
+        return Err(WindowsNativePrepareFailure::Bounds { native, error });
+    }
+    let (host, port) = match parse_destination(&options.destination) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            return Err(WindowsNativePrepareFailure::Endpoint { native, error });
+        }
+    };
+    let policy = windows_native_policy::connection_policy(&options.rdp);
+    tracing::info!(
+        desktop_width = desktop_size.0,
+        desktop_height = desktop_size.1,
+        ?policy,
+        shared_folder_count = options.rdp.resources.shared_folders.len(),
+        "native RDP: stage=connection-policy"
+    );
+    if !options.rdp.resources.shared_folders.is_empty() {
+        tracing::warn!(
+            shared_folder_count = options.rdp.resources.shared_folders.len(),
+            "native RDP shared-folder redirection is not transported by the current ABI"
+        );
+    }
+    let connection_options =
+        match windows_rdp_host::WindowsRdpConnectionOptions::new(
+            host,
+            port,
+            desktop_size.0,
+            desktop_size.1,
+            windows_rdp_host::WindowsRdpColorDepth::Bpp32,
+        ) {
+            Ok(options) => options.with_policy(policy),
+            Err(error) => {
+                return Err(WindowsNativePrepareFailure::ConnectionOptions { native, error });
+            }
+        };
+    let mut credentials = windows_rdp_host::WindowsRdpCredentialBundle::new();
+    if let Some(username) = options.username.as_ref() {
+        credentials.set_username(username.clone());
+    }
+    if let Some(domain) = options.domain.as_ref() {
+        credentials.set_domain(domain.clone());
+    }
+    if let Some(password) = options.password.as_ref() {
+        credentials.set_server_password(password.clone());
+    }
+    windows_native_policy::apply_gateway_credentials(&mut credentials, &options.rdp);
+    if let Err(error) = native.apply_credentials(&credentials) {
+        return Err(WindowsNativePrepareFailure::Credentials { native, error });
+    }
+
+    Ok((native, connection_options))
 }
 
 fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> bool {
@@ -309,6 +428,8 @@ pub struct RemoteDesktopView {
     windows_native_registration: Option<windows_rdp_host::WindowsRdpRegistration>,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     native_event_state: Option<native_events::NativeRdpEventState>,
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    windows_native_presentation_scheduled: bool,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     windows_native_display: windows_native_display::WindowsNativeDisplayState,
 }
@@ -500,6 +621,8 @@ impl RemoteDesktopView {
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             native_event_state: None,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            windows_native_presentation_scheduled: false,
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native_display: Default::default(),
         }
     }
@@ -542,7 +665,7 @@ impl RemoteDesktopView {
 
         #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
         {
-            self.ensure_windows_native_presentation(window, cx);
+            self.schedule_windows_native_presentation(window, cx);
         }
 
         #[cfg(not(all(feature = "windows-native-rdp", target_os = "windows")))]
@@ -579,8 +702,30 @@ impl RemoteDesktopView {
         }
     }
 
+    /// Defers the Windows native RDP initialization out of `render` into five
+    /// borrow-scoped phases.
+    ///
+    /// Every ActiveX/COM call in the initialization sequence pumps Win32
+    /// messages (`CreateWindowEx`, `AtlAxCreateControl`, `CoCreateInstance`,
+    /// bounds updates, credentials, `Connect`). The pump dispatches pending
+    /// GPUI foreground tasks, which re-borrow the App. Running any of those
+    /// calls while holding the App borrow therefore panics with "RefCell
+    /// already borrowed" (and starves `on_request_frame`, leaving the window
+    /// blank). The phases alternate accordingly:
+    ///
+    /// * Phase 1 (App borrow held): pure-Rust snapshot of the inputs.
+    /// * Phase 2 (no borrow): ActiveX host creation and preparation.
+    /// * Phase 3 (App borrow held): shutdown registration and failure
+    ///   routing. Registration stays ahead of `Connect` so app quit still
+    ///   drains a connecting session.
+    /// * Phase 4 (no borrow): `Connect`.
+    /// * Phase 5 (App borrow held): attach the connected host to the view.
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-    fn ensure_windows_native_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn schedule_windows_native_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.windows_native_presentation_scheduled {
+            return;
+        }
+        // Same layout precondition as the deferred initialization below.
         if self.options.backend_preference
             != one_core::storage::RemoteDesktopBackendPreference::Canvas
             && self
@@ -591,44 +736,110 @@ impl RemoteDesktopView {
             return;
         }
 
-        let proxy_configured = self.options.proxy.is_some();
-        let creation = presentation::create_remote_desktop_presentation_with(
-            presentation::current_remote_desktop_platform(),
-            self.options.backend_preference,
-            presentation_capability::current_windows_native_rdp_capability,
-            || {
-                if proxy_configured {
-                    return Err(WindowsNativePresentationCreateError::ProxyUnsupported);
-                }
-                windows_native::WindowsNativeAdapter::create(
-                    window,
-                    next_windows_native_rdp_generation(),
-                )
-                .map_err(WindowsNativePresentationCreateError::Adapter)
-            },
-            |error| match error {
-                WindowsNativePresentationCreateError::ProxyUnsupported => None,
-                WindowsNativePresentationCreateError::Adapter(
-                    windows_native::WindowsNativeAdapterCreateError::Host(error),
-                ) => presentation::classify_windows_native_create_error(*error),
-                WindowsNativePresentationCreateError::Adapter(
-                    windows_native::WindowsNativeAdapterCreateError::WindowHandle(_)
-                    | windows_native::WindowsNativeAdapterCreateError::ParentHandleNotWin32
-                    | windows_native::WindowsNativeAdapterCreateError::Overlay(_),
-                ) => None,
-            },
-        );
+        self.windows_native_presentation_scheduled = true;
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            // Phase 1: snapshot the inputs with the App borrow held. `None`
+            // means a fallback, failure, or retry path already ran.
+            let inputs = window_handle
+                .update(cx, |_, window, app| {
+                    this.update(app, |this, _cx| {
+                        this.prepare_windows_native_presentation(window)
+                    })
+                })
+                .ok()
+                .and_then(|result| result.ok())
+                .flatten();
+            let Some(inputs) = inputs else {
+                return;
+            };
 
-        let mut native = match creation {
-            Ok(presentation::RemoteDesktopPresentationCreation::Canvas { fallback_reason }) => {
-                self.presentation_initialization =
-                    presentation::RemoteDesktopPresentationInitialization::Canvas {
-                        fallback_reason,
-                    };
+            // Phase 2: create and prepare the native host WITHOUT holding the
+            // App borrow; see `prepare_windows_native_connection`.
+            let prepared = prepare_windows_native_connection(inputs);
+
+            // Phase 3: register the host for shutdown drain and route any
+            // preparation failure, with the App borrow held.
+            let admitted = window_handle
+                .update(cx, |_, _window, app| {
+                    this.update(app, |this, cx| {
+                        this.admit_windows_native_presentation(prepared, cx)
+                    })
+                })
+                .ok()
+                .and_then(|result| result.ok())
+                .flatten();
+            let Some((mut native, registration, connection_options)) = admitted else {
+                return;
+            };
+
+            // Phase 4: connect WITHOUT holding the App borrow. The ActiveX
+            // `Connect` call pumps COM messages that can dispatch pending
+            // GPUI foreground tasks; the borrow must be released around it.
+            if let Err(error) = native.connect(&connection_options) {
+                let _ = window_handle.update(cx, |_, _window, app| {
+                    this.update(app, |this, cx| {
+                        this.fail_windows_native_presentation(
+                            native,
+                            registration,
+                            "connect",
+                            error,
+                            cx,
+                        );
+                    })
+                });
                 return;
             }
-            Ok(presentation::RemoteDesktopPresentationCreation::Native(native)) => native,
-            Err(presentation::RemoteDesktopPresentationCreateError::Selection(error)) => {
+
+            // Phase 5: attach the connected host to the view.
+            let _ = window_handle.update(cx, |_, window, app| {
+                this.update(app, |this, cx| {
+                    this.attach_windows_native_presentation(native, registration, window, cx);
+                    this.presentation_initialization =
+                        presentation::RemoteDesktopPresentationInitialization::Native;
+                })
+            });
+        })
+        .detach();
+    }
+
+    /// Phase 1 of the Windows native RDP initialization: gathers everything
+    /// the borrow-free COM stages need, using only pure-Rust work (no COM,
+    /// no window creation, no message pumping).
+    ///
+    /// Returns `None` when a terminal path already ran (selection fallback,
+    /// proxy rejection, failure) or when initialization is no longer pending.
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn prepare_windows_native_presentation(
+        &mut self,
+        window: &mut Window,
+    ) -> Option<WindowsNativePresentationInputs> {
+        self.windows_native_presentation_scheduled = false;
+        if !matches!(
+            self.presentation_initialization,
+            presentation::RemoteDesktopPresentationInitialization::Pending
+        ) {
+            return None;
+        }
+        if self.options.backend_preference
+            != one_core::storage::RemoteDesktopBackendPreference::Canvas
+            && self
+                .content_bounds
+                .and_then(|bounds| resize::resize_dimensions(bounds, window.scale_factor()))
+                .is_none()
+        {
+            return None;
+        }
+
+        // Selection is pure Rust: platform, preference, and capability probe
+        // results, with no COM calls.
+        let selection = match presentation::select_remote_desktop_presentation(
+            presentation::current_remote_desktop_platform(),
+            self.options.backend_preference,
+            presentation_capability::current_windows_native_rdp_capability(),
+        ) {
+            Ok(selection) => selection,
+            Err(error) => {
                 tracing::warn!(
                     ?error,
                     "failed to select the Windows native RDP presentation"
@@ -640,40 +851,132 @@ impl RemoteDesktopView {
                         "Windows native RDP diagnostic\nstage=selection\nerror={error:?}"
                     )),
                 );
-                return;
+                return None;
             }
-            Err(presentation::RemoteDesktopPresentationCreateError::NativeCreate(
-                WindowsNativePresentationCreateError::ProxyUnsupported,
-            )) => {
-                tracing::warn!("Windows native RDP cannot use the configured SOCKS/HTTP proxy");
-                self.fail_presentation_initialization(
-                    presentation::RemoteDesktopPresentation::NativeWindows,
-                    true,
-                    Some(
-                        "Windows native RDP diagnostic\nstage=proxy\nerror=SOCKS/HTTP proxy is unsupported by Windows native RDP"
-                            .to_owned(),
-                    ),
-                );
-                self.status =
-                    SharedString::from(t!("RemoteDesktop.native_proxy_unsupported").to_string());
-                return;
-            }
-            Err(presentation::RemoteDesktopPresentationCreateError::NativeCreate(
-                WindowsNativePresentationCreateError::Adapter(error),
-            )) => {
+        };
+        if matches!(
+            selection.presentation,
+            presentation::RemoteDesktopPresentation::Canvas
+        ) {
+            self.presentation_initialization =
+                presentation::RemoteDesktopPresentationInitialization::Canvas {
+                    fallback_reason: selection.fallback_reason,
+                };
+            return None;
+        }
+
+        // Windows native RDP cannot tunnel through SOCKS/HTTP proxies; fail
+        // closed rather than leaking the connection around the proxy.
+        if self.options.proxy.is_some() {
+            tracing::warn!("Windows native RDP cannot use the configured SOCKS/HTTP proxy");
+            self.fail_presentation_initialization(
+                presentation::RemoteDesktopPresentation::NativeWindows,
+                true,
+                Some(
+                    "Windows native RDP diagnostic\nstage=proxy\nerror=SOCKS/HTTP proxy is unsupported by Windows native RDP"
+                        .to_owned(),
+                ),
+            );
+            self.status =
+                SharedString::from(t!("RemoteDesktop.native_proxy_unsupported").to_string());
+            return None;
+        }
+
+        let Some(bounds) = self.content_bounds else {
+            // Layout disappeared between scheduling and now; leave the state
+            // pending so the next render reschedules.
+            return None;
+        };
+        let Some(size) = resize::resize_dimensions(bounds, window.scale_factor()) else {
+            return None;
+        };
+        Some(WindowsNativePresentationInputs {
+            owner: windows_native::WindowsNativeAdapter::parent_window_owner(window),
+            generation: next_windows_native_rdp_generation(),
+            bounds,
+            scale_factor: window.scale_factor(),
+            desktop_size: windows_native_policy::initial_desktop_size(&self.options.rdp, size),
+            options: self.options.clone(),
+        })
+    }
+
+    /// Phase 3 of the Windows native RDP initialization: registers the
+    /// prepared host for shutdown drain (before `Connect` runs) and routes
+    /// preparation failures to their terminal paths.
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn admit_windows_native_presentation(
+        &mut self,
+        prepared: Result<
+            (
+                windows_native::WindowsNativeAdapter,
+                windows_rdp_host::WindowsRdpConnectionOptions,
+            ),
+            WindowsNativePrepareFailure,
+        >,
+        cx: &mut Context<Self>,
+    ) -> Option<(
+        windows_native::WindowsNativeAdapter,
+        windows_rdp_host::WindowsRdpRegistration,
+        windows_rdp_host::WindowsRdpConnectionOptions,
+    )> {
+        let (native, connection_options) = match prepared {
+            Ok(prepared) => prepared,
+            Err(WindowsNativePrepareFailure::Create(error)) => {
+                // Format the diagnostic before consuming `error` by value for
+                // the Canvas fallback classification below.
+                let failure_detail =
+                    format!("Windows native RDP diagnostic\nstage=create\nerror={error}");
                 tracing::warn!(
                     error = %error,
                     ?error,
                     "failed to create the Windows native RDP host"
                 );
-                self.fail_presentation_initialization(
-                    presentation::RemoteDesktopPresentation::NativeWindows,
-                    true,
-                    Some(format!(
-                        "Windows native RDP diagnostic\nstage=create\nerror={error}"
-                    )),
+                let fallback_reason = match error {
+                    windows_native::WindowsNativeAdapterCreateError::Host(host_error)
+                        if self.options.backend_preference
+                            == one_core::storage::RemoteDesktopBackendPreference::Auto =>
+                    {
+                        presentation::classify_windows_native_create_error(host_error)
+                    }
+                    _ => None,
+                };
+                match fallback_reason {
+                    Some(reason) => {
+                        self.presentation_initialization =
+                            presentation::RemoteDesktopPresentationInitialization::Canvas {
+                                fallback_reason: Some(reason),
+                            };
+                    }
+                    None => {
+                        self.fail_presentation_initialization(
+                            presentation::RemoteDesktopPresentation::NativeWindows,
+                            true,
+                            Some(failure_detail),
+                        );
+                    }
+                }
+                return None;
+            }
+            Err(WindowsNativePrepareFailure::Bounds { native, error }) => {
+                self.fail_unregistered_windows_native_presentation(native, "bounds", error, cx);
+                return None;
+            }
+            Err(WindowsNativePrepareFailure::Endpoint { native, error }) => {
+                self.fail_unregistered_windows_native_presentation(native, "endpoint", error, cx);
+                return None;
+            }
+            Err(WindowsNativePrepareFailure::ConnectionOptions { native, error }) => {
+                self.fail_unregistered_windows_native_presentation(
+                    native,
+                    "connection-options",
+                    error,
+                    cx,
                 );
-                return;
+                return None;
+            }
+            Err(WindowsNativePrepareFailure::Credentials { native, error }) => {
+                self.fail_unregistered_windows_native_presentation(native, "credentials", error, cx);
+                return None;
             }
         };
 
@@ -691,100 +994,13 @@ impl RemoteDesktopView {
                     error,
                     cx,
                 );
-                return;
+                return None;
             }
         };
 
-        let Some(bounds) = self.content_bounds else {
-            self.fail_windows_native_presentation(
-                native,
-                registration,
-                "layout",
-                anyhow::anyhow!("native RDP layout disappeared before initialization"),
-                cx,
-            );
-            return;
-        };
-        let Some(size) = resize::resize_dimensions(bounds, window.scale_factor()) else {
-            self.fail_windows_native_presentation(
-                native,
-                registration,
-                "layout",
-                anyhow::anyhow!("native RDP layout became invalid during initialization"),
-                cx,
-            );
-            return;
-        };
-        let desktop_size = windows_native_policy::initial_desktop_size(&self.options.rdp, size);
-        if let Err(error) =
-            native.update_bounds(bounds, point(px(0.0), px(0.0)), window.scale_factor())
-        {
-            self.fail_windows_native_presentation(native, registration, "bounds", error, cx);
-            return;
-        }
-        let (host, port) = match parse_destination(&self.options.destination) {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                self.fail_windows_native_presentation(native, registration, "endpoint", error, cx);
-                return;
-            }
-        };
-        let policy = windows_native_policy::connection_policy(&self.options.rdp);
-        tracing::info!(
-            desktop_width = desktop_size.0,
-            desktop_height = desktop_size.1,
-            ?policy,
-            shared_folder_count = self.options.rdp.resources.shared_folders.len(),
-            "native RDP: stage=connection-policy"
-        );
-        if !self.options.rdp.resources.shared_folders.is_empty() {
-            tracing::warn!(
-                shared_folder_count = self.options.rdp.resources.shared_folders.len(),
-                "native RDP shared-folder redirection is not transported by the current ABI"
-            );
-        }
-        let connection_options = match windows_rdp_host::WindowsRdpConnectionOptions::new(
-            host,
-            port,
-            desktop_size.0,
-            desktop_size.1,
-            windows_rdp_host::WindowsRdpColorDepth::Bpp32,
-        ) {
-            Ok(options) => options.with_policy(policy),
-            Err(error) => {
-                self.fail_windows_native_presentation(
-                    native,
-                    registration,
-                    "connection-options",
-                    error,
-                    cx,
-                );
-                return;
-            }
-        };
-        let mut credentials = windows_rdp_host::WindowsRdpCredentialBundle::new();
-        if let Some(username) = self.options.username.as_ref() {
-            credentials.set_username(username.clone());
-        }
-        if let Some(domain) = self.options.domain.as_ref() {
-            credentials.set_domain(domain.clone());
-        }
-        if let Some(password) = self.options.password.as_ref() {
-            credentials.set_server_password(password.clone());
-        }
-        windows_native_policy::apply_gateway_credentials(&mut credentials, &self.options.rdp);
-        if let Err(error) = native.apply_credentials(&credentials) {
-            self.fail_windows_native_presentation(native, registration, "credentials", error, cx);
-            return;
-        }
-        if let Err(error) = native.connect(&connection_options) {
-            self.fail_windows_native_presentation(native, registration, "connect", error, cx);
-            return;
-        }
-
-        self.attach_windows_native_presentation(native, registration, window, cx);
-        self.presentation_initialization =
-            presentation::RemoteDesktopPresentationInitialization::Native;
+        // `Connect` (Phase 4) and the attach (Phase 5) run without the App
+        // borrow; see `schedule_windows_native_presentation`.
+        Some((native, registration, connection_options))
     }
 
     fn fail_presentation_initialization(

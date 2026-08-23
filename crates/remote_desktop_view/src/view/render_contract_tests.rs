@@ -258,36 +258,41 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
 #[test]
 fn windows_native_hosts_keep_full_shutdown_registrations_through_every_terminal_path() {
     let view = include_str!("../view.rs").replace("\r\n", "\n");
-    let initialize = function_body(
+    let admit = function_body(
         &view,
-        "fn ensure_windows_native_presentation",
+        "fn admit_windows_native_presentation",
         "fn fail_presentation_initialization",
     );
-    let create = initialize
-        .find("WindowsNativeAdapter::create")
-        .expect("native presentation creation");
-    let register = initialize[create..]
-        .find("register_windows_native_rdp")
-        .map(|offset| create + offset)
-        .expect("application shutdown registration");
-    let post_create = initialize
-        .find("let Some(bounds)")
-        .expect("post-create native initialization");
+    assert!(admit.contains("register_windows_native_rdp"));
+    assert!(admit.contains("native.generation()"));
+    assert!(admit.contains("WindowsRdpRegistrationError"));
     assert!(
-        create < register && register < post_create,
-        "the created adapter must be admitted before bounds, connect, or attach work"
-    );
-    assert!(initialize.contains("native.generation()"));
-    assert!(initialize.contains("WindowsRdpRegistrationError"));
-    assert!(initialize.contains("fail_unregistered_windows_native_presentation"));
-    assert!(
-        initialize
-            .matches("fail_windows_native_presentation(")
+        admit.matches("fail_unregistered_windows_native_presentation(")
             .count()
             >= 5,
-        "every admitted post-create failure must retain its full registration"
+        "every preparation failure and shutdown-admission rejection must still clean up its \
+         native host"
     );
-    assert!(initialize.contains("self.attach_windows_native_presentation(native, registration,"));
+
+    let schedule = function_body(
+        &view,
+        "fn schedule_windows_native_presentation",
+        "fn prepare_windows_native_presentation",
+    );
+    let admit_call = schedule
+        .find("this.admit_windows_native_presentation(prepared, cx)")
+        .expect("borrowed registration phase");
+    let connect = schedule
+        .find("native.connect")
+        .expect("unborrowed connect phase");
+    assert!(
+        admit_call < connect,
+        "the adapter must be registered for shutdown drain before Connect starts"
+    );
+    assert!(schedule.contains(
+        "this.attach_windows_native_presentation(native, registration, window, cx)"
+    ));
+    assert!(schedule.contains("fail_windows_native_presentation("));
 
     assert!(
         view.contains(
@@ -726,47 +731,135 @@ fn presentation_initialization_precedes_and_gates_canvas_runtime_start() {
 }
 
 #[test]
-fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
+fn windows_native_connect_runs_outside_the_app_borrow() {
     let view = include_str!("../view.rs").replace("\r\n", "\n");
-    let initialize = function_body(
+    let schedule = function_body(
         &view,
-        "fn ensure_windows_native_presentation",
-        "fn fail_presentation_initialization",
+        "fn schedule_windows_native_presentation",
+        "fn prepare_windows_native_presentation",
     );
 
-    let proxy_check = initialize
-        .find("if proxy_configured")
-        .expect("proxy capability check");
-    let create = initialize
-        .find("WindowsNativeAdapter::create")
-        .expect("native presentation creation");
+    let spawn = schedule
+        .find("cx.spawn")
+        .expect("deferred native initialization task");
+    let snapshot = schedule
+        .find("this.prepare_windows_native_presentation(window)")
+        .expect("borrowed pure-Rust snapshot phase");
+    let snapshot_borrow_end = schedule
+        .find(".flatten();")
+        .expect("end of the borrowed snapshot phase");
+    let prepare = schedule
+        .find("prepare_windows_native_connection(inputs)")
+        .expect("unborrowed ActiveX creation and preparation phase");
+    let admit = schedule
+        .find("this.admit_windows_native_presentation(prepared, cx)")
+        .expect("borrowed registration phase");
+    let admit_borrow_end = schedule[admit..]
+        .find(".flatten();")
+        .map(|offset| admit + offset)
+        .expect("end of the borrowed registration phase");
+    let connect = schedule
+        .find("native.connect")
+        .expect("unborrowed connect phase");
+    let attach = schedule
+        .find("this.attach_windows_native_presentation(native, registration, window, cx)")
+        .expect("borrowed attach phase");
+
+    assert!(spawn < snapshot);
+    assert!(snapshot < snapshot_borrow_end);
     assert!(
-        proxy_check < create,
-        "unsupported SOCKS/HTTP proxy settings must fail before creating a native host"
+        snapshot_borrow_end < prepare && prepare < admit,
+        "the ActiveX host creation and preparation pump Win32 messages that can dispatch \
+         pending GPUI foreground tasks; they must run outside the App borrow"
     );
-    assert!(initialize.contains("WindowsNativePresentationCreateError::ProxyUnsupported => None"));
+    assert!(admit < admit_borrow_end);
+    assert!(
+        admit_borrow_end < connect,
+        "the ActiveX Connect call pumps COM messages that can dispatch pending GPUI \
+         foreground tasks; it must run after the App borrow is released"
+    );
+    assert!(connect < attach);
+    assert!(schedule.contains("windows_native_presentation_scheduled"));
+
+    // The COM-stage function itself must be borrow-free: it runs outside any
+    // GPUI context and only receives a pure-Rust input snapshot.
+    let prepare_fn = function_body(
+        &view,
+        "fn prepare_windows_native_connection",
+        "fn preserve_presented_frame_during_session_reset",
+    );
+    assert!(prepare_fn.contains("WindowsNativeAdapter::create_with_owner"));
+    assert!(prepare_fn.contains("native.update_bounds"));
+    assert!(prepare_fn.contains("native.apply_credentials"));
+    assert!(
+        !prepare_fn.contains("cx."),
+        "the borrow-free COM stage must not touch any GPUI context"
+    );
+
+    // The snapshot phase must stay pure Rust: no COM calls before the borrow
+    // is released.
+    let snapshot_fn = function_body(
+        &view,
+        "fn prepare_windows_native_presentation",
+        "fn admit_windows_native_presentation",
+    );
+    assert!(snapshot_fn.contains("parent_window_owner(window)"));
+    assert!(snapshot_fn.contains("options: self.options.clone()"));
+    for token in ["create_with_owner", "update_bounds", "apply_credentials"] {
+        assert!(
+            !snapshot_fn.contains(token),
+            "the borrowed snapshot phase must not call the COM-stage primitive: {token}"
+        );
+    }
+}
+
+#[test]
+fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let snapshot = function_body(
+        &view,
+        "fn prepare_windows_native_presentation",
+        "fn admit_windows_native_presentation",
+    );
+
+    let selection = snapshot
+        .find("select_remote_desktop_presentation(")
+        .expect("presentation selection");
+    let proxy_check = snapshot
+        .find("if self.options.proxy.is_some()")
+        .expect("proxy capability check");
+    let owner = snapshot
+        .find("parent_window_owner(window)")
+        .expect("native owner extraction");
+    assert!(
+        selection < proxy_check && proxy_check < owner,
+        "selection and the unsupported SOCKS/HTTP proxy check must fail before touching the \
+         native host"
+    );
     let proxy_failure = function_body(
-        initialize,
-        "WindowsNativePresentationCreateError::ProxyUnsupported,\n            )) =>",
-        "WindowsNativePresentationCreateError::Adapter(error),\n            )) =>",
+        snapshot,
+        "if self.options.proxy.is_some() {",
+        "let Some(bounds) = self.content_bounds",
     );
     assert!(proxy_failure.contains("self.fail_presentation_initialization("));
-    assert!(
-        proxy_failure
-            .contains("RemoteDesktopPresentation::NativeWindows,\n                    true,")
-    );
+    assert!(proxy_failure.contains(
+        "RemoteDesktopPresentation::NativeWindows,\n                true,"
+    ));
     assert!(
         !proxy_failure.contains("RemoteDesktopPresentationInitialization::Canvas"),
         "Auto must fail closed rather than bypassing an unsupported proxy via Canvas fallback"
     );
+    assert!(proxy_failure.contains("native_proxy_unsupported"));
 
-    let post_create_start = initialize
-        .find("let Some(bounds)")
-        .expect("post-create native initialization");
-    let post_create = &initialize[post_create_start..];
+    // Phase 2: the borrow-free COM sequence.
+    let prepare = function_body(
+        &view,
+        "fn prepare_windows_native_connection",
+        "fn preserve_presented_frame_during_session_reset",
+    );
     let mut previous = 0;
     for token in [
-        "windows_native_policy::initial_desktop_size",
+        "WindowsNativeAdapter::create_with_owner",
         "native.update_bounds",
         "parse_destination",
         "windows_native_policy::connection_policy",
@@ -774,30 +867,49 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
         ".with_policy(policy)",
         "windows_native_policy::apply_gateway_credentials",
         "native.apply_credentials",
-        "native.connect",
-        "attach_windows_native_presentation",
-        "RemoteDesktopPresentationInitialization::Native",
     ] {
-        let position = post_create[previous..]
+        let position = prepare[previous..]
             .find(token)
             .map(|offset| previous + offset)
             .unwrap_or_else(|| panic!("missing ordered native initialization token: {token}"));
         previous = position + token.len();
     }
-
     assert!(
-        !post_create.contains("RemoteDesktopPresentationInitialization::Canvas"),
-        "once a native host exists, later setup/connect failures must not open a Canvas session"
+        prepare.matches("WindowsNativePrepareFailure").count() >= 5,
+        "every COM preparation failure must route its native host to cleanup"
+    );
+
+    // Phase 3: admission routes preparation failures before the host is
+    // registered, and registered failures fail closed (no Canvas session).
+    let admit = function_body(
+        &view,
+        "fn admit_windows_native_presentation",
+        "fn fail_presentation_initialization",
+    );
+    let post_create = admit
+        .find("Err(WindowsNativePrepareFailure::Bounds")
+        .expect("post-create preparation failure branches");
+    assert!(
+        !admit[post_create..].contains("RemoteDesktopPresentationInitialization::Canvas"),
+        "once a native host exists, later preparation/connect failures must not open a Canvas \
+         session"
     );
     assert!(
-        post_create
-            .matches("fail_windows_native_presentation")
+        admit[post_create..]
+            .matches("fail_unregistered_windows_native_presentation")
             .count()
             >= 5,
-        "all post-create initialization failures must close the native host and fail closed"
+        "all post-create preparation failures must close the native host and fail closed"
     );
-    for (offset, _) in post_create.match_indices("self.fail_windows_native_presentation(") {
-        let invocation = &post_create[offset..];
+    let register = admit
+        .find("register_windows_native_rdp")
+        .expect("application shutdown registration");
+    assert!(
+        post_create < register,
+        "every preparation failure must be routed before the host is registered"
+    );
+    for (offset, _) in admit.match_indices("self.fail_unregistered_windows_native_presentation(") {
+        let invocation = &admit[offset..];
         let end = invocation
             .find(");")
             .expect("native initialization failure invocation");
@@ -805,6 +917,30 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
             invocation[..end].contains("cx"),
             "native initialization failure cleanup must retain ownership on the GPUI thread"
         );
+    }
+
+    // Phase 4 and Phase 5 live in the schedule: connect outside the borrow,
+    // then attach with the registration.
+    let schedule = function_body(
+        &view,
+        "fn schedule_windows_native_presentation",
+        "fn prepare_windows_native_presentation",
+    );
+    let mut previous = 0;
+    for token in [
+        "cx.spawn",
+        "this.prepare_windows_native_presentation(window)",
+        "prepare_windows_native_connection(inputs)",
+        "this.admit_windows_native_presentation(prepared, cx)",
+        "native.connect",
+        "this.attach_windows_native_presentation(native, registration, window, cx)",
+        "RemoteDesktopPresentationInitialization::Native",
+    ] {
+        let position = schedule[previous..]
+            .find(token)
+            .map(|offset| previous + offset)
+            .unwrap_or_else(|| panic!("missing ordered deferred native token: {token}"));
+        previous = position + token.len();
     }
 }
 

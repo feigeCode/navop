@@ -344,12 +344,12 @@ impl From<WindowsNativeOverlayError> for WindowsNativeAdapterCreateError {
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 impl WindowsNativeAdapter {
-    pub(crate) fn create(
+    /// Extracts the Win32 owner HWND from a GPUI window without performing any
+    /// COM or window creation work. Safe to call while holding the App borrow.
+    pub(crate) fn parent_window_owner(
         window: &gpui::Window,
-        generation: u64,
-    ) -> Result<Self, WindowsNativeAdapterCreateError> {
+    ) -> Result<usize, WindowsNativeAdapterCreateError> {
         use raw_window_handle::RawWindowHandle;
-        use windows_rdp_host::{WindowsRdpHost, WindowsRdpHostOptions, WindowsRdpParentWindow};
 
         let raw = raw_window_handle::HasWindowHandle::window_handle(window)
             .map_err(WindowsNativeAdapterCreateError::WindowHandle)?
@@ -357,7 +357,21 @@ impl WindowsNativeAdapter {
         let RawWindowHandle::Win32(handle) = raw else {
             return Err(WindowsNativeAdapterCreateError::ParentHandleNotWin32);
         };
-        let owner = handle.hwnd.get() as usize;
+        Ok(handle.hwnd.get() as usize)
+    }
+
+    /// Creates the ActiveX host for an already-extracted owner HWND.
+    ///
+    /// This pumps Win32 messages (window creation, `AtlAxCreateControl`,
+    /// `CoCreateInstance`), so it MUST NOT be called while holding the App
+    /// borrow: the message pump can re-enter GPUI foreground tasks and
+    /// re-borrow the App context.
+    pub(crate) fn create_with_owner(
+        owner: usize,
+        generation: u64,
+    ) -> Result<Self, WindowsNativeAdapterCreateError> {
+        use windows_rdp_host::{WindowsRdpHost, WindowsRdpHostOptions, WindowsRdpParentWindow};
+
         let overlay = WindowsNativeOverlay::create(owner, generation)?;
         let parent = unsafe { WindowsRdpParentWindow::from_raw(overlay.hwnd()) };
         let host = unsafe {
@@ -370,6 +384,14 @@ impl WindowsNativeAdapter {
             overlay,
             host,
         })
+    }
+
+    pub(crate) fn create(
+        window: &gpui::Window,
+        generation: u64,
+    ) -> Result<Self, WindowsNativeAdapterCreateError> {
+        let owner = Self::parent_window_owner(window)?;
+        Self::create_with_owner(owner, generation)
     }
 
     pub(crate) fn generation(&self) -> u64 {
