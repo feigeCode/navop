@@ -14,8 +14,18 @@ constexpr char kReplacementCharacter[] = "\xEF\xBF\xBD";
 // operation does not flood stderr; set `NAVOP_REMOTE_DESKTOP_DIAGNOSTICS`
 // (the same switch as the Rust-side remote desktop diagnostics) to re-enable.
 bool native_trace_enabled() noexcept {
-    static const bool enabled =
-        std::getenv("NAVOP_REMOTE_DESKTOP_DIAGNOSTICS") != nullptr;
+    static const bool enabled = []() noexcept {
+        char* value = nullptr;
+        const errno_t error = _dupenv_s(
+            &value,
+            nullptr,
+            "NAVOP_REMOTE_DESKTOP_DIAGNOSTICS");
+        if (error != 0 || value == nullptr) {
+            return false;
+        }
+        std::free(value);
+        return true;
+    }();
     return enabled;
 }
 
