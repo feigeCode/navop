@@ -65,7 +65,7 @@ mod windows_native_display;
 mod windows_native_display_integration;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_overlay;
-#[cfg(feature = "windows-native-rdp")]
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_policy;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
