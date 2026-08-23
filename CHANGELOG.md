@@ -4,6 +4,58 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.9] - 2026-08-23
+
+### 中文
+
+#### 更新内容
+
+- 标签页新增会话锁定功能：可通过密码锁定/解锁会话（密码仅保存在内存中），支持「锁定全部会话」与「隐藏输出」，锁定中的终端会拒绝键盘输入，且无法通过关闭按钮直接关闭。
+- 标签页新增 SecureCRT 风格的连接状态徽章：已连接、断开、已连接并锁定等状态以不同图标显示，并带悬浮提示。
+- 连接导入新增 SecureCRT 会话与快捷命令支持，支持手动扫描目录，并展示扫描到的可用工作区分组。
+- SSH 支持可选的旧版 ssh-dss 主机密钥认证，并在 Windows 上新增 Pageant 认证。
+- 终端快捷命令编辑器新增「点击执行」选项，点击命令即可自动回车执行；终端设置新增建议弹窗独立开关，并增强设置面板与命令栏功能。
+- Telnet 连接支持自定义退格键编码。
+- 数据库工作区改进：MySQL/PostgreSQL 表信息视图新增表大小、索引数等信息；SQL 导出保留 Schema 元数据并支持使用当前选中的数据库；二进制与文本值（含 MySQL BIT、文本 sidecar、空二进制）在显示、编辑、导入导出等数据工作流中得到更好保留；修复字符类型显示与编辑问题。
+- 数据库比较功能优化：改进结果布局与差异浏览，差异详情列表采用虚拟化渲染，比较问题区域支持滚动查看。
+- 连接表单统一 SSH 隧道配置，减少重复填写。
+- Windows 原生 RDP 全面重构初始化与关闭生命周期，修复白屏与崩溃问题，默认在独立全屏窗口打开，并仅保留 Windows 原生 MSTSC 与 IronRDP 后端。
+- 其他改进：窗口跨显示器恢复位置、SFTP 支持延迟凭据提示、PostgreSQL 瞬时连接失败自动重试、RDP 标准化 Windows 剪贴板文件路径、首页快速打开连接改为双击触发、补充国际化文案。
+
+#### 修复与优化
+
+- 修复 Windows 原生 RDP 初始化与关闭期间的崩溃和白屏问题。
+- 修复数据库字符类型显示与编辑，以及二进制/文本值在数据工作流中丢失的问题。
+- 修复终端 ZMODEM 探测输出停滞、AI 聊天侧栏切换标签后滚动位置丢失等问题。
+- 修复窗口在多个显示器之间切换后无法恢复位置的问题。
+
+---
+
+### English
+
+#### What's New
+
+- Added session locking to tabs: lock and unlock sessions with a password kept only in memory, with "Lock All Sessions" and "Hide Output" options; locked terminals reject keystrokes and cannot be closed via the close button.
+- Added SecureCRT-style connection status badges to tabs, showing connected, disconnected, and connected-and-locked states with tooltips.
+- Added SecureCRT session and quick-command import, with manual directory scanning and surfaced scanned workspace groups.
+- Added opt-in legacy ssh-dss host-key support for SSH, and Pageant authentication on Windows.
+- Quick-command editor now supports "execute on click" to run a command immediately, added an independent toggle for the suggestion popup in terminal settings, and enhanced the settings panel and command bar.
+- Added configurable backspace code for Telnet connections.
+- Improved the database workspace: MySQL/PostgreSQL table views now show table sizes and index counts; SQL exports preserve schema metadata and can use the currently selected database; binary and text values (including MySQL BIT, text sidecars, and empty binary) are better preserved across display, editing, import, and export workflows; fixed character-type display and editing.
+- Improved database comparison with better result layout and diff browsing, virtualized diff-detail lists, and scrollable comparison issues.
+- Unified the SSH tunnel form in connection forms to reduce repeated configuration.
+- Rebuilt Windows native RDP initialization and shutdown lifecycle to fix white screens and crashes, opening in a dedicated fullscreen window by default and keeping only the Windows-native MSTSC and IronRDP backends.
+- Other improvements: window placement is restored across displays, SFTP prompts for delayed credentials, PostgreSQL retries transient connection failures, RDP normalizes Windows clipboard file paths, quick-open on the home page now triggers on double-click, and additional i18n text was added.
+
+#### Fixes and Improvements
+
+- Fixed crashes and white screens during Windows native RDP initialization and shutdown.
+- Fixed database character-type display and editing, and the loss of binary/text values across data workflows.
+- Fixed stalled ZMODEM probe output in terminals and AI Chat sidebar scroll position after switching tabs.
+- Fixed window placement not being restored when switching between multiple displays.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.8...v0.10.9
+
 ## [v0.10.8] - 2026-08-20
 
 ### 中文
