@@ -172,59 +172,46 @@ fn localized_fallback_reason(reason: presentation::WindowsNativeRdpUnavailableRe
 }
 
 impl RemoteDesktopView {
+    /// Queues the Windows native RDP close intent and spawns the borrow-free
+    /// close task. The entity borrow held by `try_close` only performs pure
+    /// Rust state resets; every native call runs inside the spawned task after
+    /// the update closure returns.
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-    fn retry_windows_native_close(
+    fn spawn_windows_native_close(
         registration: windows_rdp_host::WindowsRdpRegistration,
-        mut mode: WindowsNativeCloseRetryMode,
+        initial_mode: WindowsNativeCloseRetryMode,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
-        let generation = registration.generation();
-        let started_at = Instant::now();
-        let graceful_deadline = started_at + WINDOWS_NATIVE_CLOSE_TIMEOUT;
-        let hard_deadline = match mode {
-            WindowsNativeCloseRetryMode::WaitForConfirmation => {
-                graceful_deadline + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT
-            }
-            WindowsNativeCloseRetryMode::ForceClose => {
-                started_at + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT
-            }
-        };
-
+        let hard_deadline = Instant::now()
+            + match initial_mode {
+                WindowsNativeCloseRetryMode::WaitForConfirmation => {
+                    WINDOWS_NATIVE_CLOSE_TIMEOUT + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT
+                }
+                WindowsNativeCloseRetryMode::ForceClose => WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT,
+            };
         cx.spawn(async move |this, cx| {
             loop {
-                let now = Instant::now();
-                if now >= hard_deadline {
-                    tracing::warn!(
-                        generation,
-                        "timed out waiting for Windows native RDP callback quiescence"
-                    );
-                    return false;
-                }
-                if matches!(mode, WindowsNativeCloseRetryMode::WaitForConfirmation)
-                    && now >= graceful_deadline
-                {
-                    mode = WindowsNativeCloseRetryMode::ForceClose;
-                }
-
-                let poll = this.update(cx, |this, cx| match mode {
-                    WindowsNativeCloseRetryMode::WaitForConfirmation => {
-                        this.poll_windows_native_close(registration, cx)
-                    }
-                    WindowsNativeCloseRetryMode::ForceClose => {
-                        this.force_close_windows_native(registration, cx)
-                    }
+                let taken = this.update(cx, |this, _| {
+                    this.take_windows_native_close_operation(registration)
                 });
-                match poll {
-                    Ok(WindowsNativeClosePoll::Closed) => return true,
-                    Ok(WindowsNativeClosePoll::Failed) => return false,
-                    Ok(WindowsNativeClosePoll::Pending) => {}
-                    Err(_) => {
-                        // Entity release owns the synchronous owner-thread
-                        // force-close fallback once this view is gone.
-                        return true;
+                match taken {
+                    // The view is gone; its release hook (or the shutdown
+                    // drain) owns the adapter and its terminal outcome.
+                    Err(_) => return true,
+                    Ok(WindowsNativeCloseTake::Closed) => return true,
+                    Ok(WindowsNativeCloseTake::Failed) => return false,
+                    Ok(WindowsNativeCloseTake::Pending) => {}
+                    Ok(WindowsNativeCloseTake::Ready(operation)) => {
+                        return close_windows_native_operation(
+                            &this,
+                            operation,
+                            initial_mode,
+                            hard_deadline,
+                            cx,
+                        )
+                        .await;
                     }
                 }
-
                 cx.background_executor()
                     .timer(Duration::from_millis(16))
                     .await;
