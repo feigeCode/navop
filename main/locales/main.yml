@@ -287,6 +287,30 @@ Home:
       en: "%{savable} / %{total} can be saved"
       zh-CN: "可保存 %{savable} / %{total} 条"
       zh-HK: "可儲存 %{savable} / %{total} 筆"
+    workspace_group_count:
+      en: "Found %{groups} SSH connection groups; they will be imported as Navop workspaces"
+      zh-CN: "发现 %{groups} 个 SSH 连接分组，保存后将转换为 Navop 工作区"
+      zh-HK: "發現 %{groups} 個 SSH 連線分組，儲存後將轉換為 Navop 工作區"
+    discovered_workspace_groups:
+      en: "Connection groups (%{groups}): %{paths}"
+      zh-CN: "扫描到连接分组（%{groups}）：%{paths}"
+      zh-HK: "掃描到連線分組（%{groups}）：%{paths}"
+    workspace:
+      en: "Workspace: %{path}"
+      zh-CN: "工作区：%{path}"
+      zh-HK: "工作區：%{path}"
+    kind_workspace:
+      en: Workspace
+      zh-CN: 工作区
+      zh-HK: 工作區
+    workspace_path_required:
+      en: Workspace path is required
+      zh-CN: 工作区路径不能为空
+      zh-HK: 工作區路徑不能為空
+    workspace_save_unsupported:
+      en: Workspace imports cannot be converted to connections
+      zh-CN: 工作区导入不能转换为连接
+      zh-HK: 工作區匯入不能轉換為連線
     sources:
       en: Application Sources
       zh-CN: 应用来源

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use super::connection_import_draft::EditableImportDraft;
+use super::connection_import_draft::{
+    EditableImportDraft, ImportDraftKind, normalized_ssh_group_path, normalized_workspace_path,
+};
 use super::connection_import_draft_conversion::{
     quick_command_duplicate_identity, stored_connection_duplicate_identity,
 };
@@ -80,13 +82,20 @@ pub(crate) fn duplicate_connection_name(
     draft: &EditableImportDraft,
     existing: &[StoredConnection],
 ) -> Result<Option<String>, String> {
+    Ok(duplicate_connection(draft, existing)?.map(|connection| connection.name.clone()))
+}
+
+fn duplicate_connection<'a>(
+    draft: &EditableImportDraft,
+    existing: &'a [StoredConnection],
+) -> Result<Option<&'a StoredConnection>, String> {
     let draft_identity = draft.duplicate_identity()?;
     for connection in existing {
         let Some(existing_identity) = stored_connection_duplicate_identity(connection)? else {
             continue;
         };
         if existing_identity == draft_identity {
-            return Ok(Some(connection.name.clone()));
+            return Ok(Some(connection));
         }
     }
     Ok(None)
@@ -134,10 +143,17 @@ pub(crate) fn save_import_draft(
     cx: &mut App,
 ) -> Result<ImportSaveResult, String> {
     let storage = cx.global::<GlobalStorageState>().storage.clone();
-    if matches!(
-        draft.kind(),
-        super::connection_import_draft::ImportDraftKind::QuickCommand
-    ) {
+    if draft.kind() == ImportDraftKind::Workspace {
+        let path = draft
+            .workspace_path()
+            .ok_or_else(|| t!("Home.ConnectionImport.workspace_path_required").to_string())?;
+        let resolution = workspace_path_id(&path, &storage)?;
+        notify_workspaces_created(&resolution.created_workspace_ids, cx);
+        return Ok(ImportSaveResult::Saved {
+            connection_id: None,
+        });
+    }
+    if matches!(draft.kind(), ImportDraftKind::QuickCommand) {
         let repo = storage
             .get::<QuickCommandRepository>()
             .ok_or_else(|| t!("Home.ConnectionImport.repository_unavailable").to_string())?;
@@ -159,38 +175,62 @@ pub(crate) fn save_import_draft(
         .get::<ConnectionRepository>()
         .ok_or_else(|| t!("Home.ConnectionImport.repository_unavailable").to_string())?;
     let existing = repo.list().map_err(|error| error.to_string())?;
-    if let Some(existing_name) = duplicate_connection_name(draft, &existing)? {
-        return Ok(ImportSaveResult::SkippedDuplicate { existing_name });
+    if let Some(existing_connection) = duplicate_connection(draft, &existing)? {
+        if draft.kind() == ImportDraftKind::Ssh
+            && existing_connection.workspace_id.is_none()
+            && normalized_ssh_group_path(&draft.ssh_group_path).is_some()
+        {
+            let resolution = ssh_group_workspace_id(draft, &storage)?;
+            if let Some(workspace_id) = resolution.workspace_id {
+                let connection_id = existing_connection
+                    .id
+                    .ok_or_else(|| "Existing connection ID is missing".to_string())?;
+                let mut updated_connection = existing_connection.clone();
+                updated_connection.workspace_id = Some(workspace_id);
+                updated_connection.updated_at = Some(
+                    repo.update_workspace(connection_id, Some(workspace_id))
+                        .map_err(|error| error.to_string())?,
+                );
+                notify_workspaces_created(&resolution.created_workspace_ids, cx);
+                notify_connection_updated(updated_connection, cx);
+                return Ok(ImportSaveResult::Saved {
+                    connection_id: Some(connection_id),
+                });
+            }
+        }
+        return Ok(ImportSaveResult::SkippedDuplicate {
+            existing_name: existing_connection.name.clone(),
+        });
     }
 
+    let workspace_resolution = ssh_group_workspace_id(draft, &storage)?;
     let mut connection = draft.to_stored_connection()?;
-    connection.workspace_id = ssh_group_workspace_id(draft, &storage)?;
+    connection.workspace_id = workspace_resolution.workspace_id;
     connection.owner_id = GlobalCurrentUser::get_user(cx).map(|user| user.id);
     repo.insert(&mut connection)
         .map_err(|error| error.to_string())?;
     let connection_id = connection.id;
+    notify_workspaces_created(&workspace_resolution.created_workspace_ids, cx);
     notify_connections_created(vec![connection], cx);
     Ok(ImportSaveResult::Saved { connection_id })
 }
 
-fn ssh_group_workspace_id(
-    draft: &EditableImportDraft,
-    storage: &StorageManager,
-) -> Result<Option<i64>, String> {
-    let group_path = draft.ssh_group_path.trim();
-    if group_path.is_empty() {
-        return Ok(None);
-    }
+#[derive(Default)]
+struct WorkspaceResolution {
+    workspace_id: Option<i64>,
+    created_workspace_ids: Vec<i64>,
+}
+
+fn workspace_path_id(path: &str, storage: &StorageManager) -> Result<WorkspaceResolution, String> {
+    let group_path = normalized_workspace_path(path)
+        .ok_or_else(|| t!("Home.ConnectionImport.workspace_path_required").to_string())?;
     let repo = storage
         .get::<WorkspaceRepository>()
         .ok_or_else(|| t!("Home.ConnectionImport.repository_unavailable").to_string())?;
-    let workspaces = repo.list().map_err(|error| error.to_string())?;
+    let mut workspaces = repo.list().map_err(|error| error.to_string())?;
     let mut parent_id = None;
-    for component in group_path
-        .split('/')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
+    let mut created_workspace_ids = Vec::new();
+    for component in group_path.split('/') {
         let workspace_id = match workspaces
             .iter()
             .find(|workspace| workspace.parent_id == parent_id && workspace.name == component)
@@ -201,12 +241,30 @@ fn ssh_group_workspace_id(
                 workspace.parent_id = parent_id;
                 repo.insert(&mut workspace)
                     .map_err(|error| error.to_string())?;
-                workspace.id
+                let workspace_id = workspace
+                    .id
+                    .ok_or_else(|| "Workspace repository did not assign an ID".to_string())?;
+                created_workspace_ids.push(workspace_id);
+                workspaces.push(workspace.clone());
+                Some(workspace_id)
             }
         };
         parent_id = workspace_id;
     }
-    Ok(parent_id)
+    Ok(WorkspaceResolution {
+        workspace_id: parent_id,
+        created_workspace_ids,
+    })
+}
+
+fn ssh_group_workspace_id(
+    draft: &EditableImportDraft,
+    storage: &StorageManager,
+) -> Result<WorkspaceResolution, String> {
+    let Some(group_path) = normalized_ssh_group_path(&draft.ssh_group_path) else {
+        return Ok(WorkspaceResolution::default());
+    };
+    workspace_path_id(&group_path, storage)
 }
 
 fn composite_extensions_root() -> Result<std::path::PathBuf, String> {
@@ -222,6 +280,28 @@ fn notify_connections_created(connections: Vec<StoredConnection>, cx: &mut App) 
     for connection in connections {
         notifier.update(cx, |_, cx| {
             cx.emit(ConnectionDataEvent::ConnectionCreated { connection });
+        });
+    }
+}
+
+fn notify_connection_updated(connection: StoredConnection, cx: &mut App) {
+    let Some(notifier) = get_notifier(cx) else {
+        return;
+    };
+    notifier.update(cx, |_, cx| {
+        cx.emit(ConnectionDataEvent::ConnectionUpdated { connection });
+    });
+}
+
+fn notify_workspaces_created(workspace_ids: &[i64], cx: &mut App) {
+    let Some(notifier) = get_notifier(cx) else {
+        return;
+    };
+    for workspace_id in workspace_ids {
+        notifier.update(cx, |_, cx| {
+            cx.emit(ConnectionDataEvent::WorkspaceCreated {
+                workspace_id: *workspace_id,
+            });
         });
     }
 }

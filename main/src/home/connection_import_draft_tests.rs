@@ -1,7 +1,7 @@
 use connection_import_protocol::{
     DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, PasswordImportStatus,
     SshImportAuthMethod, SshImportRecord, SshJumpServerImportRecord, SshProxyImportKind,
-    SshProxyImportRecord,
+    SshProxyImportRecord, WorkspaceImportRecord,
 };
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use super::connection_import_actions::duplicate_connection_name;
 use super::connection_import_actions::save_import_draft;
 use super::connection_import_draft::{
-    EditableImportDraft, ImportDraftEdit, ImportDraftField, selected_import_count,
+    EditableImportDraft, ImportDraftEdit, ImportDraftField, ImportDraftKind, selected_import_count,
     selected_import_drafts_to_connections,
 };
 
@@ -33,6 +33,27 @@ fn imported_drafts_are_selected_by_default_and_can_be_unselected() {
         .unwrap();
 
     assert_eq!(1, selected_import_count(&drafts));
+}
+
+#[test]
+fn workspace_import_draft_preserves_nested_path() {
+    let draft = EditableImportDraft::new(workspace_import("Production/Staging"));
+
+    assert_eq!(ImportDraftKind::Workspace, draft.kind());
+    assert_eq!(
+        Some("Production/Staging".to_string()),
+        draft.workspace_path()
+    );
+}
+
+#[test]
+fn workspace_import_cannot_be_converted_to_a_connection() {
+    let draft = EditableImportDraft::new(workspace_import("Production/Staging"));
+
+    assert_eq!(
+        rust_i18n::t!("Home.ConnectionImport.workspace_save_unsupported"),
+        draft.to_stored_connection().unwrap_err()
+    );
 }
 
 #[test]
@@ -186,6 +207,167 @@ fn saving_ssh_import_creates_and_reuses_nested_workspaces(cx: &mut gpui::TestApp
         .expect("list workspaces after second save");
     assert_eq!(2, final_workspaces.len());
     assert_eq!(staging.id, second.workspace_id);
+}
+
+#[gpui::test]
+fn saving_ssh_import_normalizes_windows_workspace_group_paths(cx: &mut gpui::TestAppContext) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("import.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations");
+    let storage = StorageManager::new_with_connection(conn);
+    storage.register(ConnectionRepository::new(storage.connection()));
+    storage.register(WorkspaceRepository::new(storage.connection()));
+    cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+    let mut record = ssh_import("windows-group");
+    record.ssh.as_mut().unwrap().group_path = Some(r"Production\Staging".to_string());
+    let draft = EditableImportDraft::new(record);
+
+    cx.update(|cx| save_import_draft(&draft, cx))
+        .expect("save SSH import");
+
+    cx.update(|cx| {
+        let workspaces = cx
+            .global::<GlobalStorageState>()
+            .storage
+            .get::<WorkspaceRepository>()
+            .unwrap()
+            .list()
+            .expect("list workspaces");
+        let production = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Production")
+            .expect("Production workspace");
+        let staging = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Staging")
+            .expect("Staging workspace");
+        assert_eq!(None, production.parent_id);
+        assert_eq!(Some(production.id), Some(staging.parent_id));
+    });
+}
+
+#[gpui::test]
+fn saving_workspace_import_creates_reuses_and_normalizes_nested_workspaces(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("import.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations");
+    let storage = StorageManager::new_with_connection(conn);
+    storage.register(ConnectionRepository::new(storage.connection()));
+    storage.register(WorkspaceRepository::new(storage.connection()));
+    cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+    for path in ["Production/Staging", r" Production\Staging "] {
+        let draft = EditableImportDraft::new(workspace_import(path));
+        let result = cx
+            .update(|cx| save_import_draft(&draft, cx))
+            .expect("save workspace import");
+        assert_eq!(
+            super::connection_import_actions::ImportSaveResult::Saved {
+                connection_id: None,
+            },
+            result
+        );
+    }
+
+    cx.update(|cx| {
+        let storage = &cx.global::<GlobalStorageState>().storage;
+        let workspaces = storage
+            .get::<WorkspaceRepository>()
+            .unwrap()
+            .list()
+            .expect("list workspaces");
+        assert_eq!(2, workspaces.len());
+        let production = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Production")
+            .expect("Production workspace");
+        let staging = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Staging")
+            .expect("Staging workspace");
+        assert_eq!(None, production.parent_id);
+        assert_eq!(production.id, staging.parent_id);
+
+        let connections = storage
+            .get::<ConnectionRepository>()
+            .unwrap()
+            .list()
+            .expect("list connections");
+        assert!(connections.is_empty());
+    });
+}
+
+#[gpui::test]
+fn duplicate_ssh_import_assigns_group_workspace_to_existing_ungrouped_connection(
+    cx: &mut gpui::TestAppContext,
+) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("import.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations");
+    let storage = StorageManager::new_with_connection(conn);
+    storage.register(ConnectionRepository::new(storage.connection()));
+    storage.register(WorkspaceRepository::new(storage.connection()));
+    cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+    let mut existing = EditableImportDraft::new(ssh_import("existing"))
+        .to_stored_connection()
+        .expect("existing connection");
+    let existing_id = cx.update(|cx| {
+        let repo = cx
+            .global::<GlobalStorageState>()
+            .storage
+            .get::<ConnectionRepository>()
+            .expect("connection repository");
+        repo.insert(&mut existing).expect("insert existing");
+        existing.id.expect("existing connection id")
+    });
+
+    let mut duplicate_record = ssh_import("duplicate-with-group");
+    duplicate_record.ssh.as_mut().unwrap().group_path = Some("Production/Staging".to_string());
+    let duplicate = EditableImportDraft::new(duplicate_record);
+
+    let result = cx
+        .update(|cx| save_import_draft(&duplicate, cx))
+        .expect("apply imported workspace");
+    assert_eq!(
+        super::connection_import_actions::ImportSaveResult::Saved {
+            connection_id: Some(existing_id),
+        },
+        result
+    );
+
+    cx.update(|cx| {
+        let storage = &cx.global::<GlobalStorageState>().storage;
+        let connections = storage
+            .get::<ConnectionRepository>()
+            .unwrap()
+            .list()
+            .expect("list connections");
+        assert_eq!(1, connections.len());
+
+        let workspaces = storage
+            .get::<WorkspaceRepository>()
+            .unwrap()
+            .list()
+            .expect("list workspaces");
+        let production = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Production")
+            .expect("Production workspace");
+        let staging = workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Staging")
+            .expect("Staging workspace");
+        assert_eq!(None, production.parent_id);
+        assert_eq!(production.id, staging.parent_id);
+        assert_eq!(staging.id, connections[0].workspace_id);
+    });
 }
 
 #[test]
@@ -462,6 +644,7 @@ fn database_import(name: &str) -> ImportRecord {
         ssh: None,
         port_forwarding: None,
         quick_command: None,
+        workspace: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -488,6 +671,7 @@ fn sqlite_import(name: &str, path: Option<&str>) -> ImportRecord {
         ssh: None,
         port_forwarding: None,
         quick_command: None,
+        workspace: None,
         password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
@@ -516,6 +700,7 @@ fn external_database_import(name: &str, driver_id: &str, port: u16) -> ImportRec
         ssh: None,
         port_forwarding: None,
         quick_command: None,
+        workspace: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -546,7 +731,28 @@ fn ssh_import(name: &str) -> ImportRecord {
         }),
         port_forwarding: None,
         quick_command: None,
+        workspace: None,
         password_status: PasswordImportStatus::Unsupported,
+        warnings: Vec::new(),
+    }
+}
+
+fn workspace_import(path: &str) -> ImportRecord {
+    ImportRecord {
+        id: format!("securecrt:workspace:{path}"),
+        importer_id: "com.onetcli.importer.securecrt/securecrt".to_string(),
+        source_label: "SecureCRT".to_string(),
+        source_id: Some(format!("Sessions/{path}")),
+        kind: ImportRecordKind::Workspace,
+        display_name: path.rsplit(['/', '\\']).next().unwrap_or(path).to_string(),
+        database: None,
+        ssh: None,
+        port_forwarding: None,
+        quick_command: None,
+        workspace: Some(WorkspaceImportRecord {
+            path: path.to_string(),
+        }),
+        password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
 }

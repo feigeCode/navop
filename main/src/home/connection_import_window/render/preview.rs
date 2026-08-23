@@ -9,7 +9,9 @@ use gpui_component::{
 use rust_i18n::t;
 
 use super::super::{ConnectionImportWindow, is_save_candidate};
-use crate::home::connection_import_draft::{EditableImportDraft, ImportDraftKind};
+use crate::home::connection_import_draft::{
+    EditableImportDraft, ImportDraftKind, normalized_ssh_group_path,
+};
 use crate::home::connection_import_model::{ImportPreviewRow, ImportRowSaveStatus};
 
 pub(super) fn render_preview_row(
@@ -51,7 +53,10 @@ fn render_row_actions(
     h_flex()
         .gap_2()
         .when(
-            !matches!(row.draft.kind(), ImportDraftKind::QuickCommand),
+            !matches!(
+                row.draft.kind(),
+                ImportDraftKind::QuickCommand | ImportDraftKind::Workspace
+            ),
             |this| {
                 this.child(
                     Button::new(format!("edit-import-{record_id}"))
@@ -134,11 +139,17 @@ fn row_detail_text(draft: &EditableImportDraft) -> String {
         parts.push(draft.quick_command_detail_text());
         return parts.join(" · ");
     }
+    if matches!(draft.kind(), ImportDraftKind::Workspace) {
+        if let Some(path) = draft.workspace_path() {
+            parts.push(t!("Home.ConnectionImport.workspace", path = path).to_string());
+        }
+        return parts.join(" · ");
+    }
     if let Some(endpoint) = endpoint_text(draft) {
         parts.push(endpoint);
     }
-    if let Some(group) = trimmed_text(&draft.ssh_group_path) {
-        parts.push(group);
+    if let Some(group) = normalized_ssh_group_path(&draft.ssh_group_path) {
+        parts.push(t!("Home.ConnectionImport.workspace", path = group).to_string());
     }
     if let Some(username) = trimmed_text(&draft.username) {
         parts.push(username);
@@ -175,6 +186,7 @@ fn kind_text(kind: ImportDraftKind) -> String {
         ImportDraftKind::Database => t!("Home.ConnectionImport.kind_database").to_string(),
         ImportDraftKind::Ssh => "SSH".to_string(),
         ImportDraftKind::QuickCommand => t!("Home.ConnectionImport.kind_quick_command").to_string(),
+        ImportDraftKind::Workspace => t!("Home.ConnectionImport.kind_workspace").to_string(),
         ImportDraftKind::Unsupported => t!("Home.ConnectionImport.kind_unsupported").to_string(),
     }
 }

@@ -12,6 +12,7 @@ interface connection-import {
         ssh,
         port-forwarding,
         quick-command,
+        workspace,
     }
 
     record importer-capabilities {
@@ -63,6 +64,7 @@ interface connection-import {
         availability: importer-availability,
         discovered-files: list<discovered-file>,
         warnings: list<import-warning>,
+        discovered-workspace-paths: list<string>,
     }
 
     enum import-database-type {
@@ -168,6 +170,10 @@ interface connection-import {
         connection-source-id: option<string>,
     }
 
+    record workspace-import-record {
+        path: string,
+    }
+
     enum password-import-status {
         included,
         missing,
@@ -186,6 +192,7 @@ interface connection-import {
         ssh: option<ssh-import-record>,
         port-forwarding: option<port-forwarding-import-record>,
         quick-command: option<quick-command-import-record>,
+        workspace: option<workspace-import-record>,
         password-status: password-import-status,
         warnings: list<import-warning>,
     }

@@ -294,6 +294,7 @@ fn scan_error_report(importer_id: String, message: String) -> ImportScanReport {
         availability: ImporterAvailability::Error { message },
         discovered_files: Vec::new(),
         warnings: Vec::new(),
+        discovered_workspace_paths: Vec::new(),
     }
 }
 
@@ -402,6 +403,7 @@ fn parse_output_kind(value: &str) -> Option<ImportRecordKind> {
         "ssh" => Some(ImportRecordKind::Ssh),
         "port-forwarding" | "port_forwarding" => Some(ImportRecordKind::PortForwarding),
         "quick-command" | "quick_command" => Some(ImportRecordKind::QuickCommand),
+        "workspace" => Some(ImportRecordKind::Workspace),
         _ => None,
     }
 }

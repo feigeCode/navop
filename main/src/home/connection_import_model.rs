@@ -1,9 +1,14 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use connection_import_protocol::{
-    ImportRecord, ImportScanReport, ImporterAvailability, ImporterDescriptor, Platform,
+    ImportRecord, ImportRecordKind, ImportScanReport, ImporterAvailability, ImporterDescriptor,
+    Platform,
 };
 use extension_runtime::connection_import_provider::ImportPreviewError;
 
-use super::connection_import_draft::EditableImportDraft;
+use super::connection_import_draft::{
+    EditableImportDraft, ImportDraftKind, normalized_ssh_group_path, normalized_workspace_path,
+};
 
 pub(crate) struct ImportCenterState {
     sources: Vec<ImportSourceState>,
@@ -17,6 +22,7 @@ pub(crate) struct ImportSourceState {
     pub(crate) availability: ImporterAvailability,
     pub(crate) scan_error: Option<String>,
     pub(crate) preview_error: Option<String>,
+    pub(crate) discovered_workspace_paths: Vec<String>,
 }
 
 pub(crate) struct ImportPreviewRow {
@@ -77,6 +83,20 @@ impl ImportCenterState {
         &self.rows
     }
 
+    pub(crate) fn workspace_group_paths(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter(|row| row.selected)
+            .filter_map(|row| match row.draft.kind() {
+                ImportDraftKind::Ssh => normalized_ssh_group_path(&row.draft.ssh_group_path),
+                ImportDraftKind::Workspace => row.draft.workspace_path(),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     pub(crate) fn row(&self, record_id: &str) -> Option<&ImportPreviewRow> {
         self.rows.iter().find(|row| row.record_id() == record_id)
     }
@@ -101,6 +121,13 @@ impl ImportCenterState {
                 .find(|source| source.descriptor.id == report.importer_id)
             {
                 source.availability = report.availability;
+                source.discovered_workspace_paths = report
+                    .discovered_workspace_paths
+                    .into_iter()
+                    .filter_map(|path| normalized_workspace_path(&path))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
                 source.scan_error = match &source.availability {
                     ImporterAvailability::Error { message } => Some(message.clone()),
                     _ => None,
@@ -133,6 +160,35 @@ impl ImportCenterState {
     }
 
     pub(crate) fn apply_preview_records(&mut self, records: Vec<ImportRecord>) {
+        let mut workspace_paths_by_importer = BTreeMap::<String, BTreeSet<String>>::new();
+        for record in &records {
+            let workspace_path = match record.kind {
+                ImportRecordKind::Ssh => record
+                    .ssh
+                    .as_ref()
+                    .and_then(|ssh| ssh.group_path.as_deref())
+                    .and_then(normalized_ssh_group_path),
+                ImportRecordKind::Workspace => record
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| normalized_workspace_path(&workspace.path)),
+                _ => None,
+            };
+            if let Some(workspace_path) = workspace_path {
+                workspace_paths_by_importer
+                    .entry(record.importer_id.clone())
+                    .or_default()
+                    .insert(workspace_path);
+            }
+        }
+        for source in &mut self.sources {
+            if let Some(workspace_paths) = workspace_paths_by_importer.remove(&source.descriptor.id)
+                && !workspace_paths.is_empty()
+            {
+                source.discovered_workspace_paths = workspace_paths.into_iter().collect();
+            }
+        }
+
         self.rows = records
             .into_iter()
             .map(|record| ImportPreviewRow {
@@ -210,6 +266,7 @@ impl ImportSourceState {
             availability,
             scan_error: None,
             preview_error: None,
+            discovered_workspace_paths: Vec::new(),
         }
     }
 }

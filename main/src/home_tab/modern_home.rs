@@ -2,7 +2,11 @@ use gpui::{
     AnyElement, ColorExt as _, FontWeight, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, IconSize, Sizable, StyledExt, button::{Button, ButtonVariants as _}, h_flex, v_flex, InteractiveElementExt};
+use gpui_component::{
+    ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable, StyledExt,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 use one_core::storage::StoredConnection;
 use rust_i18n::t;
 

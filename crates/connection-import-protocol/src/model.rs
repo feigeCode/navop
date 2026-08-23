@@ -29,6 +29,7 @@ pub enum ImportRecordKind {
     Ssh,
     PortForwarding,
     QuickCommand,
+    Workspace,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +52,8 @@ pub struct ImportScanReport {
     pub availability: ImporterAvailability,
     pub discovered_files: Vec<DiscoveredFile>,
     pub warnings: Vec<ImportWarning>,
+    #[serde(default)]
+    pub discovered_workspace_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +95,8 @@ pub struct ImportRecord {
     pub port_forwarding: Option<PortForwardingImportRecord>,
     #[serde(default)]
     pub quick_command: Option<QuickCommandImportRecord>,
+    #[serde(default)]
+    pub workspace: Option<WorkspaceImportRecord>,
     pub password_status: PasswordImportStatus,
     pub warnings: Vec<ImportWarning>,
 }
@@ -104,12 +109,35 @@ impl ImportRecord {
                 self.database.is_some(),
                 self.ssh.is_some(),
                 self.port_forwarding.is_some(),
-                self.quick_command.is_some()
+                self.quick_command.is_some(),
+                self.workspace.is_some()
             ),
-            (ImportRecordKind::Database, true, false, false, false)
-                | (ImportRecordKind::Ssh, false, true, false, false)
-                | (ImportRecordKind::PortForwarding, false, false, true, false)
-                | (ImportRecordKind::QuickCommand, false, false, false, true)
+            (ImportRecordKind::Database, true, false, false, false, false)
+                | (ImportRecordKind::Ssh, false, true, false, false, false)
+                | (
+                    ImportRecordKind::PortForwarding,
+                    false,
+                    false,
+                    true,
+                    false,
+                    false
+                )
+                | (
+                    ImportRecordKind::QuickCommand,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false
+                )
+                | (
+                    ImportRecordKind::Workspace,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true
+                )
         );
         if matches_payload {
             Ok(())
@@ -177,6 +205,11 @@ pub struct QuickCommandImportRecord {
     pub sort_order: i32,
     #[serde(default)]
     pub connection_source_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceImportRecord {
+    pub path: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,9 +361,45 @@ mod tests {
             ssh: None,
             port_forwarding: None,
             quick_command: None,
+            workspace: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn legacy_scan_reports_default_discovered_workspace_paths() {
+        let json = r#"{
+            "importer_id":"legacy",
+            "availability":"no_data",
+            "discovered_files":[],
+            "warnings":[]
+        }"#;
+
+        let report: ImportScanReport = serde_json::from_str(json).unwrap();
+
+        assert!(report.discovered_workspace_paths.is_empty());
+    }
+
+    #[test]
+    fn scan_reports_round_trip_discovered_workspace_paths() {
+        let report = ImportScanReport {
+            importer_id: "securecrt".to_string(),
+            availability: ImporterAvailability::Available {
+                estimated_count: Some(2),
+            },
+            discovered_files: Vec::new(),
+            warnings: Vec::new(),
+            discovered_workspace_paths: vec![
+                "Production".to_string(),
+                "Production/Staging".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: ImportScanReport = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(report, decoded);
     }
 
     #[test]
@@ -416,6 +485,47 @@ mod tests {
             record.validate_shape(),
             Err(ImportProtocolError::MismatchedRecordPayload { .. })
         ));
+    }
+
+    #[test]
+    fn validates_workspace_payload_shape_and_json_round_trip() {
+        let mut record = base_record(ImportRecordKind::Workspace);
+        record.workspace = Some(WorkspaceImportRecord {
+            path: "Production/Staging".to_string(),
+        });
+
+        assert_eq!(Ok(()), record.validate_shape());
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded: ImportRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn old_records_without_workspace_payload_still_decode() {
+        let json = r#"{
+            "id":"legacy:ssh",
+            "importer_id":"legacy",
+            "source_label":"Legacy",
+            "source_id":null,
+            "kind":"ssh",
+            "display_name":"Legacy SSH",
+            "database":null,
+            "ssh":{
+                "name":"Legacy SSH",
+                "host":"legacy.example.test",
+                "port":22,
+                "username":"deploy",
+                "auth_method":"agent"
+            },
+            "port_forwarding":null,
+            "quick_command":null,
+            "password_status":"missing",
+            "warnings":[]
+        }"#;
+
+        let decoded: ImportRecord = serde_json::from_str(json).unwrap();
+        assert!(decoded.workspace.is_none());
+        assert_eq!(Ok(()), decoded.validate_shape());
     }
 
     #[test]

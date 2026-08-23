@@ -74,6 +74,9 @@ fn import_draft_to_connection(
         ImportRecordKind::PortForwarding => {
             Err(t!("Home.ConnectionImport.port_forwarding_save_unsupported").to_string())
         }
+        ImportRecordKind::Workspace => {
+            Err(t!("Home.ConnectionImport.workspace_save_unsupported").to_string())
+        }
     }
 }
 
@@ -87,6 +90,9 @@ pub(crate) fn import_draft_duplicate_identity(
         ImportRecordKind::QuickCommand => quick_command_duplicate_identity(draft),
         ImportRecordKind::PortForwarding => {
             Err(t!("Home.ConnectionImport.port_forwarding_duplicate_unsupported").to_string())
+        }
+        ImportRecordKind::Workspace => {
+            Err(t!("Home.ConnectionImport.workspace_save_unsupported").to_string())
         }
     }
 }

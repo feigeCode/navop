@@ -82,14 +82,42 @@ impl ConnectionImportWindow {
         self.status_message = None;
         cx.notify();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let result = {
+            let scan_result = {
                 let ids = importer_ids.clone();
-                let task = Tokio::spawn(cx, async move {
-                    let reports = scan_import_sources(ids.clone()).await?;
-                    let preview_ids = previewable_source_ids_after_scan(&ids, &reports);
-                    let preview = preview_import_records(preview_ids.clone(), true).await?;
-                    Ok::<_, String>((reports, preview_ids, preview))
-                });
+                let task = Tokio::spawn(cx, async move { scan_import_sources(ids).await });
+                match task.await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        Err(t!("Home.ConnectionImport.scan_task_failed", error = error).to_string())
+                    }
+                }
+            };
+            let reports = match scan_result {
+                Ok(reports) => reports,
+                Err(error) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.scanning = false;
+                        this.status_message = Some(error);
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let preview_ids = previewable_source_ids_after_scan(&importer_ids, &reports);
+            if this
+                .update(cx, |this, cx| {
+                    this.model.apply_scan_reports(reports);
+                    this.status_message = None;
+                    cx.notify();
+                })
+                .is_err()
+            {
+                return;
+            }
+
+            let preview_result = {
+                let ids = preview_ids.clone();
+                let task = Tokio::spawn(cx, async move { preview_import_records(ids, true).await });
                 match task.await {
                     Ok(result) => result,
                     Err(error) => {
@@ -99,15 +127,16 @@ impl ConnectionImportWindow {
             };
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;
-                match result {
-                    Ok((reports, preview_ids, preview)) => {
-                        this.model.apply_scan_reports(reports);
+                match preview_result {
+                    Ok(preview) => {
                         this.model.apply_preview_records(preview.records);
                         this.model
                             .apply_preview_errors(&preview_ids, preview.errors);
                         this.status_message = None;
                     }
-                    Err(error) => this.status_message = Some(error),
+                    Err(error) => {
+                        this.status_message = Some(error);
+                    }
                 }
                 cx.notify();
             });

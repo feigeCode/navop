@@ -48,6 +48,10 @@ impl ConnectionImportWindowModel {
         self.state.rows()
     }
 
+    pub(crate) fn workspace_group_paths(&self) -> Vec<String> {
+        self.state.workspace_group_paths()
+    }
+
     pub(crate) fn toggle_source(&mut self, importer_id: &str) {
         self.state.toggle_source(importer_id);
     }

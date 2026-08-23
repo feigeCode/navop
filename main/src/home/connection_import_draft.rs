@@ -13,6 +13,7 @@ pub(crate) enum ImportDraftKind {
     Database,
     Ssh,
     QuickCommand,
+    Workspace,
     Unsupported,
 }
 
@@ -46,6 +47,7 @@ pub(crate) struct EditableImportDraft {
     pub(crate) port: String,
     pub(crate) username: String,
     pub(crate) ssh_group_path: String,
+    pub(crate) workspace_path: String,
     pub(crate) password: String,
     pub(crate) database: String,
     pub(crate) private_key_path: String,
@@ -54,6 +56,23 @@ pub(crate) struct EditableImportDraft {
     pub(crate) quick_command_shortcut: String,
     pub(crate) quick_command_description: String,
     payload: ImportDraftPayload,
+}
+
+pub(crate) fn normalized_workspace_path(path: &str) -> Option<String> {
+    let normalized_separators = path.replace('\\', "/");
+    let components = normalized_separators
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if components.is_empty() || components.iter().any(|part| matches!(*part, "." | "..")) {
+        return None;
+    }
+    Some(components.join("/"))
+}
+
+pub(crate) fn normalized_ssh_group_path(path: &str) -> Option<String> {
+    normalized_workspace_path(path)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +86,7 @@ impl EditableImportDraft {
             ImportRecordKind::Database => Self::database(record),
             ImportRecordKind::Ssh => Self::ssh(record),
             ImportRecordKind::QuickCommand => Self::quick_command(record),
+            ImportRecordKind::Workspace => Self::workspace(record),
             ImportRecordKind::PortForwarding => Self::unsupported(record),
         }
     }
@@ -89,6 +109,7 @@ impl EditableImportDraft {
                 .map(|record| record.username.clone())
                 .unwrap_or_default(),
             ssh_group_path: String::new(),
+            workspace_path: String::new(),
             password: imported
                 .and_then(|record| record.password.clone())
                 .unwrap_or_default(),
@@ -127,6 +148,7 @@ impl EditableImportDraft {
             ssh_group_path: imported
                 .and_then(|record| record.group_path.clone())
                 .unwrap_or_default(),
+            workspace_path: String::new(),
             password,
             database: String::new(),
             private_key_path,
@@ -149,6 +171,7 @@ impl EditableImportDraft {
             port: String::new(),
             username: String::new(),
             ssh_group_path: String::new(),
+            workspace_path: String::new(),
             password: String::new(),
             database: String::new(),
             private_key_path: String::new(),
@@ -168,6 +191,37 @@ impl EditableImportDraft {
         }
     }
 
+    fn workspace(record: ImportRecord) -> Self {
+        let path = record
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.path.clone())
+            .unwrap_or_default();
+        let name = optional_text(&record.display_name)
+            .or_else(|| {
+                normalized_workspace_path(&path)
+                    .and_then(|path| path.rsplit('/').next().map(str::to_string))
+            })
+            .unwrap_or_default();
+        Self {
+            selected: true,
+            name,
+            host: String::new(),
+            port: String::new(),
+            username: String::new(),
+            ssh_group_path: String::new(),
+            workspace_path: path,
+            password: String::new(),
+            database: String::new(),
+            private_key_path: String::new(),
+            quick_command_group_name: String::new(),
+            quick_command_command: String::new(),
+            quick_command_shortcut: String::new(),
+            quick_command_description: String::new(),
+            payload: ImportDraftPayload::Record(record),
+        }
+    }
+
     fn unsupported(record: ImportRecord) -> Self {
         Self {
             selected: true,
@@ -176,6 +230,7 @@ impl EditableImportDraft {
             port: String::new(),
             username: String::new(),
             ssh_group_path: String::new(),
+            workspace_path: String::new(),
             password: String::new(),
             database: String::new(),
             private_key_path: String::new(),
@@ -193,6 +248,7 @@ impl EditableImportDraft {
                 ImportRecordKind::Database => ImportDraftKind::Database,
                 ImportRecordKind::Ssh => ImportDraftKind::Ssh,
                 ImportRecordKind::QuickCommand => ImportDraftKind::QuickCommand,
+                ImportRecordKind::Workspace => ImportDraftKind::Workspace,
                 ImportRecordKind::PortForwarding => ImportDraftKind::Unsupported,
             },
         }
@@ -204,6 +260,7 @@ impl EditableImportDraft {
                 ImportRecordKind::Database => ConnectionType::Database,
                 ImportRecordKind::Ssh => ConnectionType::SshSftp,
                 ImportRecordKind::QuickCommand => ConnectionType::SshSftp,
+                ImportRecordKind::Workspace => ConnectionType::SshSftp,
                 ImportRecordKind::PortForwarding => ConnectionType::PortForwarding,
             },
         }
@@ -213,6 +270,9 @@ impl EditableImportDraft {
         let name = match &self.payload {
             ImportDraftPayload::Record(record) => match record.kind {
                 ImportRecordKind::QuickCommand => IconName::TerminalQuickCommandColor,
+                ImportRecordKind::Workspace => {
+                    return Icon::new(IconName::FolderOpen).with_size(IconSize::Default);
+                }
                 _ => {
                     return crate::connection_visuals::connection_type_icon(
                         self.visual_connection_type(),
@@ -262,6 +322,10 @@ impl EditableImportDraft {
         }
         parts.push(self.quick_command_command.clone());
         parts.join(" · ")
+    }
+
+    pub(crate) fn workspace_path(&self) -> Option<String> {
+        normalized_workspace_path(&self.workspace_path)
     }
 
     pub(crate) fn warning_text(&self) -> Option<String> {

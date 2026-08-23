@@ -39,6 +39,14 @@ pub(super) fn render_source_row(
         .unwrap_or_else(|| availability_text(&source.availability));
     let has_error = source.preview_error.is_some()
         || matches!(source.availability, ImporterAvailability::Error { .. });
+    let discovered_workspace_text = (!source.discovered_workspace_paths.is_empty()).then(|| {
+        t!(
+            "Home.ConnectionImport.discovered_workspace_groups",
+            groups = source.discovered_workspace_paths.len(),
+            paths = source.discovered_workspace_paths.join(", ")
+        )
+        .to_string()
+    });
     h_flex()
         .items_center()
         .gap_3()
@@ -95,7 +103,18 @@ pub(super) fn render_source_row(
                             cx.theme().muted_foreground
                         })
                         .child(status_text),
-                ),
+                )
+                .when_some(discovered_workspace_text, |this, text| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(text),
+                    )
+                }),
         )
         .when(
             source.descriptor.capabilities.supports_manual_file_pick,

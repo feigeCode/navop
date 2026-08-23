@@ -92,6 +92,7 @@ fn database_record(name: &str) -> ImportRecord {
         ssh: None,
         port_forwarding: None,
         quick_command: None,
+        workspace: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }
