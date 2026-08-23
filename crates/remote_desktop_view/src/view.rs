@@ -877,6 +877,12 @@ impl RemoteDesktopView {
         cx: &mut Context<Self>,
     ) -> Self {
         let manage_native_cursor = config.options.protocol == RemoteDesktopProtocol::Rdp;
+        // Standalone windows (tab_index: None, e.g. the fullscreen RDP popup)
+        // have no tab container to drive TabContent::on_activate, so they must
+        // start as the active presentation and request native focus directly.
+        // Otherwise the native overlay stays hidden and the window renders
+        // only the GPUI background.
+        let standalone_window = config.tab_index.is_none();
         let presentation_initialization = if config.options.protocol == RemoteDesktopProtocol::Vnc {
             presentation::RemoteDesktopPresentationInitialization::Canvas {
                 fallback_reason: None,
@@ -1104,7 +1110,7 @@ impl RemoteDesktopView {
             _presentation_task: None,
             _presentation_pacing_task: None,
             presentation_initialization,
-            tab_active: false,
+            tab_active: standalone_window,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native: None,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -1126,7 +1132,7 @@ impl RemoteDesktopView {
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native_lifecycle_dirty: false,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-            windows_native_focus_requested: false,
+            windows_native_focus_requested: standalone_window,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native_close_requested: false,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
