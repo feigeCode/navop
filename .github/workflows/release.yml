@@ -114,14 +114,14 @@ jobs:
           RELEASE_PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
-          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
-          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
-          linux_x64_portable='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":false,"windows_native_rdp":false,"portable_linux":true}'
-          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","variant":"standard","arm_linux":true,"windows_native_rdp":false,"portable_linux":false}'
-          linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","variant":"portable","arm_linux":true,"windows_native_rdp":false,"portable_linux":true}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
-          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
+          linux_x64_portable='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu-portable.tar.gz","public_label":"linux-x64-portable","variant":"portable","arm_linux":false,"windows_native_rdp":false,"portable_linux":true}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","variant":"standard","arm_linux":true,"windows_native_rdp":false,"portable_linux":false}'
+          linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","public_label":"linux-arm64-portable","variant":"portable","arm_linux":true,"windows_native_rdp":false,"portable_linux":true}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x64"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x86"}'
 
           case "$RELEASE_PLATFORM" in
             all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_x64_portable,$linux_arm64,$linux_arm64_portable,$windows_x64,$windows_x86]" ;;
@@ -271,6 +271,7 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.tag }}"
           echo "ONETCLI_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+          echo "PUBLIC_BASENAME=navop-${VERSION#v}-${{ matrix.public_label }}" >> "$GITHUB_ENV"
 
       - name: Verify secrets are set
         shell: bash
@@ -411,6 +412,8 @@ jobs:
           script/bundle-macos.sh ${{ matrix.target }}
           script/bundle-macos-dmg.sh ${{ matrix.target }}
           tar czf ${{ matrix.archive }} -C target Navop.app
+          cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
+          mv "navop-${{ matrix.target }}.dmg" "${PUBLIC_BASENAME}.dmg"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -449,6 +452,7 @@ jobs:
             --numeric-owner \
             -czf "${{ matrix.archive }}" \
             -C package .
+          cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
 
       - name: Install Linux packaging dependencies
         if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
@@ -581,7 +585,8 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "portable-package/${{ matrix.binary }}"
           Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
           Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
-          Compress-Archive -Path "portable-package/*" -DestinationPath "${{ matrix.windows_basename }}-portable.zip"
+          Copy-Item "${{ matrix.archive }}" "${env:PUBLIC_BASENAME}.zip"
+          Compress-Archive -Path "portable-package/*" -DestinationPath "${env:PUBLIC_BASENAME}-portable.zip"
 
       - name: Install WiX Toolset
         if: runner.os == 'Windows'
@@ -608,56 +613,42 @@ jobs:
             -d Version="$msiVersion" `
             -d SourceDir="${{ github.workspace }}\package" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "${{ matrix.windows_basename }}.msi"
+            -out "${env:PUBLIC_BASENAME}.msi"
           wix build installer/windows/navop-bundle.wxs `
             -ext WixToolset.BootstrapperApplications.wixext `
             -arch ${{ matrix.windows_arch }} `
             -d Version="$msiVersion" `
-            -d MsiPath="${{ github.workspace }}\${{ matrix.windows_basename }}.msi" `
+            -d MsiPath="${{ github.workspace }}\${env:PUBLIC_BASENAME}.msi" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "${{ matrix.windows_basename }}.exe"
+            -out "${env:PUBLIC_BASENAME}.exe"
 
       - name: Validate Windows MSI metadata
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           ./script/validate-windows-msi.ps1 `
-            -Path "${{ matrix.windows_basename }}.msi" `
+            -Path "${env:PUBLIC_BASENAME}.msi" `
             -ExpectedLanguage 1033
 
       - name: Upload artifact
+        if: matrix.variant == 'standard'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
 
-      - name: Upload macOS DMG artifact
-        if: runner.os == 'macOS'
+      - name: Upload versioned public package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: navop-${{ matrix.target }}.dmg
-          path: "*.dmg"
-
-      - name: Upload Windows MSI artifact
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.windows_basename }}.msi
-          path: ${{ matrix.windows_basename }}.msi
-
-      - name: Upload Windows portable ZIP artifact
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.windows_basename }}-portable.zip
-          path: ${{ matrix.windows_basename }}-portable.zip
-
-      - name: Upload Windows EXE artifact
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.windows_basename }}.exe
-          path: ${{ matrix.windows_basename }}.exe
+          name: navop-${{ matrix.public_label }}-packages
+          path: |
+            navop-*-${{ matrix.public_label }}.tar.gz
+            navop-*-${{ matrix.public_label }}.dmg
+            navop-*-${{ matrix.public_label }}.zip
+            navop-*-${{ matrix.public_label }}-portable.zip
+            navop-*-${{ matrix.public_label }}.msi
+            navop-*-${{ matrix.public_label }}.exe
+          if-no-files-found: error
 
       - name: Upload Linux installer artifacts
         if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux

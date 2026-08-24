@@ -16,7 +16,7 @@ env:
   CNB_REPOSITORY: "navop-dev/navop"
 
 concurrency:
-  group: navop-cnb-release-${{ inputs.tag }}
+  group: navop-cnb-release
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,12 @@ jobs:
     name: Sync release to CNB
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
+
       - name: Sync release assets to CNB
         env:
           TAG_NAME: ${{ inputs.tag }}
@@ -43,6 +49,33 @@ jobs:
             exit 1
           fi
           gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          git remote remove cnb 2>/dev/null || true
+          git remote add cnb "https://cnb.cool/${CNB_REPOSITORY}.git"
+          git config --global credential.helper store
+          printf 'https://cnb:%s@cnb.cool\n' "$CNB_TOKEN" >"${HOME}/.git-credentials"
+          chmod 600 "${HOME}/.git-credentials"
+          trap 'rm -f "${HOME}/.git-credentials"' EXIT
+
+          # CNB release synchronization requires the Git tag to exist first.
+          # Because --tags pushes the complete tag set, replace every CNB tag
+          # whose tag object was moved or recreated before pushing all tags.
+          declare -A remote_tag_oids=()
+          while read -r remote_oid remote_ref; do
+            remote_tag_oids["${remote_ref#refs/tags/}"]="$remote_oid"
+          done < <(git ls-remote --tags cnb | awk '$2 !~ /\^\{\}$/')
+
+          while read -r local_ref; do
+            tag_name="${local_ref#refs/tags/}"
+            local_oid="$(git rev-parse "$local_ref")"
+            remote_oid="${remote_tag_oids[$tag_name]-}"
+            if [ -n "$remote_oid" ] && [ "$remote_oid" != "$local_oid" ]; then
+              echo "CNB tag ${tag_name} points to ${remote_oid}; replacing it with ${local_oid}"
+              git push cnb ":refs/tags/${tag_name}"
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/tags)
+
+          git push cnb --tags
 
           wget -q https://cnb.cool/znb/mpgrm/-/releases/download/v0.1.0/mpgrm_linux_amd64.tar.gz
           tar -xf mpgrm_linux_amd64.tar.gz

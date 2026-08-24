@@ -225,6 +225,18 @@ jobs:
           }
 
           function targetFor(fileName) {
+            const publicTargets = [
+              ["macos-arm64", "aarch64-apple-darwin"],
+              ["macos-x64", "x86_64-apple-darwin"],
+              ["linux-x64-portable", "x86_64-unknown-linux-gnu"],
+              ["linux-arm64-portable", "aarch64-unknown-linux-gnu"],
+              ["linux-x64", "x86_64-unknown-linux-gnu"],
+              ["linux-arm64", "aarch64-unknown-linux-gnu"],
+              ["windows-x64", "x86_64-pc-windows-msvc"],
+              ["win32", "i686-pc-windows-msvc"],
+            ];
+            const publicTarget = publicTargets.find(([label]) => fileName.includes(`-${label}.`) || fileName.includes(`-${label}-portable.`));
+            if (publicTarget) return fileName.includes("-portable.") ? `${publicTarget[1]}-portable` : publicTarget[1];
             const knownTargets = [
               "aarch64-apple-darwin",
               "x86_64-apple-darwin",
@@ -241,9 +253,21 @@ jobs:
             return "universal";
           }
 
-          const packageFiles = fs
-            .readdirSync("artifacts")
+          const publicUpdaterAlternatives = new Map([
+            ["navop-aarch64-apple-darwin.tar.gz", `navop-${version}-macos-arm64.tar.gz`],
+            ["navop-x86_64-apple-darwin.tar.gz", `navop-${version}-macos-x64.tar.gz`],
+            ["navop-x86_64-unknown-linux-gnu.tar.gz", `navop-${version}-linux-x64.tar.gz`],
+            ["navop-aarch64-unknown-linux-gnu.tar.gz", `navop-${version}-linux-arm64.tar.gz`],
+            ["navop-x86_64-pc-windows-msvc.zip", `navop-${version}-windows-x64.zip`],
+            ["navop-i686-pc-windows-msvc.zip", `navop-${version}-win32.zip`],
+          ]);
+          const availableFiles = new Set(fs.readdirSync("artifacts"));
+          const packageFiles = [...availableFiles]
             .filter((fileName) => /^navop[-_]/.test(fileName))
+            .filter((fileName) => {
+              const alternative = publicUpdaterAlternatives.get(fileName);
+              return !alternative || !availableFiles.has(alternative);
+            })
             .sort();
           const packages = packageFiles.map((fileName) => ({
             target: targetFor(fileName),

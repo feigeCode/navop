@@ -28,7 +28,7 @@ env:
   SCCACHE_IDLE_TIMEOUT: "7200"
   WINDOWS_TARGET: ${{ inputs.architecture == 'x86' && 'i686-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
   WINDOWS_WIX_ARCH: ${{ inputs.architecture == 'x86' && 'x86' || 'x64' }}
-  WINDOWS_BASENAME: ${{ inputs.architecture == 'x86' && 'navop-i686-pc-windows-msvc' || 'navop-x86_64-pc-windows-msvc' }}
+  WINDOWS_LABEL: ${{ inputs.architecture == 'x86' && 'win32' || 'windows-x64' }}
 
 jobs:
   build:
@@ -47,6 +47,7 @@ jobs:
           }
           "ONETCLI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "MSI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_BASENAME=navop-$version-$env:WINDOWS_LABEL" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
