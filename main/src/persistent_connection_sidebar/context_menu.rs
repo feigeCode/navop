@@ -125,6 +125,9 @@ mod tests {
                 id: 50,
                 workspace_id: Some(1),
                 name: "186华为云服务器".to_string(),
+                last_used_at: None,
+                updated_at: None,
+                created_at: None,
             }];
             filter_connection_tree_inputs(
                 &mut workspaces,

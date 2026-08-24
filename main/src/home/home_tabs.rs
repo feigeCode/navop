@@ -13,7 +13,9 @@ use json_view::JsonFormatterView;
 use mongodb_view::MongoTabView;
 use notes::NotesView;
 use one_core::license::Feature;
-use one_core::settings::{LocalTerminalCustomProfile, LocalTerminalProfileKind};
+use one_core::settings::{
+    ConnectionSortOrder, LocalTerminalCustomProfile, LocalTerminalProfileKind,
+};
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
 use one_core::tab_actions::next_duplicate_tab_index;
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
@@ -36,6 +38,7 @@ fn redis_tab_open_context(
     conn: &StoredConnection,
     workspace: Option<Workspace>,
     all_connections: &[StoredConnection],
+    sort_order: ConnectionSortOrder,
 ) -> (String, Vec<StoredConnection>, Option<Workspace>) {
     let workspace_id = workspace.as_ref().and_then(|ws| ws.id);
 
@@ -47,9 +50,7 @@ fn redis_tab_open_context(
                 .filter(|connection| connection.workspace_id == Some(id))
                 .cloned()
                 .collect();
-            connections.sort_by(|left, right| {
-                crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-            });
+            crate::connection_sort::sort_connections(&mut connections, sort_order);
             if connections.is_empty() {
                 connections.push(conn.clone());
             }
@@ -378,6 +379,7 @@ mod tests {
             &connection,
             Some(workspace(7, "backend")),
             &all_connections,
+            ConnectionSortOrder::Natural,
         );
 
         assert_eq!("redis-42", tab_id);
@@ -695,6 +697,7 @@ mod tests {
             &active,
             Some(workspace(7, "backend")),
             &all_connections,
+            ConnectionSortOrder::Natural,
         );
 
         assert_eq!("workspace-redis-tab-7", tab_id);
@@ -1248,8 +1251,9 @@ impl HomePage {
         };
         let active_conn_id = conn.id;
 
+        let sort_order = AppSettings::global(cx).connection_sort_order;
         let (tab_id, connections, workspace_for_tab) =
-            redis_tab_open_context(open_mode, &conn, workspace, &self.connections);
+            redis_tab_open_context(open_mode, &conn, workspace, &self.connections, sort_order);
 
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
@@ -1291,6 +1295,11 @@ impl HomePage {
         } else {
             DatabaseOpenMode::default()
         };
+        let connection_sort_order = if cx.has_global::<AppSettings>() {
+            AppSettings::global(cx).connection_sort_order
+        } else {
+            ConnectionSortOrder::default()
+        };
 
         let workspace_id = workspace.as_ref().and_then(|ws| ws.id);
         let active_conn_id = conn.id;
@@ -1304,9 +1313,7 @@ impl HomePage {
                     .filter(|connection| connection.connection_type == ConnectionType::MongoDB)
                     .cloned()
                     .collect();
-                connections.sort_by(|left, right| {
-                    crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-                });
+                crate::connection_sort::sort_connections(&mut connections, connection_sort_order);
                 let tab_id = format!("workspace-mongodb-tab-{}", workspace_id.unwrap_or(0));
                 (tab_id, connections, workspace)
             }
@@ -1651,10 +1658,13 @@ impl HomePage {
         ) else {
             return;
         };
-        // 分组内的连接按名称排序（IP 地址按数值段比较）
-        connections.sort_by(|left, right| {
-            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-        });
+        // 分组内的连接按设置中的排序方式排列
+        let connection_sort_order = if cx.has_global::<AppSettings>() {
+            AppSettings::global(cx).connection_sort_order
+        } else {
+            ConnectionSortOrder::default()
+        };
+        crate::connection_sort::sort_connections(&mut connections, connection_sort_order);
 
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {

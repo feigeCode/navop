@@ -67,11 +67,12 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings,
-    HomeConnectionLayout, HomePageStyle, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
-    LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
-    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
-    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
+    AppSettings, ConnectionSortOrder, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
+    GlobalProxySettings, HomeConnectionLayout, HomePageStyle, LOCALE_EN, LOCALE_SYSTEM,
+    LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+    LocalTerminalProfileSettings, PersonalSyncBackendKind, PersonalSyncSettings, ProxyType,
+    StartupDefaultPage, SyncProvider, effective_locale_for_setting, is_installed_font_family,
+    is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -662,6 +663,48 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.ConnectionDisplay.home_layout_desc")
+                                    .to_string(),
+                            ),
+                            SettingItem::new(
+                                t!("Settings.General.ConnectionDisplay.connection_sort"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            ConnectionSortOrder::Natural.as_str().into(),
+                                            t!("Settings.General.ConnectionDisplay.connection_sort_natural")
+                                                .into(),
+                                        ),
+                                        (
+                                            ConnectionSortOrder::Lru.as_str().into(),
+                                            t!("Settings.General.ConnectionDisplay.connection_sort_lru")
+                                                .into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx).connection_sort_order.as_str(),
+                                        )
+                                    },
+                                    |value: SharedString, cx: &mut App| {
+                                        let order = ConnectionSortOrder::from_value(&value);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.connection_sort_order = order;
+                                        });
+                                        // 立即刷新主页与连接侧栏，使新的排序方式即时生效
+                                        let home = cx
+                                            .try_global::<GlobalHomePage>()
+                                            .map(|global| global.home_page.clone());
+                                        if let Some(home) = home {
+                                            home.update(cx, |_, cx| cx.notify());
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.connection_sort_order.as_str(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.ConnectionDisplay.connection_sort_desc")
                                     .to_string(),
                             ),
                         ]),

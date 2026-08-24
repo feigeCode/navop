@@ -7,7 +7,10 @@ use gpui_component::{
     input::{Input, LocalInputStyle},
     v_flex,
 };
+use one_core::settings::{AppSettings, ConnectionSortOrder};
 use rust_i18n::t;
+
+use crate::connection_sort::{connection_name_cmp, lru_sort_key};
 
 use super::batch_toolbar::batch_mode_toggle;
 use super::tree_model::{
@@ -101,13 +104,34 @@ impl PersistentConnectionSidebar {
                     id,
                     workspace_id: connection.workspace_id,
                     name: connection.name.clone(),
+                    last_used_at: connection.last_used_at,
+                    updated_at: connection.updated_at,
+                    created_at: connection.created_at,
                 })
             })
             .collect::<Vec<_>>();
-        // 分组内的连接按名称排序（IP 地址按数值段比较）
-        connections.sort_by(|left, right| {
-            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-        });
+        // 分组内的连接按设置中的排序方式排列
+        match AppSettings::global(cx).connection_sort_order {
+            ConnectionSortOrder::Natural => {
+                connections.sort_by(|left, right| connection_name_cmp(&left.name, &right.name));
+            }
+            ConnectionSortOrder::Lru => {
+                connections.sort_by(|left, right| {
+                    lru_sort_key(
+                        right.last_used_at,
+                        right.updated_at,
+                        right.created_at,
+                        Some(right.id),
+                    )
+                    .cmp(&lru_sort_key(
+                        left.last_used_at,
+                        left.updated_at,
+                        left.created_at,
+                        Some(left.id),
+                    ))
+                });
+            }
+        }
         filter_connection_tree_inputs(&mut workspaces, &mut connections, &query, |connection| {
             matching_connection_ids.contains(&connection.id)
         });

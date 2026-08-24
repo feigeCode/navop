@@ -2035,6 +2035,22 @@ Settings:
         en: Choose the card or list layout for the existing connection list on Home
         zh-CN: 选择主页现有连接列表使用卡片或列表布局
         zh-HK: 選擇主頁現有連線列表使用卡片或列表佈局
+      connection_sort:
+        en: Connection Sorting
+        zh-CN: 连接排序
+        zh-HK: 連線排序
+      connection_sort_desc:
+        en: Choose how connections are ordered in Home and the connection tree. More sorting modes will be added over time.
+        zh-CN: 选择首页与连接树中连接的排列方式，后续会持续新增更多排序方式。
+        zh-HK: 選擇首頁與連線樹中連線的排列方式，後續會持續新增更多排序方式。
+      connection_sort_natural:
+        en: Name (Natural Order)
+        zh-CN: 按名称（自然排序）
+        zh-HK: 按名稱（自然排序）
+      connection_sort_lru:
+        en: Most Recently Used
+        zh-CN: 最近使用优先
+        zh-HK: 最近使用優先
 
     # 文件传输设置
     FileTransfer:

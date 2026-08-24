@@ -127,6 +127,32 @@ impl HomePageStyle {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionSortOrder {
+    /// 名称自然排序：数字段按数值比较（对 IP 地址友好），其余部分忽略大小写
+    #[default]
+    Natural,
+    /// 最近使用优先（LRU）：最近打开过的连接排在最前
+    Lru,
+}
+
+impl ConnectionSortOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Natural => "natural",
+            Self::Lru => "lru",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "lru" => Self::Lru,
+            _ => Self::Natural,
+        }
+    }
+}
+
 impl HomeConnectionLayout {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -838,6 +864,9 @@ pub struct AppSettings {
     pub home_connection_layout: HomeConnectionLayout,
     #[serde(default)]
     pub home_page_style: HomePageStyle,
+    /// 连接列表排序方式
+    #[serde(default)]
+    pub connection_sort_order: ConnectionSortOrder,
     #[serde(default = "default_true")]
     pub connection_sidebar_expanded: bool,
     #[serde(default)]
@@ -1171,6 +1200,7 @@ impl Default for AppSettings {
             portable_remember_master_key: false,
             home_connection_layout: HomeConnectionLayout::default(),
             home_page_style: HomePageStyle::default(),
+            connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
             enable_sql_auto_save: true,
@@ -1446,12 +1476,12 @@ mod tests {
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, CustomFont, DEFAULT_TERMINAL_THEME,
-        HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
-        LocalTerminalProfileKind, LocalTerminalProfileSettings, MainWindowState, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage,
-        SyncProvider, default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        ConnectionSortOrder, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
+        LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
+        MainWindowState, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
+        RemoteFileOpenMode, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -1805,7 +1835,33 @@ mod tests {
 
         assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
         assert_eq!(HomePageStyle::Modern, settings.home_page_style);
+        assert_eq!(ConnectionSortOrder::Natural, settings.connection_sort_order);
         assert!(settings.connection_sidebar_expanded);
+    }
+
+    #[test]
+    fn connection_sort_order_round_trips_via_value() {
+        assert_eq!("natural", ConnectionSortOrder::Natural.as_str());
+        assert_eq!("lru", ConnectionSortOrder::Lru.as_str());
+        assert_eq!(ConnectionSortOrder::Lru, ConnectionSortOrder::from_value("lru"));
+        assert_eq!(
+            ConnectionSortOrder::Natural,
+            ConnectionSortOrder::from_value("natural")
+        );
+        assert_eq!(
+            ConnectionSortOrder::Natural,
+            ConnectionSortOrder::from_value("unknown")
+        );
+    }
+
+    #[test]
+    fn app_settings_deserializes_connection_sort_order() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "connection_sort_order": "lru"
+        }))
+        .expect("connection_sort_order 应能读取");
+
+        assert_eq!(ConnectionSortOrder::Lru, settings.connection_sort_order);
     }
 
     #[test]

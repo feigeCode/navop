@@ -41,6 +41,7 @@ impl HomePage {
     ) -> AnyElement {
         let legacy = self.home_page_style == HomePageStyle::Legacy;
         let center_modern_content = !legacy && self.persistent_sidebar_expanded;
+        let connection_sort_order = AppSettings::global(cx).connection_sort_order;
         let workspaces_with_connections: Vec<_> = self
             .workspaces
             .iter()
@@ -62,10 +63,7 @@ impl HomePage {
                     .filter(|conn| self.match_connection_type(conn))
                     .cloned()
                     .collect();
-                // 分组内的连接按名称排序（IP 地址按数值段比较）
-                conn_list.sort_by(|left, right| {
-                    crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-                });
+                crate::connection_sort::sort_connections(&mut conn_list, connection_sort_order);
                 (ws.clone(), conn_list)
             })
             .collect();
@@ -78,9 +76,7 @@ impl HomePage {
             .filter(|conn| self.match_connection_type(conn))
             .cloned()
             .collect();
-        unassigned_connections.sort_by(|left, right| {
-            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-        });
+        crate::connection_sort::sort_connections(&mut unassigned_connections, connection_sort_order);
         let has_workspaces = self.workspaces.iter().any(|ws| ws.id.is_some());
 
         if layout == ConnectionLayout::List && !has_workspaces {

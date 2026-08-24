@@ -12,6 +12,11 @@ pub(crate) struct ConnectionNodeInput {
     pub id: i64,
     pub workspace_id: Option<i64>,
     pub name: String,
+    /// 最近使用时间戳，用于按配置的排序方式（如 LRU）排列连接树
+    pub last_used_at: Option<i64>,
+    /// 更新时间与创建时间，LRU 排序回退字段，与数据库 COALESCE 顺序保持一致
+    pub updated_at: Option<i64>,
+    pub created_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,6 +238,9 @@ mod tests {
             id,
             workspace_id,
             name: name.to_string(),
+            last_used_at: None,
+            updated_at: None,
+            created_at: None,
         }
     }
 
