@@ -195,6 +195,26 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         .map(|offset| leaked + offset)
         .expect("timeout terminal completion");
     assert!(leaked < timeout);
+    let timeout_branch_start = runner
+        .find("if now >= hard_deadline")
+        .expect("hard timeout branch");
+    let timeout_branch_end = runner[timeout_branch_start..]
+        .find("if matches!(mode, WindowsNativeCloseRetryMode::WaitForConfirmation)")
+        .map(|offset| timeout_branch_start + offset)
+        .expect("graceful timeout branch");
+    let timeout_branch = &runner[timeout_branch_start..timeout_branch_end];
+    assert!(timeout_branch.contains("WindowsRdpTerminalOutcome::TimedOutLeaked"));
+    assert!(timeout_branch.contains(
+        "RemoteDesktopView::finish_windows_native_close_in_view(this, registration, cx);"
+    ));
+    assert!(
+        timeout_branch.contains("return true;"),
+        "a quarantined timeout is a terminal close outcome for the tab"
+    );
+    assert!(
+        !timeout_branch.contains("return false;"),
+        "only ownership/state failures should keep the tab open"
+    );
 
     let release_start = view
         .find("cx.on_release(move |this, cx|")

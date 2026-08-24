@@ -1378,6 +1378,7 @@ impl OnetCliApp {
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
                             app.set_main_content(MainContent::Tabs, cx);
+                            app.show_home_if_tab_container_is_empty(cx);
                             app.sync_connection_sidebar_theme(cx);
                         });
                     });
@@ -1856,6 +1857,40 @@ mod tests {
         assert!(
             setter.contains("tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);")
         );
+    }
+
+    #[test]
+    fn stale_tab_activation_cannot_replace_modern_home_with_an_empty_container() {
+        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let activated_arm = source
+            .split("TabContainerEvent::TabActivated { .. } =>")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed")
+                    .next()
+            })
+            .expect("TabActivated event arm");
+        let set_tabs = activated_arm
+            .find("app.set_main_content(MainContent::Tabs, cx);")
+            .expect("TabActivated switches to tabs");
+        let empty_guard = activated_arm
+            .find("app.show_home_if_tab_container_is_empty(cx);")
+            .expect("TabActivated rechecks the empty-container fallback");
+        let sync_theme = activated_arm
+            .find("app.sync_connection_sidebar_theme(cx);")
+            .expect("TabActivated syncs the sidebar theme");
+        assert!(set_tabs < empty_guard);
+        assert!(empty_guard < sync_theme);
+
+        let fallback = source
+            .split("fn show_home_if_tab_container_is_empty")
+            .nth(1)
+            .and_then(|source| source.split("\n    fn render_main_content").next())
+            .expect("empty-container fallback");
+        assert!(fallback.contains("HomePageStyle::Modern"));
+        assert!(fallback.contains("tabs.tabs().is_empty() && !tabs.is_pinned_tab_active()"));
+        assert!(fallback.contains("self.set_main_content(MainContent::Home, cx);"));
     }
 
     #[test]

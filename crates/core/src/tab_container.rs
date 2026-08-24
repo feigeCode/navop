@@ -1701,11 +1701,15 @@ impl TabContainer {
     fn do_remove_tab_by_id(&mut self, tab_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.tabs.iter().position(|t| t.id() == tab_id) {
             let was_active = self.regular_tab_is_active(index);
+            if was_active {
+                self.tabs[index].content().on_deactivate(window, cx);
+            }
             let removed_tab_id = self.tabs[index].id();
             self.tabs.remove(index);
             self.closing_tabs.remove(&removed_tab_id);
             clear_tab_activity(&mut self.activity_tabs, removed_tab_id.as_ref());
 
+            let mut activated_regular = None;
             if self.tabs.is_empty() {
                 self.active_index = 0;
                 if was_active {
@@ -1723,9 +1727,21 @@ impl TabContainer {
                 }
             }
 
+            if was_active && !self.tabs.is_empty() {
+                let new_tab = &self.tabs[self.active_index];
+                new_tab.content().on_activate(window, cx);
+                new_tab.content().focus_handle(cx).focus(window, cx);
+                let new_tab_id = new_tab.id().to_string();
+                clear_tab_activity(&mut self.activity_tabs, &new_tab_id);
+                activated_regular = Some((self.active_index, new_tab_id));
+            }
+
             cx.emit(TabContainerEvent::TabClosed {
                 id: tab_id.to_string(),
             });
+            if let Some((index, id)) = activated_regular {
+                cx.emit(TabContainerEvent::TabActivated { index, id });
+            }
             cx.emit(TabContainerEvent::LayoutChanged);
             cx.notify();
         }
@@ -4582,6 +4598,7 @@ mod tests {
         focus_handle: FocusHandle,
         frame: Option<Arc<RenderImage>>,
         status: Option<SharedString>,
+        lifecycle: Option<Arc<Mutex<Vec<String>>>>,
     }
 
     impl TestTab {
@@ -4591,6 +4608,7 @@ mod tests {
                 focus_handle: cx.focus_handle(),
                 frame: None,
                 status: None,
+                lifecycle: None,
             }
         }
 
@@ -4604,6 +4622,21 @@ mod tests {
                 focus_handle: cx.focus_handle(),
                 frame: None,
                 status: Some(status.into()),
+                lifecycle: None,
+            }
+        }
+
+        fn with_lifecycle(
+            title: &'static str,
+            lifecycle: Arc<Mutex<Vec<String>>>,
+            cx: &mut Context<Self>,
+        ) -> Self {
+            Self {
+                title: title.into(),
+                focus_handle: cx.focus_handle(),
+                frame: None,
+                status: None,
+                lifecycle: Some(lifecycle),
             }
         }
 
@@ -4681,6 +4714,24 @@ mod tests {
 
         fn title(&self, _cx: &App) -> SharedString {
             self.title.clone()
+        }
+
+        fn on_activate(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+            if let Some(lifecycle) = &self.lifecycle {
+                lifecycle
+                    .lock()
+                    .expect("lifecycle lock")
+                    .push(format!("activate:{}", self.title));
+            }
+        }
+
+        fn on_deactivate(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+            if let Some(lifecycle) = &self.lifecycle {
+                lifecycle
+                    .lock()
+                    .expect("lifecycle lock")
+                    .push(format!("deactivate:{}", self.title));
+            }
         }
     }
 
@@ -5027,6 +5078,89 @@ mod tests {
             })
             .expect("window opens");
         });
+    }
+
+    #[gpui::test]
+    fn closing_active_regular_tab_activates_remaining_regular_tab(cx: &mut TestAppContext) {
+        let lifecycle = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let lifecycle_for_window = lifecycle.clone();
+        let events_for_window = events.clone();
+
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let first = cx.new(|cx| {
+                    TestTab::with_lifecycle("first", lifecycle_for_window.clone(), cx)
+                });
+                let second = cx.new(|cx| {
+                    TestTab::with_lifecycle("second", lifecycle_for_window.clone(), cx)
+                });
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("first", "test", first.clone()),
+                        window,
+                        cx,
+                    );
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("second", "test", second),
+                        window,
+                        cx,
+                    );
+                });
+                let events_for_subscription = events_for_window.clone();
+                cx.subscribe(&container, move |_, event: &TabContainerEvent, _| {
+                    let event = match event {
+                        TabContainerEvent::TabClosed { id } => format!("closed:{id}"),
+                        TabContainerEvent::TabActivated { index, id } => {
+                            format!("activated:{index}:{id}")
+                        }
+                        TabContainerEvent::LayoutChanged => "layout".to_string(),
+                        TabContainerEvent::NavigationSidebarToggled { .. } => return,
+                    };
+                    events_for_subscription
+                        .lock()
+                        .expect("events lock")
+                        .push(event);
+                })
+                .detach();
+                lifecycle_for_window
+                    .lock()
+                    .expect("lifecycle lock")
+                    .clear();
+                events_for_window.lock().expect("events lock").clear();
+
+                container.update(cx, |container, cx| {
+                    container.force_close_tab_by_id("second", window, cx);
+                });
+
+                let container_ref = container.read(cx);
+                assert_eq!(1, container_ref.tabs().len());
+                assert_eq!(0, container_ref.active_index());
+                assert_eq!("first", container_ref.active_tab().unwrap().id().as_ref());
+                assert!(first.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+
+        assert_eq!(
+            vec![
+                "deactivate:second".to_string(),
+                "activate:first".to_string()
+            ],
+            *lifecycle.lock().expect("lifecycle lock")
+        );
+        assert_eq!(
+            vec![
+                "closed:second".to_string(),
+                "activated:0:first".to_string(),
+                "layout".to_string()
+            ],
+            *events.lock().expect("events lock")
+        );
     }
 
     #[gpui::test]

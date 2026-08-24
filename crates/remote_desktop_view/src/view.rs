@@ -2234,7 +2234,7 @@ pub(crate) async fn close_windows_native_operation(
                 cx,
             );
             RemoteDesktopView::finish_windows_native_close_in_view(this, registration, cx);
-            return false;
+            return true;
         }
         if matches!(mode, WindowsNativeCloseRetryMode::WaitForConfirmation)
             && now >= graceful_deadline
