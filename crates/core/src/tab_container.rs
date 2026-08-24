@@ -457,6 +457,9 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
     /// Called when tab becomes inactive
     fn on_deactivate(&mut self, window: &mut Window, cx: &mut Context<Self>) {}
 
+    /// Temporarily obscure a native presentation without changing tab lifecycle.
+    fn set_presentation_obscured(&mut self, obscured: bool, cx: &mut Context<Self>) {}
+
     /// Try to close this tab. Returns a Task that resolves to true if close succeeded.
     fn try_close(
         &mut self,
@@ -541,6 +544,7 @@ pub trait TabContentView: 'static + Send + Sync {
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>>;
     fn on_activate(&self, window: &mut Window, cx: &mut App);
     fn on_deactivate(&self, window: &mut Window, cx: &mut App);
+    fn set_presentation_obscured(&self, obscured: bool, cx: &mut App);
     fn try_close(&self, tab_id: &str, window: &mut Window, cx: &mut App) -> Task<bool>;
     fn width_size(&self, cx: &App) -> Option<Size>;
     fn focus_handle(&self, cx: &App) -> FocusHandle;
@@ -625,6 +629,10 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn on_deactivate(&self, window: &mut Window, cx: &mut App) {
         self.update(cx, |this, cx| this.on_deactivate(window, cx))
+    }
+
+    fn set_presentation_obscured(&self, obscured: bool, cx: &mut App) {
+        self.update(cx, |this, cx| this.set_presentation_obscured(obscured, cx))
     }
 
     fn try_close(&self, tab_id: &str, window: &mut Window, cx: &mut App) -> Task<bool> {
@@ -1037,6 +1045,7 @@ pub struct TabContainer {
     rename_input_subscription: Option<Subscription>,
     show_tab_bar_when_empty: bool,
     show_tab_content: bool,
+    presentation_obscured: bool,
     show_window_controls: bool,
     #[cfg(test)]
     force_windows_titlebar_for_test: bool,
@@ -1086,6 +1095,7 @@ impl TabContainer {
             rename_input_subscription: None,
             show_tab_bar_when_empty: false,
             show_tab_content: true,
+            presentation_obscured: false,
             show_window_controls: false,
             #[cfg(test)]
             force_windows_titlebar_for_test: false,
@@ -1246,14 +1256,22 @@ impl TabContainer {
         self.pinned_tabs.clear();
         self.pinned_tabs.push(tab);
         self.active_pinned_index = self.tabs.is_empty().then_some(0);
+        if self.active_pinned_index.is_some() {
+            self.sync_active_presentation_obscured(cx);
+        }
         cx.notify();
     }
 
     /// Add a pinned tab that stays fixed before the scrollable tab list.
     pub fn add_pinned_tab(&mut self, tab: TabItem, cx: &mut Context<Self>) {
         self.pinned_tabs.push(tab);
+        let mut activated = false;
         if self.tabs.is_empty() && self.active_pinned_index.is_none() {
             self.active_pinned_index = Some(0);
+            activated = true;
+        }
+        if activated {
+            self.sync_active_presentation_obscured(cx);
         }
         cx.notify();
     }
@@ -1262,12 +1280,17 @@ impl TabContainer {
     pub fn insert_pinned_tab_at(&mut self, index: usize, tab: TabItem, cx: &mut Context<Self>) {
         let index = index.min(self.pinned_tabs.len());
         self.pinned_tabs.insert(index, tab);
+        let mut activated = false;
         if let Some(active_index) = self.active_pinned_index {
             if active_index >= index {
                 self.active_pinned_index = Some(active_index + 1);
             }
         } else if self.tabs.is_empty() {
             self.active_pinned_index = Some(index);
+            activated = true;
+        }
+        if activated {
+            self.sync_active_presentation_obscured(cx);
         }
         cx.notify();
     }
@@ -1345,6 +1368,9 @@ impl TabContainer {
                     .on_activate(window, cx);
                 self.tabs[self.active_index]
                     .content()
+                    .set_presentation_obscured(self.presentation_obscured, cx);
+                self.tabs[self.active_index]
+                    .content()
                     .focus_handle(cx)
                     .focus(window, cx);
                 self.active_pinned_index = None;
@@ -1354,6 +1380,9 @@ impl TabContainer {
                 self.pinned_tabs[next_index]
                     .content()
                     .on_activate(window, cx);
+                self.pinned_tabs[next_index]
+                    .content()
+                    .set_presentation_obscured(self.presentation_obscured, cx);
                 self.pinned_tabs[next_index]
                     .content()
                     .focus_handle(cx)
@@ -1398,6 +1427,9 @@ impl TabContainer {
         self.active_pinned_index = Some(index);
         if let Some(pinned) = self.pinned_tabs.get(index) {
             pinned.content().on_activate(window, cx);
+            pinned
+                .content()
+                .set_presentation_obscured(self.presentation_obscured, cx);
             pinned.content().focus_handle(cx).focus(window, cx);
             cx.emit(TabContainerEvent::TabActivated {
                 index,
@@ -1549,6 +1581,27 @@ impl TabContainer {
             .and_then(|index| self.pinned_tabs.get(index))
     }
 
+    fn active_content(&self) -> Option<Arc<dyn TabContentView>> {
+        self.active_pinned_tab()
+            .map(|tab| tab.content().clone())
+            .or_else(|| self.active_tab().map(|tab| tab.content().clone()))
+    }
+
+    fn sync_active_presentation_obscured(&self, cx: &mut Context<Self>) {
+        if let Some(content) = self.active_content() {
+            content.set_presentation_obscured(self.presentation_obscured, cx);
+        }
+    }
+
+    pub fn set_active_presentation_obscured(&mut self, obscured: bool, cx: &mut Context<Self>) {
+        if self.presentation_obscured == obscured {
+            return;
+        }
+
+        self.presentation_obscured = obscured;
+        self.sync_active_presentation_obscured(cx);
+    }
+
     fn deactivate_active_content(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pinned) = self.active_pinned_tab() {
             pinned.content().on_deactivate(window, cx);
@@ -1565,6 +1618,7 @@ impl TabContainer {
         self.active_pinned_index = None;
         self.tab_bar_scroll_handle
             .scroll_to_item(self.tabs.len() - 1);
+        self.sync_active_presentation_obscured(cx);
         cx.emit(TabContainerEvent::TabActivated {
             index: self.active_index,
             id,
@@ -1634,6 +1688,9 @@ impl TabContainer {
         // 激活新 tab 的 content
         if let Some(new_tab) = self.tabs.get(self.active_index) {
             new_tab.content().on_activate(window, cx);
+            new_tab
+                .content()
+                .set_presentation_obscured(self.presentation_obscured, cx);
         }
 
         // 让 content 获取焦点
@@ -1716,6 +1773,9 @@ impl TabContainer {
                     self.active_pinned_index = (!self.pinned_tabs.is_empty()).then_some(0);
                     if let Some(pinned) = self.active_pinned_tab() {
                         pinned.content().on_activate(window, cx);
+                        pinned
+                            .content()
+                            .set_presentation_obscured(self.presentation_obscured, cx);
                         pinned.content().focus_handle(cx).focus(window, cx);
                     }
                 }
@@ -1730,6 +1790,9 @@ impl TabContainer {
             if was_active && !self.tabs.is_empty() {
                 let new_tab = &self.tabs[self.active_index];
                 new_tab.content().on_activate(window, cx);
+                new_tab
+                    .content()
+                    .set_presentation_obscured(self.presentation_obscured, cx);
                 new_tab.content().focus_handle(cx).focus(window, cx);
                 let new_tab_id = new_tab.id().to_string();
                 clear_tab_activity(&mut self.activity_tabs, &new_tab_id);
@@ -2234,6 +2297,9 @@ impl TabContainer {
             let new_tab = &self.tabs[index];
             if switching_content {
                 new_tab.content().on_activate(window, cx);
+                new_tab
+                    .content()
+                    .set_presentation_obscured(self.presentation_obscured, cx);
             }
             new_tab.content().focus_handle(cx).focus(window, cx);
             let tab_id = new_tab.id().to_string();
@@ -2537,6 +2603,9 @@ impl TabContainer {
                 self.active_pinned_index = (!self.pinned_tabs.is_empty()).then_some(0);
                 if let Some(pinned) = self.active_pinned_tab() {
                     pinned.content().on_activate(window, cx);
+                    pinned
+                        .content()
+                        .set_presentation_obscured(self.presentation_obscured, cx);
                     pinned.content().focus_handle(cx).focus(window, cx);
                 }
             }
@@ -2550,6 +2619,9 @@ impl TabContainer {
                 self.tabs[self.active_index]
                     .content()
                     .on_activate(window, cx);
+                self.tabs[self.active_index]
+                    .content()
+                    .set_presentation_obscured(self.presentation_obscured, cx);
             }
         }
 
@@ -4599,6 +4671,7 @@ mod tests {
         frame: Option<Arc<RenderImage>>,
         status: Option<SharedString>,
         lifecycle: Option<Arc<Mutex<Vec<String>>>>,
+        presentation_obscured: bool,
     }
 
     impl TestTab {
@@ -4609,6 +4682,7 @@ mod tests {
                 frame: None,
                 status: None,
                 lifecycle: None,
+                presentation_obscured: false,
             }
         }
 
@@ -4623,6 +4697,7 @@ mod tests {
                 frame: None,
                 status: Some(status.into()),
                 lifecycle: None,
+                presentation_obscured: false,
             }
         }
 
@@ -4637,6 +4712,7 @@ mod tests {
                 frame: None,
                 status: None,
                 lifecycle: Some(lifecycle),
+                presentation_obscured: false,
             }
         }
 
@@ -4731,6 +4807,19 @@ mod tests {
                     .lock()
                     .expect("lifecycle lock")
                     .push(format!("deactivate:{}", self.title));
+            }
+        }
+
+        fn set_presentation_obscured(&mut self, obscured: bool, _cx: &mut Context<Self>) {
+            if self.presentation_obscured == obscured {
+                return;
+            }
+            self.presentation_obscured = obscured;
+            if let Some(lifecycle) = &self.lifecycle {
+                lifecycle
+                    .lock()
+                    .expect("lifecycle lock")
+                    .push(format!("obscured:{obscured}:{}", self.title));
             }
         }
     }
@@ -5090,12 +5179,10 @@ mod tests {
         cx.update(|cx| {
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
-                let first = cx.new(|cx| {
-                    TestTab::with_lifecycle("first", lifecycle_for_window.clone(), cx)
-                });
-                let second = cx.new(|cx| {
-                    TestTab::with_lifecycle("second", lifecycle_for_window.clone(), cx)
-                });
+                let first =
+                    cx.new(|cx| TestTab::with_lifecycle("first", lifecycle_for_window.clone(), cx));
+                let second = cx
+                    .new(|cx| TestTab::with_lifecycle("second", lifecycle_for_window.clone(), cx));
                 let container = cx.new(|cx| TabContainer::new(window, cx));
 
                 container.update(cx, |container, cx| {
@@ -5126,10 +5213,7 @@ mod tests {
                         .push(event);
                 })
                 .detach();
-                lifecycle_for_window
-                    .lock()
-                    .expect("lifecycle lock")
-                    .clear();
+                lifecycle_for_window.lock().expect("lifecycle lock").clear();
                 events_for_window.lock().expect("events lock").clear();
 
                 container.update(cx, |container, cx| {
@@ -5160,6 +5244,103 @@ mod tests {
                 "layout".to_string()
             ],
             *events.lock().expect("events lock")
+        );
+    }
+
+    #[gpui::test]
+    fn presentation_obscuring_is_idempotent_and_only_updates_active_content(
+        cx: &mut TestAppContext,
+    ) {
+        let lifecycle = Arc::new(Mutex::new(Vec::new()));
+        let lifecycle_for_window = lifecycle.clone();
+
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let active = cx
+                    .new(|cx| TestTab::with_lifecycle("active", lifecycle_for_window.clone(), cx));
+                let background = cx.new(|cx| {
+                    TestTab::with_lifecycle("background", lifecycle_for_window.clone(), cx)
+                });
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("active", "test", active),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("background", "test", background),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                });
+                lifecycle_for_window.lock().expect("lifecycle lock").clear();
+
+                container.update(cx, |container, cx| {
+                    container.set_active_presentation_obscured(true, cx);
+                    container.set_active_presentation_obscured(true, cx);
+                });
+
+                container
+            })
+            .expect("window opens");
+        });
+
+        assert_eq!(
+            vec!["obscured:true:active".to_string()],
+            *lifecycle.lock().expect("lifecycle lock")
+        );
+    }
+
+    #[gpui::test]
+    fn active_tab_inherits_presentation_obscuring_when_switched(cx: &mut TestAppContext) {
+        let lifecycle = Arc::new(Mutex::new(Vec::new()));
+        let lifecycle_for_window = lifecycle.clone();
+
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let first =
+                    cx.new(|cx| TestTab::with_lifecycle("first", lifecycle_for_window.clone(), cx));
+                let second = cx
+                    .new(|cx| TestTab::with_lifecycle("second", lifecycle_for_window.clone(), cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("first", "test", first),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("second", "test", second),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                    container.set_active_presentation_obscured(true, cx);
+                });
+                lifecycle_for_window.lock().expect("lifecycle lock").clear();
+
+                container.update(cx, |container, cx| {
+                    container.set_active_index(1, window, cx);
+                });
+
+                container
+            })
+            .expect("window opens");
+        });
+
+        assert_eq!(
+            vec![
+                "deactivate:first".to_string(),
+                "activate:second".to_string(),
+                "obscured:true:second".to_string(),
+            ],
+            *lifecycle.lock().expect("lifecycle lock")
         );
     }
 

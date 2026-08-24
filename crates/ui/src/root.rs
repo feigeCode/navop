@@ -9,8 +9,8 @@ use crate::{
     window_border,
 };
 use gpui::{
-    Anchor, AnyView, App, AppContext, Context, DefiniteLength, ElementId, Entity, FocusHandle,
-    InteractiveElement, IntoElement, KeyBinding, ParentElement as _, Pixels, Render,
+    Anchor, AnyView, App, AppContext, Context, DefiniteLength, ElementId, Entity, EventEmitter,
+    FocusHandle, InteractiveElement, IntoElement, KeyBinding, ParentElement as _, Pixels, Render,
     StyleRefinement, Styled, WeakFocusHandle, Window, actions, div, prelude::FluentBuilder as _,
 };
 use std::{any::TypeId, rc::Rc};
@@ -49,6 +49,13 @@ pub struct Root {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DialogHandle(u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DialogStateChanged {
+    pub active_count: usize,
+}
+
+impl EventEmitter<DialogStateChanged> for Root {}
+
 #[derive(Clone)]
 pub(crate) struct ActiveSheet {
     focus_handle: FocusHandle,
@@ -84,6 +91,12 @@ impl ActiveDialog {
 }
 
 impl Root {
+    fn emit_dialog_state_changed(&self, cx: &mut Context<'_, Root>) {
+        cx.emit(DialogStateChanged {
+            active_count: self.active_dialogs.len(),
+        });
+    }
+
     /// Create a new Root view.
     pub fn new(view: impl Into<AnyView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
@@ -296,6 +309,7 @@ impl Root {
             move |dialog, window, cx| build(handle, dialog, window, cx),
         ));
         self.dialog_generation = self.dialog_generation.wrapping_add(1);
+        self.emit_dialog_state_changed(cx);
         cx.notify();
         handle
     }
@@ -309,10 +323,14 @@ impl Root {
     }
 
     pub fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
+        let had_dialog = !self.active_dialogs.is_empty();
         self.dialog_generation = self.dialog_generation.wrapping_add(1);
         self.pending_focus_restore = None;
         if let Some(handle) = self.close_dialog_internal() {
             window.focus(&handle, cx);
+        }
+        if had_dialog {
+            self.emit_dialog_state_changed(cx);
         }
         cx.notify();
     }
@@ -344,11 +362,13 @@ impl Root {
                 window.focus(&handle, cx);
             }
         }
+        self.emit_dialog_state_changed(cx);
         cx.notify();
         true
     }
 
     pub(crate) fn defer_close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
+        let had_dialog = !self.active_dialogs.is_empty();
         self.dialog_generation = self.dialog_generation.wrapping_add(1);
         let dialog_generation = self.dialog_generation;
         if let Some(handle) = self.close_dialog_internal() {
@@ -373,10 +393,14 @@ impl Root {
             })
             .detach();
         }
+        if had_dialog {
+            self.emit_dialog_state_changed(cx);
+        }
         cx.notify();
     }
 
     pub fn close_all_dialogs(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
+        let had_dialogs = !self.active_dialogs.is_empty();
         self.dialog_generation = self.dialog_generation.wrapping_add(1);
         self.pending_focus_restore = None;
         self.focused_input = None;
@@ -387,6 +411,9 @@ impl Root {
         self.active_dialogs.clear();
         if let Some(handle) = previous_focused_handle.and_then(|h| h.upgrade()) {
             window.focus(&handle, cx);
+        }
+        if had_dialogs {
+            self.emit_dialog_state_changed(cx);
         }
         cx.notify();
     }
@@ -582,5 +609,58 @@ impl Render for Root {
                 .child(self.view.clone())
                 .child(self.tooltip_overlay.clone()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Theme;
+    use gpui::{TestAppContext, WindowOptions};
+    use std::{cell::RefCell, rc::Rc};
+
+    struct DialogTestContent;
+
+    impl Render for DialogTestContent {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn dialog_state_events_track_nested_stack_changes_only(cx: &mut TestAppContext) {
+        let observed_counts = Rc::new(RefCell::new(Vec::new()));
+        let observed_counts_for_window = observed_counts.clone();
+
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let content = cx.new(|_| DialogTestContent);
+                let root = cx.new(|cx| Root::new(content, window, cx));
+                let observed_counts = observed_counts_for_window.clone();
+                cx.subscribe(&root, move |_, event: &DialogStateChanged, _| {
+                    observed_counts.borrow_mut().push(event.active_count);
+                })
+                .detach();
+
+                root.update(cx, |root, cx| {
+                    let first = root.open_dialog_with_handle(|_, dialog, _, _| dialog, window, cx);
+                    root.open_dialog(|dialog, _, _| dialog, window, cx);
+                    assert!(root.close_dialog_by_handle(first, window, cx));
+                    root.defer_close_dialog(window, cx);
+                    root.close_dialog(window, cx);
+                    root.close_all_dialogs(window, cx);
+                    root.open_dialog(|dialog, _, _| dialog, window, cx);
+                    root.open_dialog(|dialog, _, _| dialog, window, cx);
+                    root.close_all_dialogs(window, cx);
+                });
+
+                root
+            })
+            .expect("window opens");
+        });
+        cx.run_until_parked();
+
+        assert_eq!(vec![1, 2, 1, 0, 1, 2, 0], *observed_counts.borrow());
     }
 }

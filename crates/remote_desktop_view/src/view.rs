@@ -105,6 +105,7 @@ struct WindowsNativeOperation {
     event_state: native_events::NativeRdpEventState,
     bounds: Option<(Bounds<Pixels>, f32)>,
     tab_active: bool,
+    presentation_obscured: bool,
     allow_activation: bool,
     lifecycle_dirty: bool,
     focus_requested: bool,
@@ -622,6 +623,7 @@ fn execute_windows_native_operation(
     let effects = operation.native.drain_events(&mut operation.event_state);
     let mut requested_focus = None;
     let mut allow_activation = operation.allow_activation;
+    let presentation_active = operation.tab_active && !operation.presentation_obscured;
 
     for effect in &effects {
         match effect {
@@ -630,12 +632,12 @@ fn execute_windows_native_operation(
             }
             NativeRdpUiEffect::LoginComplete { .. } => {
                 operation.native.mark_login_complete();
-                allow_activation = operation.tab_active;
+                allow_activation = presentation_active;
             }
             NativeRdpUiEffect::Reconnected { .. } => {
                 operation.native.mark_login_complete();
-                allow_activation = operation.tab_active;
-                if operation.tab_active {
+                allow_activation = presentation_active;
+                if presentation_active {
                     requested_focus = Some(WindowsNativeFocusTarget::NativeChild);
                 }
             }
@@ -697,24 +699,30 @@ fn execute_windows_native_operation(
         );
     }
 
-    if operation.lifecycle_dirty && !operation.tab_active {
+    if operation.lifecycle_dirty && !presentation_active {
         let mut focus_parent = false;
         if let Err(error) = operation.native.deactivate(&mut || {
             focus_parent = true;
         }) {
-            tracing::warn!(?error, "failed to deactivate Windows native RDP presentation");
+            tracing::warn!(
+                ?error,
+                "failed to deactivate Windows native RDP presentation"
+            );
         }
         if focus_parent {
             requested_focus = Some(WindowsNativeFocusTarget::Parent);
         }
-    } else if operation.lifecycle_dirty && operation.tab_active && allow_activation {
+    } else if operation.lifecycle_dirty && presentation_active && allow_activation {
         if let Err(error) = operation.native.activate(false) {
             tracing::warn!(?error, "failed to activate Windows native RDP presentation");
         }
     }
 
     let now_presentable = operation.native.refresh_native_readiness();
-    if now_presentable && allow_activation && operation.native.activation_pending()
+    if now_presentable
+        && presentation_active
+        && allow_activation
+        && operation.native.activation_pending()
         && let Err(error) = operation.native.activate(false)
     {
         tracing::trace!(
@@ -723,7 +731,7 @@ fn execute_windows_native_operation(
         );
     }
 
-    if operation.tab_active
+    if presentation_active
         && allow_activation
         && (operation.focus_requested
             || requested_focus == Some(WindowsNativeFocusTarget::NativeChild))
@@ -731,14 +739,11 @@ fn execute_windows_native_operation(
         match operation.native.focus() {
             Ok(()) => requested_focus = None,
             Err(error) => {
-                tracing::trace!(
-                    ?error,
-                    "deferred Windows native RDP focus is still blocked"
-                );
+                tracing::trace!(?error, "deferred Windows native RDP focus is still blocked");
             }
         }
     }
-    if !operation.tab_active {
+    if !presentation_active {
         requested_focus = None;
     }
 
@@ -842,6 +847,7 @@ pub struct RemoteDesktopView {
     _presentation_pacing_task: Option<Task<()>>,
     presentation_initialization: presentation::RemoteDesktopPresentationInitialization,
     tab_active: bool,
+    presentation_obscured: bool,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     windows_native: Option<windows_native::WindowsNativeAdapter>,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -900,18 +906,17 @@ impl RemoteDesktopView {
                     .update(cx, |this, _| this.windows_native_maintenance_is_pending())
                     .unwrap_or(false)
                 {
-                    let operation = match this.update(cx, |this, _| {
-                        this.take_windows_native_operation()
-                    }) {
-                        Ok(Some(operation)) => operation,
-                        Ok(None) => {
-                            cx.background_executor()
-                                .timer(WINDOWS_NATIVE_EVENT_POLL_INTERVAL)
-                                .await;
-                            continue;
-                        }
-                        Err(_) => break,
-                    };
+                    let operation =
+                        match this.update(cx, |this, _| this.take_windows_native_operation()) {
+                            Ok(Some(operation)) => operation,
+                            Ok(None) => {
+                                cx.background_executor()
+                                    .timer(WINDOWS_NATIVE_EVENT_POLL_INTERVAL)
+                                    .await;
+                                continue;
+                            }
+                            Err(_) => break,
+                        };
                     let result = execute_windows_native_operation(operation);
                     let result_slot = Rc::new(RefCell::new(Some(result)));
                     let result_for_commit = result_slot.clone();
@@ -1111,6 +1116,7 @@ impl RemoteDesktopView {
             _presentation_pacing_task: None,
             presentation_initialization,
             tab_active: standalone_window,
+            presentation_obscured: false,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native: None,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -1791,7 +1797,8 @@ impl RemoteDesktopView {
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     fn take_windows_native_operation(&mut self) -> Option<WindowsNativeOperation> {
-        if self.windows_native_close_requested || self.windows_native_operation_in_flight.is_some() {
+        if self.windows_native_close_requested || self.windows_native_operation_in_flight.is_some()
+        {
             return None;
         }
         let registration = self.windows_native_registration?;
@@ -1813,8 +1820,10 @@ impl RemoteDesktopView {
             generation,
             serial: self.next_windows_native_operation_serial,
         };
-        self.next_windows_native_operation_serial =
-            self.next_windows_native_operation_serial.wrapping_add(1).max(1);
+        self.next_windows_native_operation_serial = self
+            .next_windows_native_operation_serial
+            .wrapping_add(1)
+            .max(1);
         self.windows_native_operation_in_flight = Some(token);
 
         Some(WindowsNativeOperation {
@@ -1824,12 +1833,14 @@ impl RemoteDesktopView {
             event_state,
             bounds: self.pending_windows_native_bounds.take(),
             tab_active: self.tab_active,
-            allow_activation: self.tab_active && self.connected && self.native_login_complete,
+            presentation_obscured: self.presentation_obscured,
+            allow_activation: self.tab_active
+                && !self.presentation_obscured
+                && self.connected
+                && self.native_login_complete,
             lifecycle_dirty: std::mem::take(&mut self.windows_native_lifecycle_dirty),
             focus_requested: std::mem::take(&mut self.windows_native_focus_requested),
-            display_request: self
-                .windows_native_display
-                .take_request(Instant::now()),
+            display_request: self.windows_native_display.take_request(Instant::now()),
             was_presentation_ready,
         })
     }
@@ -1912,13 +1923,12 @@ impl RemoteDesktopView {
             .into_iter()
             .filter(|request| request.generation() == generation)
             .collect();
-        let focus_handle = if self.tab_active
-            && requested_focus == Some(WindowsNativeFocusTarget::Parent)
-        {
-            Some(self.focus_handle.clone())
-        } else {
-            None
-        };
+        let focus_handle =
+            if self.tab_active && requested_focus == Some(WindowsNativeFocusTarget::Parent) {
+                Some(self.focus_handle.clone())
+            } else {
+                None
+            };
         cx.notify();
         WindowsNativeOperationCommitResult::Attached(WindowsNativeOperationCommit {
             focus_handle,
@@ -2182,7 +2192,6 @@ impl RemoteDesktopView {
             cx.notify();
         });
     }
-
 }
 
 /// Borrow-free close runner: owns the adapter for the whole close and is the
@@ -2265,10 +2274,7 @@ pub(crate) async fn close_windows_native_operation(
                             );
                             switch_to_force = true;
                             Ok(windows_native::NativeDestroyProgress::PendingCallbacks)
-                        } else if operation
-                            .native
-                            .close_confirmed(&mut operation.event_state)
-                        {
+                        } else if operation.native.close_confirmed(&mut operation.event_state) {
                             operation.native.finish_destroy()
                         } else {
                             Ok(windows_native::NativeDestroyProgress::PendingCallbacks)
@@ -2284,9 +2290,7 @@ pub(crate) async fn close_windows_native_operation(
                     }
                 }
             }
-            WindowsNativeCloseRetryMode::ForceClose => {
-                operation.native.force_close(&mut || {})
-            }
+            WindowsNativeCloseRetryMode::ForceClose => operation.native.force_close(&mut || {}),
         };
         if switch_to_force {
             mode = WindowsNativeCloseRetryMode::ForceClose;
@@ -2327,10 +2331,7 @@ pub(crate) async fn close_windows_native_operation(
             return true;
         }
 
-        let deadline = crate::windows_native_shutdown::detached_cleanup_deadline(
-            hard_deadline,
-            cx,
-        );
+        let deadline = crate::windows_native_shutdown::detached_cleanup_deadline(hard_deadline, cx);
         if Instant::now() >= deadline {
             continue;
         }

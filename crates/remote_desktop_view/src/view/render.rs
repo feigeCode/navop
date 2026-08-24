@@ -273,6 +273,19 @@ impl TabContent for RemoteDesktopView {
         window.focus(&self.focus_handle, cx);
     }
 
+    fn set_presentation_obscured(&mut self, obscured: bool, _cx: &mut Context<Self>) {
+        if self.presentation_obscured == obscured {
+            return;
+        }
+
+        self.presentation_obscured = obscured;
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        {
+            self.windows_native_lifecycle_dirty = true;
+            self.windows_native_focus_requested = false;
+        }
+    }
+
     fn try_close(
         &mut self,
         _tab_id: &str,
@@ -295,9 +308,7 @@ impl TabContent for RemoteDesktopView {
             self.windows_native_display.reset();
             let Some(registration) = self.windows_native_registration else {
                 if self.windows_native.is_some() || self.native_event_state.is_some() {
-                    tracing::error!(
-                        "Windows native RDP adapter has no shutdown registration"
-                    );
+                    tracing::error!("Windows native RDP adapter has no shutdown registration");
                     return Task::ready(false);
                 }
                 return Task::ready(true);

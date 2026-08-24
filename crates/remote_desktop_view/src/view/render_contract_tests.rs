@@ -634,8 +634,11 @@ fn windows_native_shutdown_uses_locked_gpui_context_contracts() {
             "{signature} must retain mutable AsyncApp access for WeakEntity::update"
         );
     }
-    let poll_registration =
-        function_body(&drain, "async fn poll_registration(\n", "fn completed_report(");
+    let poll_registration = function_body(
+        &drain,
+        "async fn poll_registration(\n",
+        "fn completed_report(",
+    );
     for call in [
         "record_stalled_detached_owner(registration, deadline_elapsed, cx)",
         "poll_view_owner(owner, registration, deadline, deadline_elapsed, cx).await",
@@ -769,7 +772,7 @@ fn windows_native_events_are_drained_on_the_gpui_owner_thread() {
     assert!(execute.contains("operation.native.activate(false)"));
     assert!(execute.contains("operation.native.focus()"));
     assert!(execute.contains("operation.event_state.take_focus_release_pending()"));
-    assert!(execute.contains("if !operation.tab_active {"));
+    assert!(execute.contains("if !presentation_active {"));
 
     assert!(native.contains("pub(super) fn drain_events("));
     assert!(native.contains("state.close_confirmed()"));
@@ -1443,15 +1446,24 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
         "fn take_windows_native_operation(",
         "fn commit_windows_native_operation",
     );
-    assert!(take.contains("lifecycle_dirty: std::mem::take(&mut self.windows_native_lifecycle_dirty),"));
-    assert!(take.contains("focus_requested: std::mem::take(&mut self.windows_native_focus_requested),"));
+    assert!(
+        take.contains("lifecycle_dirty: std::mem::take(&mut self.windows_native_lifecycle_dirty),")
+    );
+    assert!(
+        take.contains("focus_requested: std::mem::take(&mut self.windows_native_focus_requested),")
+    );
     let execute = function_body(
         &view,
         "fn execute_windows_native_operation(",
         "pub struct RemoteDesktopViewConfig",
     );
-    assert!(execute.contains("if operation.lifecycle_dirty && !operation.tab_active {"));
-    assert!(execute.contains("} else if operation.lifecycle_dirty && operation.tab_active && allow_activation {"));
+    assert!(execute.contains(
+        "let presentation_active = operation.tab_active && !operation.presentation_obscured;"
+    ));
+    assert!(execute.contains("if operation.lifecycle_dirty && !presentation_active {"));
+    assert!(execute.contains(
+        "} else if operation.lifecycle_dirty && presentation_active && allow_activation {"
+    ));
 
     // Phase 5 only installs Rust ownership/state. LoginComplete/Reconnected
     // perform native synchronization after the entity borrow has ended.
@@ -1469,13 +1481,57 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
 }
 
 #[test]
+fn windows_native_dialog_obscures_presentation_without_changing_tab_lifecycle() {
+    let render = include_str!("render.rs").replace("\r\n", "\n");
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let setter = function_body(&render, "fn set_presentation_obscured", "fn try_close");
+    let take = function_body(
+        &view,
+        "fn take_windows_native_operation(",
+        "fn commit_windows_native_operation",
+    );
+    let execute = function_body(
+        &view,
+        "fn execute_windows_native_operation(",
+        "pub struct RemoteDesktopViewConfig",
+    );
+
+    assert!(view.contains("presentation_obscured: bool,"));
+    assert!(view.contains("presentation_obscured: false,"));
+    assert!(setter.contains("self.presentation_obscured = obscured;"));
+    assert!(setter.contains("self.windows_native_lifecycle_dirty = true;"));
+    assert!(setter.contains("self.windows_native_focus_requested = false;"));
+    for forbidden in [
+        "native.activate",
+        "native.deactivate",
+        "native.focus",
+        "cx.defer_in",
+    ] {
+        assert!(
+            !setter.contains(forbidden),
+            "dialog obscuring must record pure Rust intent only: {forbidden}"
+        );
+    }
+
+    assert!(take.contains("presentation_obscured: self.presentation_obscured,"));
+    assert!(take.contains("!self.presentation_obscured"));
+    assert!(execute.contains(
+        "let presentation_active = operation.tab_active && !operation.presentation_obscured;"
+    ));
+    assert!(execute.contains("allow_activation = presentation_active;"));
+    assert!(execute.contains("if presentation_active {"));
+    assert!(execute.contains("operation.lifecycle_dirty && !presentation_active"));
+    assert!(
+        execute.contains("operation.lifecycle_dirty && presentation_active && allow_activation")
+    );
+    assert!(execute.contains("now_presentable\n        && presentation_active"));
+    assert!(execute.contains("if !presentation_active {\n        requested_focus = None;"));
+}
+
+#[test]
 fn standalone_window_starts_active_with_native_focus_requested() {
     let view = include_str!("../view.rs").replace("\r\n", "\n");
-    let new_body = function_body(
-        &view,
-        "pub fn new(",
-        "fn cancel_presentation_pacing",
-    );
+    let new_body = function_body(&view, "pub fn new(", "fn cancel_presentation_pacing");
 
     let standalone = new_body
         .find("let standalone_window = config.tab_index.is_none();")
@@ -1498,13 +1554,15 @@ fn standalone_window_starts_active_with_native_focus_requested() {
 
 #[test]
 fn overlay_composition_diagnostics_are_gated_behind_the_diagnostics_env() {
-    let source =
-        include_str!("windows_native_overlay/diagnostics.rs").replace("\r\n", "\n");
+    let source = include_str!("windows_native_overlay/diagnostics.rs").replace("\r\n", "\n");
 
     assert!(source.contains("NAVOP_REMOTE_DESKTOP_DIAGNOSTICS"));
     assert!(source.contains("fn overlay_diagnostics_enabled"));
     assert!(
-        source.matches("if !overlay_diagnostics_enabled() {").count() >= 4,
+        source
+            .matches("if !overlay_diagnostics_enabled() {")
+            .count()
+            >= 4,
         "every overlay log entry point must early-return when diagnostics are disabled"
     );
 }

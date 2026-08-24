@@ -40,10 +40,10 @@ mod user_avatar;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
 
-use crate::onetcli_app::OnetCliApp;
+use crate::onetcli_app::{GlobalTabContainer, OnetCliApp};
 use gpui::*;
 
-use gpui_component::Root;
+use gpui_component::{DialogStateChanged, Root};
 use gpui_component_assets::Assets;
 use one_core::settings::{AppSettings, MainWindowSize, MainWindowState};
 use std::path::PathBuf;
@@ -422,7 +422,15 @@ fn main() {
                 app_init::init_window_systems(window, cx);
                 update::schedule_update_check(window, cx);
                 let view = cx.new(|cx| OnetCliApp::new(window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
+                let root = cx.new(|cx| Root::new(view, window, cx));
+                let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();
+                cx.subscribe(&root, move |_, event: &DialogStateChanged, cx| {
+                    tab_container.update(cx, |tabs, cx| {
+                        tabs.set_active_presentation_obscured(event.active_count > 0, cx);
+                    });
+                })
+                .detach();
+                root
             }) {
                 Ok(window) => window,
                 Err(error) => {
@@ -561,6 +569,21 @@ mod embedded_cli_removal_tests {
             .expect("forwarded file open");
 
         assert!(activation < open);
+    }
+
+    #[test]
+    fn main_window_dialog_state_obscures_active_native_presentation() {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let root_export = include_str!("../../crates/ui/src/lib.rs");
+
+        assert!(root_export.contains("DialogStateChanged"));
+        assert!(source.contains("use gpui_component::{DialogStateChanged, Root};"));
+        assert!(source.contains("let root = cx.new(|cx| Root::new(view, window, cx));"));
+        assert!(source.contains("cx.subscribe(&root,"));
+        assert!(source.contains("event: &DialogStateChanged"));
+        assert!(source.contains("event.active_count > 0"));
+        assert!(source.contains("set_active_presentation_obscured"));
+        assert!(source.contains(".detach();\n                root"));
     }
 
     #[test]
