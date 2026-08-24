@@ -39,8 +39,8 @@ fn clipboard_sync_backoff_uses_explicit_time_without_sleeping() {
 
 #[test]
 fn successful_clipboard_reads_and_writes_clear_the_unavailable_backoff() {
-    let clipboard_source = include_str!("clipboard.rs");
-    let input_source = include_str!("input.rs");
+    let clipboard_source = include_str!("clipboard.rs").replace("\r\n", "\n");
+    let input_source = include_str!("input.rs").replace("\r\n", "\n");
 
     assert_eq!(
         3,
