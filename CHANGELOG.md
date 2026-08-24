@@ -4,6 +4,32 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.10] - 2026-08-24
+
+### 中文
+
+#### 修复与优化
+
+- 修复 Windows RDP 独立全屏窗口的兼容性与稳定性问题：从连接右键菜单打开独立窗口时，改用系统远程桌面客户端 `mstsc.exe` 启动全屏会话，避免内嵌原生窗口可能出现的白屏、焦点和退出异常。
+- 支持将主机名、IPv4、IPv6 与自定义端口正确传递给系统远程桌面客户端；参数无效或外部程序启动失败时会在 Navop 中显示明确提示。
+- 修复 Windows 原生 RDP 会话关闭超时后标签页可能无法完成关闭的问题；超时隔离原生组件后，Navop 现在会正确收敛标签页关闭流程。
+- 修复关闭当前标签页后剩余标签页未正确激活、聚焦，以及延迟激活事件可能让空标签容器覆盖新版首页的问题。
+- 非 Windows 平台及 VNC 独立窗口继续使用 Navop 内置窗口，不受本次调整影响。
+
+---
+
+### English
+
+#### Fixes and Improvements
+
+- Fixed compatibility and stability issues with dedicated fullscreen Windows RDP windows. Opening a dedicated window from a connection's context menu now launches the system Remote Desktop client (`mstsc.exe`) in fullscreen, avoiding white-screen, focus, and exit issues that could occur with the embedded native window.
+- Correctly passes hostnames, IPv4/IPv6 addresses, and custom ports to the system Remote Desktop client, with clear in-app messages when the connection parameters are invalid or the external program cannot be launched.
+- Fixed an issue where a Windows native RDP tab could remain open after native shutdown timed out. Once the native component is quarantined, Navop now completes the tab close flow correctly.
+- Fixed lifecycle and focus restoration for the remaining tab after closing the active tab, and prevented a delayed activation event from replacing the modern home page with an empty tab container.
+- Dedicated VNC windows and remote desktop windows on non-Windows platforms continue to use Navop's built-in window and are unaffected by this change.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.9...v0.10.10
+
 ## [v0.10.9] - 2026-08-24
 
 ### 中文
