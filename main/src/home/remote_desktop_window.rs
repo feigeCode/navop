@@ -15,10 +15,7 @@ fn remote_desktop_window_options(title: String) -> PopupWindowOptions {
         .min_width(MIN_WINDOW_WIDTH)
         .min_height(MIN_WINDOW_HEIGHT)
         .fullscreen(true)
-        // 全屏 RDP 的 ActiveX 子窗口会覆盖整个客户区并抢走鼠标/键盘输入，
-        // 隐藏标题栏后 hover 显示与关闭都会失效。保留标题栏，让窗口控件
-        // 始终可见可点（overlay 只覆盖标题栏下方的内容区）。
-        .hide_titlebar_when_fullscreen(false)
+        .hide_titlebar_when_fullscreen(true)
         .fullscreen_hint(t!("Connection.fullscreen_exit_hint").to_string())
 }
 
@@ -51,11 +48,11 @@ pub(crate) fn open_remote_desktop_fullscreen_window(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn fullscreen_window_keeps_titlebar_visible() {
+    fn fullscreen_window_hides_titlebar_until_hovered() {
         let options = super::remote_desktop_window_options("RDP".to_string());
 
         assert!(options.fullscreen);
-        assert!(!options.hide_titlebar_when_fullscreen);
+        assert!(options.hide_titlebar_when_fullscreen);
         assert!(options.fullscreen_hint.is_some());
     }
 }

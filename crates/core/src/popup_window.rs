@@ -226,14 +226,48 @@ impl Render for PopupWindowContent {
                         cx.notify();
                     }))
             })
-            .justify_center()
+            .when(auto_hide_titlebar, |this| this.justify_start())
+            .when(!auto_hide_titlebar, |this| this.justify_center())
             .size_full()
             .bg(cx.theme().background)
             .opacity(crate::settings::AppSettings::global(cx).window_opacity)
             .when(!auto_hide_titlebar, |this| {
                 this.child(render_popup_titlebar(self.title.clone()))
             })
-            .child(self.view.clone())
+            .when(auto_hide_titlebar && self.titlebar_revealed, |this| {
+                this.child(
+                    div()
+                        .id("fullscreen-titlebar")
+                        .w_full()
+                        .h(TITLE_BAR_HEIGHT)
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            if !*hovered && this.titlebar_revealed {
+                                this.titlebar_revealed = false;
+                                cx.notify();
+                            }
+                        }))
+                        .child(render_popup_titlebar(self.title.clone())),
+                )
+            })
+            .child(
+                div()
+                    .id("fullscreen-titlebar-content")
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    // Native overlay children (RDP ActiveX) are positioned from
+                    // the embedded view bounds and would swallow the top hover
+                    // zone. Reserve the strip while the titlebar is hidden so
+                    // hovering the top edge can still reveal the window chrome.
+                    .when(
+                        auto_hide_titlebar && !self.titlebar_revealed,
+                        |this| this.pt(px(4.0)),
+                    )
+                    .child(self.view.clone()),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
@@ -245,21 +279,14 @@ impl Render for PopupWindowContent {
                         .top_0()
                         .left_0()
                         .w_full()
-                        .h(if self.titlebar_revealed {
-                            TITLE_BAR_HEIGHT
-                        } else {
-                            px(4.0)
-                        })
+                        .h(px(4.0))
                         .overflow_hidden()
-                        .on_hover(cx.listener(|this, hovered, _, cx| {
-                            if this.titlebar_revealed != *hovered {
-                                this.titlebar_revealed = *hovered;
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            if *hovered && !this.titlebar_revealed {
+                                this.titlebar_revealed = true;
                                 cx.notify();
                             }
-                        }))
-                        .when(self.titlebar_revealed, |this| {
-                            this.child(render_popup_titlebar(self.title.clone()))
-                        }),
+                        })),
                 )
             })
     }
