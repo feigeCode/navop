@@ -8,7 +8,7 @@
 
   <p>
     <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="下载量" /></a>
-    <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
+    <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=dev&style=for-the-badge" alt="CI" /></a>
     <a href="#许可证"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20supplementary%20terms-blue?style=for-the-badge" alt="许可证：Apache-2.0 与补充协议" /></a>
     <a href="https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605"><img src="https://img.shields.io/badge/QQ%20Group-860670605-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ 群 860670605" /></a>
     <a href="https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD"><img src="https://img.shields.io/badge/WeChat%20Group-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="加入微信群" /></a>
@@ -55,18 +55,23 @@
 
 - 连接 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse。
 - 通过扩展安装达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB，以及无需 Instant Client 的 Oracle 驱动。
-- 浏览数据库对象，编辑和执行 SQL，查看执行计划，导入导出数据，比较 Schema/Data，并通过 ER 图查看关系。
+- 浏览数据库对象，编辑和执行 SQL，查看执行计划，导入导出数据，比较 Schema/Data，并通过 ER 图查看关系；SQL 查询支持无限结果模式与执行中取消。
+- 编辑 MySQL 存储过程与函数、PostgreSQL 函数与过程，支持重载例程导航，并可查看表大小、索引数等表信息。
 - 查看持久化保存的 SQL 执行历史，使用改进的跨数据库类型映射和目标表匹配进行 Schema/Data Compare，并选择 Oracle Native 或纯 Go 驱动，同时支持 Oracle 11g 查询分页限制。
 - 使用专用界面管理 Redis 与 MongoDB。
 - 通过 SOCKS5、HTTP CONNECT 代理和 SSH 隧道路由受支持的网络连接。
 
 ### 远程连接与运维
 
-- 在可拖拽分屏中使用 SSH 与本地终端，并提供快捷命令、历史记录、广播输入、Shell integration 和终端 AI。
+- 在可拖拽分屏中使用 SSH 与本地终端，并提供快捷命令、历史记录、广播输入、Shell integration 和终端 AI；SSH 可配置字符集（UTF-8、GBK、Big5、Shift_JIS 等）与终端类型以适配旧环境。
+- 使用密码锁定会话，可一键锁定全部会话，或隐藏当前会话输出。
+- 录制终端会话并通过只读时间线回放，回放期间会阻止输入与在线操作。
 - 支持 Telnet 连接、自动登录脚本和手动凭据覆盖。
 - 通过静态历史查看器查看 SSH、串口和本地终端会话日志，支持滚动、文本选择、搜索与 TXT 导出。
-- 通过 SFTP 上传下载、搜索、收藏、远程编辑、拖拽传输和跨服务器复制文件。
+- 通过 SFTP 上传下载、目录上传、搜索、收藏、远程编辑、拖拽传输和跨服务器复制文件；并支持 SSH 下的 ZMODEM 文件传输。
+- 支持导入 SecureCRT 会话与快捷命令，并在连接侧边栏批量管理连接。
 - 创建可复用的本地、远程（`ssh -R`）端口转发与动态 SOCKS 隧道。
+- SSH/SFTP 主机密钥变更时会展示新旧指纹并要求明确确认，且可按连接启用旧版 SSH 算法。
 - 使用串口连接、服务器监控，以及通过扩展 provider 提供的 RDP/VNC 远程桌面。
 
 ### 编辑、AI 与扩展
@@ -172,11 +177,11 @@ npx -y @navop/mcp@latest
 | 平台 | 架构 | 产物 |
 | --- | --- | --- |
 | macOS | Apple Silicon、Intel | `.dmg`、`.tar.gz` |
-| Linux | x86_64 | `.tar.gz`、`.deb`、`.rpm`、`.AppImage` |
-| Linux | ARM64 | `.tar.gz` |
+| Linux | x86_64 | `.tar.gz`、`.deb`、`.rpm`、`.AppImage`、`-portable.tar.gz` |
+| Linux | ARM64 | `.tar.gz`、`-portable.tar.gz` |
 | Windows | x86_64、x86（32 位） | `.msi`、`.exe`、`.zip`、`-portable.zip` |
 
-Windows `.msi` 和 `.exe` 都是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；EXE 安装包封装的是同一套 MSI 安装流程。普通 `.zip` 是免安装版，仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。只有需要把应用数据放在程序同级目录时才应下载 `-portable.zip`。便携模式默认每次启动都要求输入主密钥。用户也可以在设置中明确选择把可自动恢复的加密主密钥副本保存到 `data/state/key_storage`，但该加密使用程序内置密钥，不具备设备绑定保护；任何同时获得应用程序和完整 `data` 目录的人都可能恢复主密钥。
+Windows `.msi` 和 `.exe` 都是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；EXE 安装包封装的是同一套 MSI 安装流程。普通 `.zip` 是免安装版，仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。只有需要把应用数据放在程序同级目录时才应下载 `-portable.zip`。便携版（Linux 与 Windows）默认每次启动都要求输入主密钥。用户也可以在设置中明确选择把可自动恢复的加密主密钥副本保存到 `data/state/key_storage`，但该加密使用程序内置密钥，不具备设备绑定保护；任何同时获得应用程序和完整 `data` 目录的人都可能恢复主密钥。
 
 > **从 v0.10.1 或更早版本的 Windows ZIP 升级：**这些历史 ZIP 已启用便携模式。请下载新的 `-portable.zip`，解压到新目录，并把原目录中的整个 `data` 复制进去。如果把新的普通 `.zip` 解压到另一个目录，或改用 MSI/EXE 安装版，Navop 会使用正常的 Windows 用户数据目录，而且不会自动迁移便携数据。原有连接和设置可能因此看起来消失，但旧便携目录中的数据并未被删除。
 

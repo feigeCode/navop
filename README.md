@@ -8,7 +8,7 @@
 
   <p>
     <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="Downloads" /></a>
-    <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
+    <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=dev&style=for-the-badge" alt="CI" /></a>
     <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20supplementary%20terms-blue?style=for-the-badge" alt="License: Apache-2.0 plus supplementary terms" /></a>
     <a href="https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605"><img src="https://img.shields.io/badge/QQ%20Group-860670605-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ Group 860670605" /></a>
     <a href="https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD"><img src="https://img.shields.io/badge/WeChat%20Group-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="Join WeChat Group" /></a>
@@ -55,18 +55,23 @@
 
 - Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse.
 - Install extension drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and Oracle without Instant Client.
-- Browse database objects, edit and run SQL, inspect execution plans, import or export data, compare schemas and data, and visualize relationships with ER diagrams.
-- Review persistent SQL execution history, compare cross-database schemas and data with improved type mapping and target matching, and choose Native or pure-Go Oracle drivers, including Oracle 11g query-limit support.
+- Browse database objects, edit and run SQL, inspect execution plans, import or export data, compare schemas and data, and visualize relationships with ER diagrams. Run SQL queries in unlimited-results mode and cancel in-flight execution when needed.
+- Edit MySQL stored procedures and functions and PostgreSQL functions and procedures, with overload-aware routine navigation and table information such as sizes and index counts.
+- Review persistent SQL execution history, compare schemas and data across databases with improved type mapping and target matching, and choose Native or pure-Go Oracle drivers, including Oracle 11g query-limit support.
 - Work with Redis and MongoDB through dedicated interfaces.
 - Route supported network connections through SOCKS5 or HTTP CONNECT proxies and SSH tunnels.
 
 ### Remote access and operations
 
-- Use SSH and local terminals with draggable splits, quick commands, history, broadcast input, shell integration, and terminal AI.
+- Use SSH and local terminals with draggable split panes in any direction, quick commands, history, broadcast input, shell integration, and terminal AI. Configure SSH encodings (UTF-8, GBK, Big5, Shift_JIS, and more) and terminal types to match legacy environments.
+- Lock sessions with a password, lock all active sessions at once, or hide the output of the current session.
+- Record sessions and replay them in a read-only timeline viewer that blocks input and online operations.
 - Connect over Telnet with automatic login scripts and manual credential overrides.
 - Review SSH, serial, and local terminal session logs in a static history viewer with scrollback, selection, search, and TXT export.
-- Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy.
+- Manage remote files with SFTP uploads, directory uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy; transfer files over SSH with ZMODEM.
+- Import SecureCRT sessions and quick commands, and batch-manage connections from the sidebar.
 - Create reusable local, remote (`ssh -R`), and dynamic SOCKS port-forwarding connections.
+- Confirm SSH and SFTP host-key changes with explicit fingerprint warnings, and enable legacy SSH algorithms only when a server requires them.
 - Open serial connections, monitor servers, and connect to remote desktops through installable RDP and VNC providers.
 
 ### Editing, AI, and extensibility
@@ -172,11 +177,11 @@ Download the latest build from [GitHub Releases](https://github.com/feigeCode/na
 | Platform | Architecture | Artifacts |
 | --- | --- | --- |
 | macOS | Apple Silicon, Intel | `.dmg`, `.tar.gz` |
-| Linux | x86_64 | `.tar.gz`, `.deb`, `.rpm`, `.AppImage` |
-| Linux | ARM64 | `.tar.gz` |
+| Linux | x86_64 | `.tar.gz`, `.deb`, `.rpm`, `.AppImage`, `-portable.tar.gz` |
+| Linux | ARM64 | `.tar.gz`, `-portable.tar.gz` |
 | Windows | x86_64, x86 (32-bit) | `.msi`, `.exe`, `.zip`, `-portable.zip` |
 
-The Windows `.msi` and `.exe` are bilingual per-user installers and do not require administrator privileges when using the default location. The EXE installer wraps the same MSI installation. The standard `.zip` requires no installation but still uses the normal per-user data directories and supports remembered master-key unlock. Use `-portable.zip` only when the application data must stay beside the executable. Portable mode asks for the master key on every start by default. You may explicitly choose in Settings to store an encrypted, automatically recoverable copy under `data/state/key_storage`, but this uses a key embedded in the application rather than device-bound protection; anyone who obtains both the application and the complete `data` directory may be able to recover the master key.
+The Windows `.msi` and `.exe` are bilingual per-user installers and do not require administrator privileges when using the default location. The EXE installer wraps the same MSI installation. The standard `.zip` requires no installation but still uses the normal per-user data directories and supports remembered master-key unlock. Use `-portable.zip` only when the application data must stay beside the executable. Portable archives (Linux and Windows) ask for the master key on every start by default. You may explicitly choose in Settings to store an encrypted, automatically recoverable copy under `data/state/key_storage`, but this uses a key embedded in the application rather than device-bound protection; anyone who obtains both the application and the complete `data` directory may be able to recover the master key.
 
 > **Upgrading from the Windows ZIP in v0.10.1 or earlier:** those archives enabled portable mode. Download the new `-portable.zip`, extract it to a new directory, and copy the complete existing `data` directory into it. Extracting the new standard `.zip` to a different directory, or switching to the MSI/EXE installer, uses the normal Windows user data location and does not automatically migrate portable data. The old connections and settings may therefore appear missing even though the original portable data has not been deleted.
 
