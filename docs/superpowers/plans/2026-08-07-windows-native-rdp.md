@@ -2,9 +2,9 @@
 
 > Steps use checkbox (`- [ ]`) syntax for tracking. Update this document whenever scope, dependencies, decisions, commands, validation evidence, or status change.
 
-**Goal:** 在 Windows 版 Navop 中使用系统 `mstscax.dll` 提供的 Remote Desktop ActiveX 控件，把真实的微软 RDP 客户端直接嵌入 GPUI 的远程桌面 tab；完整覆盖连接、输入、显示、剪贴板、音频、重连、安全、RD Gateway、资源重定向、多显示器、诊断、打包和发布，同时保留现有 canvas/IronRDP 路径作为跨平台实现和可靠回退。
+**Goal:** 在 Windows 版 Navop 的普通 RDP tab 中使用系统 `mstscax.dll` 提供的 Remote Desktop ActiveX 控件，把真实的微软 RDP 客户端直接嵌入 GPUI 的远程桌面 tab；独立窗口是明确的例外，直接交给系统 `mstsc.exe` 全屏打开。完整覆盖连接、输入、显示、剪贴板、音频、重连、安全、RD Gateway、资源重定向、多显示器、诊断、打包和发布，同时保留现有 canvas/IronRDP 路径作为跨平台实现和可靠回退。
 
-**Architecture:** Navop 不启动并重挂外部 `mstsc.exe` 顶层窗口，而是在 GPUI 主窗口下创建受控的 Win32 child `HWND`，由一个小型 C++/ATL shim 在该窗口内创建 `MsRdpClient12` ActiveX 控件。Rust 通过窄 C ABI 持有 opaque handle、发送命令并接收结构化事件。`RemoteDesktopView` 使用 presentation 层在现有 canvas 和 Windows native child window 之间选择；native 控件自行绘制并处理输入，不伪装成 framebuffer backend。
+**Architecture:** 普通 RDP tab 不启动并重挂外部 `mstsc.exe` 顶层窗口，而是在 GPUI 主窗口下创建受控的 Win32 child `HWND`，由一个小型 C++/ATL shim 在该窗口内创建 `MsRdpClient12` ActiveX 控件。Rust 通过窄 C ABI 持有 opaque handle、发送命令并接收结构化事件。`RemoteDesktopView` 使用 presentation 层在现有 canvas 和 Windows native child window 之间选择；native 控件自行绘制并处理输入，不伪装成 framebuffer backend。Windows RDP 独立窗口不嵌入 ActiveX，而是直接启动系统 `mstsc.exe /f`，不通过 `SetParent` 重新挂接；VNC 与非 Windows 的独立窗口继续使用 Navop 内部 popup。
 
 **Tech Stack:** Rust 2024、GPUI、`windows` crate、Win32/COM/OLE、C++17、ATL、`cc` crate、`mstscax.dll` / `MsRdpClient12`、Cargo feature、现有 IronRDP/canvas backend、Windows x64/x86 CI 和真机/VM 验证。
 
@@ -39,7 +39,7 @@ Navop GPUI window
                 └── system mstscax.dll
 ```
 
-不采用：
+普通 RDP tab 不采用：
 
 ```text
 启动 mstsc.exe
@@ -52,6 +52,15 @@ Navop GPUI window
 - 外部 `mstsc.exe` 的进程、窗口、焦点、DPI、对话框、退出和升级行为不受 Navop 控制。
 - `SetParent` 不是受支持的 ActiveX 宿主 contract，会导致输入队列、窗口样式、所有者关系、模态对话框和 DPI awareness 不一致。
 - ActiveX 控件本身就是微软提供给桌面容器应用的可嵌入接口，应直接宿主系统控件。
+
+独立窗口的产品边界例外：
+
+- 普通 RDP tab：继续使用 Navop 内嵌 ActiveX。
+- Windows RDP 独立窗口：直接启动系统 `mstsc.exe /v:<host[:port]> /f`。
+- 不使用 `SetParent` 重新嵌入外部 MSTSC；外部窗口生命周期不由 Navop popup 管理。
+- 外部 MSTSC 不接收 Navop 保存的 username/password，只使用 Windows 已有凭据或系统自己的登录提示。
+- 外部 MSTSC 不受 Navop remote desktop provider guard 约束。
+- VNC 与非 Windows fallback 独立窗口仍使用内部 popup。
 
 ### 1.2 ActiveX 版本与接口边界
 
@@ -197,7 +206,7 @@ Navop GPUI window
 
 ### 3.4 明确非目标
 
-- 不通过 `SetParent` 嵌入外部 `mstsc.exe`。
+- 不通过 `SetParent` 嵌入外部 `mstsc.exe`；Windows RDP 独立窗口虽直接启动外部 `mstsc.exe`，但保持独立进程和窗口，不做重挂接。
 - 不把 ActiveX 的绘制结果抓取后伪装成现有 framebuffer backend。
 - 不把 RD Gateway 当成 SOCKS5/HTTP proxy；两者配置、认证和失败语义独立。
 - 不分发、替换或注册自带 `mstscax.dll`。
@@ -3243,7 +3252,7 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 - [ ] Task 1-4 完成。
 - [ ] x64/x86 创建、连接、销毁成功。
-- [ ] 未使用外部 `mstsc.exe`/`SetParent`。
+- [ ] 普通 RDP tab 未使用外部 `mstsc.exe`/`SetParent`；Windows RDP 独立窗口若启用，仅验证其直接启动且不做 `SetParent` 重挂接。
 
 ### Gate B：可供内部使用
 

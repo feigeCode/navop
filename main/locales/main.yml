@@ -123,6 +123,14 @@ Home:
     en: "Invalid local terminal configuration: %{error}"
     zh-CN: "本地终端配置无效：%{error}"
     zh-HK: "本機終端設定無效：%{error}"
+  remote_desktop_parameters_invalid:
+    en: "Invalid remote desktop connection parameters: %{error}"
+    zh-CN: "远程桌面连接参数无效：%{error}"
+    zh-HK: "遠程桌面連線參數無效：%{error}"
+  external_program_launch_failed:
+    en: "Unable to launch the Windows Remote Desktop client: %{error}"
+    zh-CN: "无法启动 Windows 远程桌面客户端：%{error}"
+    zh-HK: "無法啟動 Windows 遠程桌面用戶端：%{error}"
   port_forwarding_started:
     en: "Port Forwarding %{name} started on %{addr}"
     zh-CN: "端口转发 %{name} 已启动：%{addr}"

@@ -1477,29 +1477,6 @@ fn standalone_window_starts_active_with_native_focus_requested() {
 }
 
 #[test]
-fn standalone_fullscreen_escape_uses_a_scoped_low_level_keyboard_hook() {
-    let view = include_str!("../view.rs").replace("\r\n", "\n");
-    let hook = include_str!("windows_native_fullscreen_escape.rs").replace("\r\n", "\n");
-
-    assert!(view.contains("mod windows_native_fullscreen_escape;"));
-    let install_site = function_body(&view, "pub fn new(", "fn cancel_presentation_pacing");
-    assert!(
-        install_site.contains("windows_native_fullscreen_escape::install_fullscreen_escape("),
-        "standalone windows must install the Escape hook"
-    );
-    assert!(install_site.contains("if standalone_window {"));
-
-    assert!(hook.contains("SetWindowsHookExW(WH_KEYBOARD_LL"));
-    assert!(hook.contains("VK_ESCAPE"));
-    assert!(hook.contains("GetForegroundWindow()"));
-    assert!(hook.contains("active.target_hwnd == foreground"));
-    assert!(hook.contains("active.fullscreen"));
-    assert!(hook.contains("window.toggle_fullscreen()"));
-    assert!(hook.contains("CallNextHookEx"));
-    assert!(hook.contains("UnhookWindowsHookEx"));
-}
-
-#[test]
 fn overlay_composition_diagnostics_are_gated_behind_the_diagnostics_env() {
     let source =
         include_str!("windows_native_overlay/diagnostics.rs").replace("\r\n", "\n");

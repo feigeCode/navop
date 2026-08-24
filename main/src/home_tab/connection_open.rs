@@ -116,6 +116,62 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        {
+            if connection.connection_type == ConnectionType::Rdp {
+                let params = match connection.to_remote_desktop_params() {
+                    Ok(params) => params,
+                    Err(error) => {
+                        tracing::warn!(
+                            connection_id = ?connection.id,
+                            ?error,
+                            "无法解析远程桌面连接参数"
+                        );
+                        window.push_notification(
+                            Notification::error(
+                                t!(
+                                    "Home.remote_desktop_parameters_invalid",
+                                    error = format!("{error:#}")
+                                )
+                                .to_string(),
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                };
+
+                match crate::home::remote_desktop_window::launch_mstsc_fullscreen(
+                    &params.host,
+                    params.port,
+                ) {
+                    Ok(()) => {
+                        self.selected_connection_id = connection.id;
+                        self.touch_connection_last_used(connection.id, cx);
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            connection_id = ?connection.id,
+                            ?error,
+                            "无法启动 Windows 远程桌面客户端"
+                        );
+                        window.push_notification(
+                            Notification::error(
+                                t!(
+                                    "Home.external_program_launch_failed",
+                                    error = format!("{error:#}")
+                                )
+                                .to_string(),
+                            ),
+                            cx,
+                        );
+                    }
+                }
+                return;
+            }
+        }
+
         if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
             return;
         }

@@ -64,8 +64,6 @@ mod windows_native_display;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_display_integration;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-mod windows_native_fullscreen_escape;
-#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_overlay;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_policy;
@@ -1064,17 +1062,6 @@ impl RemoteDesktopView {
             });
         })
         .detach();
-
-        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-        if standalone_window {
-            // The ActiveX child owns the Win32 keyboard focus inside the
-            // standalone fullscreen popup, so the popup keybinding can never
-            // see Escape. Intercept it with a low-level keyboard hook.
-            windows_native_fullscreen_escape::install_fullscreen_escape(
-                window_handle,
-                cx,
-            );
-        }
 
         Self {
             options: config.options,
