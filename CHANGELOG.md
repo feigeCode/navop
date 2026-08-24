@@ -4,6 +4,40 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.11.0] - 2026-08-24
+
+### 中文
+
+#### 更新内容
+
+- 连接列表新增排序设置：「设置 → 通用 → 连接显示」新增「连接排序」，默认按名称自然排序（IP 地址等数字段按数值比较、忽略大小写），也可切换为「最近使用优先（LRU）」；首页连接列表、Redis/MongoDB 工作区标签页与持久侧栏连接树统一应用该配置，切换后即时生效。
+- SSH 新增对老旧服务器的可选兼容支持：在连接「高级设置」中开启「允许旧版 SSH 算法」后，可连接仅支持 DSA 主机密钥、SHA-1 密钥交换/MAC 或 1024 位 DH 组协商的旧设备，并针对「Key exchange init failed」问题调整协商参数与顺序，同时完善相关错误提示。
+- 标签页改进：复制标签页自动追加序号（例如 192.168.1.1 → 192.168.1.1(1)），并复用已释放的编号；标签宽度按内容自适应，不再截断长标题。
+- 更新依赖以提升安全性与功能：升级 clickhouse、sqlparser、russh、russh-sftp 等依赖，并引入 gpui-ce 剪贴板修复。
+
+#### 修复与优化
+
+- 修复原生 RDP 遮挡对话框与关闭流程问题，改进原生窗口叠加层、连接状态显示与剪贴板同步重试回退。
+- 修复 MySQL 数据库导出时 LONGTEXT 字段未能作为文本正确导出的问题。
+
+---
+
+### English
+
+#### What's New
+
+- Added configurable connection sorting under **Settings → General → Connection Display**: a new "Connection Sorting" option defaults to natural name order (numeric segments such as IP addresses compared by value, case-insensitive) with "Most Recently Used" (LRU) also available; the Home connection list, Redis/MongoDB workspace tabs, and the persistent connection sidebar tree all honor the setting and refresh immediately on change.
+- SSH now offers opt-in compatibility for legacy servers. With "Allow Legacy SSH Algorithms" enabled under **Advanced Settings**, Navop can connect to old devices that only support DSA host keys, SHA-1 key exchange/MAC, or 1024-bit DH group negotiation, with adjusted negotiation parameters and order that avoid "Key exchange init failed", plus clearer error messages.
+- Improved tabs: duplicated tabs are automatically numbered (e.g. `192.168.1.1` → `192.168.1.1(1)`), reusing freed numbers, and tab widths now adapt to content so long titles are not truncated.
+- Updated dependencies for security and functionality: clickhouse, sqlparser, russh, and russh-sftp were upgraded, and a gpui-ce clipboard fix was included.
+
+#### Fixes and Improvements
+
+- Fixed native RDP overlay dialogs and the close flow, and improved native window overlay handling, connecting status display, and clipboard retry/backoff.
+- Fixed MySQL export so `LONGTEXT` fields are correctly exported as text.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.10...v0.11.0
+
 ## [v0.10.10] - 2026-08-24
 
 ### 中文
