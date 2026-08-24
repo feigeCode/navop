@@ -15,6 +15,7 @@ use notes::NotesView;
 use one_core::license::Feature;
 use one_core::settings::{LocalTerminalCustomProfile, LocalTerminalProfileKind};
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
+use one_core::tab_actions::next_duplicate_tab_index;
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
@@ -873,6 +874,18 @@ impl HomePage {
         });
     }
 
+    /// 计算同基础名称的下一个可用标签序号；没有任何同名标签时返回 None（首标签不加序号）。
+    fn next_available_tab_index(&self, base_title: &str, cx: &App) -> Option<usize> {
+        let tab_container = self.active_tab_container(cx);
+        let titles: Vec<String> = tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .map(|tab| tab.title(cx).to_string())
+            .collect();
+        next_duplicate_tab_index(base_title, titles.iter().map(String::as_str))
+    }
+
     fn terminal_sync_path_enabled(cx: &App) -> bool {
         current_terminal_settings(cx).sync_path_with_terminal
     }
@@ -901,7 +914,7 @@ impl HomePage {
             .unwrap_or(0);
         let tab_id = format!("ssh-terminal-{}-{}", conn_id, timestamp);
 
-        // 统计同一连接的 SSH 终端数量，计算序号
+        // 统计同一连接的 SSH 终端数量，计算序号（从 (1) 开始，复用已释放序号）
         let prefix = format!("ssh-terminal-{}-", conn_id);
         let tab_container = self.active_tab_container(cx);
         let existing_count = tab_container
@@ -910,11 +923,10 @@ impl HomePage {
             .iter()
             .filter(|t| t.id().starts_with(&prefix))
             .count();
-        let tab_index = if existing_count > 0 {
-            Some(existing_count + 1)
-        } else {
-            None
-        };
+        let base_title = conn.name.clone();
+        let tab_index = self
+            .next_available_tab_index(&base_title, cx)
+            .or_else(|| (existing_count > 0).then_some(existing_count));
         let sync_path = Self::terminal_sync_path_enabled(cx);
 
         let terminal_view = cx.new(|cx| {
@@ -959,11 +971,10 @@ impl HomePage {
             .iter()
             .filter(|t| t.id().starts_with(&prefix))
             .count();
-        let tab_index = if existing_count > 0 {
-            Some(existing_count + 1)
-        } else {
-            None
-        };
+        let base_title = conn.name.clone();
+        let tab_index = self
+            .next_available_tab_index(&base_title, cx)
+            .or_else(|| (existing_count > 0).then_some(existing_count));
 
         let terminal_view =
             cx.new(|cx| TerminalWorkspace::new_serial_with_index(conn, tab_index, window, cx));
@@ -1036,7 +1047,7 @@ impl HomePage {
             .unwrap_or(0);
         let tab_id = format!("sftp-{}-{}", conn_id, timestamp);
 
-        // 统计同一连接的 SFTP 视图数量，计算序号
+        // 统计同一连接的 SFTP 视图数量，计算序号（从 (1) 开始，复用已释放序号）
         let prefix = format!("sftp-{}-", conn_id);
         let tab_container = self.active_tab_container(cx);
         let existing_count = tab_container
@@ -1045,11 +1056,10 @@ impl HomePage {
             .iter()
             .filter(|t| t.id().starts_with(&prefix))
             .count();
-        let tab_index = if existing_count > 0 {
-            Some(existing_count + 1)
-        } else {
-            None
-        };
+        let base_title = conn.name.clone();
+        let tab_index = self
+            .next_available_tab_index(&base_title, cx)
+            .or_else(|| (existing_count > 0).then_some(existing_count));
 
         // 创建 SftpView 并订阅终端打开事件
         let sftp_view = cx.new(|cx| SftpView::new_with_index(conn, tab_index, window, cx));
@@ -1111,7 +1121,7 @@ impl HomePage {
                         let conn_id = connection.id.unwrap_or(0);
                         let tab_id = format!("ssh-terminal-{}-{}", conn_id, ts);
                         let conn = connection.clone();
-                        // 统计同一连接的 SSH 终端数量
+                        // 统计同一连接的 SSH 终端数量，计算序号（从 (1) 开始，复用已释放序号）
                         let prefix = format!("ssh-terminal-{}-", conn_id);
                         let existing = event_tab_container
                             .read(cx)
@@ -1119,11 +1129,18 @@ impl HomePage {
                             .iter()
                             .filter(|t| t.id().starts_with(&prefix))
                             .count();
-                        let idx = if existing > 0 {
-                            Some(existing + 1)
-                        } else {
-                            None
-                        };
+                        let base_title = conn.name.clone();
+                        let titles: Vec<String> = event_tab_container
+                            .read(cx)
+                            .tabs()
+                            .iter()
+                            .map(|tab| tab.title(cx).to_string())
+                            .collect();
+                        let idx = next_duplicate_tab_index(
+                            &base_title,
+                            titles.iter().map(String::as_str),
+                        )
+                        .or_else(|| (existing > 0).then_some(existing));
                         let sync_path = HomePage::terminal_sync_path_enabled(cx);
                         let terminal_view = cx.new(|cx| {
                             TerminalWorkspace::new_ssh_with_index(
@@ -1188,11 +1205,10 @@ impl HomePage {
             .iter()
             .filter(|tab| tab.id().starts_with(&prefix))
             .count();
-        let tab_index = if existing_count > 0 {
-            Some(existing_count + 1)
-        } else {
-            None
-        };
+        let base_title = conn.name.clone();
+        let tab_index = self
+            .next_available_tab_index(&base_title, cx)
+            .or_else(|| (existing_count > 0).then_some(existing_count));
         let title = conn.name.clone();
         let window_handle = window.window_handle();
         let view = cx.new(move |cx| {
@@ -1577,7 +1593,7 @@ impl HomePage {
             .unwrap_or(0);
         let tab_id = format!("terminal-{}", timestamp);
 
-        // 统计已有本地终端数量，计算序号
+        // 统计已有本地终端数量，计算序号（从 (1) 开始，复用已释放序号）
         let tab_container = self.active_tab_container(cx);
         let existing_count = tab_container
             .read(cx)
@@ -1585,11 +1601,9 @@ impl HomePage {
             .iter()
             .filter(|t| t.id().starts_with("terminal-") || t.id().starts_with("local-terminal-"))
             .count();
-        let tab_index = if existing_count > 0 {
-            Some(existing_count + 1)
-        } else {
-            None
-        };
+        let tab_index = self
+            .next_available_tab_index("Terminal", cx)
+            .or_else(|| (existing_count > 0).then_some(existing_count));
 
         let home = cx.entity();
         window.defer(cx, move |window, cx| {

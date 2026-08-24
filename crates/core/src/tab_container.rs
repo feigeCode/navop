@@ -5,7 +5,7 @@ use crate::sidebar_contribution::{
 };
 use crate::tab_actions::{
     TAB_TITLE_METADATA_KEY, clear_tab_activity, duplicate_tab_id, mark_tab_activity,
-    normalize_title, resolve_tab_title,
+    next_duplicate_tab_title, normalize_title, resolve_tab_title,
 };
 use crate::tab_navigation::{ActiveTabSlot, tab_number_target};
 use crate::tab_switcher::{TabSwitcherEntry, open_tab_switcher_dialog};
@@ -38,6 +38,15 @@ use std::sync::Arc;
 const TAB_MIN_WIDTH: Pixels = px(60.0);
 const TAB_RENAME_MIN_WIDTH: Pixels = px(280.0);
 const TAB_CONTAINER_CONTEXT: &str = "TabContainer";
+
+/// 标签最大宽度硬上限，防止超长标题撑爆标签栏。
+const TAB_HARD_MAX_WIDTH: f32 = 400.0;
+/// 每字符宽度的宽裕估算（含 CJK 余量），用于计算 max_w 上限。
+/// 实际渲染宽度由 GPUI flex 布局按真实字体测量，此值仅做上限保护。
+const TAB_CHAR_WIDTH_BUDGET: f32 = 12.0;
+/// 标签中除标题外的固定 UI 预算：序号 + 图标 + 状态标 + 关闭按钮 +
+/// gap_2 间距 + px_3 内边距。宽裕估算，确保上限不误伤正常标题。
+const TAB_CHROME_BUDGET: f32 = 160.0;
 
 #[derive(Clone, Copy)]
 struct TitlebarPlatform {
@@ -437,6 +446,10 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         true
     }
 
+    /// Called when the tab bar applies a final displayed title (rename or
+    /// duplicate suffix), so the content can keep derived labels in sync.
+    fn apply_title(&mut self, title: &str, window: &mut Window, cx: &mut Context<Self>) {}
+
     /// Whether this tab can be duplicated from the tab bar menu.
     fn can_duplicate(&self, cx: &App) -> bool {
         false
@@ -537,6 +550,7 @@ pub trait TabContentView: 'static + Send + Sync {
     fn closeable(&self, cx: &App) -> bool;
     fn can_rename(&self, cx: &App) -> bool;
     fn rename(&self, title: &str, window: &mut Window, cx: &mut App) -> bool;
+    fn apply_title(&self, title: &str, window: &mut Window, cx: &mut App);
     fn can_duplicate(&self, cx: &App) -> bool;
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>>;
     fn on_activate(&self, window: &mut Window, cx: &mut App);
@@ -609,6 +623,10 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn rename(&self, title: &str, window: &mut Window, cx: &mut App) -> bool {
         self.update(cx, |this, cx| this.rename(title, window, cx))
+    }
+
+    fn apply_title(&self, title: &str, window: &mut Window, cx: &mut App) {
+        self.update(cx, |this, cx| this.apply_title(title, window, cx));
     }
 
     fn can_duplicate(&self, cx: &App) -> bool {
@@ -2351,6 +2369,7 @@ impl TabContainer {
         if self.tabs[index].set_title_override(&title) {
             cx.emit(TabContainerEvent::LayoutChanged);
         }
+        self.tabs[index].content().apply_title(&title, window, cx);
         cx.notify();
     }
 
@@ -2372,14 +2391,25 @@ impl TabContainer {
         let duplicate_id = duplicate_tab_id(source_id.as_ref(), |candidate| {
             self.tabs.iter().any(|tab| tab.id() == candidate)
         });
+        // 复制标签时自动对标签名追加序号，如 "172.29.13.200" -> "172.29.13.200(1)"
+        let source_title = self.tabs[index].title(cx);
+        let duplicate_title = next_duplicate_tab_title(source_title.as_ref(), |candidate| {
+            self.tabs
+                .iter()
+                .any(|tab| tab.title(cx).as_ref() == candidate)
+        });
         let from = self.tabs[index].from();
         let metadata = self.tabs[index].metadata().clone();
-        let duplicate = TabItem {
+        let mut duplicate = TabItem {
             id: SharedString::from(duplicate_id.clone()),
             from,
             metadata,
             content: duplicate_content,
         };
+        duplicate.set_title_override(&duplicate_title);
+        duplicate
+            .content()
+            .apply_title(duplicate_title.as_ref(), window, cx);
         self.subscribe_tab_content(&duplicate, window, cx);
 
         let insert_index = (index + 1).min(self.tabs.len());
@@ -2567,9 +2597,18 @@ impl TabContainer {
         self.add_and_activate_tab_with_focus(tab, window, cx);
     }
 
+    /// 计算标签的 max_w 上限。实际渲染宽度由 GPUI flex 布局按真实字体测量，
+    /// 此处只提供宽裕的上限保护，避免超长标题撑爆标签栏。优先使用内容自带
+    /// 的 `width_size`；否则按标题字符数估算一个绝不误伤正常标题的上限。
     fn get_tab_max_width(&self, tab: &TabItem, cx: &App) -> gpui::Pixels {
-        let size = tab.content().width_size(cx).unwrap_or(self.size);
-        self.size_to_pixels(size)
+        if let Some(size) = tab.content().width_size(cx) {
+            return self.size_to_pixels(size);
+        }
+
+        let title = tab.title(cx);
+        let char_count = title.chars().count() as f32;
+        let estimated = char_count * TAB_CHAR_WIDTH_BUDGET + TAB_CHROME_BUDGET;
+        px(estimated.min(TAB_HARD_MAX_WIDTH))
     }
 
     fn size_to_pixels(&self, size: Size) -> gpui::Pixels {
@@ -3866,7 +3905,6 @@ impl TabContainer {
                             .items_center()
                             .gap_2()
                             .h(tab_item_height)
-                            .text_ellipsis()
                             .min_w(tab_min_width)
                             .max_w(tab_max_width)
                             .px_3()

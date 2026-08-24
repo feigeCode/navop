@@ -11,6 +11,8 @@ fn tab_content_view_exposes_tab_action_contracts() {
     let _can_rename: fn(&dyn TabContentView, &App) -> bool = <dyn TabContentView>::can_rename;
     let _rename: fn(&dyn TabContentView, &str, &mut gpui::Window, &mut App) -> bool =
         <dyn TabContentView>::rename;
+    let _apply_title: fn(&dyn TabContentView, &str, &mut gpui::Window, &mut App) =
+        <dyn TabContentView>::apply_title;
     let _can_duplicate: fn(&dyn TabContentView, &App) -> bool = <dyn TabContentView>::can_duplicate;
     let _duplicate: fn(
         &dyn TabContentView,

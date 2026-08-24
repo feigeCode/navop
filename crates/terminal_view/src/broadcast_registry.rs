@@ -36,6 +36,17 @@ impl BroadcastInputRegistry {
         }
     }
 
+    pub(crate) fn update_label(
+        &mut self,
+        id: BroadcastClientId,
+        label: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.hub.update_label(id, label) {
+            cx.notify();
+        }
+    }
+
     pub(crate) fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.hub.set_enabled(enabled) {
             cx.notify();
