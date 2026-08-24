@@ -52,55 +52,38 @@ pub fn build_client_preferred_algorithms_with_legacy(
 ) -> Preferred {
     let mut preferred = Preferred::default();
     if allow_legacy_algorithms {
-        preferred.kex = with_legacy_kex(preferred.kex);
+        let mut kex = preferred.kex.into_owned();
+        let extension_start = kex
+            .iter()
+            .position(|name| {
+                matches!(
+                    *name,
+                    kex::EXTENSION_SUPPORT_AS_CLIENT
+                        | kex::EXTENSION_SUPPORT_AS_SERVER
+                        | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
+                        | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
+                )
+            })
+            .unwrap_or(kex.len());
+
+        kex.splice(
+            extension_start..extension_start,
+            [
+                kex::ECDH_SHA2_NISTP256,
+                kex::ECDH_SHA2_NISTP384,
+                kex::ECDH_SHA2_NISTP521,
+                kex::DH_G14_SHA1,
+                // 固定组必须先于 group-exchange：russh 客户端 GEX 允许 MIN 为
+                // 2048 位（更低会被配置拒绝），只支持 1024 位组的旧设备必须
+                // 走固定 DH group1 路径才能完成密钥交换。
+                kex::DH_G1_SHA1,
+                kex::DH_GEX_SHA1,
+            ],
+        );
+        preferred.kex = Cow::Owned(kex);
     }
 
-    preferred.key = build_host_key_algorithms(
-        preferred.key,
-        known_host_key_algorithms,
-        allow_legacy_algorithms,
-    );
-    preferred
-}
-
-fn with_legacy_kex(preferred: Cow<'static, [kex::Name]>) -> Cow<'static, [kex::Name]> {
-    let mut kex = preferred.into_owned();
-    let extension_start = kex
-        .iter()
-        .position(|name| {
-            matches!(
-                *name,
-                kex::EXTENSION_SUPPORT_AS_CLIENT
-                    | kex::EXTENSION_SUPPORT_AS_SERVER
-                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
-                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
-            )
-        })
-        .unwrap_or(kex.len());
-    kex.splice(
-        extension_start..extension_start,
-        [
-            kex::ECDH_SHA2_NISTP256,
-            kex::ECDH_SHA2_NISTP384,
-            kex::ECDH_SHA2_NISTP521,
-            kex::DH_G14_SHA1,
-            kex::DH_GEX_SHA1,
-            kex::DH_G1_SHA1,
-        ],
-    );
-    Cow::Owned(kex)
-}
-
-fn build_host_key_algorithms(
-    preferred: Cow<'static, [Algorithm]>,
-    known_host_key_algorithms: &[String],
-    allow_legacy_algorithms: bool,
-) -> Cow<'static, [Algorithm]> {
-    let mut default_keys = preferred.into_owned();
-    if allow_legacy_algorithms && !default_keys.contains(&Algorithm::Dsa) {
-        default_keys.push(Algorithm::Dsa);
-    }
-
+    let default_keys = preferred.key.into_owned();
     let mut keys = Vec::with_capacity(default_keys.len());
     for known in known_host_key_algorithms {
         for candidate in &default_keys {
@@ -114,7 +97,19 @@ fn build_host_key_algorithms(
             keys.push(candidate);
         }
     }
-    Cow::Owned(keys)
+    if allow_legacy_algorithms {
+        // DSA (`ssh-dss`) host keys and hmac-sha1 predate OpenSSH and only
+        // appear with the explicitly enabled legacy compatibility set. Both
+        // are appended as last-resort fallbacks so modern and known algorithms
+        // stay preferred.
+        keys.push(Algorithm::Dsa);
+
+        let mut mac = preferred.mac.into_owned();
+        mac.push(russh::mac::HMAC_SHA1);
+        preferred.mac = Cow::Owned(mac);
+    }
+    preferred.key = Cow::Owned(keys);
+    preferred
 }
 
 fn host_key_algorithm_matches(candidate: &Algorithm, known: &str) -> bool {
@@ -206,6 +201,13 @@ impl SshConnectConfig {
     }
 }
 
+/// legacy 兼容允许的最低 DH 组位数。russh 客户端配置的下限即为 2048。
+const LEGACY_GEX_MIN_BITS: usize = 2048;
+/// legacy 兼容请求的首选 DH 组位数，避免旧设备按首选位生成过大的组。
+const LEGACY_GEX_PREFERRED_BITS: usize = 2048;
+/// DH 组位数上限，与 russh 默认保持一致。
+const LEGACY_GEX_MAX_BITS: usize = 8192;
+
 fn build_russh_client_config(
     config: &SshConnectConfig,
     identity: &HostKeyIdentity,
@@ -221,6 +223,7 @@ fn build_russh_client_config(
             &known_host_key_algorithms,
             config.allow_legacy_algorithms,
         ),
+        gex: legacy_gex_params(config.allow_legacy_algorithms)?,
         inactivity_timeout: Some(defaults::INACTIVITY_TIMEOUT),
         keepalive_interval: config
             .keepalive_interval
@@ -228,6 +231,23 @@ fn build_russh_client_config(
         keepalive_max: config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
         ..<_>::default()
     }))
+}
+
+/// 构建 DH 组交换参数。
+///
+/// 旧设备（如仅支持 ssh-dss / hmac-sha1 的服务器）常只提供 2048 位 DH 组，
+/// 而 russh 默认最低接受 3072 位，会导致 `Key exchange init failed`。
+/// 仅当连接显式开启 legacy 兼容时才放宽到 2048，现代路径保持严格默认。
+fn legacy_gex_params(allow_legacy_algorithms: bool) -> Result<client::GexParams> {
+    if allow_legacy_algorithms {
+        Ok(client::GexParams::new(
+            LEGACY_GEX_MIN_BITS,
+            LEGACY_GEX_PREFERRED_BITS,
+            LEGACY_GEX_MAX_BITS,
+        )?)
+    } else {
+        Ok(client::GexParams::default())
+    }
 }
 
 fn host_key_proxy_type(proxy_type: ProxyType) -> HostKeyProxyType {
@@ -2082,9 +2102,14 @@ fn normalize_disconnect_result(
 #[cfg(test)]
 mod port_forward_tests {
     use std::borrow::Cow;
+    use std::future::Future;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use russh::client::GexParams;
+    use russh::kex::DH_GEX_SHA256;
+    use russh::kex::DH_G1_SHA1;
+    use russh::kex::dh::groups::{DH_GROUP1, DH_GROUP14, DhGroup};
     use russh::server::{Auth, Server as _};
     use tempfile::TempDir;
     use tokio::net::TcpListener;
@@ -2095,8 +2120,9 @@ mod port_forward_tests {
         Algorithm, EcdsaCurve, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
         HostKeyVerifier, JumpServerConnectConfig, Preferred, PrivateKey, ProxyConnectConfig,
         ProxyType, RusshClient, SshAuth, SshClient, SshConnectConfig,
-        build_client_preferred_algorithms, build_client_preferred_algorithms_with_legacy,
-        build_local_forward_bind_addr, build_russh_client_config, normalize_disconnect_result,
+        build_client_preferred_algorithms_with_legacy,
+        build_local_forward_bind_addr, build_russh_client_config, legacy_gex_params,
+        normalize_disconnect_result,
     };
 
     #[derive(Clone)]
@@ -2127,11 +2153,7 @@ mod port_forward_tests {
     }
 
     fn host_key_names(known: &[String]) -> Vec<String> {
-        build_client_preferred_algorithms(known)
-            .key
-            .iter()
-            .map(|algorithm| algorithm.as_str().to_owned())
-            .collect()
+        host_key_names_with_legacy(known, false)
     }
 
     fn host_key_names_with_legacy(known: &[String], allow_legacy_algorithms: bool) -> Vec<String> {
@@ -2139,6 +2161,14 @@ mod port_forward_tests {
             .key
             .iter()
             .map(|algorithm| algorithm.as_str().to_owned())
+            .collect()
+    }
+
+    fn mac_names(allow_legacy_algorithms: bool) -> Vec<String> {
+        build_client_preferred_algorithms_with_legacy(&[], allow_legacy_algorithms)
+            .mac
+            .iter()
+            .map(|name| name.as_ref().to_string())
             .collect()
     }
 
@@ -2312,8 +2342,8 @@ mod port_forward_tests {
 
         assert!(curve25519 < nistp256);
         assert!(nistp256 < group14_sha1);
-        assert!(group14_sha1 < group_exchange_sha1);
-        assert!(group_exchange_sha1 < group1_sha1);
+        assert!(group14_sha1 < group1_sha1);
+        assert!(group1_sha1 < group_exchange_sha1);
     }
 
     #[test]
@@ -2342,21 +2372,97 @@ mod port_forward_tests {
     }
 
     #[test]
-    fn client_enables_ssh_dss_host_keys_only_for_legacy_connections() {
-        let modern = host_key_names_with_legacy(&[], false);
-        let legacy = host_key_names_with_legacy(&[], true);
+    fn legacy_host_key_fallback_offers_ssh_dss_only_when_enabled() {
+        let defaults = host_key_names(&[]);
+        assert!(
+            !defaults.iter().any(|name| name == "ssh-dss"),
+            "ssh-dss must not be offered unless legacy algorithms are enabled"
+        );
 
-        assert!(!modern.iter().any(|algorithm| algorithm == "ssh-dss"));
-        assert!(legacy.iter().any(|algorithm| algorithm == "ssh-dss"));
-        assert_eq!(legacy.len(), modern.len() + 1);
-        assert_eq!(&legacy[..modern.len()], modern);
+        let legacy = host_key_names_with_legacy(&[], true);
+        assert_eq!(
+            legacy
+                .iter()
+                .filter(|name| name.as_str() == "ssh-dss")
+                .count(),
+            1,
+            "ssh-dss should be offered exactly once with legacy algorithms"
+        );
+        assert_eq!(
+            legacy.last().map(String::as_str),
+            Some("ssh-dss"),
+            "ssh-dss should be a last-resort fallback"
+        );
+        assert_eq!(
+            legacy.first().map(String::as_str),
+            Some("ssh-ed25519"),
+            "modern host-key algorithms must stay preferred"
+        );
+        for default in defaults {
+            assert!(
+                legacy.contains(&default),
+                "default host-key algorithm {default} must remain enabled"
+            );
+        }
     }
 
     #[test]
-    fn client_promotes_known_ssh_dss_key_after_legacy_opt_in() {
-        let promoted = host_key_names_with_legacy(&["ssh-dss".to_owned()], true);
+    fn legacy_host_key_fallback_keeps_known_algorithms_ahead_of_ssh_dss() {
+        let promoted = host_key_names_with_legacy(&["ecdsa-sha2-nistp256".to_owned()], true);
 
-        assert_eq!(promoted.first().map(String::as_str), Some("ssh-dss"));
+        assert_eq!(
+            promoted.first().map(String::as_str),
+            Some("ecdsa-sha2-nistp256")
+        );
+        assert_eq!(
+            promoted.last().map(String::as_str),
+            Some("ssh-dss"),
+            "ssh-dss must never displace a known or modern host-key algorithm"
+        );
+    }
+
+    #[test]
+    fn legacy_mac_fallback_offers_hmac_sha1_only_when_enabled() {
+        let defaults = mac_names(false);
+        assert_eq!(defaults, default_mac_names());
+        assert!(
+            !defaults.iter().any(|name| name == "hmac-sha1"),
+            "hmac-sha1 must not be offered unless legacy algorithms are enabled"
+        );
+
+        let legacy = mac_names(true);
+        assert_eq!(
+            legacy
+                .iter()
+                .filter(|name| name.as_str() == "hmac-sha1")
+                .count(),
+            1,
+            "hmac-sha1 should be offered exactly once with legacy algorithms"
+        );
+        assert_eq!(
+            legacy.last().map(String::as_str),
+            Some("hmac-sha1"),
+            "hmac-sha1 should be a last-resort fallback"
+        );
+        assert_eq!(
+            legacy.first().map(String::as_str),
+            Some("hmac-sha2-512-etm@openssh.com"),
+            "modern MAC algorithms must stay preferred"
+        );
+        for default in defaults {
+            assert!(
+                legacy.contains(&default),
+                "default MAC algorithm {default} must remain enabled"
+            );
+        }
+    }
+
+    fn default_mac_names() -> Vec<String> {
+        Preferred::default()
+            .mac
+            .iter()
+            .map(|name| name.as_ref().to_string())
+            .collect()
     }
 
     #[test]
@@ -2683,6 +2789,327 @@ zsXyAAAAAAE=
             panic!("a different fallback key must remain rejected");
         };
         assert!(error.to_string().contains("changed SSH host key"));
+    }
+
+    #[tokio::test]
+    async fn client_connects_when_the_server_only_offers_ssh_dss_host_key() {
+        let (address, server_task) = spawn_ssh_dss_host_key_test_server().await;
+        let mut config = host_key_test_config(address, HostKeyVerifier::insecure());
+        config.allow_legacy_algorithms = true;
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        result.expect("server offering only ssh-dss should connect with legacy algorithms enabled");
+    }
+
+    #[tokio::test]
+    async fn client_rejects_ssh_dss_only_server_when_legacy_algorithms_are_disabled() {
+        let (address, server_task) = spawn_ssh_dss_host_key_test_server().await;
+        let config = host_key_test_config(address, HostKeyVerifier::insecure());
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("ssh DSA host key must not be negotiated unless the connection opts in");
+        };
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
+        assert!(error.to_string().contains("No common Key algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
+    }
+
+    async fn spawn_ssh_dss_host_key_test_server() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("DSS host-key test server should bind");
+        let address = socket
+            .local_addr()
+            .expect("DSS host-key test server should have an address");
+        let dsa = PrivateKey::random(&mut rand_010::rng(), Algorithm::Dsa)
+            .expect("DSA host key should be generated");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![dsa],
+            preferred: Preferred {
+                key: Cow::Owned(vec![Algorithm::Dsa]),
+                ..Preferred::default()
+            },
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = CompatibilityTestServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        (address, server_task)
+    }
+
+    #[tokio::test]
+    async fn client_connects_when_the_server_only_offers_hmac_sha1_mac() {
+        let (address, server_task) = spawn_legacy_mac_test_server().await;
+        let mut config = host_key_test_config(address, HostKeyVerifier::insecure());
+        config.allow_legacy_algorithms = true;
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        result.expect("server offering only hmac-sha1 should connect with legacy algorithms enabled");
+    }
+
+    #[tokio::test]
+    async fn client_rejects_hmac_sha1_only_server_when_legacy_algorithms_are_disabled() {
+        let (address, server_task) = spawn_legacy_mac_test_server().await;
+        let config = host_key_test_config(address, HostKeyVerifier::insecure());
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("hmac-sha1 must not be negotiated unless the connection opts in");
+        };
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
+        assert!(error.to_string().contains("No common Mac algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
+    }
+
+    async fn spawn_legacy_mac_test_server() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("legacy MAC test server should bind");
+        let address = socket
+            .local_addr()
+            .expect("legacy MAC test server should have an address");
+        let ed25519 = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 host key should be generated");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![ed25519],
+            preferred: Preferred {
+                mac: Cow::Owned(vec![russh::mac::HMAC_SHA1]),
+                // AEAD ciphers have integrated authentication and skip MAC
+                // negotiation entirely, so pin a MAC-bearing cipher to reproduce
+                // the legacy-device path.
+                cipher: Cow::Owned(vec![russh::cipher::AES_128_CTR]),
+                ..Preferred::default()
+            },
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = CompatibilityTestServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        (address, server_task)
+    }
+
+    #[test]
+    fn legacy_dh_group_accepts_2048_bit_groups_only_when_enabled() {
+        let strict = legacy_gex_params(false).expect("default gex params should build");
+        let legacy = legacy_gex_params(true).expect("legacy gex params should build");
+
+        assert_eq!(legacy.min_group_size(), 2048);
+        assert_eq!(legacy.preferred_group_size(), 2048);
+        assert_eq!(legacy.max_group_size(), 8192);
+        assert!(
+            strict.min_group_size() > legacy.min_group_size(),
+            "modern connections must keep a stricter DH group floor"
+        );
+        assert_ne!(strict.preferred_group_size(), legacy.preferred_group_size());
+        assert_eq!(strict.max_group_size(), legacy.max_group_size());
+    }
+
+    #[test]
+    fn legacy_kex_prefers_fixed_group1_before_group_exchange() {
+        let names = kex_names(true);
+        let group1 = names
+            .iter()
+            .position(|name| name == "diffie-hellman-group1-sha1")
+            .expect("legacy list must still offer fixed group1 SHA-1");
+        let group_exchange = names
+            .iter()
+            .position(|name| name == "diffie-hellman-group-exchange-sha1")
+            .expect("legacy list must still offer group-exchange SHA-1");
+
+        assert!(
+            group1 < group_exchange,
+            "fixed group1 must be preferred over group-exchange so 1024-bit \
+             devices never hit the 2048-bit GEX floor"
+        );
+        assert!(!kex_names(false).contains(&"diffie-hellman-group1-sha1".to_owned()));
+    }
+
+    #[derive(Clone)]
+    struct LegacyGexTestServer;
+
+    impl russh::server::Server for LegacyGexTestServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for LegacyGexTestServer {
+        type Error = anyhow::Error;
+
+        async fn auth_password(&mut self, _: &str, _: &str) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
+        }
+
+        // 模拟只能生成 2048 位 DH 组的旧设备：无视客户端请求范围，固定返回 group14。
+        fn lookup_dh_gex_group(
+            &mut self,
+            _gex_params: &GexParams,
+        ) -> impl Future<Output = Result<Option<DhGroup>, Self::Error>> + Send {
+            async { Ok(Some(DH_GROUP14.clone())) }
+        }
+    }
+
+    #[tokio::test]
+    async fn client_connects_when_server_only_supports_2048_bit_dh_group() {
+        let (address, server_task) = spawn_legacy_gex_test_server().await;
+        let mut config = host_key_test_config(address, HostKeyVerifier::insecure());
+        config.allow_legacy_algorithms = true;
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        result.expect("a 2048-bit DH group should connect with legacy algorithms enabled");
+    }
+
+    #[tokio::test]
+    async fn client_rejects_2048_bit_dh_group_when_legacy_algorithms_are_disabled() {
+        let (address, server_task) = spawn_legacy_gex_test_server().await;
+        let config = host_key_test_config(address, HostKeyVerifier::insecure());
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("a 2048-bit DH group must not be accepted unless the connection opts in");
+        };
+        assert!(error.to_string().contains("exchange init failed"));
+    }
+
+    async fn spawn_legacy_gex_test_server() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("legacy gex test server should bind");
+        let address = socket
+            .local_addr()
+            .expect("legacy gex test server should have an address");
+        let ed25519 = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 host key should be generated");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![ed25519],
+            preferred: Preferred {
+                kex: Cow::Owned(vec![DH_GEX_SHA256]),
+                ..Preferred::default()
+            },
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = LegacyGexTestServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        (address, server_task)
+    }
+
+    #[tokio::test]
+    async fn client_connects_when_server_offers_only_fixed_group1_and_gex() {
+        let (address, server_task) = spawn_legacy_group1_test_server().await;
+        let mut config = host_key_test_config(address, HostKeyVerifier::insecure());
+        config.allow_legacy_algorithms = true;
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        result.expect(
+            "a 1024-bit device offering fixed group1 must connect with legacy algorithms enabled",
+        );
+    }
+
+    #[tokio::test]
+    async fn client_rejects_1024_bit_fixed_group_when_legacy_algorithms_are_disabled() {
+        let (address, server_task) = spawn_legacy_group1_test_server().await;
+        let config = host_key_test_config(address, HostKeyVerifier::insecure());
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("a 1024-bit fixed group must not be accepted unless the connection opts in");
+        };
+        assert!(error.to_string().contains("No common Kex algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
+    }
+
+    async fn spawn_legacy_group1_test_server() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("legacy group1 test server should bind");
+        let address = socket
+            .local_addr()
+            .expect("legacy group1 test server should have an address");
+        let ed25519 = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 host key should be generated");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![ed25519],
+            preferred: Preferred {
+                kex: Cow::Owned(vec![russh::kex::DH_GEX_SHA1, DH_G1_SHA1]),
+                ..Preferred::default()
+            },
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = FixedGroup1TestServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        (address, server_task)
+    }
+
+    #[derive(Clone)]
+    struct FixedGroup1TestServer;
+
+    impl russh::server::Server for FixedGroup1TestServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for FixedGroup1TestServer {
+        type Error = anyhow::Error;
+
+        async fn auth_password(&mut self, _: &str, _: &str) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
+        }
+
+        // 模拟只能生成 1024 位 DH 组的更旧设备：无视客户端请求范围，固定返回 group1。
+        fn lookup_dh_gex_group(
+            &mut self,
+            _gex_params: &GexParams,
+        ) -> impl Future<Output = Result<Option<DhGroup>, Self::Error>> + Send {
+            async { Ok(Some(DH_GROUP1.clone())) }
+        }
     }
 
     #[tokio::test]

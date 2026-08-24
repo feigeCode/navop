@@ -62,6 +62,6 @@ Ssh:
     zh-CN: "HTTP代理连接失败: %{response}"
     zh-HK: "HTTP代理連線失敗: %{response}"
   legacy_algorithms_required_hint:
-    en: The server may only support legacy SSH key-exchange or host-key algorithms. Edit this connection and enable “Allow Legacy SSH Algorithms” under “Advanced Settings”, then try again.
-    zh-CN: 服务器可能仅支持旧版 SSH 密钥交换或主机密钥算法。请编辑此连接，在“高级设置”中开启“允许旧版 SSH 算法”后重试。
-    zh-HK: 伺服器可能僅支援舊版 SSH 金鑰交換或主機金鑰演算法。請編輯此連線，在「進階設定」中開啟「允許舊版 SSH 演算法」後重試。
+    en: The server may only support legacy SSH algorithms, for example a DSA host key, SHA-1 key exchange, or SHA-1 MAC. Edit this connection and enable “Allow Legacy SSH Algorithms” under “Advanced Settings”, then try again.
+    zh-CN: 服务器可能仅支持旧版 SSH 算法，例如 DSA 主机密钥、SHA-1 密钥交换或 SHA-1 MAC。请编辑此连接，在“高级设置”中开启“允许旧版 SSH 算法”后重试。
+    zh-HK: 伺服器可能僅支援舊版 SSH 演算法，例如 DSA 主機金鑰、SHA-1 金鑰交換或 SHA-1 MAC。請編輯此連線，在「進階設定」中開啟「允許舊版 SSH 演算法」後重試。
