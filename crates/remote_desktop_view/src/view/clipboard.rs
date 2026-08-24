@@ -10,9 +10,28 @@ use remote_desktop::{RemoteDesktopInput, RemoteDesktopProtocol};
 use super::RemoteDesktopView;
 
 const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
+// A missing ClipboardItem can mean an empty or unsupported clipboard, or a
+// transient platform read failure. Back off before probing again so a
+// long-lived unavailable clipboard is not opened and enumerated repeatedly on
+// the UI thread.
+const CLIPBOARD_UNAVAILABLE_BACKOFF: Duration = Duration::from_secs(2);
 const REMOTE_CLIPBOARD_TRANSFER_BIT: u64 = 1 << 63;
 pub(super) const FIRST_LOCAL_CLIPBOARD_TRANSFER_ID: u64 = 1;
 const REMOTE_CLIPBOARD_STAGING_ROOT: &str = "navop-rdp-clipboard";
+
+fn clipboard_sync_is_due(
+    last_clipboard_unavailable_at: Option<Instant>,
+    last_clipboard_sync_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    if last_clipboard_unavailable_at
+        .is_some_and(|at| now.saturating_duration_since(at) < CLIPBOARD_UNAVAILABLE_BACKOFF)
+    {
+        return false;
+    }
+    !last_clipboard_sync_at
+        .is_some_and(|at| now.saturating_duration_since(at) < CLIPBOARD_SYNC_INTERVAL)
+}
 
 pub(super) fn clipboard_text_supported(protocol: RemoteDesktopProtocol, text: &str) -> bool {
     protocol == RemoteDesktopProtocol::Rdp || text.is_ascii()
@@ -133,6 +152,7 @@ impl RemoteDesktopView {
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        self.clear_clipboard_read_backoff();
         self.last_clipboard_text = Some(text);
         self.last_clipboard_files = None;
         self.last_clipboard_sync_at = Some(Instant::now());
@@ -187,6 +207,7 @@ impl RemoteDesktopView {
             self.notify_clipboard_install_failed(window, cx);
             return;
         }
+        self.clear_clipboard_read_backoff();
         self.last_clipboard_files = Some(path_strings);
         self.last_clipboard_text = None;
         self.last_clipboard_sync_at = Some(Instant::now());
@@ -198,8 +219,12 @@ impl RemoteDesktopView {
             return;
         }
         let Some(item) = cx.read_from_clipboard() else {
+            // GPUI could not provide a readable item. This can be an empty or
+            // unsupported clipboard, or a transient platform read failure.
+            self.last_clipboard_unavailable_at = Some(Instant::now());
             return;
         };
+        self.clear_clipboard_read_backoff();
         match classify_local_clipboard(&item) {
             LocalClipboardContent::Files(paths) => self.sync_local_clipboard_files(paths),
             LocalClipboardContent::Text(text) => self.sync_local_clipboard_text(text, window, cx),
@@ -207,14 +232,20 @@ impl RemoteDesktopView {
         }
     }
 
+    pub(super) fn clear_clipboard_read_backoff(&mut self) {
+        self.last_clipboard_unavailable_at = None;
+    }
+
     fn clipboard_sync_due(&mut self) -> bool {
-        if self
-            .last_clipboard_sync_at
-            .is_some_and(|synced_at| synced_at.elapsed() < CLIPBOARD_SYNC_INTERVAL)
-        {
+        let now = Instant::now();
+        if !clipboard_sync_is_due(
+            self.last_clipboard_unavailable_at,
+            self.last_clipboard_sync_at,
+            now,
+        ) {
             return false;
         }
-        self.last_clipboard_sync_at = Some(Instant::now());
+        self.last_clipboard_sync_at = Some(now);
         true
     }
 

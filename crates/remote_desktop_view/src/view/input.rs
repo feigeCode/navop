@@ -125,6 +125,7 @@ impl RemoteDesktopView {
         let Some(item) = cx.read_from_clipboard() else {
             return true;
         };
+        self.clear_clipboard_read_backoff();
         self.last_clipboard_sync_at = Some(Instant::now());
         match classify_local_clipboard(&item) {
             LocalClipboardContent::Files(paths) => {

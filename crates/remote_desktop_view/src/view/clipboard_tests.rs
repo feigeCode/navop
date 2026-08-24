@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use gpui::{ClipboardEntry, ClipboardItem, ExternalPaths};
 use remote_desktop::RemoteDesktopProtocol;
@@ -6,9 +7,51 @@ use remote_desktop::RemoteDesktopProtocol;
 use super::{
     FIRST_LOCAL_CLIPBOARD_TRANSFER_ID, LocalClipboardContent, REMOTE_CLIPBOARD_TRANSFER_BIT,
     allocate_local_clipboard_transfer_id, classify_local_clipboard, clipboard_files_supported,
-    clipboard_text_supported, is_remote_clipboard_transfer_id,
+    clipboard_sync_is_due, clipboard_text_supported, is_remote_clipboard_transfer_id,
     validate_remote_clipboard_paths_in_root,
 };
+
+#[test]
+fn clipboard_sync_backoff_uses_explicit_time_without_sleeping() {
+    let now = Instant::now();
+
+    assert!(!clipboard_sync_is_due(
+        Some(now),
+        None,
+        now + Duration::from_millis(1_999)
+    ));
+    assert!(clipboard_sync_is_due(
+        Some(now),
+        None,
+        now + Duration::from_secs(2)
+    ));
+    assert!(!clipboard_sync_is_due(
+        None,
+        Some(now),
+        now + Duration::from_millis(499)
+    ));
+    assert!(clipboard_sync_is_due(
+        None,
+        Some(now),
+        now + Duration::from_millis(500)
+    ));
+}
+
+#[test]
+fn successful_clipboard_reads_and_writes_clear_the_unavailable_backoff() {
+    let clipboard_source = include_str!("clipboard.rs");
+    let input_source = include_str!("input.rs");
+
+    assert_eq!(
+        3,
+        clipboard_source
+            .matches("self.clear_clipboard_read_backoff();")
+            .count()
+    );
+    assert!(input_source.contains(
+        "let Some(item) = cx.read_from_clipboard() else {\n            return true;\n        };\n        self.clear_clipboard_read_backoff();"
+    ));
+}
 
 #[test]
 fn clipboard_protocol_policy_keeps_vnc_to_ascii_text_only() {

@@ -1064,6 +1064,9 @@ pub struct TabContainer {
     show_tab_bar_when_empty: bool,
     show_tab_content: bool,
     presentation_obscured: bool,
+    presentation_obscured_by_main_content: bool,
+    presentation_obscured_by_dialog: bool,
+    presentation_obscured_by_legacy_caller: bool,
     show_window_controls: bool,
     #[cfg(test)]
     force_windows_titlebar_for_test: bool,
@@ -1114,6 +1117,9 @@ impl TabContainer {
             show_tab_bar_when_empty: false,
             show_tab_content: true,
             presentation_obscured: false,
+            presentation_obscured_by_main_content: false,
+            presentation_obscured_by_dialog: false,
+            presentation_obscured_by_legacy_caller: false,
             show_window_controls: false,
             #[cfg(test)]
             force_windows_titlebar_for_test: false,
@@ -1611,13 +1617,53 @@ impl TabContainer {
         }
     }
 
-    pub fn set_active_presentation_obscured(&mut self, obscured: bool, cx: &mut Context<Self>) {
+    fn recompute_active_presentation_obscured(&mut self, cx: &mut Context<Self>) {
+        let obscured = self.presentation_obscured_by_main_content
+            || self.presentation_obscured_by_dialog
+            || self.presentation_obscured_by_legacy_caller;
         if self.presentation_obscured == obscured {
             return;
         }
 
         self.presentation_obscured = obscured;
         self.sync_active_presentation_obscured(cx);
+    }
+
+    pub fn set_active_presentation_obscured_by_main_content(
+        &mut self,
+        obscured: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.presentation_obscured_by_main_content == obscured {
+            return;
+        }
+
+        self.presentation_obscured_by_main_content = obscured;
+        self.recompute_active_presentation_obscured(cx);
+    }
+
+    pub fn set_active_presentation_obscured_by_dialog(
+        &mut self,
+        obscured: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.presentation_obscured_by_dialog == obscured {
+            return;
+        }
+
+        self.presentation_obscured_by_dialog = obscured;
+        self.recompute_active_presentation_obscured(cx);
+    }
+
+    /// Compatibility entry point for callers that do not own one of the
+    /// explicitly tracked obscuring sources.
+    pub fn set_active_presentation_obscured(&mut self, obscured: bool, cx: &mut Context<Self>) {
+        if self.presentation_obscured_by_legacy_caller == obscured {
+            return;
+        }
+
+        self.presentation_obscured_by_legacy_caller = obscured;
+        self.recompute_active_presentation_obscured(cx);
     }
 
     fn deactivate_active_content(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5286,7 +5332,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn presentation_obscuring_is_idempotent_and_only_updates_active_content(
+    fn presentation_obscuring_combines_independent_sources_and_only_updates_active_content(
         cx: &mut TestAppContext,
     ) {
         let lifecycle = Arc::new(Mutex::new(Vec::new()));
@@ -5318,8 +5364,19 @@ mod tests {
                 lifecycle_for_window.lock().expect("lifecycle lock").clear();
 
                 container.update(cx, |container, cx| {
+                    container.set_active_presentation_obscured_by_main_content(true, cx);
+                    container.set_active_presentation_obscured_by_main_content(true, cx);
+                    container.set_active_presentation_obscured_by_dialog(true, cx);
+                    container.set_active_presentation_obscured_by_main_content(false, cx);
+                    container.set_active_presentation_obscured_by_dialog(false, cx);
+                    container.set_active_presentation_obscured_by_dialog(true, cx);
+                    container.set_active_presentation_obscured_by_main_content(true, cx);
+                    container.set_active_presentation_obscured_by_dialog(false, cx);
+                    container.set_active_presentation_obscured_by_main_content(false, cx);
                     container.set_active_presentation_obscured(true, cx);
-                    container.set_active_presentation_obscured(true, cx);
+                    container.set_active_presentation_obscured_by_main_content(true, cx);
+                    container.set_active_presentation_obscured(false, cx);
+                    container.set_active_presentation_obscured_by_main_content(false, cx);
                 });
 
                 container
@@ -5328,7 +5385,14 @@ mod tests {
         });
 
         assert_eq!(
-            vec!["obscured:true:active".to_string()],
+            vec![
+                "obscured:true:active".to_string(),
+                "obscured:false:active".to_string(),
+                "obscured:true:active".to_string(),
+                "obscured:false:active".to_string(),
+                "obscured:true:active".to_string(),
+                "obscured:false:active".to_string(),
+            ],
             *lifecycle.lock().expect("lifecycle lock")
         );
     }
@@ -5359,7 +5423,7 @@ mod tests {
                         window,
                         cx,
                     );
-                    container.set_active_presentation_obscured(true, cx);
+                    container.set_active_presentation_obscured_by_main_content(true, cx);
                 });
                 lifecycle_for_window.lock().expect("lifecycle lock").clear();
 

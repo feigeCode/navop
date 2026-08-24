@@ -1337,6 +1337,10 @@ impl OnetCliApp {
         });
         tab_container.update(cx, |tc, cx| {
             tc.set_tab_content_visible(main_content == MainContent::Tabs, cx);
+            tc.set_active_presentation_obscured_by_main_content(
+                main_content != MainContent::Tabs,
+                cx,
+            );
             if layout.pin_home {
                 let home_tab = TabItem::new(layout.home_tab_id, "app", home_page.clone());
                 tc.insert_pinned_tab_at(0, home_tab, cx);
@@ -1440,6 +1444,14 @@ impl OnetCliApp {
     fn set_main_content(&mut self, main_content: MainContent, cx: &mut Context<Self>) {
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);
+            // The modern Home page is not a pinned tab, so the active tab stays
+            // present in the TabContainer while Home renders. Mark the active
+            // tab content as obscured so Windows-native RDP overlays are
+            // deactivated and stop intercepting mouse/keyboard input on Home.
+            tabs.set_active_presentation_obscured_by_main_content(
+                main_content != MainContent::Tabs,
+                cx,
+            );
         });
         if self.main_content == main_content {
             return;
@@ -1791,6 +1803,11 @@ mod tests {
             constructor
                 .contains("tc.set_tab_content_visible(main_content == MainContent::Tabs, cx)")
         );
+        assert!(
+            constructor.contains(
+                "tc.set_active_presentation_obscured_by_main_content(\n                main_content != MainContent::Tabs,"
+            )
+        );
         assert!(!constructor.contains("set_base_content"));
         assert!(constructor.contains("let home_tab ="));
         assert!(
@@ -1857,6 +1874,7 @@ mod tests {
         assert!(
             setter.contains("tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);")
         );
+        assert!(setter.contains("tabs.set_active_presentation_obscured_by_main_content("));
     }
 
     #[test]

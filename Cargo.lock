@@ -4860,7 +4860,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -5064,7 +5064,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "anyhow",
  "log",
@@ -5074,7 +5074,7 @@ dependencies = [
 [[package]]
 name = "gpui_collections"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "gpui_ce_util",
  "indexmap 2.14.0",
@@ -5084,7 +5084,7 @@ dependencies = [
 [[package]]
 name = "gpui_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5094,7 +5094,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5145,7 +5145,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5195,7 +5195,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5206,7 +5206,7 @@ dependencies = [
 [[package]]
 name = "gpui_media"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -5221,7 +5221,7 @@ dependencies = [
 [[package]]
 name = "gpui_path"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "anyhow",
  "dunce",
@@ -5231,7 +5231,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "console_error_panic_hook",
  "gpui",
@@ -5244,7 +5244,7 @@ dependencies = [
 [[package]]
 name = "gpui_refineable"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "gpui_derive_refineable",
 ]
@@ -5252,7 +5252,7 @@ dependencies = [
 [[package]]
 name = "gpui_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "async-task",
  "backtrace",
@@ -5267,7 +5267,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -5277,7 +5277,7 @@ dependencies = [
 [[package]]
 name = "gpui_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "heapless",
  "log",
@@ -5288,7 +5288,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5310,7 +5310,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5340,7 +5340,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5368,7 +5368,7 @@ dependencies = [
 [[package]]
 name = "gpui_zed_util"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=6618b2cebfad911a5fec24d174775149d3156d31#6618b2cebfad911a5fec24d174775149d3156d31"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=d4405ecf1e71bb9bd23568573a98fe293097e92c#d4405ecf1e71bb9bd23568573a98fe293097e92c"
 dependencies = [
  "anyhow",
  "async-fs",

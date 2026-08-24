@@ -54,6 +54,32 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
 }
 
 #[test]
+fn empty_status_visibility_matches_native_connection_lifecycle() {
+    use super::render::should_show_empty_status;
+
+    assert!(
+        should_show_empty_status(true, true, false, false),
+        "Windows native sessions must show connecting status before Connected"
+    );
+    assert!(
+        !should_show_empty_status(true, true, false, true),
+        "Windows native sessions must hide the empty canvas after Connected and before the first frame"
+    );
+    assert!(
+        should_show_empty_status(true, true, true, true),
+        "Windows native sessions must show failure detail even after a prior Connected event"
+    );
+    assert!(
+        should_show_empty_status(true, false, false, true),
+        "canvas-backed sessions must preserve their existing empty-frame status"
+    );
+    assert!(
+        !should_show_empty_status(false, true, true, false),
+        "a rendered frame must always suppress the empty-frame status"
+    );
+}
+
+#[test]
 fn remote_cursor_never_calls_gpui_paint_only_cursor_apis_from_output_callbacks() {
     let output = include_str!("output.rs");
     let cursor = include_str!("cursor.rs");
@@ -1631,8 +1657,8 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     );
 
     let status = &content[content
-        .find("show_empty_status && (!uses_windows_native || show_failure_detail)")
-        .expect("empty-frame status")..];
+        .find("should_show_empty_status(")
+        .expect("empty-frame status predicate")..];
     assert!(status.contains(".min_w_0()"));
     assert!(status.contains(".max_w_full()"));
     assert!(status.contains(".flex_shrink_0()"));

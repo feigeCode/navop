@@ -11,6 +11,15 @@ struct RemoteDesktopCanvasPaint {
     cursor: Option<cursor::RemoteCursorPaint>,
 }
 
+pub(super) fn should_show_empty_status(
+    show_empty_status: bool,
+    uses_windows_native: bool,
+    show_failure_detail: bool,
+    connected: bool,
+) -> bool {
+    show_empty_status && (!uses_windows_native || show_failure_detail || !connected)
+}
+
 fn remote_desktop_frame_canvas(frame: RemoteDesktopCanvasPaint) -> impl IntoElement {
     canvas(
         move |_, _, _| frame,
@@ -479,7 +488,12 @@ impl Render for RemoteDesktopView {
                     .child(remote_desktop_frame_canvas(canvas_paint))
             })
             .when(
-                show_empty_status && (!uses_windows_native || show_failure_detail),
+                should_show_empty_status(
+                    show_empty_status,
+                    uses_windows_native,
+                    show_failure_detail,
+                    self.connected,
+                ),
                 |this| {
                     this.child(
                         div()

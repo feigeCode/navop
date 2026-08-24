@@ -427,7 +427,7 @@ fn main() {
                 let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();
                 cx.subscribe(&root, move |_, event: &DialogStateChanged, cx| {
                     tab_container.update(cx, |tabs, cx| {
-                        tabs.set_active_presentation_obscured(event.active_count > 0, cx);
+                        tabs.set_active_presentation_obscured_by_dialog(event.active_count > 0, cx);
                     });
                 })
                 .detach();
@@ -583,7 +583,7 @@ mod embedded_cli_removal_tests {
         assert!(source.contains("cx.subscribe(&root,"));
         assert!(source.contains("event: &DialogStateChanged"));
         assert!(source.contains("event.active_count > 0"));
-        assert!(source.contains("set_active_presentation_obscured"));
+        assert!(source.contains("set_active_presentation_obscured_by_dialog"));
         assert!(source.contains(".detach();\n                root"));
     }
 
