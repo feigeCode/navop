@@ -180,7 +180,7 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "finish_windows_native_close_in_view(this, registration, cx);",
     ] {
         assert!(
-            runner.contains(token),
+            contains_ignoring_whitespace(runner, token),
             "missing borrow-free close runner token: {token}"
         );
     }
@@ -192,6 +192,7 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         .expect("fail-closed adapter leak");
     let timeout = runner[leaked..]
         .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
+        .map(|offset| leaked + offset)
         .expect("timeout terminal completion");
     assert!(leaked < timeout);
 
@@ -574,10 +575,11 @@ fn windows_native_shutdown_controller_drains_on_the_foreground_and_leaks_before_
     assert!(poll_view_owner.contains("WindowsNativeCloseTake::Pending"));
     assert!(poll_view_owner.contains("WindowsNativeCloseTake::Failed"));
     let drain_leak = poll_view_owner
-        .find("Box::leak(Box::new(operation.native))")
+        .find("Box::leak(Box::new(operation.into_leaked_adapter()))")
         .expect("drain deadline adapter leak");
     let drain_leak_terminal = poll_view_owner[drain_leak..]
         .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
+        .map(|offset| drain_leak + offset)
         .expect("drain deadline terminal completion");
     assert!(drain_leak < drain_leak_terminal);
 }
@@ -739,7 +741,10 @@ fn windows_native_events_are_drained_on_the_gpui_owner_thread() {
         );
     }
     assert!(execute.contains("operation.native.drain_events(&mut operation.event_state)"));
-    assert!(execute.contains("operation.native.update_bounds(bounds, point(px(0.0), px(0.0)), scale_factor)"));
+    assert!(contains_ignoring_whitespace(
+        execute,
+        "operation.native.update_bounds(bounds, point(px(0.0), px(0.0)), scale_factor)"
+    ));
     assert!(execute.contains("operation.native.deactivate(&mut || {"));
     assert!(execute.contains("operation.native.activate(false)"));
     assert!(execute.contains("operation.native.focus()"));
@@ -826,7 +831,7 @@ fn windows_native_reconnect_resets_and_reopens_the_native_presentation() {
     assert!(execute.contains("operation.native.begin_reconnect(&mut || {"));
     assert!(execute.contains("operation.native.mark_login_complete();"));
     assert!(execute.contains("requested_focus = Some(WindowsNativeFocusTarget::NativeChild)"));
-    assert!(execute.contains("NativeRdpEventState::take_focus_release_pending"));
+    assert!(execute.contains("operation.event_state.take_focus_release_pending()"));
     assert!(execute.contains("operation.native.deactivate(&mut || {"));
     assert!(execute.contains("operation.native.focus()"));
 }
@@ -1627,6 +1632,11 @@ fn function_body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|offset| start + offset)
         .expect("next function");
     &source[start..end]
+}
+
+fn contains_ignoring_whitespace(source: &str, token: &str) -> bool {
+    let compact = |value: &str| value.split_whitespace().collect::<String>();
+    compact(source).contains(&compact(token))
 }
 
 #[test]

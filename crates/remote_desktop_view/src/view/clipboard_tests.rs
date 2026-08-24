@@ -94,7 +94,7 @@ fn remote_clipboard_paths_must_resolve_inside_the_staging_root() {
     let received_string = received.to_string_lossy().into_owned();
 
     assert_eq!(
-        vec![std::fs::canonicalize(&received).unwrap()],
+        vec![dunce::canonicalize(&received).unwrap()],
         validate_remote_clipboard_paths_in_root(&root, &[received_string]).unwrap()
     );
     assert!(
