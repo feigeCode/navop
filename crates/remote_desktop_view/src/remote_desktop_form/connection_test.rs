@@ -146,23 +146,18 @@ impl RemoteDesktopFormWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         match result {
-            ConnectionTestResult::Success | ConnectionTestResult::NativeReachable => h_flex()
-                .justify_center()
-                .px_6()
-                .pb_2()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().success)
-                        .child(
-                            if matches!(result, ConnectionTestResult::NativeReachable) {
-                                t!("RemoteDesktopForm.native_reachable")
-                            } else {
-                                t!("RemoteDesktopForm.credentials_valid")
-                            }
-                            .to_string(),
-                        ),
-                ),
+            ConnectionTestResult::Success | ConnectionTestResult::NativeReachable => {
+                h_flex().justify_center().px_6().pb_2().child(
+                    div().text_sm().text_color(cx.theme().success).child(
+                        if matches!(result, ConnectionTestResult::NativeReachable) {
+                            t!("RemoteDesktopForm.native_reachable")
+                        } else {
+                            t!("RemoteDesktopForm.credentials_valid")
+                        }
+                        .to_string(),
+                    ),
+                )
+            }
             ConnectionTestResult::Failure(reason) => h_flex().px_6().pb_2().child(
                 div()
                     .w_full()
@@ -280,7 +275,7 @@ fn test_native_rdp_reachability(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionTestResult, ConnectionTestState, CONNECTION_TEST_TIMEOUT,
+        CONNECTION_TEST_TIMEOUT, ConnectionTestResult, ConnectionTestState,
         should_use_native_connection_test, test_native_rdp_reachability,
     };
     use one_core::storage::RemoteDesktopBackendPreference;

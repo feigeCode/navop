@@ -29,12 +29,7 @@ pub(crate) fn sort_connections(connections: &mut [StoredConnection], order: Conn
 /// LRU 比较：最近打开过的连接排最前；从未打开过的按更新时间/创建时间回退；
 /// 仍相同时按 id 倒序保证排序稳定，与数据库 `list` 的 LRU 排序保持一致。
 fn lru_cmp(left: &StoredConnection, right: &StoredConnection) -> Ordering {
-    let left_key = lru_sort_key(
-        left.last_used_at,
-        left.updated_at,
-        left.created_at,
-        left.id,
-    );
+    let left_key = lru_sort_key(left.last_used_at, left.updated_at, left.created_at, left.id);
     let right_key = lru_sort_key(
         right.last_used_at,
         right.updated_at,
@@ -190,7 +185,10 @@ mod tests {
         order: ConnectionSortOrder,
     ) -> Vec<String> {
         sort_connections(&mut connections, order);
-        connections.into_iter().map(|connection| connection.name).collect()
+        connections
+            .into_iter()
+            .map(|connection| connection.name)
+            .collect()
     }
 
     #[test]

@@ -2116,8 +2116,8 @@ mod port_forward_tests {
     use std::time::Duration;
 
     use russh::client::GexParams;
-    use russh::kex::DH_GEX_SHA256;
     use russh::kex::DH_G1_SHA1;
+    use russh::kex::DH_GEX_SHA256;
     use russh::kex::dh::groups::{DH_GROUP1, DH_GROUP14, DhGroup};
     use russh::server::{Auth, Server as _};
     use tempfile::TempDir;
@@ -2129,9 +2129,8 @@ mod port_forward_tests {
         Algorithm, EcdsaCurve, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
         HostKeyVerifier, JumpServerConnectConfig, Preferred, PrivateKey, ProxyConnectConfig,
         ProxyType, RusshClient, SshAuth, SshClient, SshConnectConfig,
-        build_client_preferred_algorithms_with_legacy,
-        build_local_forward_bind_addr, build_russh_client_config, legacy_gex_params,
-        normalize_disconnect_result,
+        build_client_preferred_algorithms_with_legacy, build_local_forward_bind_addr,
+        build_russh_client_config, legacy_gex_params, normalize_disconnect_result,
     };
 
     #[derive(Clone)]
@@ -2866,7 +2865,8 @@ zsXyAAAAAAE=
         let result = RusshClient::connect(config).await;
         server_task.abort();
 
-        result.expect("server offering only hmac-sha1 should connect with legacy algorithms enabled");
+        result
+            .expect("server offering only hmac-sha1 should connect with legacy algorithms enabled");
     }
 
     #[tokio::test]

@@ -172,11 +172,13 @@ impl ConnectionImportWindow {
                 let task = Tokio::spawn(cx, async move {
                     preview_import_records_from_files(id, selected_paths, true).await
                 });
-                task.await.unwrap_or_else(|error| Err(t!(
+                task.await.unwrap_or_else(|error| {
+                    Err(t!(
                         "Home.ConnectionImport.file_parse_task_failed",
                         error = error
                     )
-                    .to_string()))
+                    .to_string())
+                })
             };
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;
@@ -238,11 +240,13 @@ impl ConnectionImportWindow {
                 let task = Tokio::spawn(cx, async move {
                     preview_import_records_from_files(id, selected_paths, true).await
                 });
-                task.await.unwrap_or_else(|error| Err(t!(
+                task.await.unwrap_or_else(|error| {
+                    Err(t!(
                         "Home.ConnectionImport.directory_scan_task_failed",
                         error = error
                     )
-                    .to_string()))
+                    .to_string())
+                })
             };
             let _ = this.update(cx, |this, cx| {
                 this.scanning = false;

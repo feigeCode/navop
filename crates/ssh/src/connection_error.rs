@@ -38,10 +38,12 @@ pub fn add_legacy_algorithm_hint(error: Error, allow_legacy_algorithms: bool) ->
 
 fn is_no_common_algorithm_with_legacy_remedy(error: &Error) -> bool {
     error.chain().any(|cause| {
-        cause.downcast_ref::<russh::Error>().is_some_and(|error| match error {
-            russh::Error::NoCommonAlgo { kind, theirs, .. } => matches_kind(kind, theirs),
-            _ => false,
-        })
+        cause
+            .downcast_ref::<russh::Error>()
+            .is_some_and(|error| match error {
+                russh::Error::NoCommonAlgo { kind, theirs, .. } => matches_kind(kind, theirs),
+                _ => false,
+            })
     })
 }
 
@@ -101,10 +103,7 @@ mod tests {
     #[test]
     fn ssh_dss_host_key_negotiation_failure_suggests_enabling_legacy_algorithms() {
         let error = add_legacy_algorithm_hint(
-            no_common_algorithm_with_theirs(
-                russh::AlgorithmKind::Key,
-                vec!["ssh-dss".to_owned()],
-            ),
+            no_common_algorithm_with_theirs(russh::AlgorithmKind::Key, vec!["ssh-dss".to_owned()]),
             false,
         );
 
@@ -145,10 +144,7 @@ mod tests {
     #[test]
     fn unsupported_mac_negotiation_failure_does_not_suggest_legacy_algorithms() {
         let error = add_legacy_algorithm_hint(
-            no_common_algorithm_with_theirs(
-                russh::AlgorithmKind::Mac,
-                vec!["hmac-md5".to_owned()],
-            ),
+            no_common_algorithm_with_theirs(russh::AlgorithmKind::Mac, vec!["hmac-md5".to_owned()]),
             false,
         );
 

@@ -1475,8 +1475,8 @@ mod tests {
     use gpui_component::{Theme, ThemeMode};
 
     use super::{
-        AiChatSettings, AiChatToolExecutionMode, AppSettings, CustomFont, DEFAULT_TERMINAL_THEME,
-        ConnectionSortOrder, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
+        AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
+        DEFAULT_TERMINAL_THEME, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
         LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
         MainWindowState, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
         RemoteFileOpenMode, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
@@ -1843,7 +1843,10 @@ mod tests {
     fn connection_sort_order_round_trips_via_value() {
         assert_eq!("natural", ConnectionSortOrder::Natural.as_str());
         assert_eq!("lru", ConnectionSortOrder::Lru.as_str());
-        assert_eq!(ConnectionSortOrder::Lru, ConnectionSortOrder::from_value("lru"));
+        assert_eq!(
+            ConnectionSortOrder::Lru,
+            ConnectionSortOrder::from_value("lru")
+        );
         assert_eq!(
             ConnectionSortOrder::Natural,
             ConnectionSortOrder::from_value("natural")

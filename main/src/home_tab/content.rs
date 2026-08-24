@@ -76,7 +76,10 @@ impl HomePage {
             .filter(|conn| self.match_connection_type(conn))
             .cloned()
             .collect();
-        crate::connection_sort::sort_connections(&mut unassigned_connections, connection_sort_order);
+        crate::connection_sort::sort_connections(
+            &mut unassigned_connections,
+            connection_sort_order,
+        );
         let has_workspaces = self.workspaces.iter().any(|ws| ws.id.is_some());
 
         if layout == ConnectionLayout::List && !has_workspaces {

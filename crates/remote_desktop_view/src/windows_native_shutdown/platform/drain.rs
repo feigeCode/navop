@@ -123,8 +123,9 @@ async fn poll_view_owner(
     use crate::view::WindowsNativeCloseTake;
 
     // Phase A: pure ownership transfer inside the borrow.
-    let taken =
-        owner.update(cx, |view, _| view.take_windows_native_close_operation(registration));
+    let taken = owner.update(cx, |view, _| {
+        view.take_windows_native_close_operation(registration)
+    });
     let taken = match taken {
         Ok(taken) => taken,
         Err(error) => {
@@ -175,7 +176,9 @@ async fn poll_view_owner(
                     cx,
                 );
                 crate::view::RemoteDesktopView::finish_windows_native_close_in_view(
-                    owner, registration, cx,
+                    owner,
+                    registration,
+                    cx,
                 );
                 return dispatch;
             }

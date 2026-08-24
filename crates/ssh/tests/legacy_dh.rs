@@ -43,7 +43,10 @@ fn config_for(host: &str, allow_legacy_algorithms: bool) -> SshConnectConfig {
 
 async fn run_echo_check(host: &str) -> anyhow::Result<String> {
     let mut client = RusshClient::connect(config_for(host, true)).await?;
-    assert!(client.is_connected(), "legacy client should be connected after handshake");
+    assert!(
+        client.is_connected(),
+        "legacy client should be connected after handshake"
+    );
 
     let mut channel = client.open_channel().await?;
     channel.exec("echo legacy-dh-${HOSTNAME:-ok}").await?;

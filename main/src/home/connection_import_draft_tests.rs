@@ -12,7 +12,7 @@ use one_core::storage::{
 };
 use std::collections::BTreeMap;
 
-use super::connection_import_actions::{ save_import_draft};
+use super::connection_import_actions::save_import_draft;
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, ImportDraftKind, selected_import_count,
     selected_import_drafts_to_connections,
