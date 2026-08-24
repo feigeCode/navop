@@ -104,6 +104,10 @@ impl PersistentConnectionSidebar {
                 })
             })
             .collect::<Vec<_>>();
+        // 分组内的连接按名称排序（IP 地址按数值段比较）
+        connections.sort_by(|left, right| {
+            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+        });
         filter_connection_tree_inputs(&mut workspaces, &mut connections, &query, |connection| {
             matching_connection_ids.contains(&connection.id)
         });

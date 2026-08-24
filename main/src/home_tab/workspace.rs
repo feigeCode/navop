@@ -113,6 +113,9 @@ impl HomePage {
                         );
                     } else {
                         this.workspaces.push(workspace);
+                        this.workspaces.sort_by(|left, right| {
+                            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+                        });
                         emit_connection_event(
                             ConnectionDataEvent::WorkspaceCreated { workspace_id },
                             cx,

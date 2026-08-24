@@ -13,7 +13,10 @@ impl HomePage {
         });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| match load_task.await {
-            Ok(workspaces) => {
+            Ok(mut workspaces) => {
+                workspaces.sort_by(|left, right| {
+                    crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+                });
                 _ = this.update(cx, |this, cx| {
                     this.workspaces = workspaces;
                     cx.notify();

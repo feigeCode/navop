@@ -10,6 +10,7 @@ mod auth;
 
 mod ai_chat_acp;
 mod app_init;
+mod connection_sort;
 mod connection_visuals;
 mod credential_vault;
 mod env_file;
