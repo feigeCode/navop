@@ -1,7 +1,6 @@
-use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, Hsla, IntoElement, ParentElement, Pixels, Render,
-    Styled, UniformListScrollHandle, Window,
+    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, Styled, UniformListScrollHandle, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, h_flex,
@@ -123,6 +122,31 @@ pub(crate) enum PersistentConnectionSidebarEvent {
 impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSidebar {}
 
 impl PersistentConnectionSidebar {
+    /// Render the connection tree as a floating panel that overlays the main
+    /// content instead of occupying flex space, so expanding it no longer
+    /// squeezes the terminal. The caller (OnetCliApp) positions it just after
+    /// the navigation rail and above the terminal, and collapses it when the
+    /// terminal regains focus.
+    pub(crate) fn render_floating_tree(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette(cx);
+        let layout = cx.theme().geometry.layout;
+        let rail_width = layout.global_rail;
+        let top = layout.tab_bar;
+        div()
+            .absolute()
+            .top(top)
+            .bottom_0()
+            .left(rail_width)
+            .w(self.tree_width)
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.render_connection_tree(palette, window, cx))
+            .into_any_element()
+    }
+
     pub(crate) fn new(
         home_page: Entity<HomePage>,
         tree_expanded: bool,
@@ -196,7 +220,7 @@ impl PersistentConnectionSidebar {
 }
 
 impl Render for PersistentConnectionSidebar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self.palette(cx);
         h_flex()
             .h_full()
@@ -207,9 +231,6 @@ impl Render for PersistentConnectionSidebar {
                 palette,
                 cx,
             ))
-            .when(self.tree_expanded, |this| {
-                this.child(self.render_connection_tree(palette, window, cx))
-            })
             .into_any_element()
     }
 }

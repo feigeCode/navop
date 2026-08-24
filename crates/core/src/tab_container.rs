@@ -3424,44 +3424,72 @@ impl TabContainer {
             return content;
         }
 
-        let center_content = div()
-            .relative()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .child(content)
-            .child(self.render_hidden_sidebar_launcher(hidden, cx));
-        let center = if bottom.is_empty() {
-            center_content.into_any_element()
+        // 中心内容（终端）总是在左右导航浮层之间铺开：导航面板以绝对定位浮动，
+        // 不进入 flex 流，因此标签栏不会被挤动；中心内容向左/右让出面板宽度，
+        // 既保持浮动（不影响标签栏），又不被面板遮挡。
+        let left_width = if left.is_empty() {
+            Pixels::ZERO
         } else {
-            v_flex()
-                .id("tab-sidebar-center")
-                .size_full()
+            self.sidebar_side_width(&left, layout)
+        };
+        let right_width = if right.is_empty() {
+            Pixels::ZERO
+        } else {
+            self.sidebar_side_width(&right, layout)
+        };
+        let center = if bottom.is_empty() {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(left_width)
+                .right(right_width)
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(content)
+                .child(self.render_hidden_sidebar_launcher(hidden, cx))
+                .into_any_element()
+        } else {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(left_width)
+                .right(right_width)
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
                 .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
+                    v_flex()
+                        .id("tab-sidebar-center")
+                        .size_full()
                         .min_w_0()
+                        .min_h_0()
                         .overflow_hidden()
-                        .child(center_content),
-                )
-                .child(
-                    div()
-                        .relative()
-                        .w_full()
-                        .h(self.sidebar_bottom_height(&bottom, layout))
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .child(self.render_sidebar_dock(SidebarPlacement::Bottom, bottom, cx)),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(content)
+                                .child(self.render_hidden_sidebar_launcher(hidden, cx)),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .w_full()
+                                .h(self.sidebar_bottom_height(&bottom, layout))
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .child(self.render_sidebar_dock(SidebarPlacement::Bottom, bottom, cx)),
+                        ),
                 )
                 .into_any_element()
         };
 
-        let mut root = h_flex()
+        let mut root = div()
             .id("tab-sidebar-root")
             .relative()
             .size_full()
@@ -3476,34 +3504,32 @@ impl TabContainer {
                     });
                 }
             });
+        root = root.child(center);
         if !left.is_empty() {
+            let left_width = self.sidebar_side_width(&left, layout);
             root = root.child(
                 div()
-                    .relative()
-                    .h_full()
-                    .w(self.sidebar_side_width(&left, layout))
-                    .flex_shrink_0()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(left_width)
                     .overflow_hidden()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(self.render_sidebar_dock(SidebarPlacement::Left, left, cx)),
             );
         }
-        root = root.child(
-            div()
-                .flex_1()
-                .h_full()
-                .min_w_0()
-                .min_h_0()
-                .overflow_hidden()
-                .child(center),
-        );
         if !right.is_empty() {
+            let right_width = self.sidebar_side_width(&right, layout);
             root = root.child(
                 div()
-                    .relative()
-                    .h_full()
-                    .w(self.sidebar_side_width(&right, layout))
-                    .flex_shrink_0()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(right_width)
                     .overflow_hidden()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(self.render_sidebar_dock(SidebarPlacement::Right, right, cx)),
             );
         }
@@ -3613,9 +3639,12 @@ impl TabContainer {
         let tab_bar_height = layout.tab_bar;
         let tab_item_height = layout.tab_item;
 
-        // When the application navigation sidebar is fully hidden on macOS,
-        // reserve the title-bar area occupied by the traffic-light controls.
-        if titlebar_platform.is_macos && navigation_sidebar_expanded == Some(false) {
+        // On macOS reserve the title-bar area occupied by the traffic-light
+        // controls. The navigation sidebar now floats (absolute) instead of
+        // pushing the tab bar, so the reservation must stay constant in both
+        // the collapsed and expanded states; otherwise the toggle button
+        // jumps left when toggled.
+        if titlebar_platform.is_macos && navigation_sidebar_expanded.is_some() {
             left_padding = layout.macos_compact_title_bar_content_padding;
         }
 
