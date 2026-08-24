@@ -456,8 +456,17 @@ impl client::Handler for RusshHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_identity: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let server_public_key = match server_identity {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key,
+            PublicKeyOrCertificate::Certificate(_) => {
+                return Err(anyhow::anyhow!(
+                    "SSH host certificates are not supported for {}",
+                    self.identity
+                ));
+            }
+        };
         match self
             .host_key_verifier
             .verify(&self.identity, server_public_key)

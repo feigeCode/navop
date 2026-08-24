@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use russh::ChannelMsg;
 use russh::client::{self, Handle};
-use russh::keys::PublicKey;
+use russh::keys::PublicKeyOrCertificate;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
@@ -879,8 +879,17 @@ impl client::Handler for SftpHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_identity: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let server_public_key = match server_identity {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key,
+            PublicKeyOrCertificate::Certificate(_) => {
+                return Err(anyhow!(
+                    "SSH host certificates are not supported for {}",
+                    self.identity
+                ));
+            }
+        };
         let acceptance = self
             .host_key_verifier
             .verify(&self.identity, server_public_key)

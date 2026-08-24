@@ -187,9 +187,9 @@ rustls-native-certs = "0.8.1"
 rustls-pemfile = "2.2.0"
 rusqlite = { version = "0.38", features = ["bundled", "column_decltype"] }
 duckdb = { version = "1.10501.0", features = ["bundled"] }
-clickhouse = { version = "0.14.1", features = ["rustls-tls-native-roots"] }
+clickhouse = { version = "0.15.1", features = ["rustls-tls-native-roots"] }
 sqlformat = "0.5.0"
-sqlparser = "0.60.0"
+sqlparser = "0.62.0"
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 rust_xlsxwriter = "0.94.0"
 dashmap = "5.5.3"
@@ -200,8 +200,8 @@ redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", 
 
 # SSH and SFTP
 # dsa feature enables verifying/offering the legacy ssh-dss host-key algorithm.
-russh = { version = "0.62.4", features = ["dsa"] }
-russh-sftp = "2.3.0"
+russh = { version = "0.63.1", features = ["dsa"] }
+russh-sftp = "2.4.0"
 tokio-socks = "0.5"
 
 # Encryption

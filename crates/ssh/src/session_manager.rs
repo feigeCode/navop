@@ -289,7 +289,7 @@ where
                         flight_guard.complete();
                         continue;
                     }
-                    match result {
+                    return match result {
                         Ok(new_client) => {
                             let arc = Arc::new(Mutex::new(new_client));
                             state.connecting = None;
@@ -297,13 +297,13 @@ where
                             state.shell_integration = None;
                             state.last_ping = Some(Instant::now());
                             flight_guard.complete();
-                            return Ok(arc);
+                            Ok(arc)
                         }
                         Err(err) => {
                             // 只清 connecting，等待者重跑一轮循环继续尝试（会再次走 Connect 分支）。
                             state.connecting = None;
                             flight_guard.complete();
-                            return Err(err);
+                            Err(err)
                         }
                     }
                 }
