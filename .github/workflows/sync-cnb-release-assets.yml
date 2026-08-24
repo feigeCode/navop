@@ -9,10 +9,15 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 env:
   CNB_REPOSITORY: "navop-dev/navop"
+
+concurrency:
+  group: navop-cnb-release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   sync-release-to-cnb:
@@ -29,6 +34,15 @@ jobs:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+(\.[0-9]+){2}([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid Navop release tag: ${TAG_NAME}"
+            exit 1
+          fi
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "::error::CNB_TOKEN secret is empty or not set"
+            exit 1
+          fi
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
 
           wget -q https://cnb.cool/znb/mpgrm/-/releases/download/v0.1.0/mpgrm_linux_amd64.tar.gz
           tar -xf mpgrm_linux_amd64.tar.gz

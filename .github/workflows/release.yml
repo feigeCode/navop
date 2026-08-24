@@ -805,3 +805,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --ref dev \
             -f tag="$RELEASE_TAG"
+
+          gh workflow run sync-cnb-release-assets.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref dev \
+            -f tag="$RELEASE_TAG"

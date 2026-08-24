@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.tag }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   upload:
@@ -116,59 +116,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           gh release download "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "navop-aarch64-apple-darwin.tar.gz" \
-            --pattern "navop-x86_64-apple-darwin.tar.gz" \
-            --pattern "navop-x86_64-unknown-linux-gnu.tar.gz" \
-            --pattern "navop-x86_64-pc-windows-msvc.zip" \
-            --pattern "navop-i686-pc-windows-msvc.zip" \
+            --pattern "navop-*" \
+            --pattern "navop_*" \
             --pattern "sha256sums.txt" \
             --dir artifacts
-          if ! gh release download "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "navop-aarch64-unknown-linux-gnu.tar.gz" \
-            --dir artifacts; then
-            echo "ARM Linux asset is not published yet; continuing with the available platforms."
-          fi
           ls -la artifacts
 
       - name: Verify downloaded release assets
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
-          for file in \
-            navop-aarch64-apple-darwin.tar.gz \
-            navop-x86_64-apple-darwin.tar.gz \
-            navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-x86_64-pc-windows-msvc.zip \
-            navop-i686-pc-windows-msvc.zip \
-            sha256sums.txt; do
-            if [ ! -s "artifacts/${file}" ]; then
+          test -s artifacts/sha256sums.txt
+          shopt -s nullglob
+          release_files=(artifacts/navop-* artifacts/navop_*)
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "::error::No Navop package assets were downloaded"
+            exit 1
+          fi
+          for path in "${release_files[@]}"; do
+            file="${path#artifacts/}"
+            if [ ! -s "$path" ]; then
               echo "::error::Missing or empty GitHub Release asset: ${file}"
               exit 1
             fi
-          done
-
-          for file in \
-            navop-aarch64-apple-darwin.tar.gz \
-            navop-x86_64-apple-darwin.tar.gz \
-            navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-x86_64-pc-windows-msvc.zip \
-            navop-i686-pc-windows-msvc.zip; do
             if ! awk -v file="$file" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
               echo "::error::sha256sums.txt is missing checksum for ${file}"
               exit 1
             fi
           done
-
-          if [ -s "artifacts/navop-aarch64-unknown-linux-gnu.tar.gz" ] && ! awk \
-            '$2 == "navop-aarch64-unknown-linux-gnu.tar.gz" && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' \
-            artifacts/sha256sums.txt; then
-            echo "::error::sha256sums.txt is missing checksum for navop-aarch64-unknown-linux-gnu.tar.gz"
-            exit 1
-          fi
 
       - name: Generate R2 update manifest
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
@@ -201,7 +180,7 @@ jobs:
               }),
           );
 
-          const appAssets = {
+          const updaterAssets = {
             "aarch64-apple-darwin": "navop-aarch64-apple-darwin.tar.gz",
             "x86_64-apple-darwin": "navop-x86_64-apple-darwin.tar.gz",
             "x86_64-unknown-linux-gnu": "navop-x86_64-unknown-linux-gnu.tar.gz",
@@ -209,7 +188,7 @@ jobs:
             "i686-pc-windows-msvc": "navop-i686-pc-windows-msvc.zip",
           };
           if (fs.existsSync("artifacts/navop-aarch64-unknown-linux-gnu.tar.gz")) {
-            appAssets["aarch64-unknown-linux-gnu"] = "navop-aarch64-unknown-linux-gnu.tar.gz";
+            updaterAssets["aarch64-unknown-linux-gnu"] = "navop-aarch64-unknown-linux-gnu.tar.gz";
           }
 
           function checksumFor(fileName) {
@@ -245,6 +224,36 @@ jobs:
             );
           }
 
+          function targetFor(fileName) {
+            const knownTargets = [
+              "aarch64-apple-darwin",
+              "x86_64-apple-darwin",
+              "x86_64-unknown-linux-gnu",
+              "aarch64-unknown-linux-gnu",
+              "x86_64-pc-windows-msvc",
+              "i686-pc-windows-msvc",
+            ];
+            const target = knownTargets.find((candidate) => fileName.includes(candidate));
+            if (target) return fileName.includes("-portable.") ? `${target}-portable` : target;
+            if (/_(?:[^_]+)_amd64\.(?:deb|AppImage)$/.test(fileName) || /\.x86_64\.rpm$/.test(fileName)) {
+              return "x86_64-unknown-linux-gnu";
+            }
+            return "universal";
+          }
+
+          const packageFiles = fs
+            .readdirSync("artifacts")
+            .filter((fileName) => /^navop[-_]/.test(fileName))
+            .sort();
+          const packages = packageFiles.map((fileName) => ({
+            target: targetFor(fileName),
+            file: fileName,
+            url: `${baseUrl}/releases/${releaseTag}/${fileName}`,
+            github_url: `https://github.com/${repository}/releases/download/${releaseTag}/${fileName}`,
+            sha256: checksumFor(fileName),
+            size: fs.statSync(`artifacts/${fileName}`).size,
+          }));
+
           fs.mkdirSync("artifacts/updates", { recursive: true });
           fs.writeFileSync(
             "artifacts/updates/latest.json",
@@ -254,9 +263,10 @@ jobs:
                 version,
                 release_page_url: `${baseUrl}/releases/${releaseTag}/`,
                 release_notes: releaseNotes,
-                downloads: objectUrls("releases", appAssets),
-                fallback_downloads: githubReleaseUrls(appAssets),
-                sha256s: objectChecksums(appAssets),
+                downloads: objectUrls("releases", updaterAssets),
+                fallback_downloads: githubReleaseUrls(updaterAssets),
+                sha256s: objectChecksums(updaterAssets),
+                packages,
               },
               null,
               2,
@@ -327,26 +337,25 @@ jobs:
             echo "Verified R2 object: ${key} (${actual_size} bytes, sha256=${actual_sha256})"
           }
 
-          release_files=( \
-            navop-aarch64-apple-darwin.tar.gz \
-            navop-x86_64-apple-darwin.tar.gz \
-            navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-x86_64-pc-windows-msvc.zip \
-            navop-i686-pc-windows-msvc.zip \
-          )
-          if [ -s "artifacts/navop-aarch64-unknown-linux-gnu.tar.gz" ]; then
-            release_files+=(navop-aarch64-unknown-linux-gnu.tar.gz)
-          fi
-          for file in "${release_files[@]}"; do
-            if [[ "$file" == *.zip ]]; then
-              content_type="application/zip"
-            else
-              content_type="application/gzip"
-            fi
+          shopt -s nullglob
+          release_files=(artifacts/navop-* artifacts/navop_*)
+          for path in "${release_files[@]}"; do
+            file="${path#artifacts/}"
+            case "$file" in
+              *.tar.gz) content_type="application/gzip" ;;
+              *.zip) content_type="application/zip" ;;
+              *.dmg) content_type="application/x-apple-diskimage" ;;
+              *.msi) content_type="application/x-msi" ;;
+              *.exe) content_type="application/vnd.microsoft.portable-executable" ;;
+              *.deb) content_type="application/vnd.debian.binary-package" ;;
+              *.rpm) content_type="application/x-rpm" ;;
+              *.AppImage) content_type="application/octet-stream" ;;
+              *) content_type="application/octet-stream" ;;
+            esac
             # Release repair workflows may replace an object under the same tag
             # and filename, so these URLs must be revalidated instead of cached
             # as immutable for a year.
-            upload_object "artifacts/${file}" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=0, must-revalidate"
+            upload_object "$path" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=0, must-revalidate"
           done
 
           upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"
