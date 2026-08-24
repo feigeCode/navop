@@ -1472,6 +1472,42 @@ fn standalone_window_starts_active_with_native_focus_requested() {
 }
 
 #[test]
+fn standalone_fullscreen_escape_uses_a_scoped_low_level_keyboard_hook() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let hook = include_str!("windows_native_fullscreen_escape.rs").replace("\r\n", "\n");
+
+    assert!(view.contains("mod windows_native_fullscreen_escape;"));
+    let install_site = function_body(&view, "pub fn new(", "fn cancel_presentation_pacing");
+    assert!(
+        install_site.contains("windows_native_fullscreen_escape::install_fullscreen_escape("),
+        "standalone windows must install the Escape hook"
+    );
+    assert!(install_site.contains("if standalone_window {"));
+
+    assert!(hook.contains("SetWindowsHookExW(WH_KEYBOARD_LL"));
+    assert!(hook.contains("VK_ESCAPE"));
+    assert!(hook.contains("GetForegroundWindow()"));
+    assert!(hook.contains("active.target_hwnd == foreground"));
+    assert!(hook.contains("active.fullscreen"));
+    assert!(hook.contains("window.toggle_fullscreen()"));
+    assert!(hook.contains("CallNextHookEx"));
+    assert!(hook.contains("UnhookWindowsHookEx"));
+}
+
+#[test]
+fn overlay_composition_diagnostics_are_gated_behind_the_diagnostics_env() {
+    let source =
+        include_str!("windows_native_overlay/diagnostics.rs").replace("\r\n", "\n");
+
+    assert!(source.contains("NAVOP_REMOTE_DESKTOP_DIAGNOSTICS"));
+    assert!(source.contains("fn overlay_diagnostics_enabled"));
+    assert!(
+        source.matches("if !overlay_diagnostics_enabled() {").count() >= 4,
+        "every overlay log entry point must early-return when diagnostics are disabled"
+    );
+}
+
+#[test]
 fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cursor() {
     let input = include_str!("input.rs");
     let move_start = input

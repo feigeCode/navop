@@ -48,7 +48,7 @@ pub(crate) fn open_remote_desktop_fullscreen_window(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn fullscreen_window_auto_hides_titlebar() {
+    fn fullscreen_window_hides_titlebar_until_hovered() {
         let options = super::remote_desktop_window_options("RDP".to_string());
 
         assert!(options.fullscreen);
