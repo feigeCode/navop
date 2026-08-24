@@ -54,7 +54,7 @@ impl HomePage {
                 }
             })
             .map(|ws| {
-                let conn_list: Vec<_> = self
+                let mut conn_list: Vec<_> = self
                     .connections
                     .iter()
                     .filter(|conn| conn.workspace_id == ws.id)
@@ -62,11 +62,15 @@ impl HomePage {
                     .filter(|conn| self.match_connection_type(conn))
                     .cloned()
                     .collect();
+                // 分组内的连接按名称排序（IP 地址按数值段比较）
+                conn_list.sort_by(|left, right| {
+                    crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+                });
                 (ws.clone(), conn_list)
             })
             .collect();
 
-        let unassigned_connections: Vec<_> = self
+        let mut unassigned_connections: Vec<_> = self
             .connections
             .iter()
             .filter(|conn| conn.workspace_id.is_none())
@@ -74,6 +78,9 @@ impl HomePage {
             .filter(|conn| self.match_connection_type(conn))
             .cloned()
             .collect();
+        unassigned_connections.sort_by(|left, right| {
+            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+        });
         let has_workspaces = self.workspaces.iter().any(|ws| ws.id.is_some());
 
         if layout == ConnectionLayout::List && !has_workspaces {

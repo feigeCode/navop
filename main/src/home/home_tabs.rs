@@ -46,6 +46,9 @@ fn redis_tab_open_context(
                 .filter(|connection| connection.workspace_id == Some(id))
                 .cloned()
                 .collect();
+            connections.sort_by(|left, right| {
+                crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+            });
             if connections.is_empty() {
                 connections.push(conn.clone());
             }
@@ -1278,13 +1281,16 @@ impl HomePage {
 
         let (tab_id, connections, workspace_for_tab) = match open_mode {
             DatabaseOpenMode::Workspace if workspace_id.is_some() => {
-                let connections = self
+                let mut connections: Vec<StoredConnection> = self
                     .connections
                     .iter()
                     .filter(|connection| connection.workspace_id == workspace_id)
                     .filter(|connection| connection.connection_type == ConnectionType::MongoDB)
                     .cloned()
                     .collect();
+                connections.sort_by(|left, right| {
+                    crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+                });
                 let tab_id = format!("workspace-mongodb-tab-{}", workspace_id.unwrap_or(0));
                 (tab_id, connections, workspace)
             }
@@ -1622,7 +1628,7 @@ impl HomePage {
         // 在 defer 之前准备所有需要的数据，避免在 HomePage 更新期间
         // 触发 on_deactivate 导致双重借用 panic
         let workspace_id = workspace.as_ref().and_then(|w| w.id);
-        let Some((conn_clone, connections)) = database_tab_connection_context(
+        let Some((conn_clone, mut connections)) = database_tab_connection_context(
             open_mode,
             conn,
             workspace_id,
@@ -1631,6 +1637,10 @@ impl HomePage {
         ) else {
             return;
         };
+        // 分组内的连接按名称排序（IP 地址按数值段比较）
+        connections.sort_by(|left, right| {
+            crate::connection_sort::connection_name_cmp(&left.name, &right.name)
+        });
 
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
