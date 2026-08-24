@@ -3433,7 +3433,7 @@ fn select_projection_is_direct(
         }
         // Aliases change the result column name, so the source schema cannot
         // be mapped by name without additional result-column lineage support.
-        ast::SelectItem::ExprWithAlias { .. } => false,
+        ast::SelectItem::ExprWithAlias { .. } | ast::SelectItem::ExprWithAliases { .. } => false,
         ast::SelectItem::UnnamedExpr(expr) => direct_column_reference(expr, table_name, alias),
     })
 }

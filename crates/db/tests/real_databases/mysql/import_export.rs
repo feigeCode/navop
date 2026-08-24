@@ -67,6 +67,65 @@ async fn mysql_real_import_export_round_trips_sql_csv_and_json() {
     connection.disconnect().await.expect("disconnect");
 }
 
+#[tokio::test]
+async fn mysql_real_sql_export_preserves_utf8mb3_bin_longtext_as_text() {
+    let config = mysql_config().expect("set ONETCLI_TEST_MYSQL_PASSWORD to run MySQL tests");
+    let database = unique_database("io_longtext");
+    let plugin = MySqlPlugin::new();
+    let mut connection = plugin
+        .create_connection(config)
+        .await
+        .expect("MySQL should connect");
+
+    execute(
+        &plugin,
+        connection.as_ref(),
+        &format!(
+            "CREATE DATABASE `{database}` CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;\n\
+             CREATE TABLE `{database}`.data (\
+                 id VARCHAR(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin PRIMARY KEY,\
+                 entity_value LONGTEXT CHARACTER SET utf8mb3 COLLATE utf8mb3_bin,\
+                 raw_value LONGBLOB\
+             );\n\
+             INSERT INTO `{database}`.data VALUES \
+                 ('uuid_001', '{{\"metric\":\"sales\",\"label\":\"中文\"}}', UNHEX('000102FF'));"
+        ),
+    )
+    .await;
+
+    let sql = export(
+        &plugin,
+        connection.as_ref(),
+        &database,
+        DataFormat::Sql,
+        None,
+    )
+    .await;
+
+    assert_eq!(sql.rows_exported, 1);
+    assert!(
+        sql.output
+            .contains(r#"'uuid_001', '{"metric":"sales","label":"中文"}'"#),
+        "LONGTEXT should be exported as a quoted string:\n{}",
+        sql.output
+    );
+    assert!(
+        !sql.output
+            .to_ascii_lowercase()
+            .contains("x'7b226d657472696322"),
+        "LONGTEXT JSON must not be re-encoded as a binary hex literal:\n{}",
+        sql.output
+    );
+    assert!(
+        sql.output.contains("X'000102ff'"),
+        "real LONGBLOB bytes should remain a binary hex literal:\n{}",
+        sql.output
+    );
+
+    drop_database(&plugin, connection.as_ref(), &database).await;
+    connection.disconnect().await.expect("disconnect");
+}
+
 async fn setup(
     plugin: &MySqlPlugin,
     connection: &(dyn DbConnection + Send + Sync),

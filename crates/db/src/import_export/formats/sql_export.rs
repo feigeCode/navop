@@ -34,7 +34,7 @@ pub(super) async fn export_table_data_in_pages(
         };
         let paginated_query = export_page_select_sql(plugin, config, table, page_limit, offset);
         let mut query_result = query_export_page(connection, &paginated_query).await?;
-        if plugin.name() == DatabaseType::MySQL && !query_result.binary_cells.is_empty() {
+        if plugin.name() == DatabaseType::MySQL {
             if schema_columns.is_none() {
                 schema_columns = Some(
                     plugin

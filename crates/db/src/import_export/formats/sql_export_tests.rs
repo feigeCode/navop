@@ -22,6 +22,7 @@ struct PagedConnection {
 struct MySqlBinaryTextConnection {
     config: DbConnectionConfig,
     queries: Arc<Mutex<Vec<String>>>,
+    include_binary_sidecars: bool,
 }
 
 impl PagedConnection {
@@ -39,10 +40,11 @@ impl PagedConnection {
 }
 
 impl MySqlBinaryTextConnection {
-    fn new() -> Self {
+    fn new(include_binary_sidecars: bool) -> Self {
         Self {
             config: test_config(),
             queries: Arc::new(Mutex::new(Vec::new())),
+            include_binary_sidecars,
         }
     }
 
@@ -202,8 +204,8 @@ impl DbConnection for MySqlBinaryTextConnection {
                         Some(String::new()),
                         None,
                         Some(String::new()),
-                        Some("utf8mb4".to_string()),
-                        Some("utf8mb4_0900_ai_ci".to_string()),
+                        Some("utf8mb3".to_string()),
+                        Some("utf8mb3_bin".to_string()),
                     ],
                     vec![
                         Some("raw".to_string()),
@@ -221,15 +223,56 @@ impl DbConnection for MySqlBinaryTextConnection {
             }));
         }
 
+        let (payload, raw, binary_cells) = if self.include_binary_sidecars {
+            (
+                "0x74727565".to_string(),
+                "0x000102ff".to_string(),
+                vec![
+                    BinaryCell {
+                        row_index: 0,
+                        column_index: 1,
+                        bytes: b"true".to_vec(),
+                    },
+                    BinaryCell {
+                        row_index: 0,
+                        column_index: 2,
+                        bytes: vec![0x00, 0x01, 0x02, 0xff],
+                    },
+                ],
+            )
+        } else {
+            (
+                r#"{"metric":"sales"}"#.to_string(),
+                "0x000102ff".to_string(),
+                vec![],
+            )
+        };
+
         Ok(SqlResult::Query(QueryResult {
             sql: query.to_string(),
             columns: vec!["id".to_string(), "payload".to_string(), "raw".to_string()],
             column_meta: vec![
                 QueryColumnMeta::new("id", "MYSQL_TYPE_LONGLONG"),
-                QueryColumnMeta::new("payload", "MYSQL_TYPE_LONG_BLOB").with_result_encoding(
-                    Some("binary"),
-                    Some("binary"),
-                    Some(63),
+                QueryColumnMeta::new(
+                    "payload",
+                    if self.include_binary_sidecars {
+                        "MYSQL_TYPE_LONG_BLOB"
+                    } else {
+                        "MYSQL_TYPE_BLOB"
+                    },
+                )
+                .with_result_encoding(
+                    Some(if self.include_binary_sidecars {
+                        "binary"
+                    } else {
+                        "utf8mb4"
+                    }),
+                    Some(if self.include_binary_sidecars {
+                        "binary"
+                    } else {
+                        "utf8mb4_general_ci"
+                    }),
+                    Some(if self.include_binary_sidecars { 63 } else { 45 }),
                 ),
                 QueryColumnMeta::new("raw", "MYSQL_TYPE_LONG_BLOB").with_result_encoding(
                     Some("binary"),
@@ -237,23 +280,8 @@ impl DbConnection for MySqlBinaryTextConnection {
                     Some(63),
                 ),
             ],
-            rows: vec![vec![
-                Some("1".to_string()),
-                Some("0x74727565".to_string()),
-                Some("0x000102ff".to_string()),
-            ]],
-            binary_cells: vec![
-                BinaryCell {
-                    row_index: 0,
-                    column_index: 1,
-                    bytes: b"true".to_vec(),
-                },
-                BinaryCell {
-                    row_index: 0,
-                    column_index: 2,
-                    bytes: vec![0x00, 0x01, 0x02, 0xff],
-                },
-            ],
+            rows: vec![vec![Some("1".to_string()), Some(payload), Some(raw)]],
+            binary_cells,
             elapsed_ms: 1,
         }))
     }
@@ -489,7 +517,7 @@ fn sql_dump_prefers_binary_sidecar_without_guessing_from_display_text() {
 
 #[tokio::test]
 async fn mysql_sql_export_normalizes_longtext_and_preserves_longblob_binary_literals() {
-    let connection = MySqlBinaryTextConnection::new();
+    let connection = MySqlBinaryTextConnection::new(true);
     let config = ExportConfig {
         database: "app".to_string(),
         tables: vec!["binary_text".to_string()],
@@ -512,6 +540,40 @@ async fn mysql_sql_export_normalizes_longtext_and_preserves_longblob_binary_lite
     assert_eq!(rows, 1);
     assert!(output.contains("VALUES (1, 'true', X'000102ff');"));
     assert!(!output.contains("X'74727565'"));
+    assert_eq!(
+        connection.queries(),
+        vec![
+            "SELECT * FROM `app`.`binary_text` LIMIT 1000 OFFSET 0",
+            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT, CHARACTER_SET_NAME, COLLATION_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'app' AND TABLE_NAME = 'binary_text' ORDER BY ORDINAL_POSITION",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn mysql_sql_export_reconciles_longtext_metadata_without_binary_sidecars() {
+    let connection = MySqlBinaryTextConnection::new(false);
+    let config = ExportConfig {
+        database: "app".to_string(),
+        tables: vec!["binary_text".to_string()],
+        ..ExportConfig::default()
+    };
+    let mut output = String::new();
+
+    let rows = export_table_data_in_pages(
+        &MySqlPlugin::new(),
+        &connection,
+        &config,
+        "binary_text",
+        false,
+        &mut output,
+        &|_| {},
+    )
+    .await
+    .expect("MySQL SQL export should reconcile wire BLOB metadata with LONGTEXT schema");
+
+    assert_eq!(rows, 1);
+    assert!(output.contains(r#"VALUES (1, '{"metric":"sales"}', X'000102ff');"#));
+    assert!(!output.contains("X'7b226d6574726963223a2273616c6573227d'"));
     assert_eq!(
         connection.queries(),
         vec![
