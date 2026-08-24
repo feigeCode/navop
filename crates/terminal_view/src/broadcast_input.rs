@@ -42,6 +42,17 @@ impl BroadcastInputHub {
         self.clients.remove(&id).is_some()
     }
 
+    pub fn update_label(&mut self, id: BroadcastClientId, label: String) -> bool {
+        match self.clients.get_mut(&id) {
+            Some(existing) => {
+                let changed = *existing != label;
+                *existing = label;
+                changed
+            }
+            None => false,
+        }
+    }
+
     pub fn set_enabled(&mut self, enabled: bool) -> bool {
         let changed = self.enabled != enabled;
         self.enabled = enabled;
@@ -228,5 +239,17 @@ mod tests {
 
         hub.toggle_selected(target);
         assert_eq!(0, hub.selected_count());
+    }
+
+    #[test]
+    fn update_label_refreshes_the_visible_target_label() {
+        let mut hub = BroadcastInputHub::default();
+        let target = hub.register("172.29.13.200");
+
+        assert!(hub.update_label(target, "172.29.13.200(1)".to_string()));
+        assert_eq!("172.29.13.200(1)", hub.snapshot().targets[0].label.as_str());
+
+        assert!(!hub.update_label(target, "172.29.13.200(1)".to_string()));
+        assert!(!hub.update_label(9999, "unknown".to_string()));
     }
 }

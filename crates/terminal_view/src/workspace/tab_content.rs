@@ -88,6 +88,12 @@ impl TabContent for TerminalWorkspace {
         }
     }
 
+    fn apply_title(&mut self, title: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        self.active_pane().update(cx, |pane, cx| {
+            pane.sync_broadcast_label(title, cx);
+        });
+    }
+
     fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
         Vec::new()
     }

@@ -121,6 +121,10 @@ impl TabContent for TerminalView {
         Task::ready(true)
     }
 
+    fn apply_title(&mut self, title: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_broadcast_label(title, cx);
+    }
+
     fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
         Vec::new()
     }

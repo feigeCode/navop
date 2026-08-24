@@ -39,6 +39,19 @@ impl TerminalView {
         }
     }
 
+    /// 让广播输入面板中的标签与标签页最终显示的标题保持一致。
+    pub(crate) fn sync_broadcast_label(&mut self, title: &str, cx: &mut Context<Self>) {
+        let Some(client_id) = self.broadcast_client_id else {
+            return;
+        };
+        let Some(registry) = broadcast_input_registry(cx) else {
+            return;
+        };
+        registry.update(cx, |registry, cx| {
+            registry.update_label(client_id, title.to_string(), cx);
+        });
+    }
+
     pub(super) fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
         if !self.is_live_ssh_terminal(cx) {
             return;
