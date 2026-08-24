@@ -471,6 +471,13 @@
 - **验证方式**：纯 contract 覆盖搜索自动展开、显式折叠优先、非搜索态遵循普通展开状态；真实树测试确认搜索中箭头可反复收起/展开，修改搜索词后重新自动展示匹配路径，清空搜索后保留用户最后的普通展开选择。
 - **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及数据库树、文件树、资源树等同时支持过滤和层级展开的 GPUI 树视图。
 
+- **标题**：旧 SSH 服务器的 DH 协商失败通常是超出 russh gex 位宽下限而非缺少算法
+- **触发信号**：legacy 兼容算法已开启且 `No common Key/Mac algorithm` 已消失，但连接仍失败；日志出现 `russh::client::kex: DH prime size (2048 bits) not within requested range` 或 `(1024 bits) not within requested range` 后跟 `Key exchange init failed`。用 `ssh -o KexAlgorithms=xxx` 探测可拿到服务器真实 offer 列表。
+- **根因 / 约束**：russh `GexParams` 默认 `min_group_size=3072`，客户端配置校验也强制不低于 2048。2048 位组（老 Cisco/网管）可用 `GexParams::new(2048, 2048, 8192)` 放行；但更旧设备只提供 1024 位组时，GEX 路径无论如何都过不了 2048 下限。这类设备通常除 `group-exchange-sha1` 外还声明**固定组** `diffie-hellman-group1-sha1`（固定 1024 位组不走 GEX 范围校验），而 russh 客户端按自身列表顺序选 kex，一旦 `DH_GEX_SHA1` 排在 `DH_G1_SHA1` 前就会优先走进 GEX 死路。`Key exchange init failed` 是 `Error::KexInit` 而非 `NoCommonAlgo`，`add_legacy_algorithm_hint` 不会附加提示。
+- **正确做法**：在 `build_russh_client_config` 内按 `allow_legacy_algorithms` 选 `gex`：legacy 用 `client::GexParams::new(2048, 2048, 8192)`，现代路径保持默认；同时把 legacy KEX 顺序固定为现代组 → `DH_G14_SHA1` → `DH_G1_SHA1` → `DH_GEX_SHA1`，让 1024 位设备优先走固定 group1 路径，GEX 只作为最后回退。用具名常量避免魔法数字；真实 offer 探测 `ssh -o BatchMode=yes -o PreferredAuthentications=none -o KexAlgorithms=...` 区分“无共同算法”与“只有 1024 位组”。
+- **验证方式**：`cargo check -p ssh`、`cargo test -p ssh`（覆盖 gex 参数开/关、固定 group1 排在 group-exchange 前、以及 fake server 只声明 `DH_GEX_SHA1 + DH_G1_SHA1` 且 `lookup_dh_gex_group` 固定返回 `DH_GROUP1` 时 legacy 开启连接成功、关闭时报 `No common Kex algorithm`）、`cargo clippy -p ssh --all-targets` 无新增警告；再用真机 DMG 分别连接 2048 位组与 1024 位组设备确认 `Key exchange init failed` 消失。
+- **适用范围**：`crates/ssh/src/ssh.rs::build_russh_client_config` / `legacy_gex_params` / `build_client_preferred_algorithms_with_legacy`，以及任何直接构造 `russh::client::Config` 的 legacy 兼容链路。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

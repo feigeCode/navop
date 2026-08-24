@@ -19,13 +19,15 @@ impl fmt::Display for LegacyAlgorithmRequired {
 
 impl StdError for LegacyAlgorithmRequired {}
 
-/// Add an actionable hint only when russh reports a legacy KEX or DSA host-key
-/// negotiation failure and this connection has not enabled legacy algorithms.
+/// Add an actionable hint when russh reports that no common legacy-key
+/// algorithm exists and this connection has not enabled legacy algorithms.
 ///
+/// Both legacy key-exchange algorithms and a server whose only host-key
+/// algorithm is `ssh-dss` are covered; newer-capable servers are not affected.
 /// Host-key changes, authentication failures, network errors, and failures in
 /// other SSH algorithm categories are deliberately left unchanged.
 pub fn add_legacy_algorithm_hint(error: Error, allow_legacy_algorithms: bool) -> Error {
-    if allow_legacy_algorithms || !is_legacy_algorithm_negotiation_failure(&error) {
+    if allow_legacy_algorithms || !is_no_common_algorithm_with_legacy_remedy(&error) {
         return error;
     }
 
@@ -34,23 +36,26 @@ pub fn add_legacy_algorithm_hint(error: Error, allow_legacy_algorithms: bool) ->
     })
 }
 
-fn is_legacy_algorithm_negotiation_failure(error: &Error) -> bool {
+fn is_no_common_algorithm_with_legacy_remedy(error: &Error) -> bool {
     error.chain().any(|cause| {
-        cause
-            .downcast_ref::<russh::Error>()
-            .is_some_and(|error| match error {
-                russh::Error::NoCommonAlgo {
-                    kind: russh::AlgorithmKind::Kex,
-                    ..
-                } => true,
-                russh::Error::NoCommonAlgo {
-                    kind: russh::AlgorithmKind::Key,
-                    theirs,
-                    ..
-                } => theirs.iter().any(|algorithm| algorithm == "ssh-dss"),
-                _ => false,
-            })
+        cause.downcast_ref::<russh::Error>().is_some_and(|error| match error {
+            russh::Error::NoCommonAlgo { kind, theirs, .. } => matches_kind(kind, theirs),
+            _ => false,
+        })
     })
+}
+
+/// The legacy compatibility list only covers SHA-1 KEX, the DSA host-key
+/// algorithm, and hmac-sha1, so a hint is only useful for those failures.
+fn matches_kind(kind: &russh::AlgorithmKind, theirs: &[String]) -> bool {
+    match kind {
+        russh::AlgorithmKind::Kex => true,
+        russh::AlgorithmKind::Key => theirs
+            .iter()
+            .any(|name| matches!(name.as_str(), "ssh-dss" | "ssh-dss-cert-v01@openssh.com")),
+        russh::AlgorithmKind::Mac => theirs.iter().any(|name| name == "hmac-sha1"),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -58,20 +63,17 @@ mod tests {
     use super::{LegacyAlgorithmRequired, add_legacy_algorithm_hint};
 
     fn no_common_algorithm(kind: russh::AlgorithmKind) -> anyhow::Error {
-        no_common_algorithm_with_theirs(kind, &["theirs"])
+        no_common_algorithm_with_theirs(kind, vec!["theirs".to_owned()])
     }
 
     fn no_common_algorithm_with_theirs(
         kind: russh::AlgorithmKind,
-        theirs: &[&str],
+        theirs: Vec<String>,
     ) -> anyhow::Error {
         russh::Error::NoCommonAlgo {
             kind,
             ours: vec!["ours".to_owned()],
-            theirs: theirs
-                .iter()
-                .map(|algorithm| (*algorithm).to_owned())
-                .collect(),
+            theirs,
         }
         .into()
     }
@@ -97,25 +99,61 @@ mod tests {
     }
 
     #[test]
-    fn host_key_algorithm_negotiation_failure_does_not_add_legacy_kex_hint() {
-        let error =
-            add_legacy_algorithm_hint(no_common_algorithm(russh::AlgorithmKind::Key), false);
-
-        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_none());
-        assert!(error.to_string().contains("No common Key algorithm"));
-    }
-
-    #[test]
-    fn disabled_legacy_algorithms_adds_hint_for_ssh_dss_host_key_failure() {
+    fn ssh_dss_host_key_negotiation_failure_suggests_enabling_legacy_algorithms() {
         let error = add_legacy_algorithm_hint(
-            no_common_algorithm_with_theirs(russh::AlgorithmKind::Key, &["ssh-dss"])
-                .context("handshake failed"),
+            no_common_algorithm_with_theirs(
+                russh::AlgorithmKind::Key,
+                vec!["ssh-dss".to_owned()],
+            ),
             false,
         );
 
         assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
         assert!(error.to_string().contains("No common Key algorithm"));
         assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
+    }
+
+    #[test]
+    fn unrelated_host_key_algorithm_failure_does_not_suggest_legacy_algorithms() {
+        let error = add_legacy_algorithm_hint(
+            no_common_algorithm_with_theirs(
+                russh::AlgorithmKind::Key,
+                vec!["sk-ssh-ed25519@openssh.com".to_owned()],
+            ),
+            false,
+        );
+
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_none());
+        assert!(error.to_string().contains("No common Key algorithm"));
+    }
+
+    #[test]
+    fn hmac_sha1_mac_negotiation_failure_suggests_enabling_legacy_algorithms() {
+        let error = add_legacy_algorithm_hint(
+            no_common_algorithm_with_theirs(
+                russh::AlgorithmKind::Mac,
+                vec!["hmac-sha1".to_owned()],
+            ),
+            false,
+        );
+
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
+        assert!(error.to_string().contains("No common Mac algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
+    }
+
+    #[test]
+    fn unsupported_mac_negotiation_failure_does_not_suggest_legacy_algorithms() {
+        let error = add_legacy_algorithm_hint(
+            no_common_algorithm_with_theirs(
+                russh::AlgorithmKind::Mac,
+                vec!["hmac-md5".to_owned()],
+            ),
+            false,
+        );
+
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_none());
+        assert!(error.to_string().contains("No common Mac algorithm"));
     }
 
     #[test]
