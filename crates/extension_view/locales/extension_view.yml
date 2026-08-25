@@ -36,9 +36,17 @@ Extension:
     zh-CN: 离线包下载
     zh-HK: 離線包下載
   offline_package_hint:
-    en: Download the extension offline package from GitHub Releases and install it locally.
-    zh-CN: 前往 GitHub Releases 下载扩展离线包,再通过本地安装导入。
-    zh-HK: 前往 GitHub Releases 下載擴展離線包,再通過本機安裝匯入。
+    en: Choose a channel below to get the extension package, then install it locally.
+    zh-CN: 从以下渠道获取扩展安装包,再通过本地安装导入。
+    zh-HK: 從以下渠道獲取擴展安裝包,再通過本機安裝匯入。
+  offline_package_releases_label:
+    en: GitHub Releases
+    zh-CN: GitHub Releases 离线包
+    zh-HK: GitHub Releases 離線包
+  offline_package_mirror_label:
+    en: Domestic Mirror
+    zh-CN: 国内扩展下载
+    zh-HK: 國內擴展下載
   local_install:
     en: Local Install
     zh-CN: 本地安装
