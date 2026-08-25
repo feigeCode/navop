@@ -4206,7 +4206,7 @@ impl Terminal {
 
     /// 获取选中的文本
     pub fn selection_text(&self) -> Option<String> {
-        self.term.lock().selection_to_string()
+        crate::selection_text_from_term(&self.term.lock())
     }
 
     /// 清除选择

@@ -111,6 +111,7 @@ use ssh::SshSessionManager;
 use std::ops::Deref;
 use terminal::GpuiEventProxy;
 use terminal::LocalConfig;
+use terminal::selection_text_from_term;
 use terminal::terminal::{
     ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
     TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, TerminalScrollSnapshot,

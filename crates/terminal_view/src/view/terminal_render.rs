@@ -50,7 +50,7 @@ impl TerminalView {
                 screen_lines: term.screen_lines(),
                 columns: term.columns(),
                 selection_present: term.selection.is_some(),
-                selection_text: term.selection_to_string(),
+                selection_text: selection_text_from_term(term),
                 block_selection_text: block_selection_text_from_term(term, self.block_selection),
                 cursor_screen_line: cursor.line.0 + display_offset as i32,
                 cursor_column: cursor.column.0,

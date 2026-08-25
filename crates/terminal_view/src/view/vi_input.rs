@@ -56,7 +56,7 @@ impl TerminalView {
             }
             PendingTerminalAction::ViYank => {
                 if term.mode().contains(TermMode::VI) {
-                    let text = term.selection_to_string();
+                    let text = selection_text_from_term(&term);
                     term.selection = None;
                     TerminalActionOutcome::Yank(text)
                 } else {

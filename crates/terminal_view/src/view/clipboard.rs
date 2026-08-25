@@ -27,7 +27,7 @@ impl TerminalView {
     pub(super) fn selection_text(&self, cx: &App) -> Option<String> {
         let term = self.terminal.read(cx).term().clone();
         let selection_text = match term.try_lock_unfair() {
-            Some(term) => term.selection_to_string(),
+            Some(term) => selection_text_from_term(&term),
             None => self.terminal_frame_snapshot.selection_text.clone(),
         };
         selection_text

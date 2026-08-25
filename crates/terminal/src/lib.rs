@@ -8,6 +8,7 @@ pub mod osc;
 pub mod performance_metrics;
 pub mod pty_backend;
 pub mod recording;
+mod selection_text;
 pub mod serial_backend;
 mod serial_ingress;
 mod session_logging;
@@ -38,6 +39,7 @@ pub use performance_metrics::{
     terminal_performance_metrics_enabled,
 };
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
+pub use selection_text::selection_text_from_term;
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
 pub use ssh_session_identity::{

@@ -85,7 +85,7 @@ impl TerminalView {
             self.schedule_terminal_render_retry(cx);
             return;
         };
-        let selection_text = term.selection_to_string();
+        let selection_text = selection_text_from_term(&term);
         drop(term);
 
         self.pending_selection_auto_copy = false;
