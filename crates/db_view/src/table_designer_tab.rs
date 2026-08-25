@@ -306,6 +306,7 @@ pub struct TableDesigner {
     ddl_preview_input: Entity<InputState>,
     preview_refresh_state: PreviewRefreshScheduleState,
     metadata_load_seq: usize,
+    preview_generation: usize,
     original_design: Option<TableDesign>,
     _subscriptions: Vec<Subscription>,
 }
@@ -533,6 +534,7 @@ impl TableDesigner {
             ddl_preview_input,
             preview_refresh_state: PreviewRefreshScheduleState::default(),
             metadata_load_seq: 0,
+            preview_generation: 0,
             original_design: None,
             _subscriptions: vec![
                 name_sub,
@@ -680,77 +682,103 @@ impl TableDesigner {
             .collect()
     }
 
-    fn build_diff_preview_sql(
-        &self,
-        design: &TableDesign,
-        column_renames: &[(String, String)],
-        cx: &App,
-    ) -> String {
-        let global_state = cx.global::<GlobalDbState>().clone();
-
-        if let Ok(plugin) = global_state
-            .db_manager
-            .get_plugin(&self.config.database_type)
-        {
-            if let Some(original) = &self.original_design {
-                let normalized = Self::normalize_column_renames(original, design, column_renames);
-                plugin.build_alter_table_sql_with_renames(original, design, &normalized)
-            } else {
-                plugin.build_create_table_sql(design)
-            }
-        } else {
-            String::new()
-        }
-    }
-
-    fn build_ddl_preview_sql(&self, design: &TableDesign, cx: &App) -> String {
-        if design.table_name.trim().is_empty() || design.columns.is_empty() {
-            return String::new();
-        }
-
-        let global_state = cx.global::<GlobalDbState>().clone();
-        if let Ok(plugin) = global_state
-            .db_manager
-            .get_plugin(&self.config.database_type)
-        {
-            plugin.build_create_table_sql(design)
-        } else {
-            String::new()
-        }
-    }
-
     fn update_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let global_state = cx.global::<GlobalDbState>().clone();
+        let connection_id = self.config.connection_id.clone();
+        let database_name = self.config.database_name.clone();
+        let schema_name = self.config.schema_name.clone();
         let design = self.collect_design(cx);
         let column_renames = self.collect_column_renames(cx);
-        let sql = self.build_diff_preview_sql(&design, &column_renames, cx);
-        let ddl = self.build_ddl_preview_sql(&design, cx);
+        let original = self.original_design.clone();
+        let column_renames = match &original {
+            Some(original) => Self::normalize_column_renames(original, &design, &column_renames),
+            None => column_renames,
+        };
 
-        if let Some(original) = &self.original_design {
-            if Self::sql_has_changes(&sql) {
-                let original_order = column_order_snapshot(original);
-                let current_order = column_order_snapshot(&design);
-                tracing::warn!(
-                    target: "table_designer_diag",
-                    table = %design.table_name,
-                    database_type = ?self.config.database_type,
-                    ?column_renames,
-                    ?original_order,
-                    ?current_order,
-                    original_columns = ?original.columns,
-                    current_columns = ?design.columns,
-                    sql = %sql,
-                    "[table_designer_diag] existing table preview detected diff"
-                );
-            }
-        }
+        // 预览与保存共用同一条异步驱动路径（build_table_design_sql），由插件
+        // （driver jar）生成方言正确的 DDL / COMMENT，其他数据库同样受益。
+        self.preview_generation += 1;
+        let generation = self.preview_generation;
+        let window_handle = window.window_handle();
 
-        self.sql_preview_input.update(cx, |state, cx| {
-            state.set_value(sql, window, cx);
-        });
-        self.ddl_preview_input.update(cx, |state, cx| {
-            state.set_value(ddl, window, cx);
-        });
-        cx.notify();
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let sql_result = global_state
+                .build_table_design_sql(
+                    cx,
+                    connection_id.clone(),
+                    database_name.clone(),
+                    schema_name.clone(),
+                    original.clone(),
+                    design.clone(),
+                    column_renames.clone(),
+                )
+                .await;
+
+            // 完整 CREATE TABLE 预览：新建表时与 SQL 预览相同；编辑既有表时
+            // 单独通过驱动生成完整建表 DDL。
+            let ddl_result = if original.is_some() {
+                Some(
+                    global_state
+                    .build_table_design_sql(
+                        cx,
+                        connection_id,
+                        database_name,
+                        schema_name,
+                        None,
+                        design.clone(),
+                        Vec::new(),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+
+            let _ = cx.update(|cx: &mut App| {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    let _ = this.update(cx, |designer, cx| {
+                        if designer.preview_generation != generation {
+                            return;
+                        }
+                        if let Ok(sql) = &sql_result {
+                            if let Some(original) = &designer.original_design {
+                                if Self::sql_has_changes(sql) {
+                                    let original_order = column_order_snapshot(original);
+                                    let current_order = column_order_snapshot(&design);
+                                    tracing::warn!(
+                                        target: "table_designer_diag",
+                                        table = %design.table_name,
+                                        database_type = ?designer.config.database_type,
+                                        ?column_renames,
+                                        ?original_order,
+                                        ?current_order,
+                                        original_columns = ?original.columns,
+                                        current_columns = ?design.columns,
+                                        sql = %sql,
+                                        "[table_designer_diag] existing table preview detected diff"
+                                    );
+                                }
+                            }
+                            designer.sql_preview_input.update(cx, |state, cx| {
+                                state.set_value(sql.clone(), window, cx);
+                            });
+                            if ddl_result.is_none() {
+                                designer.ddl_preview_input.update(cx, |state, cx| {
+                                    state.set_value(sql.clone(), window, cx);
+                                });
+                            }
+                        }
+                        if let Some(Ok(ddl)) = &ddl_result {
+                            designer.ddl_preview_input.update(cx, |state, cx| {
+                                state.set_value(ddl.clone(), window, cx);
+                            });
+                        }
+                        cx.notify();
+                    });
+                });
+            });
+        })
+        .detach();
     }
 
     fn schedule_preview_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
