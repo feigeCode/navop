@@ -358,7 +358,7 @@ fn render_create_panel(
             view,
             window,
             |_, window, cx| {
-                show_connection_import_window(cx.entity(), window.window_handle(), cx);
+                show_connection_import_window(cx.entity(), window, cx);
             },
             cx,
         ))

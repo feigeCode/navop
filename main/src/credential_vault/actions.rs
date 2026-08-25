@@ -56,6 +56,7 @@ impl CredentialVaultView {
             move |window, cx| {
                 cx.new(|cx| CredentialFormWindow::new(existing, storage_manager, view, window, cx))
             },
+            Some(_window),
             cx,
         );
     }

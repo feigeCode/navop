@@ -77,6 +77,7 @@ pub(crate) fn open_remote_desktop_fullscreen_window(
             view.read(cx).focus_handle(cx).focus(window, cx);
             view
         },
+        None,
         cx,
     );
 }

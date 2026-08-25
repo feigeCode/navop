@@ -221,6 +221,7 @@ fn open_view(view: PreparedExtensionView, cx: &mut App) -> Result<()> {
                 .expect("validated extension view spec")
             })
         },
+        None,
         cx,
     );
     Ok(())

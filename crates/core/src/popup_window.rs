@@ -1,13 +1,32 @@
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement, Render, SharedString, Size, StatefulInteractiveElement, Styled, Window,
-    WindowBounds, WindowKind, WindowOptions, actions, div, point, prelude::FluentBuilder, px, size,
+    AnyView, AnyWindowHandle, App, AppContext, Bounds, Context, InteractiveElement, IntoElement,
+    KeyBinding, ParentElement, Render, SharedString, Size, StatefulInteractiveElement, Styled,
+    Window, WindowBounds, WindowKind, WindowOptions, actions, div, prelude::FluentBuilder, px,
+    size,
 };
+use std::sync::OnceLock;
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt, notification::Notification, v_flex,
 };
 
 const FULLSCREEN_POPUP_CONTEXT: &str = "FullscreenPopupWindow";
+
+/// 主窗口 handle 注册表。
+///
+/// 部分弹出窗口的调用方只持有 `cx: &mut App`、没有 `&mut Window`，而 GPUI 在
+/// 这类上下文里 `cx.active_window()` 会返回 `None`。此时回退到主窗口 handle，
+/// 让弹窗落在用户实际所在的屏幕（主窗口所在显示器）。
+static MAIN_WINDOW_HANDLE: OnceLock<AnyWindowHandle> = OnceLock::new();
+
+/// 由主程序在创建主窗口后注册主窗口 handle。
+pub fn set_main_window_handle(handle: AnyWindowHandle) {
+    let _ = MAIN_WINDOW_HANDLE.set(handle);
+}
+
+/// 读取已注册的主窗口 handle（未注册时返回 `None`）。
+fn main_window_handle() -> Option<AnyWindowHandle> {
+    MAIN_WINDOW_HANDLE.get().copied()
+}
 
 actions!(popup_window, [ExitPopupFullscreen]);
 
@@ -103,9 +122,16 @@ impl PopupWindowOptions {
 /// 异步创建一个独立的弹出窗口，窗口内容由 `create_view_fn` 提供。
 /// 窗口会自动包含 Root 组件以支持 notification 等功能。
 ///
+/// 弹出窗口应出现在「父窗口 / 当前激活窗口」所在的屏幕，而不是恒落主屏幕。
+/// 优先使用 `parent_window`（调用方透传的真实窗口，最可靠）；没有时回退到当前激活窗口；
+/// 再没有则回退主屏幕。`parent_window` 的 display_id 在读取前先 `bounds_changed` 一次，
+/// 刷新「窗口被拖到另一屏但未触发 resize」时 GPUI 未刷新的缓存 `display_id`，
+/// 从而保证弹窗落在真实所在屏幕。
+///
 /// # 参数
 /// - `options`: 窗口配置选项
 /// - `create_view_fn`: 创建窗口内容的闭包
+/// - `parent_window`: 触发弹窗的父窗口；为 `None` 时回退到激活窗口 / 主屏幕
 /// - `cx`: App 上下文
 ///
 /// # 示例
@@ -115,34 +141,63 @@ impl PopupWindowOptions {
 ///     |window, cx| {
 ///         cx.new(|cx| MyView::new(window, cx))
 ///     },
+///     Some(window),
 ///     cx,
 /// );
 /// ```
-pub fn open_popup_window<F, E>(options: PopupWindowOptions, create_view_fn: F, cx: &mut App)
-where
+pub fn open_popup_window<F, E>(
+    options: PopupWindowOptions,
+    create_view_fn: F,
+    parent_window: Option<&mut Window>,
+    cx: &mut App,
+) where
     E: Into<AnyView>,
     F: FnOnce(&mut Window, &mut App) -> E + Send + 'static,
 {
-    let mut window_size = size(px(options.width), px(options.height));
-    let display = if let Some(active_window) = cx.active_window() {
-        active_window
-            .update(cx, |_, window, cx| window.display(cx))
-            .ok()
-            .flatten()
-            .or_else(|| cx.primary_display())
-    } else {
-        cx.primary_display()
+    // 解析父窗口 / 激活窗口所在显示器的 id。
+    let parent_display_id = match parent_window {
+        Some(window) => {
+            window.bounds_changed(cx);
+            window.display(cx).map(|display| display.id())
+        }
+        None => {
+            // 没有父窗口时，优先活动窗口；活动窗口取不到（仅持有 App 上下文的调用方）
+            // 则回退到注册的主窗口 handle，保证弹窗落在用户实际所在屏幕。
+            let from_active = cx.active_window().and_then(|handle| {
+                handle
+                    .update(cx, |_, window, cx| {
+                        window.bounds_changed(cx);
+                        window.display(cx)
+                    })
+                    .ok()
+                    .flatten()
+                    .map(|display| display.id())
+            });
+            from_active.or_else(|| {
+                main_window_handle().and_then(|handle| {
+                    cx.update_window(handle, |_, window, cx| {
+                        window.bounds_changed(cx);
+                        window.display(cx).map(|display| display.id())
+                    })
+                    .ok()
+                    .flatten()
+                })
+            })
+        }
     };
-    let display_id = display.as_ref().map(|display| display.id());
-    let window_bounds = if let Some(display) = display.as_ref() {
-        let display_bounds = display.visible_bounds();
-        let display_size = display_bounds.size;
+
+    let mut window_size = size(px(options.width), px(options.height));
+    let display = parent_display_id
+        .and_then(|id| cx.find_display(id))
+        .or_else(|| cx.primary_display());
+    if let Some(display) = display {
+        let display_size = display.bounds().size;
         window_size.width = window_size.width.min(display_size.width * 0.85);
         window_size.height = window_size.height.min(display_size.height * 0.85);
-        Bounds::centered_at(display_bounds.center(), window_size)
-    } else {
-        Bounds::new(point(px(0.0), px(0.0)), window_size)
-    };
+    }
+    // `Bounds::centered` 生成目标显示器局部坐标的居中 bounds，平台层会再叠加
+    // 该显示器 frame 原点；必须同时指定 display_id。
+    let window_bounds = Bounds::centered(parent_display_id, window_size, cx);
     let title = options.title.clone();
     let fullscreen_hint = options.fullscreen_hint.clone();
 
@@ -159,7 +214,7 @@ where
                 width: px(options.min_width),
                 height: px(options.min_height),
             }),
-            display_id,
+            display_id: parent_display_id,
             kind: WindowKind::Normal,
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             #[cfg(target_os = "linux")]

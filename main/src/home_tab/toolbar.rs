@@ -90,7 +90,7 @@ impl HomePage {
                                 move |_, window, cx| {
                                     show_connection_import_window(
                                         view.clone(),
-                                        window.window_handle(),
+                                        window,
                                         cx,
                                     );
                                 }

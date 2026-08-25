@@ -15,6 +15,7 @@ pub fn init_window_systems(window: &Window, cx: &mut App) {
     }
 
     let _ = MAIN_WINDOW_HANDLE.set(window.window_handle());
+    one_core::popup_window::set_main_window_handle(window.window_handle());
 
     // 初始化 hotkey
     system_hotkey::register(cx);

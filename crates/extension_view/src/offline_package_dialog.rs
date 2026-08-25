@@ -22,6 +22,7 @@ pub(super) fn show_offline_package_dialog(cx: &mut App) {
     one_core::popup_window::open_popup_window(
         options,
         |_window, cx| cx.new(|cx| OfflinePackageDialogView::new(cx)),
+        None,
         cx,
     );
 }

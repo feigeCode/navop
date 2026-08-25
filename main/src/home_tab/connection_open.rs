@@ -73,6 +73,7 @@ impl HomePage {
                     )
                 })
             },
+            Some(window),
             cx,
         );
     }
