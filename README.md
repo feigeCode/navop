@@ -247,6 +247,6 @@ ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-f
 
 ## License
 
-Navop source code is licensed under [Apache License 2.0](LICENSE-APACHE). Navop-authored portions are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which adds restrictions on redistribution, resale, competing products or services, and unauthorized distribution platforms. Third-party components remain subject to their own licenses.
+Navop source code is licensed under [Apache License 2.0](LICENSE-APACHE). Navop-authored portions are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which permits free redistribution through free distribution channels (such as GitHub Releases, Flatpak repositories, and free app stores) while prohibiting commercial resale, charging fees, competing products or services, and paid distribution platforms. Third-party components remain subject to their own licenses.
 
 For licensing inquiries, contact xiaofei.hf@gmail.com.

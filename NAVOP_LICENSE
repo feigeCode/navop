@@ -10,11 +10,15 @@ The Navop License
 
 "再分发"是指以任何形式向第三方提供本软件的副本，无论是否经过修改，包括但不限于出售、转售、租赁、出借、托管分发或捆绑分发。
 
+"免费分发渠道"是指不向用户或任何第三方收取任何费用的公开软件分发渠道，包括但不限于开源软件仓库、GitHub Releases、Flatpak 仓库（如 FlatPark、Flathub）、免费应用商店、软件源或镜像站点等。
+
 二、许可授予
 
 根据本许可的条款和条件，许可方特此授予您非排他性、全球性、不可转让、不可再许可、可撤销、免版税的版权许可，允许您将本软件用于个人用途和商业用途。
 
 上述版权声明和本许可声明应包含在本软件的所有副本或重要部分中。
+
+依本许可第三条允许的免费分发不视为对本许可的转让或再许可。
 
 三、允许的使用
 
@@ -22,15 +26,16 @@ The Navop License
 
 （一）在个人或企业内部环境中安装和使用本软件；
 （二）将本软件用于商业目的，包括在商业项目中使用本软件作为工具；
-（三）为适配您的使用环境对本软件进行必要的配置和调整。
+（三）为适配您的使用环境对本软件进行必要的配置和调整；
+（四）通过免费分发渠道（包括但不限于 GitHub Releases、Flatpak 仓库如 FlatPark/Flathub、免费应用商店、软件源或镜像站点）向第三方免费分发本软件，且该分发不向任何第三方收取任何费用。
 
 四、再分发限制
 
-（一）您不得出售、转售、租赁或以任何直接或间接收取费用的方式向第三方分发本软件的副本，无论是否经过修改。
+（一）您不得出售、转售、租赁本软件，或以任何直接或间接收取费用（包括但不限于订阅费、许可费、捆绑或搭售）的方式向第三方分发本软件的副本，无论是否经过修改。
 
-（二）您不得将本软件（无论是否经过修改）作为独立产品或任何产品、套件、平台的组成部分进行再分发或转授权。
+（二）您不得将本软件（无论是否经过修改）作为独立的商业产品或任何商业产品、套件、平台的组成部分进行再分发、转售或转授权。
 
-（三）您不得将本软件托管于任何公开的下载站点、应用商店或软件分发平台（许可方官方渠道除外）。
+（三）您不得将本软件托管于任何向用户收取费用或要求付费订阅的下载站点、应用商店或软件分发平台（许可方官方渠道除外）；免费分发渠道不受此限。
 
 （四）您不得基于本软件的全部或部分代码创建竞争性产品或服务。
 
@@ -71,11 +76,15 @@ The Navop License
 
 "Redistribution" means providing copies of the Software to third parties in any form, whether modified or unmodified, including but not limited to selling, reselling, leasing, lending, hosting for distribution, or bundling for distribution.
 
+"Free Distribution Channel" means any public software distribution channel that does not charge users or any third party any fee, including but not limited to open-source software repositories, GitHub Releases, Flatpak repositories (such as FlatPark and Flathub), free application stores, software repositories, or mirror sites.
+
 2. License Grant
 
 Subject to the terms and conditions of this License, the Licensor hereby grants to you a non-exclusive, worldwide, non-transferable, non-sublicensable, revocable, royalty-free copyright license to use the Software for personal and commercial purposes.
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+Free distribution of the Software permitted under Section 3 shall not be deemed a transfer or sublicense of this License.
 
 3. Permitted Uses
 
@@ -83,15 +92,16 @@ Subject to compliance with all terms of this License, you may:
 
 (a) Install and use the Software in personal or internal enterprise environments;
 (b) Use the Software for commercial purposes, including using the Software as a tool in commercial projects;
-(c) Make necessary configurations and adjustments to the Software to adapt it to your usage environment.
+(c) Make necessary configurations and adjustments to the Software to adapt it to your usage environment;
+(d) Distribute the Software free of charge to third parties through free distribution channels (including but not limited to GitHub Releases, Flatpak repositories such as FlatPark and Flathub, free application stores, software repositories, or mirror sites), provided that no fee is charged to any third party for such distribution.
 
 4. Redistribution Restrictions
 
-(a) You may not sell, resell, lease, or distribute copies of the Software to third parties by any means that directly or indirectly charges a fee, whether modified or unmodified.
+(a) You may not sell, resell, lease the Software, or distribute copies of the Software to third parties by any means that directly or indirectly charges a fee (including but not limited to subscription fees, license fees, bundling, or tying arrangements), whether modified or unmodified.
 
-(b) You may not redistribute or sublicense the Software (whether modified or unmodified) as a standalone product or as a component of any product, suite, or platform.
+(b) You may not redistribute, resell, or sublicense the Software (whether modified or unmodified) as a standalone commercial product or as a component of any commercial product, suite, or platform.
 
-(c) You may not host the Software on any public download site, application store, or software distribution platform (except through the Licensor's official channels).
+(c) You may not host the Software on any download site, application store, or software distribution platform that charges users a fee or requires a paid subscription (except through the Licensor's official channels); free distribution channels are not subject to this restriction.
 
 (d) You may not create competing products or services based on the Software's code, in whole or in part.
 

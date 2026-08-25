@@ -247,6 +247,6 @@ ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
 
 ## 许可证
 
-Navop 源代码基于 [Apache License 2.0](LICENSE-APACHE) 开源。Navop 自有代码还须遵守 [Navop 补充协议](NAVOP_LICENSE)，其中包含对二次分发、转售、竞争性产品或服务以及未经授权分发平台的限制。第三方组件继续适用其各自的许可证。
+Navop 源代码基于 [Apache License 2.0](LICENSE-APACHE) 开源。Navop 自有代码还须遵守 [Navop 补充协议](NAVOP_LICENSE)，该协议允许通过免费分发渠道（如 GitHub Releases、Flatpak 仓库和免费应用商店）免费分发，但禁止商业转售、收取费用、竞争性产品或服务以及付费分发平台。第三方组件继续适用其各自的许可证。
 
 如有许可证与版权相关问题，请联系 xiaofei.hf@gmail.com。
