@@ -277,9 +277,13 @@ fn find_loaded_table_info(
         if table.name != table_name {
             return false;
         }
-        match schema_name {
-            Some(schema) => table.schema.as_deref() == Some(schema),
-            None => true,
+        match (schema_name, table.schema.as_deref()) {
+            // 驱动没有返回 schema 信息时,退化按表名匹配。
+            // 宿主调用 list_tables 时已带上 schema 过滤条件,所以同名表
+            // 在结果集中通常唯一。
+            (Some(_), None) => true,
+            (Some(schema), Some(table_schema)) => schema == table_schema,
+            (None, _) => true,
         }
     })
 }
@@ -4830,5 +4834,66 @@ mod tests {
 
         assert_eq!(items[selected_idx].info.name, "utf8mb4_custom_ci");
         assert_eq!(items[selected_idx].info.charset, "utf8mb4");
+    }
+
+    fn table_info(name: &str, schema: Option<&str>, comment: Option<&str>) -> TableInfo {
+        TableInfo {
+            name: name.into(),
+            object_type: Default::default(),
+            schema: schema.map(Into::into),
+            comment: comment.map(Into::into),
+            engine: None,
+            create_time: None,
+            charset: None,
+            collation: None,
+        }
+    }
+
+    #[test]
+    fn find_loaded_table_info_matches_schema_when_available() {
+        let found = find_loaded_table_info(
+            vec![
+                table_info("other", Some("testuser"), None),
+                table_info("demo_child", Some("testuser"), Some("demo表")),
+            ],
+            "demo_child",
+            Some("testuser"),
+        );
+        assert_eq!(found.and_then(|t| t.comment).as_deref(), Some("demo表"));
+    }
+
+    #[test]
+    fn find_loaded_table_info_rejects_schema_mismatch() {
+        let found = find_loaded_table_info(
+            vec![table_info("demo_child", Some("other_owner"), None)],
+            "demo_child",
+            Some("testuser"),
+        );
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn find_loaded_table_info_falls_back_to_name_when_schema_absent() {
+        // 部分驱动(如 go dbipc)不在 schema/objects 返回 owner/schema,
+        // wire 对标 None;此时应退化为按表名匹配,保证表注释能回显。
+        let found = find_loaded_table_info(
+            vec![table_info("demo_child", None, Some("demo表"))],
+            "demo_child",
+            Some("testuser"),
+        );
+        assert_eq!(found.and_then(|t| t.comment).as_deref(), Some("demo表"));
+    }
+
+    #[test]
+    fn find_loaded_table_info_matches_by_name_when_no_schema_requested() {
+        let found = find_loaded_table_info(
+            vec![
+                table_info("demo_child", Some("a"), Some("demo表")),
+                table_info("demo_child", Some("b"), None),
+            ],
+            "demo_child",
+            None,
+        );
+        assert_eq!(found.and_then(|t| t.comment).as_deref(), Some("demo表"));
     }
 }

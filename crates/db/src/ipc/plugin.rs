@@ -2011,7 +2011,7 @@ fn table_info_from_wire(object: wire_schema::ObjectInfo) -> TableInfo {
             }
             _ => TableObjectType::Table,
         },
-        schema: None,
+        schema: empty_to_none(object.schema),
         comment: empty_to_none(object.comment),
         engine: None,
         create_time: object.created_at,

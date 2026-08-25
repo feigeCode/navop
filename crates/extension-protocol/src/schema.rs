@@ -204,6 +204,9 @@ pub struct ObjectInfo {
     pub name: String,
     #[serde(default = "default_object_kind")]
     pub kind: ObjectKind,
+    /// 对象所属 schema/owner,空表示未知或未提供。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub schema: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
     /// 估算行数(table),null 表示未知。
@@ -684,6 +687,7 @@ mod tests {
         let o = ObjectInfo {
             name: "users".into(),
             kind: ObjectKind::Table,
+            schema: "public".into(),
             comment: String::new(),
             row_count_estimate: Some(12345),
             size_bytes: Some(9876543),
@@ -693,6 +697,7 @@ mod tests {
         };
         let j = serde_json::to_string(&o).unwrap();
         assert!(j.contains(r#""kind":"table""#));
+        assert!(j.contains(r#""schema":"public""#));
         assert!(j.contains(r#""row_count_estimate":12345"#));
         assert!(!j.contains("updated_at"));
         assert!(!j.contains("comment"));
@@ -708,6 +713,19 @@ mod tests {
         assert_eq!(parsed.name, "users");
         assert_eq!(parsed.kind, ObjectKind::Table);
         assert_eq!(parsed.comment, "legacy table");
+        assert_eq!(parsed.schema, "");
+    }
+
+    #[test]
+    fn object_info_parses_schema_field_from_driver() {
+        // GBase 8s 驱动在 schema/objects 里返回 owner/schema。
+        let parsed: ObjectInfo = serde_json::from_str(
+            r#"{"name":"demo_child","kind":"table","schema":"testuser","comment":"demo表"}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.name, "demo_child");
+        assert_eq!(parsed.schema, "testuser");
+        assert_eq!(parsed.comment, "demo表");
     }
 
     #[test]
