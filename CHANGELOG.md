@@ -4,6 +4,50 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.12.0] - 2026-08-25
+
+### 中文
+
+#### 更新内容
+
+- 扩展市场新增更新提醒：应用启动后在后台检查扩展市场，与已安装的插件版本对比，发现新版本时弹出通知，并可直接跳转到扩展市场查看更新；同一批更新仅提醒一次，确认后不再重复打扰。
+- 离线安装包下载窗口现在展示全部下载渠道：扩展市场、GitHub Releases 与国内扩展下载镜像，每个渠道都支持复制地址与一键打开。
+- 连接树改为浮动面板：展开连接树时不再挤压或推动终端与标签栏，点击连接也不会误收起侧栏；展开/收起按钮在窗口控件下不再跳动。
+
+#### 修复与优化
+
+- 表设计器 SQL 预览改为通过数据库驱动异步生成，与保存共用同一路径：方言级 DDL（如 COMMENT ON）由数据库插件生成而非宿主内置，修复 DM、金仓（Kingbase）等表/列注释修改时预览为空白或「没有需要变更的语句」的问题。
+- 表设计器打开时正确回显表注释：通过 IPC 传递 Schema 匹配已加载的表，驱动未返回 Schema 时按表名兜底匹配。
+- 表设计器 SQL 预览与保存增加加载状态：预览生成期间显示进度条，保存期间禁用保存按钮。
+- 修复 Oracle 在对象页签右键「设计表」无法打开的问题：对象树节点 ID 统一从父节点派生，与左侧树保持一致。
+- 修复多显示器场景下弹窗位置错误：新建连接、导入、设置、更新等弹窗现在会出现在当前活动窗口所在的屏幕。
+- 修复数据比较中 JSON 字段控制字符显示不一致的问题：比较面板不再将 `\r\n` 显示为自动换行的多行文本，与查询面板保持一致。
+- 修复 Moonshot Kimi 系列模型（kimi-k2 等）调用报错的问题：强制使用模型要求的 temperature=1。
+- 授权协议调整：允许免费渠道分发 Navop，禁止商业转售。
+
+---
+
+### English
+
+#### What's New
+
+- Extension marketplace update notifications: Navop now checks the extension marketplace in the background on startup, compares it with installed plugin versions, and shows a notification when updates are available, with a direct link to view them in the marketplace; each batch of updates is announced only once.
+- The offline package download dialog now lists all download channels: the extension marketplace, GitHub Releases, and the domestic mirror, each with copy-address and open buttons.
+- The connection tree is now a floating panel: expanding it no longer squeezes or pushes the terminal/tab bar, clicking a connection no longer accidentally collapses the sidebar, and the expand/collapse toggle no longer jumps under the window controls.
+
+#### Fixes and Improvements
+
+- Table designer SQL preview is now generated asynchronously by the database driver, sharing the same code path as saving: dialect-specific DDL such as `COMMENT ON` is produced by the IPC plugin instead of a host-local builder, fixing blank or "no changes detected" previews when editing table/column comments on DM, Kingbase, and others.
+- The table designer now echoes the table comment on load by plumbing the schema through IPC, falling back to matching by table name when a driver does not report a schema.
+- Table designer SQL preview and save now show loading states: a spinner while the preview is generated and a disabled save button while DDL is built and executed.
+- Fixed "Design Table" from the object tab for Oracle by deriving object tree node IDs from their parent node so they match the left-side tree.
+- Fixed popup placement on multi-monitor setups: dialogs such as New Connection, Import, Settings, and Update now appear on the screen of the active window.
+- Fixed inconsistent JSON control-character rendering in data comparison, so `\r\n` no longer wraps into multi-line text and now matches the query panel.
+- Fixed invocation errors with Moonshot Kimi models (kimi-k2 and newer) by forcing the model-required `temperature=1`.
+- License update: free distribution channels are permitted; commercial resale is prohibited.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.11.0...v0.12.0
+
 ## [v0.11.0] - 2026-08-24
 
 ### 中文
