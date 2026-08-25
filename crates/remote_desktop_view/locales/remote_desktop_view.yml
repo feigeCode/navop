@@ -302,9 +302,9 @@ RemoteDesktopForm:
     zh-CN: 正在测试…
     zh-HK: 正在測試…
   credentials_valid:
-    en: Credentials are valid
-    zh-CN: 凭据有效
-    zh-HK: 憑據有效
+    en: "RDP port is reachable (credentials are verified when connecting)"
+    zh-CN: RDP 端口可达（凭据将在实际连接时验证）
+    zh-HK: RDP 連接埠可達（憑據將在實際連線時驗證）
   native_reachable:
     en: "Host is reachable (native RDP connects without a pre-check of credentials)"
     zh-CN: 主机可达（原生 RDP 模式无需安装插件，凭据在连接时验证）

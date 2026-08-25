@@ -15,7 +15,82 @@ mod tunnel_tests;
 
 pub use proxy::{
     ProxyTunnel, ProxyTunnelConfig, ProxyTunnelError, ProxyTunnelType, start_proxy_tunnel,
+    test_proxy_reachability,
 };
+
+#[derive(Debug, Error)]
+pub enum TcpReachabilityError {
+    #[error("target host is required")]
+    MissingHost,
+    #[error("target port is required")]
+    MissingPort,
+    #[error("failed to create TCP reachability runtime: {0}")]
+    Runtime(String),
+    #[error("could not connect to {host}:{port}: {detail}")]
+    Connect {
+        host: String,
+        port: u16,
+        detail: String,
+    },
+    #[error(
+        "connection to {host}:{port} timed out after {seconds:.1} seconds",
+        seconds = timeout.as_secs_f64()
+    )]
+    Timeout {
+        host: String,
+        port: u16,
+        timeout: Duration,
+    },
+}
+
+pub fn test_tcp_reachability(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<(), TcpReachabilityError> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(TcpReachabilityError::MissingHost);
+    }
+    if port == 0 {
+        return Err(TcpReachabilityError::MissingPort);
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| TcpReachabilityError::Runtime(error.to_string()))?;
+    let result = runtime.block_on(async {
+        tokio::time::timeout(timeout, async {
+            let socket_addrs = tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|error| error.to_string())?;
+            let mut last_error = None;
+            for socket_addr in socket_addrs {
+                match tokio::net::TcpStream::connect(socket_addr).await {
+                    Ok(_) => return Ok(()),
+                    Err(error) => last_error = Some(format!("{socket_addr}: {error}")),
+                }
+            }
+            Err(last_error.unwrap_or_else(|| "no address resolved".to_string()))
+        })
+        .await
+    });
+
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(detail)) => Err(TcpReachabilityError::Connect {
+            host: host.to_string(),
+            port,
+            detail,
+        }),
+        Err(_) => Err(TcpReachabilityError::Timeout {
+            host: host.to_string(),
+            port,
+            timeout,
+        }),
+    }
+}
 
 const DEFAULT_SSH_PORT: u16 = 22;
 const DEFAULT_SSH_AUTH_TYPE: &str = "password";

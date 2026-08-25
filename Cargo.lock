@@ -10658,6 +10658,7 @@ dependencies = [
  "anyhow",
  "cocoa 0.26.0",
  "connection-form",
+ "connection_tunnel",
  "dunce",
  "futures",
  "gpui",

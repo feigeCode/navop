@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -113,6 +114,42 @@ pub fn start_proxy_tunnel(
         local_addr,
         shutdown_tx: Some(shutdown_tx),
         worker: Some(worker),
+    })
+}
+
+pub fn test_proxy_reachability(
+    config: &ProxyTunnelConfig,
+    target_host: &str,
+    target_port: u16,
+    timeout: Duration,
+) -> Result<(), ProxyTunnelError> {
+    let proxy = config.to_ssh_proxy()?;
+    let target_host = target_host.trim();
+    if target_host.is_empty() {
+        return Err(ProxyTunnelError::MissingField("target_host"));
+    }
+    if target_port == 0 {
+        return Err(ProxyTunnelError::MissingField("target_port"));
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| ProxyTunnelError::Establish(error.to_string()))?;
+    runtime.block_on(async {
+        tokio::time::timeout(
+            timeout,
+            ssh::connect_via_proxy(&proxy, target_host, target_port),
+        )
+        .await
+        .map_err(|_| {
+            ProxyTunnelError::Establish(format!(
+                "connection to {target_host}:{target_port} timed out after {:.1} seconds",
+                timeout.as_secs_f64()
+            ))
+        })?
+        .map(|_| ())
+        .map_err(|error| ProxyTunnelError::Establish(error.to_string()))
     })
 }
 

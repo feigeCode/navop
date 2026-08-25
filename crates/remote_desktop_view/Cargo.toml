@@ -10,6 +10,7 @@ dunce = "1.0"
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 connection-form = { workspace = true }
+connection_tunnel = { workspace = true }
 one-core = { workspace = true }
 one-ui = { workspace = true }
 remote_desktop = { workspace = true }
