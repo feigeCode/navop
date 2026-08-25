@@ -935,10 +935,17 @@ fn is_valid_entry_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
+fn breadcrumb_item_min_width(label: &str) -> f32 {
+    if label == "/" { 0. } else { 35. }
+}
+
 fn breadcrumb_item(label: impl Into<SharedString>) -> BreadcrumbItem {
+    let label: SharedString = label.into();
+    let min_width = breadcrumb_item_min_width(label.as_ref());
+
     BreadcrumbItem::new(label)
         .flex_shrink_1()
-        .min_w(px(35.))
+        .min_w(px(min_width))
         .max_w(px(BREADCRUMB_ITEM_MAX_WIDTH))
         .overflow_hidden()
         .text_ellipsis()
@@ -7121,10 +7128,10 @@ mod tests {
         BoundedDisconnectOutcome, CloseState, ConnectionGeneration, ConnectionState,
         PendingTransfer, SharedProgress, TransferAdmission, TransferClientPool,
         TransferClientPoolState, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
-        acquire_transfer_client, bounded_disconnect, is_valid_entry_name, join_remote_path,
-        mark_server_copy_directory_replacements, server_copy_conflict_flags,
-        should_apply_local_listing, should_apply_remote_listing, tab_connection_status,
-        transfer_error_summary, upload_directory_conflict_policy,
+        acquire_transfer_client, bounded_disconnect, breadcrumb_item_min_width,
+        is_valid_entry_name, join_remote_path, mark_server_copy_directory_replacements,
+        server_copy_conflict_flags, should_apply_local_listing, should_apply_remote_listing,
+        tab_connection_status, transfer_error_summary, upload_directory_conflict_policy,
     };
     use one_core::tab_container::TabConnectionStatus;
     use sftp::{DirectoryConflictPolicy, ServerCopyItem};
@@ -7134,6 +7141,12 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn root_breadcrumb_does_not_reserve_regular_item_width() {
+        assert_eq!(breadcrumb_item_min_width("/"), 0.);
+        assert_eq!(breadcrumb_item_min_width("home"), 35.);
+    }
 
     #[test]
     fn awaiting_credentials_uses_connecting_tab_status() {
