@@ -66,6 +66,7 @@
 - Use SSH and local terminals with draggable split panes in any direction, quick commands, history, broadcast input, shell integration, and terminal AI. Configure SSH encodings (UTF-8, GBK, Big5, Shift_JIS, and more) and terminal types to match legacy environments.
 - Lock sessions with a password, lock all active sessions at once, or hide the output of the current session.
 - Record sessions and replay them in a read-only timeline viewer that blocks input and online operations.
+- Duplicate tabs with automatic numbering that reuses freed numbers (e.g. `192.168.1.1` → `192.168.1.1(1)`), and tab widths adapt to content so long titles are not truncated.
 - Connect over Telnet with automatic login scripts and manual credential overrides.
 - Review SSH, serial, and local terminal session logs in a static history viewer with scrollback, selection, search, and TXT export.
 - Manage remote files with SFTP uploads, directory uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy; transfer files over SSH with ZMODEM.
@@ -89,6 +90,7 @@
 - Light, dark, and system themes, importable application and terminal themes, accent colors, and window opacity controls.
 - English, Simplified Chinese, and Traditional Chinese interfaces.
 - Reusable keychain references and encrypted synchronization of personal connections, credentials, and settings across devices.
+- Sort connection lists by natural name order (IP-friendly, case-insensitive) or most recently used, configurable under **Settings > General > Connection Display**.
 
 ## Public MCP, Navop CLI, and Agent Skill
 
