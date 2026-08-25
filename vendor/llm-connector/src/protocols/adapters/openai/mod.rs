@@ -144,10 +144,21 @@ impl Protocol for OpenAIProtocol {
         let capabilities = self.capabilities_for_model(&request.model);
         let parts = build_openai_compatible_request_parts(request, &capabilities)?;
 
+        // Moonshot Kimi models (kimi-k2 and newer, including `kimi-latest`) only accept
+        // temperature == 1.0; any other value is rejected with
+        // "OpenAI invalid temperature: only 1 is allowed for this model".
+        let temperature = if self.service_name.eq_ignore_ascii_case("moonshot")
+            && request.model.to_lowercase().contains("kimi")
+        {
+            Some(1.0)
+        } else {
+            request.temperature
+        };
+
         Ok(OpenAIRequest {
             model: request.model.clone(),
             messages: parts.messages,
-            temperature: request.temperature,
+            temperature,
             max_tokens: request.max_tokens,
             top_p: request.top_p,
             frequency_penalty: request.frequency_penalty,
@@ -535,5 +546,43 @@ mod tests {
                 "function": { "name": "get_weather" }
             }))
         );
+    }
+
+    #[test]
+    fn test_moonshot_kimi_forces_temperature_to_one() {
+        let protocol = OpenAIProtocol::with_service("test-key", "moonshot");
+        let request = ChatRequest::new("kimi-k2-turbo-preview")
+            .add_message(Message::user("hello"))
+            .with_temperature(0.7);
+
+        let req = protocol.build_request(&request).unwrap();
+        assert_eq!(req.temperature, Some(1.0));
+
+        // Also applied when temperature is not set explicitly.
+        let request = ChatRequest::new("kimi-latest").add_message(Message::user("hello"));
+        let req = protocol.build_request(&request).unwrap();
+        assert_eq!(req.temperature, Some(1.0));
+    }
+
+    #[test]
+    fn test_moonshot_non_kimi_keeps_temperature() {
+        let protocol = OpenAIProtocol::with_service("test-key", "moonshot");
+        let request = ChatRequest::new("moonshot-v1-8k")
+            .add_message(Message::user("hello"))
+            .with_temperature(0.7);
+
+        let req = protocol.build_request(&request).unwrap();
+        assert_eq!(req.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn test_non_moonshot_kimi_model_keeps_temperature() {
+        let protocol = OpenAIProtocol::new("test-key");
+        let request = ChatRequest::new("kimi-k2-0711-preview")
+            .add_message(Message::user("hello"))
+            .with_temperature(0.7);
+
+        let req = protocol.build_request(&request).unwrap();
+        assert_eq!(req.temperature, Some(0.7));
     }
 }
