@@ -89,6 +89,7 @@ pub fn open_remote_file_editor<T: 'static>(
                     register_window_close_handler(window.window_handle(), view.downgrade(), cx);
                     view
                 },
+                None,
                 cx,
             );
 

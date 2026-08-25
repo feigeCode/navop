@@ -221,6 +221,7 @@ fn open_remote_image_preview_window(
             .min_width(480.0)
             .min_height(360.0),
         move |_window, cx| cx.new(|_| RemoteImagePreview::new(image)),
+        None,
         cx,
     );
 }

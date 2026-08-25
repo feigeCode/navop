@@ -2749,6 +2749,7 @@ fn show_global_proxy_settings_window(cx: &mut App) {
         PopupWindowOptions::new(t!("Settings.General.Proxy.dialog_title").to_string())
             .size(560.0, 460.0),
         move |window, cx| cx.new(|cx| GlobalProxySettingsView::new(window, cx)),
+        None,
         cx,
     );
 }

@@ -37,6 +37,7 @@ pub(super) fn show_update_dialog(info: UpdateDialogInfo, cx: &mut App) {
         PopupWindowOptions::new(t!("Update.title").to_string())
             .size(AVAILABLE_WINDOW_WIDTH, AVAILABLE_WINDOW_HEIGHT),
         move |_window, cx| cx.new(|cx| UpdateDialogView::new(info, cx)),
+        None,
         cx,
     );
 }

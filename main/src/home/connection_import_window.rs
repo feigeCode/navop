@@ -33,14 +33,16 @@ pub(crate) struct ConnectionImportWindow {
 
 pub(crate) fn show_connection_import_window(
     parent: Entity<HomePage>,
-    parent_window: AnyWindowHandle,
+    window: &mut Window,
     cx: &mut App,
 ) {
+    let parent_window = window.window_handle();
     open_popup_window(
         PopupWindowOptions::new(t!("Home.import").to_string()).size(1040.0, 720.0),
         move |window, cx| {
             cx.new(|cx| ConnectionImportWindow::new(parent, parent_window, window, cx))
         },
+        Some(window),
         cx,
     );
 }

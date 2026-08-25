@@ -1667,6 +1667,7 @@ impl DatabaseEventHandler {
             PopupWindowOptions::new(t!("Table.import_data_to_table").to_string())
                 .size(900.0, 600.0),
             move |_window, _cx| import_view.clone(),
+            Some(window),
             cx,
         );
     }
@@ -1728,6 +1729,7 @@ impl DatabaseEventHandler {
         open_popup_window(
             PopupWindowOptions::new(t!("ImportExport.export_table").to_string()).size(800.0, 600.0),
             move |_window, _cx| export_view.clone(),
+            Some(window),
             cx,
         );
     }
@@ -4318,6 +4320,7 @@ impl DatabaseEventHandler {
         open_popup_window(
             PopupWindowOptions::new(t!("ImportExport.run_sql_file").to_string()).size(800.0, 520.0),
             move |window, cx| SqlRunView::new(connection_id, database, schema, window, cx),
+            Some(_window),
             cx,
         );
     }
@@ -4393,6 +4396,7 @@ impl DatabaseEventHandler {
                                     cx,
                                 )
                             },
+                            None,
                             cx,
                         );
                     })
@@ -4442,6 +4446,7 @@ impl DatabaseEventHandler {
         open_popup_window(
             PopupWindowOptions::new(title).size(1100.0, 780.0),
             move |_window, _cx| compare_view.clone(),
+            Some(window),
             cx,
         );
     }
@@ -4455,6 +4460,7 @@ impl DatabaseEventHandler {
         open_popup_window(
             PopupWindowOptions::new(title).size(1100.0, 780.0),
             move |_window, _cx| compare_view.clone(),
+            Some(window),
             cx,
         );
     }

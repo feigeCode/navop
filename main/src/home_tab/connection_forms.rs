@@ -124,6 +124,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, popup_height),
             move |window, cx| cx.new(|cx| ConnectionFormWindow::new(config, window, cx)),
+            Some(window),
             cx,
         );
     }
@@ -162,6 +163,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
+            Some(_window),
             cx,
         );
     }
@@ -203,6 +205,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| RedisFormWindow::new(config, window, cx)),
+            Some(_window),
             cx,
         );
     }
@@ -239,6 +242,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| MongoFormWindow::new(config, window, cx)),
+            Some(_window),
             cx,
         );
     }
@@ -275,6 +279,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, 600.0),
             move |window, cx| cx.new(|cx| SerialFormWindow::new(config, window, cx)),
+            Some(_window),
             cx,
         );
     }
@@ -311,6 +316,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, 600.0),
             move |window, cx| cx.new(|cx| TelnetFormWindow::new(config, window, cx)),
+            Some(_window),
             cx,
         );
     }
