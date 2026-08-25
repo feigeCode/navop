@@ -373,6 +373,32 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
 }
 
 #[test]
+fn windows_native_graceful_close_disconnects_before_requesting_control_close() {
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+    let begin_close = function_body(
+        &native,
+        "pub(crate) fn begin_close(",
+        "pub(super) fn close_confirmed(",
+    );
+
+    let disconnect = begin_close
+        .find("self.host.disconnect()")
+        .expect("graceful close must disconnect the remote RDP session");
+    let request_close = begin_close
+        .find("self.host.request_close()")
+        .expect("graceful close must still request native control shutdown");
+
+    assert!(
+        disconnect < request_close,
+        "the remote session must disconnect before the ActiveX control is closed"
+    );
+    assert!(
+        begin_close.contains("if let Err(error) = self.host.disconnect()"),
+        "disconnect failure must not prevent the native control from closing"
+    );
+}
+
+#[test]
 fn windows_native_hosts_keep_full_shutdown_registrations_through_every_terminal_path() {
     let view = include_str!("../view.rs").replace("\r\n", "\n");
     let admit = function_body(
@@ -883,6 +909,54 @@ fn windows_native_reconnect_resets_and_reopens_the_native_presentation() {
     assert!(execute.contains("operation.event_state.take_focus_release_pending()"));
     assert!(execute.contains("operation.native.deactivate(&mut || {"));
     assert!(execute.contains("operation.native.focus()"));
+}
+
+#[test]
+fn windows_native_reconnect_options_keep_the_native_dialog_presented() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let execute = function_body(
+        &view,
+        "fn execute_windows_native_operation(",
+        "pub struct RemoteDesktopViewConfig",
+    );
+    let effects = function_body(
+        &view,
+        "fn apply_windows_native_ui_effect(",
+        "fn mark_windows_native_connected",
+    );
+    let logon_error = effects
+        .split("NativeRdpUiEffect::LogonError")
+        .nth(1)
+        .expect("logon error effect")
+        .split("NativeRdpUiEffect::Disconnected")
+        .next()
+        .expect("logon error branch");
+
+    assert!(
+        logon_error.contains("WindowsRdpLogonErrorKind::ReconnectOptions"),
+        "code -4 must be handled as the interactive native Reconnect dialog"
+    );
+    assert!(
+        logon_error.contains("self.show_windows_native_failure(diagnostic)")
+            && logon_error.contains("else"),
+        "only terminal logon errors should reset the native presentation"
+    );
+    assert!(
+        execute.contains("WindowsRdpLogonErrorKind::ReconnectOptions")
+            && execute.contains("operation.native.mark_login_complete()"),
+        "the native presentation gate must open so the Winlogon Reconnect dialog is visible"
+    );
+    let reconnect_options = execute
+        .find("WindowsRdpLogonErrorKind::ReconnectOptions")
+        .expect("ReconnectOptions branch");
+    let generic_logon_error = execute[reconnect_options..]
+        .find("| NativeRdpUiEffect::LogonError { .. }")
+        .map(|offset| reconnect_options + offset)
+        .expect("generic logon-error deactivation branch");
+    assert!(
+        reconnect_options < generic_logon_error,
+        "the interactive event must bypass the generic logon-error deactivation path"
+    );
 }
 
 #[test]

@@ -103,6 +103,11 @@ pub(super) fn notification_request(
                 generation: *generation,
             })
         }
+        NativeRdpUiEffect::LogonError { error, .. }
+            if error.kind() == WindowsRdpLogonErrorKind::ReconnectOptions =>
+        {
+            None
+        }
         NativeRdpUiEffect::LogonError { generation, error } => {
             Some(NativeRdpNotificationRequest::LogonError {
                 generation: *generation,
@@ -602,6 +607,20 @@ mod tests {
         assert_eq!(
             Some(
                 "Windows native RDP diagnostic\n\
+                 event=LogonError\n\
+                 generation=8\n\
+                 kind=ReconnectOptions\n\
+                 code=-4"
+                    .to_owned()
+            ),
+            diagnostic_text(&NativeRdpUiEffect::LogonError {
+                generation: 8,
+                error: WindowsRdpLogonError::from_native_code(-4),
+            })
+        );
+        assert_eq!(
+            Some(
+                "Windows native RDP diagnostic\n\
                  event=Disconnected\n\
                  generation=8\n\
                  category=Network\n\
@@ -652,6 +671,14 @@ mod tests {
                 generation: 8,
                 error: WindowsRdpLogonError::from_native_code(-1_073_741_715),
             })
+        );
+        assert_eq!(
+            None,
+            notification_request(&NativeRdpUiEffect::LogonError {
+                generation: 8,
+                error: WindowsRdpLogonError::from_native_code(-4),
+            }),
+            "the native Reconnect dialog is an interactive logon-stage event, not a failure"
         );
         assert_eq!(
             Some(NativeRdpNotificationRequest::Disconnected {

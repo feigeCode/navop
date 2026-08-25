@@ -115,6 +115,7 @@ pub enum WindowsRdpLogonErrorKind {
     Warning,
     AccessDenied,
     AccountRestriction,
+    ReconnectOptions,
     SessionArbitration,
     Unknown,
 }
@@ -138,6 +139,9 @@ impl WindowsRdpLogonError {
             -1 => WindowsRdpLogonErrorKind::AccessDenied,
             // STATUS_ACCOUNT_RESTRICTION.
             -1_073_741_714 => WindowsRdpLogonErrorKind::AccountRestriction,
+            // ARBITRATION_CODE_RECONN_OPTIONS: Winlogon is displaying the
+            // interactive Reconnect dialog.
+            -4 => WindowsRdpLogonErrorKind::ReconnectOptions,
             // Documented ARBITRATION_CODE_* values.
             -7..=-2 => WindowsRdpLogonErrorKind::SessionArbitration,
             _ => WindowsRdpLogonErrorKind::Unknown,
@@ -848,7 +852,7 @@ mod tests {
             (-1_073_741_714, WindowsRdpLogonErrorKind::AccountRestriction),
             (-2, WindowsRdpLogonErrorKind::SessionArbitration),
             (-3, WindowsRdpLogonErrorKind::SessionArbitration),
-            (-4, WindowsRdpLogonErrorKind::SessionArbitration),
+            (-4, WindowsRdpLogonErrorKind::ReconnectOptions),
             (-5, WindowsRdpLogonErrorKind::SessionArbitration),
             (-6, WindowsRdpLogonErrorKind::SessionArbitration),
             (-7, WindowsRdpLogonErrorKind::SessionArbitration),

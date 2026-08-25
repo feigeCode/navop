@@ -547,14 +547,22 @@ impl WindowsNativeAdapter {
             WindowsRdpHostLifecycle::Closed | WindowsRdpHostLifecycle::Closing => {
                 Ok(NativeCloseProgress::Ready)
             }
-            WindowsRdpHostLifecycle::Open => match self.host.request_close()? {
-                WindowsRdpRequestCloseStatus::CanProceed => Ok(NativeCloseProgress::Ready),
-                WindowsRdpRequestCloseStatus::WaitForEvents => {
-                    Ok(NativeCloseProgress::WaitingForEvents {
-                        generation: self.host.generation(),
-                    })
+            WindowsRdpHostLifecycle::Open => {
+                if let Err(error) = self.host.disconnect() {
+                    tracing::warn!(
+                        ?error,
+                        "failed to disconnect Windows native RDP before graceful close"
+                    );
                 }
-            },
+                match self.host.request_close()? {
+                    WindowsRdpRequestCloseStatus::CanProceed => Ok(NativeCloseProgress::Ready),
+                    WindowsRdpRequestCloseStatus::WaitForEvents => {
+                        Ok(NativeCloseProgress::WaitingForEvents {
+                            generation: self.host.generation(),
+                        })
+                    }
+                }
+            }
         }
     }
 

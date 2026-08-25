@@ -656,6 +656,15 @@ fn execute_windows_native_operation(
                     requested_focus = Some(WindowsNativeFocusTarget::Parent);
                 }
             }
+            NativeRdpUiEffect::LogonError { error, .. }
+                if error.kind() == windows_rdp_host::WindowsRdpLogonErrorKind::ReconnectOptions =>
+            {
+                operation.native.mark_login_complete();
+                allow_activation = presentation_active;
+                if presentation_active {
+                    requested_focus = Some(WindowsNativeFocusTarget::NativeChild);
+                }
+            }
             NativeRdpUiEffect::FatalError { .. }
             | NativeRdpUiEffect::LogonError { .. }
             | NativeRdpUiEffect::Disconnected { .. } => {
@@ -2062,13 +2071,23 @@ impl RemoteDesktopView {
                 self.show_windows_native_failure(diagnostic);
             }
             NativeRdpUiEffect::LogonError { generation, error } => {
-                tracing::error!(
-                    generation,
-                    kind = ?error.kind(),
-                    code = error.code(),
-                    "Windows native RDP logon error"
-                );
-                self.show_windows_native_failure(diagnostic);
+                if error.kind() == windows_rdp_host::WindowsRdpLogonErrorKind::ReconnectOptions {
+                    tracing::info!(
+                        generation,
+                        kind = ?error.kind(),
+                        code = error.code(),
+                        "Windows native RDP is awaiting Reconnect dialog input"
+                    );
+                    self.native_login_complete = true;
+                } else {
+                    tracing::error!(
+                        generation,
+                        kind = ?error.kind(),
+                        code = error.code(),
+                        "Windows native RDP logon error"
+                    );
+                    self.show_windows_native_failure(diagnostic);
+                }
             }
             NativeRdpUiEffect::Disconnected { generation, reason } => {
                 self.windows_native_display.reset();
