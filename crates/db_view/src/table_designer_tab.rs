@@ -19,6 +19,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     scroll::Scrollbar,
     select::{Select, SelectEvent, SelectItem, SelectState},
+    spinner::Spinner,
     tab::{Tab, TabBar},
     v_flex,
 };
@@ -311,6 +312,8 @@ pub struct TableDesigner {
     preview_refresh_state: PreviewRefreshScheduleState,
     metadata_load_seq: usize,
     preview_generation: usize,
+    sql_preview_loading: bool,
+    executing: bool,
     original_design: Option<TableDesign>,
     _subscriptions: Vec<Subscription>,
 }
@@ -539,6 +542,8 @@ impl TableDesigner {
             preview_refresh_state: PreviewRefreshScheduleState::default(),
             metadata_load_seq: 0,
             preview_generation: 0,
+            sql_preview_loading: false,
+            executing: false,
             original_design: None,
             _subscriptions: vec![
                 name_sub,
@@ -703,6 +708,8 @@ impl TableDesigner {
         // （driver jar）生成方言正确的 DDL / COMMENT，其他数据库同样受益。
         self.preview_generation += 1;
         let generation = self.preview_generation;
+        self.sql_preview_loading = true;
+        cx.notify();
         let window_handle = window.window_handle();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
@@ -723,16 +730,16 @@ impl TableDesigner {
             let ddl_result = if original.is_some() {
                 Some(
                     global_state
-                    .build_table_design_sql(
-                        cx,
-                        connection_id,
-                        database_name,
-                        schema_name,
-                        None,
-                        design.clone(),
-                        Vec::new(),
-                    )
-                    .await,
+                        .build_table_design_sql(
+                            cx,
+                            connection_id,
+                            database_name,
+                            schema_name,
+                            None,
+                            design.clone(),
+                            Vec::new(),
+                        )
+                        .await,
                 )
             } else {
                 None
@@ -744,6 +751,7 @@ impl TableDesigner {
                         if designer.preview_generation != generation {
                             return;
                         }
+                        designer.sql_preview_loading = false;
                         if let Ok(sql) = &sql_result {
                             if let Some(original) = &designer.original_design {
                                 if Self::sql_has_changes(sql) {
@@ -833,6 +841,9 @@ impl TableDesigner {
         let global_state = cx.global::<GlobalDbState>().clone();
         let window_handle = window.window_handle();
 
+        self.executing = true;
+        cx.notify();
+
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = global_state
                 .execute_script(
@@ -848,6 +859,10 @@ impl TableDesigner {
             let _ = cx.update(|cx: &mut App| {
                 let _ = cx.update_window(window_handle, |_, window, cx| match &result {
                     Ok(results) => {
+                        let _ = this.update(cx, |designer, cx| {
+                            designer.executing = false;
+                            cx.notify();
+                        });
                         let has_error = results.iter().any(|r| r.is_error());
                         if has_error {
                             let error_msg = results
@@ -919,6 +934,10 @@ impl TableDesigner {
                             t!("Table.modify_failed").to_string()
                         };
                         window.push_notification(format!("{}: {}", msg, e), cx);
+                        let _ = this.update(cx, |designer, cx| {
+                            designer.executing = false;
+                            cx.notify();
+                        });
                     }
                 });
             });
@@ -939,6 +958,11 @@ impl TableDesigner {
 
         self.active_tab = DesignerTab::SqlPreview;
         self.update_previews(window, cx);
+
+        // 确认对话框打开期间先取消保存按钮的 loading，
+        // 确认执行时 execute_request 会重新置为 loading，取消则不会卡住。
+        self.executing = false;
+        cx.notify();
 
         let designer_entity = cx.entity().clone();
         window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -988,6 +1012,9 @@ impl TableDesigner {
         let table_name = design.table_name.clone();
         let window_handle = window.window_handle();
 
+        self.executing = true;
+        cx.notify();
+
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let sql_result = global_state
                 .build_table_design_sql(
@@ -1004,20 +1031,25 @@ impl TableDesigner {
             let _ = cx.update(|cx: &mut App| {
                 let _ = cx.update_window(window_handle, |_, window, cx| {
                     let _ = this.update(cx, |designer, cx| match sql_result {
-                        Ok(sql) if !Self::sql_has_changes(&sql) => match &success_behavior {
-                            ExecuteSuccessBehavior::StayOpen { .. } => {
-                                window.push_notification(t!("Table.no_changes").to_string(), cx);
+                        Ok(sql) if !Self::sql_has_changes(&sql) => {
+                            designer.executing = false;
+                            cx.notify();
+                            match &success_behavior {
+                                ExecuteSuccessBehavior::StayOpen { .. } => {
+                                    window
+                                        .push_notification(t!("Table.no_changes").to_string(), cx);
+                                }
+                                ExecuteSuccessBehavior::CloseTab {
+                                    tab_container,
+                                    tab_id,
+                                    ..
+                                } => {
+                                    tab_container.update(cx, |container: &mut TabContainer, cx| {
+                                        container.force_close_tab_by_id(tab_id, window, cx);
+                                    });
+                                }
                             }
-                            ExecuteSuccessBehavior::CloseTab {
-                                tab_container,
-                                tab_id,
-                                ..
-                            } => {
-                                tab_container.update(cx, |container: &mut TabContainer, cx| {
-                                    container.force_close_tab_by_id(tab_id, window, cx);
-                                });
-                            }
-                        },
+                        }
                         Ok(sql) => {
                             let request = TableDesignerExecutionRequest {
                                 connection_id,
@@ -1031,6 +1063,8 @@ impl TableDesigner {
                             designer.maybe_confirm_and_execute(request, window, cx);
                         }
                         Err(error) => {
+                            designer.executing = false;
+                            cx.notify();
                             let msg = if is_new_table {
                                 t!("Table.create_failed").to_string()
                             } else {
@@ -1298,6 +1332,7 @@ impl TableDesigner {
                 Button::new("execute")
                     .small()
                     .primary()
+                    .loading(self.executing)
                     .label(t!("Common.save").to_string())
                     .on_click(cx.listener(Self::handle_execute)),
             )
@@ -1424,10 +1459,25 @@ impl TableDesigner {
             .into_any_element()
     }
 
-    fn render_sql_preview(&self, _cx: &Context<Self>) -> AnyElement {
+    fn render_sql_preview(&self, cx: &Context<Self>) -> AnyElement {
         v_flex()
             .size_full()
             .p_4()
+            .gap_3()
+            .when(self.sql_preview_loading, |this| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(Spinner::new().with_size(Size::Small))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("Table.generating_sql_preview").to_string()),
+                        ),
+                )
+            })
             .child(
                 Input::new(&self.sql_preview_input)
                     .size_full()
