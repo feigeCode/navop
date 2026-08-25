@@ -1702,6 +1702,17 @@ impl DbConnectionForm {
         self.sync_ssh_connection_selection(window, cx);
     }
 
+    /// Prefills a new connection without switching the form into update mode.
+    pub fn load_initial_connection(
+        &mut self,
+        connection: &StoredConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.load_connection(connection, window, cx);
+        self.editing_connection = None;
+    }
+
     fn current_ssh_connection_id(&self, cx: &App) -> Option<i64> {
         self.selected_ssh_connection_id.or_else(|| {
             self.get_field_value("ssh_connection_id", cx)
@@ -3225,6 +3236,57 @@ mod tests {
         assert_eq!(&Some(42), item.value());
         assert!(item.matches("10.0.0.5"));
         assert!(!item.matches("42"));
+    }
+
+    #[gpui::test]
+    fn initial_connection_prefills_without_entering_edit_mode(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let params = DbConnectionConfig {
+            database_type: DatabaseType::MySQL,
+            name: "Imported DB".to_string(),
+            host: "db.example.test".to_string(),
+            port: 3306,
+            username: "imported".to_string(),
+            password: String::new(),
+            credential_reference: None,
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            proxy: None,
+            extra_params: HashMap::new(),
+            id: String::new(),
+        };
+        let connection = StoredConnection::from_db_connection(params);
+        assert_eq!(None, connection.id);
+
+        let window = cx.update(|cx| {
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                cx.new(|cx| {
+                    let mut form = DbConnectionForm::new(DbFormConfig::mysql(), window, cx);
+                    form.load_initial_connection(&connection, window, cx);
+                    form
+                })
+            })
+            .expect("form window should open")
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let form = window.root(&mut cx).expect("form should be mounted");
+
+        assert!(form.read_with(&cx, |form, _| form.editing_connection.is_none()));
+        assert_eq!(
+            Some("db.example.test".to_string()),
+            form.read_with(&cx, |form, cx| form.get_field_value("host", cx))
+        );
+        let (stored, is_update) = form
+            .read_with(&cx, |form, cx| form.build_stored_connection(cx))
+            .expect("prefilled connection should be valid");
+        assert!(!is_update);
+        assert_eq!(None, stored.id);
     }
 
     #[gpui::test]

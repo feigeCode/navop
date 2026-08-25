@@ -156,9 +156,13 @@ impl ConnectionFormWindow {
             f.set_ssh_connections(config.ssh_connections.clone(), window, cx);
         });
 
-        if let Some(conn) = connection_to_load {
+        if let Some(conn) = config.editing_connection.as_ref() {
             form.update(cx, |f, cx| {
                 f.load_connection(conn, window, cx);
+            });
+        } else if let Some(conn) = config.initial_connection.as_ref() {
+            form.update(cx, |f, cx| {
+                f.load_initial_connection(conn, window, cx);
             });
         }
 
