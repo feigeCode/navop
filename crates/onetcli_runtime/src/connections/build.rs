@@ -62,6 +62,7 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
     let values = required_object(input, "values")?;
     let password = optional_value_str(values, "password").map(str::to_string);
     let params = SshParams {
+        sftp_account: None,
         host: required_value_str(values, "host")?.to_string(),
         port: optional_u16(values, "port").unwrap_or(22),
         username: required_value_str(values, "username")?.to_string(),

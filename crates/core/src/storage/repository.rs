@@ -912,6 +912,7 @@ mod tests {
         StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                sftp_account: None,
                 host: format!("{name}.example.com"),
                 port: 22,
                 username: "deploy".to_string(),
@@ -1354,6 +1355,7 @@ mod tests {
         let mut connection = ssh_connection("sensitive-readable");
         let connection_id = repo.insert(&mut connection).expect("connection");
         let plaintext_params = serde_json::to_string(&SshParams {
+            sftp_account: None,
             host: "sensitive-readable.example.com".to_string(),
             port: 22,
             username: "deploy".to_string(),

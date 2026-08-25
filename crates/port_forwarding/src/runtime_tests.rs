@@ -12,6 +12,7 @@ fn ssh_connection(id: i64) -> StoredConnection {
     let mut connection = StoredConnection::new_ssh(
         "bastion".to_string(),
         SshParams {
+            sftp_account: None,
             host: "bastion.example.com".to_string(),
             port: 22,
             username: "deploy".to_string(),

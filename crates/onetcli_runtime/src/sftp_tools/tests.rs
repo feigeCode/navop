@@ -1,14 +1,14 @@
 use super::{
     OverwritePolicy, SftpTool, SftpToolHandler, file_entry_json, parse_overwrite_policy,
     prepare_local_target, prepare_remote_upload_target, remote_upload_directory_policy,
-    sftp_tool_registry,
+    sftp_tool_registry, ssh_config_from_params,
 };
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ConnectionRepository, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
-    SshAuthMethod, SshParams, StoredConnection,
+    SftpAccount, SshAuthMethod, SshParams, StoredConnection,
 };
 use serde_json::json;
 use sftp::{DirectoryConflictPolicy, FileEntry, PathMetadata};
@@ -325,6 +325,33 @@ fn sftp_config_resolves_vault_username_before_connecting() {
     assert_eq!("vault-user", config.username);
 }
 
+#[test]
+fn sftp_config_applies_separate_sftp_account_credentials() {
+    let mut params = ssh_params();
+    params.sftp_account = Some(SftpAccount {
+        username: "sftp-user".to_string(),
+        password: "sftp-secret".to_string(),
+    });
+
+    let config = ssh_config_from_params(&params);
+
+    assert_eq!("sftp-user", config.username);
+    assert!(matches!(
+        &config.auth,
+        ssh::SshAuth::Password(password) if password == "sftp-secret"
+    ));
+}
+
+#[test]
+fn sftp_config_falls_back_to_main_credentials_without_sftp_account() {
+    let params = ssh_params();
+
+    let config = ssh_config_from_params(&params);
+
+    assert_eq!("manual-user", config.username);
+    assert!(matches!(&config.auth, ssh::SshAuth::AutoPublicKey));
+}
+
 fn repo() -> Arc<ConnectionRepository> {
     let conn = SqliteConnection::open_with_pool_size(":memory:", 1).expect("sqlite should open");
     conn.with_connection(|db| {
@@ -337,6 +364,7 @@ fn repo() -> Arc<ConnectionRepository> {
 
 fn ssh_params() -> SshParams {
     SshParams {
+        sftp_account: None,
         host: "127.0.0.1".to_string(),
         port: 22,
         username: "manual-user".to_string(),

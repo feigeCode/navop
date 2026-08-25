@@ -4,6 +4,24 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [Unreleased]
+
+### 中文
+
+#### 更新内容
+
+- SSH 连接支持为 SFTP 单独配置一套账户：在连接表单新增「SFTP 账户」页签，可启用独立 SFTP 用户名/密码；启用后 SFTP 传输、远程文件浏览与远程文件编辑使用该账户连接远端，SSH 终端仍使用主账户，未配置时 SFTP 与 SSH 共用一套凭据。
+
+---
+
+### English
+
+#### What's New
+
+- SSH connections can now use a separate SFTP account: a new "SFTP Account" tab in the connection form lets you enable an independent SFTP username/password. When enabled, SFTP transfers, remote file browsing, and remote file editing connect with that account while the SSH terminal keeps using the main account; when unset, SFTP and SSH share the same credentials.
+
+---
+
 ## [v0.12.0] - 2026-08-25
 
 ### 中文

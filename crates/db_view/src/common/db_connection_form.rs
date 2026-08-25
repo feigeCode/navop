@@ -3197,6 +3197,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                sftp_account: None,
                 host: host.to_string(),
                 port: 22,
                 username: "root".to_string(),

@@ -38,11 +38,20 @@ pub(crate) fn resolve_ssh_connection(
         password: params.prompts_for_password()
             && matches!(&params.auth_method, SshAuthMethod::Password { .. }),
     };
+    let (username, auth) = match params.sftp_account.as_ref() {
+        Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => {
+            (
+                account.username.clone(),
+                SshAuth::Password(account.password.clone()),
+            )
+        }
+        _ => (params.username.clone(), ssh_auth(params.auth_method)),
+    };
     let config = SshConnectConfig {
         host: params.host,
         port: params.port,
-        username: params.username,
-        auth: ssh_auth(params.auth_method),
+        username,
+        auth,
         timeout: params.connect_timeout.map(Duration::from_secs),
         keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
         keepalive_max: params.keepalive_max,
@@ -135,13 +144,14 @@ fn ssh_auth(method: SshAuthMethod) -> SshAuth {
 #[cfg(test)]
 mod tests {
     use super::{resolve_ssh_connection, ssh_config_for, ssh_config_with_runtime_credentials};
-    use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
+    use one_core::storage::{SftpAccount, SshAuthMethod, SshParams, StoredConnection};
     use ssh::SshAuth;
 
     fn connection_with_auth(auth_method: SshAuthMethod) -> StoredConnection {
         StoredConnection::new_ssh(
             "source".to_string(),
             SshParams {
+                sftp_account: None,
                 host: "source.internal".to_string(),
                 port: 2222,
                 username: "deploy".to_string(),
@@ -209,6 +219,63 @@ mod tests {
         let resolved = resolve_ssh_connection(&connection).expect("valid SSH connection");
 
         assert!(!resolved.credential_prompt_policy.password);
+    }
+
+    #[test]
+    fn sftp_account_overrides_main_credentials() {
+        let mut connection = connection_with_auth(SshAuthMethod::Password {
+            password: "main-secret".to_string(),
+        });
+        let mut params = connection.to_ssh_params().expect("valid SSH params");
+        params.sftp_account = Some(SftpAccount {
+            username: "sftp-user".to_string(),
+            password: "sftp-secret".to_string(),
+        });
+        connection.params = serde_json::to_string(&params).expect("serialize SSH params");
+
+        let config = ssh_config_for(&connection).expect("valid SSH connection");
+
+        assert_eq!(config.username, "sftp-user");
+        assert!(matches!(
+            config.auth,
+            SshAuth::Password(ref value) if value == "sftp-secret"
+        ));
+    }
+
+    #[test]
+    fn empty_sftp_account_falls_back_to_main_credentials() {
+        let mut connection = connection_with_auth(SshAuthMethod::Password {
+            password: "main-secret".to_string(),
+        });
+        let mut params = connection.to_ssh_params().expect("valid SSH params");
+        params.sftp_account = Some(SftpAccount {
+            username: String::new(),
+            password: String::new(),
+        });
+        connection.params = serde_json::to_string(&params).expect("serialize SSH params");
+
+        let config = ssh_config_for(&connection).expect("valid SSH connection");
+
+        assert_eq!(config.username, "deploy");
+        assert!(matches!(
+            config.auth,
+            SshAuth::Password(ref value) if value == "main-secret"
+        ));
+    }
+
+    #[test]
+    fn sftp_account_is_ignored_when_unset() {
+        let connection = connection_with_auth(SshAuthMethod::Password {
+            password: "main-secret".to_string(),
+        });
+
+        let config = ssh_config_for(&connection).expect("valid SSH connection");
+
+        assert_eq!(config.username, "deploy");
+        assert!(matches!(
+            config.auth,
+            SshAuth::Password(ref value) if value == "main-secret"
+        ));
     }
 
     #[test]

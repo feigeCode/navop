@@ -422,6 +422,7 @@ mod tests {
 
     fn ssh_params(auth_method: SshAuthMethod) -> SshParams {
         SshParams {
+            sftp_account: None,
             host: "2001:db8::1".to_string(),
             port: 2222,
             username: "alice doe".to_string(),

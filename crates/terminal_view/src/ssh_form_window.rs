@@ -32,9 +32,9 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SshAccountExpect,
-    SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
-    Workspace, ssh_os_icon,
+    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SftpAccount,
+    SshAccountExpect, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
+    StoredTerminalType, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -215,6 +215,11 @@ pub struct SshFormWindow {
     jump_mfa_request: Option<FormMfaRequest>,
     jump_mfa_inputs: Vec<JumpMfaInput>,
     jump_mfa_signature: Option<String>,
+
+    // 独立 SFTP 账户设置
+    sftp_account_use_custom: bool,
+    sftp_username_input: Entity<InputState>,
+    sftp_password_input: Entity<InputState>,
 
     // 代理设置
     enable_proxy: bool,
@@ -573,6 +578,15 @@ impl SshFormWindow {
                 .masked(true)
         });
 
+        // 独立 SFTP 账户设置
+        let sftp_username_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.username_placeholder")));
+        let sftp_password_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.password_placeholder"))
+                .masked(true)
+        });
+
         // 代理设置
         let proxy_host_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.proxy_host")));
@@ -669,6 +683,7 @@ impl SshFormWindow {
         let mut disable_shell_integration = false;
         let mut x11_forwarding = false;
         let mut allow_legacy_algorithms = false;
+        let mut sftp_account_use_custom = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
         let mut credential_reference = None;
@@ -811,6 +826,15 @@ impl SshFormWindow {
                     }
                 }
 
+                // 加载独立 SFTP 账户设置
+                if let Some(ref sftp_account) = params.sftp_account {
+                    sftp_account_use_custom = true;
+                    sftp_username_input
+                        .update(cx, |s, cx| s.set_value(&sftp_account.username, window, cx));
+                    sftp_password_input
+                        .update(cx, |s, cx| s.set_value(&sftp_account.password, window, cx));
+                }
+
                 // 加载代理设置
                 if let Some(ref proxy) = params.proxy {
                     proxy_credential_reference = proxy.credential_reference.clone();
@@ -923,6 +947,9 @@ impl SshFormWindow {
             jump_mfa_request: None,
             jump_mfa_inputs: Vec::new(),
             jump_mfa_signature: None,
+            sftp_account_use_custom,
+            sftp_username_input,
+            sftp_password_input,
             enable_proxy,
             proxy_type,
             proxy_host_input,
@@ -1158,7 +1185,24 @@ impl SshFormWindow {
             None
         };
 
+        // 独立 SFTP 账户：仅在启用且至少填了一项凭据时生效，否则回退到主账户
+        let sftp_account = if self.sftp_account_use_custom {
+            let sftp_username = self.sftp_username_input.read(cx).text().to_string();
+            let sftp_password = self.sftp_password_input.read(cx).text().to_string();
+            if sftp_username.trim().is_empty() && sftp_password.is_empty() {
+                None
+            } else {
+                Some(SftpAccount {
+                    username: sftp_username,
+                    password: sftp_password,
+                })
+            }
+        } else {
+            None
+        };
+
         Some(SshParams {
+            sftp_account,
             host,
             port,
             username,
@@ -2582,6 +2626,55 @@ impl SshFormWindow {
             })
     }
 
+    /// 渲染独立 SFTP 账户标签页
+    fn render_sftp_account_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let use_custom = self.sftp_account_use_custom;
+
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                self.render_form_row(
+                    &t!("SSH.sftp_account"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("enable-sftp-account")
+                                    .checked(use_custom)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.sftp_account_use_custom =
+                                            !this.sftp_account_use_custom;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.sftp_account_desc").to_string()),
+                        ),
+                ),
+            )
+            .when(use_custom, |this| {
+                this.child(self.render_form_row(
+                    &t!("SSH.sftp_username"),
+                    self.render_form_input(&self.sftp_username_input),
+                ))
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.sftp_password"),
+                        self.render_form_input(&self.sftp_password_input).mask_toggle(),
+                    ),
+                )
+            })
+    }
+
     /// 渲染代理标签页
     fn render_proxy_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enable_proxy = self.enable_proxy;
@@ -2821,6 +2914,7 @@ impl Render for SshFormWindow {
                         .child(Tab::new().label(t!("SSH.tab_basic").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_init").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_jump_server").to_string()))
+                        .child(Tab::new().label(t!("SSH.tab_sftp_account").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_proxy").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_advanced").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_other").to_string())),
@@ -2840,9 +2934,10 @@ impl Render for SshFormWindow {
                             0 => self.render_basic_tab(cx).into_any_element(),
                             1 => self.render_init_tab(cx).into_any_element(),
                             2 => self.render_jump_server_tab(cx).into_any_element(),
-                            3 => self.render_proxy_tab(cx).into_any_element(),
-                            4 => self.render_advanced_tab(cx).into_any_element(),
-                            5 => self.render_other_tab().into_any_element(),
+                            3 => self.render_sftp_account_tab(cx).into_any_element(),
+                            4 => self.render_proxy_tab(cx).into_any_element(),
+                            5 => self.render_advanced_tab(cx).into_any_element(),
+                            6 => self.render_other_tab().into_any_element(),
                             _ => div().into_any_element(),
                         },
                     )),
@@ -2926,7 +3021,8 @@ mod tests {
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
     use one_core::storage::{
-        SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+        SftpAccount, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
+        StoredTerminalType,
     };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -2935,6 +3031,7 @@ mod tests {
 
     fn sample_params() -> SshParams {
         SshParams {
+            sftp_account: None,
             host: "127.0.0.1".to_string(),
             port: 22,
             username: "root".to_string(),
@@ -3173,6 +3270,81 @@ mod tests {
             built.auth_method,
             SshAuthMethod::Password { ref password } if password.is_empty()
         ));
+    }
+
+    #[gpui::test]
+    fn ssh_form_loads_and_builds_separate_sftp_account(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.sftp_account = Some(SftpAccount {
+            username: "sftp-user".to_string(),
+            password: "sftp-secret".to_string(),
+        });
+        let initial_connection = StoredConnection::new_ssh("sftp-account".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        form.read_with(cx, |form, _| {
+            assert!(form.sftp_account_use_custom);
+        });
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("预填独立 SFTP 账户的表单应能构建参数");
+        assert_eq!(
+            built.sftp_account,
+            Some(SftpAccount {
+                username: "sftp-user".to_string(),
+                password: "sftp-secret".to_string(),
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_form_without_sftp_account_shares_ssh_credentials(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.host_input
+                .update(cx, |state, cx| state.set_value("share.example", window, cx));
+            form.username_input
+                .update(cx, |state, cx| state.set_value("main-user", window, cx));
+            form
+        });
+
+        form.read_with(cx, |form, _| {
+            assert!(!form.sftp_account_use_custom);
+        });
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("未启用独立 SFTP 账户时应能构建参数");
+        assert_eq!(built.sftp_account, None);
     }
 
     #[gpui::test]

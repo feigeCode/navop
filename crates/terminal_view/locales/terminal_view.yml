@@ -370,6 +370,10 @@ SSH:
     en: Jump Server
     zh-CN: 跳板机
     zh-HK: 跳板機
+  tab_sftp_account:
+    en: SFTP Account
+    zh-CN: SFTP 账户
+    zh-HK: SFTP 賬戶
   tab_proxy:
     en: Proxy
     zh-CN: 代理设置
@@ -423,6 +427,23 @@ SSH:
     en: Jump server requires MFA. Fill in the dynamic field below, then test again.
     zh-CN: 跳板机要求 MFA。请填写下方动态字段后重新测试。
     zh-HK: 跳板機要求 MFA。請填寫下方動態字段後重新測試。
+  # 独立 SFTP 账户相关
+  sftp_account:
+    en: Separate SFTP Account
+    zh-CN: 独立 SFTP 账户
+    zh-HK: 獨立 SFTP 賬戶
+  sftp_account_desc:
+    en: When enabled, SFTP transfers and remote file editing use this account while the SSH terminal keeps using the main account. Leave it disabled to share the SSH credentials.
+    zh-CN: 启用后，SFTP 传输与远程文件编辑使用该账户连接，SSH 终端仍使用主账户；关闭时 SFTP 与 SSH 共用一套凭据。
+    zh-HK: 啟用後，SFTP 傳輸與遠程文件編輯使用該賬戶連接，SSH 終端仍使用主賬戶；關閉時 SFTP 與 SSH 共用一套憑據。
+  sftp_username:
+    en: SFTP Username
+    zh-CN: SFTP 用户名
+    zh-HK: SFTP 用戶名
+  sftp_password:
+    en: SFTP Password
+    zh-CN: SFTP 密码
+    zh-HK: SFTP 密碼
   mfa_prompt_placeholder:
     en: MFA response
     zh-CN: MFA 响应

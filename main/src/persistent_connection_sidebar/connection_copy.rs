@@ -401,6 +401,7 @@ mod tests {
         StoredConnection::new_ssh(
             "SSH".to_string(),
             SshParams {
+                sftp_account: None,
                 host: "2001:db8::1".to_string(),
                 port: 2222,
                 username: "alice".to_string(),
