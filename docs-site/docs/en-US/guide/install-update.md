@@ -12,13 +12,14 @@ If Gatekeeper blocks the first macOS launch, verify the official release source 
 
 | Platform | Device/architecture | Recommended file | Typical use |
 | --- | --- | --- | --- |
-| macOS | Apple Silicon | Apple Silicon `.dmg` or `.tar.gz` | M-series Macs |
-| macOS | Intel | Intel `.dmg` or `.tar.gz` | Intel Macs |
-| Windows | x86_64 | `.msi` | MSI installer with Start menu, desktop shortcuts, and stable file associations |
-| Windows | x86_64 | `.exe` | EXE installer wrapping the same standard per-user MSI installation |
-| Windows | x86_64 | `.zip` | No-install use with data kept in the normal Windows user directories |
-| Windows | x86_64 | `-portable.zip` | Keep the application and data together in a movable folder |
-| Linux | x86_64 | `.deb`, `.rpm`, `.AppImage`, or `.tar.gz` | Select for the distribution and desktop environment |
+| macOS | Apple Silicon | `navop-<version>-macos-arm64.dmg` or `navop-<version>-macos-arm64.tar.gz` | M-series Macs |
+| macOS | Intel | `navop-<version>-macos-x64.dmg` or `navop-<version>-macos-x64.tar.gz` | Intel Macs |
+| Windows | x86_64 | `navop-<version>-windows-x64.msi` | MSI installer with Start menu, desktop shortcuts, and stable file associations |
+| Windows | x86_64 | `navop-<version>-windows-x64.exe` | EXE installer wrapping the same standard per-user MSI installation |
+| Windows | x86_64 | `navop-<version>-windows-x64.zip` | No-install use with data kept in the normal Windows user directories |
+| Windows | x86_64 | `navop-<version>-windows-x64-portable.zip` | Keep the application and data together in a movable folder |
+| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`, `navop-<version>-linux-x64-portable.tar.gz`, `navop_<version>_amd64.deb`, `navop-<version>-1.x86_64.rpm`, `navop_<version>_amd64.AppImage` | Select for the distribution and desktop environment |
+| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz`, `navop-<version>-linux-arm64-portable.tar.gz` | ARM64 devices |
 
 Use `sha256sums.txt` from the same release to verify download integrity.
 

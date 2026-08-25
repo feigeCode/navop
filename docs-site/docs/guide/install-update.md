@@ -14,13 +14,14 @@ Navop 提供 macOS、Windows 和 Linux 桌面版本。安装包、系统架构�
 
 | 平台 | 设备/架构 | 推荐文件 | 适用场景 |
 | --- | --- | --- | --- |
-| macOS | Apple Silicon | `.dmg` 或 `.tar.gz` 的 Apple Silicon 构建 | M 系列 Mac |
-| macOS | Intel | `.dmg` 或 `.tar.gz` 的 Intel 构建 | Intel Mac |
-| Windows | x86_64 | `.msi` | MSI 安装包，提供开始菜单、桌面快捷方式和稳定的文件关联 |
-| Windows | x86_64 | `.exe` | EXE 安装包，封装同一套当前用户 MSI 安装流程 |
-| Windows | x86_64 | `.zip` | 免安装运行；数据仍保存在 Windows 用户目录 |
-| Windows | x86_64 | `-portable.zip` | 数据与程序放在同一目录、可整体移动 |
-| Linux | x86_64 | `.deb`、`.rpm`、`.AppImage` 或 `.tar.gz` | 按发行版和桌面环境选择 |
+| macOS | Apple Silicon | `navop-<version>-macos-arm64.dmg` 或 `navop-<version>-macos-arm64.tar.gz` | M 系列 Mac |
+| macOS | Intel | `navop-<version>-macos-x64.dmg` 或 `navop-<version>-macos-x64.tar.gz` | Intel Mac |
+| Windows | x86_64 | `navop-<version>-windows-x64.msi` | MSI 安装包，提供开始菜单、桌面快捷方式和稳定的文件关联 |
+| Windows | x86_64 | `navop-<version>-windows-x64.exe` | EXE 安装包，封装同一套当前用户 MSI 安装流程 |
+| Windows | x86_64 | `navop-<version>-windows-x64.zip` | 免安装运行；数据仍保存在 Windows 用户目录 |
+| Windows | x86_64 | `navop-<version>-windows-x64-portable.zip` | 数据与程序放在同一目录、可整体移动 |
+| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`、`navop-<version>-linux-x64-portable.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage` | 按发行版和桌面环境选择 |
+| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz`、`navop-<version>-linux-arm64-portable.tar.gz` | ARM64 设备 |
 
 每个发布版本的 `sha256sums.txt` 用于校验下载完整性。企业环境应在安装前保存版本号、文件名和校验值，便于回溯。
 

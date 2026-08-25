@@ -174,14 +174,16 @@ npx -y @navop/mcp@latest
 
 ## 安装
 
-请从 [GitHub Releases](https://github.com/feigeCode/navop/releases/latest) 下载最新版本。每个版本都包含用于校验文件的 `sha256sums.txt`。
+请从 [GitHub Releases](https://github.com/feigeCode/navop/releases/latest) 下载最新版本。每个版本都包含用于校验文件的 `sha256sums.txt`。发布包遵循 `navop-<version>-<平台>-<架构>.<扩展名>` 的命名规则，例如 `navop-0.11.0-macos-arm64.dmg`、`navop-0.11.0-windows-x64.msi`、`navop-0.11.0-linux-x64.tar.gz`；32 位 Windows 包使用 `win32` 标识（例如 `navop-0.11.0-win32.msi`）。Linux 的 `.deb` 与 `.AppImage` 安装包沿用发行版命名规范（`navop_<version>_amd64.deb` / `navop_<version>_amd64.AppImage`）。
 
 | 平台 | 架构 | 产物 |
 | --- | --- | --- |
-| macOS | Apple Silicon、Intel | `.dmg`、`.tar.gz` |
-| Linux | x86_64 | `.tar.gz`、`.deb`、`.rpm`、`.AppImage`、`-portable.tar.gz` |
-| Linux | ARM64 | `.tar.gz`、`-portable.tar.gz` |
-| Windows | x86_64、x86（32 位） | `.msi`、`.exe`、`.zip`、`-portable.zip` |
+| macOS | Apple Silicon | `navop-<version>-macos-arm64.dmg`、`navop-<version>-macos-arm64.tar.gz` |
+| macOS | Intel | `navop-<version>-macos-x64.dmg`、`navop-<version>-macos-x64.tar.gz` |
+| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`、`navop-<version>-linux-x64-portable.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage` |
+| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz`、`navop-<version>-linux-arm64-portable.tar.gz` |
+| Windows | x86_64 | `navop-<version>-windows-x64.msi`、`navop-<version>-windows-x64.exe`、`navop-<version>-windows-x64.zip`、`navop-<version>-windows-x64-portable.zip` |
+| Windows | x86（32 位） | `navop-<version>-win32.msi`、`navop-<version>-win32.exe`、`navop-<version>-win32.zip`、`navop-<version>-win32-portable.zip` |
 
 Windows `.msi` 和 `.exe` 都是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；EXE 安装包封装的是同一套 MSI 安装流程。普通 `.zip` 是免安装版，仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。只有需要把应用数据放在程序同级目录时才应下载 `-portable.zip`。便携版（Linux 与 Windows）默认每次启动都要求输入主密钥。用户也可以在设置中明确选择把可自动恢复的加密主密钥副本保存到 `data/state/key_storage`，但该加密使用程序内置密钥，不具备设备绑定保护；任何同时获得应用程序和完整 `data` 目录的人都可能恢复主密钥。
 
