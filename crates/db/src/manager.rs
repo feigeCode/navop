@@ -1873,15 +1873,24 @@ impl GlobalDbState {
                 match original.as_ref() {
                     Some(original) => {
                         plugin
-                            .build_alter_table_sql_with_renames_async(
+                            .build_alter_table_sql_with_schema_async(
                                 conn,
+                                schema.as_deref(),
                                 original,
                                 &design,
                                 &column_renames,
                             )
                             .await
                     }
-                    None => plugin.build_create_table_sql_async(conn, &design).await,
+                    None => {
+                        plugin
+                            .build_create_table_sql_with_schema_async(
+                                conn,
+                                schema.as_deref(),
+                                &design,
+                            )
+                            .await
+                    }
                 }
             }
             .await;

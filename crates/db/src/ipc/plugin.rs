@@ -1707,6 +1707,35 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         }
     }
 
+    async fn build_create_table_sql_with_schema_async(
+        &self,
+        connection: &dyn DbConnection,
+        schema: Option<&str>,
+        design: &TableDesign,
+    ) -> Result<String> {
+        let params = wire_ddl::BuildCreateTableParams {
+            conn_id: None,
+            spec: table_spec_from_design_with_schema(design, schema),
+            options: wire_ddl::CreateTableOptions::default(),
+        };
+        let value = serde_json::to_value(params)?;
+        match self
+            .metadata::<wire_ddl::BuildCreateTableResult>(
+                connection,
+                wire_method::DDL_BUILD_CREATE_TABLE,
+                value,
+            )
+            .await
+        {
+            Ok(result) => Ok(join_ddl_statements(result.statements, Some(result.sql))),
+            Err(error) if is_not_supported(&error) => Ok(self
+                .compatible_plugin()
+                .map(|plugin| plugin.build_create_table_sql(design))
+                .unwrap_or_else(|| self.build_create_table_sql(design))),
+            Err(error) => Err(error),
+        }
+    }
+
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> String {
         let table = self.quote_identifier(&new.table_name);
         let original_cols: HashMap<&str, &ColumnDefinition> = original
@@ -1823,6 +1852,52 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         }
     }
 
+    async fn build_alter_table_sql_with_schema_async(
+        &self,
+        connection: &dyn DbConnection,
+        schema: Option<&str>,
+        original: &TableDesign,
+        new: &TableDesign,
+        column_renames: &[(String, String)],
+    ) -> Result<String> {
+        let params = wire_ddl::BuildAlterTableParams {
+            conn_id: None,
+            from_spec: table_spec_from_design_with_schema(original, schema),
+            to_spec: table_spec_from_design_with_schema(new, schema),
+            column_renames: column_renames
+                .iter()
+                .map(|(old_name, new_name)| wire_ddl::ColumnRenameSpec {
+                    old_name: old_name.clone(),
+                    new_name: new_name.clone(),
+                })
+                .collect(),
+            options: wire_ddl::AlterTableOptions {
+                allow_destructive: true,
+                with_rollback: false,
+            },
+        };
+        let value = serde_json::to_value(params)?;
+        match self
+            .metadata::<wire_ddl::BuildAlterTableResult>(
+                connection,
+                wire_method::DDL_BUILD_ALTER_TABLE,
+                value,
+            )
+            .await
+        {
+            Ok(result) => Ok(join_ddl_statements(result.statements, None)),
+            Err(error) if is_not_supported(&error) => Ok(self
+                .compatible_plugin()
+                .map(|plugin| {
+                    plugin.build_alter_table_sql_with_renames(original, new, column_renames)
+                })
+                .unwrap_or_else(|| {
+                    self.build_alter_table_sql_with_renames(original, new, column_renames)
+                })),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn import_data_with_progress(
         &self,
         connection: &dyn DbConnection,
@@ -1867,10 +1942,27 @@ fn names_to_databases(names: Vec<String>) -> Vec<DatabaseInfo> {
 }
 
 fn table_spec_from_design(design: &TableDesign) -> wire_ddl::TableSpec {
+    table_spec_from_design_with_schema(design, None)
+}
+
+// Build a TableSpec from a TableDesign, optionally qualifying the table with an
+// explicit schema. When a non-empty schema is provided the connection database
+// name is dropped: Oracle/PostgreSQL-compatible drivers (DM, Kingbase) treat
+// the `database` qualifier as the schema/owner and would otherwise emit
+// `"库名"."表名"` which neither database resolves.
+fn table_spec_from_design_with_schema(
+    design: &TableDesign,
+    schema: Option<&str>,
+) -> wire_ddl::TableSpec {
+    let schema = schema.filter(|schema| !schema.trim().is_empty());
+    let database = match schema {
+        Some(_) => None,
+        None => Some(design.database_name.clone()).filter(|database| !database.is_empty()),
+    };
     wire_ddl::TableSpec {
         name: design.table_name.clone(),
-        schema: None,
-        database: Some(design.database_name.clone()).filter(|database| !database.is_empty()),
+        schema: schema.map(str::to_string),
+        database,
         columns: design
             .columns
             .iter()
@@ -2277,6 +2369,7 @@ mod tests {
         config: DbConnectionConfig,
         supports_alter_table_builder: bool,
         object_view: Option<serde_json::Value>,
+        last_alter_schema: std::sync::Mutex<Option<String>>,
     }
 
     struct RecordingQueryConnection {
@@ -2331,6 +2424,7 @@ mod tests {
                 },
                 supports_alter_table_builder: true,
                 object_view: None,
+                last_alter_schema: std::sync::Mutex::new(None),
             }
         }
 
@@ -2346,6 +2440,13 @@ mod tests {
                 supports_alter_table_builder: false,
                 ..Self::new()
             }
+        }
+
+        fn last_alter_schema(&self) -> Option<String> {
+            self.last_alter_schema
+                .lock()
+                .expect("last_alter_schema mutex poisoned")
+                .clone()
         }
     }
 
@@ -2420,6 +2521,12 @@ mod tests {
                     .clone()
                     .ok_or_else(|| DbError::NotSupported(method.to_string())),
                 wire_method::DDL_BUILD_ALTER_TABLE if self.supports_alter_table_builder => {
+                    if let Some(schema) = params["from_spec"]["schema"].as_str() {
+                        *self
+                            .last_alter_schema
+                            .lock()
+                            .expect("last_alter_schema mutex poisoned") = Some(schema.to_string());
+                    }
                     Ok(serde_json::json!({
                         "statements": ["DRIVER RENAME SQL"],
                         "rollback_statements": [],
@@ -3362,6 +3469,49 @@ mod tests {
             .unwrap();
 
         assert_eq!("DRIVER RENAME SQL;", sql);
+    }
+
+    #[tokio::test]
+    async fn async_alter_with_schema_forwards_schema_to_driver() {
+        let plugin = ExternalDatabasePlugin::new();
+        let connection = DriverRequestOnlyConnection::new();
+        let mut original = TableDesign::new("comi_ai_manager", "AI_SCHEDULED_TASK");
+        original.add_column(ColumnDefinition::new("payload").data_type("VARCHAR"));
+        let mut current = TableDesign::new("comi_ai_manager", "AI_SCHEDULED_TASK");
+        current.add_column(ColumnDefinition::new("body").data_type("VARCHAR"));
+
+        let sql = plugin
+            .build_alter_table_sql_with_schema_async(
+                &connection,
+                Some("comi_ai_manager"),
+                &original,
+                &current,
+                &[("payload".to_string(), "body".to_string())],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!("DRIVER RENAME SQL;", sql);
+        assert_eq!(
+            Some("comi_ai_manager".to_string()),
+            connection.last_alter_schema()
+        );
+    }
+
+    #[test]
+    fn table_spec_with_schema_sets_schema_and_drops_database() {
+        let mut design = TableDesign::new("comi_ai_manager", "AI_SCHEDULED_TASK");
+        design.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+
+        // Explicit schema: qualify with schema and drop the connection database.
+        let spec = table_spec_from_design_with_schema(&design, Some("comi_ai_manager"));
+        assert_eq!(Some("comi_ai_manager".to_string()), spec.schema);
+        assert_eq!(None, spec.database);
+
+        // No schema: fall back to the connection database name.
+        let spec = table_spec_from_design_with_schema(&design, None);
+        assert_eq!(None, spec.schema);
+        assert_eq!(Some("comi_ai_manager".to_string()), spec.database);
     }
 
     #[tokio::test]

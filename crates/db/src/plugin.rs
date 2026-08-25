@@ -2929,6 +2929,24 @@ pub trait DatabasePlugin: Send + Sync {
         Ok(self.build_create_table_sql(design))
     }
 
+    /// Build CREATE TABLE SQL through an async-capable path with an explicit
+    /// target schema.
+    ///
+    /// The default implementation delegates to
+    /// [`DatabasePlugin::build_create_table_sql_async`]. External IPC plugins
+    /// override this so the driver can qualify the table with the target
+    /// schema instead of falling back to the connection database name, which
+    /// Oracle/PostgreSQL-compatible drivers (DM, Kingbase) otherwise treat as
+    /// the schema/owner.
+    async fn build_create_table_sql_with_schema_async(
+        &self,
+        connection: &dyn DbConnection,
+        _schema: Option<&str>,
+        design: &TableDesign,
+    ) -> Result<String> {
+        self.build_create_table_sql_async(connection, design).await
+    }
+
     /// Build ALTER TABLE SQL from original and new TableDesign
     /// Returns a series of ALTER TABLE statements for the differences
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> String;
@@ -2984,6 +3002,24 @@ pub trait DatabasePlugin: Send + Sync {
         column_renames: &[(String, String)],
     ) -> Result<String> {
         Ok(self.build_alter_table_sql_with_renames(original, new, column_renames))
+    }
+
+    /// Async-capable ALTER TABLE builder with an explicit target schema.
+    ///
+    /// The default implementation delegates to
+    /// [`DatabasePlugin::build_alter_table_sql_with_renames_async`]. External
+    /// IPC plugins override this so the driver can qualify the table with the
+    /// target schema instead of the connection database name.
+    async fn build_alter_table_sql_with_schema_async(
+        &self,
+        connection: &dyn DbConnection,
+        _schema: Option<&str>,
+        original: &TableDesign,
+        new: &TableDesign,
+        column_renames: &[(String, String)],
+    ) -> Result<String> {
+        self.build_alter_table_sql_with_renames_async(connection, original, new, column_renames)
+            .await
     }
 
     /// Check if a column definition has changed
