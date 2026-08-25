@@ -1995,7 +1995,7 @@ mod tests {
         assert!(render.contains(".when(show_persistent_sidebar"));
         assert!(render.contains("layout.child(self.connection_sidebar.clone())"));
         assert!(sidebar_source.contains("fn is_expanded"));
-        assert!(sidebar_source.contains(".when(self.tree_expanded"));
+        assert!(sidebar_source.contains("fn render_floating_tree"));
     }
 
     #[test]
@@ -2470,6 +2470,15 @@ impl Render for OnetCliApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
         let main_content = self.render_main_content(cx);
+        let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
+        let sidebar_expanded = self.connection_sidebar.read(cx).is_expanded();
+        let floating_tree = if show_persistent_sidebar && sidebar_expanded {
+            Some(self.connection_sidebar.update(cx, |sidebar, cx| {
+                sidebar.render_floating_tree(window, cx)
+            }))
+        } else {
+            None
+        };
         div()
             .size_full()
             .relative()
@@ -2495,7 +2504,6 @@ impl Render for OnetCliApp {
             }))
             .bg(cx.theme().background)
             .child({
-                let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
                 gpui_component::h_flex()
                     .size_full()
                     .min_w_0()
@@ -2503,7 +2511,32 @@ impl Render for OnetCliApp {
                     .when(show_persistent_sidebar, |layout| {
                         layout.child(self.connection_sidebar.clone())
                     })
-                    .child(div().flex_1().min_w_0().h_full().child(main_content))
+                    .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .when(show_persistent_sidebar && sidebar_expanded, |this| {
+                            this.on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                                    if !this.connection_sidebar.read(cx).is_expanded() {
+                                        return;
+                                    }
+                                    let layout = cx.theme().geometry.layout;
+                                    let in_terminal = event.position.x > layout.global_rail
+                                        && event.position.y > layout.tab_bar;
+                                    if in_terminal {
+                                        this.set_connection_sidebar_expanded(false, cx);
+                                    }
+                                }),
+                            )
+                        })
+                        .child(main_content),
+                    )
+            })
+            .when(show_persistent_sidebar && sidebar_expanded, |this| {
+                this.child(floating_tree.unwrap())
             })
             .children(sheet_layer)
             .children(dialog_layer)
