@@ -8,6 +8,8 @@ The home screen is the entry point for every saved resource. Workspaces group co
 
 The home dashboard keeps recent connections beside New Connection, Terminal, Quick Open, sync, import, Notes, AI workbench, and extension shortcuts. Search by connection name and switch between card and list layouts. Create workspaces for production, staging, local development, customers, or projects; edit their names, reorder them, and filter the visible connections. Use unmistakable names and visual cues for production resources.
 
+The connection list order is configurable under **Settings → General → Connection Display**: it defaults to natural name order (numeric segments such as IP addresses compared by value, case-insensitive) and can be switched to "Most Recently Used" (LRU). The setting applies to the Home connection list, Redis/MongoDB workspace tabs, and the persistent sidebar connection tree, taking effect immediately.
+
 ![Connection cards and workspace groups](/images/app.png)
 
 The persistent connection sidebar stays available while other tabs are open. Use it to search, expand or collapse workspace groups, resize the navigation area, and move quickly between resources. A single click selects or focuses a home card or sidebar row; a double-click opens the connection directly. Before sharing a screen, review any visible hostnames, accounts, team labels, and internal addresses.
@@ -24,11 +26,13 @@ Existing connections can be edited, copied, or deleted. A copy is useful for a r
 
 Search changes only what is displayed. Cards work well for a smaller set of recognizable resources, while list views make dense browsing and ordering easier; double-click the reviewed target to open it. Closing a database or terminal tab does not delete the saved connection. Periodically remove obsolete entries, normalize names, and confirm workspace membership. Never put a password or token in a connection name; hostnames and internal addresses may also require redaction in screenshots.
 
+Duplicating a tab automatically appends a number that reuses freed slots (e.g. `192.168.1.1` → `192.168.1.1(1)`), and tab widths adapt to content so long titles are not truncated.
+
 Deleting a saved entry normally does not delete a remote database or server. Operations performed inside the opened workspace, however, can change real remote data.
 
 ## Import from other applications
 
-Connection import requires an importer extension. It can scan supported local applications or read an exported file, then show a preview before anything is saved. Database and SSH records are labeled to indicate whether passwords were imported, missing, unsupported, or blocked by permissions.
+Connection import requires an importer extension. It can scan supported local applications (such as SecureCRT sessions and quick commands) or read an exported file, then show a preview before anything is saved. Database and SSH records are labeled to indicate whether passwords were imported, missing, unsupported, or blocked by permissions.
 
 Select only reviewed records. Duplicate detection skips obvious repeats, but you must still compare names, hosts, ports, databases, and authentication methods. Some sources cannot export secrets, so re-enter them after import. Port-forward import, saving, and duplicate handling may not be supported and should be rebuilt manually.
 

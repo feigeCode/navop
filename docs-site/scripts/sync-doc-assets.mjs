@@ -23,8 +23,7 @@ const screenshots = [
   "er.png",
   "extension.png",
   "markdown.png",
-  "theme.png",
-  "whiteboard.png"
+  "theme.png"
 ];
 
 mkdirSync(outputDir, { recursive: true });

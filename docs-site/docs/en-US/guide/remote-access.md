@@ -6,6 +6,8 @@ Navop connects to RDP and VNC through provider extensions, offers Serial termina
 
 Install a compatible remote desktop provider from Extensions, then create an RDP or VNC connection. Enter host, port, user, and password; RDP may also require a Domain. A provider version mismatch should be fixed by updating or reloading the extension rather than randomly changing credentials.
 
+On Windows, opening a dedicated window from a connection's context menu launches the system Remote Desktop client (`mstsc.exe`) in fullscreen, avoiding white-screen, focus, and exit issues that could occur with the embedded native window; hostnames, IPv4/IPv6 addresses, and custom ports are passed to the system client correctly. Embedded native RDP opens in a tab by default, while dedicated VNC windows and remote desktop windows on non-Windows platforms continue to use Navop's built-in window.
+
 Configure SOCKS/HTTP proxy and read-only mode when supported. Read-only reduces input mistakes but does not replace remote account permissions. Verify certificates or host identity and use least-privilege accounts.
 
 ## Diagnose display and input

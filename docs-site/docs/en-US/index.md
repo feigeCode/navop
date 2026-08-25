@@ -2,13 +2,13 @@
 
 Navop is the dev and ops workspace for the AI era, bringing databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, Notes, AI, and team sync into one native workspace.
 
-## Current release: v0.10.0
+## Current release: v0.11.0
 
-[Download Navop v0.10.0](https://github.com/feigeCode/navop/releases/tag/v0.10.0)
+[Download Navop v0.11.0](https://github.com/feigeCode/navop/releases/tag/v0.11.0)
 
-- Added SSH remote/reverse port forwarding (`ssh -R`) with fixed remote ports and automatic allocation via port `0`.
-- The unified execution mode in AI Chat is now persisted, preserving the selected mode after restarting the app.
-- Smoothed RDP remote cursor movement and fixed database table rename and PostgreSQL primary-key editing issues.
+- Added a configurable "Connection Sorting" option under **Settings → General → Connection Display**, defaulting to natural name order (IP addresses compared by value, case-insensitive) with "Most Recently Used" also available; the Home connection list, Redis/MongoDB workspace tabs, and the persistent sidebar connection tree all honor the setting.
+- SSH now offers opt-in compatibility for legacy servers that only support DSA host keys, SHA-1 key exchange/MAC, or 1024-bit DH group negotiation.
+- Duplicated tabs are automatically numbered (reusing freed numbers) and tab widths adapt to content so long titles are not truncated.
 
 ## Start here
 

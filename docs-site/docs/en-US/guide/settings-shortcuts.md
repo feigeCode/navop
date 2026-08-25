@@ -12,6 +12,12 @@ Configure application, SQL, table-preview, and terminal fonts separately. Custom
 
 Missing glyphs trigger fallback or unreadable output. Prefer monospaced fonts for SQL and terminals and recheck charts and highlighting after theme changes.
 
+## Connection display and sorting
+
+The "Connection Sorting" option under **Settings → General → Connection Display** controls the connection list order: it defaults to natural name order (numeric segments such as IP addresses compared by value, case-insensitive) and can be switched to "Most Recently Used" (LRU). The setting applies to the Home connection list, Redis/MongoDB workspace tabs, and the persistent sidebar connection tree, taking effect immediately.
+
+Sorting changes display order only and never modifies connections; do not rely on it as a substitute for naming or grouping.
+
 ## Tune database and table behavior
 
 Database preferences include connection opening, SQL auto-save, maximum rows, table row height, and large-text handling. Maximum rows limits preview, not server permission; increasing it costs memory and network. Auto-save does not commit transactions.

@@ -63,17 +63,18 @@
 
 ### Remote access and operations
 
-- Use SSH and local terminals with draggable split panes in any direction, quick commands, history, broadcast input, shell integration, and terminal AI. Configure SSH encodings (UTF-8, GBK, Big5, Shift_JIS, and more) and terminal types to match legacy environments.
-- Lock sessions with a password, lock all active sessions at once, or hide the output of the current session.
+- Use SSH and local terminals with draggable split panes in any direction, quick commands (including execute-on-click), history, broadcast input, shell integration, and terminal AI. Configure SSH encodings (UTF-8, GBK, Big5, Shift_JIS, and more) and terminal types to match legacy environments.
+- Lock sessions with a password, lock all active sessions at once, or hide the output of the current session. Tabs can show SecureCRT-style status badges for connected, disconnected, and locked states.
 - Record sessions and replay them in a read-only timeline viewer that blocks input and online operations.
 - Duplicate tabs with automatic numbering that reuses freed numbers (e.g. `192.168.1.1` → `192.168.1.1(1)`), and tab widths adapt to content so long titles are not truncated.
-- Connect over Telnet with automatic login scripts and manual credential overrides.
+- Connect over Telnet with automatic login scripts, manual credential overrides, and configurable backspace codes.
 - Review SSH, serial, and local terminal session logs in a static history viewer with scrollback, selection, search, and TXT export.
 - Manage remote files with SFTP uploads, directory uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy; transfer files over SSH with ZMODEM.
 - Import SecureCRT sessions and quick commands, and batch-manage connections from the sidebar.
 - Create reusable local, remote (`ssh -R`), and dynamic SOCKS port-forwarding connections.
-- Confirm SSH and SFTP host-key changes with explicit fingerprint warnings, and enable legacy SSH algorithms only when a server requires them.
-- Open serial connections, monitor servers, and connect to remote desktops through installable RDP and VNC providers.
+- Confirm SSH and SFTP host-key changes with explicit fingerprint warnings, and enable legacy SSH algorithms only when a server requires them; Windows also supports Pageant authentication.
+- Forward remote X11 GUI applications to a local X server over SSH, with automatic detection of the local X11 environment (XMing on Windows, XQuartz on macOS).
+- Open serial connections, monitor servers, and connect to remote desktops through installable RDP and VNC providers. On Windows, dedicated fullscreen RDP windows open through the system Remote Desktop client (`mstsc.exe`).
 
 ### Editing, AI, and extensibility
 
