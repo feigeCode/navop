@@ -518,7 +518,9 @@ fn canonical_row_key(row_key: &HashMap<String, Value>) -> String {
 fn cell_text(value: &Value) -> String {
     match value {
         Value::Null => "NULL".to_string(),
-        Value::String(value) => value.clone(),
+        // Json 列经过 serde 解析后，内嵌字符串里原本的字面量 `\r\n` 已被解码为真实换行。
+        // 这里重新转义为可见的 `\r` / `\n`，保证对比面板与查询面板显示一致，不再被折行。
+        Value::String(value) => value.replace('\r', "\\r").replace('\n', "\\n"),
         Value::Bool(value) => value.to_string(),
         _ => serde_json::to_string(value).unwrap_or_else(|_| "?".to_string()),
     }
@@ -527,7 +529,7 @@ fn cell_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_statement_index, canonical_row_key, ordered_key_text, row_key, row_ui_id,
+        build_statement_index, canonical_row_key, cell_text, ordered_key_text, row_key, row_ui_id,
         row_value_summary, statement_ids_for_row, statement_kind_code,
     };
     use db::compare::{RowData, SyncPlan, SyncPlanSummary, SyncStatement, SyncStatementKind};
@@ -584,6 +586,35 @@ mod tests {
         assert_eq!(
             row_value_summary(&row, &["id".to_string(), "name".to_string()]),
             "id=1, name=Alice"
+        );
+    }
+
+    #[test]
+    fn cell_text_escapes_real_newlines_in_string_values() {
+        // Json 列解析后，内嵌字符串里的真实 CRLF 应显示为字面量 `\r\n`，与查询面板一致。
+        let value = json!("a\r\nb");
+        assert_eq!(cell_text(&value), "a\\r\\nb");
+    }
+
+    #[test]
+    fn cell_text_object_branch_escapes_control_characters_via_serde() {
+        // Object 分支走 serde_json::to_string，行为保持不变（内嵌真实换行仍会被转义）。
+        let value = json!({"mapboxUrl": "a\r\nb"});
+        assert_eq!(cell_text(&value), r#"{"mapboxUrl":"a\r\nb"}"#);
+    }
+
+    #[test]
+    fn row_value_summary_escapes_newlines_in_json_string_values() {
+        let row: RowData = [
+            ("id".to_string(), json!(1)),
+            ("map".to_string(), json!("a\r\nb")),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            row_value_summary(&row, &["id".to_string(), "map".to_string()]),
+            "id=1, map=a\\r\\nb"
         );
     }
 
