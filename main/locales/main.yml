@@ -3992,6 +3992,20 @@ Update:
     zh-CN: 打开发布页面手动下载
     zh-HK: 打開發布頁面手動下載
 
+PluginUpdate:
+  title:
+    en: Plugin Updates Available
+    zh-CN: 发现插件更新
+    zh-HK: 發現插件更新
+  available:
+    en: "%{count} installed plugin(s) have newer versions available."
+    zh-CN: "有 %{count} 个已安装插件可更新到新版本。"
+    zh-HK: "有 %{count} 個已安裝插件可更新到新版本。"
+  view_updates:
+    en: View Updates
+    zh-CN: 查看更新
+    zh-HK: 查看更新
+
 
 # LLM 提供商
 LlmProviders:

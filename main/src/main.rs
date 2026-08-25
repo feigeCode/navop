@@ -14,6 +14,7 @@ mod connection_sort;
 mod connection_visuals;
 mod credential_vault;
 mod env_file;
+mod extension_update;
 mod file_association;
 mod file_open;
 mod home;
@@ -422,6 +423,7 @@ fn main() {
                 window.activate_window();
                 app_init::init_window_systems(window, cx);
                 update::schedule_update_check(window, cx);
+                extension_update::schedule_plugin_update_check(window, cx);
                 let view = cx.new(|cx| OnetCliApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));
                 let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();

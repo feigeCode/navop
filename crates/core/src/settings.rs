@@ -829,6 +829,9 @@ pub struct AppSettings {
     pub auto_update: bool,
     #[serde(default)]
     pub skipped_update_version: Option<String>,
+    /// 插件更新提示最近一次通知的更新集合签名，用于避免每次启动都重复提示。
+    #[serde(default)]
+    pub plugin_update_notified_signature: Option<String>,
     /// Whether any configured synchronization provider is allowed to run.
     #[serde(default)]
     pub sync_enabled: bool,
@@ -1184,6 +1187,7 @@ impl Default for AppSettings {
             log_file_path: String::new(),
             auto_update: true,
             skipped_update_version: None,
+            plugin_update_notified_signature: None,
             sync_enabled: false,
             sync_provider: SyncProvider::OnetCloud,
             global_proxy: GlobalProxySettings::default(),
