@@ -186,6 +186,17 @@ npx -y @navop/mcp@latest
 | Windows | x86_64 | `navop-<version>-windows-x64.msi`、`navop-<version>-windows-x64.exe`、`navop-<version>-windows-x64.zip`、`navop-<version>-windows-x64-portable.zip` |
 | Windows | x86（32 位） | `navop-<version>-win32.msi`、`navop-<version>-win32.exe`、`navop-<version>-win32.zip`、`navop-<version>-win32-portable.zip` |
 
+### Linux Flatpak
+
+Navop 也已在 [FlatPark](https://flatpark.org/zh-Hans/apps/dev.navop.Navop/) 上架，并标注为开发者认可的社区 Flatpak 软件包。运行以下命令添加 FlatPark 软件源，并为当前用户安装 Navop：
+
+```bash
+flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak --user install flatpark dev.navop.Navop
+```
+
+Flatpak 软件包运行在沙盒中，部分集成功能可能需要授予额外权限。详细说明与问题排查请参阅 [FlatPark 软件包页面](https://flatpark.org/zh-Hans/apps/dev.navop.Navop/)。
+
 Windows `.msi` 和 `.exe` 都是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；EXE 安装包封装的是同一套 MSI 安装流程。普通 `.zip` 是免安装版，仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。只有需要把应用数据放在程序同级目录时才应下载 `-portable.zip`。便携版（Linux 与 Windows）默认每次启动都要求输入主密钥。用户也可以在设置中明确选择把可自动恢复的加密主密钥副本保存到 `data/state/key_storage`，但该加密使用程序内置密钥，不具备设备绑定保护；任何同时获得应用程序和完整 `data` 目录的人都可能恢复主密钥。
 
 > **从 v0.10.1 或更早版本的 Windows ZIP 升级：**这些历史 ZIP 已启用便携模式。请下载新的 `-portable.zip`，解压到新目录，并把原目录中的整个 `data` 复制进去。如果把新的普通 `.zip` 解压到另一个目录，或改用 MSI/EXE 安装版，Navop 会使用正常的 Windows 用户数据目录，而且不会自动迁移便携数据。原有连接和设置可能因此看起来消失，但旧便携目录中的数据并未被删除。

@@ -186,6 +186,17 @@ Download the latest build from [GitHub Releases](https://github.com/feigeCode/na
 | Windows | x86_64 | `navop-<version>-windows-x64.msi`, `navop-<version>-windows-x64.exe`, `navop-<version>-windows-x64.zip`, `navop-<version>-windows-x64-portable.zip` |
 | Windows | x86 (32-bit) | `navop-<version>-win32.msi`, `navop-<version>-win32.exe`, `navop-<version>-win32.zip`, `navop-<version>-win32-portable.zip` |
 
+### Linux Flatpak
+
+Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a developer-endorsed community Flatpak package. Add the FlatPark remote and install Navop for the current user:
+
+```bash
+flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak --user install flatpark dev.navop.Navop
+```
+
+The Flatpak package runs in a sandbox, so some integrations may require additional permissions. See the [FlatPark package page](https://flatpark.org/apps/dev.navop.Navop/) for details and troubleshooting guidance.
+
 The Windows `.msi` and `.exe` are bilingual per-user installers and do not require administrator privileges when using the default location. The EXE installer wraps the same MSI installation. The standard `.zip` requires no installation but still uses the normal per-user data directories and supports remembered master-key unlock. Use `-portable.zip` only when the application data must stay beside the executable. Portable archives (Linux and Windows) ask for the master key on every start by default. You may explicitly choose in Settings to store an encrypted, automatically recoverable copy under `data/state/key_storage`, but this uses a key embedded in the application rather than device-bound protection; anyone who obtains both the application and the complete `data` directory may be able to recover the master key.
 
 > **Upgrading from the Windows ZIP in v0.10.1 or earlier:** those archives enabled portable mode. Download the new `-portable.zip`, extract it to a new directory, and copy the complete existing `data` directory into it. Extracting the new standard `.zip` to a different directory, or switching to the MSI/EXE installer, uses the normal Windows user data location and does not automatically migrate portable data. The old connections and settings may therefore appear missing even though the original portable data has not been deleted.
