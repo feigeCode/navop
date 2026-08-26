@@ -288,15 +288,12 @@ mod tests {
     fn connection_header_exposes_auto_hide_toggle_left_of_batch_operations() {
         let source = include_str!("tree.rs");
         let implementation = source.split("#[cfg(test)]").next().unwrap();
-        let toggle = implementation.find("auto_hide_tree_toggle(").expect(
-            "连接树头部应渲染自动隐藏开关",
-        );
-        let batch = implementation.find("batch_mode_toggle(").expect(
-            "连接树头部应渲染批量操作开关",
-        );
-        assert!(
-            toggle < batch,
-            "自动隐藏开关应位于批量操作开关的左侧"
-        );
+        let toggle = implementation
+            .find("auto_hide_tree_toggle(")
+            .expect("连接树头部应渲染自动隐藏开关");
+        let batch = implementation
+            .find("batch_mode_toggle(")
+            .expect("连接树头部应渲染批量操作开关");
+        assert!(toggle < batch, "自动隐藏开关应位于批量操作开关的左侧");
     }
 }

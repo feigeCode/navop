@@ -2,12 +2,20 @@ use std::path::Path;
 
 use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
 use gpui_component::{Icon, IconName, IconSize, Sizable};
-use one_core::storage::{ConnectionType, DatabaseType, DbConnectionConfig, StoredConnection};
+use one_core::storage::{
+    ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalDriverIconSource<'a> {
     File(&'a Path),
     Asset(&'a str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SshIconSource<'a> {
+    File(&'a Path),
+    BuiltIn(IconName),
 }
 
 /// Semantic icon sizes for connection identity surfaces.
@@ -123,10 +131,29 @@ pub(crate) fn stored_connection_icon(
             .unwrap_or_else(|_| generic_database_icon(size)),
         ConnectionType::SshSftp => connection
             .to_ssh_params()
-            .map(|params| color_icon(params.os_icon(), size))
+            .map(|params| ssh_icon(&params, size))
             .unwrap_or_else(|_| color_icon(IconName::LinuxPenguinColor, size)),
         kind => connection_type_icon(kind, size),
     }
+}
+
+fn ssh_icon(params: &SshParams, size: ConnectionVisualSize) -> Icon {
+    match ssh_icon_source(params) {
+        SshIconSource::File(path) => {
+            driver_icon_from_file_path(path.to_path_buf(), size.icon_size())
+        }
+        SshIconSource::BuiltIn(name) => color_icon(name, size),
+    }
+}
+
+fn ssh_icon_source(params: &SshParams) -> SshIconSource<'_> {
+    params
+        .icon_file_path
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.is_file())
+        .map(SshIconSource::File)
+        .unwrap_or_else(|| SshIconSource::BuiltIn(params.os_icon()))
 }
 
 pub(crate) fn external_driver_icon_for_config_with_registry(
@@ -181,6 +208,8 @@ fn external_driver_icon_source<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::storage::{SshAccountExpect, SshAuthMethod};
+    use tempfile::tempdir;
 
     #[test]
     fn semantic_connection_sizes_map_to_the_shared_icon_scale() {
@@ -250,5 +279,56 @@ mod tests {
             Some(ExternalDriverIconSource::Asset("icons/driver.svg"))
         );
         assert_eq!(external_driver_icon_source(None, None), None);
+    }
+
+    #[test]
+    fn ssh_file_icon_takes_precedence_and_missing_file_falls_back() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let icon_path = directory.path().join("custom.svg");
+        std::fs::write(&icon_path, "<svg/>").expect("temporary icon should be written");
+        let mut params = ssh_params();
+        params.icon = Some("ubuntu".to_string());
+        params.icon_file_path = Some(icon_path.to_string_lossy().into_owned());
+
+        assert_eq!(
+            ssh_icon_source(&params),
+            SshIconSource::File(icon_path.as_path())
+        );
+
+        params.icon_file_path = Some(directory.path().join("missing.svg").display().to_string());
+        assert_eq!(
+            ssh_icon_source(&params),
+            SshIconSource::BuiltIn(IconName::UbuntuColor)
+        );
+    }
+
+    fn ssh_params() -> SshParams {
+        SshParams {
+            sftp_account: None,
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_method: SshAuthMethod::Agent,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
+            keyboard_interactive: None,
+            terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            x11_forwarding: None,
+            allow_legacy_algorithms: None,
+            jump_server: None,
+            proxy: None,
+            os_id: None,
+            icon: None,
+            icon_file_path: None,
+            account_expect: SshAccountExpect::default(),
+        }
     }
 }

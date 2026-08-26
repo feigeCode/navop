@@ -1,8 +1,9 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) enum TerminalPaneEvent {
     Focused,
+    OpenSftp(StoredConnection),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

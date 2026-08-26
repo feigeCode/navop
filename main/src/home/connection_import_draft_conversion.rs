@@ -225,6 +225,7 @@ fn to_ssh_connection(
         }),
         os_id: None,
         icon: None,
+        icon_file_path: None,
         account_expect: Default::default(),
     };
     Ok(StoredConnection::new_ssh(name, params, None))

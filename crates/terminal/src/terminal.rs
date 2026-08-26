@@ -73,7 +73,10 @@ use crate::ssh_backend::SshBackendConnect;
 use crate::windows_environment::{
     environment_value, merge_environment_overrides, refreshed_windows_environment,
 };
-use crate::zmodem::{ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder};
+use crate::zmodem::{
+    ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder, ZmodemTransferOutcome,
+    ZmodemTransferProgress,
+};
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TelnetBackend, TerminalBackend, TerminalControlHandle,
@@ -104,6 +107,10 @@ pub enum TerminalModelEvent {
     SshMfaChanged,
     /// SSH ZMODEM 文件选择请求状态变化
     ZmodemRequestChanged,
+    /// SSH ZMODEM 文件传输进度变化
+    ZmodemProgressChanged,
+    /// SSH ZMODEM 文件传输结束
+    ZmodemTransferFinished(ZmodemTransferOutcome),
     /// shell 开始渲染新的 prompt（OSC 133;A）
     PromptStart,
     /// shell prompt 已渲染完成，用户可以输入（OSC 133;B）
@@ -3133,6 +3140,12 @@ impl Terminal {
             TerminalEvent::ZmodemRequestChanged => {
                 cx.emit(TerminalModelEvent::ZmodemRequestChanged);
             }
+            TerminalEvent::ZmodemProgressChanged => {
+                cx.emit(TerminalModelEvent::ZmodemProgressChanged);
+            }
+            TerminalEvent::ZmodemTransferFinished(outcome) => {
+                cx.emit(TerminalModelEvent::ZmodemTransferFinished(outcome));
+            }
             TerminalEvent::PromptStart => {
                 cx.emit(TerminalModelEvent::PromptStart);
             }
@@ -3484,6 +3497,24 @@ impl Terminal {
         self.zmodem_responder
             .as_ref()
             .and_then(ZmodemResponder::pending_request)
+    }
+
+    pub fn zmodem_transfer_progress(&self) -> Option<ZmodemTransferProgress> {
+        self.zmodem_responder
+            .as_ref()
+            .and_then(ZmodemResponder::transfer_progress)
+    }
+
+    /// Request cancellation of the active ZMODEM transfer.
+    ///
+    /// Returns `true` only for a backend that accepted the request; the final
+    /// `ZmodemTransferFinished(Cancelled)` event remains the source of truth.
+    pub fn cancel_zmodem_transfer(&self) -> bool {
+        self.zmodem_transfer_progress().is_some()
+            && self
+                .backend
+                .as_deref()
+                .is_some_and(TerminalBackend::cancel_transfer)
     }
 
     pub fn submit_zmodem_picker(&self, response: ZmodemPickerResponse) -> bool {
@@ -5537,6 +5568,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             None,
@@ -5602,6 +5634,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             None,
@@ -5674,6 +5707,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             None,
@@ -5732,6 +5766,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             None,

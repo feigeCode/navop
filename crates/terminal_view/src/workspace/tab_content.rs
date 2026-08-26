@@ -9,10 +9,11 @@ use one_core::sidebar_contribution::SidebarContribution;
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use terminal::terminal::TerminalConnectionKind;
 
-use super::TerminalWorkspace;
+use super::{TerminalWorkspace, TerminalWorkspaceEvent};
 use crate::view::TerminalView;
 
 impl EventEmitter<TabContentEvent> for TerminalWorkspace {}
+impl EventEmitter<TerminalWorkspaceEvent> for TerminalWorkspace {}
 
 impl Focusable for TerminalWorkspace {
     fn focus_handle(&self, cx: &App) -> FocusHandle {

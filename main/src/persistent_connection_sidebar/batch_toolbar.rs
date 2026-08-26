@@ -111,7 +111,9 @@ pub(super) fn auto_hide_tree_toggle(
     // 表示“自动隐藏开启”，钉帽在右、针尖指向左侧。
     let pin = Icon::new(IconName::Pin)
         .with_size(IconSize::Small)
-        .when(active, |icon| icon.rotate(Radians(std::f32::consts::FRAC_PI_2)));
+        .when(active, |icon| {
+            icon.rotate(Radians(std::f32::consts::FRAC_PI_2))
+        });
     Toggle::new("persistent-auto-hide-tree")
         .icon(pin)
         .checked(active)

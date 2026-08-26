@@ -441,6 +441,9 @@ pub struct SshParams {
     /// 手动指定的连接图标 ID（None = 按探测到的 os_id 自动选择）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// 本机自定义连接图标的绝对路径（优先于内置图标）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_file_path: Option<String>,
 }
 
 impl SshParams {
@@ -2063,6 +2066,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             Some(7),
@@ -2255,6 +2259,7 @@ mod tests {
             proxy: None,
             os_id: None,
             icon: None,
+            icon_file_path: None,
             account_expect: Default::default(),
         };
         assert_eq!(
@@ -3205,6 +3210,7 @@ mod serial_tests {
             proxy: None,
             os_id: Some("ubuntu".to_string()),
             icon: None,
+            icon_file_path: None,
             account_expect: Default::default(),
         };
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
@@ -3215,6 +3221,26 @@ mod serial_tests {
         params.os_id = None;
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(!json.contains("os_id"));
+    }
+
+    #[test]
+    fn ssh_params_custom_icon_path_round_trips_and_defaults_to_none() {
+        let mut params: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧连接缺少自定义图标路径时应可反序列化");
+        assert_eq!(params.icon_file_path, None);
+
+        params.icon = Some("ubuntu".to_string());
+        params.icon_file_path = Some("/tmp/custom-ssh-icon.svg".to_string());
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+
+        assert_eq!(parsed.icon, Some("ubuntu".to_string()));
+        assert_eq!(
+            parsed.icon_file_path,
+            Some("/tmp/custom-ssh-icon.svg".to_string())
+        );
     }
 
     #[test]
@@ -3292,8 +3318,7 @@ mod serial_tests {
 
         let json = serde_json::to_string(&params).expect("SSH 配置应可序列化");
         assert!(json.contains("\"sftp_account\""));
-        let parsed: SshParams =
-            serde_json::from_str(&json).expect("SSH 配置应可再次反序列化");
+        let parsed: SshParams = serde_json::from_str(&json).expect("SSH 配置应可再次反序列化");
         assert_eq!(parsed.sftp_account, params.sftp_account);
 
         let legacy: SshParams = serde_json::from_str(
@@ -3390,6 +3415,7 @@ mod serial_tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             None,

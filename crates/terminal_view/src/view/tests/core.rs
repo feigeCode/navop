@@ -80,6 +80,7 @@ fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
             proxy: None,
             os_id: None,
             icon: None,
+            icon_file_path: None,
             account_expect: Default::default(),
         },
         None,
@@ -209,6 +210,7 @@ fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
             proxy: None,
             os_id: None,
             icon: None,
+            icon_file_path: None,
             account_expect: Default::default(),
         },
         None,
@@ -265,6 +267,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
             proxy: None,
             os_id: None,
             icon: None,
+            icon_file_path: None,
             account_expect: Default::default(),
         },
         None,
@@ -297,6 +300,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
         proxy: None,
         os_id: None,
         icon: None,
+        icon_file_path: None,
         account_expect: Default::default(),
     })
     .expect("SSH params should serialize");

@@ -4069,6 +4069,10 @@ LlmProviders:
     en: "Default model: %{model}"
     zh-CN: "默认模型: %{model}"
     zh-HK: "默認模型: %{model}"
+  default_model_auto:
+    en: "Default model: Auto (from cloud model list)"
+    zh-CN: "默认模型: 自动（跟随云端模型列表）"
+    zh-HK: "默認模型: 自動（跟隨雲端模型列表）"
   optional_models_count:
     en: "Optional models: %{count}"
     zh-CN: "可选模型: %{count} 个"

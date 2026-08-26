@@ -26,6 +26,11 @@ pub struct TerminalWorkspace {
     pub(super) pane_subscriptions: HashMap<TerminalPaneId, Vec<Subscription>>,
 }
 
+#[derive(Clone, Debug)]
+pub enum TerminalWorkspaceEvent {
+    OpenSftp(StoredConnection),
+}
+
 impl TerminalWorkspace {
     pub fn new(config: LocalConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::new_with_index(config, None, window, cx)

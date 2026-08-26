@@ -39,12 +39,10 @@ pub(crate) fn resolve_ssh_connection(
             && matches!(&params.auth_method, SshAuthMethod::Password { .. }),
     };
     let (username, auth) = match params.sftp_account.as_ref() {
-        Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => {
-            (
-                account.username.clone(),
-                SshAuth::Password(account.password.clone()),
-            )
-        }
+        Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => (
+            account.username.clone(),
+            SshAuth::Password(account.password.clone()),
+        ),
         _ => (params.username.clone(), ssh_auth(params.auth_method)),
     };
     let config = SshConnectConfig {
@@ -174,6 +172,7 @@ mod tests {
                 proxy: None,
                 os_id: None,
                 icon: None,
+                icon_file_path: None,
                 account_expect: Default::default(),
             },
             None,

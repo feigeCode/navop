@@ -68,6 +68,7 @@ pub(super) fn ssh_connection(id: i64) -> StoredConnection {
             proxy: Some(proxy(id)),
             os_id: None,
             icon: None,
+            icon_file_path: None,
             account_expect: Default::default(),
         },
         None,

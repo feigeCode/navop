@@ -11,7 +11,7 @@ use connection_form::team::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ColorExt as _, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
@@ -25,6 +25,7 @@ use gpui_component::{
     scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
     tab::{Tab, TabBar},
+    tooltip::Tooltip,
     v_flex,
 };
 use one_core::cloud_sync::TeamOption;
@@ -248,6 +249,8 @@ pub struct SshFormWindow {
     detected_os_id: Option<String>,
     /// 手动指定的连接图标 ID（None = 自动跟随探测结果）
     manual_icon: Option<String>,
+    /// 本机自定义连接图标路径（优先于内置图标）
+    custom_icon_file_path: Option<String>,
 
     // 云同步开关
     sync_enabled: bool,
@@ -686,6 +689,7 @@ impl SshFormWindow {
         let mut sftp_account_use_custom = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
+        let mut custom_icon_file_path: Option<String> = None;
         let mut credential_reference = None;
         let mut jump_credential_reference = None;
         let mut proxy_credential_reference = None;
@@ -701,6 +705,7 @@ impl SshFormWindow {
                 keyboard_interactive = params.keyboard_interactive_enabled();
                 detected_os_id = params.os_id.clone();
                 manual_icon = params.icon.clone();
+                custom_icon_file_path = params.icon_file_path.clone();
                 name_input.update(cx, |s, cx| s.set_value(&conn.name, window, cx));
                 host_input.update(cx, |s, cx| s.set_value(&params.host, window, cx));
                 port_input.update(cx, |s, cx| {
@@ -967,6 +972,7 @@ impl SshFormWindow {
             last_tested_signature: None,
             detected_os_id,
             manual_icon,
+            custom_icon_file_path,
             sync_enabled,
             disable_shell_integration,
             x11_forwarding,
@@ -1250,6 +1256,7 @@ impl SshFormWindow {
             proxy,
             os_id: self.detected_os_id.clone(),
             icon: self.manual_icon.clone(),
+            icon_file_path: self.custom_icon_file_path.clone(),
             account_expect: SshAccountExpect::default(),
         })
     }
@@ -1861,93 +1868,170 @@ impl SshFormWindow {
         Input::new(input).w_full()
     }
 
-    /// 渲染连接图标选择器：自动（跟随测试连接探测结果）或手动固定图标。
-    fn render_icon_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let list_active = cx.theme().list_active;
-        let list_active_border = cx.theme().list_active_border;
-        let list_hover = cx.theme().list_hover;
+    fn prompt_for_custom_icon(&mut self, cx: &mut Context<Self>) {
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t!("SSH.icon_select_file").to_string().into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.custom_icon_file_path = Some(path.to_string_lossy().into_owned());
+                this.manual_icon = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_icon_selection_indicator(
+        &self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let indicator_background = cx.theme().button_primary;
         let indicator_foreground = cx.theme().button_primary_foreground;
 
-        let tile = |id: &str, selected: bool, icon: Option<IconName>| {
-            let id_string = (!id.is_empty()).then(|| id.to_string());
-            let tile_id = format!("ssh-icon-{}", if id.is_empty() { "auto" } else { id });
-            let tile_selector = tile_id.clone();
-            let mut tile = div()
-                .id(SharedString::from(tile_id.clone()))
-                .debug_selector(move || tile_selector.clone())
-                .w(px(36.0))
-                .h(px(36.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_md()
-                .relative()
-                .cursor_pointer();
-            if selected {
-                tile = tile
-                    .border_2()
-                    .border_color(list_active_border)
-                    .bg(list_active);
-            } else {
-                tile = tile
-                    .border_1()
-                    .border_color(border)
-                    .hover(|style| style.bg(list_hover));
-            }
+        div()
+            .id(SharedString::from(id.clone()))
+            .debug_selector(move || id.clone())
+            .absolute()
+            .top(px(-5.0))
+            .right(px(-5.0))
+            .size(px(14.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(indicator_background)
+            .border_1()
+            .border_color(indicator_foreground)
+            .child(
+                Icon::new(IconName::Check)
+                    .with_size(px(9.0))
+                    .text_color(indicator_foreground),
+            )
+    }
 
-            let tile = match icon {
-                Some(icon) => tile.child(icon.color().with_size(px(22.0))),
-                None => tile.child(
+    fn render_builtin_icon_tile(
+        &self,
+        id: &str,
+        selected: bool,
+        icon: Option<IconName>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id_string = (!id.is_empty()).then(|| id.to_string());
+        let tile_id = format!("ssh-icon-{}", if id.is_empty() { "auto" } else { id });
+        let tile_selector = tile_id.clone();
+        div()
+            .id(SharedString::from(tile_id.clone()))
+            .debug_selector(move || tile_selector.clone())
+            .w(px(36.0))
+            .h(px(36.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .relative()
+            .cursor_pointer()
+            .when(selected, |tile| {
+                tile.border_2()
+                    .border_color(cx.theme().list_active_border)
+                    .bg(cx.theme().list_active)
+            })
+            .when(!selected, |tile| {
+                tile.border_1()
+                    .border_color(cx.theme().border)
+                    .hover(|style| style.bg(cx.theme().list_hover))
+            })
+            .when_some(icon, |tile, icon| {
+                tile.child(icon.color().with_size(px(22.0)))
+            })
+            .when(icon.is_none(), |tile| {
+                tile.child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(t!("SSH.icon_auto").to_string()),
-                ),
-            };
-
-            tile.when(selected, move |tile| {
-                let indicator_id = format!("{tile_id}-selected");
-                tile.child(
-                    div()
-                        .id(SharedString::from(indicator_id.clone()))
-                        .debug_selector(move || indicator_id.clone())
-                        .absolute()
-                        .top(px(-5.0))
-                        .right(px(-5.0))
-                        .size(px(14.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(indicator_background)
-                        .border_1()
-                        .border_color(indicator_foreground)
-                        .child(
-                            Icon::new(IconName::Check)
-                                .with_size(px(9.0))
-                                .text_color(indicator_foreground),
-                        ),
                 )
+            })
+            .when(selected, |tile| {
+                tile.child(self.render_icon_selection_indicator(format!("{tile_id}-selected"), cx))
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.manual_icon = id_string.clone();
+                this.custom_icon_file_path = None;
                 cx.notify();
             }))
-        };
+    }
 
+    fn render_custom_icon_tile(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.custom_icon_file_path.is_some();
+        let icon = self
+            .custom_icon_file_path
+            .as_ref()
+            .map(|path| Icon::default().file_path(path).color().with_size(px(22.0)))
+            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)));
+
+        div()
+            .id("ssh-icon-local")
+            .debug_selector(|| "ssh-icon-local".to_string())
+            .w(px(36.0))
+            .h(px(36.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .relative()
+            .cursor_pointer()
+            .when(selected, |tile| {
+                tile.border_2()
+                    .border_color(cx.theme().list_active_border)
+                    .bg(cx.theme().list_active)
+                    .child(
+                        self.render_icon_selection_indicator(
+                            "ssh-icon-local-selected".to_string(),
+                            cx,
+                        ),
+                    )
+            })
+            .when(!selected, |tile| {
+                tile.border_1()
+                    .border_color(cx.theme().border)
+                    .hover(|style| style.bg(cx.theme().list_hover))
+            })
+            .child(icon)
+            .tooltip(|window, cx| Tooltip::new(t!("SSH.icon_local").to_string()).build(window, cx))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.prompt_for_custom_icon(cx);
+            }))
+    }
+
+    /// 渲染连接图标选择器：自动、内置图标或本地图片。
+    fn render_icon_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = h_flex().gap_2().flex_wrap().items_center();
-        // 自动：跟随测试连接探测到的系统图标（未探测到时为默认企鹅）
-        row = row.child(tile("", self.manual_icon.is_none(), None));
+        row = row.child(self.render_builtin_icon_tile(
+            "",
+            self.manual_icon.is_none() && self.custom_icon_file_path.is_none(),
+            None,
+            cx,
+        ));
         for id in SSH_ICON_IDS {
-            row = row.child(tile(
+            row = row.child(self.render_builtin_icon_tile(
                 id,
-                self.manual_icon.as_deref() == Some(*id),
+                self.custom_icon_file_path.is_none() && self.manual_icon.as_deref() == Some(*id),
                 Some(ssh_os_icon(Some(id))),
+                cx,
             ));
         }
-        row.child(
+        row.child(self.render_custom_icon_tile(cx)).child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
@@ -2669,7 +2753,8 @@ impl SshFormWindow {
                 .child(
                     self.render_form_row(
                         &t!("SSH.sftp_password"),
-                        self.render_form_input(&self.sftp_password_input).mask_toggle(),
+                        self.render_form_input(&self.sftp_password_input)
+                            .mask_toggle(),
                     ),
                 )
             })
@@ -3052,6 +3137,7 @@ mod tests {
             proxy: None,
             os_id: None,
             icon: None,
+            icon_file_path: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
             account_expect: Default::default(),
@@ -3283,7 +3369,8 @@ mod tests {
             username: "sftp-user".to_string(),
             password: "sftp-secret".to_string(),
         });
-        let initial_connection = StoredConnection::new_ssh("sftp-account".to_string(), params, None);
+        let initial_connection =
+            StoredConnection::new_ssh("sftp-account".to_string(), params, None);
         let (form, cx) = cx.add_window_view(|window, cx| {
             super::SshFormWindow::new(
                 super::SshFormWindowConfig {
@@ -3460,6 +3547,53 @@ mod tests {
             cx.debug_bounds("ssh-icon-ubuntu-selected").is_some(),
             "the selected icon should render an unambiguous selection indicator"
         );
+    }
+
+    #[gpui::test]
+    fn ssh_form_preserves_custom_icon_path_and_builtin_selection_clears_it(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.icon_file_path = Some("/tmp/custom-ssh-icon.svg".to_string());
+        let initial_connection = StoredConnection::new_ssh("custom-icon".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("预填自定义图标路径的表单应能构建参数");
+        assert_eq!(
+            built.icon_file_path,
+            Some("/tmp/custom-ssh-icon.svg".to_string())
+        );
+        assert!(cx.debug_bounds("ssh-icon-local-selected").is_some());
+
+        let ubuntu = cx
+            .debug_bounds("ssh-icon-ubuntu")
+            .expect("Ubuntu icon tile should be rendered");
+        cx.simulate_click(ubuntu.center(), Modifiers::default());
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("选择内置图标后表单应能构建参数");
+
+        assert_eq!(built.icon, Some("ubuntu".to_string()));
+        assert_eq!(built.icon_file_path, None);
     }
 
     #[test]

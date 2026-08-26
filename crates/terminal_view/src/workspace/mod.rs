@@ -11,4 +11,4 @@ mod tab_drag;
 mod view;
 
 pub use split_model::{TerminalPaneId, TerminalSplitId, TerminalSplitNode, TerminalSplitTree};
-pub use view::TerminalWorkspace;
+pub use view::{TerminalWorkspace, TerminalWorkspaceEvent};

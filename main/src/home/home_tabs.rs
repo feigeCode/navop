@@ -30,7 +30,8 @@ use terminal::{
     local_config_from_settings_with_profile,
 };
 use terminal_view::{
-    TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
+    TerminalConnectionKind, TerminalWorkspace, TerminalWorkspaceEvent,
+    current_settings as current_terminal_settings,
 };
 
 fn redis_tab_open_context(
@@ -832,6 +833,24 @@ mod tests {
     }
 
     #[test]
+    fn ssh_terminal_workspace_can_request_an_sftp_tab() {
+        let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
+        let method = source
+            .split("\n    pub(crate) fn open_ssh_terminal_with_mode")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("\n    pub(crate) fn open_serial_terminal")
+                    .next()
+            })
+            .expect("SSH terminal open method");
+
+        assert!(method.contains("TerminalWorkspaceEvent::OpenSftp(connection)"));
+        assert!(method.contains("this.open_sftp_view(connection.clone(), window, cx)"));
+        assert!(method.contains("self._subscriptions.push(subscription)"));
+    }
+
+    #[test]
     fn local_terminal_entry_points_use_profile_settings() {
         let source = include_str!("home_tabs.rs");
         let legacy_default = concat!(
@@ -938,6 +957,16 @@ impl HomePage {
         let terminal_view = cx.new(|cx| {
             TerminalWorkspace::new_ssh_with_index(conn, tab_index, window, cx, None, sync_path)
         });
+        let subscription = cx.subscribe_in(
+            &terminal_view,
+            window,
+            |this, _terminal, event: &TerminalWorkspaceEvent, window, cx| match event {
+                TerminalWorkspaceEvent::OpenSftp(connection) => {
+                    this.open_sftp_view(connection.clone(), window, cx);
+                }
+            },
+        );
+        self._subscriptions.push(subscription);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tc, cx| {
                 let tab = TabItem::new(tab_id, "ssh", terminal_view);

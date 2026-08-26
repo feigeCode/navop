@@ -3,7 +3,7 @@ use gpui_component::Placement;
 use one_core::tab_container::{TabContent as _, TabContentEvent};
 
 use super::pane_tab_transfer::TerminalPaneTabMetadata;
-use super::{TerminalPaneId, TerminalWorkspace};
+use super::{TerminalPaneId, TerminalWorkspace, TerminalWorkspaceEvent};
 use crate::view::{TerminalPaneEvent, TerminalView};
 
 impl TerminalWorkspace {
@@ -48,6 +48,9 @@ impl TerminalWorkspace {
             window,
             |this, pane, event: &TerminalPaneEvent, _window, cx| match event {
                 TerminalPaneEvent::Focused => this.activate_entity(pane.clone(), cx),
+                TerminalPaneEvent::OpenSftp(connection) => {
+                    cx.emit(TerminalWorkspaceEvent::OpenSftp(connection.clone()));
+                }
             },
         );
         let content_subscription = cx.subscribe_in(
