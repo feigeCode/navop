@@ -97,7 +97,7 @@ pub(super) fn render_navigation_rail(
                 )
                 .child(render_filter_buttons(
                     home_page,
-                    sidebar,
+                    sidebar.clone(),
                     FilterSectionVisuals {
                         selected_filter,
                         palette,
@@ -114,6 +114,7 @@ pub(super) fn render_navigation_rail(
                         user_tooltip,
                         palette,
                         item_size: rail_item_size,
+                        sidebar: sidebar.clone(),
                     },
                 )),
         )

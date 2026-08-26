@@ -32,6 +32,7 @@ pub(super) struct ApplicationSectionConfig {
     pub user_tooltip: String,
     pub palette: SidebarPalette,
     pub item_size: Size,
+    pub sidebar: Entity<PersistentConnectionSidebar>,
 }
 
 #[derive(Clone, Copy)]
@@ -149,9 +150,10 @@ pub(super) fn render_application_buttons(
 ) -> AnyElement {
     let ApplicationSectionConfig {
         availability,
-        user_tooltip,
+        ref user_tooltip,
         palette,
         item_size,
+        ..
     } = config;
     let visuals = ApplicationButtonVisuals { palette, item_size };
     let mut applications = v_flex()
@@ -163,23 +165,25 @@ pub(super) fn render_application_buttons(
         .border_color(palette.border);
     for application in leading_navigation_applications(availability) {
         applications =
-            applications.child(render_application_button(application, home_page, visuals));
+            applications.child(render_application_button(application, home_page, &config, visuals));
     }
-    applications = applications.child(render_application_overflow_button(home_page, visuals));
+    applications = applications.child(render_application_overflow_button(home_page, &config, visuals));
     for application in trailing_navigation_applications() {
         applications =
-            applications.child(render_application_button(application, home_page, visuals));
+            applications.child(render_application_button(application, home_page, &config, visuals));
     }
     applications
-        .child(render_user_button(home_page, user_tooltip, visuals))
+        .child(render_user_button(home_page, user_tooltip.to_string(), visuals))
         .into_any_element()
 }
 
 fn render_application_button(
     application: NavigationApplication,
     home_page: &Entity<HomePage>,
+    config: &ApplicationSectionConfig,
     visuals: ApplicationButtonVisuals,
 ) -> impl IntoElement {
+    let sidebar = config.sidebar.clone();
     rail_button(
         persistent_application_id(application),
         persistent_application_icon(application),
@@ -189,14 +193,17 @@ fn render_application_button(
         visuals.item_size,
         move |home, window, cx| {
             home.activate_navigation_application(application, window, cx);
+            sidebar.update(cx, |sidebar, cx| sidebar.collapse_if_auto_hide(cx));
         },
     )
 }
 
 fn render_application_overflow_button(
     home_page: &Entity<HomePage>,
+    config: &ApplicationSectionConfig,
     visuals: ApplicationButtonVisuals,
 ) -> impl IntoElement {
+    let sidebar = config.sidebar.clone();
     rail_button(
         "persistent-more-applications",
         IconName::Ellipsis,
@@ -204,7 +211,10 @@ fn render_application_overflow_button(
         visuals.palette,
         home_page,
         visuals.item_size,
-        |home, window, cx| home.show_application_navigation_quick_open(window, cx),
+        move |home, window, cx| {
+            home.show_application_navigation_quick_open(window, cx);
+            sidebar.update(cx, |sidebar, cx| sidebar.collapse_if_auto_hide(cx));
+        },
     )
 }
 
@@ -277,5 +287,21 @@ mod tests {
     fn switching_filters_always_reveals_the_connection_tree() {
         assert!(next_tree_expanded_after_filter_click(false, true));
         assert!(next_tree_expanded_after_filter_click(false, false));
+    }
+
+    #[test]
+    fn application_navigation_buttons_auto_collapse_the_connection_tree() {
+        let source = include_str!("navigation_sections.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        let activate = implementation
+            .find("home.activate_navigation_application(application, window, cx)")
+            .expect("应用按钮应触发导航");
+        let collapse = implementation
+            .find("sidebar.collapse_if_auto_hide(cx)")
+            .expect("应用按钮应在导航后自动收起连接树");
+        assert!(
+            activate < collapse,
+            "自动收起逻辑必须紧跟在应用导航之后执行"
+        );
     }
 }
