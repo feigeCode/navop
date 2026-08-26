@@ -12,7 +12,7 @@ use rust_i18n::t;
 
 use crate::connection_sort::{connection_name_cmp, lru_sort_key};
 
-use super::batch_toolbar::batch_mode_toggle;
+use super::batch_toolbar::{auto_hide_tree_toggle, batch_mode_toggle};
 use super::tree_model::{
     ConnectionNodeInput, ConnectionTreeRow, WorkspaceNodeInput, build_connection_tree_rows,
     filter_connection_tree_inputs, hide_empty_workspace_inputs,
@@ -248,6 +248,11 @@ impl PersistentConnectionSidebar {
             .child(
                 h_flex()
                     .gap_1()
+                    .child(auto_hide_tree_toggle(
+                        view_for_batch.clone(),
+                        self.auto_hide_tree,
+                        palette,
+                    ))
                     .child(batch_mode_toggle(
                         view_for_batch,
                         self.connection_selection.is_active(),
@@ -277,5 +282,21 @@ mod tests {
         assert!(!implementation.contains("persistent-hide-empty-workspaces"));
         assert!(!implementation.contains("persistent-new-root-group"));
         assert!(!implementation.contains("persistent-refresh-connections"));
+    }
+
+    #[test]
+    fn connection_header_exposes_auto_hide_toggle_left_of_batch_operations() {
+        let source = include_str!("tree.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        let toggle = implementation.find("auto_hide_tree_toggle(").expect(
+            "连接树头部应渲染自动隐藏开关",
+        );
+        let batch = implementation.find("batch_mode_toggle(").expect(
+            "连接树头部应渲染批量操作开关",
+        );
+        assert!(
+            toggle < batch,
+            "自动隐藏开关应位于批量操作开关的左侧"
+        );
     }
 }

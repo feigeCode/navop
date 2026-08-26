@@ -1,6 +1,6 @@
 use one_core::settings::{AppSettings, ConnectionSidebarTreeState};
 
-use super::PersistentConnectionSidebar;
+use super::{PersistentConnectionSidebar, PersistentConnectionSidebarEvent};
 
 impl PersistentConnectionSidebar {
     pub(super) fn set_workspace_collapsed(
@@ -48,6 +48,24 @@ impl PersistentConnectionSidebar {
         }
     }
 
+    pub(super) fn set_auto_hide_tree(&mut self, auto_hide: bool, cx: &mut gpui::Context<Self>) {
+        if self.auto_hide_tree != auto_hide {
+            self.auto_hide_tree = auto_hide;
+            self.persist_tree_state(cx);
+            cx.notify();
+        }
+    }
+
+    /// 双击打开会话后，若开启了自动隐藏，则把连接树收起。
+    pub(super) fn collapse_after_open(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.auto_hide_tree && self.tree_expanded {
+            self.set_tree_expanded(false, cx);
+            cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged {
+                expanded: false,
+            });
+        }
+    }
+
     pub(super) fn collapse_all_groups(&mut self, cx: &mut gpui::Context<Self>) {
         self.home_page.update(cx, |home, cx| {
             home.set_all_workspaces_sidebar_collapsed(true, cx);
@@ -55,16 +73,20 @@ impl PersistentConnectionSidebar {
     }
 
     fn persist_tree_state(&self, cx: &mut gpui::Context<Self>) {
-        let tree_state = stored_tree_state(self.hide_empty_workspaces);
+        let tree_state = stored_tree_state(self.hide_empty_workspaces, self.auto_hide_tree);
         AppSettings::update_and_save(cx, |settings| {
             settings.connection_sidebar_tree_state = tree_state;
         });
     }
 }
 
-fn stored_tree_state(hide_empty_workspaces: bool) -> ConnectionSidebarTreeState {
+fn stored_tree_state(
+    hide_empty_workspaces: bool,
+    auto_hide_tree: bool,
+) -> ConnectionSidebarTreeState {
     ConnectionSidebarTreeState {
         hide_empty_workspaces,
+        auto_hide_tree,
     }
 }
 
@@ -74,8 +96,9 @@ mod tests {
 
     #[test]
     fn stored_tree_state_preserves_local_sidebar_preferences() {
-        let state = stored_tree_state(true);
+        let state = stored_tree_state(true, false);
 
         assert!(state.hide_empty_workspaces);
+        assert!(!state.auto_hide_tree);
     }
 }
