@@ -146,7 +146,7 @@ impl HomePage {
             },
         );
         open_popup_window(
-            PopupWindowOptions::new(title).size(700.0, 560.0),
+            PopupWindowOptions::new(title).size(700.0, 600.0),
             move |window, cx| cx.new(|cx| RemoteDesktopFormWindow::new(config, window, cx)),
             Some(_window),
             cx,
