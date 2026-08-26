@@ -685,6 +685,13 @@ impl DatabaseObjects {
 
         let mut metadata: HashMap<String, String> = current_node.metadata.clone();
         let database = metadata.get("database").cloned().unwrap_or_default();
+        // 树中加载的数据库节点（如 MySQL）默认不携带 database 元数据，
+        // 此时回退到数据库节点名，避免打开表/视图数据时数据库名为空。
+        let database = if database.is_empty() && current_node.node_type == DbNodeType::Database {
+            current_node.name.clone()
+        } else {
+            database
+        };
 
         let (node_id, target_node_type) = match db_node_type {
             DbNodeType::Connection => {
@@ -1707,6 +1714,40 @@ mod tests {
             node.metadata.get("table").map(String::as_str)
         );
         assert_eq!("conn1:app_db:public:table_folder:users", node.id);
+    }
+
+    #[test]
+    fn database_without_database_metadata_falls_back_to_node_name_for_table_row() {
+        // MySQL 数据库节点（来自树）默认不携带 database 元数据，
+        // 从对象页签双击表行时必须以节点名作为数据库名。
+        let current_node = DbNode::new(
+            "conn1:shop_db",
+            "shop_db",
+            DbNodeType::Database,
+            "conn1".to_string(),
+            DatabaseType::MySQL,
+        );
+        let row = vec!["orders".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&current_node),
+            &[],
+            &row,
+        )
+        .expect("table row under a database node should produce a node");
+
+        assert_eq!(DbNodeType::Table, node.node_type);
+        assert_eq!("orders", node.name);
+        assert_eq!(
+            Some("shop_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!(
+            Some("orders"),
+            node.metadata.get("table").map(String::as_str)
+        );
+        assert_eq!("conn1:shop_db:table_folder:orders", node.id);
     }
 
     #[test]
