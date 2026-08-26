@@ -68,9 +68,7 @@ impl PersistentConnectionSidebar {
     pub(super) fn collapse_if_auto_hide(&mut self, cx: &mut gpui::Context<Self>) {
         if self.auto_hide_tree && self.tree_expanded {
             self.set_tree_expanded(false, cx);
-            cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged {
-                expanded: false,
-            });
+            cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded: false });
         }
     }
 

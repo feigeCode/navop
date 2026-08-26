@@ -164,16 +164,30 @@ pub(super) fn render_application_buttons(
         .border_t_1()
         .border_color(palette.border);
     for application in leading_navigation_applications(availability) {
-        applications =
-            applications.child(render_application_button(application, home_page, &config, visuals));
+        applications = applications.child(render_application_button(
+            application,
+            home_page,
+            &config,
+            visuals,
+        ));
     }
-    applications = applications.child(render_application_overflow_button(home_page, &config, visuals));
+    applications = applications.child(render_application_overflow_button(
+        home_page, &config, visuals,
+    ));
     for application in trailing_navigation_applications() {
-        applications =
-            applications.child(render_application_button(application, home_page, &config, visuals));
+        applications = applications.child(render_application_button(
+            application,
+            home_page,
+            &config,
+            visuals,
+        ));
     }
     applications
-        .child(render_user_button(home_page, user_tooltip.to_string(), visuals))
+        .child(render_user_button(
+            home_page,
+            user_tooltip.to_string(),
+            visuals,
+        ))
         .into_any_element()
 }
 
