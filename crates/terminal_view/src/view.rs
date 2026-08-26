@@ -103,7 +103,7 @@ use paste_safety::{
     UnbracketedPasteHazard, detect_unbracketed_paste_hazard, multiline_non_empty_line_count,
 };
 #[cfg(test)]
-use paste_safety::{has_trailing_line_continuation, has_unterminated_shell_quote};
+use paste_safety::has_unterminated_shell_quote;
 use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};

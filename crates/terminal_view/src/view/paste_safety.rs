@@ -2,7 +2,6 @@
 pub(super) enum UnbracketedPasteHazard {
     HereDoc,
     UnterminatedQuote,
-    LineContinuation,
 }
 
 pub(super) fn multiline_non_empty_line_count(text: &str) -> usize {
@@ -14,22 +13,6 @@ fn contains_heredoc_operator(text: &str) -> bool {
         let line = line.trim_start();
         !line.is_empty() && !line.starts_with('#') && line.contains("<<")
     })
-}
-
-pub(super) fn has_trailing_line_continuation(text: &str) -> bool {
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        if lines.peek().is_none() {
-            break;
-        }
-
-        let trimmed = line.trim_end();
-        if !trimmed.is_empty() && trimmed.ends_with('\\') {
-            return true;
-        }
-    }
-
-    false
 }
 
 pub(super) fn has_unterminated_shell_quote(text: &str) -> bool {
@@ -64,10 +47,6 @@ pub(super) fn has_unterminated_shell_quote(text: &str) -> bool {
 pub(super) fn detect_unbracketed_paste_hazard(text: &str) -> Option<UnbracketedPasteHazard> {
     if contains_heredoc_operator(text) {
         return Some(UnbracketedPasteHazard::HereDoc);
-    }
-
-    if has_trailing_line_continuation(text) {
-        return Some(UnbracketedPasteHazard::LineContinuation);
     }
 
     if has_unterminated_shell_quote(text) {

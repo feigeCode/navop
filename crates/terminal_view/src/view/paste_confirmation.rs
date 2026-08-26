@@ -20,13 +20,15 @@ impl TerminalView {
             UnbracketedPasteHazard::UnterminatedQuote => {
                 t!("TerminalView.unbracketed_paste_quote_message").to_string()
             }
-            UnbracketedPasteHazard::LineContinuation => {
-                t!("TerminalView.unbracketed_paste_continuation_message").to_string()
-            }
         };
-        let preview_text = Self::paste_preview_text(text);
+        let text = text.to_string();
+        let preview_text = Self::paste_preview_text(&text);
+        let view = cx.entity().clone();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view_ok = view.clone();
+            let text_ok = text.clone();
+
             dialog
                 .title(title.clone())
                 .alert()
@@ -46,7 +48,18 @@ impl TerminalView {
                         )
                         .into_any_element(),
                 )
-                .button_props(DialogButtonProps::default().ok_text(t!("Common.close")))
+                .button_props(
+                    DialogButtonProps::default()
+                        .show_cancel(true)
+                        .ok_text(t!("TerminalView.paste_anyway"))
+                        .cancel_text(t!("Common.cancel")),
+                )
+                .on_ok(move |_event, window, cx| {
+                    view_ok.update(cx, |this, cx| {
+                        this.paste_text_unchecked(&text_ok, window, cx);
+                    });
+                    true
+                })
         });
     }
 

@@ -12,6 +12,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 - SSH 连接支持为 SFTP 单独配置一套账户：在连接表单新增「SFTP 账户」页签，可启用独立 SFTP 用户名/密码；启用后 SFTP 传输、远程文件浏览与远程文件编辑使用该账户连接远端，SSH 终端仍使用主账户，未配置时 SFTP 与 SSH 共用一套凭据。
 
+#### 修复与优化
+
+- 修复终端粘贴误拦截：粘贴带行尾反斜杠续行的多行命令（如多行 wget/curl）不再被当作「不安全的多行粘贴」硬拦截，改为走普通多行粘贴确认；对 heredoc、未闭合引号等高风险粘贴，提示框新增「仍然粘贴」按钮，可在确认后继续粘贴。
+
 ---
 
 ### English
@@ -19,6 +23,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### What's New
 
 - SSH connections can now use a separate SFTP account: a new "SFTP Account" tab in the connection form lets you enable an independent SFTP username/password. When enabled, SFTP transfers, remote file browsing, and remote file editing connect with that account while the SSH terminal keeps using the main account; when unset, SFTP and SSH share the same credentials.
+
+#### Fixes and Improvements
+
+- Fixed terminal paste blocking: multi-line commands with trailing backslash line continuations (e.g., multi-line wget/curl) are no longer hard-blocked as "unsafe multi-line paste" and now use the normal multi-line paste confirmation; the unsafe-paste warning for heredoc and unterminated quotes now offers a "Paste Anyway" button so you can proceed after confirming.
 
 ---
 

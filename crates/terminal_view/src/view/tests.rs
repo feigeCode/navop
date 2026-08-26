@@ -11,7 +11,7 @@ use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,
     UnbracketedPasteHazard, WrappedLineSegment, block_selection_text_from_rows,
     clipboard_image_from_item, detect_unbracketed_paste_hazard, encode_mouse_modifiers,
-    has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
+    has_unterminated_shell_quote, history_prompt_available,
     history_prompt_dropdown_origin, history_prompt_overlay_bounds, live_ssh_feature_supported,
     live_terminal_input_supported, mouse_button_code, multiline_non_empty_line_count,
     recording_playback_display_name, remote_clipboard_image_path, resolve_ssh_reconnect_source,

@@ -22,12 +22,10 @@ fn detect_unbracketed_paste_hazard_matches_heredoc() {
 }
 
 #[test]
-fn detect_unbracketed_paste_hazard_matches_line_continuation() {
-    assert!(has_trailing_line_continuation("echo hello \\\nworld"));
-    assert_eq!(
-        detect_unbracketed_paste_hazard("echo hello \\\nworld"),
-        Some(UnbracketedPasteHazard::LineContinuation)
-    );
+fn detect_unbracketed_paste_hazard_does_not_block_line_continuation() {
+    // 反斜杠续行是合法 shell 写法（如多行 wget/curl），不应被硬阻断；
+    // 无 bracketed paste 时仅由普通多行粘贴确认流程兜底。
+    assert_eq!(detect_unbracketed_paste_hazard("echo hello \\\nworld"), None);
 }
 
 #[test]
@@ -46,5 +44,4 @@ fn detect_unbracketed_paste_hazard_ignores_plain_text() {
         None
     );
     assert!(!has_unterminated_shell_quote("printf '%s\\n' hello"));
-    assert!(!has_trailing_line_continuation("echo hello\necho world"));
 }

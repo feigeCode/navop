@@ -1105,10 +1105,10 @@ TerminalView:
     en: The pasted content contains an unterminated quoted string. Without bracketed paste, the remote shell may continue waiting for more input and merge later commands into the same block.
     zh-CN: 粘贴内容包含未闭合的引号结构。当前远端未开启 bracketed paste，shell 可能继续等待补全输入，并把后续命令并入同一块内容。
     zh-HK: 貼上內容包含未閉合的引號結構。當前遠端未開啟 bracketed paste，shell 可能繼續等待補全輸入，並把後續命令併入同一塊內容。
-  unbracketed_paste_continuation_message:
-    en: The pasted content uses trailing backslash line continuation. Without bracketed paste, the remote shell may continue consuming later input and break the pasted block.
-    zh-CN: 粘贴内容包含行尾反斜杠续行。当前远端未开启 bracketed paste，shell 可能继续吞入后续输入，导致整块粘贴被拆乱。
-    zh-HK: 貼上內容包含行尾反斜杠續行。當前遠端未開啟 bracketed paste，shell 可能繼續吞入後續輸入，導致整塊貼上被拆亂。
+  paste_anyway:
+    en: Paste Anyway
+    zh-CN: 仍然粘贴
+    zh-HK: 仍然貼上
   paste_preview:
     en: Paste preview
     zh-CN: 粘贴预览
