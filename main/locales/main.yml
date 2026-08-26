@@ -1502,6 +1502,10 @@ Connection:
     en: Batch Operations
     zh-CN: 批量操作
     zh-HK: 批量操作
+  auto_hide_tree:
+    en: Auto-hide the tree after opening a session
+    zh-CN: 自动隐藏
+    zh-HK: 自動隱藏
   batch_select_visible:
     en: Select or Deselect Visible Connections
     zh-CN: 选择或取消选择当前可见连接

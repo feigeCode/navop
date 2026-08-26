@@ -747,10 +747,21 @@ fn format_legacy_custom_command(program: &str, arguments: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionSidebarTreeState {
     #[serde(default)]
     pub hide_empty_workspaces: bool,
+    #[serde(default = "default_true")]
+    pub auto_hide_tree: bool,
+}
+
+impl Default for ConnectionSidebarTreeState {
+    fn default() -> Self {
+        Self {
+            hide_empty_workspaces: false,
+            auto_hide_tree: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
