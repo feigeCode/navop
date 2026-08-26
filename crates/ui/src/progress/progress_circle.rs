@@ -160,7 +160,7 @@ impl RenderOnce for ProgressCircle {
         let prev_target = state.read(cx).target();
         let has_changed = prev_target != value;
 
-        let color = self.color.unwrap_or(cx.theme().progress_bar);
+        let color = self.color.unwrap_or(cx.theme().primary);
 
         div()
             .id(self.id.clone())

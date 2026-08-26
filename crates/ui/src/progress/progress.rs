@@ -72,7 +72,7 @@ impl Sizable for Progress {
 
 impl RenderOnce for Progress {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let color = self.color.unwrap_or(cx.theme().progress_bar);
+        let color = self.color.unwrap_or(cx.theme().primary);
         let value = self.value;
         let loading = self.loading;
 
