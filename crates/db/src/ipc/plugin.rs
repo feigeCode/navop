@@ -2633,6 +2633,123 @@ mod tests {
         }
     }
 
+    struct ExportDdlConnection {
+        config: DbConnectionConfig,
+    }
+
+    impl ExportDdlConnection {
+        fn new() -> Self {
+            Self {
+                config: DriverRequestOnlyConnection::new().config,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DbConnection for ExportDdlConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by metadata"))
+        }
+
+        async fn query(&self, _query: &str) -> Result<SqlResult, DbError> {
+            Err(DbError::query("query should not be used by metadata"))
+        }
+
+        async fn driver_request_value(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<serde_json::Value, DbError> {
+            match method {
+                wire_method::SCHEMA_COLUMNS => Ok(serde_json::json!([
+                    {
+                        "ordinal": 1,
+                        "name": "id",
+                        "type": "INTEGER",
+                        "raw_type": "INTEGER",
+                        "nullable": false,
+                        "default": null,
+                        "is_primary": true,
+                        "is_unique": false,
+                        "is_partition_key": false,
+                        "is_clustering_key": false,
+                        "max_length": null,
+                        "precision": null,
+                        "scale": null,
+                        "comment": "event id",
+                        "extra": null
+                    },
+                    {
+                        "ordinal": 2,
+                        "name": "name",
+                        "type": "VARCHAR(64)",
+                        "raw_type": "VARCHAR(64)",
+                        "nullable": true,
+                        "default": null,
+                        "is_primary": false,
+                        "is_unique": false,
+                        "is_partition_key": false,
+                        "is_clustering_key": false,
+                        "max_length": 64,
+                        "precision": null,
+                        "scale": null,
+                        "comment": "customer name",
+                        "extra": null
+                    }
+                ])),
+                wire_method::SCHEMA_OBJECTS if params["kinds"][0] == "table" => Ok(serde_json::json!([
+                    {
+                        "name": "events",
+                        "kind": "table",
+                        "schema": "",
+                        "comment": "event stream",
+                        "extra": null
+                    }
+                ])),
+                other => Err(DbError::NotSupported(other.to_string())),
+            }
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(None)
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
     fn driver_manifest(id: &str, supports_schema: bool, form_title: &str) -> IpcDriverManifest {
         let mut driver: IpcDriverManifest = serde_json::from_str(&format!(
             r#"{{
@@ -3272,6 +3389,22 @@ mod tests {
         let databases = plugin.list_databases(&connection).await.unwrap();
 
         assert_eq!(vec!["mockdb"], databases);
+    }
+
+    #[tokio::test]
+    async fn default_export_table_create_sql_includes_primary_key_and_comments() {
+        let plugin = ExternalDatabasePlugin::new();
+        let connection = ExportDdlConnection::new();
+
+        let ddl = plugin
+            .export_table_create_sql(&connection, "main", None, "events")
+            .await
+            .expect("default export_table_create_sql should succeed");
+
+        assert_eq!(
+            "CREATE TABLE \"events\" (\n    \"id\" INTEGER NOT NULL,\n    \"name\" VARCHAR(64),\n    PRIMARY KEY (\"id\")\n)\nCOMMENT ON TABLE \"events\" IS 'event stream';\nCOMMENT ON COLUMN \"events\".\"id\" IS 'event id';\nCOMMENT ON COLUMN \"events\".\"name\" IS 'customer name'",
+            ddl
+        );
     }
 
     #[tokio::test]

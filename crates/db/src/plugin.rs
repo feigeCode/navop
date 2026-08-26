@@ -2619,15 +2619,54 @@ pub trait DatabasePlugin: Send + Sync {
         }
 
         let table_ref = self.format_export_table_reference(database, schema, table);
-        let mut sql = format!("CREATE TABLE {} (\n", table_ref);
-        for (i, col) in columns.iter().enumerate() {
-            if i > 0 {
-                sql.push_str(",\n");
-            }
-            sql.push_str("    ");
-            sql.push_str(&self.build_column_definition(col, true));
+        let mut definitions = columns
+            .iter()
+            .map(|column| format!("    {}", self.build_column_definition(column, true)))
+            .collect::<Vec<_>>();
+        let primary_keys = columns
+            .iter()
+            .filter(|column| column.is_primary_key)
+            .map(|column| self.quote_identifier(&column.name))
+            .collect::<Vec<_>>();
+        if !primary_keys.is_empty() {
+            definitions.push(format!("    PRIMARY KEY ({})", primary_keys.join(", ")));
         }
-        sql.push_str("\n)");
+
+        let mut sql = format!("CREATE TABLE {} (\n{}\n)", table_ref, definitions.join(",\n"));
+
+        // Best-effort table comment: drivers that cannot list table metadata are
+        // still able to export the structure (columns + primary key + column comments).
+        let mut statements = Vec::new();
+        if let Ok(tables) = self
+            .list_tables(connection, database, schema.map(|s| s.to_string()))
+            .await
+        {
+            if let Some(comment) = tables
+                .iter()
+                .find(|info| info.name == table)
+                .and_then(|info| info.comment.clone())
+            {
+                statements.push(format!(
+                    "COMMENT ON TABLE {} IS {}",
+                    table_ref,
+                    self.escape_sql_value(&comment)
+                ));
+            }
+        }
+        statements.extend(columns.iter().filter_map(|column| {
+            column.comment.as_ref().map(|comment| {
+                format!(
+                    "COMMENT ON COLUMN {}.{} IS {}",
+                    table_ref,
+                    self.quote_identifier(&column.name),
+                    self.escape_sql_value(comment)
+                )
+            })
+        }));
+        if !statements.is_empty() {
+            sql.push('\n');
+            sql.push_str(&statements.join(";\n"));
+        }
         Ok(sql)
     }
 
