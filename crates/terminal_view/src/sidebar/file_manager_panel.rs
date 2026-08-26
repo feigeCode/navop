@@ -1077,8 +1077,7 @@ fn breadcrumb_item(label: impl Into<SharedString>) -> BreadcrumbItem {
         .flex_shrink_1()
         .min_w(px(0.))
         .max_w(px(BREADCRUMB_ITEM_MAX_WIDTH))
-        .overflow_hidden()
-        .text_ellipsis()
+        .truncate()
 }
 
 /// 判断传输错误是否为取消
