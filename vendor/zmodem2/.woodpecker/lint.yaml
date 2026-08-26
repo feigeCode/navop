@@ -1,0 +1,13 @@
+steps:
+  - name: lint
+    when:
+      event: [push, pull_request]
+    image: rust
+    environment: [CARGO_TERM_COLOR=always]
+    commands:
+      - rustup default stable
+      - rustup component add clippy
+      - rustup component add rustfmt
+      - cargo check --no-default-features
+      - cargo fmt --all -- --check
+      - cargo clippy

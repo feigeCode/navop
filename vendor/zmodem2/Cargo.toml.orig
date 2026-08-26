@@ -1,0 +1,30 @@
+[package]
+authors = ["Jarkko Sakkinen <jarkko.sakkinen@iki.fi>"]
+description = "ZMODEM file transfer protocol"
+edition = "2024"
+homepage = "https://codeberg.org/jarkko/zmodem2"
+license = "MIT OR Apache-2.0"
+name = "zmodem2"
+repository = "https://codeberg.org/jarkko/zmodem2.git"
+rust-version = "1.85"
+version = "0.7.2"
+build = "build.rs"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+bitflags = "2.4"
+hex = "0.4.3"
+thiserror = "1.0"
+
+[dev-dependencies]
+nix = { version = "0.29", features = ["fs"] }
+rstest = "0.25"
+tempfile = "3.10"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+harness = true

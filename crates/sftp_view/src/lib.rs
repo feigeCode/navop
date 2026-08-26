@@ -65,8 +65,8 @@ use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use sftp_transfer::{
     SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpDownloadRequest, SftpRemoteDeleteEntry,
     SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
-    SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, SftpUploadRequest,
-    delete_remote_task_key, download_task_key, upload_task_key,
+    SftpTransferReservation, SftpTransferSnapshot, SftpTransferState, SftpUploadConnection,
+    SftpUploadRequest, delete_remote_task_key, download_task_key, upload_task_key,
 };
 use ssh::{ChannelEvent, SshChannel, SshConnectConfig, SshSessionManager};
 use std::collections::VecDeque;
@@ -503,6 +503,18 @@ impl TransferQueue {
         }
         debug_assert!(task.external_transfer_id.is_some());
         self.tasks.push(task);
+        true
+    }
+
+    fn untrack_external(&mut self, transfer_id: SftpTransferId) -> bool {
+        let Some(index) = self
+            .tasks
+            .iter()
+            .position(|task| task.external_transfer_id == Some(transfer_id))
+        else {
+            return false;
+        };
+        self.tasks.remove(index);
         true
     }
 
@@ -1173,6 +1185,48 @@ fn prepare_global_remote_delete(
         remote_dir: remote_dir.to_string(),
     };
     PreparedGlobalRemoteDelete { request, operation }
+}
+
+fn commit_external_transfer(
+    queue: &mut TransferQueue,
+    next_task_id: &mut usize,
+    executor: &Entity<SftpTransferExecutor>,
+    reservation: SftpTransferReservation,
+    operation: TransferOperation,
+    cx: &mut Context<SftpView>,
+) -> Option<SftpTransferSnapshot> {
+    let transfer_id = reservation.id();
+    let task = TransferTask {
+        id: *next_task_id,
+        external_transfer_id: Some(transfer_id),
+        operation,
+        state: TransferTaskState::Pending,
+        shared_progress: new_shared_progress(),
+        error: None,
+    };
+
+    if !queue.track_external(task) {
+        return None;
+    }
+
+    let committed_id =
+        match executor.update(cx, |executor, cx| executor.commit_reserved(reservation, cx)) {
+            Ok(id) => id,
+            Err(_) => {
+                let removed = queue.untrack_external(transfer_id);
+                debug_assert!(removed);
+                return None;
+            }
+        };
+    debug_assert_eq!(committed_id, transfer_id);
+    *next_task_id += 1;
+
+    Some(
+        executor
+            .read(cx)
+            .snapshot(committed_id)
+            .expect("committed SFTP transfer must have an initial snapshot"),
+    )
 }
 
 fn remote_delete_display_name(entries: &[FileItem]) -> String {
@@ -4013,32 +4067,23 @@ impl SftpView {
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
         };
         for transfer in transfers {
-            let task_id = self.next_task_id;
-            self.next_task_id += 1;
             let prepared = prepare_global_upload(&transfer, conflict_policy, &upload_context);
-            let transfer_id = self
+            let reservation = self
                 .upload_executor
-                .update(cx, |executor, cx| executor.submit(prepared.request, cx));
-            let task = TransferTask {
-                id: task_id,
-                external_transfer_id: Some(transfer_id),
-                operation: prepared.operation,
-                state: TransferTaskState::Pending,
-                shared_progress: new_shared_progress(),
-                error: None,
-            };
-            if !self.transfer_queue.track_external(task) {
-                let _ = self
-                    .upload_executor
-                    .update(cx, |executor, cx| executor.cancel(transfer_id, cx));
+                .update(cx, |executor, _| executor.reserve(prepared.request));
+            let Some(snapshot) = commit_external_transfer(
+                &mut self.transfer_queue,
+                &mut self.next_task_id,
+                &self.upload_executor,
+                reservation,
+                prepared.operation,
+                cx,
+            ) else {
                 tracing::debug!("Ignoring upload after transfer admission was frozen");
                 continue;
-            }
-            let snapshot = self.upload_executor.read(cx).snapshot(transfer_id);
-            if let Some(snapshot) = snapshot {
-                let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
-                self.refresh_transfer_target_if_visible(refresh_target, cx);
-            }
+            };
+            let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
+            self.refresh_transfer_target_if_visible(refresh_target, cx);
         }
 
         self.start_progress_refresh(cx);
@@ -4232,30 +4277,23 @@ impl SftpView {
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
         };
         for transfer in transfers {
-            let task_id = self.next_task_id;
-            self.next_task_id += 1;
             let prepared = prepare_global_download(&transfer, &download_context);
-            let transfer_id = self.upload_executor.update(cx, |executor, cx| {
-                executor.submit_download(prepared.request, cx)
+            let reservation = self.upload_executor.update(cx, |executor, _| {
+                executor.reserve_download(prepared.request)
             });
-            let task = TransferTask {
-                id: task_id,
-                external_transfer_id: Some(transfer_id),
-                operation: prepared.operation,
-                state: TransferTaskState::Pending,
-                shared_progress: new_shared_progress(),
-                error: None,
-            };
-            if !self.transfer_queue.track_external(task) {
-                let _ = self
-                    .upload_executor
-                    .update(cx, |executor, cx| executor.cancel(transfer_id, cx));
+            let Some(snapshot) = commit_external_transfer(
+                &mut self.transfer_queue,
+                &mut self.next_task_id,
+                &self.upload_executor,
+                reservation,
+                prepared.operation,
+                cx,
+            ) else {
+                tracing::debug!("Ignoring download after transfer admission was frozen");
                 continue;
-            }
-            if let Some(snapshot) = self.upload_executor.read(cx).snapshot(transfer_id) {
-                let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
-                self.refresh_transfer_target_if_visible(refresh_target, cx);
-            }
+            };
+            let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
+            self.refresh_transfer_target_if_visible(refresh_target, cx);
         }
         self.start_progress_refresh(cx);
         cx.notify();
@@ -4492,29 +4530,22 @@ impl SftpView {
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
         };
         let prepared = prepare_global_remote_delete(&entries, &remote_path, &context);
-        let transfer_id = self.upload_executor.update(cx, |executor, cx| {
-            executor.submit_delete_remote(prepared.request, cx)
+        let reservation = self.upload_executor.update(cx, |executor, _| {
+            executor.reserve_delete_remote(prepared.request)
         });
-        let task_id = self.next_task_id;
-        self.next_task_id += 1;
-        if !self.transfer_queue.track_external(TransferTask {
-            id: task_id,
-            external_transfer_id: Some(transfer_id),
-            operation: prepared.operation,
-            state: TransferTaskState::Pending,
-            shared_progress: new_shared_progress(),
-            error: None,
-        }) {
-            let _ = self
-                .upload_executor
-                .update(cx, |executor, cx| executor.cancel(transfer_id, cx));
+        let Some(snapshot) = commit_external_transfer(
+            &mut self.transfer_queue,
+            &mut self.next_task_id,
+            &self.upload_executor,
+            reservation,
+            prepared.operation,
+            cx,
+        ) else {
             tracing::debug!("Ignoring remote delete after transfer admission was frozen");
             return;
-        }
-        if let Some(snapshot) = self.upload_executor.read(cx).snapshot(transfer_id) {
-            let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
-            self.refresh_transfer_target_if_visible(refresh_target, cx);
-        }
+        };
+        let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
+        self.refresh_transfer_target_if_visible(refresh_target, cx);
         self.start_progress_refresh(cx);
         cx.notify();
     }
@@ -7228,6 +7259,25 @@ mod tests {
 
         assert!(!queue.track_external(task));
         assert!(queue.tasks.is_empty());
+    }
+
+    #[test]
+    fn external_transfer_mirror_can_be_rolled_back_after_failed_commit() {
+        let mut queue = TransferQueue::new(1);
+        let mut first = transfer_task(0);
+        first.external_transfer_id = Some(SftpTransferId::new(7));
+        let mut second = transfer_task(1);
+        second.external_transfer_id = Some(SftpTransferId::new(8));
+
+        assert!(queue.track_external(first));
+        assert!(queue.track_external(second));
+        assert!(queue.untrack_external(SftpTransferId::new(7)));
+        assert!(!queue.untrack_external(SftpTransferId::new(7)));
+        assert_eq!(queue.tasks.len(), 1);
+        assert_eq!(
+            queue.tasks[0].external_transfer_id,
+            Some(SftpTransferId::new(8))
+        );
     }
 
     #[test]

@@ -72,7 +72,10 @@ pub(super) async fn run_upload(
         .await?
         {
             SenderStep::Progress => continue,
-            SenderStep::Complete => return Ok(strip_zfin_terminator(pending)),
+            SenderStep::Complete => {
+                drain_sender(channel, &mut sender, cancellation).await?;
+                return Ok(strip_zfin_terminator(pending));
+            }
             SenderStep::Idle => {}
         }
         if feed_sender(&mut sender, &mut pending)? {
@@ -90,6 +93,23 @@ pub(super) async fn run_upload(
             }
         }
     }
+}
+
+/// Drains any wire bytes the sender still has queued after the session
+/// completes. The ZFIN acknowledgement (`OO`) lives in the sender's outgoing
+/// buffer at this point, and the remote `rz` blocks on it before exiting, so
+/// returning early without flushing it would leave the transfer hung.
+async fn drain_sender(
+    channel: &mut dyn SshChannel,
+    sender: &mut Sender,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    while let Action::WriteWire(bytes) = sender.poll() {
+        let bytes = bytes.to_vec();
+        send_wire(channel, &bytes, cancellation).await?;
+        sender.wire_written(bytes.len());
+    }
+    Ok(())
 }
 
 fn strip_zfin_terminator(mut pending: Vec<u8>) -> Vec<u8> {

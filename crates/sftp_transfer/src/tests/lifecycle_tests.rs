@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use gpui::{AppContext, Subscription, TestAppContext};
 use one_core::background_tasks::{
@@ -14,6 +17,67 @@ use super::{
 
 struct TestObserver {
     _subscription: Subscription,
+}
+
+#[gpui::test]
+fn reserved_transfer_emits_events_only_after_commit(cx: &mut TestAppContext) {
+    let provider = TestProvider::default();
+    let executor = new_executor(provider.clone(), cx);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observer = cx.update(|cx| {
+        let source = executor.clone();
+        let events = events.clone();
+        cx.new(|cx| TestObserver {
+            _subscription: cx.subscribe(
+                &source,
+                move |_this, _source, event: &SftpTransferEvent, _cx| {
+                    events.lock().unwrap().push(event.clone());
+                },
+            ),
+        })
+    });
+    let reservation = executor.update(cx, |executor, _| {
+        executor.reserve(upload_request(
+            SftpConnectionIdentity::Local(7),
+            "reserved-events",
+        ))
+    });
+    let transfer = reservation.id();
+
+    cx.run_until_parked();
+    assert!(events.lock().unwrap().is_empty());
+    assert!(provider.started().is_empty());
+
+    let committed = executor.update(cx, |executor, cx| {
+        match executor.commit_reserved(reservation, cx) {
+            Ok(id) => id,
+            Err(_) => panic!("the reserving executor must accept its reservation"),
+        }
+    });
+    assert_eq!(committed, transfer);
+    wait_until(cx, |_| provider.started() == vec![transfer]);
+    {
+        let events = events.lock().unwrap();
+        assert!(matches!(
+            events.first(),
+            Some(SftpTransferEvent::Added(id)) if *id == transfer
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SftpTransferEvent::Updated(id) if *id == transfer))
+        );
+    }
+
+    provider.complete(transfer, Ok(()));
+    wait_until(cx, |_| {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, SftpTransferEvent::Finished(id) if *id == transfer))
+    });
+    drop(observer);
 }
 
 #[gpui::test]

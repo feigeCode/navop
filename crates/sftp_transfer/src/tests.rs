@@ -117,6 +117,63 @@ fn different_connections_start_provider_in_parallel(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn reserved_transfer_is_inert_until_committed(cx: &mut TestAppContext) {
+    let provider = TestProvider::default();
+    let executor = new_executor(provider.clone(), cx);
+    let reservation = executor.update(cx, |executor, _| {
+        executor.reserve(upload_request(SftpConnectionIdentity::Local(7), "reserved"))
+    });
+    let transfer = reservation.id();
+
+    cx.run_until_parked();
+    assert!(provider.started().is_empty());
+    assert!(
+        executor.read_with(cx, |executor, _| executor.snapshot(transfer).is_none()),
+        "reservation must not create an active or completed transfer"
+    );
+
+    let committed = executor.update(cx, |executor, cx| {
+        match executor.commit_reserved(reservation, cx) {
+            Ok(id) => id,
+            Err(_) => panic!("the reserving executor must accept its reservation"),
+        }
+    });
+    assert_eq!(committed, transfer);
+    wait_until(cx, |_| provider.started() == vec![transfer]);
+
+    provider.complete(transfer, Ok(()));
+    wait_until(cx, |cx| {
+        executor.read_with(cx, |executor, _| {
+            executor.snapshot(transfer).unwrap().state == SftpTransferState::Succeeded
+        })
+    });
+}
+
+#[gpui::test]
+fn reservation_cannot_be_committed_by_another_executor(cx: &mut TestAppContext) {
+    let first_provider = TestProvider::default();
+    let second_provider = TestProvider::default();
+    let first_executor = new_executor(first_provider.clone(), cx);
+    let second_executor = new_executor(second_provider.clone(), cx);
+    let reservation = first_executor.update(cx, |executor, _| {
+        executor.reserve(upload_request(
+            SftpConnectionIdentity::Local(7),
+            "wrong-executor",
+        ))
+    });
+    let transfer = reservation.id();
+
+    let rejected =
+        second_executor.update(cx, |executor, cx| executor.commit_reserved(reservation, cx));
+    assert!(rejected.is_err());
+    cx.run_until_parked();
+    assert!(first_provider.started().is_empty());
+    assert!(second_provider.started().is_empty());
+    assert!(first_executor.read_with(cx, |executor, _| executor.snapshot(transfer).is_none()));
+    assert!(second_executor.read_with(cx, |executor, _| executor.snapshot(transfer).is_none()));
+}
+
+#[gpui::test]
 fn both_connection_sources_reach_provider(cx: &mut TestAppContext) {
     let provider = TestProvider::default();
     let executor = new_executor(provider.clone(), cx);

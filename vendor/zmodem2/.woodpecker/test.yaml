@@ -1,0 +1,11 @@
+steps:
+  - name: test
+    when:
+      event: [push, pull_request]
+    image: rust
+    environment: [CARGO_TERM_COLOR=always]
+    commands:
+      - apt-get update
+      - apt-get install -y lrzsz
+      - rustup default stable
+      - cargo test --verbose

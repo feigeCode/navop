@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[cfg(test)]
@@ -25,8 +28,23 @@ use super::{
 };
 
 const DEFAULT_COMPLETED_HISTORY_LIMIT: usize = 200;
+static NEXT_EXECUTOR_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+
+#[must_use = "a reserved SFTP transfer must be committed or explicitly dropped"]
+pub struct SftpTransferReservation {
+    executor_instance_id: u64,
+    id: SftpTransferId,
+    request: TransferRequest,
+}
+
+impl SftpTransferReservation {
+    pub fn id(&self) -> SftpTransferId {
+        self.id
+    }
+}
 
 pub struct SftpTransferExecutor {
+    instance_id: u64,
     provider: Arc<dyn SftpTransferProvider>,
     next_transfer_id: u64,
     next_runtime_connection: u64,
@@ -49,6 +67,10 @@ impl SftpTransferExecutor {
         completed_history_limit: usize,
     ) -> Self {
         Self {
+            instance_id: NEXT_EXECUTOR_INSTANCE_ID
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1)
+                .max(1),
             provider,
             next_transfer_id: 0,
             next_runtime_connection: 0,
@@ -79,7 +101,12 @@ impl SftpTransferExecutor {
     }
 
     pub fn submit(&mut self, request: SftpUploadRequest, cx: &mut Context<Self>) -> SftpTransferId {
-        self.submit_request(TransferRequest::Upload(request), cx)
+        let reservation = self.reserve(request);
+        self.commit_own_reservation(reservation, cx)
+    }
+
+    pub fn reserve(&mut self, request: SftpUploadRequest) -> SftpTransferReservation {
+        self.reserve_request(TransferRequest::Upload(request))
     }
 
     pub fn submit_download(
@@ -87,7 +114,12 @@ impl SftpTransferExecutor {
         request: SftpDownloadRequest,
         cx: &mut Context<Self>,
     ) -> SftpTransferId {
-        self.submit_request(TransferRequest::Download(request), cx)
+        let reservation = self.reserve_download(request);
+        self.commit_own_reservation(reservation, cx)
+    }
+
+    pub fn reserve_download(&mut self, request: SftpDownloadRequest) -> SftpTransferReservation {
+        self.reserve_request(TransferRequest::Download(request))
     }
 
     pub fn submit_delete_remote(
@@ -95,15 +127,54 @@ impl SftpTransferExecutor {
         request: SftpDeleteRemoteRequest,
         cx: &mut Context<Self>,
     ) -> SftpTransferId {
-        self.submit_request(TransferRequest::DeleteRemote(request), cx)
+        let reservation = self.reserve_delete_remote(request);
+        self.commit_own_reservation(reservation, cx)
     }
 
-    fn submit_request(
+    pub fn reserve_delete_remote(
         &mut self,
+        request: SftpDeleteRemoteRequest,
+    ) -> SftpTransferReservation {
+        self.reserve_request(TransferRequest::DeleteRemote(request))
+    }
+
+    pub fn commit_reserved(
+        &mut self,
+        reservation: SftpTransferReservation,
+        cx: &mut Context<Self>,
+    ) -> Result<SftpTransferId, SftpTransferReservation> {
+        if reservation.executor_instance_id != self.instance_id {
+            return Err(reservation);
+        }
+        Ok(self.commit_request(reservation.id, reservation.request, cx))
+    }
+
+    fn reserve_request(&mut self, request: TransferRequest) -> SftpTransferReservation {
+        let id = self.allocate_transfer_id();
+        SftpTransferReservation {
+            executor_instance_id: self.instance_id,
+            id,
+            request,
+        }
+    }
+
+    fn commit_own_reservation(
+        &mut self,
+        reservation: SftpTransferReservation,
+        cx: &mut Context<Self>,
+    ) -> SftpTransferId {
+        match self.commit_reserved(reservation, cx) {
+            Ok(id) => id,
+            Err(_) => unreachable!("executor must accept its own transfer reservation"),
+        }
+    }
+
+    fn commit_request(
+        &mut self,
+        id: SftpTransferId,
         request: TransferRequest,
         cx: &mut Context<Self>,
     ) -> SftpTransferId {
-        let id = self.allocate_transfer_id();
         let token = CancellationToken::new();
         let background_task = register_background_task(&request, &token, cx);
         let connection = request.connection().clone();

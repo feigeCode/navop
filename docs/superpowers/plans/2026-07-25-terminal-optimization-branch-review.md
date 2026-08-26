@@ -3856,18 +3856,11 @@ consumer。后续必须保持独立小提交：
 
 #### P0：下一轮优先处理
 
-1. **view 提交与 mirror 注册不是原子操作。**
-   当前顺序是先向全局 executor submit，再将 `external_transfer_id` 注册到
-   `TransferQueue`。GPUI 同步 update 路径下 admission 不会在两条语句之间被其他
-   callback 改变，且提交后会立即读取 snapshot 做 reconcile；但 `track_external`
-   失败时仍只能补偿性 cancel 已创建的全局任务。后续应提供 admission-aware 的
-   “预留 ID / 注册 mirror / 提交”协议，并补冻结 admission 的回归测试。
-
-2. **缺少 `sftp_view` 提交流程的 entity 级端到端测试。**
+1. **缺少 `sftp_view` 提交流程的 entity 级端到端测试。**
    当前测试重点覆盖 request preparation、snapshot reconcile、刷新目标和 shared
-   executor 生命周期，尚未直接驱动 upload/download/DeleteRemote 的 UI 提交入口。
-   后续至少覆盖提交、Added/Updated/Finished、queued/running cancel、失败刷新和
-   `track_external` 补偿取消。
+   executor 生命周期，以及 reservation/commit、冻结 admission、mirror 回滚协议；
+   尚未直接驱动 upload/download/DeleteRemote 的 UI 提交入口。后续至少覆盖提交、
+   Added/Updated/Finished、queued/running cancel 和失败刷新。
 
 #### P1：SFTP 删除与连接生命周期
 
@@ -3922,7 +3915,7 @@ consumer。后续必须保持独立小提交：
 
 保持“小切片、每步可运行、同一类 operation 共用 shared executor contract”的顺序：
 
-1. 修复 13.2 的 P0：原子提交/mirror 协议和 `sftp_view` entity 级端到端测试；
+1. 补齐 13.2 剩余 P0：`sftp_view` entity 级端到端测试；
 2. 迁移 Terminal 侧边栏远程删除，复用本轮 DeleteRemote request/provider/FIFO；
 3. 决策并迁移 `sftp_view` 本地删除：若只操作本机文件，可进入通用 file-operation
    executor，而不是强塞入 SFTP connection lane；
@@ -3963,3 +3956,59 @@ rtk cargo check -p one-core
 `dev` 上的 `sftp_transfer`、`sftp_view`、`terminal_view` 和 `one-core` 已能完成
 上述定向测试与 `cargo check`；后续若再次出现 manifest 加载失败，应作为新的回归
 单独记录。
+
+### 13.5 切片：SFTP admission-aware 原子提交协议（2026-08-26）
+
+状态：**初版完成，剩余 entity 级 E2E 待补。**
+
+本切片完成：
+
+1. `sftp_transfer` 新增 owned `SftpTransferReservation`，reserve 阶段只分配
+   `SftpTransferId` 并持有 request，不创建 background task、active record、
+   cancellation watcher，不进入 connection lane，不发送 `Added`，也不启动
+   provider；
+2. upload、download、DeleteRemote 分别提供 `reserve`、`reserve_download`、
+   `reserve_delete_remote`，并通过 `commit_reserved` 执行真正提交；
+3. 旧 `submit`、`submit_download`、`submit_delete_remote` API 保持不变，内部改为
+   reserve 后立即 commit，因此既有调用方和同连接 FIFO 行为不变；
+4. reservation 绑定创建它的 executor instance，错误 executor 不能提交该
+   reservation；
+5. `sftp_view` 的 upload、download、DeleteRemote 统一改为：
+   `reserve ID -> track_external mirror -> commit`；
+6. admission 已冻结时，`track_external` 拒绝 mirror，未提交 reservation 直接丢弃，
+   executor 不会产生需要补偿 cancel 的 active task；
+7. executor commit 失败时会移除已经注册的 external mirror，避免 view 留下孤儿任务；
+8. commit 成功后才创建全局任务并发送事件，因此 `Added`、`Updated`、`Finished`
+   到达时，对应 mirror 已经存在。
+
+新增回归覆盖：
+
+- reservation 在 commit 前没有 snapshot、provider 调用或事件；
+- commit 后 provider 正常启动并进入成功终态；
+- `Added` 是 reservation 对应 transfer 的首个事件，随后可观察到 `Updated` 和
+  `Finished`；
+- reservation 不能提交到另一个 executor；
+- external mirror 可以按 transfer ID 精确回滚，且不影响其他 mirror；
+- 原有 connection FIFO、取消、进度、history、download 和 DeleteRemote 测试继续通过。
+
+本切片实际验证：
+
+```text
+rtk cargo test -p sftp_transfer --lib   # 34 passed
+rtk cargo test -p sftp_view --lib       # 82 passed
+rtk cargo check -p sftp_transfer        # passed；仅既有 future-incompat warning
+rtk cargo check -p sftp_view            # passed；仅既有 extension-runtime warnings
+rtk git diff --check                     # passed
+```
+
+仍未完成：
+
+1. `sftp_view` 尚无可直接构造完整 entity 并驱动 upload/download/DeleteRemote UI
+   提交入口的测试 fixture；需要覆盖完整提交、Added/Updated/Finished、queued/running
+   cancel、失败后的可见目录刷新；
+2. 当前 mirror commit 失败回滚已有 queue 级测试和 executor 跨实例拒绝测试，但尚未
+   由完整 `SftpView` entity 触发错误 executor 分支；
+3. P1/P2 的结构化删除结果、best-effort recursive delete、connection/session
+   ownership、cleanup 生命周期、显式 scanning phase、稳定 task key 和 history
+   contract 仍按 13.2 保留；
+4. 下一迁移切片按 13.3 执行：先补 entity E2E，再迁移 Terminal 侧边栏远程删除。
