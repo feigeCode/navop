@@ -10,7 +10,9 @@ use gpui_component::{
     h_flex, v_flex,
 };
 use one_core::llm::{
-    GlobalProviderState, notifier::emit_provider_config_changed, storage::ProviderRepository,
+    GlobalProviderState,
+    notifier::emit_provider_config_changed,
+    storage::{ProviderRepository, refresh_onetcli_models},
     types::ProviderConfig,
 };
 use one_core::storage::{GlobalStorageState, StorageManager, traits::Repository};
@@ -73,6 +75,21 @@ impl LlmProvidersView {
             }
         }
 
+        self.reload_providers(cx);
+
+        // 登录后从云端实时拉取内置 Navop AI 模型列表并持久化，
+        // 拉取完成后刷新面板模型选项与当前列表。
+        if is_logged_in {
+            self.spawn_refresh_onetcli_models(cx);
+        }
+    }
+
+    fn reload_providers(&mut self, cx: &mut Context<Self>) {
+        let repo = self
+            .storage_manager
+            .get::<ProviderRepository>()
+            .expect("ProviderRepository not found");
+        let is_logged_in = self.is_logged_in;
         match repo.list() {
             Ok(mut providers) => {
                 if !is_logged_in {
@@ -86,6 +103,32 @@ impl LlmProvidersView {
         }
         self.loading = false;
         cx.notify();
+    }
+
+    fn spawn_refresh_onetcli_models(&mut self, cx: &mut Context<Self>) {
+        let storage_manager = self.storage_manager.clone();
+        let provider_state = cx.global::<GlobalProviderState>().clone();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Some(repo) = storage_manager.get::<ProviderRepository>() else {
+                return;
+            };
+            match refresh_onetcli_models(&repo, &provider_state).await {
+                Ok(Some(_)) => {
+                    cx.update(|cx| {
+                        emit_provider_config_changed(cx);
+                        if let Some(panel) = this.upgrade() {
+                            let _ = panel.update(cx, |this, cx| this.reload_providers(cx));
+                        }
+                    });
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to refresh built-in Navop AI models: {}", e);
+                }
+            }
+        })
+        .detach();
     }
 
     fn add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -455,6 +498,15 @@ impl LlmProvidersView {
     ) -> impl IntoElement {
         let api_base_display = provider.api_base.clone();
         let api_version_display = provider.api_version.clone();
+        let default_model_display = if provider.model.is_empty() {
+            t!("LlmProviders.default_model_auto").to_string()
+        } else {
+            t!(
+                "LlmProviders.default_model",
+                model = provider.model.as_str()
+            )
+            .to_string()
+        };
 
         v_flex()
             .gap_1()
@@ -462,13 +514,7 @@ impl LlmProvidersView {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(
-                        t!(
-                            "LlmProviders.default_model",
-                            model = provider.model.as_str()
-                        )
-                        .to_string(),
-                    ),
+                    .child(default_model_display),
             )
             .when(!provider.models.is_empty(), |this| {
                 this.child(

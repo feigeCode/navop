@@ -1,6 +1,7 @@
 use anyhow::Result;
 use gpui::{App, SharedString};
 use rusqlite::params;
+use std::collections::HashSet;
 
 use crate::llm::chat_history::{AgentSessionRepository, MessageRepository, SessionRepository};
 use crate::storage::connection::SqliteConnection;
@@ -8,6 +9,7 @@ use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::traits::{Entity, Repository};
 use crate::storage::{GlobalStorageState, now};
 
+use super::manager::GlobalProviderState;
 use super::types::{ProviderConfig, ProviderType};
 
 struct ProviderConfigRow {
@@ -60,10 +62,12 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             None => Vec::new(),
         };
         let mut models = models;
-        if models.is_empty() {
-            models.push(row.model.clone());
-        } else if !models.iter().any(|m| m == &row.model) {
-            models.insert(0, row.model.clone());
+        if !row.model.is_empty() {
+            if models.is_empty() {
+                models.push(row.model.clone());
+            } else if !models.iter().any(|m| m == &row.model) {
+                models.insert(0, row.model.clone());
+            }
         }
 
         Ok(ProviderConfig {
@@ -106,6 +110,16 @@ impl ProviderRepository {
                     existing.enabled = true;
                     let _ = self.update(&existing);
                 }
+                // 迁移旧版本硬编码的默认模型 qwen-plus：内置 provider 的默认模型
+                // 改为随云端模型列表实时拉取，不再预设具体模型。
+                if existing.model == "qwen-plus" || existing.models.iter().any(|m| m == "qwen-plus")
+                {
+                    existing.model = String::new();
+                    existing
+                        .models
+                        .retain(|m| m != "qwen-plus" && !m.is_empty());
+                    let _ = self.update(&existing);
+                }
                 return Ok(existing);
             }
         }
@@ -124,7 +138,7 @@ impl ProviderRepository {
             api_key: None,
             api_base: None,
             api_version: None,
-            model: "qwen-plus".to_string(),
+            model: String::new(),
             models: Vec::new(),
             max_tokens: None,
             temperature: None,
@@ -168,7 +182,7 @@ impl Repository for ProviderRepository {
         let api_base = item.api_base.clone();
         let api_version = item.api_version.clone();
         let model = item.model.clone();
-        let models = if item.models.is_empty() {
+        let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
         } else {
             item.models.clone()
@@ -201,7 +215,7 @@ impl Repository for ProviderRepository {
         let api_base = item.api_base.clone();
         let api_version = item.api_version.clone();
         let model = item.model.clone();
-        let models = if item.models.is_empty() {
+        let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
         } else {
             item.models.clone()
@@ -278,6 +292,48 @@ impl Repository for ProviderRepository {
     }
 }
 
+/// 实时拉取云端 OnetCli（内置 Navop AI）provider 的模型列表并持久化到本地。
+///
+/// - 若本地尚未创建内置 provider，会先确保其存在；
+/// - 拉取失败或云端模型列表为空时不改动已有配置，避免离线时清空本地模型列表；
+/// - 成功后更新 `models`（完整模型列表）与默认 `model`（列表首项或保留现有默认模型），
+///   并写回 SQLite `llm_providers` 表。
+pub async fn refresh_onetcli_models(
+    repo: &ProviderRepository,
+    provider_state: &GlobalProviderState,
+) -> Result<Option<ProviderConfig>> {
+    let mut config = repo.ensure_onetcli_provider()?;
+
+    let provider = provider_state.manager().get_provider(&config).await?;
+    let models = dedup_non_empty(provider.models().await?);
+    if models.is_empty() {
+        tracing::warn!("内置 Navop AI 云端模型列表为空，跳过模型更新");
+        return Ok(Some(config));
+    }
+
+    let model_changed = config.model.is_empty() || !models.iter().any(|m| m == &config.model);
+    let changed = config.models != models || model_changed;
+    config.models = models.clone();
+    if model_changed {
+        config.model = models[0].clone();
+    }
+    if changed {
+        repo.update(&config)?;
+        tracing::info!("已从云端刷新内置 Navop AI 模型列表: {:?}", config.models);
+    }
+
+    Ok(Some(config))
+}
+
+/// 去除空字符串与重复项，保持原有顺序。
+fn dedup_non_empty(models: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    models
+        .into_iter()
+        .filter(|model| !model.trim().is_empty() && seen.insert(model.clone()))
+        .collect()
+}
+
 pub fn init(cx: &mut App) {
     let storage_state = cx.global::<GlobalStorageState>();
     let storage = storage_state.storage.clone();
@@ -292,4 +348,76 @@ pub fn init(cx: &mut App) {
     storage.register(session_repo);
     storage.register(message_repo);
     storage.register(agent_session_repo);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dedup_non_empty_keeps_order_and_drops_empty_and_duplicates() {
+        let models = vec![
+            "qwen-plus".to_string(),
+            "qwen-max".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+            "qwen-plus".to_string(),
+            "deepseek-v3".to_string(),
+        ];
+        assert_eq!(
+            dedup_non_empty(models),
+            vec!["qwen-plus", "qwen-max", "deepseek-v3"]
+        );
+    }
+
+    #[test]
+    fn dedup_non_empty_returns_empty_for_all_empty_input() {
+        assert!(dedup_non_empty(vec![String::new(), " ".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn provider_config_row_with_empty_model_keeps_models_untouched() {
+        let row = ProviderConfigRow {
+            id: 1,
+            name: "Navop AI".into(),
+            provider_type: ProviderType::OnetCli.as_str().to_string(),
+            api_key: None,
+            api_base: None,
+            api_version: None,
+            model: String::new(),
+            models: Some(serde_json::to_string(&["qwen-max", "deepseek-v3"]).unwrap()),
+            max_tokens: None,
+            temperature: None,
+            enabled: 1,
+            is_default: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let config = ProviderConfig::try_from(row).unwrap();
+        assert!(config.model.is_empty());
+        assert_eq!(config.models, vec!["qwen-max", "deepseek-v3"]);
+    }
+
+    #[test]
+    fn provider_config_row_with_empty_model_and_no_models_stays_empty() {
+        let row = ProviderConfigRow {
+            id: 1,
+            name: "Navop AI".into(),
+            provider_type: ProviderType::OnetCli.as_str().to_string(),
+            api_key: None,
+            api_base: None,
+            api_version: None,
+            model: String::new(),
+            models: None,
+            max_tokens: None,
+            temperature: None,
+            enabled: 1,
+            is_default: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let config = ProviderConfig::try_from(row).unwrap();
+        assert!(config.model.is_empty());
+        assert!(config.models.is_empty());
+    }
 }

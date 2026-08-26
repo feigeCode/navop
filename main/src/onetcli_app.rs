@@ -6,9 +6,9 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext, ColorExt as _, Context, Entity, ExternalPaths, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task,
-    Window, actions, div,
+    AnyElement, App, AppContext, AsyncApp, ColorExt as _, Context, Entity, ExternalPaths,
+    Focusable, InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
+    Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -315,7 +315,11 @@ use gpui::px;
 use gpui_component::dock::ToggleZoom;
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
-use one_core::settings::{AppSettings, HomePageStyle, MainWindowState, StartupDefaultPage};
+use one_core::llm::notifier::emit_provider_config_changed;
+use one_core::llm::storage::{ProviderRepository, refresh_onetcli_models};
+use one_core::settings::{
+    AppSettings, GlobalCurrentUser, HomePageStyle, MainWindowState, StartupDefaultPage,
+};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContainerEvent, TabContentRegistry, TabItem};
 use one_core::tab_navigation::{
@@ -809,6 +813,51 @@ pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
+/// 内置 Navop AI 模型列表的定期刷新间隔（已登录时）。
+const ONETCLI_MODEL_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// 未登录时检查登录态的轮询间隔。
+const ONETCLI_MODEL_REFRESH_LOGIN_POLL: Duration = Duration::from_secs(30);
+/// 应用启动后首次拉取前的延迟，等待会话恢复与云客户端就绪。
+const ONETCLI_MODEL_REFRESH_STARTUP_DELAY: Duration = Duration::from_secs(3);
+
+/// 启动后按固定间隔拉取内置 Navop AI 云端模型列表并持久化到本地。
+///
+/// 模型列表依赖云账号：未登录时仅以较短间隔轮询登录态、不做拉取；
+/// 一旦登录立即拉取一次，之后按固定间隔定期刷新，并通知 AI 面板更新模型选项。
+fn spawn_onetcli_model_refresh(cx: &mut App) {
+    let storage = cx.global::<GlobalStorageState>().storage.clone();
+    let provider_state = cx.global::<GlobalProviderState>().clone();
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        // 先等待云客户端 / 会话恢复就绪
+        cx.background_executor()
+            .timer(ONETCLI_MODEL_REFRESH_STARTUP_DELAY)
+            .await;
+
+        loop {
+            let logged_in = cx.update(|cx| GlobalCurrentUser::get_user(cx).is_some());
+            let interval = if logged_in {
+                if let Some(repo) = storage.get::<ProviderRepository>() {
+                    match refresh_onetcli_models(&repo, &provider_state).await {
+                        Ok(Some(_)) => {
+                            cx.update(|cx| emit_provider_config_changed(cx));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!("内置 Navop AI 模型列表刷新失败: {e}");
+                        }
+                    }
+                }
+                ONETCLI_MODEL_REFRESH_INTERVAL
+            } else {
+                ONETCLI_MODEL_REFRESH_LOGIN_POLL
+            };
+            cx.background_executor().timer(interval).await;
+        }
+    })
+    .detach();
+}
+
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     one_core::themes::load_bundled(cx);
@@ -832,6 +881,7 @@ pub fn init(cx: &mut App) {
             .set_proxy_settings(&AppSettings::global(cx).global_proxy)
             .expect("LLM 代理初始化失败");
     }
+    spawn_onetcli_model_refresh(cx);
     db::init_cache(cx);
     // 启动后台磁盘缓存清理任务
     if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
@@ -2498,9 +2548,10 @@ impl Render for OnetCliApp {
         let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
         let docked_tree = show_persistent_sidebar && sidebar_expanded && !auto_hide_tree;
         let floating_tree = if show_persistent_sidebar && sidebar_expanded && auto_hide_tree {
-            Some(self.connection_sidebar.update(cx, |sidebar, cx| {
-                sidebar.render_floating_tree(window, cx)
-            }))
+            Some(
+                self.connection_sidebar
+                    .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx)),
+            )
         } else {
             None
         };
@@ -2543,38 +2594,41 @@ impl Render for OnetCliApp {
                     .when(show_persistent_sidebar, |layout| {
                         layout.child(self.connection_sidebar.clone())
                     })
-                    .when_some(docked_tree_element, |layout, tree| {
-                        layout.child(tree)
-                    })
+                    .when_some(docked_tree_element, |layout, tree| layout.child(tree))
                     .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .when(
-                            show_persistent_sidebar && sidebar_expanded && auto_hide_tree,
-                            |this| {
-                            this.on_mouse_down(
-                                gpui::MouseButton::Left,
-                                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                                    if !this.connection_sidebar.read(cx).is_expanded() {
-                                        return;
-                                    }
-                                    let layout = cx.theme().geometry.layout;
-                                    let in_terminal = event.position.x > layout.global_rail
-                                        && event.position.y > layout.tab_bar;
-                                    if in_terminal {
-                                        this.set_connection_sidebar_expanded(false, cx);
-                                    }
-                                }),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .when(
+                                show_persistent_sidebar && sidebar_expanded && auto_hide_tree,
+                                |this| {
+                                    this.on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(
+                                            |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                                if !this.connection_sidebar.read(cx).is_expanded() {
+                                                    return;
+                                                }
+                                                let layout = cx.theme().geometry.layout;
+                                                let in_terminal = event.position.x
+                                                    > layout.global_rail
+                                                    && event.position.y > layout.tab_bar;
+                                                if in_terminal {
+                                                    this.set_connection_sidebar_expanded(false, cx);
+                                                }
+                                            },
+                                        ),
+                                    )
+                                },
                             )
-                        })
-                        .child(main_content),
+                            .child(main_content),
                     )
             })
-            .when(show_persistent_sidebar && sidebar_expanded && auto_hide_tree, |this| {
-                this.child(floating_tree.unwrap())
-            })
+            .when(
+                show_persistent_sidebar && sidebar_expanded && auto_hide_tree,
+                |this| this.child(floating_tree.unwrap()),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
