@@ -3813,3 +3813,153 @@ consumer。后续必须保持独立小提交：
     显式 retry；
 13. 自动化证明 reconnect、restore 和 retry UI 初始化都不会自动重放任何历史命令、
     输入、文件操作或控制序列。
+
+## 13. 全局后台长任务迁移跟踪（2026-08-26）
+
+### 13.1 初版已完成范围
+
+本轮先完成可运行的 SFTP 长任务初版，不一次性扩大到底层 SFTP 公共 API、全部文件
+操作和数据库任务。
+
+已完成：
+
+1. 新增共享 `sftp_transfer` executor/provider/model/scheduler/history；
+2. Terminal 侧边栏 SFTP 上传接入全局后台任务；
+3. 独立 `sftp_view` 上传接入全局后台任务；
+4. 独立 `sftp_view` 下载接入全局后台任务；
+5. 独立 `sftp_view` 远程删除接入全局后台任务；
+6. upload、download、DeleteRemote 对同一个
+   `SftpConnectionIdentity` 共用 connection-scoped FIFO lane，不同连接可以并行；
+7. 全局任务已接入 queued/running/cancelling/succeeded/failed/cancelled 状态、
+   cooperative cancellation、后台任务面板、完成历史和 view 内任务镜像；
+8. `sftp_view` 关闭时可以选择继续后台运行或取消；关闭状态会冻结新任务 admission，
+   并阻止任务完成后继续刷新已经关闭的 view；
+9. DeleteRemote 对普通条目错误采用“记录错误并继续剩余顶层 entry，最后聚合失败”
+   的初版语义；取消错误立即结束；
+10. DeleteRemote 进入成功、取消或失败终态时都会刷新仍然可见的目标远程目录。失败
+    也刷新是必要行为，因为聚合失败前可能已有其他条目删除成功；重复终态事件不会
+    重复刷新；
+11. DeleteRemote 进度对外统一为顶层 entry 数量，递归目录内部回调只更新当前文件
+    细节，不再把递归子项总量直接混入顶层总量。
+
+当前职责边界：
+
+- `sftp_transfer` 已负责 upload、download、DeleteRemote；
+- `sftp_view` 的本地删除和 server-copy 仍由旧的 view-local scheduler 负责；
+- Terminal 侧边栏的远程删除尚未迁移；
+- `sftp_view` 当前使用 `SftpUploadConnection::Config` 创建全局任务，尚未迁移为
+  application `SshSessionService` / generation-bound lease；
+- DeleteRemote 复用既有 `RusshSftpClient::delete` 和 `delete_recursive`，本轮没有
+  修改底层 `sftp` crate 的公共删除 API。
+
+### 13.2 已知兼容折衷与风险
+
+#### P0：下一轮优先处理
+
+1. **view 提交与 mirror 注册不是原子操作。**
+   当前顺序是先向全局 executor submit，再将 `external_transfer_id` 注册到
+   `TransferQueue`。GPUI 同步 update 路径下 admission 不会在两条语句之间被其他
+   callback 改变，且提交后会立即读取 snapshot 做 reconcile；但 `track_external`
+   失败时仍只能补偿性 cancel 已创建的全局任务。后续应提供 admission-aware 的
+   “预留 ID / 注册 mirror / 提交”协议，并补冻结 admission 的回归测试。
+
+2. **缺少 `sftp_view` 提交流程的 entity 级端到端测试。**
+   当前测试重点覆盖 request preparation、snapshot reconcile、刷新目标和 shared
+   executor 生命周期，尚未直接驱动 upload/download/DeleteRemote 的 UI 提交入口。
+   后续至少覆盖提交、Added/Updated/Finished、queued/running cancel、失败刷新和
+   `track_external` 补偿取消。
+
+#### P1：SFTP 删除与连接生命周期
+
+1. **删除失败信息仍是字符串聚合。**
+   当前最终错误形如“失败数量 + `path: error` 拼接文本”，后台任务不能结构化展示
+   每个 entry 的成功、失败、跳过和失败原因。后续应增加 operation-specific result
+   metadata，并对错误文本做长度和敏感信息边界控制。
+
+2. **递归目录删除遇到第一个子项错误会停止该目录。**
+   底层 `delete_recursive` 使用 fail-fast `?`；shared provider 只能继续下一个顶层
+   entry，不能继续该目录内剩余的可删除子项。后续应在底层增加 best-effort recursive
+   delete result，结构化返回每个子项错误。
+
+3. **取消是 cooperative cancellation。**
+   顶层 entry 之间和递归子项之间会检查取消，但单个 SFTP remove RPC 的 `.await`
+   期间无法中断。普通文件删除公共 API 也没有 cancellation 参数。因此用户点击取消
+   后，当前正在执行的单个删除仍可能完成。RPC 返回后 provider 会再次检查取消，
+   通常不会继续下一个顶层 entry；但取消检查与最后一次 progress callback 之间没有
+   全局线性化锁，仍存在一次窄竞态。executor 最终状态采用 cancellation-wins，不把
+   已观察到取消的任务落为成功终态。
+
+4. **全局任务仍按配置重新建 SFTP channel。**
+   `sftp_transfer` 已支持 `SessionManager` 与 `Config` 两种 source，但独立
+   `sftp_view` 当前固定提交 `Config`，尚未复用 application-owned SSH session
+   service。后续需和 SSH consumer 迁移一起处理，避免 view 生命周期重新成为 shared
+   transport owner。
+
+5. **后台 cleanup 仍持有 `Entity<SftpView>`。**
+   选择后台继续后，cleanup task 会等待本地 mirror 中的 active transfer 全部结束再
+   断开 view client。永久阻塞的网络任务可能延长整个 view entity 生命周期。后续应将
+   connection cleanup ownership 移到独立后台 owner，或增加 bounded timeout。
+
+6. **关闭确认 dialog 的异常销毁路径需要更强复位保障。**
+   正常选择 Abort/Background/Cancel 可以收敛；若 dialog/sender 在非正常路径被丢弃，
+   需要确保 confirmation 状态必然复位并允许重新关闭。
+
+#### P2：模型与可观测性清理
+
+1. `SftpTransferSnapshot.local_path` 对 DeleteRemote 暂时使用空 `PathBuf` 占位；
+   后续改为 `Option<PathBuf>` 或 operation-specific metadata。
+2. 扫描阶段没有独立 snapshot 字段，目前通过 `total == None`、当前文件和 UI 文案
+   推断；后续增加显式 phase/scanning 字段。
+3. `delete_remote_task_key` 仍是长度编码字符串，并对 entries 输入顺序敏感；后续
+   明确批次是“有序操作”还是“无序集合”，再改为稳定 hash 或结构化 canonical key。
+4. 全局 completed history 当前是进程生命周期内共享、有界 200 条；后续补按
+   connection 查询/清理、重复与迟到事件、跨 view 生命周期的 contract 测试。
+5. 底层 `sftp` crate 缺少真实递归删除顺序、部分失败、取消和 channel 回收测试。
+6. runtime/临时连接必须在 view 生命周期内复用同一个
+   `SftpConnectionIdentity::Runtime`；后续在提交 API 层强化 identity 不变量。
+
+### 13.3 后续迁移推荐顺序
+
+保持“小切片、每步可运行、同一类 operation 共用 shared executor contract”的顺序：
+
+1. 修复 13.2 的 P0：原子提交/mirror 协议和 `sftp_view` entity 级端到端测试；
+2. 迁移 Terminal 侧边栏远程删除，复用本轮 DeleteRemote request/provider/FIFO；
+3. 决策并迁移 `sftp_view` 本地删除：若只操作本机文件，可进入通用 file-operation
+   executor，而不是强塞入 SFTP connection lane；
+4. 迁移 SFTP server-copy，并明确 source/target 双连接的 lane 获取顺序，防止互锁；
+5. 将 SFTP connection source 迁移到 application `SshSessionService` /
+   generation-bound lease，收口按 Config 重复建连；
+6. 建立数据库长任务公共 contract：operation metadata、进度、取消、结构化结果、
+   task key、历史和资源 lane；
+7. 先迁移数据库导出，再迁移数据库导入。导入破坏性更高，必须额外定义事务、
+   overwrite/merge、失败恢复、未知提交状态和显式重试语义；
+8. 最后统一全局后台任务面板的 operation-specific detail、错误明细、历史恢复、
+   retry 和持久化策略。
+
+### 13.4 初版验收命令
+
+本切片交付前至少运行：
+
+```text
+rtk cargo test -p sftp_transfer --lib
+rtk cargo test -p sftp_view --lib
+rtk cargo check -p sftp_transfer
+rtk cargo check -p sftp_view
+rtk git diff --check
+```
+
+Terminal 侧边栏上传和 `one-core` 后台任务面板若被 scoped diff 触及，还应保留：
+
+```text
+rtk cargo test -p terminal_view file_manager_panel --lib
+rtk cargo test -p one-core background_tasks --lib
+rtk cargo test -p one-core background_task_panel --lib
+rtk cargo check -p terminal_view
+rtk cargo check -p one-core
+```
+
+本文件第 2.2 节记录的 Cargo manifest 加载失败属于对历史分支
+`feat/terminal-optimization-focused` 的审查结论，不代表当前工作区状态。当前
+`dev` 上的 `sftp_transfer`、`sftp_view`、`terminal_view` 和 `one-core` 已能完成
+上述定向测试与 `cargo check`；后续若再次出现 manifest 加载失败，应作为新的回归
+单独记录。

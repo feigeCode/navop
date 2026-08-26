@@ -2258,10 +2258,7 @@ mod tests {
         // node id must match the id used in the real left-side tree so that
         // tree-driven actions (design table, open table data) can find it.
         assert_eq!("127:COMI_SERVER2112:table_folder:BIZ_MESSAGE", node.id);
-        assert_eq!(
-            Some(""),
-            node.metadata.get("database").map(String::as_str)
-        );
+        assert_eq!(Some(""), node.metadata.get("database").map(String::as_str));
         assert_eq!(
             Some("COMI_SERVER2112"),
             node.metadata.get("schema").map(String::as_str)
