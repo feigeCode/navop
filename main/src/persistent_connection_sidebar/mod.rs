@@ -109,6 +109,7 @@ pub(crate) struct PersistentConnectionSidebar {
     connection_selection: ConnectionSelection,
     pub(super) tree_expanded: bool,
     pub(super) hide_empty_workspaces: bool,
+    pub(super) auto_hide_tree: bool,
     pub(super) search_input: Entity<InputState>,
     tree_width: Pixels,
     terminal_colors: Option<TerminalColors>,
@@ -184,6 +185,7 @@ impl PersistentConnectionSidebar {
             connection_selection: ConnectionSelection::default(),
             tree_expanded,
             hide_empty_workspaces: tree_state.hide_empty_workspaces,
+            auto_hide_tree: tree_state.auto_hide_tree,
             search_input,
             tree_width: cx.theme().geometry.layout.context_sidebar_default,
             terminal_colors: None,
@@ -200,6 +202,19 @@ impl PersistentConnectionSidebar {
 
     pub(crate) fn is_expanded(&self) -> bool {
         self.tree_expanded
+    }
+
+    pub(crate) fn is_auto_hide_tree(&self) -> bool {
+        self.auto_hide_tree
+    }
+
+    /// 非自动隐藏模式下，连接树作为与终端并排的分割面板渲染，而不是浮层。
+    pub(crate) fn render_docked_connection_tree(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_connection_tree(self.palette(cx), window, cx)
     }
 
     pub(crate) fn set_terminal_colors(

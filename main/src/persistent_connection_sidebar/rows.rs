@@ -249,11 +249,15 @@ impl PersistentConnectionSidebar {
                     cx.new(|_| drag.clone())
                 })
             })
-            .on_double_click(move |_, window, cx| {
-                if let Some(connection) = open_connection.as_ref() {
-                    home_for_open.update(cx, |home, cx| {
-                        home.open_connection_from_quick(connection, window, cx)
-                    });
+            .on_double_click({
+                let view_for_collapse = view_for_select.clone();
+                move |_, window, cx| {
+                    if let Some(connection) = open_connection.as_ref() {
+                        home_for_open.update(cx, |home, cx| {
+                            home.open_connection_from_quick(connection, window, cx)
+                        });
+                    }
+                    view_for_collapse.update(cx, |this, cx| this.collapse_after_open(cx));
                 }
             })
             .on_click(move |event, _, cx| {
@@ -295,5 +299,17 @@ impl PersistentConnectionSidebar {
             .child(tree_label(name))
             .when_some(team_indicator, |row, indicator| row.child(indicator))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn double_click_opening_a_connection_collapses_the_tree_when_auto_hide_is_on() {
+        let source = include_str!("rows.rs");
+        assert!(
+            source.contains("collapse_after_open"),
+            "双击打开会话后应通过 collapse_after_open 触发自动隐藏"
+        );
     }
 }

@@ -1999,6 +1999,29 @@ mod tests {
     }
 
     #[test]
+    fn auto_hide_off_renders_a_docked_split_panel_instead_of_a_floating_overlay() {
+        let source = include_str!("onetcli_app.rs");
+        let sidebar_source = include_str!("persistent_connection_sidebar/mod.rs");
+        let render = source
+            .rsplit("impl Render for OnetCliApp")
+            .next()
+            .expect("OnetCliApp render source");
+
+        assert!(
+            render.contains("is_auto_hide_tree()"),
+            "主渲染需读取连接树的自动隐藏开关"
+        );
+        assert!(
+            render.contains("render_docked_connection_tree"),
+            "非自动隐藏时应渲染并排的分割面板"
+        );
+        assert!(
+            render.contains("show_persistent_sidebar && sidebar_expanded && auto_hide_tree"),
+            "浮层连接树仅应在自动隐藏开启时渲染，避免遮挡终端"
+        );
+    }
+
+    #[test]
     fn home_style_switches_between_legacy_home_and_modern_persistent_sidebar() {
         let app = include_str!("onetcli_app.rs");
         let home = include_str!("home_tab/render.rs");
@@ -2472,9 +2495,18 @@ impl Render for OnetCliApp {
         let main_content = self.render_main_content(cx);
         let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
         let sidebar_expanded = self.connection_sidebar.read(cx).is_expanded();
-        let floating_tree = if show_persistent_sidebar && sidebar_expanded {
+        let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
+        let docked_tree = show_persistent_sidebar && sidebar_expanded && !auto_hide_tree;
+        let floating_tree = if show_persistent_sidebar && sidebar_expanded && auto_hide_tree {
             Some(self.connection_sidebar.update(cx, |sidebar, cx| {
                 sidebar.render_floating_tree(window, cx)
+            }))
+        } else {
+            None
+        };
+        let docked_tree_element = if docked_tree {
+            Some(self.connection_sidebar.update(cx, |sidebar, cx| {
+                sidebar.render_docked_connection_tree(window, cx)
             }))
         } else {
             None
@@ -2511,12 +2543,17 @@ impl Render for OnetCliApp {
                     .when(show_persistent_sidebar, |layout| {
                         layout.child(self.connection_sidebar.clone())
                     })
+                    .when_some(docked_tree_element, |layout, tree| {
+                        layout.child(tree)
+                    })
                     .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .h_full()
-                        .when(show_persistent_sidebar && sidebar_expanded, |this| {
+                        .when(
+                            show_persistent_sidebar && sidebar_expanded && auto_hide_tree,
+                            |this| {
                             this.on_mouse_down(
                                 gpui::MouseButton::Left,
                                 cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -2535,7 +2572,7 @@ impl Render for OnetCliApp {
                         .child(main_content),
                     )
             })
-            .when(show_persistent_sidebar && sidebar_expanded, |this| {
+            .when(show_persistent_sidebar && sidebar_expanded && auto_hide_tree, |this| {
                 this.child(floating_tree.unwrap())
             })
             .children(sheet_layer)

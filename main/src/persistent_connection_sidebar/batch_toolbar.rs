@@ -1,6 +1,7 @@
-use gpui::{Anchor, AnyElement, IntoElement, ParentElement, Styled, div};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{Anchor, AnyElement, IntoElement, ParentElement, Radians, Styled, div};
 use gpui_component::{
-    Disableable, IconName, Sizable,
+    Disableable, Icon, IconName, IconSize, Sizable,
     button::Toggle,
     button::{IconButton, IconButtonRole},
     h_flex,
@@ -98,6 +99,27 @@ pub(super) fn batch_mode_toggle(
         .tooltip(t!("Connection.batch_operations"))
         .on_click(move |checked, _, cx| {
             view.update(cx, |this, cx| this.set_batch_mode(*checked, cx));
+        })
+}
+
+pub(super) fn auto_hide_tree_toggle(
+    view: gpui::Entity<PersistentConnectionSidebar>,
+    active: bool,
+    palette: SidebarPalette,
+) -> Toggle {
+    // 竖着的图钉表示“固定/置顶”（自动隐藏关闭），横着的图钉（顺时针旋转 90°）
+    // 表示“自动隐藏开启”，钉帽在右、针尖指向左侧。
+    let pin = Icon::new(IconName::Pin)
+        .with_size(IconSize::Small)
+        .when(active, |icon| icon.rotate(Radians(std::f32::consts::FRAC_PI_2)));
+    Toggle::new("persistent-auto-hide-tree")
+        .icon(pin)
+        .checked(active)
+        .xsmall()
+        .text_color(palette.foreground)
+        .tooltip(t!("Connection.auto_hide_tree"))
+        .on_click(move |checked, _, cx| {
+            view.update(cx, |this, cx| this.set_auto_hide_tree(*checked, cx));
         })
 }
 
