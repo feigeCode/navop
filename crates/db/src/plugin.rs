@@ -2611,63 +2611,7 @@ pub trait DatabasePlugin: Send + Sync {
         schema: Option<&str>,
         table: &str,
     ) -> Result<String> {
-        let columns = self
-            .list_columns(connection, database, schema.map(|s| s.to_string()), table)
-            .await?;
-        if columns.is_empty() {
-            return Ok(String::new());
-        }
-
-        let table_ref = self.format_export_table_reference(database, schema, table);
-        let mut definitions = columns
-            .iter()
-            .map(|column| format!("    {}", self.build_column_definition(column, true)))
-            .collect::<Vec<_>>();
-        let primary_keys = columns
-            .iter()
-            .filter(|column| column.is_primary_key)
-            .map(|column| self.quote_identifier(&column.name))
-            .collect::<Vec<_>>();
-        if !primary_keys.is_empty() {
-            definitions.push(format!("    PRIMARY KEY ({})", primary_keys.join(", ")));
-        }
-
-        let mut sql = format!("CREATE TABLE {} (\n{}\n)", table_ref, definitions.join(",\n"));
-
-        // Best-effort table comment: drivers that cannot list table metadata are
-        // still able to export the structure (columns + primary key + column comments).
-        let mut statements = Vec::new();
-        if let Ok(tables) = self
-            .list_tables(connection, database, schema.map(|s| s.to_string()))
-            .await
-        {
-            if let Some(comment) = tables
-                .iter()
-                .find(|info| info.name == table)
-                .and_then(|info| info.comment.clone())
-            {
-                statements.push(format!(
-                    "COMMENT ON TABLE {} IS {}",
-                    table_ref,
-                    self.escape_sql_value(&comment)
-                ));
-            }
-        }
-        statements.extend(columns.iter().filter_map(|column| {
-            column.comment.as_ref().map(|comment| {
-                format!(
-                    "COMMENT ON COLUMN {}.{} IS {}",
-                    table_ref,
-                    self.quote_identifier(&column.name),
-                    self.escape_sql_value(comment)
-                )
-            })
-        }));
-        if !statements.is_empty() {
-            sql.push('\n');
-            sql.push_str(&statements.join(";\n"));
-        }
-        Ok(sql)
+        default_export_table_create_sql(self, connection, database, schema, table).await
     }
 
     /// Export table data as INSERT statements
@@ -3160,6 +3104,80 @@ pub trait DatabasePlugin: Send + Sync {
         config: &ExportConfig,
         progress_tx: Option<ExportProgressSender>,
     ) -> Result<ExportResult>;
+}
+
+/// Default column-based CREATE TABLE export shared by the `DatabasePlugin`
+/// trait default. Driver overrides that need to opt back into the generic
+/// builder (e.g. when the driver's own structure export is unavailable) call
+/// this free function directly: a `Trait::method(self)` call from inside an
+/// override would dispatch back to the override instead of the default body.
+pub(crate) async fn default_export_table_create_sql<P>(
+    plugin: &P,
+    connection: &dyn DbConnection,
+    database: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> Result<String>
+where
+    P: DatabasePlugin + ?Sized,
+{
+    let columns = plugin
+        .list_columns(connection, database, schema.map(|s| s.to_string()), table)
+        .await?;
+    if columns.is_empty() {
+        return Ok(String::new());
+    }
+
+    let table_ref = plugin.format_export_table_reference(database, schema, table);
+    let mut definitions = columns
+        .iter()
+        .map(|column| format!("    {}", plugin.build_column_definition(column, true)))
+        .collect::<Vec<_>>();
+    let primary_keys = columns
+        .iter()
+        .filter(|column| column.is_primary_key)
+        .map(|column| plugin.quote_identifier(&column.name))
+        .collect::<Vec<_>>();
+    if !primary_keys.is_empty() {
+        definitions.push(format!("    PRIMARY KEY ({})", primary_keys.join(", ")));
+    }
+
+    let mut sql = format!("CREATE TABLE {} (\n{}\n)", table_ref, definitions.join(",\n"));
+
+    // Best-effort table comment: drivers that cannot list table metadata are
+    // still able to export the structure (columns + primary key + column comments).
+    let mut statements = Vec::new();
+    if let Ok(tables) = plugin
+        .list_tables(connection, database, schema.map(|s| s.to_string()))
+        .await
+    {
+        if let Some(comment) = tables
+            .iter()
+            .find(|info| info.name == table)
+            .and_then(|info| info.comment.clone())
+        {
+            statements.push(format!(
+                "COMMENT ON TABLE {} IS {}",
+                table_ref,
+                plugin.escape_sql_value(&comment)
+            ));
+        }
+    }
+    statements.extend(columns.iter().filter_map(|column| {
+        column.comment.as_ref().map(|comment| {
+            format!(
+                "COMMENT ON COLUMN {}.{} IS {}",
+                table_ref,
+                plugin.quote_identifier(&column.name),
+                plugin.escape_sql_value(comment)
+            )
+        })
+    }));
+    if !statements.is_empty() {
+        sql.push('\n');
+        sql.push_str(&statements.join(";\n"));
+    }
+    Ok(sql)
 }
 
 fn foreign_key_action_sql(action: &str) -> Option<String> {
