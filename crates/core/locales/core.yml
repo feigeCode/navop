@@ -28,6 +28,80 @@ TabSwitcher:
     zh-CN: 搜索标签页
     zh-HK: 搜尋標籤頁
 
+BackgroundTasks:
+  title:
+    en: "Background Tasks"
+    zh-CN: "后台任务"
+    zh-HK: "後台任務"
+  open:
+    en: "Show background tasks"
+    zh-CN: "查看后台任务"
+    zh-HK: "查看後台任務"
+  no_tasks:
+    en: "No background tasks"
+    zh-CN: "暂无后台任务"
+    zh-HK: "暫無後台任務"
+  queued:
+    en: "Queued"
+    zh-CN: "等待中"
+    zh-HK: "等待中"
+  running:
+    en: "Running"
+    zh-CN: "进行中"
+    zh-HK: "進行中"
+  succeeded:
+    en: "Succeeded"
+    zh-CN: "已成功"
+    zh-HK: "已成功"
+  failed:
+    en: "Failed"
+    zh-CN: "已失败"
+    zh-HK: "已失敗"
+  cancelled:
+    en: "Cancelled"
+    zh-CN: "已取消"
+    zh-HK: "已取消"
+  cancelling:
+    en: "Cancelling"
+    zh-CN: "取消中"
+    zh-HK: "取消中"
+  cancel:
+    en: "Cancel"
+    zh-CN: "取消"
+    zh-HK: "取消"
+  cancel_all:
+    en: "Cancel all"
+    zh-CN: "全部取消"
+    zh-HK: "全部取消"
+  filter_all:
+    en: "All"
+    zh-CN: "全部"
+    zh-HK: "全部"
+  filter_active:
+    en: "Active"
+    zh-CN: "进行中"
+    zh-HK: "進行中"
+  filter_finished:
+    en: "Finished"
+    zh-CN: "已完成"
+    zh-HK: "已完成"
+  filter_failed:
+    en: "Failed"
+    zh-CN: "失败"
+    zh-HK: "失敗"
+  result:
+    en: "Result"
+    zh-CN: "结果"
+    zh-HK: "結果"
+  clear_finished:
+    en: "Clear finished"
+    zh-CN: "清除已完成"
+    zh-HK: "清除已完成"
+  progress_unknown_total:
+    en: "In progress"
+    zh-CN: "进行中"
+    zh-HK: "進行中"
+
 Window:
   always_on_top:
     en: Keep window on top

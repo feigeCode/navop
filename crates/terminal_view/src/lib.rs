@@ -43,4 +43,4 @@ pub use theme::{
 pub use view::{
     RecordingPlaybackViewConfig, SessionLogViewConfig, TerminalView, init, refresh_keybindings,
 };
-pub use workspace::TerminalWorkspace;
+pub use workspace::{TerminalWorkspace, TerminalWorkspaceEvent};

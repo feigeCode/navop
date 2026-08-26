@@ -62,6 +62,12 @@ use remote_image_preview::{
 use rust_i18n::t;
 use sftp::{DirectoryConflictPolicy, ServerCopyItem, ServerCopyRequest, copy_between_servers};
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
+use sftp_transfer::{
+    SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpDownloadRequest, SftpRemoteDeleteEntry,
+    SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
+    SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, SftpUploadRequest,
+    delete_remote_task_key, download_task_key, upload_task_key,
+};
 use ssh::{ChannelEvent, SshChannel, SshConnectConfig, SshSessionManager};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -235,6 +241,19 @@ struct SharedProgress {
     current_file_total: AtomicU64,
 }
 
+fn new_shared_progress() -> Arc<SharedProgress> {
+    Arc::new(SharedProgress {
+        transferred: AtomicU64::new(0),
+        total: AtomicU64::new(0),
+        speed: AtomicU64::new(0),
+        cancelled: Arc::new(AtomicBool::new(false)),
+        scanning: AtomicBool::new(false),
+        current_file: std::sync::RwLock::new(None),
+        current_file_transferred: AtomicU64::new(0),
+        current_file_total: AtomicU64::new(0),
+    })
+}
+
 const MAX_TRANSFER_ERROR_SUMMARY_CHARS: usize = 500;
 
 fn transfer_error_summary(error: &anyhow::Error) -> String {
@@ -270,13 +289,14 @@ fn transfer_error_summary(error: &anyhow::Error) -> String {
 #[derive(Clone)]
 struct TransferTask {
     id: usize,
+    external_transfer_id: Option<SftpTransferId>,
     operation: TransferOperation,
     state: TransferTaskState,
     shared_progress: Arc<SharedProgress>,
     error: Option<String>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum TransferTaskState {
     Pending,
     Running,
@@ -296,8 +316,6 @@ enum TransferOperation {
     },
     Download {
         remote_path: String,
-        local_path: PathBuf,
-        is_dir: bool,
         local_dir: PathBuf,
     },
     DeleteRemote {
@@ -321,12 +339,30 @@ struct PendingTransfer {
 }
 
 #[derive(Clone)]
-struct LocalFileEntry {
-    name: String,
-    size: u64,
-    modified: SystemTime,
-    is_dir: bool,
-    owner: Option<String>,
+struct SftpUploadContext {
+    connection: SftpConnectionIdentity,
+    connection_source: SftpUploadConnection,
+}
+
+struct PreparedGlobalUpload {
+    request: SftpUploadRequest,
+    operation: TransferOperation,
+}
+
+struct PreparedGlobalDownload {
+    request: SftpDownloadRequest,
+    operation: TransferOperation,
+}
+
+struct PreparedGlobalRemoteDelete {
+    request: SftpDeleteRemoteRequest,
+    operation: TransferOperation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TransferRefreshTarget {
+    Remote(String),
+    Local(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -461,6 +497,15 @@ impl TransferQueue {
         true
     }
 
+    fn track_external(&mut self, task: TransferTask) -> bool {
+        if matches!(self.admission, TransferAdmission::Frozen) {
+            return false;
+        }
+        debug_assert!(task.external_transfer_id.is_some());
+        self.tasks.push(task);
+        true
+    }
+
     fn freeze_admission(&mut self) {
         self.admission = TransferAdmission::Frozen;
     }
@@ -468,6 +513,9 @@ impl TransferQueue {
     fn cancel_all(&mut self) {
         self.pending.clear();
         for task in &mut self.tasks {
+            if task.external_transfer_id.is_some() {
+                continue;
+            }
             match task.state {
                 TransferTaskState::Pending => {
                     task.state = TransferTaskState::Cancelled;
@@ -1024,6 +1072,223 @@ fn upload_directory_conflict_policy(
     }
 }
 
+fn prepare_global_upload(
+    transfer: &PendingTransfer,
+    selected_policy: DirectoryConflictPolicy,
+    context: &SftpUploadContext,
+) -> PreparedGlobalUpload {
+    let directory_conflict_policy = upload_directory_conflict_policy(transfer, selected_policy);
+    let title_prefix = if transfer.is_dir {
+        t!("File.upload_folder")
+    } else {
+        t!("File.upload_file")
+    };
+    let request = SftpUploadRequest {
+        connection: context.connection.clone(),
+        connection_source: context.connection_source.clone(),
+        local_path: transfer.local_path.clone(),
+        remote_path: transfer.remote_path.clone(),
+        is_dir: transfer.is_dir,
+        directory_conflict_policy,
+        display_name: transfer.name.clone(),
+        title: format!("{title_prefix} · {}", transfer.name).into(),
+        task_key: Some(upload_task_key(
+            &context.connection,
+            &transfer.local_path,
+            &transfer.remote_path,
+        )),
+    };
+    let operation = TransferOperation::Upload {
+        local_path: transfer.local_path.clone(),
+        remote_path: transfer.remote_path.clone(),
+        is_dir: transfer.is_dir,
+        directory_conflict_policy,
+        remote_dir: remote_path_parent(&transfer.remote_path),
+    };
+    PreparedGlobalUpload { request, operation }
+}
+
+fn prepare_global_download(
+    transfer: &PendingTransfer,
+    context: &SftpUploadContext,
+) -> PreparedGlobalDownload {
+    let request = SftpDownloadRequest {
+        connection: context.connection.clone(),
+        connection_source: context.connection_source.clone(),
+        remote_path: transfer.remote_path.clone(),
+        local_path: transfer.local_path.clone(),
+        is_dir: transfer.is_dir,
+        display_name: transfer.name.clone(),
+        title: format!("{} · {}", t!("Common.download"), transfer.name).into(),
+        task_key: Some(download_task_key(
+            &context.connection,
+            &transfer.remote_path,
+            &transfer.local_path,
+        )),
+    };
+    let local_dir = transfer
+        .local_path
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let operation = TransferOperation::Download {
+        remote_path: transfer.remote_path.clone(),
+        local_dir,
+    };
+    PreparedGlobalDownload { request, operation }
+}
+
+fn prepare_global_remote_delete(
+    entries: &[FileItem],
+    remote_dir: &str,
+    context: &SftpUploadContext,
+) -> PreparedGlobalRemoteDelete {
+    let remote_entries = entries
+        .iter()
+        .map(|entry| SftpRemoteDeleteEntry {
+            remote_path: join_remote_path(remote_dir, &entry.name),
+            is_dir: entry.is_dir,
+        })
+        .collect::<Vec<_>>();
+    let display_name = remote_delete_display_name(entries);
+    let request = SftpDeleteRemoteRequest {
+        connection: context.connection.clone(),
+        connection_source: context.connection_source.clone(),
+        entries: remote_entries,
+        remote_dir: remote_dir.to_string(),
+        display_name: display_name.clone(),
+        title: format!("{} · {display_name}", t!("Common.delete")).into(),
+        task_key: None,
+    };
+    let request = SftpDeleteRemoteRequest {
+        task_key: Some(delete_remote_task_key(
+            &context.connection,
+            remote_dir,
+            &request.entries,
+        )),
+        ..request
+    };
+    let operation = TransferOperation::DeleteRemote {
+        entries: entries.to_vec(),
+        remote_dir: remote_dir.to_string(),
+    };
+    PreparedGlobalRemoteDelete { request, operation }
+}
+
+fn remote_delete_display_name(entries: &[FileItem]) -> String {
+    match entries {
+        [entry] => entry.name.clone(),
+        _ => t!("Delete.delete_n_items", count = entries.len()).to_string(),
+    }
+}
+
+fn transfer_task_state_from_global(state: &SftpTransferState) -> TransferTaskState {
+    match state {
+        SftpTransferState::Queued => TransferTaskState::Pending,
+        SftpTransferState::Running | SftpTransferState::Cancelling => TransferTaskState::Running,
+        SftpTransferState::Succeeded => TransferTaskState::Completed,
+        SftpTransferState::Failed => TransferTaskState::Failed,
+        SftpTransferState::Cancelled => TransferTaskState::Cancelled,
+    }
+}
+
+fn apply_global_transfer_snapshot(task: &mut TransferTask, snapshot: &SftpTransferSnapshot) {
+    task.state = transfer_task_state_from_global(&snapshot.state);
+    task.error = snapshot.error.clone();
+    task.shared_progress
+        .transferred
+        .store(snapshot.transferred, Ordering::Relaxed);
+    task.shared_progress
+        .total
+        .store(snapshot.total.unwrap_or(0), Ordering::Relaxed);
+    task.shared_progress
+        .speed
+        .store(snapshot.speed.to_bits(), Ordering::Relaxed);
+    task.shared_progress.scanning.store(
+        snapshot.total.is_none() && snapshot.state.is_active(),
+        Ordering::Relaxed,
+    );
+    if let Ok(mut current_file) = task.shared_progress.current_file.write() {
+        *current_file = snapshot.current_file.clone();
+    }
+    task.shared_progress
+        .current_file_transferred
+        .store(snapshot.transferred, Ordering::Relaxed);
+    task.shared_progress
+        .current_file_total
+        .store(snapshot.total.unwrap_or(0), Ordering::Relaxed);
+}
+
+fn transfer_event_id(event: &SftpTransferEvent) -> SftpTransferId {
+    match event {
+        SftpTransferEvent::Added(id)
+        | SftpTransferEvent::Updated(id)
+        | SftpTransferEvent::Finished(id) => *id,
+    }
+}
+
+fn active_transfer_state(state: &TransferTaskState) -> bool {
+    matches!(
+        state,
+        TransferTaskState::Pending | TransferTaskState::Running
+    )
+}
+
+fn active_external_transfer_ids(tasks: &[TransferTask]) -> Vec<SftpTransferId> {
+    tasks
+        .iter()
+        .filter(|task| active_transfer_state(&task.state))
+        .filter_map(|task| task.external_transfer_id)
+        .collect()
+}
+
+fn should_refresh_transfer_target(
+    was_active: bool,
+    event: &SftpTransferEvent,
+    state: &SftpTransferState,
+) -> bool {
+    was_active
+        && matches!(event, SftpTransferEvent::Finished(_))
+        && matches!(
+            state,
+            SftpTransferState::Succeeded | SftpTransferState::Failed | SftpTransferState::Cancelled
+        )
+}
+
+fn reconcile_global_transfer_snapshot(
+    task: &mut TransferTask,
+    snapshot: &SftpTransferSnapshot,
+) -> Option<TransferRefreshTarget> {
+    let refresh_target = transfer_refresh_target(&task.operation, snapshot.operation)?;
+    let was_active = active_transfer_state(&task.state);
+    apply_global_transfer_snapshot(task, snapshot);
+    let finished_now = was_active && !active_transfer_state(&task.state);
+    let refreshable = matches!(
+        snapshot.state,
+        SftpTransferState::Succeeded | SftpTransferState::Failed | SftpTransferState::Cancelled
+    );
+    (finished_now && refreshable).then_some(refresh_target)
+}
+
+fn transfer_refresh_target(
+    operation: &TransferOperation,
+    snapshot_operation: SftpTransferOperation,
+) -> Option<TransferRefreshTarget> {
+    match (operation, snapshot_operation) {
+        (TransferOperation::Upload { remote_dir, .. }, SftpTransferOperation::Upload) => {
+            Some(TransferRefreshTarget::Remote(remote_dir.clone()))
+        }
+        (TransferOperation::Download { local_dir, .. }, SftpTransferOperation::Download) => {
+            Some(TransferRefreshTarget::Local(local_dir.clone()))
+        }
+        (
+            TransferOperation::DeleteRemote { remote_dir, .. },
+            SftpTransferOperation::DeleteRemote,
+        ) => Some(TransferRefreshTarget::Remote(remote_dir.clone())),
+        _ => None,
+    }
+}
+
 fn mark_server_copy_directory_replacements(
     items: &mut [ServerCopyItem],
     existing_entries: &std::collections::HashMap<String, bool>,
@@ -1116,6 +1381,8 @@ pub struct SftpView {
     favorite_edit_input: Entity<InputState>,
     favorite_editing: Option<FavoritePathEdit>,
 
+    upload_executor: Entity<SftpTransferExecutor>,
+    upload_connection_identity: SftpConnectionIdentity,
     transfer_queue: TransferQueue,
     next_task_id: usize,
     direct_copy_prompt_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1190,6 +1457,11 @@ impl SftpView {
         let local_favorite_connection_key = LOCAL_FAVORITE_CONNECTION_KEY.to_string();
         let local_favorite_paths = Self::load_favorite_paths(&local_favorite_connection_key, cx);
         let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
+        let upload_executor = sftp_transfer::global(cx);
+        let upload_connection_identity =
+            SftpConnectionIdentity::from_stored(&conn).unwrap_or_else(|| {
+                upload_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
+            });
 
         let mut subscriptions = Vec::new();
 
@@ -1300,6 +1572,12 @@ impl SftpView {
                 }
             },
         ));
+        subscriptions.push(cx.subscribe(
+            &upload_executor,
+            |this, executor, event: &SftpTransferEvent, cx| {
+                this.handle_transfer_event(&executor, event, cx);
+            },
+        ));
 
         let credential_inputs = credential_prompt_policy.requires_prompt().then(|| {
             let username = credential_prompt_policy.username.then(|| {
@@ -1374,6 +1652,8 @@ impl SftpView {
             remote_favorite_search_input,
             favorite_edit_input,
             favorite_editing: None,
+            upload_executor,
+            upload_connection_identity,
             transfer_queue: TransferQueue::new(MAX_CONCURRENT_TRANSFERS),
             next_task_id: 0,
             direct_copy_prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3157,6 +3437,76 @@ impl SftpView {
         cx.notify();
     }
 
+    fn handle_transfer_event(
+        &mut self,
+        executor: &Entity<SftpTransferExecutor>,
+        event: &SftpTransferEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let id = transfer_event_id(event);
+        let Some(snapshot) = executor.read(cx).snapshot(id) else {
+            return;
+        };
+        if snapshot.connection != self.upload_connection_identity {
+            return;
+        }
+        let refresh_target = self.apply_transfer_event_to_mirror(event, &snapshot);
+        self.refresh_transfer_target_if_visible(refresh_target, cx);
+        self.schedule_transfers(cx);
+        cx.notify();
+    }
+
+    fn refresh_transfer_target_if_visible(
+        &mut self,
+        refresh_target: Option<TransferRefreshTarget>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.close_state.is_closing() {
+            return;
+        }
+        match refresh_target {
+            Some(TransferRefreshTarget::Remote(remote_dir))
+                if remote_dir == self.remote_current_path =>
+            {
+                self.refresh_remote_dir(cx);
+            }
+            Some(TransferRefreshTarget::Local(local_dir))
+                if should_apply_local_listing(&self.local_current_path, &local_dir) =>
+            {
+                self.refresh_local_dir(cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_transfer_event_to_mirror(
+        &mut self,
+        event: &SftpTransferEvent,
+        snapshot: &SftpTransferSnapshot,
+    ) -> Option<TransferRefreshTarget> {
+        let task = self
+            .transfer_queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.external_transfer_id == Some(snapshot.id))?;
+        let refresh_target = transfer_refresh_target(&task.operation, snapshot.operation)?;
+        let was_active = active_transfer_state(&task.state);
+        apply_global_transfer_snapshot(task, snapshot);
+        should_refresh_transfer_target(was_active, event, &snapshot.state).then_some(refresh_target)
+    }
+
+    fn reconcile_transfer_snapshot_to_mirror(
+        &mut self,
+        snapshot: &SftpTransferSnapshot,
+    ) -> Option<TransferRefreshTarget> {
+        let task = self
+            .transfer_queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.external_transfer_id == Some(snapshot.id))?;
+        reconcile_global_transfer_snapshot(task, snapshot)
+    }
+
     fn start_transfer_task(&mut self, task: TransferTask, cx: &mut Context<Self>) {
         match task.operation {
             TransferOperation::Upload {
@@ -3177,36 +3527,16 @@ impl SftpView {
                     cx,
                 );
             }
-            TransferOperation::Download {
-                remote_path,
-                local_path,
-                is_dir,
-                local_dir,
-            } => {
-                self.start_download_task(
-                    task.id,
-                    remote_path,
-                    local_path,
-                    is_dir,
-                    local_dir,
-                    task.shared_progress,
-                    cx,
-                );
+            TransferOperation::Download { .. } => {
+                unreachable!("global SFTP downloads must not enter the local transfer scheduler")
             }
             TransferOperation::DeleteLocal { entries, local_dir } => {
                 self.start_local_delete_task(task.id, entries, local_dir, task.shared_progress, cx);
             }
-            TransferOperation::DeleteRemote {
-                entries,
-                remote_dir,
-            } => {
-                self.start_remote_delete_task(
-                    task.id,
-                    entries,
-                    remote_dir,
-                    task.shared_progress,
-                    cx,
-                );
+            TransferOperation::DeleteRemote { .. } => {
+                unreachable!(
+                    "global SFTP remote deletes must not enter the local transfer scheduler"
+                )
             }
             TransferOperation::ServerCopy(operation) => {
                 let ServerCopyOperation {
@@ -3392,170 +3722,6 @@ impl SftpView {
                     panel.set_items(items, cx);
                 });
             });
-        })
-        .detach();
-    }
-
-    fn start_download_task(
-        &mut self,
-        task_id: usize,
-        remote_path: String,
-        local_path: PathBuf,
-        is_dir: bool,
-        local_dir: PathBuf,
-        shared_progress: Arc<SharedProgress>,
-        cx: &mut Context<Self>,
-    ) {
-        let pool = self.transfer_client_pool.clone();
-        let local_panel = self.local_panel.clone();
-        let cancelled = shared_progress.cancelled.clone();
-        let progress_for_callback = shared_progress.clone();
-
-        if is_dir {
-            shared_progress.scanning.store(true, Ordering::Relaxed);
-            shared_progress.transferred.store(0, Ordering::Relaxed);
-            shared_progress.total.store(0, Ordering::Relaxed);
-            shared_progress.speed.store(0, Ordering::Relaxed);
-        } else {
-            shared_progress.scanning.store(false, Ordering::Relaxed);
-        }
-
-        let download_task = Tokio::spawn(cx, async move {
-            let client = acquire_transfer_client(pool.clone()).await?;
-            let download_result = {
-                let mut client_guard = client.lock().await;
-                if is_dir {
-                    client_guard
-                        .download_dir_with_progress(
-                            &remote_path,
-                            local_path.to_string_lossy().as_ref(),
-                            cancelled.clone(),
-                            Box::new(move |progress: TransferProgress| {
-                                progress_for_callback
-                                    .scanning
-                                    .store(false, Ordering::Relaxed);
-                                progress_for_callback
-                                    .transferred
-                                    .store(progress.transferred, Ordering::Relaxed);
-                                progress_for_callback
-                                    .total
-                                    .store(progress.total, Ordering::Relaxed);
-                                progress_for_callback
-                                    .speed
-                                    .store(progress.speed.to_bits(), Ordering::Relaxed);
-                                if let Some(file) = progress.current_file {
-                                    if let Ok(mut guard) =
-                                        progress_for_callback.current_file.write()
-                                    {
-                                        *guard = Some(file);
-                                    }
-                                }
-                                progress_for_callback
-                                    .current_file_transferred
-                                    .store(progress.current_file_transferred, Ordering::Relaxed);
-                                progress_for_callback
-                                    .current_file_total
-                                    .store(progress.current_file_total, Ordering::Relaxed);
-                            }),
-                        )
-                        .await
-                } else {
-                    client_guard
-                        .download_with_progress(
-                            &remote_path,
-                            local_path.to_string_lossy().as_ref(),
-                            cancelled.clone(),
-                            Box::new(move |progress: TransferProgress| {
-                                progress_for_callback
-                                    .scanning
-                                    .store(false, Ordering::Relaxed);
-                                progress_for_callback
-                                    .transferred
-                                    .store(progress.transferred, Ordering::Relaxed);
-                                progress_for_callback
-                                    .total
-                                    .store(progress.total, Ordering::Relaxed);
-                                progress_for_callback
-                                    .speed
-                                    .store(progress.speed.to_bits(), Ordering::Relaxed);
-                            }),
-                        )
-                        .await
-                }
-            };
-
-            release_transfer_client(pool, client).await;
-            Ok::<_, anyhow::Error>(download_result)
-        });
-
-        cx.spawn(async move |this, cx| {
-            let download_result = match download_task.await {
-                Ok(Ok(result)) => result,
-                Ok(Err(error)) => Err(error),
-                Err(error) => Err(anyhow::Error::new(error)),
-            };
-
-            let should_refresh = download_result.is_ok();
-
-            let _ = this.update(cx, |this, cx| {
-                this.update_task_state_from_result(task_id, download_result, cx);
-                this.schedule_transfers(cx);
-                cx.notify();
-            });
-
-            if !should_refresh {
-                return;
-            }
-
-            if let Ok(dir_entries) = std::fs::read_dir(&local_dir) {
-                let mut entries = Vec::new();
-                for entry in dir_entries.flatten() {
-                    if let Ok(metadata) = entry.metadata() {
-                        entries.push(LocalFileEntry {
-                            name: entry.file_name().to_string_lossy().to_string(),
-                            size: metadata.len(),
-                            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                            is_dir: metadata.is_dir(),
-                            owner: local_file_owner(&metadata),
-                        });
-                    }
-                }
-                entries.sort_by(|a, b| {
-                    if a.is_dir == b.is_dir {
-                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                    } else if a.is_dir {
-                        std::cmp::Ordering::Less
-                    } else {
-                        std::cmp::Ordering::Greater
-                    }
-                });
-                let items: Vec<FileItem> = entries
-                    .into_iter()
-                    .map(|e| FileItem {
-                        name: e.name,
-                        size: e.size,
-                        modified: e.modified,
-                        is_dir: e.is_dir,
-                        permissions: String::new(),
-                        owner: e.owner,
-                        directory_size: DirectorySizeState::Unknown,
-                    })
-                    .collect();
-                let local_dir_for_result = local_dir.clone();
-                let _ = this.update(cx, |this, cx| {
-                    if this.close_state.is_closing() {
-                        return;
-                    }
-                    if !should_apply_local_listing(&this.local_current_path, &local_dir_for_result)
-                    {
-                        return;
-                    }
-
-                    let _ = local_panel.update(cx, |panel, cx| {
-                        panel.set_items(items, cx);
-                    });
-                });
-            }
         })
         .detach();
     }
@@ -3751,164 +3917,6 @@ impl SftpView {
         .detach();
     }
 
-    fn start_remote_delete_task(
-        &mut self,
-        task_id: usize,
-        entries: Vec<FileItem>,
-        remote_dir: String,
-        shared_progress: Arc<SharedProgress>,
-        cx: &mut Context<Self>,
-    ) {
-        let pool = self.transfer_client_pool.clone();
-        let progress_for_task = shared_progress.clone();
-        let cancelled = shared_progress.cancelled.clone();
-        let view = cx.entity().clone();
-
-        let task = Tokio::spawn(cx, async move {
-            let client = acquire_transfer_client(pool.clone()).await?;
-            let mut delete_errors: Vec<String> = Vec::new();
-
-            for entry in entries.iter() {
-                if cancelled.load(Ordering::Relaxed) {
-                    release_transfer_client(pool, client).await;
-                    return Err(anyhow::Error::from(TransferCancelled));
-                }
-
-                let path = join_remote_path(&remote_dir, &entry.name);
-                let progress_callback = progress_for_task.clone();
-
-                let result = if entry.is_dir {
-                    progress_for_task.scanning.store(true, Ordering::Relaxed);
-                    progress_for_task.transferred.store(0, Ordering::Relaxed);
-                    progress_for_task.total.store(0, Ordering::Relaxed);
-                    progress_for_task
-                        .current_file_transferred
-                        .store(0, Ordering::Relaxed);
-                    progress_for_task
-                        .current_file_total
-                        .store(0, Ordering::Relaxed);
-                    if let Ok(mut guard) = progress_for_task.current_file.write() {
-                        *guard = None;
-                    }
-                    let mut client_guard = client.lock().await;
-                    client_guard
-                        .delete_recursive(
-                            &path,
-                            cancelled.clone(),
-                            Box::new(move |progress: TransferProgress| {
-                                progress_callback.scanning.store(false, Ordering::Relaxed);
-                                progress_callback
-                                    .transferred
-                                    .store(progress.transferred, Ordering::Relaxed);
-                                progress_callback
-                                    .total
-                                    .store(progress.total, Ordering::Relaxed);
-                                if let Some(file) = progress.current_file {
-                                    if let Ok(mut guard) = progress_callback.current_file.write() {
-                                        *guard = Some(file);
-                                    }
-                                }
-                                progress_callback
-                                    .current_file_transferred
-                                    .store(progress.current_file_transferred, Ordering::Relaxed);
-                                progress_callback
-                                    .current_file_total
-                                    .store(progress.current_file_total, Ordering::Relaxed);
-                            }),
-                        )
-                        .await
-                } else {
-                    progress_for_task.scanning.store(false, Ordering::Relaxed);
-                    if let Ok(mut guard) = progress_for_task.current_file.write() {
-                        *guard = Some(entry.name.clone());
-                    }
-                    progress_for_task
-                        .current_file_transferred
-                        .store(0, Ordering::Relaxed);
-                    progress_for_task
-                        .current_file_total
-                        .store(1, Ordering::Relaxed);
-
-                    let mut client_guard = client.lock().await;
-                    let result = client_guard.delete(&path, false).await;
-
-                    progress_for_task
-                        .transferred
-                        .fetch_add(1, Ordering::Relaxed);
-                    progress_for_task
-                        .current_file_transferred
-                        .store(1, Ordering::Relaxed);
-
-                    result
-                };
-
-                if let Err(error) = result {
-                    if error.downcast_ref::<TransferCancelled>().is_some() {
-                        release_transfer_client(pool, client).await;
-                        return Err(error);
-                    }
-
-                    tracing::error!("Failed to delete {}: {}", path, error);
-                    delete_errors.push(format!("{}: {}", entry.name, error));
-                }
-            }
-
-            release_transfer_client(pool, client).await;
-            Ok::<_, anyhow::Error>(delete_errors)
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let delete_result = match task.await {
-                Ok(Ok(result)) => Ok(result),
-                Ok(Err(error)) => Err(error),
-                Err(error) => Err(anyhow::Error::new(error)),
-            };
-
-            let _ = view.update(cx, |this, cx| {
-                let is_closing = this.close_state.is_closing();
-                let mut should_refresh = true;
-                match delete_result {
-                    Ok(delete_errors) => {
-                        if let Some(task) = this
-                            .transfer_queue
-                            .tasks
-                            .iter_mut()
-                            .find(|task| task.id == task_id)
-                        {
-                            task.state = if delete_errors.is_empty() {
-                                TransferTaskState::Completed
-                            } else {
-                                TransferTaskState::Failed
-                            };
-                        }
-
-                        if !delete_errors.is_empty() && !is_closing {
-                            let error_msg = if delete_errors.len() == 1 {
-                                t!("Error.delete_failed", error = delete_errors[0]).to_string()
-                            } else {
-                                t!("Error.delete_n_failed", count = delete_errors.len()).to_string()
-                            };
-                            this.push_notification(Notification::error(error_msg), cx);
-                        }
-                    }
-                    Err(error) => {
-                        if Self::is_transfer_cancelled(&error) {
-                            should_refresh = false;
-                        }
-                        this.update_task_state_from_result(task_id, Err(error), cx);
-                    }
-                }
-
-                if should_refresh && !is_closing {
-                    this.refresh_remote_dir(cx);
-                }
-                this.schedule_transfers(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     fn update_task_state_from_result(
         &mut self,
         task_id: usize,
@@ -3996,53 +4004,45 @@ impl SftpView {
         conflict_policy: DirectoryConflictPolicy,
         cx: &mut Context<Self>,
     ) {
-        let mut enqueued_any = false;
+        if matches!(self.transfer_queue.admission, TransferAdmission::Frozen) {
+            tracing::debug!("Ignoring uploads after transfer admission was frozen");
+            return;
+        }
+        let upload_context = SftpUploadContext {
+            connection: self.upload_connection_identity.clone(),
+            connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+        };
         for transfer in transfers {
             let task_id = self.next_task_id;
             self.next_task_id += 1;
-
-            let shared_progress = Arc::new(SharedProgress {
-                transferred: AtomicU64::new(0),
-                total: AtomicU64::new(0),
-                speed: AtomicU64::new(0),
-                cancelled: Arc::new(AtomicBool::new(false)),
-                scanning: AtomicBool::new(false),
-                current_file: std::sync::RwLock::new(None),
-                current_file_transferred: AtomicU64::new(0),
-                current_file_total: AtomicU64::new(0),
-            });
-
-            let remote_dir = if let Some(pos) = transfer.remote_path.rfind('/') {
-                let dir = &transfer.remote_path[..pos];
-                if dir.is_empty() {
-                    "/".to_string()
-                } else {
-                    dir.to_string()
-                }
-            } else {
-                ".".to_string()
-            };
-            let directory_conflict_policy =
-                upload_directory_conflict_policy(&transfer, conflict_policy);
-
-            enqueued_any |= self.transfer_queue.enqueue(TransferTask {
+            let prepared = prepare_global_upload(&transfer, conflict_policy, &upload_context);
+            let transfer_id = self
+                .upload_executor
+                .update(cx, |executor, cx| executor.submit(prepared.request, cx));
+            let task = TransferTask {
                 id: task_id,
-                operation: TransferOperation::Upload {
-                    local_path: transfer.local_path,
-                    remote_path: transfer.remote_path,
-                    is_dir: transfer.is_dir,
-                    directory_conflict_policy,
-                    remote_dir,
-                },
+                external_transfer_id: Some(transfer_id),
+                operation: prepared.operation,
                 state: TransferTaskState::Pending,
-                shared_progress,
+                shared_progress: new_shared_progress(),
                 error: None,
-            });
+            };
+            if !self.transfer_queue.track_external(task) {
+                let _ = self
+                    .upload_executor
+                    .update(cx, |executor, cx| executor.cancel(transfer_id, cx));
+                tracing::debug!("Ignoring upload after transfer admission was frozen");
+                continue;
+            }
+            let snapshot = self.upload_executor.read(cx).snapshot(transfer_id);
+            if let Some(snapshot) = snapshot {
+                let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
+                self.refresh_transfer_target_if_visible(refresh_target, cx);
+            }
         }
 
-        if enqueued_any {
-            self.schedule_transfers(cx);
-        }
+        self.start_progress_refresh(cx);
+        cx.notify();
     }
 
     fn start_progress_refresh(&mut self, cx: &mut Context<Self>) {
@@ -4081,6 +4081,21 @@ impl SftpView {
     }
 
     fn cancel_transfer(&mut self, task_id: usize, cx: &mut Context<Self>) {
+        let external_transfer_id = self
+            .transfer_queue
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .and_then(|task| task.external_transfer_id);
+        if let Some(transfer_id) = external_transfer_id {
+            self.upload_executor.update(cx, |executor, cx| {
+                executor.cancel(transfer_id, cx);
+            });
+            self.close_direct_copy_prompt_for_task(task_id, cx);
+            cx.notify();
+            return;
+        }
+
         let mut refresh_operation: Option<TransferOperation> = None;
         if let Some(task) = self
             .transfer_queue
@@ -4113,8 +4128,15 @@ impl SftpView {
     }
 
     fn cancel_all_transfers(&mut self, cx: &mut Context<Self>) {
+        let external_transfer_ids = active_external_transfer_ids(&self.transfer_queue.tasks);
+        for transfer_id in external_transfer_ids {
+            self.upload_executor.update(cx, |executor, cx| {
+                executor.cancel(transfer_id, cx);
+            });
+        }
         self.transfer_queue.cancel_all();
         self.close_active_direct_copy_prompt(cx);
+        cx.notify();
     }
 
     fn push_notification(&self, notification: Notification, cx: &mut Context<Self>) {
@@ -4201,50 +4223,42 @@ impl SftpView {
 
     fn execute_downloads(&mut self, transfers: Vec<PendingTransfer>, cx: &mut Context<Self>) {
         tracing::info!("execute_downloads: {} transfers", transfers.len());
-
-        let mut enqueued_any = false;
+        if matches!(self.transfer_queue.admission, TransferAdmission::Frozen) {
+            tracing::debug!("Ignoring downloads after transfer admission was frozen");
+            return;
+        }
+        let download_context = SftpUploadContext {
+            connection: self.upload_connection_identity.clone(),
+            connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+        };
         for transfer in transfers {
-            tracing::info!(
-                "execute_downloads: starting download for {:?}",
-                transfer.name
-            );
             let task_id = self.next_task_id;
             self.next_task_id += 1;
-
-            let shared_progress = Arc::new(SharedProgress {
-                transferred: AtomicU64::new(0),
-                total: AtomicU64::new(0),
-                speed: AtomicU64::new(0),
-                cancelled: Arc::new(AtomicBool::new(false)),
-                scanning: AtomicBool::new(false),
-                current_file: std::sync::RwLock::new(None),
-                current_file_transferred: AtomicU64::new(0),
-                current_file_total: AtomicU64::new(0),
+            let prepared = prepare_global_download(&transfer, &download_context);
+            let transfer_id = self.upload_executor.update(cx, |executor, cx| {
+                executor.submit_download(prepared.request, cx)
             });
-
-            let local_dir = transfer
-                .local_path
-                .parent()
-                .map(|path| path.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
-
-            enqueued_any |= self.transfer_queue.enqueue(TransferTask {
+            let task = TransferTask {
                 id: task_id,
-                operation: TransferOperation::Download {
-                    remote_path: transfer.remote_path,
-                    local_path: transfer.local_path,
-                    is_dir: transfer.is_dir,
-                    local_dir,
-                },
+                external_transfer_id: Some(transfer_id),
+                operation: prepared.operation,
                 state: TransferTaskState::Pending,
-                shared_progress,
+                shared_progress: new_shared_progress(),
                 error: None,
-            });
+            };
+            if !self.transfer_queue.track_external(task) {
+                let _ = self
+                    .upload_executor
+                    .update(cx, |executor, cx| executor.cancel(transfer_id, cx));
+                continue;
+            }
+            if let Some(snapshot) = self.upload_executor.read(cx).snapshot(transfer_id) {
+                let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
+                self.refresh_transfer_target_if_visible(refresh_target, cx);
+            }
         }
-
-        if enqueued_any {
-            self.schedule_transfers(cx);
-        }
+        self.start_progress_refresh(cx);
+        cx.notify();
     }
 
     fn delete_local_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4357,6 +4371,7 @@ impl SftpView {
 
         if !self.transfer_queue.enqueue(TransferTask {
             id: task_id,
+            external_transfer_id: None,
             operation: TransferOperation::DeleteLocal {
                 entries,
                 local_dir: local_path,
@@ -4468,37 +4483,40 @@ impl SftpView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let first_file = entries.first().map(|e| e.name.clone());
-
-        let shared_progress = Arc::new(SharedProgress {
-            transferred: AtomicU64::new(0),
-            total: AtomicU64::new(entries.len() as u64),
-            speed: AtomicU64::new(0),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            scanning: AtomicBool::new(false),
-            current_file: std::sync::RwLock::new(first_file),
-            current_file_transferred: AtomicU64::new(0),
-            current_file_total: AtomicU64::new(1),
-        });
-
-        let task_id = self.next_task_id;
-        self.next_task_id += 1;
-
-        if !self.transfer_queue.enqueue(TransferTask {
-            id: task_id,
-            operation: TransferOperation::DeleteRemote {
-                entries,
-                remote_dir: remote_path,
-            },
-            state: TransferTaskState::Pending,
-            shared_progress,
-            error: None,
-        }) {
+        if matches!(self.transfer_queue.admission, TransferAdmission::Frozen) {
             tracing::debug!("Ignoring remote delete after transfer admission was frozen");
             return;
         }
-
-        self.schedule_transfers(cx);
+        let context = SftpUploadContext {
+            connection: self.upload_connection_identity.clone(),
+            connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+        };
+        let prepared = prepare_global_remote_delete(&entries, &remote_path, &context);
+        let transfer_id = self.upload_executor.update(cx, |executor, cx| {
+            executor.submit_delete_remote(prepared.request, cx)
+        });
+        let task_id = self.next_task_id;
+        self.next_task_id += 1;
+        if !self.transfer_queue.track_external(TransferTask {
+            id: task_id,
+            external_transfer_id: Some(transfer_id),
+            operation: prepared.operation,
+            state: TransferTaskState::Pending,
+            shared_progress: new_shared_progress(),
+            error: None,
+        }) {
+            let _ = self
+                .upload_executor
+                .update(cx, |executor, cx| executor.cancel(transfer_id, cx));
+            tracing::debug!("Ignoring remote delete after transfer admission was frozen");
+            return;
+        }
+        if let Some(snapshot) = self.upload_executor.read(cx).snapshot(transfer_id) {
+            let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
+            self.refresh_transfer_target_if_visible(refresh_target, cx);
+        }
+        self.start_progress_refresh(cx);
+        cx.notify();
     }
 
     fn show_new_folder_dialog(
@@ -5084,6 +5102,7 @@ impl SftpView {
         self.next_task_id += 1;
         if !self.transfer_queue.enqueue(TransferTask {
             id: task_id,
+            external_transfer_id: None,
             operation: TransferOperation::ServerCopy(Box::new(ServerCopyOperation {
                 source_config,
                 target_config,
@@ -7126,15 +7145,23 @@ impl Render for SftpView {
 mod tests {
     use super::{
         BoundedDisconnectOutcome, CloseState, ConnectionGeneration, ConnectionState,
-        PendingTransfer, SharedProgress, TransferAdmission, TransferClientPool,
-        TransferClientPoolState, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
-        acquire_transfer_client, bounded_disconnect, breadcrumb_item_min_width,
+        PendingTransfer, SftpUploadContext, SharedProgress, TransferAdmission, TransferClientPool,
+        TransferClientPoolState, TransferOperation, TransferQueue, TransferRefreshTarget,
+        TransferTask, TransferTaskState, acquire_transfer_client, active_external_transfer_ids,
+        apply_global_transfer_snapshot, bounded_disconnect, breadcrumb_item_min_width,
         is_valid_entry_name, join_remote_path, mark_server_copy_directory_replacements,
-        server_copy_conflict_flags, should_apply_local_listing, should_apply_remote_listing,
-        tab_connection_status, transfer_error_summary, upload_directory_conflict_policy,
+        prepare_global_download, prepare_global_remote_delete, prepare_global_upload,
+        reconcile_global_transfer_snapshot, remote_path_parent, server_copy_conflict_flags,
+        should_apply_local_listing, should_apply_remote_listing, should_refresh_transfer_target,
+        tab_connection_status, transfer_error_summary, transfer_task_state_from_global,
+        upload_directory_conflict_policy,
     };
     use one_core::tab_container::TabConnectionStatus;
     use sftp::{DirectoryConflictPolicy, ServerCopyItem};
+    use sftp_transfer::{
+        SftpConnectionIdentity, SftpTransferEvent, SftpTransferId, SftpTransferOperation,
+        SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, download_task_key,
+    };
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -7159,6 +7186,7 @@ mod tests {
     fn transfer_task(id: usize) -> TransferTask {
         TransferTask {
             id,
+            external_transfer_id: None,
             operation: TransferOperation::DeleteLocal {
                 entries: Vec::new(),
                 local_dir: PathBuf::from("."),
@@ -7176,6 +7204,484 @@ mod tests {
             }),
             error: None,
         }
+    }
+
+    #[test]
+    fn tracked_external_transfer_is_active_but_not_startable() {
+        let mut queue = TransferQueue::new(1);
+        let mut task = transfer_task(0);
+        task.external_transfer_id = Some(SftpTransferId::new(7));
+
+        assert!(queue.track_external(task));
+        assert!(queue.has_active());
+        assert_eq!(1, queue.active_tasks().len());
+        assert!(queue.next_startable().is_empty());
+        assert!(queue.pending.is_empty());
+    }
+
+    #[test]
+    fn frozen_queue_rejects_external_transfer_tracking() {
+        let mut queue = TransferQueue::new(1);
+        queue.freeze_admission();
+        let mut task = transfer_task(0);
+        task.external_transfer_id = Some(SftpTransferId::new(7));
+
+        assert!(!queue.track_external(task));
+        assert!(queue.tasks.is_empty());
+    }
+
+    #[test]
+    fn cancel_all_leaves_external_transfers_for_executor_events() {
+        let mut queue = TransferQueue::new(2);
+        let mut pending_external = transfer_task(0);
+        pending_external.external_transfer_id = Some(SftpTransferId::new(7));
+        let pending_cancelled = pending_external.shared_progress.cancelled.clone();
+        let mut running_external = transfer_task(1);
+        running_external.external_transfer_id = Some(SftpTransferId::new(8));
+        running_external.state = TransferTaskState::Running;
+        let running_cancelled = running_external.shared_progress.cancelled.clone();
+
+        assert!(queue.track_external(pending_external));
+        assert!(queue.track_external(running_external));
+        queue.cancel_all();
+
+        assert!(matches!(queue.tasks[0].state, TransferTaskState::Pending));
+        assert!(matches!(queue.tasks[1].state, TransferTaskState::Running));
+        assert!(!pending_cancelled.load(Ordering::Relaxed));
+        assert!(!running_cancelled.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn mixed_queue_never_starts_external_transfer_locally() {
+        let mut queue = TransferQueue::new(2);
+        assert!(queue.enqueue(transfer_task(1)));
+        let mut external = transfer_task(2);
+        external.external_transfer_id = Some(SftpTransferId::new(7));
+        assert!(queue.track_external(external));
+
+        let startable = queue.next_startable();
+
+        assert_eq!(
+            vec![1],
+            startable.iter().map(|task| task.id).collect::<Vec<_>>()
+        );
+        assert!(queue.pending.is_empty());
+        assert_eq!(TransferTaskState::Pending, queue.tasks[1].state);
+    }
+
+    #[test]
+    fn active_external_transfer_ids_exclude_terminal_and_internal_tasks() {
+        let mut pending_external = transfer_task(1);
+        pending_external.external_transfer_id = Some(SftpTransferId::new(7));
+        let mut running_external = transfer_task(2);
+        running_external.external_transfer_id = Some(SftpTransferId::new(8));
+        running_external.state = TransferTaskState::Running;
+        let mut completed_external = transfer_task(3);
+        completed_external.external_transfer_id = Some(SftpTransferId::new(9));
+        completed_external.state = TransferTaskState::Completed;
+        let internal = transfer_task(4);
+
+        assert_eq!(
+            vec![SftpTransferId::new(7), SftpTransferId::new(8)],
+            active_external_transfer_ids(&[
+                pending_external,
+                running_external,
+                completed_external,
+                internal,
+            ])
+        );
+    }
+
+    #[test]
+    fn transfer_refresh_requires_first_finished_transition() {
+        let id = SftpTransferId::new(7);
+
+        assert!(!should_refresh_transfer_target(
+            true,
+            &SftpTransferEvent::Updated(id),
+            &SftpTransferState::Succeeded,
+        ));
+        assert!(should_refresh_transfer_target(
+            true,
+            &SftpTransferEvent::Finished(id),
+            &SftpTransferState::Succeeded,
+        ));
+        assert!(should_refresh_transfer_target(
+            true,
+            &SftpTransferEvent::Finished(id),
+            &SftpTransferState::Cancelled,
+        ));
+        assert!(should_refresh_transfer_target(
+            true,
+            &SftpTransferEvent::Finished(id),
+            &SftpTransferState::Failed,
+        ));
+        assert!(!should_refresh_transfer_target(
+            false,
+            &SftpTransferEvent::Finished(id),
+            &SftpTransferState::Succeeded,
+        ));
+    }
+
+    #[test]
+    fn reconciled_terminal_upload_snapshot_updates_mirror_and_requests_refresh() {
+        let mut task = transfer_task(0);
+        task.external_transfer_id = Some(SftpTransferId::new(7));
+        task.operation = TransferOperation::Upload {
+            local_path: PathBuf::from("/tmp/archive"),
+            remote_path: "/srv/archive".to_string(),
+            is_dir: true,
+            directory_conflict_policy: DirectoryConflictPolicy::Merge,
+            remote_dir: "/srv".to_string(),
+        };
+        let snapshot = SftpTransferSnapshot {
+            id: SftpTransferId::new(7),
+            operation: SftpTransferOperation::Upload,
+            connection: SftpConnectionIdentity::Runtime(3),
+            local_path: PathBuf::from("/tmp/archive"),
+            remote_path: "/srv/archive".to_string(),
+            display_name: "archive".to_string(),
+            state: SftpTransferState::Succeeded,
+            transferred: 512,
+            total: Some(512),
+            speed: 0.0,
+            current_file: None,
+            error: None,
+        };
+
+        assert_eq!(
+            Some(TransferRefreshTarget::Remote("/srv".to_string())),
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+        assert_eq!(TransferTaskState::Completed, task.state);
+        assert_eq!(
+            512,
+            task.shared_progress.transferred.load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            None,
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+    }
+
+    #[test]
+    fn reconciled_terminal_download_snapshot_updates_mirror_and_requests_local_refresh() {
+        let mut task = transfer_task(0);
+        task.external_transfer_id = Some(SftpTransferId::new(8));
+        task.operation = TransferOperation::Download {
+            remote_path: "/srv/archive".to_string(),
+            local_dir: PathBuf::from("/tmp"),
+        };
+        let snapshot = SftpTransferSnapshot {
+            id: SftpTransferId::new(8),
+            operation: SftpTransferOperation::Download,
+            connection: SftpConnectionIdentity::Runtime(3),
+            local_path: PathBuf::from("/tmp/archive"),
+            remote_path: "/srv/archive".to_string(),
+            display_name: "archive".to_string(),
+            state: SftpTransferState::Succeeded,
+            transferred: 512,
+            total: Some(512),
+            speed: 0.0,
+            current_file: None,
+            error: None,
+        };
+
+        assert_eq!(
+            Some(TransferRefreshTarget::Local(PathBuf::from("/tmp"))),
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+        assert_eq!(TransferTaskState::Completed, task.state);
+        assert_eq!(
+            None,
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+    }
+
+    #[test]
+    fn mismatched_snapshot_operation_does_not_update_or_refresh_mirror() {
+        let mut task = transfer_task(0);
+        task.operation = TransferOperation::Download {
+            remote_path: "/srv/archive".to_string(),
+            local_dir: PathBuf::from("/tmp"),
+        };
+        let snapshot = SftpTransferSnapshot {
+            id: SftpTransferId::new(8),
+            operation: SftpTransferOperation::Upload,
+            connection: SftpConnectionIdentity::Runtime(3),
+            local_path: PathBuf::from("/tmp/archive"),
+            remote_path: "/srv/archive".to_string(),
+            display_name: "archive".to_string(),
+            state: SftpTransferState::Succeeded,
+            transferred: 512,
+            total: Some(512),
+            speed: 0.0,
+            current_file: None,
+            error: None,
+        };
+
+        assert_eq!(
+            None,
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+        assert_eq!(TransferTaskState::Pending, task.state);
+        assert_eq!(0, task.shared_progress.transferred.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn remote_path_parent_handles_absolute_and_relative_upload_targets() {
+        assert_eq!("/", remote_path_parent("/file"));
+        assert_eq!("/dir", remote_path_parent("/dir/file"));
+        assert_eq!(".", remote_path_parent("file"));
+        assert_eq!("dir", remote_path_parent("dir/file"));
+        assert_eq!("/dir", remote_path_parent("/dir/file/"));
+    }
+
+    #[test]
+    fn global_transfer_states_map_to_local_mirror_states() {
+        assert_eq!(
+            TransferTaskState::Pending,
+            transfer_task_state_from_global(&SftpTransferState::Queued)
+        );
+        assert_eq!(
+            TransferTaskState::Running,
+            transfer_task_state_from_global(&SftpTransferState::Running)
+        );
+        assert_eq!(
+            TransferTaskState::Running,
+            transfer_task_state_from_global(&SftpTransferState::Cancelling)
+        );
+        assert_eq!(
+            TransferTaskState::Completed,
+            transfer_task_state_from_global(&SftpTransferState::Succeeded)
+        );
+        assert_eq!(
+            TransferTaskState::Failed,
+            transfer_task_state_from_global(&SftpTransferState::Failed)
+        );
+        assert_eq!(
+            TransferTaskState::Cancelled,
+            transfer_task_state_from_global(&SftpTransferState::Cancelled)
+        );
+    }
+
+    #[test]
+    fn global_upload_snapshot_updates_local_progress_mirror() {
+        let mut task = transfer_task(0);
+        let snapshot = SftpTransferSnapshot {
+            id: SftpTransferId::new(7),
+            operation: SftpTransferOperation::Upload,
+            connection: SftpConnectionIdentity::Runtime(3),
+            local_path: PathBuf::from("/tmp/archive.zip"),
+            remote_path: "/srv/archive.zip".to_string(),
+            display_name: "archive.zip".to_string(),
+            state: SftpTransferState::Running,
+            transferred: 128,
+            total: Some(512),
+            speed: 42.5,
+            current_file: Some("nested/file.txt".to_string()),
+            error: Some("transient".to_string()),
+        };
+
+        apply_global_transfer_snapshot(&mut task, &snapshot);
+
+        assert_eq!(TransferTaskState::Running, task.state);
+        assert_eq!(Some("transient"), task.error.as_deref());
+        assert_eq!(
+            128,
+            task.shared_progress.transferred.load(Ordering::Relaxed)
+        );
+        assert_eq!(512, task.shared_progress.total.load(Ordering::Relaxed));
+        assert_eq!(
+            42.5,
+            f64::from_bits(task.shared_progress.speed.load(Ordering::Relaxed))
+        );
+        assert_eq!(
+            Some("nested/file.txt".to_string()),
+            task.shared_progress.current_file.read().unwrap().clone()
+        );
+        assert!(!task.shared_progress.scanning.load(Ordering::Relaxed));
+        assert_eq!(
+            128,
+            task.shared_progress
+                .current_file_transferred
+                .load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            512,
+            task.shared_progress
+                .current_file_total
+                .load(Ordering::Relaxed)
+        );
+    }
+
+    #[test]
+    fn prepared_global_upload_preserves_request_and_remote_parent() {
+        let context = SftpUploadContext {
+            connection: SftpConnectionIdentity::Runtime(3),
+            connection_source: SftpUploadConnection::Config(transfer_pool_config()),
+        };
+        let transfer = PendingTransfer {
+            name: "archive".to_string(),
+            local_path: PathBuf::from("/local/archive"),
+            remote_path: "/srv/backups/archive".to_string(),
+            is_dir: true,
+            has_conflict: true,
+        };
+
+        let prepared = prepare_global_upload(&transfer, DirectoryConflictPolicy::Replace, &context);
+
+        assert_eq!(context.connection, prepared.request.connection);
+        assert_eq!(transfer.local_path, prepared.request.local_path);
+        assert_eq!(transfer.remote_path, prepared.request.remote_path);
+        assert!(prepared.request.is_dir);
+        assert_eq!(
+            DirectoryConflictPolicy::Replace,
+            prepared.request.directory_conflict_policy
+        );
+        assert_eq!("archive", prepared.request.display_name);
+        assert!(matches!(
+            prepared.operation,
+            TransferOperation::Upload { ref remote_dir, .. } if remote_dir == "/srv/backups"
+        ));
+    }
+
+    #[test]
+    fn prepared_global_download_preserves_request_and_local_parent() {
+        let context = SftpUploadContext {
+            connection: SftpConnectionIdentity::Runtime(3),
+            connection_source: SftpUploadConnection::Config(transfer_pool_config()),
+        };
+        let transfer = PendingTransfer {
+            name: "archive".to_string(),
+            local_path: PathBuf::from("/local/backups/archive"),
+            remote_path: "/srv/archive".to_string(),
+            is_dir: true,
+            has_conflict: true,
+        };
+
+        let prepared = prepare_global_download(&transfer, &context);
+
+        assert_eq!(context.connection, prepared.request.connection);
+        assert_eq!(transfer.local_path, prepared.request.local_path);
+        assert_eq!(transfer.remote_path, prepared.request.remote_path);
+        assert!(prepared.request.is_dir);
+        assert_eq!("archive", prepared.request.display_name);
+        assert_eq!(
+            Some(download_task_key(
+                &context.connection,
+                &transfer.remote_path,
+                &transfer.local_path,
+            )),
+            prepared.request.task_key
+        );
+        assert!(matches!(
+            prepared.operation,
+            TransferOperation::Download { ref local_dir, .. }
+                if local_dir == Path::new("/local/backups")
+        ));
+    }
+
+    #[test]
+    fn prepared_global_remote_delete_preserves_entries_and_remote_dir() {
+        let context = SftpUploadContext {
+            connection: SftpConnectionIdentity::Runtime(3),
+            connection_source: SftpUploadConnection::Config(transfer_pool_config()),
+        };
+        let entries = vec![
+            remote_delete_entry("archive", true),
+            remote_delete_entry("readme.txt", false),
+        ];
+
+        let prepared = prepare_global_remote_delete(&entries, "/srv/backups", &context);
+
+        assert_eq!(context.connection, prepared.request.connection);
+        assert_eq!("/srv/backups", prepared.request.remote_dir);
+        assert_eq!(2, prepared.request.entries.len());
+        assert_eq!(
+            "/srv/backups/archive",
+            prepared.request.entries[0].remote_path
+        );
+        assert!(prepared.request.entries[0].is_dir);
+        assert_eq!(
+            "/srv/backups/readme.txt",
+            prepared.request.entries[1].remote_path
+        );
+        assert!(!prepared.request.entries[1].is_dir);
+        assert!(matches!(
+            prepared.operation,
+            TransferOperation::DeleteRemote {
+                ref entries,
+                ref remote_dir,
+            } if entries.len() == 2 && remote_dir == "/srv/backups"
+        ));
+    }
+
+    #[test]
+    fn reconciled_terminal_remote_delete_snapshot_requests_remote_refresh() {
+        let mut task = transfer_task(0);
+        task.external_transfer_id = Some(SftpTransferId::new(9));
+        task.operation = TransferOperation::DeleteRemote {
+            entries: vec![remote_delete_entry("archive", true)],
+            remote_dir: "/srv/backups".to_string(),
+        };
+        let snapshot = SftpTransferSnapshot {
+            id: SftpTransferId::new(9),
+            operation: SftpTransferOperation::DeleteRemote,
+            connection: SftpConnectionIdentity::Runtime(3),
+            local_path: PathBuf::new(),
+            remote_path: "/srv/backups".to_string(),
+            display_name: "archive".to_string(),
+            state: SftpTransferState::Succeeded,
+            transferred: 1,
+            total: Some(1),
+            speed: 0.0,
+            current_file: None,
+            error: None,
+        };
+
+        assert_eq!(
+            Some(TransferRefreshTarget::Remote("/srv/backups".to_string())),
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+        assert_eq!(TransferTaskState::Completed, task.state);
+    }
+
+    #[test]
+    fn reconciled_failed_remote_delete_snapshot_requests_remote_refresh_once() {
+        let mut task = transfer_task(0);
+        task.external_transfer_id = Some(SftpTransferId::new(10));
+        task.operation = TransferOperation::DeleteRemote {
+            entries: vec![
+                remote_delete_entry("deleted.txt", false),
+                remote_delete_entry("permission-denied.txt", false),
+            ],
+            remote_dir: "/srv/backups".to_string(),
+        };
+        let snapshot = SftpTransferSnapshot {
+            id: SftpTransferId::new(10),
+            operation: SftpTransferOperation::DeleteRemote,
+            connection: SftpConnectionIdentity::Runtime(3),
+            local_path: PathBuf::new(),
+            remote_path: "/srv/backups".to_string(),
+            display_name: "2 items".to_string(),
+            state: SftpTransferState::Failed,
+            transferred: 2,
+            total: Some(2),
+            speed: 0.0,
+            current_file: Some("/srv/backups/permission-denied.txt".to_string()),
+            error: Some("permission denied".to_string()),
+        };
+
+        assert_eq!(
+            Some(TransferRefreshTarget::Remote("/srv/backups".to_string())),
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
+        assert_eq!(TransferTaskState::Failed, task.state);
+        assert_eq!(
+            None,
+            reconcile_global_transfer_snapshot(&mut task, &snapshot)
+        );
     }
 
     #[test]
@@ -7204,6 +7710,18 @@ mod tests {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+        }
+    }
+
+    fn remote_delete_entry(name: &str, is_dir: bool) -> super::FileItem {
+        super::FileItem {
+            name: name.to_string(),
+            size: 0,
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            is_dir,
+            permissions: String::new(),
+            owner: None,
+            directory_size: super::DirectorySizeState::Unknown,
         }
     }
 

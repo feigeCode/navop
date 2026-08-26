@@ -214,6 +214,9 @@ impl TerminalView {
                     settings.custom_highlights = rules;
                 });
             }
+            TerminalSidebarEvent::OpenSftp(connection) => {
+                cx.emit(TerminalPaneEvent::OpenSftp(connection.clone()));
+            }
             TerminalSidebarEvent::CdToTerminal(path) => {
                 // 向终端发送 cd 命令并回车
                 let cmd = format!("cd {}\n", shell_escape(path));

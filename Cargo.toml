@@ -45,7 +45,7 @@ members = [
     "tools/icon-audit",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
-    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
+    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
 resolver = "2"
 
 [workspace.package]
@@ -121,6 +121,7 @@ one-ui = { path = "crates/one_ui" }
 ssh = { path = "crates/ssh" }
 x11_forwarding = { path = "crates/x11_forwarding" }
 sftp = { path = "crates/sftp" }
+sftp_transfer = { path = "crates/sftp_transfer" }
 terminal = { path = "crates/terminal" }
 terminal_view = { path = "crates/terminal_view" }
 workspace_explorer = { path = "crates/workspace_explorer" }
@@ -215,7 +216,7 @@ zeroize = "1"
 
 # Terminal emulation
 alacritty_terminal = "0.26"
-zmodem2 = "0.7.1"
+zmodem2 = "0.7.2"
 
 # Serial port
 serialport = "4"

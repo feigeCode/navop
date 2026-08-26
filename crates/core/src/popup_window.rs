@@ -4,10 +4,10 @@ use gpui::{
     Window, WindowBounds, WindowKind, WindowOptions, actions, div, prelude::FluentBuilder, px,
     size,
 };
-use std::sync::OnceLock;
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt, notification::Notification, v_flex,
 };
+use std::sync::OnceLock;
 
 const FULLSCREEN_POPUP_CONTEXT: &str = "FullscreenPopupWindow";
 

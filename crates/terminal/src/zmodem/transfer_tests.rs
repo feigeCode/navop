@@ -189,7 +189,7 @@ fn escaped_payload() -> Vec<u8> {
     const ESCAPED: [u8; 12] = [
         0x00, 0x0d, 0x10, 0x11, 0x13, 0x18, 0x7f, 0x8d, 0x90, 0x91, 0x93, 0xff,
     ];
-    (0..8192)
+    (0..512 * 1024)
         .map(|index| ESCAPED[index % ESCAPED.len()])
         .collect()
 }

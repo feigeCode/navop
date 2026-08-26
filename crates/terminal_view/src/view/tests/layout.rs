@@ -458,6 +458,9 @@ fn terminal_command_bar_sits_with_primary_content_and_playback_keeps_its_footer(
     let primary_content = center_region
         .find(".child(primary_content)")
         .expect("primary terminal content should be rendered");
+    let zmodem_progress = center_region
+        .find(".when_some(zmodem_progress")
+        .expect("ZMODEM progress should be rendered below primary content");
     let command_bar = center_region
         .find(".child(self.command_bar.clone())")
         .expect("live recording controls should be hosted by the command bar");
@@ -469,8 +472,19 @@ fn terminal_command_bar_sits_with_primary_content_and_playback_keeps_its_footer(
         .expect("optional bottom tool should be rendered");
 
     assert!(command_bar < primary_content);
-    assert!(primary_content < playback_footer);
+    assert!(primary_content < zmodem_progress);
+    assert!(zmodem_progress < playback_footer);
     assert!(playback_footer < bottom_tool);
+}
+
+#[test]
+fn zmodem_upload_progress_has_stable_structure() {
+    let progress_source = include_str!("../zmodem_progress.rs");
+
+    assert!(progress_source.contains(r#""terminal-zmodem-upload""#));
+    assert!(progress_source.contains(r#""terminal-zmodem-upload-name""#));
+    assert!(progress_source.contains(r#"Progress::new("terminal-zmodem-upload-progress")"#));
+    assert!(progress_source.contains(r#"t!("TerminalZmodem.uploading")"#));
 }
 
 #[test]

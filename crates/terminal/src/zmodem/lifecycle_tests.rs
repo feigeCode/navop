@@ -2,6 +2,7 @@ use super::{
     DetectedZmodem, ZCAN, ZmodemDirection, ZmodemPickerResponse, ZmodemResponder,
     is_channel_closed, run_transfer,
 };
+use crate::TerminalEvent;
 use anyhow::Result;
 use async_trait::async_trait;
 use ssh::{ChannelEvent, ForwardRequest, PtyConfig, SshChannel};
@@ -96,6 +97,56 @@ async fn cancelled_picker_sends_zcan() {
     assert!(result.is_err());
     response_task.await.unwrap();
     assert_eq!(sent.lock().unwrap().as_slice(), &[ZCAN.to_vec()]);
+}
+
+#[tokio::test]
+async fn cancellation_during_picker_reports_cancelled_outcome() {
+    let (event_tx, mut event_rx) = unbounded_channel();
+    let responder = ZmodemResponder::new(event_tx);
+    let cancellation = CancellationToken::new();
+    let begin_progress = responder.clone();
+    let cancel_token = cancellation.clone();
+    let cancellation_task = tokio::spawn(async move {
+        event_rx.recv().await.expect("picker request event");
+        std::mem::drop(
+            begin_progress.begin_upload(crate::zmodem::ZmodemTransferProgress {
+                direction: crate::zmodem::ZmodemTransferDirection::Upload,
+                file_name: "file.bin".to_string(),
+                file_index: 0,
+                file_count: 1,
+                current_file_transferred: 0,
+                current_file_total: 1,
+                transferred: 0,
+                total: 1,
+            }),
+        );
+        sleep(Duration::from_millis(10)).await;
+        cancel_token.cancel();
+        loop {
+            match event_rx.recv().await.expect("progress event") {
+                TerminalEvent::ZmodemTransferFinished(super::ZmodemTransferOutcome::Cancelled) => {
+                    break;
+                }
+                TerminalEvent::ZmodemProgressChanged | TerminalEvent::ZmodemRequestChanged => {}
+                event => panic!("unexpected terminal event: {event:?}"),
+            }
+        }
+    });
+    let mut channel = MockChannel::default();
+
+    let result = run_transfer(
+        &mut channel,
+        DetectedZmodem {
+            direction: ZmodemDirection::Upload,
+            wire: Vec::new(),
+        },
+        &responder,
+        &cancellation,
+    )
+    .await;
+
+    assert!(result.is_err());
+    cancellation_task.await.unwrap();
 }
 
 #[tokio::test]

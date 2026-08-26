@@ -9,6 +9,7 @@ terminal = { workspace = true }
 public_mcp = { workspace = true }
 ssh = { workspace = true }
 sftp = { workspace = true }
+sftp_transfer = { workspace = true }
 remote_file_editor = { workspace = true }
 remote_image_preview = { workspace = true }
 workspace_explorer = { workspace = true }
@@ -35,6 +36,7 @@ rust-i18n = { workspace = true }
 url.workspace = true
 chrono = { workspace = true }
 tokio = { workspace = true }
+tokio-util.workspace = true
 serialport = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

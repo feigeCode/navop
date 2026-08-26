@@ -30,7 +30,9 @@ use crate::shell_integration::{
 };
 use crate::ssh_expect::SshLoginExpect;
 use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
-use crate::zmodem::{ZmodemDetector, ZmodemResponder, is_channel_closed, run_transfer};
+use crate::zmodem::{
+    ZmodemDetector, ZmodemResponder, apply_transfer_direction, is_channel_closed, run_transfer,
+};
 use crate::{
     TerminalBackend, TerminalControlAction, TerminalControlError, TerminalControlHandle,
     TerminalControlOutput, TerminalControlRequest, TerminalExecError, TerminalExecHandle,
@@ -328,6 +330,7 @@ enum SshCommand {
     CancelExec {
         id: u64,
     },
+    CancelTransfer,
     ExecTimeout {
         id: u64,
         phase: ExecPhase,
@@ -634,8 +637,8 @@ impl SshBackend {
 
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
         let exec_ids = Arc::new(AtomicU64::new(1));
-        let task_command_tx = command_tx.clone();
         let transfer_cancellation = CancellationToken::new();
+        let task_command_tx = command_tx.clone();
         let task_transfer_cancellation = transfer_cancellation.clone();
 
         // 创建 PtyWrite 回写通道
@@ -808,6 +811,9 @@ impl SshBackend {
                                     break;
                                 }
                             }
+                            SshCommand::CancelTransfer => {
+                                task_transfer_cancellation.cancel();
+                            }
                             SshCommand::ExecTimeout { id, phase } => {
                                 let effects = encode_exec_effects(
                                     terminal_encoding,
@@ -834,6 +840,7 @@ impl SshBackend {
                             }
                             SshCommand::Shutdown => {
                                 shutdown = true;
+                                task_transfer_cancellation.cancel();
                                 parser_ingress.abort();
                                 let _ = channel.close().await;
                                 break;
@@ -876,6 +883,10 @@ impl SshBackend {
                                     );
                                     let mut routed_terminal_data = routed.terminal;
                                     if let Some(detected) = routed.transfer {
+                                        apply_transfer_direction(
+                                            &zmodem_responder,
+                                            detected.direction,
+                                        );
                                         match run_transfer(
                                             &mut channel,
                                             detected,
@@ -3008,6 +3019,10 @@ impl TerminalBackend for SshBackend {
 
     fn control_handle(&self) -> Option<TerminalControlHandle> {
         Some(build_terminal_control_handle(self.command_tx.clone()))
+    }
+
+    fn cancel_transfer(&self) -> bool {
+        self.command_tx.send(SshCommand::CancelTransfer).is_ok()
     }
 
     fn resize(&self, size: TerminalSize) {

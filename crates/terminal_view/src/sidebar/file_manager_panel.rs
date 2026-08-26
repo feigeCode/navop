@@ -50,6 +50,10 @@ use sftp::{
     TransferCancelled, TransferProgress, build_remote_file_command, calculate_directory_size,
     remote_path_is_same_or_descendant,
 };
+use sftp_transfer::{
+    self, SftpConnectionIdentity, SftpTransferEvent, SftpTransferExecutor, SftpTransferId,
+    SftpTransferState, SftpUploadConnection, SftpUploadRequest, upload_task_key,
+};
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
@@ -66,6 +70,7 @@ pub const FILE_MANAGER_CONTEXT: &str = "TerminalFileManager";
 const FILE_ROW_HEIGHT: gpui::Pixels = px(36.);
 const SIZE_COLUMN_WIDTH: gpui::Pixels = px(72.);
 const MODIFIED_COLUMN_WIDTH: gpui::Pixels = px(70.);
+const CONFLICT_NAME_PREVIEW_LIMIT: usize = 3;
 
 pub fn init_keybindings() -> Vec<KeyBinding> {
     vec![KeyBinding::new(
@@ -83,16 +88,32 @@ fn file_manager_paste_shortcut() -> &'static str {
     }
 }
 
+fn upload_progress_state(state: &SftpTransferState) -> TransferProgressState {
+    match state {
+        SftpTransferState::Queued => TransferProgressState::Pending,
+        SftpTransferState::Running => TransferProgressState::Running,
+        SftpTransferState::Cancelling
+        | SftpTransferState::Succeeded
+        | SftpTransferState::Failed
+        | SftpTransferState::Cancelled => TransferProgressState::Cancelling,
+    }
+}
+
+fn local_progress_state(state: &TransferTaskState) -> TransferProgressState {
+    match state {
+        TransferTaskState::Pending => TransferProgressState::Pending,
+        TransferTaskState::Running => TransferProgressState::Running,
+        TransferTaskState::Completed | TransferTaskState::Failed | TransferTaskState::Cancelled => {
+            TransferProgressState::Cancelling
+        }
+    }
+}
+
 // ── 传输相关类型 ──────────────────────────────────────────────
 
 /// 传输操作类型
 #[derive(Clone)]
 enum TransferOperation {
-    Upload {
-        local_path: PathBuf,
-        remote_path: String,
-        is_dir: bool,
-    },
     Download {
         remote_path: String,
         local_path: PathBuf,
@@ -146,6 +167,30 @@ struct TransferTask {
     error: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum TransferCancelTarget {
+    Upload(SftpTransferId),
+    Local(usize),
+}
+
+#[derive(Clone, Copy)]
+enum TransferProgressState {
+    Pending,
+    Running,
+    Cancelling,
+}
+
+struct TransferProgressView {
+    icon: IconName,
+    label: String,
+    transferred: u64,
+    total: u64,
+    speed: f64,
+    state: TransferProgressState,
+    pending_count: usize,
+    cancel_target: TransferCancelTarget,
+}
+
 #[derive(Clone)]
 struct PendingUpload {
     name: String,
@@ -153,6 +198,124 @@ struct PendingUpload {
     remote_path: String,
     is_dir: bool,
     has_conflict: bool,
+    directory_conflict_policy: DirectoryConflictPolicy,
+}
+
+struct UploadPreparation {
+    paths: Vec<PathBuf>,
+    remote_dir: String,
+    connection_generation: u64,
+}
+
+struct CompletedUploadPreparation {
+    request: UploadPreparation,
+    remote_names: Result<HashSet<String>, String>,
+}
+
+struct UploadPreparationTask {
+    request: UploadPreparation,
+    client: Arc<Mutex<RusshSftpClient>>,
+    view: Entity<FileManagerPanel>,
+}
+
+struct UploadConflictDialog {
+    connection_generation: u64,
+    conflict_names: Vec<String>,
+    pending_uploads: Vec<PendingUpload>,
+    existing_names: HashSet<String>,
+}
+
+#[derive(Clone)]
+struct UploadConflictActions {
+    view: Entity<FileManagerPanel>,
+    connection_generation: u64,
+    pending_uploads: Vec<PendingUpload>,
+    existing_names: HashSet<String>,
+}
+
+#[derive(Clone)]
+struct UploadEnqueueRequest {
+    view: Entity<FileManagerPanel>,
+    connection_generation: u64,
+    uploads: Vec<PendingUpload>,
+}
+
+struct UploadConflictButton {
+    id: &'static str,
+    label: String,
+    primary: bool,
+    request: UploadEnqueueRequest,
+}
+
+impl UploadConflictActions {
+    fn request(&self, uploads: Vec<PendingUpload>) -> UploadEnqueueRequest {
+        UploadEnqueueRequest {
+            view: self.view.clone(),
+            connection_generation: self.connection_generation,
+            uploads,
+        }
+    }
+
+    fn skip_request(&self) -> UploadEnqueueRequest {
+        let uploads = self
+            .pending_uploads
+            .iter()
+            .filter(|upload| !upload.has_conflict)
+            .cloned()
+            .collect();
+        self.request(uploads)
+    }
+
+    fn keep_both_request(&self) -> UploadEnqueueRequest {
+        self.request(rename_conflicting_uploads(
+            self.pending_uploads.clone(),
+            self.existing_names.clone(),
+        ))
+    }
+
+    fn merge_request(&self) -> UploadEnqueueRequest {
+        let uploads = self
+            .pending_uploads
+            .iter()
+            .filter(|upload| !upload.has_conflict || upload.is_dir)
+            .cloned()
+            .collect();
+        self.request(with_directory_policy(
+            uploads,
+            DirectoryConflictPolicy::Merge,
+        ))
+    }
+
+    fn overwrite_request(&self) -> UploadEnqueueRequest {
+        self.request(with_directory_policy(
+            self.pending_uploads.clone(),
+            DirectoryConflictPolicy::Replace,
+        ))
+    }
+}
+
+fn build_pending_uploads(
+    paths: Vec<PathBuf>,
+    remote_dir: &str,
+    existing_names: Option<&HashSet<String>>,
+) -> Vec<PendingUpload> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            PendingUpload {
+                remote_path: join_remote_path(remote_dir, &name),
+                is_dir: path.is_dir(),
+                local_path: path,
+                has_conflict: existing_names.is_some_and(|names| names.contains(&name)),
+                name,
+                directory_conflict_policy: DirectoryConflictPolicy::Merge,
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -211,6 +374,31 @@ impl TransferQueue {
     fn enqueue(&mut self, task: TransferTask) {
         self.pending.push_back(task.id);
         self.tasks.push(task);
+    }
+
+    /// 将已经收到取消信号、但尚未启动的任务直接落为取消终态。
+    fn take_cancelled_pending(&mut self) -> Vec<TransferTask> {
+        let mut retained = VecDeque::with_capacity(self.pending.len());
+        let mut cancelled = Vec::new();
+
+        while let Some(task_id) = self.pending.pop_front() {
+            let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) else {
+                continue;
+            };
+
+            if task.state == TransferTaskState::Pending
+                && task.shared_progress.cancelled.load(Ordering::Relaxed)
+            {
+                task.state = TransferTaskState::Cancelled;
+                task.error = None;
+                cancelled.push(task.clone());
+            } else if task.state == TransferTaskState::Pending {
+                retained.push_back(task_id);
+            }
+        }
+
+        self.pending = retained;
+        cancelled
     }
 
     /// 取出下一个可执行的任务（串行：仅当没有 Running 时才启动）
@@ -436,6 +624,8 @@ pub enum FileManagerPanelEvent {
     Close,
     /// 请求宿主把面板移动到指定位置
     MoveTo(SidebarPlacement),
+    /// 在独立页签中打开当前连接的 SFTP 文件管理器
+    OpenSftp(StoredConnection),
     /// 在终端中 cd 到指定路径
     CdToTerminal(String),
     /// 请求将终端当前工作目录同步到文件管理器
@@ -738,8 +928,133 @@ fn should_apply_directory_result(current_path: &str, listed_path: &str) -> bool 
     current_path == listed_path
 }
 
+fn is_current_generation(current: u64, expected: u64) -> bool {
+    current == expected
+}
+
 fn should_refresh_after_upload(current_path: &str, remote_path: &str) -> bool {
     current_path == remote_path_parent(remote_path)
+}
+
+fn enqueue_uploads_if_current(request: UploadEnqueueRequest, cx: &mut App) {
+    if request.uploads.is_empty() {
+        return;
+    }
+
+    let _ = request.view.update(cx, |this, cx| {
+        if !is_current_generation(this.connection_generation, request.connection_generation) {
+            return;
+        }
+        this.enqueue_pending_uploads(request.uploads, cx);
+    });
+}
+
+fn upload_conflict_list(conflict_names: &[String]) -> String {
+    if conflict_names.len() <= CONFLICT_NAME_PREVIEW_LIMIT {
+        return conflict_names.join(", ");
+    }
+
+    t!(
+        "Conflict.n_files",
+        name = conflict_names[..CONFLICT_NAME_PREVIEW_LIMIT].join(", "),
+        count = conflict_names.len()
+    )
+    .to_string()
+}
+
+fn upload_conflict_button(conflict_button: UploadConflictButton) -> gpui::AnyElement {
+    let button = Button::new(conflict_button.id).label(conflict_button.label);
+    let button = if conflict_button.primary {
+        button.primary()
+    } else {
+        button.ghost()
+    };
+    button
+        .on_click(move |_, window, cx| {
+            window.close_dialog(cx);
+            enqueue_uploads_if_current(conflict_button.request.clone(), cx);
+        })
+        .into_any_element()
+}
+
+fn upload_conflict_buttons(
+    actions: UploadConflictActions,
+    has_dir_conflict: bool,
+) -> Vec<gpui::AnyElement> {
+    let mut buttons = vec![
+        upload_conflict_button(UploadConflictButton {
+            id: "skip",
+            label: t!("Conflict.skip").to_string(),
+            primary: false,
+            request: actions.skip_request(),
+        }),
+        upload_conflict_button(UploadConflictButton {
+            id: "keep_both",
+            label: t!("Conflict.keep_both").to_string(),
+            primary: false,
+            request: actions.keep_both_request(),
+        }),
+    ];
+    if has_dir_conflict {
+        buttons.push(upload_conflict_button(UploadConflictButton {
+            id: "merge",
+            label: t!("Conflict.merge").to_string(),
+            primary: false,
+            request: actions.merge_request(),
+        }));
+    }
+    buttons.push(upload_conflict_button(UploadConflictButton {
+        id: "overwrite",
+        label: t!("Conflict.overwrite").to_string(),
+        primary: true,
+        request: actions.overwrite_request(),
+    }));
+    buttons
+}
+
+async fn load_upload_remote_names(
+    client: Arc<Mutex<RusshSftpClient>>,
+    remote_dir: String,
+) -> Result<HashSet<String>, String> {
+    let mut client = client.lock().await;
+    let entries = client.list_dir(&remote_dir).await.map_err(|error| {
+        tracing::error!("读取远程目录失败: {}", error);
+        t!("FileManager.read_dir_failed", error = error).to_string()
+    })?;
+    Ok(entries
+        .into_iter()
+        .filter(|entry| entry.name != "." && entry.name != "..")
+        .map(|entry| entry.name)
+        .collect())
+}
+
+fn spawn_upload_preparation(
+    task: UploadPreparationTask,
+    window: &mut Window,
+    cx: &mut Context<FileManagerPanel>,
+) {
+    let list_task = Tokio::spawn(
+        cx,
+        load_upload_remote_names(task.client, task.request.remote_dir.clone()),
+    );
+    window
+        .spawn(cx, async move |cx| {
+            let remote_names = match list_task.await {
+                Ok(remote_names) => remote_names,
+                Err(error) => {
+                    tracing::error!("远程目录检查任务失败: {}", error);
+                    Err(t!("FileManager.read_dir_failed", error = error).to_string())
+                }
+            };
+            let completed = CompletedUploadPreparation {
+                request: task.request,
+                remote_names,
+            };
+            let _ = task.view.update_in(cx, |this, window, cx| {
+                this.handle_upload_preparation(completed, window, cx);
+            });
+        })
+        .detach();
 }
 
 fn should_refresh_after_delete(current_path: &str, remote_dir: &str) -> bool {
@@ -832,6 +1147,18 @@ fn rename_conflicting_uploads(
         }
     }
 
+    uploads
+}
+
+fn with_directory_policy(
+    mut uploads: Vec<PendingUpload>,
+    policy: DirectoryConflictPolicy,
+) -> Vec<PendingUpload> {
+    for upload in &mut uploads {
+        if upload.is_dir && upload.has_conflict {
+            upload.directory_conflict_policy = policy;
+        }
+    }
     uploads
 }
 
@@ -1071,10 +1398,14 @@ async fn remote_extract_has_conflict(
 
 /// 终端侧边栏文件管理器面板
 pub struct FileManagerPanel {
+    /// 当前 SSH 连接，用于在独立页签中打开同一连接的 SFTP 视图
+    stored_connection: StoredConnection,
     /// 共享 SSH 会话管理器
     session_manager: Arc<SshSessionManager>,
     /// SFTP 客户端（浏览用）
     sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 浏览连接代次；新连接或重试会使旧连接 future 的结果失效。
+    connection_generation: u64,
     /// 连接状态
     connection_state: ConnectionState,
     /// 当前远程路径
@@ -1124,8 +1455,16 @@ pub struct FileManagerPanel {
     _subscriptions: Vec<gpui::Subscription>,
 
     // ── 传输相关字段 ──
+    /// 全局 SFTP 上传执行器，上传生命周期不依赖面板。
+    upload_executor: Entity<SftpTransferExecutor>,
+    /// 当前连接在全局上传执行器中的稳定身份。
+    upload_connection_identity: SftpConnectionIdentity,
     /// 独立的传输 SFTP 连接（懒创建）
     transfer_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 是否正在建立传输连接，避免同一连接代次重复发起连接。
+    transfer_connecting: bool,
+    /// 传输连接代次；重连时递增，使旧连接 future 的结果失效。
+    transfer_generation: u64,
     /// 传输队列
     transfer_queue: TransferQueue,
     /// 下一个任务 ID
@@ -1164,6 +1503,11 @@ impl FileManagerPanel {
         let favorite_connection_id = stored_connection.id;
         let favorite_connection_key = sftp_favorite_connection_key(&stored_connection);
         let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
+        let upload_executor = sftp_transfer::global(cx);
+        let upload_connection_identity = SftpConnectionIdentity::from_stored(&stored_connection)
+            .unwrap_or_else(|| {
+                upload_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
+            });
 
         let mut subscriptions = Vec::new();
         subscriptions.push(
@@ -1207,10 +1551,18 @@ impl FileManagerPanel {
                 }
             },
         ));
+        subscriptions.push(cx.subscribe(
+            &upload_executor,
+            |this, executor, event: &SftpTransferEvent, cx| {
+                this.handle_upload_event(&executor, event, cx);
+            },
+        ));
 
         Self {
+            stored_connection,
             session_manager,
             sftp_client: None,
+            connection_generation: 0,
             connection_state: ConnectionState::Idle,
             current_path: "/".to_string(),
             items: Vec::new(),
@@ -1238,7 +1590,11 @@ impl FileManagerPanel {
             favorite_edit_input,
             favorite_editing_path: None,
             _subscriptions: subscriptions,
+            upload_executor,
+            upload_connection_identity,
             transfer_client: None,
+            transfer_connecting: false,
+            transfer_generation: 0,
             transfer_queue: TransferQueue::new(),
             next_task_id: 0,
             progress_refresh_task: None,
@@ -1281,6 +1637,8 @@ impl FileManagerPanel {
             return;
         }
 
+        self.connection_generation = self.connection_generation.wrapping_add(1);
+        let connection_generation = self.connection_generation;
         self.connection_state = ConnectionState::Connecting;
         cx.notify();
 
@@ -1304,6 +1662,9 @@ impl FileManagerPanel {
         cx.spawn(async move |this, cx| match task.await {
             Ok(Ok((client, real_path))) => {
                 let _ = this.update(cx, |this, cx| {
+                    if this.connection_generation != connection_generation {
+                        return;
+                    }
                     this.sftp_client = Some(Arc::new(Mutex::new(client)));
                     this.connection_state = ConnectionState::Connected;
                     this.current_path = real_path.clone();
@@ -1315,6 +1676,9 @@ impl FileManagerPanel {
             }
             Ok(Err(e)) => {
                 let _ = this.update(cx, |this, cx| {
+                    if this.connection_generation != connection_generation {
+                        return;
+                    }
                     this.connection_state = ConnectionState::Error(format!(
                         "{}: {}",
                         t!("FileManager.connect_failed"),
@@ -1325,6 +1689,9 @@ impl FileManagerPanel {
             }
             Err(e) => {
                 let _ = this.update(cx, |this, cx| {
+                    if this.connection_generation != connection_generation {
+                        return;
+                    }
                     this.connection_state = ConnectionState::Error(format!(
                         "{}: {}",
                         t!("FileManager.connect_failed"),
@@ -1348,7 +1715,10 @@ impl FileManagerPanel {
         self.connection_state = plan.next_state;
         self.working_dir_hint = plan.initial_working_dir;
         self.sftp_client = None;
+        self.connection_generation = self.connection_generation.wrapping_add(1);
         self.transfer_client = None;
+        self.transfer_connecting = false;
+        self.transfer_generation = self.transfer_generation.wrapping_add(1);
         self.loading = false;
 
         if plan.clear_listing {
@@ -2264,13 +2634,48 @@ impl FileManagerPanel {
         id
     }
 
+    fn handle_upload_event(
+        &mut self,
+        executor: &Entity<SftpTransferExecutor>,
+        event: &SftpTransferEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let id = match event {
+            SftpTransferEvent::Added(id)
+            | SftpTransferEvent::Updated(id)
+            | SftpTransferEvent::Finished(id) => *id,
+        };
+        let Some(snapshot) = executor.read(cx).snapshot(id) else {
+            return;
+        };
+        if snapshot.connection != self.upload_connection_identity {
+            return;
+        }
+        if matches!(event, SftpTransferEvent::Finished(_))
+            && snapshot.state == SftpTransferState::Succeeded
+            && should_refresh_after_upload(&self.current_path, &snapshot.remote_path)
+        {
+            self.refresh_dir(cx);
+        }
+        cx.notify();
+    }
+
+    fn finish_cancelled_pending_tasks(&mut self) {
+        self.transfer_queue.take_cancelled_pending();
+    }
+
     /// 创建传输专用连接（首次传输时懒创建），然后执行排队任务
     fn ensure_transfer_client_and_schedule(&mut self, cx: &mut Context<Self>) {
         if self.transfer_client.is_some() {
             self.schedule_transfers(cx);
             return;
         }
+        if self.transfer_connecting {
+            return;
+        }
 
+        self.transfer_connecting = true;
+        let transfer_generation = self.transfer_generation;
         let session_manager = self.session_manager.clone();
         let connect_task = Tokio::spawn(cx, async move {
             let shared_client = session_manager.client().await?;
@@ -2285,54 +2690,51 @@ impl FileManagerPanel {
                 Err(e) => Err(anyhow::Error::new(e)),
             };
 
-            match result {
-                Ok(client) => {
-                    let _ = this.update(cx, |this, cx| {
+            let _ = this.update(cx, |this, cx| {
+                if this.transfer_generation != transfer_generation {
+                    return;
+                }
+
+                this.transfer_connecting = false;
+                match result {
+                    Ok(client) => {
                         this.transfer_client = Some(Arc::new(Mutex::new(client)));
                         this.schedule_transfers(cx);
-                    });
-                }
-                Err(e) => {
-                    let _ = this.update(cx, |this, cx| {
+                    }
+                    Err(e) => {
                         let error_msg =
                             format!("{}: {}", t!("FileManager.transfer_connect_failed"), e);
                         tracing::error!("{}", error_msg);
                         for task in &mut this.transfer_queue.tasks {
                             if task.state == TransferTaskState::Pending {
-                                task.state = TransferTaskState::Failed;
-                                task.error = Some(error_msg.clone());
+                                let cancelled =
+                                    task.shared_progress.cancelled.load(Ordering::Relaxed);
+                                if cancelled {
+                                    task.state = TransferTaskState::Cancelled;
+                                    task.error = None;
+                                } else {
+                                    task.state = TransferTaskState::Failed;
+                                    task.error = Some(error_msg.clone());
+                                }
                             }
                         }
                         this.transfer_queue.pending.clear();
                         cx.notify();
-                    });
+                    }
                 }
-            }
+            });
         })
         .detach();
     }
 
     /// 调度下一个待执行的传输任务
     fn schedule_transfers(&mut self, cx: &mut Context<Self>) {
+        self.finish_cancelled_pending_tasks();
         let Some(task) = self.transfer_queue.next_startable() else {
             return;
         };
 
         match task.operation.clone() {
-            TransferOperation::Upload {
-                local_path,
-                remote_path,
-                is_dir,
-            } => {
-                self.start_upload_task(
-                    task.id,
-                    local_path,
-                    remote_path,
-                    is_dir,
-                    task.shared_progress,
-                    cx,
-                );
-            }
             TransferOperation::Download {
                 remote_path,
                 local_path,
@@ -2357,97 +2759,6 @@ impl FileManagerPanel {
 
         self.start_progress_refresh(cx);
         cx.notify();
-    }
-
-    /// 执行上传任务
-    fn start_upload_task(
-        &mut self,
-        task_id: usize,
-        local_path: PathBuf,
-        remote_path: String,
-        is_dir: bool,
-        shared_progress: Arc<SharedProgress>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(client) = self.transfer_client.clone() else {
-            return;
-        };
-
-        let cancelled = shared_progress.cancelled.clone();
-        let progress_for_callback = shared_progress.clone();
-        let remote_path_for_refresh = remote_path.clone();
-
-        let upload_task = Tokio::spawn(cx, async move {
-            let mut client_guard = client.lock().await;
-            if is_dir {
-                client_guard
-                    .upload_dir_with_progress(
-                        local_path.to_string_lossy().as_ref(),
-                        &remote_path,
-                        DirectoryConflictPolicy::Merge,
-                        cancelled,
-                        Box::new(move |progress: TransferProgress| {
-                            progress_for_callback
-                                .transferred
-                                .store(progress.transferred, Ordering::Relaxed);
-                            progress_for_callback
-                                .total
-                                .store(progress.total, Ordering::Relaxed);
-                            progress_for_callback
-                                .speed
-                                .store(progress.speed.to_bits(), Ordering::Relaxed);
-                            if let Some(file) = progress.current_file {
-                                if let Ok(mut guard) = progress_for_callback.current_file.write() {
-                                    *guard = Some(file);
-                                }
-                            }
-                        }),
-                    )
-                    .await
-            } else {
-                client_guard
-                    .upload_with_progress(
-                        local_path.to_string_lossy().as_ref(),
-                        &remote_path,
-                        cancelled,
-                        Box::new(move |progress: TransferProgress| {
-                            progress_for_callback
-                                .transferred
-                                .store(progress.transferred, Ordering::Relaxed);
-                            progress_for_callback
-                                .total
-                                .store(progress.total, Ordering::Relaxed);
-                            progress_for_callback
-                                .speed
-                                .store(progress.speed.to_bits(), Ordering::Relaxed);
-                        }),
-                    )
-                    .await
-            }
-        });
-
-        cx.spawn(async move |this, cx| {
-            let result = match upload_task.await {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(e)) => Err(e),
-                Err(e) => Err(anyhow::Error::new(e)),
-            };
-
-            let should_refresh = result.is_ok();
-
-            let _ = this.update(cx, |this, cx| {
-                this.update_task_state(task_id, result);
-                this.schedule_transfers(cx);
-
-                if should_refresh
-                    && should_refresh_after_upload(&this.current_path, &remote_path_for_refresh)
-                {
-                    this.refresh_dir(cx);
-                }
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     /// 执行下载任务
@@ -2590,8 +2901,9 @@ impl FileManagerPanel {
                         task.state = TransferTaskState::Cancelled;
                         task.error = None;
                     } else {
+                        let error = error.to_string();
                         task.state = TransferTaskState::Failed;
-                        task.error = Some(error.to_string());
+                        task.error = Some(error.clone());
                     }
                 }
             }
@@ -2610,6 +2922,9 @@ impl FileManagerPanel {
                 TransferTaskState::Pending => {
                     task.state = TransferTaskState::Cancelled;
                     task.error = None;
+                    self.transfer_queue
+                        .pending
+                        .retain(|pending_id| *pending_id != task_id);
                 }
                 TransferTaskState::Running => {
                     task.shared_progress
@@ -2636,6 +2951,7 @@ impl FileManagerPanel {
             loop {
                 let should_continue = this
                     .update(cx, |this, cx| {
+                        this.finish_cancelled_pending_tasks();
                         let has_active = this.transfer_queue.has_active();
                         if has_active {
                             cx.notify();
@@ -2663,21 +2979,34 @@ impl FileManagerPanel {
     /// 将待上传项加入传输队列
     fn enqueue_pending_uploads(&mut self, uploads: Vec<PendingUpload>, cx: &mut Context<Self>) {
         for upload in uploads {
-            let task = TransferTask {
-                id: self.alloc_task_id(),
-                operation: TransferOperation::Upload {
-                    local_path: upload.local_path,
-                    remote_path: upload.remote_path,
-                    is_dir: upload.is_dir,
-                },
-                state: TransferTaskState::Pending,
-                shared_progress: SharedProgress::new(),
-                error: None,
+            let title_prefix = if upload.is_dir {
+                t!("FileManager.upload_folder")
+            } else {
+                t!("FileManager.upload_file")
             };
-            self.transfer_queue.enqueue(task);
+            let task_key = upload_task_key(
+                &self.upload_connection_identity,
+                &upload.local_path,
+                &upload.remote_path,
+            );
+            let request = SftpUploadRequest {
+                connection: self.upload_connection_identity.clone(),
+                connection_source: SftpUploadConnection::SessionManager(
+                    self.session_manager.clone(),
+                ),
+                local_path: upload.local_path,
+                remote_path: upload.remote_path,
+                is_dir: upload.is_dir,
+                directory_conflict_policy: upload.directory_conflict_policy,
+                display_name: upload.name.clone(),
+                title: format!("{title_prefix} · {}", upload.name).into(),
+                task_key: Some(task_key),
+            };
+            self.upload_executor
+                .update(cx, |executor, cx| executor.submit(request, cx));
         }
 
-        self.ensure_transfer_client_and_schedule(cx);
+        cx.notify();
     }
 
     /// 上传前先检测目标目录中的重名项，必要时弹出冲突提示
@@ -2692,146 +3021,87 @@ impl FileManagerPanel {
             return;
         }
 
+        let request = UploadPreparation {
+            paths,
+            remote_dir: remote_dir.to_string(),
+            connection_generation: self.connection_generation,
+        };
         let Some(client) = self.sftp_client.clone() else {
-            let uploads: Vec<_> = paths
-                .into_iter()
-                .map(|path| {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    PendingUpload {
-                        remote_path: join_remote_path(remote_dir, &name),
-                        is_dir: path.is_dir(),
-                        local_path: path,
-                        name,
-                        has_conflict: false,
-                    }
-                })
-                .collect();
+            let uploads = build_pending_uploads(request.paths, &request.remote_dir, None);
             self.enqueue_pending_uploads(uploads, cx);
             return;
         };
 
-        let remote_dir = remote_dir.to_string();
-        let view = cx.entity().clone();
-        let list_task = Tokio::spawn(cx, {
-            let remote_dir = remote_dir.clone();
-            async move {
-                let mut client_guard = client.lock().await;
-                client_guard.list_dir(&remote_dir).await
+        spawn_upload_preparation(
+            UploadPreparationTask {
+                request,
+                client,
+                view: cx.entity().clone(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn handle_upload_preparation(
+        &mut self,
+        completed: CompletedUploadPreparation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let request = completed.request;
+        if !is_current_generation(self.connection_generation, request.connection_generation) {
+            return;
+        }
+        let remote_names = match completed.remote_names {
+            Ok(remote_names) => remote_names,
+            Err(error) => {
+                window.push_notification(Notification::error(error), cx);
+                return;
             }
-        });
-
-        window
-            .spawn(cx, async move |cx| {
-                let remote_names: HashSet<String> = match list_task.await {
-                    Ok(Ok(entries)) => entries
-                        .into_iter()
-                        .filter(|entry| entry.name != "." && entry.name != "..")
-                        .map(|entry| entry.name)
-                        .collect(),
-                    Ok(Err(e)) => {
-                        tracing::error!("读取远程目录失败: {}", e);
-                        let error_msg = t!("FileManager.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
-                            window.push_notification(Notification::error(error_msg.clone()), cx);
-                        });
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!("远程目录检查任务失败: {}", e);
-                        let error_msg = t!("FileManager.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
-                            window.push_notification(Notification::error(error_msg.clone()), cx);
-                        });
-                        return;
-                    }
-                };
-
-                let _ = view.update_in(cx, |this, window, cx| {
-                    let mut pending_uploads = Vec::new();
-                    let mut has_conflict = false;
-
-                    for path in paths {
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let has_name_conflict = remote_names.contains(&name);
-                        if has_name_conflict {
-                            has_conflict = true;
-                        }
-                        pending_uploads.push(PendingUpload {
-                            remote_path: join_remote_path(&remote_dir, &name),
-                            is_dir: path.is_dir(),
-                            local_path: path,
-                            name,
-                            has_conflict: has_name_conflict,
-                        });
-                    }
-
-                    if pending_uploads.is_empty() {
-                        return;
-                    }
-
-                    if has_conflict {
-                        let conflict_names = pending_uploads
-                            .iter()
-                            .filter(|upload| upload.has_conflict)
-                            .map(|upload| upload.name.clone())
-                            .collect();
-                        this.show_upload_conflict_dialog(
-                            conflict_names,
-                            pending_uploads,
-                            remote_names,
-                            window,
-                            cx,
-                        );
-                    } else {
-                        this.enqueue_pending_uploads(pending_uploads, cx);
-                    }
-                });
-            })
-            .detach();
+        };
+        let pending_uploads =
+            build_pending_uploads(request.paths, &request.remote_dir, Some(&remote_names));
+        let conflict_names = pending_uploads
+            .iter()
+            .filter(|upload| upload.has_conflict)
+            .map(|upload| upload.name.clone())
+            .collect::<Vec<_>>();
+        if conflict_names.is_empty() {
+            self.enqueue_pending_uploads(pending_uploads, cx);
+            return;
+        }
+        self.show_upload_conflict_dialog(
+            UploadConflictDialog {
+                connection_generation: request.connection_generation,
+                conflict_names,
+                pending_uploads,
+                existing_names: remote_names,
+            },
+            window,
+            cx,
+        );
     }
 
     fn show_upload_conflict_dialog(
         &mut self,
-        conflict_names: Vec<String>,
-        pending_uploads: Vec<PendingUpload>,
-        existing_names: HashSet<String>,
+        conflict: UploadConflictDialog,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = cx.entity().clone();
-        let conflict_count = conflict_names.len();
-        let conflict_list = if conflict_count <= 3 {
-            conflict_names.join(", ")
-        } else {
-            t!(
-                "Conflict.n_files",
-                name = conflict_names[..3].join(", "),
-                count = conflict_count
-            )
-            .to_string()
-        };
-        let has_dir_conflict = pending_uploads
+        let conflict_list = upload_conflict_list(&conflict.conflict_names);
+        let has_dir_conflict = conflict
+            .pending_uploads
             .iter()
             .any(|upload| upload.has_conflict && upload.is_dir);
-
+        let actions = UploadConflictActions {
+            view: cx.entity().clone(),
+            connection_generation: conflict.connection_generation,
+            pending_uploads: conflict.pending_uploads,
+            existing_names: conflict.existing_names,
+        };
         window.open_dialog(cx, move |dialog, _window, cx| {
-            let view_overwrite = view.clone();
-            let view_keep = view.clone();
-            let view_skip = view.clone();
-            let view_merge = view.clone();
-
-            let uploads_overwrite = pending_uploads.clone();
-            let uploads_keep = pending_uploads.clone();
-            let uploads_skip = pending_uploads.clone();
-            let uploads_merge = pending_uploads.clone();
-            let existing_names_keep = existing_names.clone();
-
+            let footer_actions = actions.clone();
             dialog
                 .title(t!("Dialog.file_conflict").to_string())
                 .w(px(450.))
@@ -2850,93 +3120,7 @@ impl FileManagerPanel {
                         .child(t!("Conflict.choose_action").to_string()),
                 )
                 .footer(move |_, _, _window, _cx| {
-                    let mut buttons: Vec<gpui::AnyElement> = vec![
-                        Button::new("skip")
-                            .label(t!("Conflict.skip").to_string())
-                            .ghost()
-                            .on_click({
-                                let view = view_skip.clone();
-                                let uploads = uploads_skip.clone();
-                                move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    let uploads: Vec<_> = uploads
-                                        .iter()
-                                        .filter(|upload| !upload.has_conflict)
-                                        .cloned()
-                                        .collect();
-                                    if !uploads.is_empty() {
-                                        view.update(cx, |this, cx| {
-                                            this.enqueue_pending_uploads(uploads, cx);
-                                        });
-                                    }
-                                }
-                            })
-                            .into_any_element(),
-                        Button::new("keep_both")
-                            .label(t!("Conflict.keep_both").to_string())
-                            .ghost()
-                            .on_click({
-                                let view = view_keep.clone();
-                                let uploads = uploads_keep.clone();
-                                let existing = existing_names_keep.clone();
-                                move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    let uploads = rename_conflicting_uploads(
-                                        uploads.clone(),
-                                        existing.clone(),
-                                    );
-                                    view.update(cx, |this, cx| {
-                                        this.enqueue_pending_uploads(uploads, cx);
-                                    });
-                                }
-                            })
-                            .into_any_element(),
-                    ];
-
-                    if has_dir_conflict {
-                        buttons.push(
-                            Button::new("merge")
-                                .label(t!("Conflict.merge").to_string())
-                                .ghost()
-                                .on_click({
-                                    let view = view_merge.clone();
-                                    let uploads = uploads_merge.clone();
-                                    move |_, window, cx| {
-                                        window.close_dialog(cx);
-                                        let uploads: Vec<_> = uploads
-                                            .iter()
-                                            .filter(|upload| !upload.has_conflict || upload.is_dir)
-                                            .cloned()
-                                            .collect();
-                                        if !uploads.is_empty() {
-                                            view.update(cx, |this, cx| {
-                                                this.enqueue_pending_uploads(uploads, cx);
-                                            });
-                                        }
-                                    }
-                                })
-                                .into_any_element(),
-                        );
-                    }
-
-                    buttons.push(
-                        Button::new("overwrite")
-                            .label(t!("Conflict.overwrite").to_string())
-                            .primary()
-                            .on_click({
-                                let view = view_overwrite.clone();
-                                let uploads = uploads_overwrite.clone();
-                                move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    view.update(cx, |this, cx| {
-                                        this.enqueue_pending_uploads(uploads.clone(), cx);
-                                    });
-                                }
-                            })
-                            .into_any_element(),
-                    );
-
-                    buttons
+                    upload_conflict_buttons(footer_actions.clone(), has_dir_conflict)
                 })
                 .overlay_closable(false)
                 .close_button(true)
@@ -4014,6 +4198,32 @@ impl FileManagerPanel {
                             ),
                     )
                     .child(div().flex_1())
+                    // 在独立页签中打开 SFTP
+                    .child(
+                        div()
+                            .id("fm-open-sftp")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .p(px(5.))
+                            .hover(move |s| s.bg(hover))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _window, cx| {
+                                    cx.emit(FileManagerPanelEvent::OpenSftp(
+                                        this.stored_connection.clone(),
+                                    ));
+                                }),
+                            )
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(t!("FileManager.open_sftp").to_string())
+                                    .build(window, cx)
+                            })
+                            .child(
+                                Icon::new(IconName::FolderOpen)
+                                    .small()
+                                    .text_color(muted_foreground),
+                            ),
+                    )
                     // 同步终端工作目录按钮
                     .child(
                         div()
@@ -4926,22 +5136,34 @@ impl FileManagerPanel {
 
     /// 渲染底部传输进度条（紧凑型，适合侧边栏窄宽度）
     fn render_transfer_progress(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(task) = self.transfer_queue.active_task() else {
+        let view = self
+            .upload_progress_view(cx)
+            .or_else(|| self.local_progress_view());
+        let Some(view) = view else {
             return div().into_any_element();
         };
-        let border = self.colors.border;
-        let panel = self.colors.muted;
-        let hover = self.colors.muted.opacity(0.72);
-        let muted_foreground = self.colors.muted_foreground;
+        self.render_transfer_progress_view(view, cx)
+    }
 
+    fn upload_progress_view(&self, cx: &mut Context<Self>) -> Option<TransferProgressView> {
+        self.upload_executor.read_with(cx, |executor, _| {
+            let snapshot = executor.active_for_connection(&self.upload_connection_identity)?;
+            Some(TransferProgressView {
+                icon: IconName::ArrowUp,
+                label: snapshot.display_name,
+                transferred: snapshot.transferred,
+                total: snapshot.total.unwrap_or(0),
+                speed: snapshot.speed,
+                state: upload_progress_state(&snapshot.state),
+                pending_count: executor.pending_count(&self.upload_connection_identity),
+                cancel_target: TransferCancelTarget::Upload(snapshot.id),
+            })
+        })
+    }
+
+    fn local_progress_view(&self) -> Option<TransferProgressView> {
+        let task = self.transfer_queue.active_task()?;
         let (icon, label) = match &task.operation {
-            TransferOperation::Upload { local_path, .. } => (
-                IconName::ArrowUp,
-                local_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-            ),
             TransferOperation::Download { remote_path, .. } => {
                 let name = remote_path.rsplit('/').next().unwrap_or(remote_path);
                 (IconName::ArrowDown, name.to_string())
@@ -4951,37 +5173,55 @@ impl FileManagerPanel {
                 t!("FileManager.delete_n_items", count = targets.len()).to_string(),
             ),
         };
+        Some(TransferProgressView {
+            icon,
+            label,
+            transferred: task.shared_progress.transferred.load(Ordering::Relaxed),
+            total: task.shared_progress.total.load(Ordering::Relaxed),
+            speed: f64::from_bits(task.shared_progress.speed.load(Ordering::Relaxed)),
+            state: local_progress_state(&task.state),
+            pending_count: self.transfer_queue.pending_count(),
+            cancel_target: TransferCancelTarget::Local(task.id),
+        })
+    }
 
-        let transferred = task.shared_progress.transferred.load(Ordering::Relaxed);
-        let total = task.shared_progress.total.load(Ordering::Relaxed);
-        let speed_bits = task.shared_progress.speed.load(Ordering::Relaxed);
-        let speed = f64::from_bits(speed_bits);
-
+    fn render_transfer_progress_view(
+        &self,
+        view: TransferProgressView,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let border = self.colors.border;
+        let panel = self.colors.muted;
+        let hover = self.colors.muted.opacity(0.72);
+        let muted_foreground = self.colors.muted_foreground;
+        let TransferProgressView {
+            icon,
+            label,
+            transferred,
+            total,
+            speed,
+            state,
+            pending_count,
+            cancel_target,
+        } = view;
         let progress_pct = if total > 0 {
             (transferred as f64 / total as f64 * 100.0) as u32
         } else {
             0
         };
-
-        let task_id = task.id;
-        let is_running = task.state == TransferTaskState::Running;
-        let pending_count = self.transfer_queue.pending_count();
-
-        let status_text = match task.state {
-            TransferTaskState::Pending => t!("FileManager.transfer_pending").to_string(),
-            TransferTaskState::Running => {
-                if is_running && speed > 0.0 {
+        let status_text = match state {
+            TransferProgressState::Pending => t!("FileManager.transfer_pending").to_string(),
+            TransferProgressState::Running => {
+                if speed > 0.0 {
                     format!("{}% {}", progress_pct, format_speed(speed))
                 } else {
                     format!("{}%", progress_pct)
                 }
             }
-            TransferTaskState::Completed => t!("FileManager.transfer_done").to_string(),
-            TransferTaskState::Failed => t!("FileManager.transfer_failed").to_string(),
-            TransferTaskState::Cancelled => t!("FileManager.transfer_cancelled").to_string(),
+            TransferProgressState::Cancelling => t!("FileManager.transfer_cancelled").to_string(),
         };
-
         let tooltip_label = label.clone();
+        let can_cancel = !matches!(state, TransferProgressState::Cancelling);
 
         v_flex()
             .border_t_1()
@@ -5015,30 +5255,27 @@ impl FileManagerPanel {
                             .text_color(muted_foreground)
                             .child(status_text),
                     )
-                    .when(
-                        is_running || task.state == TransferTaskState::Pending,
-                        |el| {
-                            el.child(
-                                div()
-                                    .id("fm-cancel-transfer")
-                                    .cursor_pointer()
-                                    .rounded_md()
-                                    .p(px(2.))
-                                    .hover(move |s| s.bg(hover))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, _window, cx| {
-                                            this.cancel_transfer(task_id, cx);
-                                        }),
-                                    )
-                                    .child(
-                                        Icon::new(IconName::Close)
-                                            .xsmall()
-                                            .text_color(muted_foreground),
-                                    ),
-                            )
-                        },
-                    ),
+                    .when(can_cancel, |el| {
+                        el.child(
+                            div()
+                                .id("fm-cancel-transfer")
+                                .cursor_pointer()
+                                .rounded_md()
+                                .p(px(2.))
+                                .hover(move |s| s.bg(hover))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _window, cx| {
+                                        this.cancel_transfer_target(cancel_target, cx);
+                                    }),
+                                )
+                                .child(
+                                    Icon::new(IconName::Close)
+                                        .xsmall()
+                                        .text_color(muted_foreground),
+                                ),
+                        )
+                    }),
             )
             // 第二行：进度条 + 排队数
             .child(
@@ -5060,6 +5297,16 @@ impl FileManagerPanel {
                     }),
             )
             .into_any_element()
+    }
+
+    fn cancel_transfer_target(&mut self, target: TransferCancelTarget, cx: &mut Context<Self>) {
+        match target {
+            TransferCancelTarget::Upload(id) => {
+                self.upload_executor
+                    .update(cx, |executor, cx| executor.cancel(id, cx));
+            }
+            TransferCancelTarget::Local(id) => self.cancel_transfer(id, cx),
+        }
     }
 
     fn render_extract_progress(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -5479,13 +5726,181 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionState, NavigationRecoveryPlan, RemoteClipboardEntry, RemoteClipboardKind,
-        RemoteFileClipboard, build_navigation_recovery_plan, build_retry_reset_plan,
+        ConnectionState, NavigationRecoveryPlan, PendingUpload, RemoteClipboardEntry,
+        RemoteClipboardKind, RemoteFileClipboard, SharedProgress, TransferOperation, TransferQueue,
+        TransferTask, TransferTaskState, build_navigation_recovery_plan, build_retry_reset_plan,
         can_paste_remote_file_clipboard, clear_remote_listing_state, frame_move_options,
-        should_apply_directory_result, should_refresh_after_upload,
+        should_apply_directory_result, should_refresh_after_upload, with_directory_policy,
     };
     use one_core::sidebar_contribution::SidebarPlacement;
+    use sftp::DirectoryConflictPolicy;
+    use sftp_transfer::SftpConnectionIdentity;
     use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
+
+    fn test_download_task(id: usize, cancelled: bool) -> TransferTask {
+        let shared_progress = SharedProgress::new();
+        shared_progress
+            .cancelled
+            .store(cancelled, Ordering::Relaxed);
+        TransferTask {
+            id,
+            operation: TransferOperation::Download {
+                remote_path: format!("/remote/{id}.txt"),
+                local_path: PathBuf::from(format!("/tmp/{id}.txt")),
+                is_dir: false,
+            },
+            state: TransferTaskState::Pending,
+            shared_progress,
+            error: None,
+        }
+    }
+
+    fn pending_directory(has_conflict: bool) -> PendingUpload {
+        PendingUpload {
+            name: "folder".to_string(),
+            local_path: PathBuf::from("/tmp/folder"),
+            remote_path: "/remote/folder".to_string(),
+            is_dir: true,
+            has_conflict,
+            directory_conflict_policy: DirectoryConflictPolicy::Merge,
+        }
+    }
+
+    #[test]
+    fn overwrite_sets_conflicting_directories_to_replace() {
+        let uploads = with_directory_policy(
+            vec![pending_directory(true)],
+            DirectoryConflictPolicy::Replace,
+        );
+
+        assert_eq!(
+            uploads[0].directory_conflict_policy,
+            DirectoryConflictPolicy::Replace
+        );
+    }
+
+    #[test]
+    fn merge_keeps_directory_policy_merge() {
+        let uploads = with_directory_policy(
+            vec![pending_directory(true)],
+            DirectoryConflictPolicy::Merge,
+        );
+
+        assert_eq!(
+            uploads[0].directory_conflict_policy,
+            DirectoryConflictPolicy::Merge
+        );
+    }
+
+    #[test]
+    fn keep_both_keeps_directory_policy_merge() {
+        let uploads = super::rename_conflicting_uploads(
+            vec![pending_directory(true)],
+            HashSet::from(["folder".to_string()]),
+        );
+
+        assert_eq!(
+            uploads[0].directory_conflict_policy,
+            DirectoryConflictPolicy::Merge
+        );
+    }
+
+    #[test]
+    fn pending_uploads_mark_remote_name_conflicts() {
+        let existing_names = HashSet::from(["archive.tar".to_string()]);
+        let uploads = super::build_pending_uploads(
+            vec![
+                PathBuf::from("/tmp/archive.tar"),
+                PathBuf::from("/tmp/readme.txt"),
+            ],
+            "/remote",
+            Some(&existing_names),
+        );
+
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[0].name, "archive.tar");
+        assert_eq!(uploads[0].remote_path, "/remote/archive.tar");
+        assert!(uploads[0].has_conflict);
+        assert_eq!(uploads[1].name, "readme.txt");
+        assert_eq!(uploads[1].remote_path, "/remote/readme.txt");
+        assert!(!uploads[1].has_conflict);
+    }
+
+    #[test]
+    fn transfer_queue_starts_tasks_strictly_in_fifo_order() {
+        let mut queue = TransferQueue::new();
+        queue.enqueue(test_download_task(1, false));
+        queue.enqueue(test_download_task(2, false));
+        queue.enqueue(test_download_task(3, false));
+
+        assert_eq!(Some(1), queue.next_startable().map(|task| task.id));
+        assert!(queue.next_startable().is_none());
+
+        queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == 1)
+            .expect("first transfer task")
+            .state = TransferTaskState::Completed;
+        assert_eq!(Some(2), queue.next_startable().map(|task| task.id));
+
+        queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == 2)
+            .expect("second transfer task")
+            .state = TransferTaskState::Completed;
+        assert_eq!(Some(3), queue.next_startable().map(|task| task.id));
+    }
+
+    #[test]
+    fn transfer_queue_removes_cancelled_pending_tasks_without_reordering() {
+        let mut queue = TransferQueue::new();
+        queue.enqueue(test_download_task(1, true));
+        queue.enqueue(test_download_task(2, false));
+        queue.enqueue(test_download_task(3, true));
+        queue.enqueue(test_download_task(4, false));
+
+        let cancelled_ids = queue
+            .take_cancelled_pending()
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![1, 3], cancelled_ids);
+        assert!(matches!(
+            queue
+                .tasks
+                .iter()
+                .find(|task| task.id == 1)
+                .map(|task| &task.state),
+            Some(TransferTaskState::Cancelled)
+        ));
+        assert_eq!(Some(2), queue.next_startable().map(|task| task.id));
+        queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == 2)
+            .expect("second transfer task")
+            .state = TransferTaskState::Completed;
+        assert_eq!(Some(4), queue.next_startable().map(|task| task.id));
+    }
+
+    #[test]
+    fn toolbar_exposes_open_sftp_tab_action() {
+        let source = include_str!("file_manager_panel.rs");
+        let toolbar = source
+            .split("fn render_toolbar")
+            .nth(1)
+            .and_then(|source| source.split("fn render_path_breadcrumb").next())
+            .expect("file manager toolbar source");
+
+        assert!(toolbar.contains(r#".id("fm-open-sftp")"#));
+        assert!(toolbar.contains("FileManagerPanelEvent::OpenSftp("));
+        assert!(toolbar.contains(r#"t!("FileManager.open_sftp")"#));
+    }
 
     #[test]
     fn paste_availability_does_not_depend_on_a_selected_file() {
@@ -5590,6 +6005,12 @@ mod tests {
     fn only_apply_directory_result_for_active_path() {
         assert!(should_apply_directory_result("/srv/app", "/srv/app"));
         assert!(!should_apply_directory_result("/srv/other", "/srv/app"));
+    }
+
+    #[test]
+    fn only_apply_upload_preparation_for_current_connection_generation() {
+        assert!(super::is_current_generation(7, 7));
+        assert!(!super::is_current_generation(8, 7));
     }
 
     #[test]

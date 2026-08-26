@@ -1,5 +1,6 @@
 use super::{
     DetectedZmodem, ZmodemDirection, ZmodemPickerKind, ZmodemPickerResponse, ZmodemResponder,
+    ZmodemTransferDirection, ZmodemTransferOutcome,
 };
 use anyhow::{Context as _, Result, bail};
 use ssh::{ChannelEvent, SshChannel};
@@ -31,10 +32,28 @@ pub(crate) async fn run_transfer(
     cancellation: &CancellationToken,
 ) -> Result<Vec<u8>> {
     let result = run_selected_transfer(channel, detected, responder, cancellation).await;
+    let was_cancelled = cancellation.is_cancelled();
     if result.is_err() {
         send_cancel(channel).await;
     }
+    responder.finish_transfer(match result {
+        Ok(_) => ZmodemTransferOutcome::Succeeded,
+        Err(ref error) => {
+            if was_cancelled {
+                ZmodemTransferOutcome::Cancelled
+            } else {
+                ZmodemTransferOutcome::Failed(format!("{error:#}"))
+            }
+        }
+    });
     result
+}
+
+pub(crate) fn apply_transfer_direction(responder: &ZmodemResponder, direction: ZmodemDirection) {
+    responder.set_transfer_direction(match direction {
+        ZmodemDirection::Upload => ZmodemTransferDirection::Upload,
+        ZmodemDirection::Download => ZmodemTransferDirection::Download,
+    });
 }
 
 async fn run_selected_transfer(
@@ -57,13 +76,19 @@ async fn run_selected_transfer(
             let ZmodemPickerResponse::UploadFiles(paths) = response else {
                 bail!("ZMODEM upload was cancelled");
             };
-            super::upload::run_upload(channel, wire, paths, cancellation).await
+            let request = super::upload::UploadRequest {
+                initial_wire: wire,
+                paths,
+                responder: responder.clone(),
+            };
+            super::upload::run_upload(channel, request, cancellation).await
         }
         ZmodemDirection::Download => {
             let ZmodemPickerResponse::DownloadDirectory(directory) = response else {
                 bail!("ZMODEM download was cancelled");
             };
-            super::download::run_download(channel, wire, directory, cancellation).await
+            super::download::run_download(channel, wire, directory, responder.clone(), cancellation)
+                .await
         }
     }
 }

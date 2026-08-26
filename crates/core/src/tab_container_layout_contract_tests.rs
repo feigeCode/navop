@@ -18,6 +18,33 @@ fn scrollable_tabs_keep_window_controls_at_the_right_edge() {
 }
 
 #[test]
+fn background_task_entry_stays_before_window_controls() {
+    let source = include_str!("tab_container.rs");
+    let dropdown = source
+        .find("Button::new(\"tab-dropdown-btn\")")
+        .expect("tab dropdown");
+    let background = source
+        .find(".id(\"background-task-entry\")")
+        .expect("background task entry");
+    let controls = source[dropdown..]
+        .find("self.render_window_controls(window, cx)")
+        .map(|offset| dropdown + offset)
+        .expect("window controls");
+
+    assert!(dropdown < background, "entry follows the dropdown");
+    assert!(
+        background < controls,
+        "entry precedes native window controls"
+    );
+
+    let panel = include_str!("background_task_panel.rs");
+    assert!(panel.contains("fn render_entry(&self, cx: &mut Context<Self>) -> impl IntoElement"));
+    assert!(panel.contains("Popover::new(\"background-task-popover\")"));
+    assert!(panel.contains(".anchor(gpui::Anchor::TopRight)"));
+    assert!(source[background..].contains(".flex_shrink_0()"));
+}
+
+#[test]
 fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
     let source = include_str!("tab_container.rs");
     let render_start = source

@@ -155,6 +155,8 @@ fn malicious_terminal_sequences_cannot_escape_the_playback_surface() {
             TerminalEvent::Wakeup => wakeups += 1,
             TerminalEvent::SshMfaChanged
             | TerminalEvent::ZmodemRequestChanged
+            | TerminalEvent::ZmodemProgressChanged
+            | TerminalEvent::ZmodemTransferFinished(_)
             | TerminalEvent::PromptStart
             | TerminalEvent::InputStart
             | TerminalEvent::CommandStart

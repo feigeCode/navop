@@ -224,6 +224,14 @@ pub trait TerminalBackend: Send {
     fn control_handle(&self) -> Option<TerminalControlHandle> {
         None
     }
+
+    /// Request cancellation of the currently active ZMODEM transfer.
+    ///
+    /// The backend only acknowledges that the request was delivered. The actual
+    /// transfer emits its normal terminal event after the protocol has stopped.
+    fn cancel_transfer(&self) -> bool {
+        false
+    }
 }
 
 /// Local terminal configuration

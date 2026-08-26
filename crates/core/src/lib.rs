@@ -4,6 +4,8 @@ rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 pub mod app_dirs;
 pub mod app_paths;
+pub mod background_task_panel;
+pub mod background_tasks;
 pub mod cloud_sync;
 pub mod command_registry;
 pub mod config;
@@ -50,6 +52,7 @@ mod tab_container_layout_contract_tests;
 mod tab_content_contract_tests;
 
 pub fn init(cx: &mut App) {
+    background_tasks::init(cx);
     gpui_tokio::init(cx);
     themes::init(cx);
     storage::init(cx);

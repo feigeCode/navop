@@ -1,3 +1,4 @@
+use crate::background_task_panel::BackgroundTaskPanel;
 use crate::layout::TOOLBAR_WIDTH;
 use crate::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPlacement,
@@ -1084,6 +1085,8 @@ pub struct TabContainer {
     sidebar_size_overrides: HashMap<SidebarPanelId, SidebarPanelSizeOverride>,
     sidebar_resizing: Option<SidebarResizeTarget>,
     sidebar_bounds: Bounds<Pixels>,
+    /// 全局后台任务面板入口，渲染在标签栏最右侧（dropdown 之后、窗口控件之前）。
+    background_task_panel: Entity<BackgroundTaskPanel>,
 }
 
 impl EventEmitter<TabContainerEvent> for TabContainer {}
@@ -1132,6 +1135,7 @@ impl TabContainer {
             sidebar_size_overrides: HashMap::new(),
             sidebar_resizing: None,
             sidebar_bounds: Bounds::default(),
+            background_task_panel: cx.new(|cx| BackgroundTaskPanel::new(cx)),
         }
     }
 
@@ -3640,7 +3644,11 @@ impl TabContainer {
                                 .h(self.sidebar_bottom_height(&bottom, layout))
                                 .flex_shrink_0()
                                 .overflow_hidden()
-                                .child(self.render_sidebar_dock(SidebarPlacement::Bottom, bottom, cx)),
+                                .child(self.render_sidebar_dock(
+                                    SidebarPlacement::Bottom,
+                                    bottom,
+                                    cx,
+                                )),
                         ),
                 )
                 .into_any_element()
@@ -4406,6 +4414,13 @@ impl TabContainer {
                         }
                     }),
             )
+            .child(
+                div()
+                    .id("background-task-entry")
+                    .debug_selector(|| "background-task-entry".to_owned())
+                    .flex_shrink_0()
+                    .child(self.background_task_panel.clone()),
+            )
             .when(
                 !titlebar_platform.is_macos && self.show_window_controls,
                 |el| el.child(self.render_window_controls(window, cx)),
@@ -5042,6 +5057,7 @@ mod tests {
     #[gpui::test]
     fn navigation_sidebar_toggle_state_can_be_configured_and_updated(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let container =
@@ -5102,6 +5118,7 @@ mod tests {
     #[gpui::test]
     fn background_open_adds_tab_without_changing_active_tab(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let active = cx.new(|cx| TestTab::new("active", cx));
@@ -5138,6 +5155,7 @@ mod tests {
         let container = Arc::new(Mutex::new(None));
         let container_for_window = container.clone();
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let content = cx.new(|cx| TestTab::new("query", cx));
@@ -5173,6 +5191,7 @@ mod tests {
         let activations = Arc::new(Mutex::new(Vec::new()));
         let activations_for_window = activations.clone();
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let regular = cx.new(|cx| TestTab::new("regular", cx));
@@ -5217,6 +5236,7 @@ mod tests {
         let activations = Arc::new(Mutex::new(Vec::new()));
         let activations_for_window = activations.clone();
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let pinned = cx.new(|cx| TestTab::new("pinned", cx));
@@ -5256,6 +5276,7 @@ mod tests {
     #[gpui::test]
     fn closing_last_regular_tab_activates_first_pinned_tab(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let pinned = cx.new(|cx| TestTab::new("pinned", cx));
@@ -5290,6 +5311,7 @@ mod tests {
         let events_for_window = events.clone();
 
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let first =
@@ -5368,6 +5390,7 @@ mod tests {
         let lifecycle_for_window = lifecycle.clone();
 
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let active = cx
@@ -5432,6 +5455,7 @@ mod tests {
         let lifecycle_for_window = lifecycle.clone();
 
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let first =
@@ -5478,6 +5502,7 @@ mod tests {
     #[gpui::test]
     fn removing_active_pinned_tab_activates_the_next_pinned_tab(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let home = cx.new(|cx| TestTab::new("home", cx));
@@ -5509,7 +5534,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn macos_tab_dropdown_stays_anchored_to_the_main_slot_right_edge(cx: &mut TestAppContext) {
+    fn macos_tab_bar_actions_stay_anchored_to_the_main_slot_right_edge(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(Theme::default());
@@ -5558,12 +5583,20 @@ mod tests {
         let dropdown = cx
             .debug_bounds("tab-dropdown-btn")
             .expect("tab dropdown button");
+        let background_tasks = cx
+            .debug_bounds("background-task-entry")
+            .expect("background task entry");
 
         assert_eq!(main_slot.right(), tab_bar.right());
         assert_eq!(
-            tab_bar.right(),
             dropdown.right(),
-            "the tab switcher must consume the trailing edge instead of following the tabs' intrinsic width"
+            background_tasks.left(),
+            "the background task entry must immediately follow the tab switcher"
+        );
+        assert_eq!(
+            tab_bar.right(),
+            background_tasks.right(),
+            "the trailing tab-bar action must consume the main slot's right edge"
         );
     }
 
@@ -5637,6 +5670,7 @@ mod tests {
     #[gpui::test]
     fn background_open_existing_tab_keeps_current_tab(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let active = cx.new(|cx| TestTab::new("active", cx));
@@ -5676,6 +5710,7 @@ mod tests {
     #[gpui::test]
     fn background_open_keeps_pinned_tab_active(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let pinned = cx.new(|cx| TestTab::new("pinned", cx));
@@ -5706,6 +5741,7 @@ mod tests {
     #[gpui::test]
     fn activate_mode_still_switches_to_existing_tab(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
             cx.open_window(WindowOptions::default(), |window, cx| {
                 let active = cx.new(|cx| TestTab::new("active", cx));

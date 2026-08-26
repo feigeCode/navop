@@ -71,6 +71,14 @@ impl TerminalView {
             TerminalModelEvent::ZmodemRequestChanged => {
                 self.sync_zmodem_picker(cx);
             }
+            TerminalModelEvent::ZmodemProgressChanged => {
+                self.sync_zmodem_background_task(cx);
+                cx.notify();
+            }
+            TerminalModelEvent::ZmodemTransferFinished(outcome) => {
+                self.finish_zmodem_background_task(outcome, cx);
+                cx.notify();
+            }
             TerminalModelEvent::PromptStart
             | TerminalModelEvent::InputStart
             | TerminalModelEvent::CommandStart => {

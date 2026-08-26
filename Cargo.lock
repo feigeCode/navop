@@ -11910,6 +11910,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sftp_transfer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "gpui",
+ "one-core",
+ "sftp",
+ "ssh",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "sftp_view"
 version = "0.1.0"
 dependencies = [
@@ -11925,6 +11940,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sftp",
+ "sftp_transfer",
  "ssh",
  "sysinfo",
  "tokio",
@@ -13024,10 +13040,12 @@ dependencies = [
  "serde_json",
  "serialport",
  "sftp",
+ "sftp_transfer",
  "sha2 0.10.9",
  "ssh",
  "terminal",
  "tokio",
+ "tokio-util",
  "tracing",
  "url",
  "uuid",
@@ -17025,9 +17043,9 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zmodem2"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "150fc94907268863d0b20d505210665e600b016f16a5abc2f4fd233cc4ac6681"
+checksum = "a2ac5e85856f619f7d6c15cbf915448147607f31d028f54b08a0a3ea7ff632e5"
 dependencies = [
  "bitflags 2.13.1",
  "hex",

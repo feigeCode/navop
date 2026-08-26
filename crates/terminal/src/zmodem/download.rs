@@ -1,20 +1,30 @@
 use super::{
-    download_path,
+    ZmodemResponder, ZmodemTransferDirection, ZmodemTransferProgress, download_path,
     transfer::{MAX_PROTOCOL_TIMEOUTS, receive_wire, send_wire},
 };
 use anyhow::{Context as _, Result, bail};
 use ssh::SshChannel;
-use std::path::PathBuf;
+use std::{path::PathBuf, string::String};
 use tokio::{
     fs::{File, OpenOptions},
     io::AsyncWriteExt as _,
 };
 use tokio_util::sync::CancellationToken;
-use zmodem2::{Action, Event, Receiver};
+use zmodem2::{Action, Event, Position, Receiver};
 
 struct DownloadFile {
     path: PathBuf,
+    remote_name: String,
+    advertised_size: Option<u64>,
+    written: u64,
     file: File,
+}
+
+#[derive(Default)]
+struct DownloadProgressTracker {
+    responder: ZmodemResponder,
+    file_index: usize,
+    completed: u64,
 }
 
 enum ReceiverStep {
@@ -27,15 +37,21 @@ pub(super) async fn run_download(
     channel: &mut dyn SshChannel,
     initial_wire: Vec<u8>,
     directory: PathBuf,
+    responder: ZmodemResponder,
     cancellation: &CancellationToken,
 ) -> Result<Vec<u8>> {
     validate_directory(&directory).await?;
     let mut receiver = Receiver::new().context("create ZMODEM receiver")?;
     let mut current = None;
+    let mut progress = DownloadProgressTracker {
+        responder,
+        ..Default::default()
+    };
     let result = drive_download(
         channel,
         &mut receiver,
         &mut current,
+        &mut progress,
         initial_wire,
         &directory,
         cancellation,
@@ -53,6 +69,7 @@ async fn drive_download(
     channel: &mut dyn SshChannel,
     receiver: &mut Receiver,
     current: &mut Option<DownloadFile>,
+    progress: &mut DownloadProgressTracker,
     mut pending: Vec<u8>,
     directory: &std::path::Path,
     cancellation: &CancellationToken,
@@ -60,7 +77,16 @@ async fn drive_download(
     let mut timeouts = 0;
     let mut session_complete = false;
     loop {
-        match drive_receiver(channel, receiver, current, directory, cancellation).await? {
+        match drive_receiver(
+            channel,
+            receiver,
+            current,
+            progress,
+            directory,
+            cancellation,
+        )
+        .await?
+        {
             ReceiverStep::Progress => continue,
             ReceiverStep::SessionComplete => {
                 session_complete = true;
@@ -132,6 +158,7 @@ async fn drive_receiver(
     channel: &mut dyn SshChannel,
     receiver: &mut Receiver,
     current: &mut Option<DownloadFile>,
+    progress: &mut DownloadProgressTracker,
     directory: &std::path::Path,
     cancellation: &CancellationToken,
 ) -> Result<ReceiverStep> {
@@ -145,16 +172,24 @@ async fn drive_receiver(
         Action::WriteFile(bytes) => {
             let bytes = bytes.to_vec();
             write_file_chunk(current, &bytes).await?;
+            let written = bytes.len() as u64;
+            if let Some(file) = current.as_mut() {
+                file.written = file.written.saturating_add(written);
+            }
+            progress.advance(current);
             receiver
                 .file_written(bytes.len())
                 .context("acknowledge ZMODEM download data")?;
             Ok(ReceiverStep::Progress)
         }
         Action::Event(Event::FileStarted(info)) => {
-            *current = Some(open_download_file(directory, info.name).await?);
+            let file = open_download_file(directory, info.name, info.size).await?;
+            progress.start_file(&file);
+            *current = Some(file);
             Ok(ReceiverStep::Progress)
         }
         Action::Event(Event::FileCompleted) => {
+            progress.complete(current);
             finish_download_file(current).await?;
             Ok(ReceiverStep::Progress)
         }
@@ -171,6 +206,7 @@ async fn drive_receiver(
 async fn open_download_file(
     directory: &std::path::Path,
     remote_name: &[u8],
+    advertised_size: Option<Position>,
 ) -> Result<DownloadFile> {
     let path = download_path(directory, remote_name)?;
     let file = OpenOptions::new()
@@ -179,7 +215,13 @@ async fn open_download_file(
         .open(&path)
         .await
         .with_context(|| format!("create ZMODEM download file {}", path.display()))?;
-    Ok(DownloadFile { path, file })
+    Ok(DownloadFile {
+        path,
+        remote_name: String::from_utf8_lossy(remote_name).into_owned(),
+        advertised_size: advertised_size.map(|size| u64::from(size.get())),
+        written: 0,
+        file,
+    })
 }
 
 async fn write_file_chunk(current: &mut Option<DownloadFile>, bytes: &[u8]) -> Result<()> {
@@ -190,6 +232,61 @@ async fn write_file_chunk(current: &mut Option<DownloadFile>, bytes: &[u8]) -> R
         .write_all(bytes)
         .await
         .context("write ZMODEM download file")
+}
+
+impl DownloadProgressTracker {
+    fn start_file(&mut self, file: &DownloadFile) {
+        self.responder.begin_download(self.snapshot(file, 0));
+    }
+
+    fn advance(&mut self, current: &Option<DownloadFile>) {
+        let Some(file) = current.as_ref() else {
+            return;
+        };
+        let current_file_transferred = file.written;
+        let transferred = self.completed.saturating_add(file.written);
+        self.responder.update_download(self.snapshot_with_current(
+            file,
+            current_file_transferred,
+            transferred,
+        ));
+    }
+
+    fn complete(&mut self, current: &Option<DownloadFile>) {
+        let Some(file) = current.as_ref() else {
+            return;
+        };
+        self.completed = self.completed.saturating_add(file.written);
+        self.file_index = self.file_index.saturating_add(1);
+        self.responder
+            .update_download(self.snapshot(file, self.completed));
+    }
+
+    fn snapshot(&self, file: &DownloadFile, transferred: u64) -> ZmodemTransferProgress {
+        self.snapshot_with_current(file, file.written, transferred)
+    }
+
+    fn snapshot_with_current(
+        &self,
+        file: &DownloadFile,
+        current_file_transferred: u64,
+        transferred: u64,
+    ) -> ZmodemTransferProgress {
+        let current_file_transferred = file
+            .advertised_size
+            .map(|size| current_file_transferred.min(size))
+            .unwrap_or(0);
+        ZmodemTransferProgress {
+            direction: ZmodemTransferDirection::Download,
+            file_name: file.remote_name.clone(),
+            file_index: self.file_index,
+            file_count: 0,
+            current_file_transferred,
+            current_file_total: file.advertised_size.unwrap_or(0),
+            transferred,
+            total: 0,
+        }
+    }
 }
 
 async fn finish_download_file(current: &mut Option<DownloadFile>) -> Result<()> {

@@ -247,13 +247,14 @@ impl SftpTool {
 
 fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
     let (username, auth) = match params.sftp_account.as_ref() {
-        Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => {
-            (
-                account.username.clone(),
-                SshAuth::Password(account.password.clone()),
-            )
-        }
-        _ => (params.username.clone(), auth_from_method(&params.auth_method)),
+        Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => (
+            account.username.clone(),
+            SshAuth::Password(account.password.clone()),
+        ),
+        _ => (
+            params.username.clone(),
+            auth_from_method(&params.auth_method),
+        ),
     };
     SshConnectConfig {
         host: params.host.clone(),

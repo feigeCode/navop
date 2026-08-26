@@ -1,3 +1,6 @@
+use super::{
+    TransferProgressGuard, ZmodemProgressState, ZmodemTransferDirection, ZmodemTransferProgress,
+};
 use crate::TerminalEvent;
 use anyhow::{Context as _, Result, bail};
 use std::{
@@ -38,6 +41,7 @@ pub enum ZmodemPickerResponse {
 #[derive(Clone, Default)]
 pub(crate) struct ZmodemResponder {
     state: Arc<StdMutex<ZmodemState>>,
+    progress: ZmodemProgressState,
     event_tx: Option<UnboundedSender<TerminalEvent>>,
 }
 
@@ -61,6 +65,7 @@ impl ZmodemResponder {
     pub(crate) fn new(event_tx: UnboundedSender<TerminalEvent>) -> Self {
         Self {
             state: Arc::new(StdMutex::new(ZmodemState::default())),
+            progress: ZmodemProgressState::new(event_tx.clone()),
             event_tx: Some(event_tx),
         }
     }
@@ -72,6 +77,34 @@ impl ZmodemResponder {
             .pending
             .as_ref()
             .map(|pending| pending.request)
+    }
+
+    pub(crate) fn transfer_progress(&self) -> Option<ZmodemTransferProgress> {
+        self.progress.snapshot()
+    }
+
+    pub(crate) fn begin_upload(&self, progress: ZmodemTransferProgress) -> TransferProgressGuard {
+        self.progress.begin(progress)
+    }
+
+    pub(crate) fn update_upload(&self, progress: ZmodemTransferProgress) {
+        self.progress.update(progress);
+    }
+
+    pub(crate) fn begin_download(&self, progress: ZmodemTransferProgress) {
+        self.progress.start(progress);
+    }
+
+    pub(crate) fn update_download(&self, progress: ZmodemTransferProgress) {
+        self.progress.update(progress);
+    }
+
+    pub(crate) fn set_transfer_direction(&self, direction: ZmodemTransferDirection) {
+        self.progress.set_direction(direction);
+    }
+
+    pub(crate) fn finish_transfer(&self, outcome: super::ZmodemTransferOutcome) {
+        self.progress.finish(outcome);
     }
 
     pub(crate) fn submit(&self, response: ZmodemPickerResponse) -> bool {

@@ -267,6 +267,8 @@ impl TerminalView {
             credential_inputs: None,
             ssh_mfa_inputs: Vec::new(),
             zmodem_picker_request_id: None,
+            zmodem_background_task_id: None,
+            zmodem_background_cancel_watch: None,
             focus_terminal_after_connect: false,
             reconnect_success_pending: false,
             current_theme: default_theme,

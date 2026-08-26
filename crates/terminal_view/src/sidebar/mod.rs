@@ -582,6 +582,8 @@ pub enum TerminalSidebarEvent {
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
     CustomHighlightsChanged(Vec<TerminalHighlightRule>),
+    /// 在独立页签中打开当前 SSH 连接的 SFTP 文件管理器
+    OpenSftp(StoredConnection),
     /// 在终端中 cd 到指定路径
     CdToTerminal(String),
     /// 请求将终端当前工作目录同步到文件管理器
@@ -901,6 +903,9 @@ impl TerminalSidebar {
                         }
                         FileManagerPanelEvent::MoveTo(placement) => {
                             this.move_tool(SidebarPanel::FileManager, *placement, cx);
+                        }
+                        FileManagerPanelEvent::OpenSftp(connection) => {
+                            cx.emit(TerminalSidebarEvent::OpenSftp(connection.clone()));
                         }
                         FileManagerPanelEvent::CdToTerminal(path) => {
                             cx.emit(TerminalSidebarEvent::CdToTerminal(path.clone()));

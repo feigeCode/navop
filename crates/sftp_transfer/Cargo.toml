@@ -1,0 +1,22 @@
+[package]
+name = "sftp_transfer"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+gpui = { workspace = true }
+one-core = { workspace = true }
+sftp = { workspace = true }
+ssh = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

@@ -305,7 +305,7 @@ where
                             flight_guard.complete();
                             Err(err)
                         }
-                    }
+                    };
                 }
             }
         }

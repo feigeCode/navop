@@ -341,18 +341,14 @@ SSH:
     en: Auto follows the OS detected by a successful connection test
     zh-CN: 自动模式跟随测试连接探测到的系统类型，也可以手动固定图标
     zh-HK: 自動模式跟隨連線測試偵測到的系統類型，也可以手動固定圖標
-  icon:
-    en: Icon
-    zh-CN: 图标
-    zh-HK: 圖標
-  icon_auto:
-    en: Auto
-    zh-CN: 自动
-    zh-HK: 自動
-  icon_hint:
-    en: Auto follows the OS detected by a successful connection test
-    zh-CN: 自动模式跟随测试连接探测到的系统类型，也可以手动固定图标
-    zh-HK: 自動模式跟隨連線測試偵測到的系統類型，也可以手動固定圖標
+  icon_local:
+    en: Local image
+    zh-CN: 本地图片
+    zh-HK: 本機圖片
+  icon_select_file:
+    en: Select a local connection icon
+    zh-CN: 选择本地连接图标
+    zh-HK: 選擇本機連線圖標
   # 标签页
   tab_basic:
     en: Basic
@@ -1947,6 +1943,10 @@ SshSession:
 
 # 文件管理器
 FileManager:
+  open_sftp:
+    en: Open SFTP in New Tab
+    zh-CN: 在新页签中打开 SFTP
+    zh-HK: 在新頁籤中開啟 SFTP
   clipboard_upload_not_connected:
     en: File Manager is not connected, so clipboard content cannot be uploaded
     zh-CN: 文件管理器未连接，无法上传剪贴板内容
@@ -2551,6 +2551,18 @@ TerminalRecordingPlayback:
     zh-HK: 回放控制目前不可用
 
 TerminalZmodem:
+  upload_title:
+    en: Upload
+    zh-CN: 上传
+    zh-HK: 上傳
+  download_title:
+    en: Download
+    zh-CN: 下载
+    zh-HK: 下載
+  uploading:
+    en: Uploading with ZMODEM
+    zh-CN: 正在通过 ZMODEM 上传
+    zh-HK: 正在透過 ZMODEM 上傳
   select_upload_files:
     en: Select files to upload with ZMODEM
     zh-CN: 选择要通过 ZMODEM 上传的文件
