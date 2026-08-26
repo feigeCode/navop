@@ -39,8 +39,8 @@ fn background_task_entry_stays_before_window_controls() {
 
     let panel = include_str!("background_task_panel.rs");
     assert!(panel.contains("fn render_entry(&self, cx: &mut Context<Self>) -> impl IntoElement"));
-    assert!(panel.contains("Popover::new(\"background-task-popover\")"));
-    assert!(panel.contains(".anchor(gpui::Anchor::TopRight)"));
+    assert!(panel.contains("open_background_task_dialog"));
+    assert!(panel.contains("window.open_dialog(cx"));
     assert!(source[background..].contains(".flex_shrink_0()"));
 }
 

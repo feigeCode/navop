@@ -2,7 +2,7 @@
 //!
 //! 该组件负责：
 //! - 在 TabContainer 标签栏最右侧渲染任务入口按钮（带运行数 / 失败数徽标）
-//! - 点击弹出 Popover，展示任务列表、状态、进度和错误
+//! - 点击弹出 Dialog 弹窗，展示任务列表、状态、进度和错误
 //! - 订阅全局任务管理器，在任务状态变化时自动刷新
 //!
 //! 该组件不负责调度任务，仅作为 [`crate::background_tasks`] 注册表的全局视图。
@@ -12,14 +12,14 @@ use crate::background_tasks::{
     BackgroundTaskStatus, global,
 };
 use gpui::{
-    AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement as _, Styled, Subscription, Window,
+    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    Window,
     prelude::FluentBuilder, px,
 };
-use gpui_component::popover::Popover;
 use gpui_component::progress::Progress;
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable as _,
+    ActiveTheme, Disableable, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -29,8 +29,6 @@ use std::sync::Arc;
 /// 面板状态实体，由 `TabContainer` 持有一个实例。
 pub struct BackgroundTaskPanel {
     manager: Entity<BackgroundTaskManager>,
-    popover_open: bool,
-    filter: BackgroundTaskFilter,
     _subscription: Subscription,
 }
 
@@ -39,13 +37,11 @@ impl BackgroundTaskPanel {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let manager = global(cx);
         let subscription = cx.subscribe(&manager, |_this, _entity, _event, cx| {
-            // 任务变化时刷新视图；保持 popover 当前开合状态不变。
+            // 任务变化时刷新入口按钮的徽标计数。
             cx.notify();
         });
         Self {
             manager,
-            popover_open: false,
-            filter: BackgroundTaskFilter::All,
             _subscription: subscription,
         }
     }
@@ -60,53 +56,23 @@ impl BackgroundTaskPanel {
         self.manager.read(cx).counts()
     }
 
-    /// 渲染完整入口（Button + Popover）。作为标签栏末尾的固定 flex item。
+    /// 渲染完整入口（Button）。作为标签栏末尾的固定 flex item。
     fn render_entry(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let counts = self.manager.read(cx).counts();
-        let is_open = self.popover_open;
-        let filter = self.filter;
-        let manager = self.manager.clone();
-        let panel = cx.entity();
-
-        Popover::new("background-task-popover")
-            .anchor(gpui::Anchor::TopRight)
-            .open(is_open)
-            .on_open_change(cx.listener(|this, open: &bool, _window, cx| {
-                this.popover_open = *open;
-                cx.notify();
-            }))
-            .trigger(
-                Button::new("background-task-button")
-                    .icon(IconName::ListChecks)
-                    .ghost()
-                    .compact()
-                    .tooltip(t!("BackgroundTasks.open").to_string())
-                    .when(counts.active > 0 || counts.failed > 0, |btn| {
-                        btn.label(Self::badge_text(&counts))
-                    }),
-            )
-            .content(move |state, _window, cx| {
-                // `content` 每帧都会被调用，不能在这里修改外部状态。
-                let _ = state;
-                let manager = manager.clone();
-                let panel = panel.clone();
-                render_panel_content(
-                    &manager,
-                    filter,
-                    std::sync::Arc::new(move |filter, cx: &mut App| {
-                        panel.update(cx, |this: &mut BackgroundTaskPanel, cx| {
-                            this.update_filter(filter);
-                            cx.notify();
-                        });
-                    }),
-                    cx,
-                )
-                .into_any_element()
+        Button::new("background-task-button")
+            .icon(IconName::ListChecks)
+            .ghost()
+            .compact()
+            .tooltip(t!("BackgroundTasks.open").to_string())
+            .when(counts.active > 0 || counts.failed > 0, |btn| {
+                btn.label(Self::badge_text(&counts))
             })
-    }
-
-    fn update_filter(&mut self, filter: BackgroundTaskFilter) {
-        self.filter = filter;
+            .on_click({
+                let manager = self.manager.clone();
+                move |_, window, cx| {
+                    open_background_task_dialog(manager.clone(), window, cx);
+                }
+            })
     }
 
     fn badge_text(counts: &BackgroundTaskCounts) -> String {
@@ -125,9 +91,74 @@ impl Render for BackgroundTaskPanel {
     }
 }
 
-/// 渲染 Popover 的内容（不含入口按钮）。
+/// 打开后台任务 Dialog 弹窗。
 ///
-/// 单独抽出便于单元测试直接渲染。
+/// 与标签页切换器（`crate::tab_switcher::open_tab_switcher_dialog`）保持一致，
+/// 通过 `window.open_dialog` 打开模态弹窗。弹窗内容由独立实体渲染，
+/// 该实体订阅任务管理器，任务状态变化时内容自动刷新。
+pub fn open_background_task_dialog(
+    manager: Entity<BackgroundTaskManager>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let panel_content = cx.new(|cx| BackgroundTaskPanelContent::new(manager, cx));
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        dialog
+            .w(px(560.0))
+            .margin_top(px(72.0))
+            .title(t!("BackgroundTasks.title").to_string())
+            .content({
+                let panel_content = panel_content.clone();
+                move |content, _window, _cx| content.p_0().child(panel_content.clone())
+            })
+    });
+}
+
+/// Dialog 弹窗内容实体：订阅任务管理器，任务变化时刷新内容。
+///
+/// 持有当前过滤条件，关闭再打开后保留上次选择。
+struct BackgroundTaskPanelContent {
+    manager: Entity<BackgroundTaskManager>,
+    filter: BackgroundTaskFilter,
+    _subscription: Subscription,
+}
+
+impl BackgroundTaskPanelContent {
+    fn new(manager: Entity<BackgroundTaskManager>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.subscribe(&manager, |_this, _entity, _event, cx| {
+            cx.notify();
+        });
+        Self {
+            manager,
+            filter: BackgroundTaskFilter::All,
+            _subscription: subscription,
+        }
+    }
+
+    fn update_filter(&mut self, filter: BackgroundTaskFilter) {
+        self.filter = filter;
+    }
+}
+
+impl Render for BackgroundTaskPanelContent {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel = cx.entity();
+        let filter = self.filter;
+        render_panel_content(
+            &self.manager,
+            filter,
+            std::sync::Arc::new(move |filter, cx: &mut App| {
+                panel.update(cx, |this: &mut BackgroundTaskPanelContent, cx| {
+                    this.update_filter(filter);
+                    cx.notify();
+                });
+            }),
+            cx,
+        )
+    }
+}
+
+/// 渲染弹窗内容（不含入口按钮）。
 pub(crate) fn render_panel_content(
     manager: &Entity<BackgroundTaskManager>,
     filter: BackgroundTaskFilter,
@@ -139,9 +170,9 @@ pub(crate) fn render_panel_content(
     let manager = manager.clone();
 
     v_flex()
-        .id("background-task-popover-content")
-        .w(px(380.0))
-        .max_h(px(420.0))
+        .id("background-task-dialog-content")
+        .w_full()
+        .max_h(px(500.0))
         .gap_2()
         .p_2()
         .child(render_header(
@@ -167,7 +198,7 @@ pub(crate) fn render_panel_content(
                 v_flex()
                     .id("background-task-list")
                     .gap_2()
-                    .max_h(px(340.0))
+                    .max_h(px(400.0))
                     .overflow_y_scroll()
                     .children(
                         tasks
@@ -194,16 +225,6 @@ fn render_header(
         .id("background-task-header")
         .items_center()
         .gap_2()
-        .child(
-            h_flex()
-                .id("background-task-title")
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .child(Icon::new(IconName::ListChecks).small())
-                .child(t!("BackgroundTasks.title").to_string()),
-        )
         .child(render_counts_badge(counts))
         .child(render_filter_bar(filter, update_filter))
         .child(
