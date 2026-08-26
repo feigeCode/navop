@@ -751,7 +751,7 @@ fn format_legacy_custom_command(program: &str, arguments: &str) -> String {
 pub struct ConnectionSidebarTreeState {
     #[serde(default)]
     pub hide_empty_workspaces: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub auto_hide_tree: bool,
 }
 
@@ -759,7 +759,7 @@ impl Default for ConnectionSidebarTreeState {
     fn default() -> Self {
         Self {
             hide_empty_workspaces: false,
-            auto_hide_tree: true,
+            auto_hide_tree: false,
         }
     }
 }
