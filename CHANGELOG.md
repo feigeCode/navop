@@ -12,6 +12,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 - SSH 连接支持为 SFTP 单独配置一套账户：在连接表单新增「SFTP 账户」页签，可启用独立 SFTP 用户名/密码；启用后 SFTP 传输、远程文件浏览与远程文件编辑使用该账户连接远端，SSH 终端仍使用主账户，未配置时 SFTP 与 SSH 共用一套凭据。
 - SFTP 文件浏览的面包屑导航优化了最小宽度处理：根目录标签不再强制保留额外宽度，窄窗口下路径显示更紧凑。
+- 连接树新增「自动隐藏」开关（默认开启）：开启时连接树以浮层显示，双击打开会话后自动收起、不再遮挡终端；关闭后连接树改为与终端并排固定的分割面板，保持展开，方便持续浏览连接列表。
 
 #### 修复与优化
 
@@ -31,6 +32,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 - SSH connections can now use a separate SFTP account: a new "SFTP Account" tab in the connection form lets you enable an independent SFTP username/password. When enabled, SFTP transfers, remote file browsing, and remote file editing connect with that account while the SSH terminal keeps using the main account; when unset, SFTP and SSH share the same credentials.
 - The SFTP file browser breadcrumb now handles minimum widths more smartly: the root label no longer reserves extra width, keeping the path compact in narrow windows.
+- The connection tree gains an auto-hide toggle (enabled by default): when on, the tree shows as a floating overlay and collapses automatically after you open a session so it never covers the terminal; when off, the tree renders as a fixed split panel docked beside the terminal and stays expanded for continuous browsing.
 
 #### Fixes and Improvements
 
