@@ -601,6 +601,11 @@ impl BackgroundTaskManager {
                         task.result = result;
                         task.error = None;
                         if let Some(progress) = &mut task.progress {
+                            // 成功即视为完成：把进度推进到总量，避免停留在最后一次
+                            // 更新的百分比（如下载 98/100 即成功时仍显示 98%）。
+                            if let Some(total) = progress.total {
+                                progress.current = total;
+                            }
                             progress.message = None;
                         }
                     }
@@ -1274,6 +1279,29 @@ mod tests {
         assert_eq!(50, progress.percent());
         assert_eq!(BackgroundTaskProgressUnit::Bytes, progress.unit);
         assert!(progress.display().contains("1.0 KB"));
+    }
+
+    #[gpui::test]
+    fn succeeded_task_pins_progress_to_total(cx: &mut gpui::TestAppContext) {
+        let manager = new_manager(cx);
+        let id = manager.update(cx, |m, cx| {
+            let id = m.register(
+                BackgroundTaskSpec::new("kind", "upload")
+                    .progress_unit(BackgroundTaskProgressUnit::Bytes),
+                cx,
+            );
+            m.mark_running(id, cx);
+            // 任务在 98/100 时即宣布成功，进度必须被钉到 100%。
+            m.update_progress(id, 98, Some(100), None, None, cx);
+            m.succeed(id, None, cx);
+            id
+        });
+
+        let task = task(&manager, id, cx);
+        assert_eq!(BackgroundTaskStatus::Succeeded, task.status);
+        let progress = task.progress.expect("progress should be kept");
+        assert_eq!(100, progress.percent());
+        assert_eq!(Some(progress.current), progress.total);
     }
 
     #[gpui::test]
