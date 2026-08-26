@@ -3436,13 +3436,24 @@ fn direct_table_identity(relation: &TableFactor) -> Option<(String, Option<Strin
         || sample.is_some()
         || !index_hints.is_empty()
         || name.0.is_empty()
-        || name.0.iter().any(|part| part.as_ident().is_none())
     {
         return None;
     }
 
+    // Build the table name from the unquoted identifier values. Using
+    // `name.to_string()` would preserve the original quoting characters (e.g.
+    // `` `ADDRESSBOOK` ``), which later get quoted again by `quote_identifier`
+    // when generating INSERT/UPDATE/DELETE statements, producing doubled
+    // quote symbols. `.value` holds the identifier without its quotes.
+    let table_name = name
+        .0
+        .iter()
+        .map(|part| part.as_ident().map(|ident| ident.value.as_str()))
+        .collect::<Option<Vec<_>>>()?
+        .join(".");
+
     Some((
-        name.to_string(),
+        table_name,
         alias.as_ref().map(|alias| alias.name.value.clone()),
     ))
 }
@@ -4237,6 +4248,53 @@ mod tests {
             let result = analyze_query_editability(query);
             assert!(result.is_none());
         }
+    }
+
+    #[test]
+    fn test_analyze_select_query_does_not_preserve_quotes_in_table_name() {
+        let plugin = MySqlPlugin::new();
+
+        // Backtick-quoted table name must not carry the quote characters into
+        // the analyzed table name (otherwise `quote_identifier` doubles them
+        // when generating UPDATE/INSERT/DELETE statements).
+        let analysis = plugin.analyze_select_query("SELECT * FROM `ADDRESSBOOK`");
+        assert_eq!(analysis.table_name.as_deref(), Some("ADDRESSBOOK"));
+        assert!(analysis.editable);
+        assert!(analysis.schema_metadata_safe);
+
+        // Quoted qualified name keeps the dotted structure but drops quotes.
+        let analysis = plugin.analyze_select_query("SELECT * FROM `ai_app`.`ADDRESSBOOK`");
+        assert_eq!(analysis.table_name.as_deref(), Some("ai_app.ADDRESSBOOK"));
+        assert!(analysis.editable);
+
+        // Unquoted names are unaffected.
+        let analysis = plugin.analyze_select_query("SELECT * FROM users");
+        assert_eq!(analysis.table_name.as_deref(), Some("users"));
+    }
+
+    #[test]
+    fn test_analyze_select_query_unquotes_other_dialect_identifiers() {
+        let plugin = MySqlPlugin::new();
+
+        // Double-quoted identifiers (PostgreSQL/Oracle/SQLite/DuckDB style).
+        let analysis = plugin.analyze_select_query("SELECT * FROM \"orders\"");
+        assert_eq!(analysis.table_name.as_deref(), Some("orders"));
+
+        // Escaped backtick inside a quoted identifier must be unescaped to the
+        // real value (`` a``b `` is the table named `a`b`).
+        let analysis = plugin.analyze_select_query("SELECT * FROM `a``b`");
+        assert_eq!(analysis.table_name.as_deref(), Some("a`b"));
+
+        // Bracket-quoted identifiers (MSSQL style) need the MSSQL dialect so
+        // the parser recognizes `[orders]` as a quoted identifier.
+        let plugin = crate::mssql::MsSqlPlugin::new();
+        let analysis = plugin.analyze_select_query("SELECT * FROM [orders]");
+        assert_eq!(analysis.table_name.as_deref(), Some("orders"));
+
+        // Double-quoted identifiers in a PostgreSQL dialect.
+        let plugin = crate::postgresql::PostgresPlugin::new();
+        let analysis = plugin.analyze_select_query("SELECT * FROM \"orders\"");
+        assert_eq!(analysis.table_name.as_deref(), Some("orders"));
     }
 
     // ==================== analyze_select_editability_fallback tests ====================
