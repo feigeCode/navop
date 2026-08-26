@@ -463,8 +463,19 @@ pub struct McpSettings {
     pub server_mode: McpServerMode,
     #[serde(default)]
     pub permission_mode: McpPermissionMode,
+    #[serde(default = "default_mcp_approval_timeout_ms")]
+    pub approval_timeout_ms: u64,
     #[serde(default, rename = "toolsets", skip_serializing)]
     pub legacy_toolsets: Option<ToolExposureToolsetSettings>,
+}
+
+pub const DEFAULT_MCP_APPROVAL_TIMEOUT_MS: u64 = 300_000;
+/// Upper bound exposed by the Settings UI for the MCP approval confirmation
+/// window. Use 0 in settings to wait indefinitely instead.
+pub const MAX_MCP_APPROVAL_TIMEOUT_MS: u64 = 3_600_000;
+
+fn default_mcp_approval_timeout_ms() -> u64 {
+    DEFAULT_MCP_APPROVAL_TIMEOUT_MS
 }
 
 impl Default for McpSettings {
@@ -473,6 +484,7 @@ impl Default for McpSettings {
             server_enabled: false,
             server_mode: McpServerMode::Temporary,
             permission_mode: McpPermissionMode::Deny,
+            approval_timeout_ms: default_mcp_approval_timeout_ms(),
             legacy_toolsets: None,
         }
     }
@@ -1491,12 +1503,13 @@ mod tests {
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
-        DEFAULT_TERMINAL_THEME, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
-        LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
-        MainWindowState, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
-        RemoteFileOpenMode, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
+        HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
+        default_grid_font_fallback_families, default_grid_monospace_font_family, grid_monospace_font,
+        installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -1735,6 +1748,10 @@ mod tests {
         assert!(!settings.mcp.server_enabled);
         assert_eq!(settings.mcp.server_mode, McpServerMode::Temporary);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
+        assert_eq!(
+            DEFAULT_MCP_APPROVAL_TIMEOUT_MS,
+            settings.mcp.approval_timeout_ms
+        );
         assert!(settings.tool_exposure.mcp.terminal);
         assert!(settings.tool_exposure.mcp.terminal_ssh_exec);
         assert!(settings.tool_exposure.mcp.terminal_exec);
@@ -2030,11 +2047,27 @@ mod tests {
         assert_eq!("en", settings.locale);
         assert!(!settings.mcp.server_enabled);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
+        assert_eq!(
+            DEFAULT_MCP_APPROVAL_TIMEOUT_MS,
+            settings.mcp.approval_timeout_ms
+        );
         assert!(settings.tool_exposure.mcp.terminal);
         assert!(settings.tool_exposure.mcp.terminal_ssh_exec);
         assert!(settings.tool_exposure.mcp.terminal_exec);
         assert!(settings.tool_exposure.mcp.connections);
         assert!(settings.tool_exposure.agent.database);
+    }
+
+    #[test]
+    fn app_settings_parses_explicit_mcp_approval_timeout() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "mcp": {
+                "approval_timeout_ms": 0
+            }
+        }))
+        .expect("approval_timeout_ms 应能被解析");
+
+        assert_eq!(0, settings.mcp.approval_timeout_ms);
     }
 
     #[test]
@@ -2257,6 +2290,7 @@ mod tests {
         settings.mcp.server_enabled = true;
         settings.mcp.server_mode = McpServerMode::Persistent;
         settings.mcp.permission_mode = McpPermissionMode::Ask;
+        settings.mcp.approval_timeout_ms = 0;
         settings.tool_exposure.mcp.connections = false;
         settings.tool_exposure.mcp.database = true;
         settings.tool_exposure.mcp.redis = true;
@@ -2268,6 +2302,7 @@ mod tests {
         assert!(loaded.mcp.server_enabled);
         assert_eq!(loaded.mcp.server_mode, McpServerMode::Persistent);
         assert_eq!(loaded.mcp.permission_mode, McpPermissionMode::Ask);
+        assert_eq!(0, loaded.mcp.approval_timeout_ms);
         assert!(loaded.tool_exposure.mcp.terminal);
         assert!(loaded.tool_exposure.mcp.terminal_ssh_exec);
         assert!(loaded.tool_exposure.mcp.terminal_exec);

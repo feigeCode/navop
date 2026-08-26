@@ -13,6 +13,7 @@ use public_mcp::remote_ops::{
 use public_mcp::server::serve_on_stream;
 use public_mcp::tools::PublicMcpToolRegistry;
 use serde_json::{Value, json};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -99,7 +100,9 @@ async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
     };
     registry.register(session.clone());
     registry.register_remote_ops(session);
-    let (approver, mut receiver) = channel_approver(Duration::from_secs(10));
+    let (approver, mut receiver) = channel_approver(Arc::new(AtomicU64::new(
+        Duration::from_secs(10).as_millis() as u64,
+    )));
     let protocol = PublicMcpServer::with_tool_registry_and_approval(
         PublicMcpToolRegistry::terminal(registry).expect("terminal registry should be valid"),
         PermissionMode::Ask,

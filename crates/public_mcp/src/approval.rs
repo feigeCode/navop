@@ -6,6 +6,11 @@ use std::{future::Future, pin::Pin, sync::Arc};
 pub type PublicMcpApprovalFuture =
     Pin<Box<dyn Future<Output = PublicMcpApprovalOutcome> + Send + 'static>>;
 
+/// Stable reason used when an approval request is denied because the user did
+/// not respond within the configured confirmation window. Clients can use this
+/// to distinguish an operator timeout from an explicit denial.
+pub const APPROVAL_TIMEOUT_REASON: &str = "approval_timeout";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicMcpApprovalRequest {
     pub operation: PublicMcpOperationKind,

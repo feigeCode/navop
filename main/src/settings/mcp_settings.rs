@@ -3,8 +3,11 @@ use crate::settings::mcp_client_config::mcp_client_config_items;
 use crate::settings::mcp_skill_install::mcp_skill_install_items;
 use crate::settings::mcp_status::mcp_runtime_status_item;
 use gpui::{App, SharedString};
-use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
-use one_core::settings::{AppSettings, McpPermissionMode, McpServerMode, McpSettings};
+use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
+use one_core::settings::{
+    AppSettings, DEFAULT_MCP_APPROVAL_TIMEOUT_MS, MAX_MCP_APPROVAL_TIMEOUT_MS, McpPermissionMode,
+    McpServerMode, McpSettings,
+};
 use rust_i18n::t;
 
 pub fn mcp_setting_group(default_settings: &McpSettings) -> SettingGroup {
@@ -60,7 +63,32 @@ fn mcp_server_items(default_settings: &McpSettings) -> Vec<SettingItem> {
             )),
         )
         .description(t!("Settings.General.Mcp.permission_mode_desc").to_string()),
+        SettingItem::new(
+            t!("Settings.General.Mcp.approval_timeout"),
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: 0.0,
+                    max: MAX_MCP_APPROVAL_TIMEOUT_MS as f64,
+                    step: 1_000.0,
+                },
+                |cx: &App| AppSettings::global(cx).mcp.approval_timeout_ms as f64,
+                |value: f64, cx: &mut App| {
+                    AppSettings::update_and_save(cx, |settings| {
+                        settings.mcp.approval_timeout_ms = normalize_approval_timeout_ms(value);
+                    });
+                },
+            )
+            .default_value(default_settings.approval_timeout_ms as f64),
+        )
+        .description(t!("Settings.General.Mcp.approval_timeout_desc").to_string()),
     ]
+}
+
+fn normalize_approval_timeout_ms(value: f64) -> u64 {
+    if !value.is_finite() {
+        return DEFAULT_MCP_APPROVAL_TIMEOUT_MS;
+    }
+    (value.round() as u64).clamp(0, MAX_MCP_APPROVAL_TIMEOUT_MS)
 }
 
 fn mcp_server_mode_options() -> Vec<(SharedString, SharedString)> {
@@ -142,6 +170,20 @@ mod tests {
                 "mcp-copy-agent-config"
             ],
             ids
+        );
+    }
+
+    #[test]
+    fn approval_timeout_values_are_clamped_to_runtime_bounds() {
+        assert_eq!(0, normalize_approval_timeout_ms(0.0));
+        assert_eq!(5_000, normalize_approval_timeout_ms(5_000.0));
+        assert_eq!(
+            DEFAULT_MCP_APPROVAL_TIMEOUT_MS,
+            normalize_approval_timeout_ms(f64::NAN)
+        );
+        assert_eq!(
+            MAX_MCP_APPROVAL_TIMEOUT_MS,
+            normalize_approval_timeout_ms((MAX_MCP_APPROVAL_TIMEOUT_MS + 1) as f64)
         );
     }
 }

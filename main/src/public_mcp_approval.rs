@@ -6,24 +6,28 @@ mod queue;
 use channel::channel_approver;
 use queue::{ApprovalQueueSnapshot, ApprovalQueueState};
 
-use gpui::{App, AppContext, AsyncApp, Global, ParentElement, Styled, div, px};
+use gpui::{App, AppContext, AsyncApp, Global, ParentElement, Styled, Subscription, div, px};
 use gpui_component::{
     ActiveTheme, WindowExt, button::ButtonVariant, dialog::DialogButtonProps,
     scroll::ScrollableElement, v_flex,
 };
+use one_core::settings::{AppSettings, DEFAULT_MCP_APPROVAL_TIMEOUT_MS};
 use public_mcp::approval::{
     PublicMcpApprovalManager, PublicMcpApprovalOutcome, PublicMcpApprovalRequest,
 };
 use rust_i18n::t;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::sync::oneshot;
 
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const APPROVAL_QUEUE_FULL_REASON: &str = "public MCP approval queue is full";
 
 pub struct GlobalPublicMcpApprovalQueue {
     manager: PublicMcpApprovalManager,
+    /// Confirmation timeout in milliseconds shared with every active approver.
+    /// 0 means wait indefinitely for the operator to respond.
+    timeout_ms: Arc<AtomicU64>,
+    _settings_subscription: Subscription,
 }
 
 impl Global for GlobalPublicMcpApprovalQueue {}
@@ -33,12 +37,16 @@ pub fn init(cx: &mut App) {
         return;
     }
 
-    let (approver, mut receiver) = channel_approver(APPROVAL_TIMEOUT);
+    let timeout_ms = Arc::new(AtomicU64::new(approval_timeout_ms(cx)));
+    let (approver, mut receiver) = channel_approver(timeout_ms.clone());
     let manager = PublicMcpApprovalManager::new(Arc::new(approver));
-    cx.set_global(GlobalPublicMcpApprovalQueue {
-        manager: manager.clone(),
-    });
+    let settings_subscription = cx.observe_global::<AppSettings>(reconcile_approval_timeout);
     let queue = Arc::new(Mutex::new(ApprovalQueueState::default()));
+    cx.set_global(GlobalPublicMcpApprovalQueue {
+        manager,
+        timeout_ms,
+        _settings_subscription: settings_subscription,
+    });
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Some(envelope) = receiver.recv().await {
@@ -53,6 +61,21 @@ pub fn approval_manager(cx: &App) -> PublicMcpApprovalManager {
     cx.try_global::<GlobalPublicMcpApprovalQueue>()
         .map(|queue| queue.manager.clone())
         .unwrap_or_default()
+}
+
+fn approval_timeout_ms(cx: &App) -> u64 {
+    cx.try_global::<AppSettings>()
+        .map(|settings| settings.mcp.approval_timeout_ms)
+        .unwrap_or(DEFAULT_MCP_APPROVAL_TIMEOUT_MS)
+}
+
+fn reconcile_approval_timeout(cx: &mut App) {
+    let Some(queue) = cx.try_global::<GlobalPublicMcpApprovalQueue>() else {
+        return;
+    };
+    queue
+        .timeout_ms
+        .store(approval_timeout_ms(cx), Ordering::Relaxed);
 }
 
 struct ApprovalEnvelope {

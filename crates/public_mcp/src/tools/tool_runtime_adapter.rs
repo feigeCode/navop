@@ -2,7 +2,7 @@ use super::{
     PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider,
     target_adapter::{mcp_target_schema, normalize_mcp_arguments},
 };
-use crate::approval::PublicMcpApprovalOutcome;
+use crate::approval::{APPROVAL_TIMEOUT_REASON, PublicMcpApprovalOutcome};
 use crate::approval_grants::redact_approval_arguments;
 use crate::permissions::{PublicMcpOperationKind, permission_policy_for_mode};
 use rmcp::{
@@ -190,11 +190,21 @@ async fn ask_then_run_runtime_tool(
         PublicMcpApprovalOutcome::Approved => {
             run_runtime_tool(registry, name, input, cancellation).await
         }
-        PublicMcpApprovalOutcome::Denied { reason } => {
-            Ok(permission_denied_result(reason.unwrap_or_else(|| {
-                "tool runtime call denied by approval".to_string()
-            })))
-        }
+        PublicMcpApprovalOutcome::Denied { reason } => Ok(denied_approval_result(reason)),
+    }
+}
+
+fn denied_approval_result(reason: Option<String>) -> CallToolResult {
+    let is_timeout = reason.as_deref() == Some(APPROVAL_TIMEOUT_REASON);
+    if is_timeout {
+        structured_error_result(
+            "approval_timeout",
+            reason.unwrap_or_else(|| "approval request timed out".to_string()),
+        )
+    } else {
+        permission_denied_result(reason.unwrap_or_else(|| {
+            "tool runtime call denied by approval".to_string()
+        }))
     }
 }
 
@@ -398,8 +408,46 @@ fn runtime_error_to_mcp_error(error: ToolError) -> McpError {
 }
 
 fn permission_denied_result(message: impl Into<String>) -> CallToolResult {
+    structured_error_result("permission_denied", message.into())
+}
+
+fn structured_error_result(code: &str, message: String) -> CallToolResult {
     CallToolResult::structured_error(json!({
-        "code": "permission_denied",
-        "message": message.into()
+        "code": code,
+        "message": message
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::approval::APPROVAL_TIMEOUT_REASON;
+
+    fn error_code(result: &CallToolResult) -> Option<&str> {
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|content| content.get("code"))
+            .and_then(Value::as_str)
+    }
+
+    #[test]
+    fn approval_timeout_reason_maps_to_approval_timeout_error() {
+        let result = denied_approval_result(Some(APPROVAL_TIMEOUT_REASON.to_string()));
+        assert!(result.is_error.unwrap_or(false));
+        assert_eq!(Some("approval_timeout"), error_code(&result));
+    }
+
+    #[test]
+    fn operator_denial_maps_to_permission_denied_error() {
+        let result = denied_approval_result(Some("operator denied public MCP request".to_string()));
+        assert!(result.is_error.unwrap_or(false));
+        assert_eq!(Some("permission_denied"), error_code(&result));
+    }
+
+    #[test]
+    fn unstated_denial_maps_to_permission_denied_error() {
+        let result = denied_approval_result(None);
+        assert_eq!(Some("permission_denied"), error_code(&result));
+    }
 }
