@@ -4,17 +4,24 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
-## [Unreleased]
+## [v0.12.1] - 2026-08-26
 
 ### 中文
 
 #### 更新内容
 
 - SSH 连接支持为 SFTP 单独配置一套账户：在连接表单新增「SFTP 账户」页签，可启用独立 SFTP 用户名/密码；启用后 SFTP 传输、远程文件浏览与远程文件编辑使用该账户连接远端，SSH 终端仍使用主账户，未配置时 SFTP 与 SSH 共用一套凭据。
+- SFTP 文件浏览的面包屑导航优化了最小宽度处理：根目录标签不再强制保留额外宽度，窄窗口下路径显示更紧凑。
 
 #### 修复与优化
 
 - 修复终端粘贴误拦截：粘贴带行尾反斜杠续行的多行命令（如多行 wget/curl）不再被当作「不安全的多行粘贴」硬拦截，改为走普通多行粘贴确认；对 heredoc、未闭合引号等高风险粘贴，提示框新增「仍然粘贴」按钮，可在确认后继续粘贴。
+- 修复从终端复制表格内容时列对齐丢失的问题，复制结果保留原始列间距。
+- 修复 RDP 连接测试（IronRDP 路径）依赖完整 RDP/TLS/NLA 认证的问题：改为 TCP 可达性探测（支持直连与代理），无需账号凭据也能快速反馈目标主机是否可达。
+- 修复 Windows 下 RDP 重连时选择重连方式的仲裁对话框被自动隐藏/中断的问题，保持对话框可见直至用户选择。
+- 修复从对象页签（对象树）双击打开 MySQL 表数据时数据库名为空、报 "Incorrect database name"（ERROR 42000）的问题。
+- 修复查询结果编辑时带引号表名（反引号、双引号、方括号等）被二次加引号、导致 INSERT/UPDATE/DELETE 语句异常的问题。
+- 修复导入数据库连接后在新连接表单中编辑并保存时误按「更新已有连接」处理的问题：现在保存为全新连接。
 
 ---
 
@@ -23,12 +30,19 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### What's New
 
 - SSH connections can now use a separate SFTP account: a new "SFTP Account" tab in the connection form lets you enable an independent SFTP username/password. When enabled, SFTP transfers, remote file browsing, and remote file editing connect with that account while the SSH terminal keeps using the main account; when unset, SFTP and SSH share the same credentials.
+- The SFTP file browser breadcrumb now handles minimum widths more smartly: the root label no longer reserves extra width, keeping the path compact in narrow windows.
 
 #### Fixes and Improvements
 
 - Fixed terminal paste blocking: multi-line commands with trailing backslash line continuations (e.g., multi-line wget/curl) are no longer hard-blocked as "unsafe multi-line paste" and now use the normal multi-line paste confirmation; the unsafe-paste warning for heredoc and unterminated quotes now offers a "Paste Anyway" button so you can proceed after confirming.
+- Fixed copying table output from the terminal losing column alignment; copied text now keeps the original column spacing.
+- Fixed the RDP connection test (IronRDP path) depending on full RDP/TLS/NLA authentication: it now performs a TCP reachability probe (direct or proxy-aware) and reports whether the target host is reachable without needing account credentials.
+- Fixed the reconnect arbitration dialog on Windows RDP being dismissed/interrupted on reconnect; it now stays visible until you choose.
+- Fixed opening a MySQL table from the object tab failing with "Incorrect database name" (ERROR 42000) when the database metadata was empty.
+- Fixed editable result sets mis-handling quoted table names (backticks, double quotes, brackets): generated INSERT/UPDATE/DELETE statements no longer double-quote the table name.
+- Fixed saving an edited database draft imported into the new-connection form treating it as an update to an existing connection; it now saves as a brand-new connection.
 
----
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.12.0...v0.12.1
 
 ## [v0.12.0] - 2026-08-25
 
