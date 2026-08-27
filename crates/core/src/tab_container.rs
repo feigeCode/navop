@@ -2464,7 +2464,9 @@ impl TabContainer {
                     let title = input.read(cx).value().to_string();
                     container.commit_rename_tab_by_id(&rename_tab_id, title, window, cx);
                 }
-                InputEvent::Change | InputEvent::Focus => {}
+                InputEvent::Change
+                | InputEvent::Focus
+                | InputEvent::GutterMarkerMouseDown { .. } => {}
             },
         ));
         input_for_focus.update(cx, |input, cx| input.focus(window, cx));

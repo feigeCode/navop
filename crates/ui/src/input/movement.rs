@@ -50,8 +50,7 @@ impl InputState {
         self.scroll_to(offset, direction, cx);
         self.pause_blink_cursor(cx);
         self.update_preferred_column();
-        self.hide_context_menu(cx);
-        self.clear_inline_completion(cx);
+        self.invalidate_completions(cx);
         cx.notify()
     }
 
