@@ -341,11 +341,36 @@ enum SshCommand {
 enum SshRuntimeInput<Command> {
     Actor(SshActorInput<Command>),
     FlushZmodemProbe,
+    FlushTerminalInput,
 }
 
 enum DeferredSshActorInput {
     Command(SshCommand),
     TerminalResponse(Vec<u8>),
+}
+
+const SSH_TERMINAL_INPUT_CHUNK_BYTES: usize = 4 * 1024;
+
+#[derive(Default)]
+struct PendingTerminalInput {
+    chunks: VecDeque<(TerminalInputSource, Vec<u8>)>,
+}
+
+impl PendingTerminalInput {
+    fn push(&mut self, source: TerminalInputSource, data: Vec<u8>) {
+        self.chunks.extend(
+            data.chunks(SSH_TERMINAL_INPUT_CHUNK_BYTES)
+                .map(|chunk| (source, chunk.to_vec())),
+        );
+    }
+
+    fn pop(&mut self) -> Option<(TerminalInputSource, Vec<u8>)> {
+        self.chunks.pop_front()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
 }
 
 struct ZmodemActorTransferResult {
@@ -566,23 +591,12 @@ fn append_terminal_data(terminal_data: &mut Vec<u8>, chunk: Vec<u8>) {
     }
 }
 
-async fn send_terminal_input<C: SshChannel + ?Sized>(
-    channel: &mut C,
-    terminal_encoding: TerminalEncoding,
-    source: TerminalInputSource,
-    data: &[u8],
-    recording_tap: Option<&RecordingTap>,
-) -> anyhow::Result<()> {
-    let encoded = encode_terminal_input(terminal_encoding, source, data);
-    send_terminal_data(channel, encoded.as_ref())
-        .await
-        .context("failed to send terminal input over SSH")?;
+fn record_terminal_input(source: TerminalInputSource, data: &[u8], tap: Option<&RecordingTap>) {
     if source.is_recordable_user_input() {
-        if let Some(tap) = recording_tap {
-            let _ = tap.record_input(encoded.as_ref());
+        if let Some(tap) = tap {
+            let _ = tap.record_input(data);
         }
     }
-    Ok(())
 }
 
 fn encode_exec_effects(
@@ -790,6 +804,7 @@ impl SshBackend {
             let mut init_sent = false;
             let mut login_expect = login_expect;
             let mut deferred_actor_inputs = VecDeque::new();
+            let mut pending_terminal_input = PendingTerminalInput::default();
 
             'actor: loop {
                 // Do not let the timer-produced bytes replace a source chunk
@@ -804,8 +819,10 @@ impl SshBackend {
                         }
                     })
                 } else {
+                    // A large paste must yield between chunks so echoed output can reach the
+                    // parser. Otherwise the remote PTY can block on stdout and stop consuming
+                    // stdin, leaving russh waiting forever for more channel window capacity.
                     tokio::select! {
-                        biased;
                         input = next_ssh_actor_input(
                             &mut channel,
                             &mut command_rx,
@@ -817,11 +834,29 @@ impl SshBackend {
                         {
                             SshRuntimeInput::FlushZmodemProbe
                         }
+                        _ = std::future::ready(()),
+                            if pending_ingress.is_none() && !pending_terminal_input.is_empty() =>
+                        {
+                            SshRuntimeInput::FlushTerminalInput
+                        }
                     }
                 };
                 let mut raw_terminal_data = None;
 
                 match runtime_input {
+                    SshRuntimeInput::FlushTerminalInput => {
+                        let (source, data) = pending_terminal_input
+                            .pop()
+                            .expect("pending terminal input should contain a chunk");
+                        if let Err(error) = send_terminal_data(&mut channel, &data)
+                            .await
+                            .context("failed to send terminal input over SSH")
+                        {
+                            disconnect_error = Some(error);
+                            break;
+                        }
+                        record_terminal_input(source, &data, recording_tap.as_ref());
+                    }
                     SshRuntimeInput::FlushZmodemProbe => {
                         zmodem_probe_flush.take();
                         raw_terminal_data = Some(zmodem_detector.flush_plain_asterisk_prefix());
@@ -846,18 +881,9 @@ impl SshBackend {
                                     );
                                     break;
                                 }
-                                if let Err(error) = send_terminal_input(
-                                    &mut channel,
-                                    terminal_encoding,
-                                    source,
-                                    &data,
-                                    recording_tap.as_ref(),
-                                )
-                                .await
-                                {
-                                    disconnect_error = Some(error);
-                                    break;
-                                }
+                                let encoded =
+                                    encode_terminal_input(terminal_encoding, source, &data);
+                                pending_terminal_input.push(source, encoded.into_owned());
                             }
                             SshCommand::InterruptForeground {
                                 request,
@@ -2000,6 +2026,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pending_terminal_input_splits_large_paste_without_reordering_bytes() {
+        let data = (0..SSH_TERMINAL_INPUT_CHUNK_BYTES * 3 + 17)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let mut pending = PendingTerminalInput::default();
+
+        pending.push(TerminalInputSource::User, data.clone());
+
+        let mut restored = Vec::new();
+        let mut chunk_sizes = Vec::new();
+        while let Some((source, chunk)) = pending.pop() {
+            assert_eq!(TerminalInputSource::User, source);
+            chunk_sizes.push(chunk.len());
+            restored.extend(chunk);
+        }
+        assert_eq!(data, restored);
+        assert_eq!(
+            vec![
+                SSH_TERMINAL_INPUT_CHUNK_BYTES,
+                SSH_TERMINAL_INPUT_CHUNK_BYTES,
+                SSH_TERMINAL_INPUT_CHUNK_BYTES,
+                17,
+            ],
+            chunk_sizes
+        );
+        assert!(pending.is_empty());
+    }
+
     #[tokio::test]
     async fn ssh_input_recording_captures_only_successfully_sent_user_bytes() {
         let recording = crate::recording::test_support::TestRecording::start(
@@ -2009,42 +2064,36 @@ mod tests {
         let tap = recording.tap();
         let (mut channel, state) = MockChannel::new([], false);
 
-        assert!(
-            send_terminal_input(
-                &mut channel,
-                crate::encoding::TerminalEncoding::EucJp,
-                TerminalInputSource::User,
-                "あ".as_bytes(),
-                Some(&tap),
-            )
-            .await
-            .is_ok()
+        let user = encode_terminal_input(
+            crate::encoding::TerminalEncoding::EucJp,
+            TerminalInputSource::User,
+            "あ".as_bytes(),
         );
-        assert!(
-            send_terminal_input(
-                &mut channel,
-                crate::encoding::TerminalEncoding::EucJp,
-                TerminalInputSource::ExternalInput,
-                "い".as_bytes(),
-                Some(&tap),
-            )
+        send_terminal_data(&mut channel, user.as_ref())
             .await
-            .is_ok()
+            .unwrap();
+        record_terminal_input(TerminalInputSource::User, user.as_ref(), Some(&tap));
+        let external = encode_terminal_input(
+            crate::encoding::TerminalEncoding::EucJp,
+            TerminalInputSource::ExternalInput,
+            "い".as_bytes(),
+        );
+        send_terminal_data(&mut channel, external.as_ref())
+            .await
+            .unwrap();
+        record_terminal_input(
+            TerminalInputSource::ExternalInput,
+            external.as_ref(),
+            Some(&tap),
         );
         state
             .lock()
             .expect("mock channel state should lock")
             .send_data_error = true;
         assert!(
-            send_terminal_input(
-                &mut channel,
-                crate::encoding::TerminalEncoding::EucJp,
-                TerminalInputSource::User,
-                b"failed input",
-                Some(&tap),
-            )
-            .await
-            .is_err()
+            send_terminal_data(&mut channel, b"failed input")
+                .await
+                .is_err()
         );
 
         drop(tap);
