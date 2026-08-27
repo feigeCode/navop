@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) const ZCAN: &[u8] = b"\x18\x18\x18\x18\x18\x18\x18\x18\x08\x08\x08\x08\x08\x08\x08\x08";
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+const CANCEL_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PICKER_WIRE_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_PROTOCOL_TIMEOUTS: usize = 6;
@@ -31,35 +32,38 @@ pub(crate) async fn run_transfer(
     responder: &ZmodemResponder,
     cancellation: &CancellationToken,
 ) -> Result<Vec<u8>> {
-    let result = run_selected_transfer(channel, detected, responder, cancellation).await;
+    let direction = match detected.direction {
+        ZmodemDirection::Upload => ZmodemTransferDirection::Upload,
+        ZmodemDirection::Download => ZmodemTransferDirection::Download,
+    };
+    let transfer_id = responder.begin_transfer(direction);
+    let result =
+        run_selected_transfer(channel, detected, responder, transfer_id, cancellation).await;
     let was_cancelled = cancellation.is_cancelled();
     if result.is_err() {
         send_cancel(channel).await;
     }
-    responder.finish_transfer(match result {
-        Ok(_) => ZmodemTransferOutcome::Succeeded,
-        Err(ref error) => {
-            if was_cancelled {
-                ZmodemTransferOutcome::Cancelled
-            } else {
-                ZmodemTransferOutcome::Failed(format!("{error:#}"))
+    responder.finish_transfer(
+        transfer_id,
+        match result {
+            Ok(_) => ZmodemTransferOutcome::Succeeded,
+            Err(ref error) => {
+                if was_cancelled {
+                    ZmodemTransferOutcome::Cancelled
+                } else {
+                    ZmodemTransferOutcome::Failed(format!("{error:#}"))
+                }
             }
-        }
-    });
+        },
+    );
     result
-}
-
-pub(crate) fn apply_transfer_direction(responder: &ZmodemResponder, direction: ZmodemDirection) {
-    responder.set_transfer_direction(match direction {
-        ZmodemDirection::Upload => ZmodemTransferDirection::Upload,
-        ZmodemDirection::Download => ZmodemTransferDirection::Download,
-    });
 }
 
 async fn run_selected_transfer(
     channel: &mut dyn SshChannel,
     detected: DetectedZmodem,
     responder: &ZmodemResponder,
+    transfer_id: super::ZmodemTransferId,
     cancellation: &CancellationToken,
 ) -> Result<Vec<u8>> {
     let direction = detected.direction;
@@ -80,6 +84,7 @@ async fn run_selected_transfer(
                 initial_wire: wire,
                 paths,
                 responder: responder.clone(),
+                transfer_id,
             };
             super::upload::run_upload(channel, request, cancellation).await
         }
@@ -87,8 +92,15 @@ async fn run_selected_transfer(
             let ZmodemPickerResponse::DownloadDirectory(directory) = response else {
                 bail!("ZMODEM download was cancelled");
             };
-            super::download::run_download(channel, wire, directory, responder.clone(), cancellation)
-                .await
+            super::download::run_download(
+                channel,
+                wire,
+                directory,
+                responder.clone(),
+                transfer_id,
+                cancellation,
+            )
+            .await
         }
     }
 }
@@ -102,6 +114,36 @@ fn picker_kind(direction: ZmodemDirection) -> ZmodemPickerKind {
 
 pub(crate) fn checked_file_size(size: u64) -> Result<u32> {
     u32::try_from(size).context("ZMODEM cannot upload files of 4 GiB or larger")
+}
+
+pub(super) fn strip_hex_header_terminator(pending: &mut Vec<u8>) -> bool {
+    if pending.len() >= 2 && pending[0] == b'\r' && pending[1] & 0x7f == b'\n' {
+        pending.drain(..2);
+        true
+    } else {
+        false
+    }
+}
+
+pub(super) async fn consume_hex_header_terminator(
+    channel: &mut dyn SshChannel,
+    pending: &mut Vec<u8>,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    if pending.first().is_some_and(|byte| *byte != b'\r') {
+        return Ok(());
+    }
+    while pending.len() < 2 {
+        let Some(data) = receive_wire(channel, cancellation).await? else {
+            return Ok(());
+        };
+        pending.extend(data);
+        if pending.first() != Some(&b'\r') {
+            return Ok(());
+        }
+    }
+    strip_hex_header_terminator(pending);
+    Ok(())
 }
 
 async fn request_picker(
@@ -181,5 +223,5 @@ pub(super) async fn receive_wire(
 }
 
 async fn send_cancel(channel: &mut dyn SshChannel) {
-    let _ = timeout(SEND_TIMEOUT, channel.send_data(ZCAN)).await;
+    let _ = timeout(CANCEL_SEND_TIMEOUT, channel.send_data(ZCAN)).await;
 }

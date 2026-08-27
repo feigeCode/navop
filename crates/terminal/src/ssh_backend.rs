@@ -1,11 +1,11 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
@@ -31,13 +31,13 @@ use crate::shell_integration::{
 use crate::ssh_expect::SshLoginExpect;
 use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
 use crate::zmodem::{
-    ZmodemDetector, ZmodemResponder, apply_transfer_direction, is_channel_closed, run_transfer,
+    DetectedZmodem, ZmodemDetector, ZmodemResponder, is_channel_closed, run_transfer,
 };
 use crate::{
     TerminalBackend, TerminalControlAction, TerminalControlError, TerminalControlHandle,
     TerminalControlOutput, TerminalControlRequest, TerminalExecError, TerminalExecHandle,
     TerminalExecOutput, TerminalExecRequest, TerminalInputHandle, TerminalInputMetricSource,
-    TerminalPerformanceMetrics, TerminalSize,
+    TerminalPerformanceMetrics, TerminalSize, TerminalTransferCancelHandle,
 };
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
@@ -330,7 +330,6 @@ enum SshCommand {
     CancelExec {
         id: u64,
     },
-    CancelTransfer,
     ExecTimeout {
         id: u64,
         phase: ExecPhase,
@@ -344,11 +343,134 @@ enum SshRuntimeInput<Command> {
     FlushZmodemProbe,
 }
 
+enum DeferredSshActorInput {
+    Command(SshCommand),
+    TerminalResponse(Vec<u8>),
+}
+
+struct ZmodemActorTransferResult {
+    result: anyhow::Result<Vec<u8>>,
+    shutdown_requested: bool,
+}
+
+#[derive(Clone, Default)]
+struct ActiveTransferCancellation {
+    current: Arc<StdMutex<Option<Arc<CancellationToken>>>>,
+}
+
+struct ActiveTransferGuard {
+    owner: ActiveTransferCancellation,
+    token: Arc<CancellationToken>,
+}
+
+impl ActiveTransferCancellation {
+    fn current(&self) -> std::sync::MutexGuard<'_, Option<Arc<CancellationToken>>> {
+        self.current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn begin(&self) -> ActiveTransferGuard {
+        let token = Arc::new(CancellationToken::new());
+        if let Some(previous) = self.current().replace(token.clone()) {
+            previous.cancel();
+        }
+        ActiveTransferGuard {
+            owner: self.clone(),
+            token,
+        }
+    }
+
+    fn cancel(&self) -> bool {
+        let token = self.current().clone();
+        if let Some(token) = token {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_handle(&self) -> Option<TerminalTransferCancelHandle> {
+        let token = self.current().clone()?;
+        let owner = self.clone();
+        Some(TerminalTransferCancelHandle::new(move || {
+            let current = owner.current();
+            if !current
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &token))
+            {
+                return false;
+            }
+            token.cancel();
+            true
+        }))
+    }
+}
+
+impl ActiveTransferGuard {
+    fn token(&self) -> &CancellationToken {
+        self.token.as_ref()
+    }
+}
+
+impl Drop for ActiveTransferGuard {
+    fn drop(&mut self) {
+        let mut current = self.owner.current();
+        if current
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &self.token))
+        {
+            current.take();
+        }
+    }
+}
+
+async fn run_zmodem_transfer_while_servicing_actor<C: SshChannel>(
+    channel: &mut C,
+    detected: DetectedZmodem,
+    responder: &ZmodemResponder,
+    cancellation: &CancellationToken,
+    command_rx: &mut UnboundedReceiver<SshCommand>,
+    terminal_response_rx: &mut UnboundedReceiver<Vec<u8>>,
+    deferred_inputs: &mut VecDeque<DeferredSshActorInput>,
+) -> ZmodemActorTransferResult {
+    let transfer = run_transfer(channel, detected, responder, cancellation);
+    tokio::pin!(transfer);
+    let mut shutdown_requested = false;
+
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut transfer => {
+                return ZmodemActorTransferResult {
+                    result,
+                    shutdown_requested,
+                };
+            }
+            Some(command) = command_rx.recv() => {
+                if matches!(command, SshCommand::Shutdown) {
+                    shutdown_requested = true;
+                    cancellation.cancel();
+                } else {
+                    // ZMODEM owns the SSH channel until its protocol session
+                    // has ended. Keep the actor responsive without injecting
+                    // terminal input, resize, or exec bytes into that session.
+                    deferred_inputs.push_back(DeferredSshActorInput::Command(command));
+                }
+            }
+            Some(data) = terminal_response_rx.recv() => {
+                deferred_inputs.push_back(DeferredSshActorInput::TerminalResponse(data));
+            }
+        }
+    }
+}
+
 pub struct SshBackend {
     command_tx: UnboundedSender<SshCommand>,
     exec_ids: Arc<AtomicU64>,
     performance_metrics: Arc<TerminalPerformanceMetrics>,
-    transfer_cancellation: CancellationToken,
+    transfer_cancellation: ActiveTransferCancellation,
 }
 
 pub struct SshBackendConnect {
@@ -637,7 +759,7 @@ impl SshBackend {
 
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
         let exec_ids = Arc::new(AtomicU64::new(1));
-        let transfer_cancellation = CancellationToken::new();
+        let transfer_cancellation = ActiveTransferCancellation::default();
         let task_command_tx = command_tx.clone();
         let task_transfer_cancellation = transfer_cancellation.clone();
 
@@ -667,24 +789,34 @@ impl SshBackend {
             let mut shell_ready = !shell_integration_active;
             let mut init_sent = false;
             let mut login_expect = login_expect;
+            let mut deferred_actor_inputs = VecDeque::new();
 
             'actor: loop {
                 // Do not let the timer-produced bytes replace a source chunk
                 // that is still waiting for bounded parser-ingress capacity.
                 let can_flush_zmodem_probe =
                     should_poll_zmodem_probe_flush(&zmodem_probe_flush, pending_ingress.is_some());
-                let runtime_input = tokio::select! {
-                    biased;
-                    input = next_ssh_actor_input(
-                        &mut channel,
-                        &mut command_rx,
-                        &mut pty_write_rx,
-                        &mut pending_ingress,
-                    ) => SshRuntimeInput::Actor(input),
-                    _ = wait_for_zmodem_probe_flush(&mut zmodem_probe_flush),
-                        if can_flush_zmodem_probe =>
-                    {
-                        SshRuntimeInput::FlushZmodemProbe
+                let runtime_input = if let Some(input) = deferred_actor_inputs.pop_front() {
+                    SshRuntimeInput::Actor(match input {
+                        DeferredSshActorInput::Command(command) => SshActorInput::Command(command),
+                        DeferredSshActorInput::TerminalResponse(data) => {
+                            SshActorInput::TerminalResponse(data)
+                        }
+                    })
+                } else {
+                    tokio::select! {
+                        biased;
+                        input = next_ssh_actor_input(
+                            &mut channel,
+                            &mut command_rx,
+                            &mut pty_write_rx,
+                            &mut pending_ingress,
+                        ) => SshRuntimeInput::Actor(input),
+                        _ = wait_for_zmodem_probe_flush(&mut zmodem_probe_flush),
+                            if can_flush_zmodem_probe =>
+                        {
+                            SshRuntimeInput::FlushZmodemProbe
+                        }
                     }
                 };
                 let mut raw_terminal_data = None;
@@ -811,9 +943,6 @@ impl SshBackend {
                                     break;
                                 }
                             }
-                            SshCommand::CancelTransfer => {
-                                task_transfer_cancellation.cancel();
-                            }
                             SshCommand::ExecTimeout { id, phase } => {
                                 let effects = encode_exec_effects(
                                     terminal_encoding,
@@ -883,18 +1012,24 @@ impl SshBackend {
                                     );
                                     let mut routed_terminal_data = routed.terminal;
                                     if let Some(detected) = routed.transfer {
-                                        apply_transfer_direction(
-                                            &zmodem_responder,
-                                            detected.direction,
-                                        );
-                                        match run_transfer(
+                                        let active_transfer = task_transfer_cancellation.begin();
+                                        let transfer = run_zmodem_transfer_while_servicing_actor(
                                             &mut channel,
                                             detected,
                                             &zmodem_responder,
-                                            &task_transfer_cancellation,
+                                            active_transfer.token(),
+                                            &mut command_rx,
+                                            &mut pty_write_rx,
+                                            &mut deferred_actor_inputs,
                                         )
-                                        .await
-                                        {
+                                        .await;
+                                        if transfer.shutdown_requested {
+                                            shutdown = true;
+                                            parser_ingress.abort();
+                                            let _ = channel.close().await;
+                                            break 'actor;
+                                        }
+                                        match transfer.result {
                                             Ok(trailing) if !trailing.is_empty() => {
                                                 append_terminal_data(
                                                     &mut routed_terminal_data,
@@ -1493,6 +1628,65 @@ mod tests {
         assert!(detector.flush_plain_asterisk_prefix().is_empty());
     }
 
+    #[tokio::test]
+    async fn active_zmodem_transfer_keeps_actor_shutdown_responsive() {
+        let (mut channel, state) =
+            MockChannel::new_with_delay([], false, Some(Duration::from_secs(30)));
+        let (event_tx, _event_rx) = unbounded_channel();
+        let responder = ZmodemResponder::new(event_tx);
+        let cancellation = CancellationToken::new();
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let (_terminal_response_tx, mut terminal_response_rx) = unbounded_channel();
+        let mut deferred_inputs = VecDeque::new();
+
+        command_tx
+            .send(SshCommand::Write {
+                source: TerminalInputSource::User,
+                data: b"defer-until-transfer-finishes".to_vec(),
+            })
+            .unwrap();
+        command_tx.send(SshCommand::Shutdown).unwrap();
+
+        let transfer = tokio::time::timeout(
+            Duration::from_millis(250),
+            run_zmodem_transfer_while_servicing_actor(
+                &mut channel,
+                DetectedZmodem {
+                    direction: crate::zmodem::ZmodemDirection::Upload,
+                    wire: Vec::new(),
+                },
+                &responder,
+                &cancellation,
+                &mut command_rx,
+                &mut terminal_response_rx,
+                &mut deferred_inputs,
+            ),
+        )
+        .await
+        .expect("shutdown should cancel an active transfer without waiting for channel input");
+
+        assert!(transfer.shutdown_requested);
+        assert!(transfer.result.is_err());
+        assert!(cancellation.is_cancelled());
+        assert!(matches!(
+            deferred_inputs.pop_front(),
+            Some(DeferredSshActorInput::Command(SshCommand::Write {
+                source: TerminalInputSource::User,
+                data,
+            })) if data == b"defer-until-transfer-finishes"
+        ));
+        assert!(deferred_inputs.is_empty());
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .ops
+                .iter()
+                .any(|op| matches!(op, ChannelOp::SendData(data) if data.as_slice() == crate::zmodem::ZCAN)),
+            "cancelled transfer should still notify the remote rz/sz process with ZCAN"
+        );
+    }
+
     #[test]
     fn ssh_backend_records_direct_and_handle_input_without_double_counting() {
         let (command_tx, mut command_rx) = unbounded_channel();
@@ -1501,7 +1695,7 @@ mod tests {
             command_tx,
             exec_ids: Arc::new(AtomicU64::new(1)),
             performance_metrics: metrics.clone(),
-            transfer_cancellation: CancellationToken::new(),
+            transfer_cancellation: ActiveTransferCancellation::default(),
         };
 
         TerminalBackend::write(&backend, b"direct".to_vec());
@@ -2855,6 +3049,50 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn ssh_backend_cancel_transfer_is_immediate_and_reusable() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let transfer_cancellation = ActiveTransferCancellation::default();
+        let backend = SshBackend {
+            command_tx,
+            exec_ids: Arc::new(AtomicU64::new(1)),
+            performance_metrics: Arc::new(TerminalPerformanceMetrics::enabled()),
+            transfer_cancellation: transfer_cancellation.clone(),
+        };
+
+        let first = transfer_cancellation.begin();
+        assert!(TerminalBackend::cancel_transfer(&backend));
+        assert!(first.token().is_cancelled());
+        assert!(
+            command_rx.try_recv().is_err(),
+            "transfer cancellation must not wait for the SSH actor command loop"
+        );
+        drop(first);
+
+        assert!(!TerminalBackend::cancel_transfer(&backend));
+        let stale = transfer_cancellation.begin();
+        let stale_handle =
+            TerminalBackend::transfer_cancel_handle(&backend).expect("active transfer handle");
+        let current = transfer_cancellation.begin();
+        assert!(stale.token().is_cancelled());
+        assert!(!current.token().is_cancelled());
+        assert!(
+            !stale_handle.cancel(),
+            "a handle captured for an older transfer must reject cancellation"
+        );
+        assert!(
+            !current.token().is_cancelled(),
+            "a stale task callback must not cancel the replacement transfer"
+        );
+
+        drop(stale);
+        assert!(TerminalBackend::cancel_transfer(&backend));
+        assert!(
+            current.token().is_cancelled(),
+            "dropping a stale guard must not clear the newer transfer token"
+        );
+    }
+
     #[tokio::test]
     async fn terminal_exec_handle_cancels_waiter_without_shutdown() {
         let (command_tx, mut command_rx) = unbounded_channel();
@@ -3021,8 +3259,12 @@ impl TerminalBackend for SshBackend {
         Some(build_terminal_control_handle(self.command_tx.clone()))
     }
 
+    fn transfer_cancel_handle(&self) -> Option<TerminalTransferCancelHandle> {
+        self.transfer_cancellation.cancel_handle()
+    }
+
     fn cancel_transfer(&self) -> bool {
-        self.command_tx.send(SshCommand::CancelTransfer).is_ok()
+        self.transfer_cancellation.cancel()
     }
 
     fn resize(&self, size: TerminalSize) {
@@ -3037,5 +3279,11 @@ impl TerminalBackend for SshBackend {
     fn shutdown(&self) {
         self.transfer_cancellation.cancel();
         let _ = self.command_tx.send(SshCommand::Shutdown);
+    }
+}
+
+impl Drop for SshBackend {
+    fn drop(&mut self) {
+        self.transfer_cancellation.cancel();
     }
 }

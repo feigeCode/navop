@@ -6,7 +6,7 @@
 //! public poll/submit API.
 
 use crate::buffer::Buffer;
-use crate::header::{Encoding, Frame, Header, Zrinit};
+use crate::header::{Encoding, EscapeMode, Frame, Header, Zrinit, write_slice_escaped};
 use crate::receiver::MAX_ZRPOS_RETRIES;
 use crate::wire::{BufferWriter, HeaderReader, SliceReader, SubpacketType};
 use crate::{Action, Error, Event, FileInfo, Position, Receiver, Sender, ZDLE, ZPAD};
@@ -16,6 +16,16 @@ fn write_header(header: Header) -> Vec<u8> {
     let mut buf = Buffer::<64>::new();
     let mut writer = BufferWriter::new(&mut buf);
     assert_eq!(header.write(&mut writer), Ok(Some(())));
+    buf.to_vec()
+}
+
+fn write_escaped(bytes: &[u8], escape_mode: EscapeMode) -> Vec<u8> {
+    let mut buf = Buffer::<64>::new();
+    let mut writer = BufferWriter::new(&mut buf);
+    assert_eq!(
+        write_slice_escaped(&mut writer, bytes, escape_mode),
+        Ok(Some(()))
+    );
     buf.to_vec()
 }
 
@@ -58,6 +68,26 @@ fn test_header_write(
     #[case] expected: &[u8],
 ) {
     assert_eq!(write_header(Header::new(encoding, frame, flags)), expected);
+}
+
+#[test]
+fn test_control_escape_mode_matches_lrzsz_escctl() {
+    assert_eq!(
+        write_escaped(
+            &[0x00, 0x1f, 0x20, 0x7f, 0x80, 0x9f, 0xa0, 0xff],
+            EscapeMode::Control,
+        ),
+        [
+            ZDLE, 0x40, ZDLE, 0x5f, 0x20, 0x7f, ZDLE, 0xc0, ZDLE, 0xdf, 0xa0, 0xff,
+        ]
+    );
+
+    // Without ESCCTL, ordinary NUL/control bytes remain raw while the
+    // protocol's always-sensitive bytes keep their standard escaping.
+    assert_eq!(
+        write_escaped(&[0x00, 0x11, 0x13, ZDLE, 0x7f, 0xff], EscapeMode::Standard),
+        [0x00, ZDLE, 0x51, ZDLE, 0x53, ZDLE, 0x58, 0x7f, 0xff]
+    );
 }
 
 #[rstest]
@@ -411,6 +441,92 @@ fn test_sender_resumes_from_zrpos() {
 
     match sender.poll() {
         Action::ReadFile { offset, .. } => assert_eq!(offset, Position::new(5)),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn test_sender_honors_receiver_escctl_for_zfile_and_file_data() {
+    let mut sender = Sender::new().unwrap();
+    drain_wire_sender(&mut sender);
+    sender
+        .start_file(FileInfo::new(b"escctl.bin", Some(Position::new(4))))
+        .unwrap();
+
+    let mut flags = [0u8; 4];
+    flags[3] = Zrinit::ESCCTL.bits();
+    let zrinit = write_header(Header::new(Encoding::ZHEX, Frame::ZRINIT, flags));
+    assert!(sender.submit_wire(&zrinit).unwrap() > 0);
+
+    let zfile = match sender.poll() {
+        Action::WriteWire(bytes) => bytes.to_vec(),
+        other => panic!("unexpected action: {other:?}"),
+    };
+    let name_end = zfile
+        .windows(b"escctl.bin".len())
+        .position(|window| window == b"escctl.bin")
+        .unwrap()
+        + b"escctl.bin".len();
+    assert_eq!(&zfile[name_end..name_end + 2], &[ZDLE, 0x40]);
+    sender.wire_written(zfile.len());
+
+    let zrpos = write_header(Header::new(
+        Encoding::ZHEX,
+        Frame::ZRPOS,
+        0u32.to_le_bytes(),
+    ));
+    assert!(sender.submit_wire(&zrpos).unwrap() > 0);
+    assert!(matches!(sender.poll(), Action::ReadFile { .. }));
+
+    sender.submit_file(&[0x00, 0x1f, 0x80, 0x9f]).unwrap();
+    let zdata = match sender.poll() {
+        Action::WriteWire(bytes) => bytes,
+        other => panic!("unexpected action: {other:?}"),
+    };
+    assert!(
+        zdata
+            .windows(8)
+            .any(|window| window == [ZDLE, 0x40, ZDLE, 0x5f, ZDLE, 0xc0, ZDLE, 0xdf])
+    );
+}
+
+#[test]
+fn test_sender_timeout_retries_zfile_while_waiting_for_zrpos() {
+    let mut sender = Sender::new().unwrap();
+    drain_wire_sender(&mut sender);
+    sender
+        .start_file(FileInfo::new(b"retry.bin", Some(Position::new(16))))
+        .unwrap();
+
+    let zrinit = write_header(Header::new(Encoding::ZHEX, Frame::ZRINIT, [0; 4]));
+    assert!(sender.submit_wire(&zrinit).unwrap() > 0);
+
+    let first_zfile = match sender.poll() {
+        Action::WriteWire(bytes) => {
+            let bytes = bytes.to_vec();
+            assert_eq!(parse_first_header(&bytes).frame(), Frame::ZFILE);
+            bytes
+        }
+        other => panic!("unexpected action: {other:?}"),
+    };
+
+    // A timeout cannot append a duplicate while the first ZFILE is still
+    // waiting to be written.
+    sender.timeout().unwrap();
+    match sender.poll() {
+        Action::WriteWire(bytes) => assert_eq!(bytes, first_zfile),
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    sender.wire_written(first_zfile.len());
+    assert_eq!(sender.poll(), Action::Idle);
+
+    sender.timeout().unwrap();
+    match sender.poll() {
+        Action::WriteWire(bytes) => {
+            assert_eq!(parse_first_header(bytes).frame(), Frame::ZFILE);
+            assert_eq!(bytes, first_zfile);
+        }
         other => panic!("unexpected action: {other:?}"),
     }
 }

@@ -1,6 +1,7 @@
 use super::{
-    ZmodemResponder, ZmodemTransferDirection, ZmodemTransferProgress, checked_file_size,
-    transfer::{MAX_PROTOCOL_TIMEOUTS, receive_wire, send_wire},
+    ZmodemResponder, ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferProgress,
+    checked_file_size,
+    transfer::{MAX_PROTOCOL_TIMEOUTS, consume_hex_header_terminator, receive_wire, send_wire},
     upload_file_name,
 };
 use anyhow::{Context as _, Result, bail};
@@ -30,10 +31,12 @@ pub(super) struct UploadRequest {
     pub(super) initial_wire: Vec<u8>,
     pub(super) paths: Vec<PathBuf>,
     pub(super) responder: ZmodemResponder,
+    pub(super) transfer_id: ZmodemTransferId,
 }
 
 struct UploadProgressTracker {
     responder: ZmodemResponder,
+    transfer_id: ZmodemTransferId,
     file_count: usize,
     total: u64,
     completed: u64,
@@ -52,7 +55,7 @@ pub(super) async fn run_upload(
     cancellation: &CancellationToken,
 ) -> Result<Vec<u8>> {
     let mut queue = prepare_entries(request.paths).await?;
-    let mut progress = UploadProgressTracker::new(&queue, request.responder);
+    let mut progress = UploadProgressTracker::new(&queue, request.responder, request.transfer_id);
     let mut sender = Sender::new().context("create ZMODEM sender")?;
     sender.set_streaming_window(usize::MAX);
     let mut current = start_next(&mut sender, &mut queue, progress.file_count).await?;
@@ -74,7 +77,8 @@ pub(super) async fn run_upload(
             SenderStep::Progress => continue,
             SenderStep::Complete => {
                 drain_sender(channel, &mut sender, cancellation).await?;
-                return Ok(strip_zfin_terminator(pending));
+                consume_hex_header_terminator(channel, &mut pending, cancellation).await?;
+                return Ok(pending);
             }
             SenderStep::Idle => {}
         }
@@ -110,13 +114,6 @@ async fn drain_sender(
         sender.wire_written(bytes.len());
     }
     Ok(())
-}
-
-fn strip_zfin_terminator(mut pending: Vec<u8>) -> Vec<u8> {
-    if pending.starts_with(b"\r\n") {
-        pending.drain(..2);
-    }
-    pending
 }
 
 async fn prepare_entries(paths: Vec<PathBuf>) -> Result<VecDeque<UploadEntry>> {
@@ -241,9 +238,14 @@ fn feed_sender(sender: &mut Sender, pending: &mut Vec<u8>) -> Result<bool> {
 }
 
 impl UploadProgressTracker {
-    fn new(queue: &VecDeque<UploadEntry>, responder: ZmodemResponder) -> Self {
+    fn new(
+        queue: &VecDeque<UploadEntry>,
+        responder: ZmodemResponder,
+        transfer_id: ZmodemTransferId,
+    ) -> Self {
         Self {
             responder,
+            transfer_id,
             file_count: queue.len(),
             total: queue.iter().map(|entry| u64::from(entry.size)).sum(),
             completed: 0,
@@ -253,13 +255,16 @@ impl UploadProgressTracker {
 
     fn begin(&self, current: Option<&UploadFile>) -> Result<super::TransferProgressGuard> {
         let current = current.context("ZMODEM upload has no file to start")?;
-        Ok(self.responder.begin_upload(self.snapshot(current)))
+        Ok(self
+            .responder
+            .begin_upload(self.transfer_id, self.snapshot(current)))
     }
 
     fn start_file(&mut self, current: Option<&UploadFile>) {
         self.current_high_water = 0;
         if let Some(current) = current {
-            self.responder.update_upload(self.snapshot(current));
+            self.responder
+                .update_upload(self.transfer_id, self.snapshot(current));
         }
     }
 
@@ -274,20 +279,23 @@ impl UploadProgressTracker {
             .saturating_add(read as u64)
             .min(current.size);
         self.current_high_water = self.current_high_water.max(position);
-        self.responder.update_upload(self.snapshot(current));
+        self.responder
+            .update_upload(self.transfer_id, self.snapshot(current));
         Ok(())
     }
 
     fn complete(&mut self, current: Option<&UploadFile>) -> Result<()> {
         let current = current.context("ZMODEM completed without a current upload file")?;
         self.current_high_water = current.size;
-        self.responder.update_upload(self.snapshot(current));
+        self.responder
+            .update_upload(self.transfer_id, self.snapshot(current));
         self.completed = self.completed.saturating_add(current.size).min(self.total);
         Ok(())
     }
 
     fn snapshot(&self, current: &UploadFile) -> ZmodemTransferProgress {
         ZmodemTransferProgress {
+            transfer_id: self.transfer_id,
             direction: ZmodemTransferDirection::Upload,
             file_name: current.name.clone(),
             file_index: current.index,

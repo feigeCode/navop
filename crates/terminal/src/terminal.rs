@@ -74,14 +74,15 @@ use crate::windows_environment::{
     environment_value, merge_environment_overrides, refreshed_windows_environment,
 };
 use crate::zmodem::{
-    ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder, ZmodemTransferOutcome,
-    ZmodemTransferProgress,
+    ZmodemPickerClaim, ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder,
+    ZmodemTransferId, ZmodemTransferOutcome, ZmodemTransferProgress,
 };
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TelnetBackend, TerminalBackend, TerminalControlHandle,
     TerminalEvent, TerminalExecHandle, TerminalInputHandle, TerminalPerformanceMetrics,
     TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
+    TerminalTransferCancelHandle,
 };
 use ssh::{
     ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
@@ -108,9 +109,12 @@ pub enum TerminalModelEvent {
     /// SSH ZMODEM 文件选择请求状态变化
     ZmodemRequestChanged,
     /// SSH ZMODEM 文件传输进度变化
-    ZmodemProgressChanged,
+    ZmodemProgressChanged(ZmodemTransferId),
     /// SSH ZMODEM 文件传输结束
-    ZmodemTransferFinished(ZmodemTransferOutcome),
+    ZmodemTransferFinished {
+        transfer_id: ZmodemTransferId,
+        outcome: ZmodemTransferOutcome,
+    },
     /// shell 开始渲染新的 prompt（OSC 133;A）
     PromptStart,
     /// shell prompt 已渲染完成，用户可以输入（OSC 133;B）
@@ -3140,11 +3144,17 @@ impl Terminal {
             TerminalEvent::ZmodemRequestChanged => {
                 cx.emit(TerminalModelEvent::ZmodemRequestChanged);
             }
-            TerminalEvent::ZmodemProgressChanged => {
-                cx.emit(TerminalModelEvent::ZmodemProgressChanged);
+            TerminalEvent::ZmodemProgressChanged(transfer_id) => {
+                cx.emit(TerminalModelEvent::ZmodemProgressChanged(transfer_id));
             }
-            TerminalEvent::ZmodemTransferFinished(outcome) => {
-                cx.emit(TerminalModelEvent::ZmodemTransferFinished(outcome));
+            TerminalEvent::ZmodemTransferFinished {
+                transfer_id,
+                outcome,
+            } => {
+                cx.emit(TerminalModelEvent::ZmodemTransferFinished {
+                    transfer_id,
+                    outcome,
+                });
             }
             TerminalEvent::PromptStart => {
                 cx.emit(TerminalModelEvent::PromptStart);
@@ -3508,19 +3518,30 @@ impl Terminal {
     /// Request cancellation of the active ZMODEM transfer.
     ///
     /// Returns `true` only for a backend that accepted the request; the final
-    /// `ZmodemTransferFinished(Cancelled)` event remains the source of truth.
+    /// A `ZmodemTransferFinished { outcome: Cancelled, .. }` event remains
+    /// the source of truth.
     pub fn cancel_zmodem_transfer(&self) -> bool {
-        self.zmodem_transfer_progress().is_some()
-            && self
-                .backend
-                .as_deref()
-                .is_some_and(TerminalBackend::cancel_transfer)
+        self.backend
+            .as_deref()
+            .is_some_and(TerminalBackend::cancel_transfer)
+    }
+
+    pub fn zmodem_transfer_cancel_handle(&self) -> Option<TerminalTransferCancelHandle> {
+        self.backend
+            .as_deref()
+            .and_then(TerminalBackend::transfer_cancel_handle)
     }
 
     pub fn submit_zmodem_picker(&self, response: ZmodemPickerResponse) -> bool {
         self.zmodem_responder
             .as_ref()
             .is_some_and(|responder| responder.submit(response))
+    }
+
+    pub fn claim_zmodem_picker(&self, request_id: u64) -> Option<ZmodemPickerClaim> {
+        self.zmodem_responder
+            .as_ref()
+            .and_then(|responder| responder.try_claim_picker(request_id))
     }
 
     /// 获取连接类型
@@ -4539,6 +4560,24 @@ mod tests {
         external_writes: Arc<Mutex<Vec<Vec<u8>>>>,
     }
 
+    struct CancelTransferProbe {
+        requests: Arc<Mutex<usize>>,
+    }
+
+    impl TerminalBackend for CancelTransferProbe {
+        fn write(&self, _data: Vec<u8>) {}
+
+        fn resize(&self, _size: TerminalSize) {}
+
+        fn shutdown(&self) {}
+
+        fn cancel_transfer(&self) -> bool {
+            let mut requests = self.requests.lock().expect("cancel probe should lock");
+            *requests += 1;
+            true
+        }
+    }
+
     impl TerminalBackend for InputRouteProbe {
         fn write(&self, data: Vec<u8>) {
             self.direct_writes
@@ -5058,6 +5097,21 @@ mod tests {
 
         terminal.shutdown();
         terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_cancel_transfer_delegates_without_a_visible_progress_snapshot() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let requests = Arc::new(Mutex::new(0));
+        terminal.backend = Some(Box::new(CancelTransferProbe {
+            requests: requests.clone(),
+        }));
+
+        assert!(terminal.zmodem_transfer_progress().is_none());
+        assert!(terminal.cancel_zmodem_transfer());
+        assert_eq!(1, *requests.lock().expect("cancel requests should lock"));
     }
 
     #[test]

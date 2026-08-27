@@ -86,6 +86,23 @@ impl TerminalControlHandle {
 }
 
 #[derive(Clone)]
+pub struct TerminalTransferCancelHandle {
+    cancel_fn: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl TerminalTransferCancelHandle {
+    pub fn new(cancel_fn: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            cancel_fn: Arc::new(cancel_fn),
+        }
+    }
+
+    pub fn cancel(&self) -> bool {
+        (self.cancel_fn)()
+    }
+}
+
+#[derive(Clone)]
 pub struct TerminalInputHandle {
     write_fn: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
 }
@@ -225,12 +242,17 @@ pub trait TerminalBackend: Send {
         None
     }
 
+    fn transfer_cancel_handle(&self) -> Option<TerminalTransferCancelHandle> {
+        None
+    }
+
     /// Request cancellation of the currently active ZMODEM transfer.
     ///
     /// The backend only acknowledges that the request was delivered. The actual
     /// transfer emits its normal terminal event after the protocol has stopped.
     fn cancel_transfer(&self) -> bool {
-        false
+        self.transfer_cancel_handle()
+            .is_some_and(|handle| handle.cancel())
     }
 }
 

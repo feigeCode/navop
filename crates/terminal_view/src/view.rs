@@ -171,7 +171,6 @@ mod text_input;
 mod tool_dock;
 mod vi_input;
 mod zmodem_picker;
-mod zmodem_progress;
 
 use actions::*;
 use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
@@ -299,10 +298,8 @@ pub struct TerminalView {
     ssh_mfa_inputs: Vec<SshMfaInput>,
     /// 当前已打开系统选择器的 ZMODEM 请求 ID，用于去重和拒绝过期结果。
     zmodem_picker_request_id: Option<u64>,
-    /// 当前桥接到全局后台任务面板的 ZMODEM 上传任务 ID。
-    zmodem_background_task_id: Option<BackgroundTaskId>,
-    /// 当前 ZMODEM 后台任务的取消监听器，任务完成或替换时 drop。
-    zmodem_background_cancel_watch: Option<Task<()>>,
+    /// 已桥接到全局后台任务面板、尚未收到终态的 ZMODEM 传输任务。
+    zmodem_background_tasks: HashMap<terminal::zmodem::ZmodemTransferId, BackgroundTaskId>,
     focus_terminal_after_connect: bool,
     reconnect_success_pending: bool,
 

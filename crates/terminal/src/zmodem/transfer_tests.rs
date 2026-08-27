@@ -1,6 +1,6 @@
 use super::{
     DetectedZmodem, ZmodemDirection, ZmodemPickerResponse, ZmodemResponder, checked_file_size,
-    run_transfer,
+    run_transfer, transfer::strip_hex_header_terminator,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -19,12 +19,13 @@ struct ReceiverPeerChannel {
     pending: Vec<u8>,
     outgoing: VecDeque<Vec<u8>>,
     received: Arc<Mutex<Vec<u8>>>,
+    sent: Arc<Mutex<Vec<u8>>>,
     session_complete: bool,
     trailing: Vec<u8>,
 }
 
 impl ReceiverPeerChannel {
-    fn new(trailing: Vec<u8>) -> (Self, Vec<u8>, Arc<Mutex<Vec<u8>>>) {
+    fn new(trailing: Vec<u8>) -> (Self, Vec<u8>, Arc<Mutex<Vec<u8>>>, Arc<Mutex<Vec<u8>>>) {
         let mut receiver = Receiver::new().expect("receiver");
         let initial = match receiver.poll() {
             Action::WriteWire(bytes) => bytes.to_vec(),
@@ -32,17 +33,20 @@ impl ReceiverPeerChannel {
         };
         receiver.wire_written(initial.len());
         let received = Arc::new(Mutex::new(Vec::new()));
+        let sent = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
                 receiver,
                 pending: Vec::new(),
                 outgoing: VecDeque::new(),
                 received: received.clone(),
+                sent: sent.clone(),
                 session_complete: false,
                 trailing,
             },
             initial,
             received,
+            sent,
         )
     }
 
@@ -74,10 +78,17 @@ impl ReceiverPeerChannel {
                 _ => {}
             }
         }
-        if self.session_complete {
-            response.extend(std::mem::take(&mut self.trailing));
+        if self.session_complete && response.ends_with(b"\r\n") {
+            replace_final_crlf_with_lrzsz_terminator(&mut response);
         }
-        if !response.is_empty() {
+        if self.session_complete && !response.is_empty() {
+            let parity_lf = response.pop().expect("lrzsz terminator byte");
+            assert_eq!(parity_lf, b'\n' | 0x80);
+            self.outgoing.push_back(response);
+            let mut trailing = vec![parity_lf];
+            trailing.extend(std::mem::take(&mut self.trailing));
+            self.outgoing.push_back(trailing);
+        } else if !response.is_empty() {
             self.outgoing.push_back(response);
         }
         Ok(())
@@ -94,6 +105,11 @@ impl ReceiverPeerChannel {
         self.pending.drain(..consumed);
         Ok(true)
     }
+}
+
+fn replace_final_crlf_with_lrzsz_terminator(bytes: &mut [u8]) {
+    let len = bytes.len();
+    bytes[len - 1] = b'\n' | 0x80;
 }
 
 #[async_trait]
@@ -119,6 +135,7 @@ impl SshChannel for ReceiverPeerChannel {
     }
 
     async fn send_data(&mut self, data: &[u8]) -> Result<()> {
+        self.sent.lock().unwrap().extend_from_slice(data);
         self.pending.extend_from_slice(data);
         self.drive()
     }
@@ -152,14 +169,31 @@ fn upload_rejects_files_larger_than_zmodem_position() {
     assert!(error.to_string().contains("4 GiB"));
 }
 
+#[test]
+fn zfin_terminator_accepts_lf_with_or_without_the_parity_bit() {
+    for terminator in [b"\r\n".as_slice(), b"\r\x8a".as_slice()] {
+        let mut pending = terminator.to_vec();
+        pending.extend_from_slice(b"e");
+        assert!(strip_hex_header_terminator(&mut pending));
+        assert_eq!(pending, b"e");
+    }
+}
+
+#[test]
+fn zfin_terminator_does_not_filter_terminal_bytes() {
+    let mut pending = b"e".to_vec();
+    assert!(!strip_hex_header_terminator(&mut pending));
+    assert_eq!(pending, b"e");
+}
+
 #[tokio::test]
-async fn upload_round_trip_preserves_trailing_terminal_bytes() {
+async fn upload_round_trip_strips_lrzsz_zfin_terminator_and_preserves_terminal_bytes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("escaped.bin");
     let payload = escaped_payload();
     tokio::fs::write(&path, &payload).await.unwrap();
     let trailing = b"\r\nremote-shell$ ".to_vec();
-    let (mut channel, initial_wire, received) = ReceiverPeerChannel::new(trailing.clone());
+    let (mut channel, initial_wire, received, sent) = ReceiverPeerChannel::new(trailing.clone());
     let (event_tx, mut event_rx) = unbounded_channel();
     let responder = ZmodemResponder::new(event_tx);
     let task_responder = responder.clone();
@@ -182,6 +216,10 @@ async fn upload_round_trip_preserves_trailing_terminal_bytes() {
 
     response_task.await.unwrap();
     assert_eq!(received.lock().unwrap().as_slice(), payload);
+    assert!(
+        sent.lock().unwrap().ends_with(b"OO"),
+        "sender must flush the final ZFIN acknowledgement"
+    );
     assert_eq!(result, trailing);
 }
 

@@ -17,6 +17,27 @@ pub(crate) const HEADER_SIZE: usize = 32;
 /// The size of the header payload (frame type + flags).
 pub(crate) const HEADER_PAYLOAD_SIZE: usize = 5;
 
+/// Controls which bytes are escaped when serializing binary ZMODEM frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum EscapeMode {
+    /// Escape the protocol's always-sensitive bytes.
+    #[default]
+    Standard,
+    /// Escape every C0 control byte and its high-bit counterpart, as requested
+    /// by the receiver's `ZRINIT.ESCCTL` capability.
+    Control,
+}
+
+impl EscapeMode {
+    const fn escaped(self, value: u8) -> u8 {
+        if matches!(self, Self::Control) && value & 0x60 == 0 {
+            value ^ 0x40
+        } else {
+            zdle::ZDLE_TABLE[value as usize]
+        }
+    }
+}
+
 pub(crate) const ZACK_HEADER: Header = Header::new(Encoding::ZHEX, Frame::ZACK, [0; 4]);
 pub(crate) const ZDATA_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZDATA, [0; 4]);
 pub(crate) const ZEOF_HEADER: Header = Header::new(Encoding::ZBIN32, Frame::ZEOF, [0; 4]);
@@ -73,6 +94,18 @@ impl Header {
     where
         P: Write + ?Sized,
     {
+        self.write_with_escape(port, EscapeMode::Standard)
+    }
+
+    /// Encodes and writes the header using the negotiated escape mode.
+    pub(crate) fn write_with_escape<P>(
+        self,
+        port: &mut P,
+        escape_mode: EscapeMode,
+    ) -> Result<Option<()>, Error>
+    where
+        P: Write + ?Sized,
+    {
         if write_header_start(port, self.encoding)?.is_none() {
             return Ok(None);
         }
@@ -92,14 +125,14 @@ impl Header {
             let len = out.len() * 2;
             let hex = &mut hex_buf.get_mut(..len).ok_or(Error::UnexpectedEof)?;
             hex::encode_to_slice(&out, hex).map_err(|_| Error::OutOfMemory)?;
-            if write_slice_escaped(port, hex)?.is_none() {
+            if write_slice_escaped(port, hex, escape_mode)?.is_none() {
                 return Ok(None);
             }
 
             if write_header_end_hex(port, self.frame)?.is_none() {
                 return Ok(None);
             }
-        } else if write_slice_escaped(port, &out)?.is_none() {
+        } else if write_slice_escaped(port, &out, escape_mode)?.is_none() {
             return Ok(None);
         }
 
@@ -290,12 +323,16 @@ fn make_crc(data: &[u8], out: &mut [u8], encoding: Encoding) -> usize {
     }
 }
 
-pub(crate) fn write_slice_escaped<P>(port: &mut P, buf: &[u8]) -> Result<Option<()>, Error>
+pub(crate) fn write_slice_escaped<P>(
+    port: &mut P,
+    buf: &[u8],
+    escape_mode: EscapeMode,
+) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
 {
     for value in buf {
-        if write_byte_escaped(port, *value)?.is_none() {
+        if write_byte_escaped(port, *value, escape_mode)?.is_none() {
             return Ok(None);
         }
     }
@@ -303,11 +340,15 @@ where
     Ok(Some(()))
 }
 
-pub(crate) fn write_byte_escaped<P>(port: &mut P, value: u8) -> Result<Option<()>, Error>
+pub(crate) fn write_byte_escaped<P>(
+    port: &mut P,
+    value: u8,
+    escape_mode: EscapeMode,
+) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
 {
-    let escaped = zdle::ZDLE_TABLE[value as usize];
+    let escaped = escape_mode.escaped(value);
     if escaped != value && port.write_byte(ZDLE)?.is_none() {
         return Ok(None);
     }

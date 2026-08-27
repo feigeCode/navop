@@ -458,9 +458,6 @@ fn terminal_command_bar_sits_with_primary_content_and_playback_keeps_its_footer(
     let primary_content = center_region
         .find(".child(primary_content)")
         .expect("primary terminal content should be rendered");
-    let zmodem_progress = center_region
-        .find(".when_some(zmodem_progress")
-        .expect("ZMODEM progress should be rendered below primary content");
     let command_bar = center_region
         .find(".child(self.command_bar.clone())")
         .expect("live recording controls should be hosted by the command bar");
@@ -472,19 +469,25 @@ fn terminal_command_bar_sits_with_primary_content_and_playback_keeps_its_footer(
         .expect("optional bottom tool should be rendered");
 
     assert!(command_bar < primary_content);
-    assert!(primary_content < zmodem_progress);
-    assert!(zmodem_progress < playback_footer);
+    assert!(primary_content < playback_footer);
     assert!(playback_footer < bottom_tool);
 }
 
 #[test]
-fn zmodem_upload_progress_has_stable_structure() {
-    let progress_source = include_str!("../zmodem_progress.rs");
+fn zmodem_progress_uses_only_the_global_background_task_panel() {
+    let view_source = include_str!("../../view.rs");
+    let render_source = include_str!("../render_layout.rs");
+    let event_source = include_str!("../terminal_events.rs");
+    let background_task_source = include_str!("../background_tasks.rs");
 
-    assert!(progress_source.contains(r#""terminal-zmodem-upload""#));
-    assert!(progress_source.contains(r#""terminal-zmodem-upload-name""#));
-    assert!(progress_source.contains(r#"Progress::new("terminal-zmodem-upload-progress")"#));
-    assert!(progress_source.contains(r#"t!("TerminalZmodem.uploading")"#));
+    assert!(!view_source.contains("mod zmodem_progress;"));
+    assert!(!render_source.contains("render_zmodem_progress"));
+    assert!(event_source.contains("self.sync_zmodem_background_task(None, cx);"));
+    assert!(event_source.contains("self.sync_zmodem_background_task(Some(*transfer_id), cx);"));
+    assert!(
+        event_source.contains("self.finish_zmodem_background_task(*transfer_id, outcome, cx);")
+    );
+    assert!(background_task_source.contains(r#"BackgroundTaskSpec::new("zmodem-transfer""#));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 [workspace]
 default-members = [ "main"]
-exclude = ["vendor/llm-connector", "vendor/zmodem2"]
+exclude = ["vendor/llm-connector"]
 members = [
     "crates/macros",
     "crates/ui",
@@ -25,6 +25,7 @@ members = [
     "crates/onetcli_runtime",
     "crates/er_flow",
     "crates/public_mcp",
+    "crates/modem-transfer",
     "crates/terminal",
     "crates/terminal_view",
     "crates/markdown-source",
@@ -216,7 +217,7 @@ zeroize = "1"
 
 # Terminal emulation
 alacritty_terminal = "0.26"
-zmodem2 = "0.7.2"
+zmodem2 = { package = "modem-transfer", path = "crates/modem-transfer" }
 
 # Serial port
 serialport = "4"
@@ -239,7 +240,6 @@ gpui = { git = "https://github.com/feigeCode/gpui-ce.git", rev = "9086e0b273bddc
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 llm-connector = { path = "vendor/llm-connector" }
-zmodem2 = { path = "vendor/zmodem2" }
 
 
 

@@ -9,8 +9,8 @@ use crate::buffer::Buffer;
 use crate::error::Error;
 use crate::file::write_zfile;
 use crate::header::{
-    Encoding, Frame, Header, ZDATA_HEADER, ZEOF_HEADER, ZFIN_HEADER, ZNAK_HEADER, ZRQINIT_HEADER,
-    Zrinit,
+    Encoding, EscapeMode, Frame, Header, ZDATA_HEADER, ZEOF_HEADER, ZFIN_HEADER, ZNAK_HEADER,
+    ZRQINIT_HEADER, Zrinit,
 };
 use crate::io::Write;
 use crate::session::{FileRequest, SenderEvent, SenderPhase};
@@ -44,6 +44,7 @@ pub struct Sender {
     finish_requested: bool,
     streaming_window: usize,
     rx_nonstop: bool,
+    escape_mode: EscapeMode,
 }
 
 impl Sender {
@@ -71,6 +72,7 @@ impl Sender {
             finish_requested: false,
             streaming_window: SUBPACKET_PER_ACK,
             rx_nonstop: false,
+            escape_mode: EscapeMode::Standard,
         };
         sender.queue_zrqinit()?;
         Ok(sender)
@@ -277,15 +279,19 @@ impl Sender {
 
     /// Signals that the protocol response timeout expired.
     ///
-    /// While still waiting for the receiver to initialize, this re-queues the
-    /// `ZRQINIT` handshake.
+    /// Re-queues the handshake appropriate for the current waiting phase.
     ///
     /// # Errors
     ///
     /// * [`Backpressure`](crate::Error::Backpressure) when outgoing bytes are still pending
     pub fn timeout(&mut self) -> Result<(), Error> {
-        if self.state == SenderPhase::WaitReceiverInit && !self.outgoing() {
-            self.queue_zrqinit()?;
+        if self.outgoing() {
+            return Ok(());
+        }
+        match self.state {
+            SenderPhase::WaitReceiverInit => self.queue_zrqinit()?,
+            SenderPhase::WaitFilePos => self.queue_zfile()?,
+            _ => {}
         }
         Ok(())
     }
@@ -337,8 +343,12 @@ impl Sender {
     }
 
     fn queue_header(&mut self, header: Header) -> Result<(), Error> {
+        let escape_mode = self.escape_mode;
         let mut writer = self.queue_writer()?;
-        if header.write(&mut writer)?.is_none() {
+        if header
+            .write_with_escape(&mut writer, escape_mode)?
+            .is_none()
+        {
             return Err(Error::OutOfMemory);
         }
         Ok(())
@@ -351,8 +361,17 @@ impl Sender {
     fn queue_zfile(&mut self) -> Result<(), Error> {
         let file_size = self.file_size;
         let file_name = &self.file_name;
+        let escape_mode = self.escape_mode;
         let mut writer = BufferWriter::new(&mut self.outgoing);
-        if write_zfile(&mut writer, &mut self.buf, file_name, file_size)?.is_none() {
+        if write_zfile(
+            &mut writer,
+            &mut self.buf,
+            file_name,
+            file_size,
+            escape_mode,
+        )?
+        .is_none()
+        {
             return Err(Error::OutOfMemory);
         }
         Ok(())
@@ -365,16 +384,17 @@ impl Sender {
         kind: SubpacketType,
         include_header: bool,
     ) -> Result<(), Error> {
+        let escape_mode = self.escape_mode;
         let mut writer = self.queue_writer()?;
         if include_header
             && ZDATA_HEADER
                 .with_count(offset)
-                .write(&mut writer)?
+                .write_with_escape(&mut writer, escape_mode)?
                 .is_none()
         {
             return Err(Error::OutOfMemory);
         }
-        if write_subpacket(&mut writer, Encoding::ZBIN32, kind, data)?.is_none() {
+        if write_subpacket(&mut writer, Encoding::ZBIN32, kind, data, escape_mode)?.is_none() {
             return Err(Error::OutOfMemory);
         }
         Ok(())
@@ -465,6 +485,9 @@ impl Sender {
         let rx_buf_size = u16::from_le_bytes([flags[0], flags[1]]) as usize;
         let caps = flags[3];
         let can_ovio = (caps & Zrinit::CANOVIO.bits()) != 0;
+        if (caps & Zrinit::ESCCTL.bits()) != 0 {
+            self.escape_mode = EscapeMode::Control;
+        }
 
         // Remember whether the streaming window governs pacing so a later
         // set_streaming_window() can recompute the cadence.

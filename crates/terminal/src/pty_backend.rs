@@ -22,7 +22,7 @@ use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInpu
 use crate::osc::extract_osc_events;
 use crate::osc::{OscEvent, OscStreamParser};
 use crate::recording::RecordingTap;
-use crate::zmodem::ZmodemTransferOutcome;
+use crate::zmodem::{ZmodemTransferId, ZmodemTransferOutcome};
 use crate::{
     TerminalBackend, TerminalControlError, TerminalControlHandle, TerminalControlOutput,
     TerminalControlRequest, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
@@ -40,9 +40,12 @@ pub enum TerminalEvent {
     /// SSH ZMODEM 文件选择请求状态变化
     ZmodemRequestChanged,
     /// SSH ZMODEM 文件传输进度变化
-    ZmodemProgressChanged,
+    ZmodemProgressChanged(ZmodemTransferId),
     /// SSH ZMODEM 文件传输结束
-    ZmodemTransferFinished(ZmodemTransferOutcome),
+    ZmodemTransferFinished {
+        transfer_id: ZmodemTransferId,
+        outcome: ZmodemTransferOutcome,
+    },
     /// shell 开始渲染新的 prompt（OSC 133;A）
     PromptStart,
     /// shell prompt 已渲染完成，进入可输入状态（OSC 133;B）

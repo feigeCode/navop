@@ -52,6 +52,7 @@ pub use types::{
     TerminalControlHandle, TerminalControlOutput, TerminalControlReadiness, TerminalControlRequest,
     TerminalExecCompletion, TerminalExecHandle, TerminalExecObserver, TerminalExecOutput,
     TerminalExecProgress, TerminalExecRequest, TerminalInputHandle, TerminalSize,
+    TerminalTransferCancelHandle,
 };
 
 #[cfg(test)]

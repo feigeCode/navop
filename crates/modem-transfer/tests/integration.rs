@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Result, Seek, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -169,6 +169,23 @@ fn set_nonblocking(fd: RawFd) {
     fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(nonblocking_flags)).unwrap();
 }
 
+fn wait_for_child(child: &mut Child, deadline: Instant, name: &str) -> ExitStatus {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status,
+            Ok(None) if Instant::now() < deadline => sleep(Duration::from_millis(5)),
+            Ok(None) => {
+                let kill_error = child.kill().err();
+                let status = child.wait().ok();
+                panic!(
+                    "{name} did not exit before the test deadline; kill_error={kill_error:?}, status={status:?}"
+                );
+            }
+            Err(error) => panic!("failed to query {name} process status: {error}"),
+        }
+    }
+}
+
 /// Helper to set up a non-blocking `sz` process.
 fn setup_sz(test_files: &TestFiles) -> (Child, MockPort<ChildStdout, ChildStdin>) {
     let mut sz_process = Command::new(env!("ZMODEM_SZ_BIN"))
@@ -189,8 +206,13 @@ fn setup_sz(test_files: &TestFiles) -> (Child, MockPort<ChildStdout, ChildStdin>
 }
 
 /// Helper to set up a non-blocking `rz` process.
-fn setup_rz(dest_dir: &TempDir) -> (Child, MockPort<ChildStdout, ChildStdin>) {
+fn setup_rz(
+    dest_dir: &TempDir,
+    args: &[&str],
+    bits_per_second: u32,
+) -> (Child, MockPort<ChildStdout, ChildStdin>) {
     let mut rz_process: Child = Command::new(env!("ZMODEM_RZ_BIN"))
+        .args(args)
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
         .current_dir(dest_dir.path())
@@ -203,7 +225,7 @@ fn setup_rz(dest_dir: &TempDir) -> (Child, MockPort<ChildStdout, ChildStdin>) {
     set_nonblocking(stdin.as_raw_fd());
     set_nonblocking(stdout.as_raw_fd());
 
-    let port = MockPort::new(stdout, stdin, RATE_BPS);
+    let port = MockPort::new(stdout, stdin, bits_per_second);
     (rz_process, port)
 }
 
@@ -356,23 +378,42 @@ fn test_batch_from_sz() {
 #[cfg(has_lrzsz)]
 fn test_batch_to_rz() {
     let test_files = TestFiles::new();
+    send_files_to_rz(&test_files.paths, &[], RATE_BPS, Duration::from_secs(90));
+}
+
+#[test]
+#[cfg(has_lrzsz)]
+fn test_single_file_to_rz_with_escctl() {
+    let source_dir = tempfile::Builder::new()
+        .prefix("zmodem_escctl_src_")
+        .tempdir()
+        .unwrap();
+    let source = source_dir.path().join("escctl.bin");
+    create_test_file(&source, 10 * 1024 + 317);
+
+    // This is the exact option combination used by the SSH terminal:
+    // -b binary, -y overwrite, -e request ESCCTL control-byte escaping.
+    send_files_to_rz(&[source], &["-bye"], 0, Duration::from_secs(15));
+}
+
+fn send_files_to_rz(paths: &[PathBuf], rz_args: &[&str], bits_per_second: u32, timeout: Duration) {
     let dest_dir = tempfile::Builder::new()
         .prefix("zmodem_test_dest_")
         .tempdir()
         .unwrap();
 
-    let (mut rz_process, mut port) = setup_rz(&dest_dir);
+    let (mut rz_process, mut port) = setup_rz(&dest_dir, rz_args, bits_per_second);
 
     let mut open_files: HashMap<String, File> = HashMap::new();
-    for path in &test_files.paths {
+    for path in paths {
         let filename = path.file_name().unwrap().to_str().unwrap().to_string();
         let file = File::open(path).unwrap();
         open_files.insert(filename, file);
     }
 
-    let mut file_iter = test_files.paths.iter();
+    let mut file_iter = paths.iter();
 
-    let first_path = file_iter.next().expect("No test files found");
+    let first_path = file_iter.next().expect("no test files found");
     let first_filename = first_path.file_name().unwrap().to_str().unwrap();
     let first_size = first_path.metadata().unwrap().len() as u32;
     let mut sender = zmodem2::Sender::new().unwrap();
@@ -388,8 +429,17 @@ fn test_batch_to_rz() {
     let mut input_offset: usize = 0;
     let mut file_buf = [0u8; 1024];
     let mut session_done = false;
+    let deadline = Instant::now() + timeout;
 
     loop {
+        if Instant::now() >= deadline {
+            let kill_error = rz_process.kill().err();
+            let status = rz_process.wait().ok();
+            panic!(
+                "timed out sending files to rz with args {rz_args:?}; kill_error={kill_error:?}, status={status:?}"
+            );
+        }
+
         let mut progressed = false;
         let mut idle = false;
 
@@ -477,8 +527,12 @@ fn test_batch_to_rz() {
         }
     }
 
-    rz_process.wait().unwrap();
-    for path in &test_files.paths {
+    let status = wait_for_child(&mut rz_process, deadline, "rz");
+    assert!(
+        status.success(),
+        "rz exited unsuccessfully with args {rz_args:?}: {status}"
+    );
+    for path in paths {
         let filename = path.file_name().unwrap();
         let received_path = dest_dir.path().join(filename);
         assert!(

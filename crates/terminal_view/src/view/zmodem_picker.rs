@@ -11,6 +11,9 @@ impl TerminalView {
         if self.zmodem_picker_request_id == Some(request_id) {
             return;
         }
+        let Some(claim) = self.terminal.read(cx).claim_zmodem_picker(request_id) else {
+            return;
+        };
         self.zmodem_picker_request_id = Some(request_id);
 
         let future = cx.prompt_for_paths(zmodem_prompt_options(request.kind()));
@@ -19,16 +22,11 @@ impl TerminalView {
                 Ok(Ok(Some(paths))) => picker_response(request.kind(), paths),
                 _ => ZmodemPickerResponse::Cancel,
             };
-            let _ = this.update(cx, |this, cx| {
-                let pending_id = this
-                    .terminal
-                    .read(cx)
-                    .zmodem_picker_request()
-                    .map(|pending| pending.id());
-                if !active_request_matches(this.zmodem_picker_request_id, pending_id, request_id) {
+            let _ = this.update(cx, |this, _cx| {
+                if this.zmodem_picker_request_id != Some(request_id) {
                     return;
                 }
-                if this.terminal.read(cx).submit_zmodem_picker(response) {
+                if claim.submit(response) {
                     this.zmodem_picker_request_id = None;
                 }
             });
@@ -69,23 +67,5 @@ fn picker_response(kind: ZmodemPickerKind, mut paths: Vec<PathBuf>) -> ZmodemPic
             .map(ZmodemPickerResponse::DownloadDirectory)
             .unwrap_or(ZmodemPickerResponse::Cancel),
         ZmodemPickerKind::UploadFiles => ZmodemPickerResponse::Cancel,
-    }
-}
-
-fn active_request_matches(active: Option<u64>, pending: Option<u64>, completed: u64) -> bool {
-    completed != 0 && active == Some(completed) && pending == Some(completed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::active_request_matches;
-
-    #[test]
-    fn picker_result_only_matches_the_active_pending_request() {
-        assert!(active_request_matches(Some(7), Some(7), 7));
-        assert!(!active_request_matches(Some(8), Some(7), 7));
-        assert!(!active_request_matches(Some(7), Some(8), 7));
-        assert!(!active_request_matches(Some(7), None, 7));
-        assert!(!active_request_matches(Some(0), Some(0), 0));
     }
 }

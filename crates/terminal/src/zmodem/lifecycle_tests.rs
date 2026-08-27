@@ -104,30 +104,20 @@ async fn cancellation_during_picker_reports_cancelled_outcome() {
     let (event_tx, mut event_rx) = unbounded_channel();
     let responder = ZmodemResponder::new(event_tx);
     let cancellation = CancellationToken::new();
-    let begin_progress = responder.clone();
     let cancel_token = cancellation.clone();
     let cancellation_task = tokio::spawn(async move {
         event_rx.recv().await.expect("picker request event");
-        std::mem::drop(
-            begin_progress.begin_upload(crate::zmodem::ZmodemTransferProgress {
-                direction: crate::zmodem::ZmodemTransferDirection::Upload,
-                file_name: "file.bin".to_string(),
-                file_index: 0,
-                file_count: 1,
-                current_file_transferred: 0,
-                current_file_total: 1,
-                transferred: 0,
-                total: 1,
-            }),
-        );
         sleep(Duration::from_millis(10)).await;
         cancel_token.cancel();
         loop {
             match event_rx.recv().await.expect("progress event") {
-                TerminalEvent::ZmodemTransferFinished(super::ZmodemTransferOutcome::Cancelled) => {
+                TerminalEvent::ZmodemTransferFinished {
+                    transfer_id: _,
+                    outcome: super::ZmodemTransferOutcome::Cancelled,
+                } => {
                     break;
                 }
-                TerminalEvent::ZmodemProgressChanged | TerminalEvent::ZmodemRequestChanged => {}
+                TerminalEvent::ZmodemProgressChanged(_) | TerminalEvent::ZmodemRequestChanged => {}
                 event => panic!("unexpected terminal event: {event:?}"),
             }
         }

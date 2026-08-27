@@ -8,7 +8,8 @@ use crate::buffer::Buffer;
 use crate::crc;
 use crate::error::Error;
 use crate::header::{
-    Encoding, Frame, HEADER_PAYLOAD_SIZE, HEADER_SIZE, Header, Zrinit, write_slice_escaped,
+    Encoding, EscapeMode, Frame, HEADER_PAYLOAD_SIZE, HEADER_SIZE, Header, Zrinit,
+    write_slice_escaped,
 };
 use crate::io::{Read, Write};
 use crate::zdle;
@@ -434,12 +435,13 @@ pub(crate) fn write_subpacket<P>(
     encoding: Encoding,
     kind: SubpacketType,
     data: &[u8],
+    escape_mode: EscapeMode,
 ) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
 {
     let kind = kind as u8;
-    if write_slice_escaped(port, data)?.is_none() {
+    if write_slice_escaped(port, data, escape_mode)?.is_none() {
         return Ok(None);
     }
     if port.write_byte(ZDLE)?.is_none() {
@@ -454,14 +456,14 @@ where
             crc.update(data);
             crc.update_byte(kind);
             let buf = crc.finalize().to_le_bytes();
-            write_slice_escaped(port, &buf)
+            write_slice_escaped(port, &buf, escape_mode)
         }
         Encoding::ZBIN => {
             let mut crc = crc::Crc16::new();
             crc.update(data);
             crc.update_byte(kind);
             let buf = crc.finalize().to_be_bytes();
-            write_slice_escaped(port, &buf)
+            write_slice_escaped(port, &buf, escape_mode)
         }
         Encoding::ZHEX => Err(Error::UnsupportedFeature),
     }

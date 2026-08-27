@@ -1,0 +1,34 @@
+[package]
+name = "modem-transfer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+authors = ["Jarkko Sakkinen <jarkko.sakkinen@iki.fi>"]
+build = "build.rs"
+description = "Navop's caller-driven ZMODEM file transfer protocol engine"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["std"]
+std = []
+
+[lib]
+name = "zmodem2"
+path = "src/lib.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+harness = true
+
+[dependencies]
+bitflags = "2.4"
+hex = "0.4.3"
+thiserror = "1.0"
+
+[dev-dependencies]
+nix = { version = "0.29", features = ["fs"] }
+rstest = "0.25"
+tempfile = "3.10"

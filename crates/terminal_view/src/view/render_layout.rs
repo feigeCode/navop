@@ -205,7 +205,6 @@ impl TerminalView {
                 })
                 .into_any_element()
         };
-        let zmodem_progress = self.render_zmodem_progress(cx);
         v_flex()
             .debug_selector(|| "terminal-tool-dock-center".to_string())
             .flex_1()
@@ -214,7 +213,6 @@ impl TerminalView {
             .min_w_0()
             .overflow_hidden()
             .child(primary_content)
-            .when_some(zmodem_progress, |this, progress| this.child(progress))
             .child(self.render_terminal_session_footer(cx))
             .when_some(state.bottom_panel, |this, panel| {
                 this.child(self.render_bottom_region(panel, state.sidebar_size, cx))

@@ -4,6 +4,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZmodemTransferProgress {
+    pub(crate) transfer_id: ZmodemTransferId,
     pub(crate) direction: ZmodemTransferDirection,
     pub(crate) file_name: String,
     pub(crate) file_index: usize,
@@ -12,6 +13,21 @@ pub struct ZmodemTransferProgress {
     pub(crate) current_file_total: u64,
     pub(crate) transferred: u64,
     pub(crate) total: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ZmodemTransferId(u64);
+
+impl ZmodemTransferId {
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for ZmodemTransferId {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
 }
 
 /// ZMODEM 传输结束原因，供全局后台任务面板准确标记终态。
@@ -38,6 +54,10 @@ impl ZmodemTransferDirection {
 }
 
 impl ZmodemTransferProgress {
+    pub fn transfer_id(&self) -> ZmodemTransferId {
+        self.transfer_id
+    }
+
     pub fn file_name(&self) -> &str {
         &self.file_name
     }
@@ -86,14 +106,14 @@ pub(crate) struct ZmodemProgressState {
 
 #[derive(Default)]
 struct ProgressState {
+    next_id: u64,
+    active_id: Option<ZmodemTransferId>,
     snapshot: Option<ZmodemTransferProgress>,
-    notified_key: Option<(usize, u32)>,
-    /// A transfer has started even if its visible snapshot was just cleared.
-    transfer_active: bool,
 }
 
 pub(crate) struct TransferProgressGuard {
     progress: ZmodemProgressState,
+    transfer_id: ZmodemTransferId,
 }
 
 impl ZmodemProgressState {
@@ -108,111 +128,109 @@ impl ZmodemProgressState {
         self.state.lock().ok()?.snapshot.clone()
     }
 
-    pub(crate) fn begin(&self, progress: ZmodemTransferProgress) -> TransferProgressGuard {
-        self.mark_transfer_active();
-        self.set(progress, true);
-        TransferProgressGuard {
-            progress: self.clone(),
-        }
-    }
-
-    pub(crate) fn start(&self, progress: ZmodemTransferProgress) {
-        // Downloads are executor-driven and keep their snapshot until the
-        // transfer reaches a terminal outcome.
-        self.mark_transfer_active();
-        self.set(progress, true);
-    }
-
-    pub(crate) fn update(&self, progress: ZmodemTransferProgress) {
-        self.set(progress, false);
-    }
-
-    pub(crate) fn set_direction(&self, direction: ZmodemTransferDirection) {
-        let changed = self
+    pub(crate) fn begin_transfer(&self, _direction: ZmodemTransferDirection) -> ZmodemTransferId {
+        let mut state = self
             .state
             .lock()
-            .ok()
-            .and_then(|mut state| {
-                state
-                    .snapshot
-                    .as_mut()
-                    .map(|snapshot| snapshot.direction = direction)
-            })
-            .is_some();
-        if changed {
-            self.notify();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.next_id = state.next_id.wrapping_add(1).max(1);
+        let transfer_id = ZmodemTransferId(state.next_id);
+        state.active_id = Some(transfer_id);
+        state.snapshot = None;
+        transfer_id
+    }
+
+    pub(crate) fn begin(
+        &self,
+        transfer_id: ZmodemTransferId,
+        progress: ZmodemTransferProgress,
+    ) -> TransferProgressGuard {
+        self.set(transfer_id, progress, true);
+        TransferProgressGuard {
+            progress: self.clone(),
+            transfer_id,
         }
     }
 
-    pub(crate) fn finish(&self, outcome: ZmodemTransferOutcome) {
-        self.finish_inner(outcome);
+    pub(crate) fn start(&self, transfer_id: ZmodemTransferId, progress: ZmodemTransferProgress) {
+        // Downloads are executor-driven and keep their snapshot until the
+        // transfer reaches a terminal outcome.
+        self.set(transfer_id, progress, true);
     }
 
-    fn set(&self, progress: ZmodemTransferProgress, force: bool) {
-        let key = (progress.file_index, progress.percent());
+    pub(crate) fn update(&self, transfer_id: ZmodemTransferId, progress: ZmodemTransferProgress) {
+        self.set(transfer_id, progress, false);
+    }
+
+    pub(crate) fn finish(&self, transfer_id: ZmodemTransferId, outcome: ZmodemTransferOutcome) {
+        self.finish_inner(transfer_id, outcome);
+    }
+
+    fn set(
+        &self,
+        transfer_id: ZmodemTransferId,
+        mut progress: ZmodemTransferProgress,
+        force: bool,
+    ) {
         let changed = self.state.lock().ok().is_some_and(|mut state| {
-            let changed = force
-                || state.notified_key != Some(key)
-                || (progress.total == 0
-                    && state
-                        .snapshot
-                        .as_ref()
-                        .is_some_and(|old| old.transferred != progress.transferred));
-            state.snapshot = Some(progress);
-            if changed {
-                state.notified_key = Some(key);
+            if state.active_id != Some(transfer_id) {
+                return false;
             }
+            progress.transfer_id = transfer_id;
+            let changed = force || state.snapshot.as_ref() != Some(&progress);
+            state.snapshot = Some(progress);
             changed
         });
         if changed {
-            self.notify();
+            self.notify(transfer_id);
         }
     }
 
-    fn mark_transfer_active(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.transfer_active = true;
-        }
-    }
-
-    fn clear(&self) {
-        let cleared = self
-            .state
-            .lock()
-            .ok()
-            .is_some_and(|mut state| state.snapshot.take().is_some());
+    fn clear(&self, transfer_id: ZmodemTransferId) {
+        let cleared = self.state.lock().ok().is_some_and(|mut state| {
+            if state.active_id != Some(transfer_id) {
+                return false;
+            }
+            state.snapshot.take().is_some()
+        });
         if cleared {
-            self.notify();
+            self.notify(transfer_id);
         }
     }
 
-    fn finish_inner(&self, outcome: ZmodemTransferOutcome) {
+    fn finish_inner(&self, transfer_id: ZmodemTransferId, outcome: ZmodemTransferOutcome) {
         let should_notify = self.state.lock().ok().is_some_and(|mut state| {
-            state.notified_key = None;
+            if state.active_id != Some(transfer_id) {
+                return false;
+            }
             state.snapshot.take();
-            std::mem::replace(&mut state.transfer_active, false)
+            state.active_id = None;
+            true
         });
         if should_notify {
-            self.notify_finished(outcome);
+            self.notify_finished(transfer_id, outcome);
         }
     }
 
-    fn notify(&self) {
+    fn notify(&self, transfer_id: ZmodemTransferId) {
         if let Some(event_tx) = &self.event_tx {
-            let _ = event_tx.send(TerminalEvent::ZmodemProgressChanged);
+            let _ = event_tx.send(TerminalEvent::ZmodemProgressChanged(transfer_id));
         }
     }
 
-    fn notify_finished(&self, outcome: ZmodemTransferOutcome) {
+    fn notify_finished(&self, transfer_id: ZmodemTransferId, outcome: ZmodemTransferOutcome) {
         if let Some(event_tx) = &self.event_tx {
-            let _ = event_tx.send(TerminalEvent::ZmodemTransferFinished(outcome));
+            let _ = event_tx.send(TerminalEvent::ZmodemTransferFinished {
+                transfer_id,
+                outcome,
+            });
         }
     }
 }
 
 impl Drop for TransferProgressGuard {
     fn drop(&mut self) {
-        self.progress.clear();
+        self.progress.clear(self.transfer_id);
     }
 }
 
@@ -235,36 +253,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_progress_notifies_on_percent_change_and_clear() {
+    async fn upload_progress_notifies_on_transferred_change_and_clear() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
-        let guard = progress_state.begin(upload_progress(0, 1_000));
-        assert_progress_event(&mut event_rx).await;
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let guard = progress_state.begin(transfer_id, upload_progress(0, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
 
-        progress_state.update(upload_progress(5, 1_000));
+        progress_state.update(transfer_id, upload_progress(5, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
+        progress_state.update(transfer_id, upload_progress(5, 1_000));
         assert!(event_rx.try_recv().is_err());
-        progress_state.update(upload_progress(10, 1_000));
-        assert_progress_event(&mut event_rx).await;
+        progress_state.update(transfer_id, upload_progress(10, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
         assert_eq!(10, progress_state.snapshot().unwrap().transferred());
 
         drop(guard);
         assert!(progress_state.snapshot().is_none());
-        assert_progress_event(&mut event_rx).await;
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
+    }
+
+    #[tokio::test]
+    async fn stale_upload_guard_does_not_clear_new_transfer() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let progress_state = ZmodemProgressState::new(event_tx);
+        let stale_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let stale_guard = progress_state.begin(stale_id, upload_progress(1, 1_000));
+        assert_progress_event_for(&mut event_rx, stale_id).await;
+
+        let current_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let _current_guard = progress_state.begin(current_id, upload_progress(2, 1_000));
+        assert_progress_event_for(&mut event_rx, current_id).await;
+
+        drop(stale_guard);
+
+        assert_eq!(
+            Some(current_id),
+            progress_state
+                .snapshot()
+                .map(|progress| progress.transfer_id())
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn stale_finish_does_not_finish_new_transfer() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let progress_state = ZmodemProgressState::new(event_tx);
+        let stale_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let _stale_guard = progress_state.begin(stale_id, upload_progress(1, 1_000));
+        assert_progress_event_for(&mut event_rx, stale_id).await;
+
+        let current_id = progress_state.begin_transfer(ZmodemTransferDirection::Download);
+        progress_state.start(current_id, download_progress(2));
+        assert_progress_event_for(&mut event_rx, current_id).await;
+
+        progress_state.finish(stale_id, ZmodemTransferOutcome::Succeeded);
+
+        assert_eq!(
+            Some(current_id),
+            progress_state
+                .snapshot()
+                .map(|progress| progress.transfer_id())
+        );
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[tokio::test]
     async fn explicit_progress_finish_does_not_emit_a_duplicate_cancel() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
-        let guard = progress_state.begin(upload_progress(1_000, 1_000));
-        assert_progress_event(&mut event_rx).await;
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let guard = progress_state.begin(transfer_id, upload_progress(1_000, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
 
-        progress_state.finish(ZmodemTransferOutcome::Succeeded);
+        progress_state.finish(transfer_id, ZmodemTransferOutcome::Succeeded);
         assert!(matches!(
             event_rx.recv().await,
-            Some(TerminalEvent::ZmodemTransferFinished(
-                ZmodemTransferOutcome::Succeeded
-            ))
+            Some(TerminalEvent::ZmodemTransferFinished {
+                transfer_id: id,
+                outcome: ZmodemTransferOutcome::Succeeded,
+            }) if id == transfer_id
         ));
         drop(guard);
         assert!(event_rx.try_recv().is_err());
@@ -274,17 +343,19 @@ mod tests {
     async fn explicit_finish_still_notifies_after_guard_clears_snapshot() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
-        let guard = progress_state.begin(upload_progress(1, 1_000));
-        assert_progress_event(&mut event_rx).await;
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let guard = progress_state.begin(transfer_id, upload_progress(1, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
         drop(guard);
-        assert_progress_event(&mut event_rx).await;
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
 
-        progress_state.finish(ZmodemTransferOutcome::Succeeded);
+        progress_state.finish(transfer_id, ZmodemTransferOutcome::Succeeded);
         assert!(matches!(
             event_rx.recv().await,
-            Some(TerminalEvent::ZmodemTransferFinished(
-                ZmodemTransferOutcome::Succeeded
-            ))
+            Some(TerminalEvent::ZmodemTransferFinished {
+                transfer_id: id,
+                outcome: ZmodemTransferOutcome::Succeeded,
+            }) if id == transfer_id
         ));
     }
 
@@ -292,15 +363,17 @@ mod tests {
     async fn finish_before_guard_drop_does_not_emit_a_duplicate_terminal_event() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
-        let guard = progress_state.begin(upload_progress(1_000, 1_000));
-        assert_progress_event(&mut event_rx).await;
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let guard = progress_state.begin(transfer_id, upload_progress(1_000, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
 
-        progress_state.finish(ZmodemTransferOutcome::Cancelled);
+        progress_state.finish(transfer_id, ZmodemTransferOutcome::Cancelled);
         assert!(matches!(
             event_rx.recv().await,
-            Some(TerminalEvent::ZmodemTransferFinished(
-                ZmodemTransferOutcome::Cancelled
-            ))
+            Some(TerminalEvent::ZmodemTransferFinished {
+                transfer_id: id,
+                outcome: ZmodemTransferOutcome::Cancelled,
+            }) if id == transfer_id
         ));
         drop(guard);
         assert!(event_rx.try_recv().is_err());
@@ -310,15 +383,20 @@ mod tests {
     async fn explicit_failed_finish_does_not_emit_a_cancel_on_drop() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
-        let guard = progress_state.begin(upload_progress(1, 1_000));
-        assert_progress_event(&mut event_rx).await;
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let guard = progress_state.begin(transfer_id, upload_progress(1, 1_000));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
 
-        progress_state.finish(ZmodemTransferOutcome::Failed("boom".to_string()));
+        progress_state.finish(
+            transfer_id,
+            ZmodemTransferOutcome::Failed("boom".to_string()),
+        );
         assert!(matches!(
             event_rx.recv().await,
-            Some(TerminalEvent::ZmodemTransferFinished(
-                ZmodemTransferOutcome::Failed(error)
-            )) if error == "boom"
+            Some(TerminalEvent::ZmodemTransferFinished {
+                transfer_id: id,
+                outcome: ZmodemTransferOutcome::Failed(error),
+            }) if id == transfer_id && error == "boom"
         ));
         drop(guard);
         assert!(event_rx.try_recv().is_err());
@@ -328,15 +406,16 @@ mod tests {
     fn download_start_keeps_snapshot_active_without_a_guard() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Download);
 
-        progress_state.start(download_progress(0));
+        progress_state.start(transfer_id, download_progress(0));
         assert_eq!(
             ZmodemTransferDirection::Download,
             progress_state.snapshot().unwrap().direction()
         );
         assert!(matches!(
             event_rx.try_recv(),
-            Ok(TerminalEvent::ZmodemProgressChanged)
+            Ok(TerminalEvent::ZmodemProgressChanged(id)) if id == transfer_id
         ));
         assert!(event_rx.try_recv().is_err());
     }
@@ -345,59 +424,58 @@ mod tests {
     async fn unknown_total_progress_notifies_on_transferred_change() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
-        progress_state.start(download_progress(0));
-        assert_progress_event(&mut event_rx).await;
+        let transfer_id = progress_state.begin_transfer(ZmodemTransferDirection::Download);
+        progress_state.start(transfer_id, download_progress(0));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
 
-        progress_state.update(download_progress(1));
-        assert_progress_event(&mut event_rx).await;
+        progress_state.update(transfer_id, download_progress(1));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
         assert_eq!(1, progress_state.snapshot().unwrap().transferred());
 
-        progress_state.update(download_progress(2));
-        assert_progress_event(&mut event_rx).await;
+        progress_state.update(transfer_id, download_progress(2));
+        assert_progress_event_for(&mut event_rx, transfer_id).await;
         assert_eq!(2, progress_state.snapshot().unwrap().transferred());
 
-        progress_state.finish(ZmodemTransferOutcome::Succeeded);
+        progress_state.finish(transfer_id, ZmodemTransferOutcome::Succeeded);
         assert!(matches!(
             event_rx.recv().await,
-            Some(TerminalEvent::ZmodemTransferFinished(
-                ZmodemTransferOutcome::Succeeded
-            ))
+            Some(TerminalEvent::ZmodemTransferFinished {
+                transfer_id: id,
+                outcome: ZmodemTransferOutcome::Succeeded,
+            }) if id == transfer_id
         ));
         assert!(progress_state.snapshot().is_none());
     }
 
     #[test]
-    fn set_direction_only_notifies_when_transfer_is_visible() {
+    fn begin_transfer_resets_the_previous_snapshot_without_notifying() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let progress_state = ZmodemProgressState::new(event_tx);
+        let upload_id = progress_state.begin_transfer(ZmodemTransferDirection::Upload);
+        let guard = progress_state.begin(upload_id, upload_progress(1, 1_000));
+        assert!(event_rx.try_recv().is_ok());
 
-        progress_state.set_direction(ZmodemTransferDirection::Download);
+        let download_id = progress_state.begin_transfer(ZmodemTransferDirection::Download);
+        assert_ne!(upload_id, download_id);
+        assert!(progress_state.snapshot().is_none());
         assert!(event_rx.try_recv().is_err());
-
-        let guard = progress_state.begin(upload_progress(1, 1_000));
-        progress_state.set_direction(ZmodemTransferDirection::Download);
-        assert!(matches!(
-            event_rx.try_recv(),
-            Ok(TerminalEvent::ZmodemProgressChanged)
-        ));
-        assert_eq!(
-            ZmodemTransferDirection::Download,
-            progress_state.snapshot().unwrap().direction()
-        );
         drop(guard);
+        assert!(event_rx.try_recv().is_err());
     }
 
-    async fn assert_progress_event(
+    async fn assert_progress_event_for(
         event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TerminalEvent>,
+        transfer_id: ZmodemTransferId,
     ) {
         assert!(matches!(
             event_rx.recv().await,
-            Some(TerminalEvent::ZmodemProgressChanged)
+            Some(TerminalEvent::ZmodemProgressChanged(id)) if id == transfer_id
         ));
     }
 
     fn upload_progress(transferred: u64, total: u64) -> ZmodemTransferProgress {
         ZmodemTransferProgress {
+            transfer_id: ZmodemTransferId::default(),
             direction: ZmodemTransferDirection::Upload,
             file_name: "archive.tar".to_string(),
             file_index: 0,
@@ -411,6 +489,7 @@ mod tests {
 
     fn download_progress(transferred: u64) -> ZmodemTransferProgress {
         ZmodemTransferProgress {
+            transfer_id: ZmodemTransferId::default(),
             direction: ZmodemTransferDirection::Download,
             file_name: "remote.tar".to_string(),
             file_index: 0,

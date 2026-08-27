@@ -6,7 +6,7 @@
 
 use crate::buffer::Buffer;
 use crate::error::Error;
-use crate::header::{Encoding, Frame, Header};
+use crate::header::{Encoding, EscapeMode, Frame, Header};
 use crate::io::Write;
 use crate::wire::{SUBPACKET_MAX_SIZE, SubpacketType, write_subpacket};
 use core::fmt::Write as _;
@@ -37,6 +37,7 @@ pub(crate) fn write_zfile<P>(
     buf: &mut Buffer<SUBPACKET_MAX_SIZE>,
     name: &[u8],
     size: u32,
+    escape_mode: EscapeMode,
 ) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
@@ -49,12 +50,18 @@ where
     write!(buf, "{size}\0").map_err(|_| Error::OutOfMemory)?;
 
     if Header::new(Encoding::ZBIN32, Frame::ZFILE, [0; 4])
-        .write(port)?
+        .write_with_escape(port, escape_mode)?
         .is_none()
     {
         return Ok(None);
     }
-    write_subpacket(port, Encoding::ZBIN32, SubpacketType::ZCRCW, buf)
+    write_subpacket(
+        port,
+        Encoding::ZBIN32,
+        SubpacketType::ZCRCW,
+        buf,
+        escape_mode,
+    )
 }
 
 #[cfg(test)]
