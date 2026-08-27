@@ -1966,7 +1966,18 @@ impl DatabasePlugin for ExternalDatabasePlugin {
                 )
                 .await;
             if let Ok(result) = dump {
-                let joined = result.statements.join("\n");
+                // Only trust statements that actually carry DDL. Some drivers
+                // (e.g. openGauss) reply to `schema/dump_ddl` for tables with a
+                // placeholder comment when they have no server-side provider;
+                // treating that as real output would replace the exported
+                // structure with a useless comment, so drop comment-only
+                // statements and fall back to the generic builder.
+                let real: Vec<String> = result
+                    .statements
+                    .into_iter()
+                    .filter(|statement| dump_statement_has_ddl(statement))
+                    .collect();
+                let joined = real.join("\n");
                 // The exporter appends `;` after the returned string, so strip
                 // trailing terminators/whitespace to avoid a double semicolon.
                 let joined = joined.trim_end().trim_end_matches(';').trim_end();
@@ -1983,6 +1994,17 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         )
         .await
     }
+}
+
+/// Returns true when `statement` contains at least one line of real DDL, i.e.
+/// it is not blank and not a `--` SQL comment. Drivers that cannot provide a
+/// table definition sometimes emit a placeholder comment through
+/// `schema/dump_ddl`; such output must not be treated as an exported structure.
+fn dump_statement_has_ddl(statement: &str) -> bool {
+    statement.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with("--")
+    })
 }
 
 fn names_to_databases(names: Vec<String>) -> Vec<DatabaseInfo> {
@@ -2811,6 +2833,7 @@ mod tests {
     struct DumpDdlConnection {
         config: DbConnectionConfig,
         empty_dump: bool,
+        comment_only: bool,
         dump_params: std::sync::Mutex<Option<serde_json::Value>>,
     }
 
@@ -2819,10 +2842,20 @@ mod tests {
             Self::with_empty_dump(false)
         }
 
+        fn with_comment_only_dump(comment_only: bool) -> Self {
+            Self {
+                config: DriverRequestOnlyConnection::new().config,
+                empty_dump: false,
+                comment_only,
+                dump_params: std::sync::Mutex::new(None),
+            }
+        }
+
         fn with_empty_dump(empty_dump: bool) -> Self {
             Self {
                 config: DriverRequestOnlyConnection::new().config,
                 empty_dump,
+                comment_only: false,
                 dump_params: std::sync::Mutex::new(None),
             }
         }
@@ -2878,6 +2911,12 @@ mod tests {
                         Some(params);
                     if self.empty_dump {
                         Ok(serde_json::json!({ "statements": [] }))
+                    } else if self.comment_only {
+                        Ok(serde_json::json!({
+                            "statements": [
+                                "-- DDL dump for table events requires server-side pg_get_tabledef support"
+                            ]
+                        }))
                     } else {
                         Ok(serde_json::json!({
                             "statements": [
@@ -3657,6 +3696,25 @@ mod tests {
             "CREATE TABLE \"events\" (\n    \"id\" INTEGER NOT NULL,\n    \"name\" VARCHAR(64),\n    PRIMARY KEY (\"id\")\n)\nCOMMENT ON TABLE \"events\" IS 'event stream';\nCOMMENT ON COLUMN \"events\".\"id\" IS 'event id';\nCOMMENT ON COLUMN \"events\".\"name\" IS 'customer name'",
             ddl
         );
+    }
+
+    #[tokio::test]
+    async fn export_table_create_sql_falls_back_when_dump_ddl_is_comment_only() {
+        let mut driver = driver_manifest("ddl-driver", true, "ddl-driver.connection");
+        driver.methods = vec![wire_method::SCHEMA_DUMP_DDL.to_string()];
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let connection = DumpDdlConnection::with_comment_only_dump(true);
+
+        let ddl = plugin
+            .export_table_create_sql(&connection, "main", None, "events")
+            .await
+            .expect("comment-only dump_ddl should fall back to the default builder");
+
+        assert!(
+            ddl.starts_with("CREATE TABLE \"events\""),
+            "comment-only dump_ddl must not replace the exported structure with a comment"
+        );
+        assert!(ddl.contains("PRIMARY KEY (\"id\")"));
     }
 
     #[tokio::test]
