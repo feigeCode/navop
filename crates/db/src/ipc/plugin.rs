@@ -1434,17 +1434,25 @@ impl DatabasePlugin for ExternalDatabasePlugin {
 
     fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
         let capabilities = self.driver.effective_capabilities();
-        if matches!(
+        let prefers_schema = matches!(
             self.driver.dialect.table_reference_schema_mode,
             TableReferenceSchemaMode::PreferSchema
-        ) || (capabilities.supports_schema && !capabilities.uses_schema_as_database)
-        {
+        );
+        let uses_true_schema = capabilities.supports_schema && !capabilities.uses_schema_as_database;
+        if prefers_schema || uses_true_schema {
             if let Some(schema) = schema.filter(|schema| !schema.trim().is_empty()) {
                 return format!(
                     "{}.{}",
                     self.quote_identifier(schema),
                     self.quote_identifier(table)
                 );
+            }
+            // True-schema databases are database-bound via the connection, so the database
+            // name is never a valid table qualifier. In Informix/GBase 8s in particular,
+            // `db.table` is parsed as `owner.table`, so fall back to the bare table name
+            // when no schema is available instead of emitting an invalid `database.table`.
+            if uses_true_schema {
+                return self.quote_identifier(table);
             }
         }
 
@@ -3214,6 +3222,25 @@ mod tests {
         assert_eq!(
             "\"APP\".\"EVENTS\"",
             plugin.format_table_reference("", Some("APP"), "EVENTS")
+        );
+    }
+
+    #[test]
+    fn external_table_reference_without_schema_omits_database_for_true_schema() {
+        // GBase 8s / Informix-style driver: schema is a real owner namespace, the connection
+        // is database-bound, and `db.table` is parsed as `owner.table` (so `db` is invalid).
+        let mut driver = driver_manifest("gbase8s", true, "gbase8s.connection");
+        driver.dialect.identifier_quote_left = String::new();
+        driver.dialect.identifier_quote_right = None;
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!(
+            "informix.demo_parent",
+            plugin.format_table_reference("onetcli_demo1", Some("informix"), "demo_parent")
+        );
+        assert_eq!(
+            "demo_parent",
+            plugin.format_table_reference("onetcli_demo1", None, "demo_parent")
         );
     }
 
