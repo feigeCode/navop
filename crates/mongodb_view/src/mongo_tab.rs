@@ -109,7 +109,8 @@ impl MongoTabView {
         cx: &mut Context<Self>,
     ) -> Self {
         let tree_view = cx.new(|cx| MongoTreeView::new_with_connections(&connections, window, cx));
-        let tab_container = cx.new(|cx| TabContainer::new(window, cx));
+        let tab_container =
+            cx.new(|cx| TabContainer::new(window, cx).with_background_task_panel(false));
         let collection_view = cx.new(|cx| CollectionView::new(window, cx));
         let sidebar =
             cx.new(|cx| MongoSidebar::new(connections.clone(), active_connection_id, window, cx));

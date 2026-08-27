@@ -177,7 +177,8 @@ impl DatabaseTabView {
     ) -> Self {
         let db_tree_view = cx.new(|cx| DbTreeView::new(&connections, window, cx));
 
-        let tab_container = cx.new(|cx| TabContainer::new(window, cx));
+        let tab_container =
+            cx.new(|cx| TabContainer::new(window, cx).with_background_task_panel(false));
 
         let objects_panel = cx.new(|cx| DatabaseObjectsPanel::new(workspace.clone(), window, cx));
 

@@ -1069,6 +1069,9 @@ pub struct TabContainer {
     presentation_obscured_by_dialog: bool,
     presentation_obscured_by_legacy_caller: bool,
     show_window_controls: bool,
+    /// 是否在标签栏最右侧显示后台任务入口。只有顶部主标签栏展示，
+    /// 内嵌的页签容器（如数据库页签）通过 `with_background_task_panel(false)` 关闭。
+    show_background_task_panel: bool,
     #[cfg(test)]
     force_windows_titlebar_for_test: bool,
     /// 窗口置顶切换回调，由上层注入；为 None 时不渲染置顶按钮
@@ -1124,6 +1127,7 @@ impl TabContainer {
             presentation_obscured_by_dialog: false,
             presentation_obscured_by_legacy_caller: false,
             show_window_controls: false,
+            show_background_task_panel: true,
             #[cfg(test)]
             force_windows_titlebar_for_test: false,
             on_toggle_always_on_top: None,
@@ -1191,6 +1195,13 @@ impl TabContainer {
 
     pub fn with_tab_bar_when_empty(mut self, show: bool) -> Self {
         self.show_tab_bar_when_empty = show;
+        self
+    }
+
+    /// 控制是否在标签栏最右侧显示后台任务管理入口。
+    /// 仅顶部的标签容器应开启；内嵌的页签容器（如数据库页签）应传入 `false`。
+    pub fn with_background_task_panel(mut self, show: bool) -> Self {
+        self.show_background_task_panel = show;
         self
     }
 
@@ -4414,13 +4425,15 @@ impl TabContainer {
                         }
                     }),
             )
-            .child(
-                div()
-                    .id("background-task-entry")
-                    .debug_selector(|| "background-task-entry".to_owned())
-                    .flex_shrink_0()
-                    .child(self.background_task_panel.clone()),
-            )
+            .when(self.show_background_task_panel, |this| {
+                this.child(
+                    div()
+                        .id("background-task-entry")
+                        .debug_selector(|| "background-task-entry".to_owned())
+                        .flex_shrink_0()
+                        .child(self.background_task_panel.clone()),
+                )
+            })
             .when(
                 !titlebar_platform.is_macos && self.show_window_controls,
                 |el| el.child(self.render_window_controls(window, cx)),
@@ -5597,6 +5610,52 @@ mod tests {
             tab_bar.right(),
             background_tasks.right(),
             "the trailing tab-bar action must consume the main slot's right edge"
+        );
+    }
+
+    #[gpui::test]
+    fn background_task_entry_can_be_hidden_on_nested_containers(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let tab = cx.new(|cx| TestTab::new("overview", cx));
+                    let tabs = cx
+                        .new(|cx| TabContainer::new(window, cx).with_background_task_panel(false));
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("overview", "test", tab),
+                            window,
+                            cx,
+                        );
+                    });
+                    let root = cx.new(|_| TestWindow {
+                        tab_container: tabs,
+                    });
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        assert!(cx.debug_bounds("tab-bar").is_some());
+        assert!(cx.debug_bounds("tab-dropdown-btn").is_some());
+        assert!(
+            cx.debug_bounds("background-task-entry").is_none(),
+            "nested tab containers must not render the background task entry"
         );
     }
 
