@@ -7176,29 +7176,43 @@ impl Render for SftpView {
 mod tests {
     use super::{
         BoundedDisconnectOutcome, CloseState, ConnectionGeneration, ConnectionState,
-        PendingTransfer, SftpUploadContext, SharedProgress, TransferAdmission, TransferClientPool,
-        TransferClientPoolState, TransferOperation, TransferQueue, TransferRefreshTarget,
-        TransferTask, TransferTaskState, acquire_transfer_client, active_external_transfer_ids,
-        apply_global_transfer_snapshot, bounded_disconnect, breadcrumb_item_min_width,
-        is_valid_entry_name, join_remote_path, mark_server_copy_directory_replacements,
-        prepare_global_download, prepare_global_remote_delete, prepare_global_upload,
-        reconcile_global_transfer_snapshot, remote_path_parent, server_copy_conflict_flags,
-        should_apply_local_listing, should_apply_remote_listing, should_refresh_transfer_target,
-        tab_connection_status, transfer_error_summary, transfer_task_state_from_global,
-        upload_directory_conflict_policy,
+        DirectorySizeState, FileItem, GlobalStorageState, PendingTransfer,
+        SftpFavoritePathRepository, SftpUploadContext, SftpView, SharedProgress, StoredConnection,
+        TransferAdmission, TransferClientPool, TransferClientPoolState, TransferOperation,
+        TransferQueue, TransferRefreshTarget, TransferTask, TransferTaskState,
+        acquire_transfer_client, active_external_transfer_ids, apply_global_transfer_snapshot,
+        bounded_disconnect, breadcrumb_item_min_width, is_valid_entry_name, join_remote_path,
+        mark_server_copy_directory_replacements, prepare_global_download,
+        prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
+        remote_path_parent, server_copy_conflict_flags, should_apply_local_listing,
+        should_apply_remote_listing, should_refresh_transfer_target, tab_connection_status,
+        transfer_error_summary, transfer_task_state_from_global, upload_directory_conflict_policy,
     };
+    use anyhow::{Result, anyhow};
+    use async_trait::async_trait;
+    use gpui::{AppContext, Entity, TestAppContext, WindowHandle};
+    use gpui_component::Root;
+    use one_core::storage::connection::SqliteConnection;
+    use one_core::storage::models::SshAuthMethod;
+    use one_core::storage::{SshParams, StorageManager, migration::run_migrations};
     use one_core::tab_container::TabConnectionStatus;
+    use sftp::ProgressCallback;
     use sftp::{DirectoryConflictPolicy, ServerCopyItem};
     use sftp_transfer::{
-        SftpConnectionIdentity, SftpTransferEvent, SftpTransferId, SftpTransferOperation,
-        SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, download_task_key,
+        SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpDownloadExecution,
+        SftpRemoteDeleteEntry, SftpTransferEvent, SftpTransferExecutor, SftpTransferId,
+        SftpTransferOperation, SftpTransferProvider, SftpTransferSnapshot, SftpTransferState,
+        SftpUploadConnection, SftpUploadExecution, download_task_key,
     };
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
+    use std::time::SystemTime;
+    use tokio::sync::oneshot;
 
     #[test]
     fn root_breadcrumb_does_not_reserve_regular_item_width() {
@@ -7235,6 +7249,639 @@ mod tests {
             }),
             error: None,
         }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SftpViewTestOperation {
+        Upload,
+        Download,
+        DeleteRemote,
+    }
+
+    #[derive(Clone, Default)]
+    struct SftpViewTestProvider {
+        state: Arc<Mutex<SftpViewTestProviderState>>,
+    }
+
+    #[derive(Default)]
+    struct SftpViewTestProviderState {
+        started: Vec<SftpTransferId>,
+        operations: HashMap<SftpTransferId, SftpViewTestOperation>,
+        paths: HashMap<SftpTransferId, (String, PathBuf, bool)>,
+        delete_entries: HashMap<SftpTransferId, Vec<SftpRemoteDeleteEntry>>,
+        completions: HashMap<SftpTransferId, oneshot::Sender<Result<()>>>,
+        progress: HashMap<SftpTransferId, ProgressCallback>,
+        cancellations: HashMap<SftpTransferId, Arc<AtomicBool>>,
+    }
+
+    struct SftpViewTestExecution {
+        id: SftpTransferId,
+        operation: SftpViewTestOperation,
+        remote_path: String,
+        local_path: PathBuf,
+        is_dir: bool,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    impl SftpViewTestProvider {
+        fn started(&self) -> Vec<SftpTransferId> {
+            self.state.lock().unwrap().started.clone()
+        }
+
+        fn operation(&self, id: SftpTransferId) -> Option<SftpViewTestOperation> {
+            self.state.lock().unwrap().operations.get(&id).copied()
+        }
+
+        fn paths(&self, id: SftpTransferId) -> Option<(String, PathBuf, bool)> {
+            self.state.lock().unwrap().paths.get(&id).cloned()
+        }
+
+        fn delete_entries(&self, id: SftpTransferId) -> Option<Vec<SftpRemoteDeleteEntry>> {
+            self.state.lock().unwrap().delete_entries.get(&id).cloned()
+        }
+
+        fn complete(&self, id: SftpTransferId, result: Result<()>) {
+            let sender = {
+                let mut state = self.state.lock().unwrap();
+                state.progress.remove(&id);
+                state.cancellations.remove(&id);
+                state
+                    .completions
+                    .remove(&id)
+                    .expect("transfer should be waiting for completion")
+            };
+            let _ = sender.send(result);
+        }
+
+        fn is_cancelled(&self, id: SftpTransferId) -> bool {
+            self.state
+                .lock()
+                .unwrap()
+                .cancellations
+                .get(&id)
+                .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+        }
+
+        async fn run(
+            &self,
+            execution: SftpViewTestExecution,
+            progress: ProgressCallback,
+        ) -> Result<()> {
+            let receiver = {
+                let (sender, receiver) = oneshot::channel();
+                let mut state = self.state.lock().unwrap();
+                state.started.push(execution.id);
+                state.operations.insert(execution.id, execution.operation);
+                state.paths.insert(
+                    execution.id,
+                    (
+                        execution.remote_path,
+                        execution.local_path,
+                        execution.is_dir,
+                    ),
+                );
+                state.completions.insert(execution.id, sender);
+                state.progress.insert(execution.id, progress);
+                state
+                    .cancellations
+                    .insert(execution.id, execution.cancelled);
+                receiver
+            };
+            receiver
+                .await
+                .map_err(|_| anyhow!("test completion channel closed"))?
+        }
+    }
+
+    #[async_trait]
+    impl SftpTransferProvider for SftpViewTestProvider {
+        async fn upload(
+            &self,
+            execution: SftpUploadExecution,
+            progress: ProgressCallback,
+        ) -> Result<()> {
+            self.run(
+                SftpViewTestExecution {
+                    id: execution.id,
+                    operation: SftpViewTestOperation::Upload,
+                    remote_path: execution.remote_path,
+                    local_path: execution.local_path,
+                    is_dir: execution.is_dir,
+                    cancelled: execution.cancelled,
+                },
+                progress,
+            )
+            .await
+        }
+
+        async fn download(
+            &self,
+            execution: SftpDownloadExecution,
+            progress: ProgressCallback,
+        ) -> Result<()> {
+            self.run(
+                SftpViewTestExecution {
+                    id: execution.id,
+                    operation: SftpViewTestOperation::Download,
+                    remote_path: execution.remote_path,
+                    local_path: execution.local_path,
+                    is_dir: execution.is_dir,
+                    cancelled: execution.cancelled,
+                },
+                progress,
+            )
+            .await
+        }
+
+        async fn delete_remote(
+            &self,
+            execution: SftpDeleteRemoteExecution,
+            progress: ProgressCallback,
+        ) -> Result<()> {
+            self.state
+                .lock()
+                .unwrap()
+                .delete_entries
+                .insert(execution.id, execution.entries);
+            self.run(
+                SftpViewTestExecution {
+                    id: execution.id,
+                    operation: SftpViewTestOperation::DeleteRemote,
+                    remote_path: execution.remote_dir,
+                    local_path: PathBuf::new(),
+                    is_dir: false,
+                    cancelled: execution.cancelled,
+                },
+                progress,
+            )
+            .await
+        }
+    }
+
+    fn test_stored_connection() -> StoredConnection {
+        StoredConnection::new_ssh(
+            "SFTP entity test".to_string(),
+            SshParams {
+                sftp_account: None,
+                host: "sftp-entity-test.internal".to_string(),
+                port: 2222,
+                username: "deploy".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
+                prompt_username: Some(true),
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: Some(1),
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: Some(false),
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        )
+    }
+
+    fn wait_until(cx: &mut TestAppContext, mut predicate: impl FnMut(&TestAppContext) -> bool) {
+        for _ in 0..100 {
+            cx.run_until_parked();
+            if predicate(cx) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("condition was not reached before timeout");
+    }
+
+    fn sftp_view_fixture(
+        cx: &mut TestAppContext,
+        temp_dir: &tempfile::TempDir,
+    ) -> (
+        SftpViewTestProvider,
+        Entity<SftpTransferExecutor>,
+        Entity<SftpView>,
+        WindowHandle<Root>,
+    ) {
+        cx.update(one_core::gpui_tokio::init);
+        cx.update(one_core::background_tasks::init);
+        cx.executor().allow_parking();
+
+        let db_path = temp_dir.path().join("sftp-view-fixture.db");
+        let conn = SqliteConnection::open_with_pool_size(&db_path, 1)
+            .expect("open isolated fixture database");
+        conn.with_connection(|conn| run_migrations(conn))
+            .expect("run isolated fixture migrations");
+        let storage = StorageManager::new_with_connection(conn);
+        storage.register(SftpFavoritePathRepository::new(storage.connection()));
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState { storage });
+            gpui_component::init(cx);
+            cx.set_global(gpui_component::Theme::default());
+        });
+
+        let provider = SftpViewTestProvider::default();
+        let executor =
+            cx.update(|cx| sftp_transfer::init_with_provider(cx, Arc::new(provider.clone())));
+
+        let mut view_slot = None;
+        let window = cx.open_window(Default::default(), |window, cx| {
+            let view = cx.new(|cx| SftpView::new(test_stored_connection(), window, cx));
+            view_slot = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+
+        let view = view_slot.expect("SFTP view fixture created");
+        cx.update(|cx| {
+            window
+                .update(cx, |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.local_current_path = temp_dir.path().to_path_buf();
+                        this.remote_current_path = "/remote".to_string();
+                        this.refresh_local_dir(cx);
+                        cx.notify();
+                    });
+                })
+                .expect("SFTP fixture window remains open");
+        });
+
+        (provider, executor, view, window)
+    }
+
+    fn submit_upload(
+        cx: &mut TestAppContext,
+        view: &Entity<SftpView>,
+        name: &str,
+    ) -> SftpTransferId {
+        let name = name.to_string();
+        view.update(cx, |this, cx| {
+            let local_path = PathBuf::from(format!("/tmp/entity/{name}"));
+            let remote_path = format!("/remote/{name}");
+            let transfer = PendingTransfer {
+                name,
+                local_path,
+                remote_path,
+                is_dir: false,
+                has_conflict: false,
+            };
+            this.execute_uploads_with_directory_policy(
+                vec![transfer],
+                DirectoryConflictPolicy::Merge,
+                cx,
+            );
+            this.transfer_queue
+                .tasks
+                .last()
+                .and_then(|task| task.external_transfer_id)
+                .expect("upload mirror should use an external transfer ID")
+        })
+    }
+
+    fn submit_download(
+        cx: &mut TestAppContext,
+        view: &Entity<SftpView>,
+        local_path: PathBuf,
+    ) -> SftpTransferId {
+        view.update(cx, |this, cx| {
+            let transfer = PendingTransfer {
+                name: "report.txt".to_string(),
+                local_path,
+                remote_path: "/remote/report.txt".to_string(),
+                is_dir: false,
+                has_conflict: false,
+            };
+            this.execute_downloads(vec![transfer], cx);
+            this.transfer_queue
+                .tasks
+                .last()
+                .and_then(|task| task.external_transfer_id)
+                .expect("download mirror should use an external transfer ID")
+        })
+    }
+
+    fn submit_remote_delete(
+        cx: &mut TestAppContext,
+        view: &Entity<SftpView>,
+        window_handle: &WindowHandle<Root>,
+    ) -> SftpTransferId {
+        window_handle
+            .update(cx, |_root, window, cx| {
+                view.update(cx, |this, cx| {
+                    this.execute_remote_delete(
+                        vec![test_remote_file_item("report.txt", false)],
+                        "/remote".to_string(),
+                        window,
+                        cx,
+                    );
+                    this.transfer_queue
+                        .tasks
+                        .last()
+                        .and_then(|task| task.external_transfer_id)
+                        .expect("remote delete mirror should use an external transfer ID")
+                })
+            })
+            .expect("SFTP test window remains open")
+    }
+
+    fn test_remote_file_item(name: &str, is_dir: bool) -> FileItem {
+        FileItem {
+            name: name.to_string(),
+            size: if is_dir { 0 } else { 128 },
+            modified: SystemTime::UNIX_EPOCH,
+            is_dir,
+            permissions: "-rw-r--r--".to_string(),
+            owner: Some("deploy".to_string()),
+            directory_size: DirectorySizeState::Unknown,
+        }
+    }
+
+    fn mirror_snapshot(
+        cx: &TestAppContext,
+        view: &Entity<SftpView>,
+        transfer_id: SftpTransferId,
+    ) -> (TransferTaskState, Option<String>) {
+        view.read_with(cx, |view, _| {
+            let task = view
+                .transfer_queue
+                .tasks
+                .iter()
+                .find(|task| task.external_transfer_id == Some(transfer_id))
+                .expect("view mirror should retain the external transfer");
+            (task.state.clone(), task.error.clone())
+        })
+    }
+
+    #[gpui::test]
+    fn sftp_view_upload_submission_reaches_global_executor_and_mirror(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, executor, view, _window) = sftp_view_fixture(cx, &temp_dir);
+
+        let transfer_id = submit_upload(cx, &view, "upload.txt");
+        wait_until(cx, |_| provider.started().contains(&transfer_id));
+
+        assert_eq!(
+            Some((
+                String::from("/remote/upload.txt"),
+                PathBuf::from("/tmp/entity/upload.txt"),
+                false
+            )),
+            provider.paths(transfer_id)
+        );
+        assert_eq!(
+            Some(SftpViewTestOperation::Upload),
+            provider.operation(transfer_id)
+        );
+        assert!(matches!(
+            mirror_snapshot(cx, &view, transfer_id),
+            (
+                TransferTaskState::Pending | TransferTaskState::Running,
+                None
+            )
+        ));
+        assert_eq!(
+            Some(SftpTransferState::Running),
+            executor.read_with(cx, |executor, _| {
+                executor
+                    .snapshot(transfer_id)
+                    .map(|snapshot| snapshot.state)
+            })
+        );
+
+        provider.complete(transfer_id, Ok(()));
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, transfer_id),
+                (TransferTaskState::Completed, _)
+            )
+        });
+        assert_eq!(
+            Some(SftpTransferState::Succeeded),
+            executor.read_with(cx, |executor, _| {
+                executor
+                    .snapshot(transfer_id)
+                    .map(|snapshot| snapshot.state)
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn sftp_view_download_submission_refreshes_local_directory(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, _executor, view, _window) = sftp_view_fixture(cx, &temp_dir);
+        let local_path = temp_dir.path().join("downloaded.txt");
+
+        let transfer_id = submit_download(cx, &view, local_path.clone());
+        wait_until(cx, |_| provider.started().contains(&transfer_id));
+
+        assert_eq!(
+            Some((
+                String::from("/remote/report.txt"),
+                local_path.clone(),
+                false
+            )),
+            provider.paths(transfer_id)
+        );
+        assert_eq!(
+            Some(SftpViewTestOperation::Download),
+            provider.operation(transfer_id)
+        );
+
+        std::fs::write(&local_path, "downloaded").expect("simulate committed local download");
+        provider.complete(transfer_id, Ok(()));
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, transfer_id),
+                (TransferTaskState::Completed, _)
+            )
+        });
+
+        view.read_with(cx, |view, cx| {
+            assert!(
+                view.local_panel
+                    .read(cx)
+                    .items()
+                    .iter()
+                    .any(|item| { item.name == "downloaded.txt" && !item.is_dir })
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn sftp_view_remote_delete_submission_reaches_provider(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, _executor, view, window) = sftp_view_fixture(cx, &temp_dir);
+
+        let transfer_id = submit_remote_delete(cx, &view, &window);
+        wait_until(cx, |_| provider.started().contains(&transfer_id));
+
+        assert_eq!(
+            Some(vec![SftpRemoteDeleteEntry {
+                remote_path: "/remote/report.txt".to_string(),
+                is_dir: false,
+            }]),
+            provider.delete_entries(transfer_id)
+        );
+        assert_eq!(
+            Some(SftpViewTestOperation::DeleteRemote),
+            provider.operation(transfer_id)
+        );
+
+        provider.complete(transfer_id, Ok(()));
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, transfer_id),
+                (TransferTaskState::Completed, _)
+            )
+        });
+    }
+
+    #[gpui::test]
+    fn frozen_sftp_view_admission_never_creates_executor_tasks(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, executor, view, window) = sftp_view_fixture(cx, &temp_dir);
+
+        window
+            .update(cx, |_root, window, cx| {
+                view.update(cx, |view, cx| {
+                    view.transfer_queue.freeze_admission();
+                    view.execute_uploads_with_directory_policy(
+                        vec![PendingTransfer {
+                            name: "frozen.txt".to_string(),
+                            local_path: PathBuf::from("/tmp/entity/frozen.txt"),
+                            remote_path: "/remote/frozen.txt".to_string(),
+                            is_dir: false,
+                            has_conflict: false,
+                        }],
+                        DirectoryConflictPolicy::Merge,
+                        cx,
+                    );
+                    view.execute_downloads(
+                        vec![PendingTransfer {
+                            name: "frozen.txt".to_string(),
+                            local_path: temp_dir.path().join("frozen.txt"),
+                            remote_path: "/remote/frozen.txt".to_string(),
+                            is_dir: false,
+                            has_conflict: false,
+                        }],
+                        cx,
+                    );
+                    view.execute_remote_delete(
+                        vec![test_remote_file_item("frozen.txt", false)],
+                        "/remote".to_string(),
+                        window,
+                        cx,
+                    );
+                });
+            })
+            .expect("SFTP test window remains open");
+        cx.run_until_parked();
+
+        assert!(view.read_with(cx, |view, _| view.transfer_queue.tasks.is_empty()));
+        assert!(provider.started().is_empty());
+        executor.read_with(cx, |executor, _| {
+            for id in 1..=3 {
+                assert!(executor.snapshot(SftpTransferId::new(id)).is_none());
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn provider_failure_is_reflected_in_sftp_view_mirror(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, executor, view, _window) = sftp_view_fixture(cx, &temp_dir);
+        let transfer_id = submit_upload(cx, &view, "failed.txt");
+        wait_until(cx, |_| provider.started().contains(&transfer_id));
+
+        provider.complete(transfer_id, Err(anyhow!("entity upload failed")));
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, transfer_id),
+                (TransferTaskState::Failed, Some(_))
+            )
+        });
+        assert_eq!(
+            Some(SftpTransferState::Failed),
+            executor.read_with(cx, |executor, _| {
+                executor
+                    .snapshot(transfer_id)
+                    .map(|snapshot| snapshot.state)
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn queued_sftp_transfer_can_be_cancelled_before_provider_start(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, _executor, view, _window) = sftp_view_fixture(cx, &temp_dir);
+        let first = submit_upload(cx, &view, "first.txt");
+        let second = submit_upload(cx, &view, "second.txt");
+
+        let second_task_id = view.read_with(cx, |view, _| {
+            view.transfer_queue
+                .tasks
+                .iter()
+                .find(|task| task.external_transfer_id == Some(second))
+                .map(|task| task.id)
+                .expect("queued transfer should have a view task ID")
+        });
+        view.update(cx, |view, cx| {
+            view.cancel_transfer(second_task_id, cx);
+        });
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, second),
+                (TransferTaskState::Cancelled, _)
+            )
+        });
+
+        wait_until(cx, |_| provider.started().contains(&first));
+        provider.complete(first, Ok(()));
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, first),
+                (TransferTaskState::Completed, _)
+            )
+        });
+
+        assert_eq!(vec![first], provider.started());
+    }
+
+    #[gpui::test]
+    fn running_sftp_transfer_cancel_reaches_provider(cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
+        let (provider, _executor, view, _window) = sftp_view_fixture(cx, &temp_dir);
+        let transfer_id = submit_upload(cx, &view, "running-cancel.txt");
+        wait_until(cx, |_| provider.started().contains(&transfer_id));
+        let task_id = view.read_with(cx, |view, _| {
+            view.transfer_queue
+                .tasks
+                .iter()
+                .find(|task| task.external_transfer_id == Some(transfer_id))
+                .map(|task| task.id)
+                .expect("running transfer should have a view task ID")
+        });
+
+        view.update(cx, |view, cx| {
+            view.cancel_transfer(task_id, cx);
+        });
+
+        wait_until(cx, |_| provider.is_cancelled(transfer_id));
+        provider.complete(transfer_id, Ok(()));
+        wait_until(cx, |cx| {
+            matches!(
+                mirror_snapshot(cx, &view, transfer_id),
+                (TransferTaskState::Cancelled, _)
+            )
+        });
     }
 
     #[test]

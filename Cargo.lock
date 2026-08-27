@@ -11929,6 +11929,7 @@ name = "sftp_view"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dirs 6.0.0",
  "gpui",
@@ -11943,6 +11944,7 @@ dependencies = [
  "sftp_transfer",
  "ssh",
  "sysinfo",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -13043,6 +13045,7 @@ dependencies = [
  "sftp_transfer",
  "sha2 0.10.9",
  "ssh",
+ "tempfile",
  "terminal",
  "tokio",
  "tokio-util",

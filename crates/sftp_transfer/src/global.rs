@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui::{App, AppContext, Entity, Global};
 
-use super::{RusshSftpTransferProvider, SftpTransferExecutor};
+use super::{RusshSftpTransferProvider, SftpTransferExecutor, SftpTransferProvider};
 
 #[derive(Clone)]
 struct GlobalSftpTransferExecutor(Entity<SftpTransferExecutor>);
@@ -15,6 +15,19 @@ pub fn init(cx: &mut App) {
     }
     let executor = new_executor(cx);
     cx.set_global(GlobalSftpTransferExecutor(executor));
+}
+
+pub fn init_with_provider(
+    cx: &mut App,
+    provider: Arc<dyn SftpTransferProvider>,
+) -> Entity<SftpTransferExecutor> {
+    if let Some(executor) = try_global(cx) {
+        return executor;
+    }
+
+    let executor = cx.new(|_| SftpTransferExecutor::new(provider));
+    cx.set_global(GlobalSftpTransferExecutor(executor.clone()));
+    executor
 }
 
 pub(crate) fn try_global(cx: &App) -> Option<Entity<SftpTransferExecutor>> {

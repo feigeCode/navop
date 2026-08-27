@@ -51,11 +51,13 @@ use sftp::{
     remote_path_is_same_or_descendant,
 };
 use sftp_transfer::{
-    self, SftpConnectionIdentity, SftpTransferEvent, SftpTransferExecutor, SftpTransferId,
-    SftpTransferState, SftpUploadConnection, SftpUploadRequest, upload_task_key,
+    self, SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpRemoteDeleteEntry,
+    SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
+    SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, SftpUploadRequest,
+    delete_remote_task_key, upload_task_key,
 };
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -119,10 +121,6 @@ enum TransferOperation {
         local_path: PathBuf,
         is_dir: bool,
     },
-    Delete {
-        targets: Vec<DeleteTarget>,
-        remote_dir: String,
-    },
 }
 
 /// 传输任务状态
@@ -169,8 +167,13 @@ struct TransferTask {
 
 #[derive(Clone, Copy)]
 enum TransferCancelTarget {
-    Upload(SftpTransferId),
+    Global(SftpTransferId),
     Local(usize),
+}
+
+#[derive(Clone)]
+struct GlobalDeleteView {
+    remote_dir: String,
 }
 
 #[derive(Clone, Copy)]
@@ -1061,6 +1064,13 @@ fn should_refresh_after_delete(current_path: &str, remote_dir: &str) -> bool {
     current_path == remote_dir
 }
 
+fn remote_delete_display_name(targets: &[DeleteTarget]) -> String {
+    match targets {
+        [target] => target.name.clone(),
+        _ => t!("FileManager.delete_n_items", count = targets.len()).to_string(),
+    }
+}
+
 fn is_valid_entry_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -1252,77 +1262,6 @@ fn delete_target_preview(targets: &[DeleteTarget]) -> String {
     lines.join("\n")
 }
 
-fn update_delete_progress(progress: &SharedProgress, name: &str, transferred: u64, total: u64) {
-    if let Ok(mut guard) = progress.current_file.write() {
-        *guard = Some(name.to_string());
-    }
-    progress.total.store(total, Ordering::Relaxed);
-    progress.transferred.store(transferred, Ordering::Relaxed);
-}
-
-async fn delete_remote_target(
-    client: &mut RusshSftpClient,
-    target: &DeleteTarget,
-    cancelled: Arc<AtomicBool>,
-    progress: Arc<SharedProgress>,
-) -> anyhow::Result<()> {
-    if target.is_dir {
-        let callback_progress = progress;
-        client
-            .delete_recursive(
-                &target.path,
-                cancelled,
-                Box::new(move |progress: TransferProgress| {
-                    callback_progress
-                        .transferred
-                        .store(progress.transferred, Ordering::Relaxed);
-                    callback_progress
-                        .total
-                        .store(progress.total, Ordering::Relaxed);
-                    if let Some(file) = progress.current_file {
-                        if let Ok(mut guard) = callback_progress.current_file.write() {
-                            *guard = Some(file);
-                        }
-                    }
-                }),
-            )
-            .await
-    } else {
-        client.delete(&target.path, false).await
-    }
-}
-
-async fn delete_targets_with_progress(
-    client: Arc<Mutex<RusshSftpClient>>,
-    targets: Vec<DeleteTarget>,
-    progress: Arc<SharedProgress>,
-) -> anyhow::Result<()> {
-    let cancelled = progress.cancelled.clone();
-    let total = targets.len() as u64;
-    let mut client = client.lock().await;
-    let mut errors = Vec::new();
-
-    for (index, target) in targets.iter().enumerate() {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err(anyhow::Error::new(TransferCancelled));
-        }
-
-        update_delete_progress(&progress, &target.name, index as u64, total);
-        match delete_remote_target(&mut client, target, cancelled.clone(), progress.clone()).await {
-            Ok(()) => {}
-            Err(error) if is_transfer_cancelled(&error) => return Err(error),
-            Err(error) => errors.push(format!("{}: {}", target.name, error)),
-        }
-        update_delete_progress(&progress, &target.name, (index + 1) as u64, total);
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("{}", errors.join("; ")))
-    }
-}
-
 async fn exec_remote_command(
     session_manager: Arc<SshSessionManager>,
     command: &str,
@@ -1454,10 +1393,12 @@ pub struct FileManagerPanel {
     _subscriptions: Vec<gpui::Subscription>,
 
     // ── 传输相关字段 ──
-    /// 全局 SFTP 上传执行器，上传生命周期不依赖面板。
-    upload_executor: Entity<SftpTransferExecutor>,
-    /// 当前连接在全局上传执行器中的稳定身份。
+    /// 全局 SFTP 传输执行器，任务生命周期不依赖面板。
+    global_executor: Entity<SftpTransferExecutor>,
+    /// 当前连接在全局传输执行器中的稳定身份。
     upload_connection_identity: SftpConnectionIdentity,
+    /// 面板提交的、尚未终结的全局远程删除。
+    pending_global_deletes: HashMap<SftpTransferId, GlobalDeleteView>,
     /// 独立的传输 SFTP 连接（懒创建）
     transfer_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 是否正在建立传输连接，避免同一连接代次重复发起连接。
@@ -1471,6 +1412,9 @@ pub struct FileManagerPanel {
     /// 进度刷新定时器
     progress_refresh_task: Option<gpui::Task<()>>,
     active_extract: Option<ActiveExtract>,
+    /// 仅测试注入；记录远程目录刷新次数。
+    #[cfg(test)]
+    test_refresh_count: Arc<AtomicU64>,
     /// 终端当前工作目录缓存，用于首次连接和导航失败恢复
     working_dir_hint: Option<String>,
     /// 终端主题配色，用于嵌入侧边栏时保持和终端一致
@@ -1502,10 +1446,10 @@ impl FileManagerPanel {
         let favorite_connection_id = stored_connection.id;
         let favorite_connection_key = sftp_favorite_connection_key(&stored_connection);
         let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
-        let upload_executor = sftp_transfer::global(cx);
+        let global_executor = sftp_transfer::global(cx);
         let upload_connection_identity = SftpConnectionIdentity::from_stored(&stored_connection)
             .unwrap_or_else(|| {
-                upload_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
+                global_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
             });
 
         let mut subscriptions = Vec::new();
@@ -1551,9 +1495,9 @@ impl FileManagerPanel {
             },
         ));
         subscriptions.push(cx.subscribe(
-            &upload_executor,
+            &global_executor,
             |this, executor, event: &SftpTransferEvent, cx| {
-                this.handle_upload_event(&executor, event, cx);
+                this.handle_global_transfer_event(&executor, event, cx);
             },
         ));
 
@@ -1589,8 +1533,9 @@ impl FileManagerPanel {
             favorite_edit_input,
             favorite_editing_path: None,
             _subscriptions: subscriptions,
-            upload_executor,
+            global_executor,
             upload_connection_identity,
+            pending_global_deletes: HashMap::new(),
             transfer_client: None,
             transfer_connecting: false,
             transfer_generation: 0,
@@ -1598,6 +1543,8 @@ impl FileManagerPanel {
             next_task_id: 0,
             progress_refresh_task: None,
             active_extract: None,
+            #[cfg(test)]
+            test_refresh_count: Arc::new(AtomicU64::new(0)),
             working_dir_hint: None,
             colors,
             frame_placement: SidebarPlacement::Right,
@@ -1618,6 +1565,12 @@ impl FileManagerPanel {
     pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
         self.colors = colors;
         cx.notify();
+    }
+
+    /// 设置测试用刷新计数句柄。仅供同文件实体测试注入，不参与生产行为。
+    #[cfg(test)]
+    pub(crate) fn set_test_refresh_count(&mut self, count: Arc<AtomicU64>) {
+        self.test_refresh_count = count;
     }
 
     pub fn set_frame_placement(&mut self, placement: SidebarPlacement, cx: &mut Context<Self>) {
@@ -2152,6 +2105,9 @@ impl FileManagerPanel {
 
     /// 刷新当前目录
     fn refresh_dir(&mut self, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        self.test_refresh_count.fetch_add(1, Ordering::Relaxed);
+
         let Some(client) = self.sftp_client.clone() else {
             return;
         };
@@ -2633,7 +2589,7 @@ impl FileManagerPanel {
         id
     }
 
-    fn handle_upload_event(
+    fn handle_global_transfer_event(
         &mut self,
         executor: &Entity<SftpTransferExecutor>,
         event: &SftpTransferEvent,
@@ -2650,13 +2606,29 @@ impl FileManagerPanel {
         if snapshot.connection != self.upload_connection_identity {
             return;
         }
-        if matches!(event, SftpTransferEvent::Finished(_))
-            && snapshot.state == SftpTransferState::Succeeded
-            && should_refresh_after_upload(&self.current_path, &snapshot.remote_path)
-        {
-            self.refresh_dir(cx);
+        if matches!(event, SftpTransferEvent::Finished(_)) {
+            self.finish_global_delete(&snapshot, cx);
+            if snapshot.state == SftpTransferState::Succeeded
+                && snapshot.operation == SftpTransferOperation::Upload
+                && should_refresh_after_upload(&self.current_path, &snapshot.remote_path)
+            {
+                self.refresh_dir(cx);
+            }
         }
         cx.notify();
+    }
+
+    fn finish_global_delete(&mut self, snapshot: &SftpTransferSnapshot, cx: &mut Context<Self>) {
+        if snapshot.operation != SftpTransferOperation::DeleteRemote {
+            return;
+        }
+        let Some(delete) = self.pending_global_deletes.remove(&snapshot.id) else {
+            return;
+        };
+        if should_refresh_after_delete(&self.current_path, &delete.remote_dir) {
+            self.clear_selection();
+            self.refresh_dir(cx);
+        }
     }
 
     fn finish_cancelled_pending_tasks(&mut self) {
@@ -2748,12 +2720,6 @@ impl FileManagerPanel {
                     cx,
                 );
             }
-            TransferOperation::Delete {
-                targets,
-                remote_dir,
-            } => {
-                self.start_delete_task(task.id, targets, remote_dir, task.shared_progress, cx);
-            }
         }
 
         self.start_progress_refresh(cx);
@@ -2835,47 +2801,6 @@ impl FileManagerPanel {
             let _ = this.update(cx, |this, cx| {
                 this.update_task_state(task_id, result);
                 this.schedule_transfers(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn start_delete_task(
-        &mut self,
-        task_id: usize,
-        targets: Vec<DeleteTarget>,
-        remote_dir: String,
-        shared_progress: Arc<SharedProgress>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(client) = self.transfer_client.clone() else {
-            return;
-        };
-
-        let delete_task = Tokio::spawn(
-            cx,
-            delete_targets_with_progress(client, targets, shared_progress),
-        );
-
-        cx.spawn(async move |this, cx| {
-            let result = match delete_task.await {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(e)) => Err(e),
-                Err(e) => Err(anyhow::Error::new(e)),
-            };
-            let should_refresh = match &result {
-                Ok(()) => true,
-                Err(error) => !is_transfer_cancelled(error),
-            };
-
-            let _ = this.update(cx, |this, cx| {
-                this.update_task_state(task_id, result);
-                this.schedule_transfers(cx);
-                if should_refresh && should_refresh_after_delete(&this.current_path, &remote_dir) {
-                    this.clear_selection();
-                    this.refresh_dir(cx);
-                }
                 cx.notify();
             });
         })
@@ -3001,7 +2926,7 @@ impl FileManagerPanel {
                 title: format!("{title_prefix} · {}", upload.name).into(),
                 task_key: Some(task_key),
             };
-            self.upload_executor
+            self.global_executor
                 .update(cx, |executor, cx| executor.submit(request, cx));
         }
 
@@ -3159,27 +3084,31 @@ impl FileManagerPanel {
             return;
         }
 
-        let first_file = targets.first().map(|target| target.name.clone());
-        let shared_progress = Arc::new(SharedProgress {
-            transferred: AtomicU64::new(0),
-            total: AtomicU64::new(targets.len() as u64),
-            speed: AtomicU64::new(0),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            current_file: std::sync::RwLock::new(first_file),
-        });
-
-        let task = TransferTask {
-            id: self.alloc_task_id(),
-            operation: TransferOperation::Delete {
-                targets,
-                remote_dir,
-            },
-            state: TransferTaskState::Pending,
-            shared_progress,
-            error: None,
+        let entries = targets
+            .iter()
+            .map(|target| SftpRemoteDeleteEntry {
+                remote_path: target.path.clone(),
+                is_dir: target.is_dir,
+            })
+            .collect::<Vec<_>>();
+        let task_key =
+            delete_remote_task_key(&self.upload_connection_identity, &remote_dir, &entries);
+        let display_name = remote_delete_display_name(&targets);
+        let request = SftpDeleteRemoteRequest {
+            connection: self.upload_connection_identity.clone(),
+            connection_source: SftpUploadConnection::SessionManager(self.session_manager.clone()),
+            entries,
+            remote_dir: remote_dir.clone(),
+            display_name: display_name.clone(),
+            title: format!("{} · {}", t!("FileManager.delete"), display_name).into(),
+            task_key: Some(task_key),
         };
-        self.transfer_queue.enqueue(task);
-        self.ensure_transfer_client_and_schedule(cx);
+        let id = self.global_executor.update(cx, |executor, cx| {
+            executor.submit_delete_remote(request, cx)
+        });
+        self.pending_global_deletes
+            .insert(id, GlobalDeleteView { remote_dir });
+        cx.notify();
     }
 
     /// 通过文件选择器上传文件
@@ -5145,17 +5074,22 @@ impl FileManagerPanel {
     }
 
     fn upload_progress_view(&self, cx: &mut Context<Self>) -> Option<TransferProgressView> {
-        self.upload_executor.read_with(cx, |executor, _| {
+        self.global_executor.read_with(cx, |executor, _| {
             let snapshot = executor.active_for_connection(&self.upload_connection_identity)?;
+            let icon = match snapshot.operation {
+                SftpTransferOperation::Upload => IconName::ArrowUp,
+                SftpTransferOperation::Download => IconName::ArrowDown,
+                SftpTransferOperation::DeleteRemote => IconName::Remove,
+            };
             Some(TransferProgressView {
-                icon: IconName::ArrowUp,
+                icon,
                 label: snapshot.display_name,
                 transferred: snapshot.transferred,
                 total: snapshot.total.unwrap_or(0),
                 speed: snapshot.speed,
                 state: upload_progress_state(&snapshot.state),
                 pending_count: executor.pending_count(&self.upload_connection_identity),
-                cancel_target: TransferCancelTarget::Upload(snapshot.id),
+                cancel_target: TransferCancelTarget::Global(snapshot.id),
             })
         })
     }
@@ -5167,10 +5101,6 @@ impl FileManagerPanel {
                 let name = remote_path.rsplit('/').next().unwrap_or(remote_path);
                 (IconName::ArrowDown, name.to_string())
             }
-            TransferOperation::Delete { targets, .. } => (
-                IconName::Remove,
-                t!("FileManager.delete_n_items", count = targets.len()).to_string(),
-            ),
         };
         Some(TransferProgressView {
             icon,
@@ -5300,8 +5230,8 @@ impl FileManagerPanel {
 
     fn cancel_transfer_target(&mut self, target: TransferCancelTarget, cx: &mut Context<Self>) {
         match target {
-            TransferCancelTarget::Upload(id) => {
-                self.upload_executor
+            TransferCancelTarget::Global(id) => {
+                self.global_executor
                     .update(cx, |executor, cx| executor.cancel(id, cx));
             }
             TransferCancelTarget::Local(id) => self.cancel_transfer(id, cx),
@@ -5726,17 +5656,38 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         ConnectionState, NavigationRecoveryPlan, PendingUpload, RemoteClipboardEntry,
-        RemoteClipboardKind, RemoteFileClipboard, SharedProgress, TransferOperation, TransferQueue,
-        TransferTask, TransferTaskState, build_navigation_recovery_plan, build_retry_reset_plan,
-        can_paste_remote_file_clipboard, clear_remote_listing_state, frame_move_options,
-        should_apply_directory_result, should_refresh_after_upload, with_directory_policy,
+        RemoteClipboardKind, RemoteFileClipboard, SharedProgress, TransferCancelTarget,
+        TransferOperation, TransferQueue, TransferTask, TransferTaskState,
+        build_navigation_recovery_plan, build_retry_reset_plan, can_paste_remote_file_clipboard,
+        clear_remote_listing_state, frame_move_options, should_apply_directory_result,
+        should_refresh_after_delete, should_refresh_after_upload, with_directory_policy,
     };
+    use anyhow::{Result, anyhow};
+    use async_trait::async_trait;
+    use gpui::{AppContext, Entity, TestAppContext, WindowHandle};
+    use gpui_component::Root;
     use one_core::sidebar_contribution::SidebarPlacement;
+    use one_core::storage::connection::SqliteConnection;
+    use one_core::storage::models::SshAuthMethod;
+    use one_core::storage::{
+        GlobalStorageState, SftpFavoritePathRepository, SshParams, StorageManager,
+        migration::run_migrations,
+    };
     use sftp::DirectoryConflictPolicy;
-    use sftp_transfer::SftpConnectionIdentity;
-    use std::collections::HashSet;
+    use sftp::ProgressCallback;
+    use sftp_transfer::{
+        SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpRemoteDeleteEntry,
+        SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
+        SftpTransferProvider, SftpTransferState, SftpUploadExecution, delete_remote_task_key,
+    };
+    use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig, SshSessionManager};
+    use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+    use tokio::sync::oneshot;
 
     fn test_download_task(id: usize, cancelled: bool) -> TransferTask {
         let shared_progress = SharedProgress::new();
@@ -5765,6 +5716,512 @@ mod tests {
             has_conflict,
             directory_conflict_policy: DirectoryConflictPolicy::Merge,
         }
+    }
+
+    fn delete_target(name: &str, is_dir: bool) -> super::DeleteTarget {
+        super::DeleteTarget {
+            name: name.to_string(),
+            path: format!("/remote/{name}"),
+            is_dir,
+        }
+    }
+
+    fn test_stored_connection() -> one_core::storage::models::StoredConnection {
+        let mut connection = one_core::storage::models::StoredConnection::new_ssh(
+            "Terminal file manager test".to_string(),
+            SshParams {
+                sftp_account: None,
+                host: "terminal-file-manager-test.internal".to_string(),
+                port: 2222,
+                username: "deploy".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: Some(1),
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        );
+        connection.id = Some(7);
+        connection
+    }
+
+    fn test_session_manager() -> Arc<SshSessionManager> {
+        Arc::new(SshSessionManager::new(SshConnectConfig {
+            host: "terminal-file-manager-test.internal".to_string(),
+            port: 2222,
+            username: "deploy".to_string(),
+            auth: SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+        }))
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum FileManagerTestOperation {
+        Upload,
+        DeleteRemote,
+    }
+
+    #[derive(Clone, Default)]
+    struct FileManagerTestProvider {
+        state: Arc<Mutex<FileManagerTestProviderState>>,
+    }
+
+    #[derive(Default)]
+    struct FileManagerTestProviderState {
+        started: Vec<SftpTransferId>,
+        operations: HashMap<SftpTransferId, FileManagerTestOperation>,
+        remote_paths: HashMap<SftpTransferId, String>,
+        delete_entries: HashMap<SftpTransferId, Vec<SftpRemoteDeleteEntry>>,
+        completions: HashMap<SftpTransferId, oneshot::Sender<Result<()>>>,
+        cancellations: HashMap<SftpTransferId, Arc<AtomicBool>>,
+    }
+
+    impl FileManagerTestProvider {
+        fn started(&self) -> Vec<SftpTransferId> {
+            self.state.lock().unwrap().started.clone()
+        }
+
+        fn operation(&self, id: SftpTransferId) -> Option<FileManagerTestOperation> {
+            self.state.lock().unwrap().operations.get(&id).copied()
+        }
+
+        fn remote_path(&self, id: SftpTransferId) -> Option<String> {
+            self.state.lock().unwrap().remote_paths.get(&id).cloned()
+        }
+
+        fn delete_entries(&self, id: SftpTransferId) -> Option<Vec<SftpRemoteDeleteEntry>> {
+            self.state.lock().unwrap().delete_entries.get(&id).cloned()
+        }
+
+        fn complete(&self, id: SftpTransferId, result: Result<()>) {
+            let sender = {
+                let mut state = self.state.lock().unwrap();
+                state.cancellations.remove(&id);
+                state
+                    .completions
+                    .remove(&id)
+                    .expect("test transfer should be waiting for completion")
+            };
+            let _ = sender.send(result);
+        }
+
+        fn is_cancelled(&self, id: SftpTransferId) -> bool {
+            self.state
+                .lock()
+                .unwrap()
+                .cancellations
+                .get(&id)
+                .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+        }
+
+        async fn run(
+            &self,
+            id: SftpTransferId,
+            operation: FileManagerTestOperation,
+            remote_path: String,
+            entries: Option<Vec<SftpRemoteDeleteEntry>>,
+            cancelled: Arc<AtomicBool>,
+        ) -> Result<()> {
+            let (sender, receiver) = oneshot::channel();
+            {
+                let mut state = self.state.lock().unwrap();
+                state.started.push(id);
+                state.operations.insert(id, operation);
+                state.remote_paths.insert(id, remote_path);
+                if let Some(entries) = entries {
+                    state.delete_entries.insert(id, entries);
+                }
+                state.completions.insert(id, sender);
+                state.cancellations.insert(id, cancelled);
+            }
+            receiver
+                .await
+                .map_err(|_| anyhow!("test completion channel closed"))?
+        }
+    }
+
+    #[async_trait]
+    impl SftpTransferProvider for FileManagerTestProvider {
+        async fn upload(
+            &self,
+            execution: SftpUploadExecution,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            self.run(
+                execution.id,
+                FileManagerTestOperation::Upload,
+                execution.remote_path,
+                None,
+                execution.cancelled,
+            )
+            .await
+        }
+
+        async fn download(
+            &self,
+            _execution: sftp_transfer::SftpDownloadExecution,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            unimplemented!("this slice does not migrate downloads")
+        }
+
+        async fn delete_remote(
+            &self,
+            execution: SftpDeleteRemoteExecution,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            self.run(
+                execution.id,
+                FileManagerTestOperation::DeleteRemote,
+                execution.remote_dir,
+                Some(execution.entries),
+                execution.cancelled,
+            )
+            .await
+        }
+    }
+
+    fn wait_until(cx: &mut TestAppContext, mut predicate: impl FnMut(&TestAppContext) -> bool) {
+        for _ in 0..100 {
+            cx.run_until_parked();
+            if predicate(cx) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("condition was not reached before timeout");
+    }
+
+    fn file_manager_fixture(
+        cx: &mut TestAppContext,
+        temp_dir: &tempfile::TempDir,
+    ) -> (
+        FileManagerTestProvider,
+        Entity<SftpTransferExecutor>,
+        Entity<super::FileManagerPanel>,
+        WindowHandle<Root>,
+    ) {
+        cx.update(one_core::gpui_tokio::init);
+        cx.update(one_core::background_tasks::init);
+        cx.executor().allow_parking();
+
+        let db_path = temp_dir.path().join("terminal-file-manager-fixture.db");
+        let conn = SqliteConnection::open_with_pool_size(&db_path, 1)
+            .expect("open isolated fixture database");
+        conn.with_connection(run_migrations)
+            .expect("run isolated fixture migrations");
+        let storage = StorageManager::new_with_connection(conn);
+        storage.register(SftpFavoritePathRepository::new(storage.connection()));
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState { storage });
+            gpui_component::init(cx);
+            cx.set_global(gpui_component::Theme::default());
+        });
+
+        let provider = FileManagerTestProvider::default();
+        let executor =
+            cx.update(|cx| sftp_transfer::init_with_provider(cx, Arc::new(provider.clone())));
+
+        let mut panel_slot = None;
+        let window = cx.open_window(Default::default(), |window, cx| {
+            let panel = cx.new(|cx| {
+                super::FileManagerPanel::new(
+                    test_stored_connection(),
+                    test_session_manager(),
+                    super::TerminalColors {
+                        background: gpui::black(),
+                        foreground: gpui::white(),
+                        muted: gpui::black(),
+                        muted_foreground: gpui::black(),
+                        border: gpui::black(),
+                        accent: gpui::black(),
+                        accent_foreground: gpui::white(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            panel_slot = Some(panel.clone());
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_slot.expect("file manager fixture panel created");
+        cx.update(|cx| {
+            window
+                .update(cx, |_, _, cx| {
+                    panel.update(cx, |this, cx| {
+                        this.current_path = "/remote".to_string();
+                        cx.notify();
+                    });
+                })
+                .expect("file manager fixture window remains open");
+        });
+
+        (provider, executor, panel, window)
+    }
+
+    fn submit_delete(
+        cx: &mut TestAppContext,
+        panel: &Entity<super::FileManagerPanel>,
+    ) -> SftpTransferId {
+        let targets = vec![
+            delete_target("report.txt", false),
+            delete_target("archive", true),
+        ];
+        panel.update(cx, |this, cx| {
+            this.enqueue_delete(targets, "/remote".to_string(), cx);
+            *this
+                .pending_global_deletes
+                .keys()
+                .next()
+                .expect("delete should be mirrored")
+        })
+    }
+
+    fn executor_state(
+        cx: &TestAppContext,
+        panel: &Entity<super::FileManagerPanel>,
+        id: SftpTransferId,
+    ) -> Option<SftpTransferState> {
+        panel.read_with(cx, |panel, cx| {
+            panel
+                .global_executor
+                .read(cx)
+                .snapshot(id)
+                .map(|snapshot| snapshot.state)
+        })
+    }
+
+    #[test]
+    fn delete_refresh_decision_depends_on_remote_directory() {
+        assert!(should_refresh_after_delete("/remote", "/remote"));
+        assert!(!should_refresh_after_delete("/remote", "/other"));
+    }
+
+    #[gpui::test]
+    fn delete_request_maps_targets_to_global_executor(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (provider, executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+        let id = submit_delete(&mut cx, &panel);
+
+        wait_until(&mut cx, |_| provider.delete_entries(id).is_some());
+
+        let snapshot = executor.read_with(cx, |executor, _| executor.snapshot(id));
+        snapshot.inspect(|snapshot| {
+            assert_eq!(snapshot.operation, SftpTransferOperation::DeleteRemote);
+            assert_eq!(snapshot.connection, SftpConnectionIdentity::Local(7));
+            assert_eq!(snapshot.remote_path, "/remote");
+            assert_eq!(
+                provider.delete_entries(id),
+                Some(vec![
+                    SftpRemoteDeleteEntry {
+                        remote_path: "/remote/report.txt".to_string(),
+                        is_dir: false,
+                    },
+                    SftpRemoteDeleteEntry {
+                        remote_path: "/remote/archive".to_string(),
+                        is_dir: true,
+                    },
+                ])
+            );
+            assert_eq!(provider.remote_path(id), Some("/remote".to_string()));
+        });
+        assert_eq!(
+            executor.read_with(cx, |executor, _| {
+                executor.pending_count(&SftpConnectionIdentity::Local(7))
+            }),
+            0
+        );
+    }
+
+    #[gpui::test]
+    fn delete_task_key_is_connection_scoped_and_target_sensitive() {
+        let connection = SftpConnectionIdentity::Local(7);
+        let base = delete_remote_task_key(
+            &connection,
+            "/remote",
+            &[
+                SftpRemoteDeleteEntry {
+                    remote_path: "/remote/report.txt".to_string(),
+                    is_dir: false,
+                },
+                SftpRemoteDeleteEntry {
+                    remote_path: "/remote/archive".to_string(),
+                    is_dir: true,
+                },
+            ],
+        );
+
+        assert_eq!(
+            base,
+            delete_remote_task_key(
+                &connection,
+                "/remote",
+                &[
+                    SftpRemoteDeleteEntry {
+                        remote_path: "/remote/report.txt".to_string(),
+                        is_dir: false,
+                    },
+                    SftpRemoteDeleteEntry {
+                        remote_path: "/remote/archive".to_string(),
+                        is_dir: true,
+                    },
+                ],
+            )
+        );
+        assert_ne!(
+            base,
+            delete_remote_task_key(
+                &SftpConnectionIdentity::Local(8),
+                "/remote",
+                &[
+                    SftpRemoteDeleteEntry {
+                        remote_path: "/remote/report.txt".to_string(),
+                        is_dir: false,
+                    },
+                    SftpRemoteDeleteEntry {
+                        remote_path: "/remote/archive".to_string(),
+                        is_dir: true,
+                    },
+                ],
+            )
+        );
+        assert_ne!(
+            base,
+            delete_remote_task_key(
+                &connection,
+                "/remote",
+                &[SftpRemoteDeleteEntry {
+                    remote_path: "/remote/report.txt".to_string(),
+                    is_dir: true,
+                }],
+            )
+        );
+    }
+
+    #[gpui::test]
+    fn delete_finish_refreshes_once_and_ignores_duplicate_finished(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+        let id = submit_delete(&mut cx, &panel);
+        wait_until(&mut cx, |_| {
+            provider.operation(id) == Some(FileManagerTestOperation::DeleteRemote)
+        });
+
+        let refresh_count = Arc::new(AtomicU64::new(0));
+        panel.update(cx, |this, _| {
+            this.set_test_refresh_count(refresh_count.clone());
+            this.selected_indices.insert(0);
+        });
+
+        provider.complete(id, Ok(()));
+        cx.run_until_parked();
+
+        panel.update(cx, |this, cx| {
+            let executor = this.global_executor.clone();
+            this.handle_global_transfer_event(&executor, &SftpTransferEvent::Finished(id), cx);
+        });
+
+        assert_eq!(refresh_count.load(Ordering::Relaxed), 1);
+        panel.read_with(cx, |panel, _| {
+            assert!(panel.pending_global_deletes.is_empty());
+            assert!(panel.selected_indices.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn delete_cancel_routes_to_global_executor_and_refreshes(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+        let id = submit_delete(&mut cx, &panel);
+        wait_until(&mut cx, |_| {
+            provider.operation(id) == Some(FileManagerTestOperation::DeleteRemote)
+        });
+
+        let refresh_count = Arc::new(AtomicU64::new(0));
+        panel.update(cx, |this, cx| {
+            this.set_test_refresh_count(refresh_count.clone());
+            this.cancel_transfer_target(TransferCancelTarget::Global(id), cx);
+        });
+        wait_until(&mut cx, |_| provider.is_cancelled(id));
+        provider.complete(id, Err(anyhow!(sftp::TransferCancelled)));
+        wait_until(&mut cx, |cx| {
+            executor_state(cx, &panel, id) == Some(SftpTransferState::Cancelled)
+        });
+
+        assert_eq!(refresh_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            executor_state(cx, &panel, id),
+            Some(SftpTransferState::Cancelled)
+        );
+    }
+
+    #[gpui::test]
+    fn delete_and_upload_share_the_global_connection_fifo(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        panel.update(cx, |this, cx| {
+            this.enqueue_pending_uploads(
+                vec![PendingUpload {
+                    name: "first.txt".to_string(),
+                    local_path: PathBuf::from("/tmp/first.txt"),
+                    remote_path: "/remote/first.txt".to_string(),
+                    is_dir: false,
+                    has_conflict: false,
+                    directory_conflict_policy: DirectoryConflictPolicy::Merge,
+                }],
+                cx,
+            );
+        });
+        let delete_id = submit_delete(&mut cx, &panel);
+        wait_until(&mut cx, |_| provider.started().first().is_some());
+        let upload_id = provider.started()[0];
+        wait_until(&mut cx, |test_cx| {
+            provider.operation(upload_id) == Some(FileManagerTestOperation::Upload)
+                && panel.read_with(test_cx, |panel, cx| {
+                    panel
+                        .global_executor
+                        .read(cx)
+                        .pending_count(&SftpConnectionIdentity::Local(7))
+                        == 1
+                })
+        });
+        assert_eq!(provider.delete_entries(delete_id), None);
+
+        provider.complete(upload_id, Ok(()));
+        wait_until(&mut cx, |_| {
+            provider.operation(delete_id) == Some(FileManagerTestOperation::DeleteRemote)
+        });
+        assert_eq!(
+            executor_state(&cx, &panel, delete_id),
+            Some(SftpTransferState::Running)
+        );
     }
 
     #[test]

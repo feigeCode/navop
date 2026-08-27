@@ -11,7 +11,7 @@ mod record;
 mod scheduler;
 
 pub use executor::{SftpTransferExecutor, SftpTransferReservation};
-pub use global::{global, init};
+pub use global::{global, init, init_with_provider};
 pub use model::{
     SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpDeleteRemoteRequest,
     SftpDownloadExecution, SftpDownloadRequest, SftpRemoteDeleteEntry, SftpTransferEvent,

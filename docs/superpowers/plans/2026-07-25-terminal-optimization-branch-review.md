@@ -4012,3 +4012,109 @@ rtk git diff --check                     # passed
    ownership、cleanup 生命周期、显式 scanning phase、稳定 task key 和 history
    contract 仍按 13.2 保留；
 4. 下一迁移切片按 13.3 执行：先补 entity E2E，再迁移 Terminal 侧边栏远程删除。
+
+### 13.6 切片：SftpView entity 级端到端测试（2026-08-26）
+
+状态：**本切片完成。**
+
+本切片在 `sftp_view` 内直接构造真实 GPUI entity/window，绕过 UI 手势但驱动
+`SftpView` 的私有提交入口，覆盖 admission-aware 两阶段协议从 view mirror 到全局
+executor/provider 的闭环：
+
+1. 新增最小测试注入缝 `sftp_transfer::init_with_provider(cx, provider)`。生产
+   `init(cx)` 不变；测试可用无网络 provider 创建强持有全局 executor，且初始化
+   保持幂等；
+2. fixture 使用 `tempfile::TempDir` 内的独立 SQLite 数据库、真实 GPUI window、
+   `gpui_component::Root`、`one_core::gpui_tokio`、`one_core::background_tasks`
+   和真实 `Entity<SftpView>`；不访问用户应用数据库，也不建立 SSH/SFTP 网络连接；
+3. stored SSH connection 通过 `prompt_username = Some(true)` 停留在
+   `AwaitingCredentials`，避免 fixture 触发真实拨号；
+4. upload、download、DeleteRemote 分别驱动
+   `execute_uploads_with_directory_policy`、`execute_downloads`、
+   `execute_remote_delete`，断言 request 到达测试 provider 且 view mirror 与全局
+   executor 使用同一个 `SftpTransferId`；
+5. 覆盖 provider 成功、provider 失败、失败信息映射到 mirror、download 完成后本地
+   目录刷新、DeleteRemote 完成后的 remote 刷新请求；
+6. 覆盖 admission 冻结：freeze 后三类提交都不会注册 background task、创建
+   executor snapshot 或调用 provider；
+7. 覆盖排队与运行中取消：排队任务在 provider start 前取消且不占用 lane；运行中
+   任务等待 provider start 后取消，cooperative cancellation 到达 provider，late
+   success 最终归一为 Cancelled；
+8. 运行中取消不使用脆弱的同步断言，而是等待 provider 启动和取消标记可见，再等待
+   executor/view 进入终态，避免异步 cancellation watcher 的调度时序抖动。
+
+本切片实际验证：
+
+```text
+cargo fmt --package sftp_transfer --package sftp_view -- --check  # passed
+cargo test -p sftp_transfer --lib                                  # 34 passed
+cargo test -p sftp_view --lib                                      # 89 passed
+cargo check -p sftp_transfer                                       # passed
+cargo check -p sftp_view                                           # passed；仅既有 warnings
+git diff --check                                                    # passed
+```
+
+仍未覆盖：
+
+1. 显式 `Added → Updated → Finished` 事件顺序已在 executor 级覆盖，本 entity 级
+   fixture 未重复断言完整事件序列；
+2. view 关闭、Background/Wait 策略和窗口生命周期资源回收；
+3. duplicate `Finished` 不应触发第二次目录刷新；
+4. 成功后的完整远端目录刷新内容（当前只验证刷新请求/状态迁移）；
+5. mirror commit 失败、异常 view close、跨窗口 duplicate event、connection/session
+   ownership 等更广泛分支仍按 13.2/13.5 保留。
+
+### 13.7 切片：Terminal 侧边栏远程删除迁移到全局 SFTP executor（2026-08-27）
+
+状态：**本切片完成。**
+
+Terminal 文件管理侧边栏的远程删除不再维护独立执行路径，而是直接接入共享的全局
+`SftpTransferExecutor`：
+
+1. `enqueue_delete` 构造 `SftpDeleteRemoteRequest`，复用
+   `SftpRemoteDeleteEntry`、`delete_remote_task_key`、全局 provider、background
+   task、协作取消、进度展示和同连接 FIFO；
+2. 面板以 `pending_global_deletes: HashMap<SftpTransferId, GlobalDeleteView>`
+   注册删除镜像，并在首个 `Finished` 事件移除镜像；成功、失败、取消都会在用户
+   仍查看目标目录时刷新远端列表并清空已删除条目的选择；
+3. duplicate `Finished` 由镜像移除天然去重，不会触发第二次目录刷新；
+4. 移除本地 `TransferOperation::Delete`、独立远程删除执行器、本地删除调度和
+   删除专用进度更新；本地队列继续负责 download，upload 与 DeleteRemote 共享全局
+   connection FIFO；
+5. 取消入口统一映射为 `TransferCancelTarget::Global(SftpTransferId)` 并调用全局
+   executor 的协作取消，不再分流到本地删除任务；
+6. Terminal fixture 使用 isolated SQLite、真实 GPUI entity/window 和注入
+   provider，不访问用户数据库，也不建立 SSH/SFTP 网络连接。
+
+本切片新增/调整的 Terminal 覆盖包括：
+
+- 删除目标按 connection 与目标集合构造稳定 task key；
+- 删除目标映射为 `SftpDeleteRemoteRequest` 并到达全局 provider；
+- 删除完成后目标目录只刷新一次，且 duplicate `Finished` 不再刷新；
+- Terminal UI cancel target 路由到全局 executor，协作取消完成后刷新目标目录；
+- upload 与 DeleteRemote 在同一 connection 上共享 FIFO；
+- 目录刷新判定仅在当前目录等于删除目标目录时生效。
+
+本切片实际验证：
+
+```text
+cargo fmt --package sftp_transfer --package terminal_view -- --check  # passed
+cargo test -p sftp_transfer --lib                                  # 34 passed
+cargo test -p terminal_view file_manager_panel --lib               # 38 passed
+cargo test -p terminal_view --lib                                  # 471 passed（默认并发）
+cargo check -p sftp_transfer                                       # passed
+cargo check -p terminal_view                                       # passed；仅既有 warnings
+git diff --check                                                    # passed
+```
+
+默认并发下的首轮全量测试暴露了两个测试等待条件过早：executor 在 provider future
+实际启动前已进入 `Running`，测试随即读取 provider 或手动 complete 会与独立 Tokio
+runtime 的调度竞态。相关测试已改为等待 provider 注册对应操作/entries 后再断言或
+完成；这不是串行化测试，也未修改生产 executor 语义。
+
+后续工作：
+
+1. Terminal download 迁移到全局 executor，并移除剩余本地 download 队列执行路径；
+2. `sftp_view` 本地删除镜像/队列进一步与共享 UI 语义对齐；
+3. server-copy 迁移到统一 executor 协议；
+4. 应用级 SSH session ownership、连接生命周期和资源回收仍按 13.2/13.5 保留。
