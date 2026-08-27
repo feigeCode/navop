@@ -106,6 +106,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260818000001",
         include_str!("../../migrations/20260818000001_remove_credential_kind.sql"),
     ),
+    (
+        "20260827000001",
+        include_str!("../../migrations/20260827000001_redis_empty_username.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -416,6 +420,75 @@ mod tests {
             )
             .is_err(),
             "duplicate conflicts of the same data type must remain rejected"
+        );
+
+        run_migrations(&conn).expect("rerun migrations");
+    }
+
+    #[test]
+    fn redis_empty_username_migration_normalizes_existing_null_usernames() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                connection_type TEXT NOT NULL,
+                params TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO connections (name, connection_type, params, created_at, updated_at) VALUES
+                ('redis-null', 'Redis', '{\"host\":\"h\",\"username\":null,\"password\":\"p\"}', 1, 1),
+                ('redis-empty', 'Redis', '{\"host\":\"h\",\"username\":\"\",\"password\":\"p\"}', 1, 1),
+                ('redis-named', 'Redis', '{\"host\":\"h\",\"username\":\"alice\",\"password\":\"p\"}', 1, 1),
+                ('mysql', 'MySQL', '{\"host\":\"h\",\"username\":null}', 1, 1);",
+        )
+        .expect("create pre-migration schema");
+
+        mark_all_migrations_except(&conn, "20260827000001");
+        run_migrations(&conn).expect("run redis empty username migration");
+
+        // 仅 Redis 连接且 username 为 null 的记录被规范化为空字符串。
+        assert_eq!(
+            "",
+            conn.query_row(
+                "SELECT json_extract(params, '$.username') FROM connections WHERE name = 'redis-null'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read normalized username")
+        );
+        assert_eq!(
+            "",
+            conn.query_row(
+                "SELECT json_extract(params, '$.username') FROM connections WHERE name = 'redis-empty'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read empty username")
+        );
+        assert_eq!(
+            "alice",
+            conn.query_row(
+                "SELECT json_extract(params, '$.username') FROM connections WHERE name = 'redis-named'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read named username")
+        );
+        // 非 Redis 连接（此处为 MySQL）的 null username 不受影响。
+        assert_eq!(
+            "null",
+            conn.query_row(
+                "SELECT json_type(params, '$.username') FROM connections WHERE name = 'mysql'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read untouched mysql username")
         );
 
         run_migrations(&conn).expect("rerun migrations");

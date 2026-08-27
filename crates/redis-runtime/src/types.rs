@@ -350,7 +350,10 @@ impl RedisConnectionConfig {
                 percent_encode_userinfo(user),
                 percent_encode_userinfo(pass)
             ),
-            (None, Some(pass)) => format!("default:{}@", percent_encode_userinfo(pass)),
+            // 未配置用户名时生成 `:pass@`（空用户名），使 redis-rs 以单参数 `AUTH <pass>`
+            // 认证；若生成 `default:<pass>@` 会以双参数 `AUTH default <pass>` 认证，
+            // 在不支持/不期望用户名认证的 Redis 上会导致连接失败或超时。
+            (None, Some(pass)) => format!(":{}@", percent_encode_userinfo(pass)),
             _ => String::new(),
         };
         let host = if self.host.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -427,6 +430,35 @@ mod url_tests {
             "redis://%E7%94%A8%E6%88%B7:p%40ss%20%25@[::1]:6379/0",
             config.to_url()
         );
+    }
+
+    #[test]
+    fn redis_url_without_username_uses_empty_username_auth() {
+        let config = RedisConnectionConfig {
+            host: "127.0.0.1".into(),
+            port: 6379,
+            username: None,
+            password: Some("secret".into()),
+            ..Default::default()
+        };
+
+        // 未配置用户名时生成 `:pass@`（空用户名），redis-rs 会以单参数 `AUTH secret` 认证，
+        // 避免 `default:secret@` 触发 `AUTH default secret` 导致的连接失败/超时。
+        assert_eq!("redis://:secret@127.0.0.1:6379/0", config.to_url());
+    }
+
+    #[test]
+    fn redis_url_empty_username_is_same_as_no_username() {
+        let config = RedisConnectionConfig {
+            host: "127.0.0.1".into(),
+            port: 6379,
+            username: Some(String::new()),
+            password: Some("secret".into()),
+            ..Default::default()
+        };
+
+        // 空字符串用户名与未配置用户名生成相同的 URL。
+        assert_eq!("redis://:secret@127.0.0.1:6379/0", config.to_url());
     }
 }
 

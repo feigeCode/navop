@@ -532,9 +532,12 @@ impl RedisFormWindow {
             let pwd = self.password_input.read(cx).text().to_string();
             if pwd.is_empty() { None } else { Some(pwd) }
         };
+        // 用户名始终存储为字符串（空输入存空字符串而非 null）。
+        // 若存 null，构建连接 URL 时会被当作 default 用户认证（AUTH default <pass>），
+        // 在不支持/不期望用户名认证的 Redis 上会导致连接失败或超时。
         let username = {
             let user = self.username_input.read(cx).text().to_string();
-            if user.is_empty() { None } else { Some(user) }
+            Some(user)
         };
         let db_index: u8 = self
             .db_index_input
@@ -1074,6 +1077,19 @@ impl Render for RedisFormWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{Context, Entity, IntoElement, ParentElement, Render, TestAppContext, Window, div};
+    use gpui_component::{Root, Theme};
+    use one_core::settings::AppSettings;
+
+    struct FormTestRoot {
+        form: Entity<RedisFormWindow>,
+    }
+
+    impl Render for FormTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().child(self.form.clone())
+        }
+    }
 
     fn redis_connection(name: &str) -> StoredConnection {
         StoredConnection::new_redis(
@@ -1135,5 +1151,39 @@ mod tests {
                 .connection_to_load()
                 .map(|connection| connection.name.as_str())
         );
+    }
+
+    #[gpui::test]
+    fn empty_username_is_stored_as_empty_string(cx: &mut TestAppContext) {
+        let mut form = None;
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.set_global(AppSettings::default());
+            cx.open_window(Default::default(), |window, cx| {
+                let config = RedisFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(redis_connection("empty username")),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                    ssh_connections: Vec::new(),
+                };
+                let entity = cx.new(|cx| RedisFormWindow::new(config, window, cx));
+                form = Some(entity.clone());
+                cx.new(|cx| Root::new(entity, window, cx))
+            })
+            .expect("test window opens");
+        });
+
+        // 用户名输入框留空时，保存的参数应为空字符串而非 null，
+        // 否则连接时会被当作 default 用户认证，导致连接失败/超时。
+        cx.update(|cx| {
+            let params = form
+                .as_ref()
+                .expect("form created")
+                .read(cx)
+                .build_redis_params(cx);
+            assert_eq!(Some(String::new()), params.username);
+        });
     }
 }
