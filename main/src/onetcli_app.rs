@@ -2072,6 +2072,25 @@ mod tests {
     }
 
     #[test]
+    fn floating_connection_tree_occludes_scroll_from_reaching_the_tab_content() {
+        let sidebar_source = include_str!("persistent_connection_sidebar/mod.rs");
+        let floating = sidebar_source
+            .split("fn render_floating_tree")
+            .nth(1)
+            .and_then(|source| source.split("\n    pub(crate) fn new").next())
+            .expect("render_floating_tree source");
+
+        assert!(
+            floating.contains(".occlude()"),
+            "浮动侧边栏应 occlude 命中测试，阻止滚轮事件传播到覆盖在下方的内容区"
+        );
+        assert!(
+            floating.contains("stop_propagation"),
+            "浮动侧边栏仍需拦截鼠标按下，避免点击穿透触发内容区行为"
+        );
+    }
+
+    #[test]
     fn home_style_switches_between_legacy_home_and_modern_persistent_sidebar() {
         let app = include_str!("onetcli_app.rs");
         let home = include_str!("home_tab/render.rs");

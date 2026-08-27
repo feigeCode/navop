@@ -143,6 +143,9 @@ impl PersistentConnectionSidebar {
             .bottom_0()
             .left(rail_width)
             .w(self.tree_width)
+            // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
+            // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。
+            .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(self.render_connection_tree(palette, window, cx))
             .into_any_element()
