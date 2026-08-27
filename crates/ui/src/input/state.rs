@@ -44,7 +44,7 @@ use crate::input::{
     search::{self, SearchPanel},
 };
 use crate::menu::PopupMenu;
-use crate::{Icon, Size};
+use crate::{Icon, IconName, Size};
 use crate::{Root, history::History};
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -104,9 +104,119 @@ actions!(
 #[derive(Clone)]
 pub enum InputEvent {
     Change,
-    PressEnter { secondary: bool },
+    PressEnter {
+        secondary: bool,
+    },
     Focus,
     Blur,
+    GutterMarkerMouseDown {
+        marker_id: SharedString,
+        logical_row: usize,
+    },
+}
+
+/// A clickable marker anchored to one logical buffer row in the code-editor gutter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputGutterMarker {
+    /// A stable ID supplied by the owning feature. It should encode enough
+    /// information to validate the marker against a current document snapshot.
+    pub id: SharedString,
+    pub logical_row: usize,
+    pub icon: IconName,
+    pub enabled: bool,
+    pub tooltip: Option<SharedString>,
+    /// Execution/lifecycle state of the marker, used by the owner to reflect
+    /// running/success/error/cancel without replacing the marker list.
+    pub state: InputGutterMarkerState,
+}
+
+/// Lifecycle state for a gutter marker.
+///
+/// This mirrors the SQL execution states and lets a feature update a marker's
+/// presentation without re-emitting the whole marker list on every state change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputGutterMarkerState {
+    #[default]
+    Idle,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl InputGutterMarker {
+    pub fn new(id: impl Into<SharedString>, logical_row: usize, icon: IconName) -> Self {
+        Self {
+            id: id.into(),
+            logical_row,
+            icon,
+            enabled: true,
+            tooltip: None,
+            state: InputGutterMarkerState::Idle,
+        }
+    }
+
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn state(mut self, state: InputGutterMarkerState) -> Self {
+        self.state = state;
+        self
+    }
+}
+
+/// The kind of a range decoration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputRangeDecorationKind {
+    /// Highlight the executable statement the cursor currently sits in.
+    #[default]
+    CurrentStatement,
+}
+
+/// The presentation style for a range decoration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputRangeDecorationStyle {
+    /// Draw a thin frame around the range.
+    #[default]
+    Frame,
+    /// No visual presentation; kept as a no-op alternative.
+    None,
+}
+
+/// A caller-owned decoration over a byte range of the document.
+///
+/// Ranges are UTF-8 byte offsets into the current text. Callers are
+/// responsible for keeping ranges consistent with the document revision they
+/// were computed from; editing invalidates all installed decorations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputRangeDecoration {
+    pub id: SharedString,
+    pub range: Range<usize>,
+    pub kind: InputRangeDecorationKind,
+    pub style: InputRangeDecorationStyle,
+}
+
+impl InputRangeDecoration {
+    pub fn new(id: impl Into<SharedString>, range: Range<usize>) -> Self {
+        Self {
+            id: id.into(),
+            range,
+            kind: InputRangeDecorationKind::CurrentStatement,
+            style: InputRangeDecorationStyle::Frame,
+        }
+    }
+
+    pub fn style(mut self, style: InputRangeDecorationStyle) -> Self {
+        self.style = style;
+        self
+    }
 }
 
 /// Per-line presentation overrides for code-editor inputs.
@@ -416,6 +526,14 @@ pub struct InputState {
     pub(super) focus_handle: FocusHandle,
     pub(super) mode: InputMode,
     pub(super) text: Rope,
+    pub(super) document_revision: u64,
+    /// Monotonic identity for all completion requests.
+    ///
+    /// Incrementing this value invalidates popup and inline responses without
+    /// requiring a document mutation.
+    pub(super) completion_epoch: u64,
+    pub(super) gutter_markers: Rc<[InputGutterMarker]>,
+    pub(super) range_decorations: Rc<[InputRangeDecoration]>,
     pub(super) display_map: DisplayMap,
     pub(super) history: History<Change>,
     pub(super) blink_cursor: Entity<BlinkCursor>,
@@ -561,6 +679,8 @@ impl InputState {
                             blink_cursor.start(cx);
                         });
                     }
+                } else {
+                    input.invalidate_completions(cx);
                 }
             }),
             cx.on_focus(&focus_handle, window, Self::on_focus),
@@ -573,6 +693,10 @@ impl InputState {
         Self {
             focus_handle: focus_handle.clone(),
             text: "".into(),
+            document_revision: 0,
+            completion_epoch: 0,
+            gutter_markers: Rc::from([]),
+            range_decorations: Rc::from([]),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
             blink_cursor,
             history,
@@ -1005,7 +1129,13 @@ impl InputState {
     ) {
         self.history.ignore = true;
         self.emit_events = false;
+        let previous_revision = self.document_revision;
         self.replace_text(value, window, cx);
+        // A same-value set is model-to-view synchronization, not a content edit.
+        if self.document_revision == previous_revision {
+            self.gutter_markers = Rc::from([]);
+            self.range_decorations = Rc::from([]);
+        }
         self.history.ignore = false;
         self.emit_events = true;
 
@@ -1249,6 +1379,63 @@ impl InputState {
     /// Return the value of the input field.
     pub fn value(&self) -> SharedString {
         SharedString::new(self.text.to_string())
+    }
+
+    /// Return the document content revision.
+    ///
+    /// Selection, focus, scrolling, and presentation-only changes do not alter
+    /// this value. Every successful text mutation increments it.
+    pub fn document_revision(&self) -> u64 {
+        self.document_revision
+    }
+
+    /// Return the current popup/inline completion invalidation epoch.
+    ///
+    /// This is exposed for owners that need to bind asynchronous SQL metadata
+    /// or completion work to the same generic completion lifetime.
+    pub fn completion_epoch(&self) -> u64 {
+        self.completion_epoch
+    }
+
+    /// Invalidate in-flight popup and inline completion requests.
+    ///
+    /// This is used for editor deactivation, IME composition, cursor context
+    /// changes, and metadata/scope invalidation. It intentionally does not
+    /// alter the document revision.
+    pub fn invalidate_completions(&mut self, cx: &mut Context<Self>) {
+        self.completion_epoch = self.completion_epoch.saturating_add(1);
+        self.context_menu_content = None;
+        self._context_menu_task = Task::ready(Ok(()));
+        self.clear_inline_completion(cx);
+    }
+
+    /// Replace the generic gutter markers.
+    ///
+    /// Markers are invalidated automatically when the document content changes.
+    pub fn set_gutter_markers(&mut self, markers: Vec<InputGutterMarker>, cx: &mut Context<Self>) {
+        self.gutter_markers = Rc::from(markers);
+        cx.notify();
+    }
+
+    pub fn gutter_markers(&self) -> &[InputGutterMarker] {
+        &self.gutter_markers
+    }
+
+    /// Replace the caller-owned range decorations.
+    ///
+    /// Decorations are invalidated automatically when the document content
+    /// changes, matching the gutter marker contract.
+    pub fn set_range_decorations(
+        &mut self,
+        decorations: Vec<InputRangeDecoration>,
+        cx: &mut Context<Self>,
+    ) {
+        self.range_decorations = Rc::from(decorations);
+        cx.notify();
+    }
+
+    pub fn range_decorations(&self) -> &[InputRangeDecoration] {
+        &self.range_decorations
     }
 
     /// Return the portion of the value within the input field that
@@ -2249,7 +2436,7 @@ impl InputState {
     ///
     /// Ensure the offset use self.next_boundary or self.previous_boundary to get the correct offset.
     pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.clear_inline_completion(cx);
+        self.invalidate_completions(cx);
 
         let previous_cursor = self.cursor();
         let offset = offset.clamp(0, self.text.len());
@@ -2483,10 +2670,11 @@ impl InputState {
         // NOTE: Do not cancel select, when blur.
         // Because maybe user want to copy the selected text by AppMenuBar (will take focus handle).
 
+        self.hover_definition.clear();
         self.hover_popover = None;
+        self.lsp.invalidate_hover();
         self.diagnostic_popover = None;
-        self.context_menu_content = None;
-        self.clear_inline_completion(cx);
+        self.invalidate_completions(cx);
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.stop(cx);
         });
@@ -3027,6 +3215,16 @@ impl EntityInputHandler for InputState {
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), &actual_text);
+        let content_changed = self.text != old_text;
+        if content_changed {
+            self.document_revision = self.document_revision.saturating_add(1);
+            self.gutter_markers = Rc::from([]);
+            self.range_decorations = Rc::from([]);
+            self.invalidate_completions(cx);
+            self.hover_definition.clear();
+            self.hover_popover = None;
+            self.lsp.invalidate_hover();
+        }
 
         let mut new_offset = (range.start + actual_text.len())
             .saturating_sub(cursor_offset_back)
@@ -3097,11 +3295,19 @@ impl EntityInputHandler for InputState {
         }
 
         self.lsp.reset();
+        self.hover_definition.clear();
+        self.hover_popover = None;
+        self.invalidate_completions(cx);
 
         let range = self.composition_replacement_range_from_utf16(range_utf16.as_ref());
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
+        if self.text != old_text {
+            self.document_revision = self.document_revision.saturating_add(1);
+            self.gutter_markers = Rc::from([]);
+            self.range_decorations = Rc::from([]);
+        }
 
         if self.mode.is_single_line() {
             let pending_text = self.text.to_string();
@@ -3322,6 +3528,243 @@ mod tests {
             range.end,
             text.to_string()
         );
+    }
+
+    #[gpui::test]
+    fn gutter_markers_track_document_revision_and_are_invalidated_on_edit(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1;\nselect 2;", window, cx);
+                let initial_revision = state.document_revision();
+                state.set_gutter_markers(
+                    vec![
+                        InputGutterMarker::new("sql-statement:0:0:9", 0, IconName::Play)
+                            .tooltip("Run statement"),
+                    ],
+                    cx,
+                );
+
+                assert_eq!(initial_revision, state.document_revision());
+                assert_eq!(0, state.gutter_markers()[0].logical_row);
+                assert_eq!(state.gutter_markers()[0].id, "sql-statement:0:0:9");
+
+                state.replace_text_range("select 1;".len().."select 1;".len(), "\n", window, cx);
+                let next_revision = state.document_revision();
+                assert!(next_revision > initial_revision);
+                assert!(state.gutter_markers().is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn same_value_set_synchronizes_view_and_clears_markers(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1;", window, cx);
+                let revision = state.document_revision();
+                state.set_selected_range(0.."select".len(), false, window, cx);
+                state.set_gutter_markers(
+                    vec![InputGutterMarker::new(
+                        "sql-statement:0:0:9",
+                        0,
+                        IconName::Play,
+                    )],
+                    cx,
+                );
+                state.set_value("select 1;", window, cx);
+
+                assert_eq!(revision, state.document_revision());
+                assert!(state.gutter_markers().is_empty());
+                assert_eq!(Selection::default(), state.selected_range);
+            });
+        });
+    }
+
+    #[test]
+    fn gutter_marker_state_builder_and_defaults() {
+        let marker = InputGutterMarker::new("sql-statement:1:0:9", 0, IconName::Play);
+        assert_eq!(marker.state, InputGutterMarkerState::Idle);
+
+        let running = marker.state(InputGutterMarkerState::Running);
+        assert_eq!(running.state, InputGutterMarkerState::Running);
+        assert_eq!(running.id, "sql-statement:1:0:9");
+        assert_eq!(running.logical_row, 0);
+        assert_eq!(running.icon, IconName::Play);
+    }
+
+    #[test]
+    fn range_decoration_builder_and_defaults() {
+        let decoration = InputRangeDecoration::new("sql-frame:1:0:9", 0..9);
+        assert_eq!(decoration.kind, InputRangeDecorationKind::CurrentStatement);
+        assert_eq!(decoration.style, InputRangeDecorationStyle::Frame);
+        assert_eq!(decoration.range, 0..9);
+
+        let styled = decoration.style(InputRangeDecorationStyle::None);
+        assert_eq!(styled.style, InputRangeDecorationStyle::None);
+        assert_eq!(styled.id, "sql-frame:1:0:9");
+    }
+
+    #[gpui::test]
+    fn change_subscriber_writing_back_to_input_state_does_not_double_acquire(
+        cx: &mut TestAppContext,
+    ) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            struct Subscriber(Entity<InputState>, Rc<std::cell::Cell<usize>>);
+            let calls = Rc::new(std::cell::Cell::new(0usize));
+            let calls_check = calls.clone();
+            let subscriber = cx.new(|cx| Subscriber(input.clone(), calls));
+            subscriber.update(cx, |sub, cx| {
+                let this = sub.0.clone();
+                let calls = sub.1.clone();
+                let emitter = this.clone();
+                cx.subscribe(&emitter, move |_, _input, _event: &InputEvent, cx| {
+                    calls.set(calls.get() + 1);
+                    this.update(cx, |state, cx| {
+                        state.set_gutter_markers(
+                            vec![InputGutterMarker::new("m", 0, IconName::Play)],
+                            cx,
+                        );
+                    });
+                });
+            });
+
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "select 1;", window, cx);
+            });
+            assert!(calls_check.get() >= 1);
+        });
+    }
+
+    #[gpui::test]
+    fn range_decorations_are_cleared_on_document_edit(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1;\nselect 2;", window, cx);
+                let revision = state.document_revision();
+                state.set_range_decorations(
+                    vec![InputRangeDecoration::new(
+                        "sql-frame:0:0:9",
+                        0.."select 1;".len(),
+                    )],
+                    cx,
+                );
+
+                assert_eq!(revision, state.document_revision());
+                assert_eq!(1, state.range_decorations().len());
+
+                state.replace_text_range("select 1;".len().."select 1;".len(), "\n", window, cx);
+                assert!(state.document_revision() > revision);
+                assert!(state.range_decorations().is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn same_value_set_clears_range_decorations(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1;", window, cx);
+                state.set_range_decorations(
+                    vec![InputRangeDecoration::new("sql-frame:0:0:9", 0..9)],
+                    cx,
+                );
+                state.set_value("select 1;", window, cx);
+
+                assert!(state.range_decorations().is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn completion_invalidation_survives_document_and_context_changes(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1", window, cx);
+                state.focus(window, cx);
+
+                let initial_epoch = state.completion_epoch();
+                state.invalidate_completions(cx);
+                assert_eq!(initial_epoch + 1, state.completion_epoch());
+                assert!(!state.is_context_menu_open(cx));
+                assert!(!state.has_inline_completion());
+
+                let initial_revision = state.document_revision();
+                state.replace_text_range("select 1".len().."select 1".len(), "0", window, cx);
+                assert!(state.document_revision() > initial_revision);
+                assert!(state.completion_epoch() > initial_epoch + 1);
+
+                state.set_inline_completion_text(Some("0".to_string()), cx);
+                state.replace_and_mark_text_in_range(
+                    Some("select 10".len().."select 10".len()),
+                    "0",
+                    None,
+                    window,
+                    cx,
+                );
+                assert!(state.has_ime_marked_text());
+                assert!(!state.has_inline_completion());
+                assert!(state.completion_epoch() > initial_epoch + 2);
+            });
+        });
+    }
+
+    /// Regression test for the SQL editor crash:
+    ///
+    /// `CompletionMenu::hide` used to call `editor.update(cx, ...)` on the
+    /// bound `InputState`. When `hide` was invoked from inside an update of that
+    /// same `InputState` (the popup hide path in `handle_completion_trigger` and
+    /// the async empty-completions path both do this), the editor entity was
+    /// already leased, so GPUI panicked with
+    /// `cannot upate ... while it is already being upated`.
+    ///
+    /// `hide` only needs to close the popup and reset the trigger offset; the
+    /// in-flight stale guards (`completion_epoch`, request id, document revision,
+    /// cursor, `trigger_start_offset` via `is_active_completion_menu`) already
+    /// discard any response that lands after the menu is hidden.
+    #[gpui::test]
+    fn hiding_completion_menu_within_input_update_does_not_panic(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1;", window, cx);
+
+                // Build a completion menu bound to this very InputState.
+                let menu = crate::input::popovers::CompletionMenu::new(cx.entity(), window, cx);
+
+                // Replays the popup-hide crash path: the InputState update is
+                // already in flight while we hide the menu.
+                menu.update(cx, |menu, cx| {
+                    menu.hide(cx);
+                });
+
+                assert!(!menu.read(cx).is_open());
+                assert_eq!(menu.read(cx).trigger_start_offset, None);
+
+                // The input must still be usable afterwards.
+                state.set_value("select 2;", window, cx);
+                assert!(state.text.to_string().contains("select 2"));
+            });
+        });
     }
 
     #[test]

@@ -7,20 +7,24 @@ use gpui::{
 use gpui::{
     HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement, IntoElement, LayoutId,
     MouseButton, MouseMoveEvent, Path, Pixels, Point, Position, ShapedLine, SharedString, Size,
-    Style, Styled as _, TextAlign, TextRun, TextStyle, UnderlineStyle, Window, fill, point, px,
-    relative, size,
+    Style, Styled as _, TextAlign, TextRun, TextStyle, UnderlineStyle, Window, fill, point,
+    prelude::FluentBuilder as _, px, relative, size,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
 use std::{ops::Range, rc::Rc};
 
 use crate::{
-    ActiveTheme as _, Colorize, IconName, Root, Selectable, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, Colorize, Disableable, IconName, Root, Selectable, Sizable as _,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
     scroll::{Scrollbar, ScrollbarShow},
 };
 
+use super::state::{
+    InputEvent, InputGutterMarker, InputGutterMarkerState, InputRangeDecorationKind,
+    InputRangeDecorationStyle,
+};
 use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
@@ -28,6 +32,7 @@ pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(10.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
+const GUTTER_MARKER_HITBOX_WIDTH: Pixels = px(22.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -234,6 +239,11 @@ struct FoldIconLayout {
     line_number_hitbox: Hitbox,
     /// List of (display_row, is_folded, icon_element) pairs for each fold candidate
     icons: Vec<(usize, bool, gpui::AnyElement)>,
+}
+
+/// Layout information for generic gutter markers.
+struct GutterMarkerLayout {
+    icons: Vec<(InputGutterMarker, gpui::AnyElement)>,
 }
 
 pub(super) struct TextElement {
@@ -502,6 +512,47 @@ impl TextElement {
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
     ) -> Option<Path<Pixels>> {
+        let line_corners = Self::layout_range_corners(&range, last_layout)?;
+
+        let mut points = vec![];
+        for corners in &line_corners {
+            points.push(corners.top_right);
+            points.push(corners.bottom_right);
+            points.push(corners.bottom_left);
+        }
+
+        let mut rev_line_corners = line_corners.iter().rev().peekable();
+        while let Some(corners) = rev_line_corners.next() {
+            points.push(corners.top_left);
+            if let Some(next) = rev_line_corners.peek() {
+                if next.top_left.x > corners.top_left.x {
+                    points.push(point(next.top_left.x, corners.top_left.y));
+                }
+            }
+        }
+
+        // print_points_as_svg_path(&line_corners, &points);
+
+        let path_origin = bounds.origin + point(last_layout.line_number_width, px(0.));
+        let first_p = *points.get(0).unwrap();
+        let mut builder = gpui::PathBuilder::fill();
+        builder.move_to(path_origin + first_p);
+        for p in points.iter().skip(1) {
+            builder.line_to(path_origin + *p);
+        }
+
+        builder.build().ok()
+    }
+
+    /// Compute the per visual line rectangles covering `range`.
+    ///
+    /// Returns `None` when the range is empty or not fully contained in the
+    /// visible viewport. The returned corners are normalized so each rectangle
+    /// runs from `top_left` to `bottom_right`.
+    fn layout_range_corners(
+        range: &Range<usize>,
+        last_layout: &LastLayout,
+    ) -> Option<Vec<Corners<Point<Pixels>>>> {
         if range.is_empty() {
             return None;
         }
@@ -515,7 +566,6 @@ impl TextElement {
         let line_height = last_layout.line_height;
         let visible_top = last_layout.visible_top;
         let lines = &last_layout.lines;
-        let line_number_width = last_layout.line_number_width;
 
         let start_ix = range.start;
         let end_ix = range.end;
@@ -599,7 +649,6 @@ impl TextElement {
             offset_y += line_size.height;
         }
 
-        let mut points = vec![];
         if line_corners.is_empty() {
             return None;
         }
@@ -612,33 +661,48 @@ impl TextElement {
             }
         }
 
-        for corners in &line_corners {
-            points.push(corners.top_right);
-            points.push(corners.bottom_right);
-            points.push(corners.bottom_left);
+        Some(line_corners)
+    }
+
+    /// Layout the current-statement frame decoration into a faint fill plus a
+    /// 1px outline. Returns `None` when no frame decoration is set or when the
+    /// decorated range is not visible.
+    fn layout_current_statement_frame(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Option<CurrentStatementFrame> {
+        let state = self.state.read(cx);
+        let decoration = state.range_decorations.iter().find(|decoration| {
+            decoration.kind == InputRangeDecorationKind::CurrentStatement
+                && decoration.style == InputRangeDecorationStyle::Frame
+        })?;
+
+        let line_corners = Self::layout_range_corners(&decoration.range, last_layout)?;
+        let outline = frame_outline_points(&line_corners);
+        let first = *outline.first()?;
+        let path_origin = bounds.origin + point(last_layout.line_number_width, px(0.));
+
+        let mut fill_builder = gpui::PathBuilder::fill();
+        fill_builder.move_to(path_origin + first);
+        for p in outline.iter().skip(1) {
+            fill_builder.line_to(path_origin + *p);
         }
+        let fill = fill_builder.build().ok()?;
 
-        let mut rev_line_corners = line_corners.iter().rev().peekable();
-        while let Some(corners) = rev_line_corners.next() {
-            points.push(corners.top_left);
-            if let Some(next) = rev_line_corners.peek() {
-                if next.top_left.x > corners.top_left.x {
-                    points.push(point(next.top_left.x, corners.top_left.y));
-                }
-            }
+        let mut stroke_builder = gpui::PathBuilder::stroke(px(1.));
+        stroke_builder.move_to(path_origin + first);
+        for p in outline.iter().skip(1) {
+            stroke_builder.line_to(path_origin + *p);
         }
+        let stroke = stroke_builder.build().ok()?;
 
-        // print_points_as_svg_path(&line_corners, &points);
-
-        let path_origin = bounds.origin + point(line_number_width, px(0.));
-        let first_p = *points.get(0).unwrap();
-        let mut builder = gpui::PathBuilder::fill();
-        builder.move_to(path_origin + first_p);
-        for p in points.iter().skip(1) {
-            builder.line_to(path_origin + *p);
-        }
-
-        builder.build().ok()
+        Some(CurrentStatementFrame {
+            fill,
+            stroke,
+            color: cx.theme().primary,
+        })
     }
 
     fn layout_search_matches(
@@ -866,6 +930,9 @@ impl TextElement {
         if state.mode.is_folding() {
             // Add extra space for fold icons
             line_number_width += FOLD_ICON_HITBOX_WIDTH
+        }
+        if !state.gutter_markers.is_empty() {
+            line_number_width += GUTTER_MARKER_HITBOX_WIDTH
         }
 
         (line_number_width, line_number_len)
@@ -1148,6 +1215,122 @@ impl TextElement {
         icon_layout
     }
 
+    /// Layout generic feature-owned markers in the outermost gutter lane.
+    ///
+    /// The marker is anchored to the first visual fragment of a logical row and
+    /// stays fixed during horizontal text scrolling. It emits only the generic
+    /// [`InputEvent::GutterMarkerMouseDown`] and never mutates editor selection or focus.
+    fn layout_gutter_markers(
+        &self,
+        origin_x: Pixels,
+        bounds: &Bounds<Pixels>,
+        last_layout: &LastLayout,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> GutterMarkerLayout {
+        struct MarkerInfo {
+            marker: InputGutterMarker,
+            offset_y: Pixels,
+        }
+
+        let markers: Vec<MarkerInfo> = {
+            let state = self.state.read(cx);
+            if !state.mode.is_code_editor() || state.gutter_markers.is_empty() {
+                return GutterMarkerLayout { icons: Vec::new() };
+            }
+
+            let mut visible: Vec<&InputGutterMarker> = state
+                .gutter_markers
+                .iter()
+                .filter(|marker| {
+                    last_layout
+                        .visible_buffer_lines
+                        .binary_search(&marker.logical_row)
+                        .is_ok()
+                })
+                .collect();
+            visible.sort_by_key(|marker| marker.logical_row);
+
+            let mut infos = Vec::with_capacity(visible.len());
+            let mut offset_y = last_layout.visible_top;
+            for (line, &buffer_line) in last_layout
+                .lines
+                .iter()
+                .zip(last_layout.visible_buffer_lines.iter())
+            {
+                while visible
+                    .first()
+                    .is_some_and(|marker| marker.logical_row == buffer_line)
+                {
+                    infos.push(MarkerInfo {
+                        marker: visible.remove(0).clone(),
+                        offset_y,
+                    });
+                }
+                offset_y += line.wrapped_lines.len() * last_layout.line_height;
+            }
+            infos
+        };
+
+        let mut icons = Vec::with_capacity(markers.len());
+        for (index, info) in markers.into_iter().enumerate() {
+            let marker_bounds = Bounds::new(
+                point(origin_x, bounds.origin.y + info.offset_y),
+                size(GUTTER_MARKER_HITBOX_WIDTH, last_layout.line_height),
+            );
+            let (state_icon, state_color) = match info.marker.state {
+                InputGutterMarkerState::Idle => (info.marker.icon, None),
+                InputGutterMarkerState::Running => {
+                    (IconName::LoaderCircle, Some(cx.theme().primary))
+                }
+                InputGutterMarkerState::Succeeded => {
+                    (IconName::CircleCheck, Some(cx.theme().success))
+                }
+                InputGutterMarkerState::Failed => {
+                    (IconName::CircleX, Some(cx.theme().danger_foreground))
+                }
+                InputGutterMarkerState::Cancelled => {
+                    (IconName::Minus, Some(cx.theme().muted_foreground))
+                }
+            };
+            let state_style =
+                state_color.map(|color| ButtonCustomVariant::new(cx).foreground(color));
+            let mut icon = Button::new(("input-gutter-marker", index))
+                .ghost()
+                .icon(state_icon)
+                .xsmall()
+                .rounded_xs()
+                .size(FOLD_ICON_WIDTH)
+                .disabled(!info.marker.enabled)
+                .when_some(state_style, |this, style| this.custom(style))
+                .when_some(info.marker.tooltip.clone(), |this, tooltip| {
+                    this.tooltip(tooltip)
+                })
+                .on_mouse_down(MouseButton::Left, {
+                    let state = self.state.clone();
+                    let marker = info.marker.clone();
+                    move |_, _: &mut Window, cx: &mut App| {
+                        cx.stop_propagation();
+                        if !marker.enabled {
+                            return;
+                        }
+                        state.update(cx, |_, cx| {
+                            cx.emit(InputEvent::GutterMarkerMouseDown {
+                                marker_id: marker.id.clone(),
+                                logical_row: marker.logical_row,
+                            });
+                        });
+                    }
+                })
+                .into_any_element();
+
+            icon.prepaint_as_root(marker_bounds.origin, marker_bounds.size.into(), window, cx);
+            icons.push((info.marker, icon));
+        }
+
+        GutterMarkerLayout { icons }
+    }
+
     /// Paint fold icons using prepaint hitboxes.
     ///
     /// This handles:
@@ -1397,6 +1580,15 @@ fn custom_text_highlights(
     }
 }
 
+/// Paint data for the current-statement frame decoration.
+struct CurrentStatementFrame {
+    /// Faint fill over the statement region.
+    fill: Path<Pixels>,
+    /// 1px outline around the statement region.
+    stroke: Path<Pixels>,
+    color: Hsla,
+}
+
 pub(super) struct PrepaintState {
     /// The lines of entire lines.
     last_layout: LastLayout,
@@ -1414,11 +1606,14 @@ pub(super) struct PrepaintState {
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
+    current_statement_frame: Option<CurrentStatementFrame>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
     bounds: Bounds<Pixels>,
     /// Fold icon layout data
     fold_icon_layout: FoldIconLayout,
+    /// Generic feature marker layout data
+    gutter_marker_layout: GutterMarkerLayout,
     // Inline completion rendering data
     /// Shaped ghost lines to paint after cursor row (completion lines 2+)
     ghost_lines: Vec<ShapedLine>,
@@ -1476,6 +1671,49 @@ fn print_points_as_svg_path(
         }
     }
 }
+
+/// Compute the outline polygon of a top-to-bottom stack of rectangles.
+///
+/// Each successive rectangle shares its top edge with the previous rectangle's
+/// bottom edge. The resulting closed polygon traces the outer boundary of the
+/// union and is used both for the faint fill and the 1px frame stroke.
+fn frame_outline_points(corners: &[Corners<Point<Pixels>>]) -> Vec<Point<Pixels>> {
+    let rects: Vec<(Point<Pixels>, Point<Pixels>)> = corners
+        .iter()
+        .map(|corners| (corners.top_left, corners.bottom_right))
+        .collect();
+
+    let mut points = Vec::with_capacity(rects.len() * 4);
+    let first = rects[0];
+    let last = rects[rects.len() - 1];
+
+    points.push(first.0);
+    points.push(point(first.1.x, first.0.y));
+
+    // Right side, top to bottom.
+    for pair in rects.windows(2) {
+        let current = pair[0];
+        let next = pair[1];
+        points.push(current.1);
+        points.push(point(next.1.x, current.1.y));
+        points.push(point(next.1.x, next.1.y));
+    }
+
+    // Bottom edge.
+    points.push(point(last.0.x, last.1.y));
+
+    // Left side, bottom to top.
+    for pair in rects.windows(2).rev() {
+        let current = pair[1];
+        let next = pair[0];
+        points.push(point(current.0.x, current.0.y));
+        points.push(point(next.0.x, current.0.y));
+        points.push(point(next.0.x, next.0.y));
+    }
+
+    points
+}
+
 impl Element for TextElement {
     type RequestLayoutState = ();
     type PrepaintState = PrepaintState;
@@ -1829,6 +2067,8 @@ impl Element for TextElement {
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, window, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
+        let current_statement_frame =
+            self.layout_current_statement_frame(&last_layout, &bounds, cx);
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
@@ -1927,6 +2167,8 @@ impl Element for TextElement {
             )));
         let fold_icon_layout =
             self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
+        let gutter_marker_layout =
+            self.layout_gutter_markers(original_x, &bounds, &last_layout, window, cx);
 
         // Publish the geometry during prepaint so sibling overlays that follow this input
         // observe the layout from the same frame instead of the previous painted frame.
@@ -1946,10 +2188,12 @@ impl Element for TextElement {
             selection_path,
             search_match_paths,
             hover_highlight_path,
+            current_statement_frame,
             hover_definition_hitbox,
             document_color_paths,
             indent_guides_path,
             fold_icon_layout,
+            gutter_marker_layout,
             ghost_first_line,
             ghost_lines,
             ghost_lines_height,
@@ -2089,6 +2333,12 @@ impl Element for TextElement {
                 .indent_guide_color
                 .unwrap_or_else(|| cx.theme().border.opacity(0.85));
             window.paint_path(path, color);
+        }
+
+        // Paint current statement frame
+        if let Some(frame) = prepaint.current_statement_frame.take() {
+            window.paint_path(frame.fill, frame.color.opacity(0.06));
+            window.paint_path(frame.stroke, frame.color);
         }
 
         // Paint selections
@@ -2282,6 +2532,7 @@ impl Element for TextElement {
             window,
             cx,
         );
+        self.paint_gutter_markers(&mut prepaint.gutter_marker_layout, window, cx);
 
         self.state.update(cx, |state, cx| {
             state.last_cursor = Some(state.cursor());
@@ -2318,6 +2569,19 @@ impl Element for TextElement {
         }
 
         self.paint_mouse_listeners(window, cx);
+    }
+}
+
+impl TextElement {
+    fn paint_gutter_markers(
+        &mut self,
+        layout: &mut GutterMarkerLayout,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        for (_, icon) in layout.icons.iter_mut() {
+            icon.paint(window, cx);
+        }
     }
 }
 

@@ -33,6 +33,7 @@ pub struct Lsp {
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
 
     document_colors: Vec<(lsp_types::Range, Hsla)>,
+    hover_generation: u64,
     _hover_task: Task<Result<()>>,
     _document_color_task: Task<()>,
 }
@@ -46,6 +47,7 @@ impl Default for Lsp {
             definition_provider: None,
             document_color_provider: None,
             document_colors: vec![],
+            hover_generation: 0,
             _hover_task: Task::ready(Ok(())),
             _document_color_task: Task::ready(()),
         }
@@ -66,18 +68,22 @@ impl Lsp {
     /// Reset all LSP states.
     pub(crate) fn reset(&mut self) {
         self.document_colors.clear();
-        self._hover_task = Task::ready(Ok(()));
+        self.invalidate_hover();
         self._document_color_task = Task::ready(());
+    }
+
+    fn next_hover_generation(&mut self) -> u64 {
+        self.hover_generation = self.hover_generation.saturating_add(1);
+        self.hover_generation
+    }
+
+    pub(crate) fn invalidate_hover(&mut self) {
+        self.hover_generation = self.hover_generation.saturating_add(1);
+        self._hover_task = Task::ready(Ok(()));
     }
 }
 
 impl InputState {
-    pub(crate) fn hide_context_menu(&mut self, cx: &mut Context<Self>) {
-        self.context_menu_content = None;
-        self._context_menu_task = Task::ready(Ok(()));
-        cx.notify();
-    }
-
     pub fn is_context_menu_open(&self, cx: &App) -> bool {
         let Some(menu) = self.context_menu_content.as_ref() else {
             return false;
@@ -150,10 +156,18 @@ impl InputState {
         cx.notify();
     }
 
-    pub(crate) fn clear_hover_state(&mut self, cx: &mut Context<InputState>) {
+    /// Invalidate the current hover UI and any in-flight hover request.
+    ///
+    /// Metadata consumers can use this when the editor's semantic context
+    /// changes without changing the document text.
+    pub fn invalidate_hover(&mut self, cx: &mut Context<InputState>) {
         self.hover_definition.clear();
         self.hover_popover = None;
-        self.lsp._hover_task = Task::ready(Ok(()));
+        self.lsp.invalidate_hover();
         cx.notify();
+    }
+
+    pub(crate) fn clear_hover_state(&mut self, cx: &mut Context<InputState>) {
+        self.invalidate_hover(cx);
     }
 }

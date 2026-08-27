@@ -58,6 +58,7 @@ pub enum ExecutionState {
     Idle,
     Executing { current: usize, total: usize },
     Completed,
+    Cancelled,
 }
 
 /// 语句列表项 - 用于虚拟滚动列表
@@ -116,7 +117,7 @@ pub(crate) enum SessionSchemaInvalidation {
     Deferred(Arc<Mutex<SchemaInvalidationPlan>>),
 }
 
-fn emit_schema_changed_events(
+pub(crate) fn emit_schema_changed_events(
     cx: &mut AsyncApp,
     notifier: Option<&GlobalConnectionNotifier>,
     scopes: Vec<(String, String, Option<String>)>,
@@ -324,7 +325,7 @@ impl SqlResultTabContainer {
             cx.notify();
         });
         self.execution_state.update(cx, |state, cx| {
-            *state = ExecutionState::Completed;
+            *state = ExecutionState::Cancelled;
             cx.notify();
         });
         if let Some(elapsed_ms) = elapsed_ms {
@@ -660,7 +661,7 @@ impl SqlResultTabContainer {
             let session_id = request.session_id.clone();
             let sql = request.sql.clone();
             let execution_state = global_state.clone();
-            let execution_task = Tokio::spawn_result(cx, async move {
+            let mut execution_task = Tokio::spawn_result(cx, async move {
                 Ok(execution_state
                     .execute_session(session_id, sql, Some(exec_opts))
                     .await)
@@ -668,29 +669,13 @@ impl SqlResultTabContainer {
             let execution_result = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => None,
-                result = execution_task => Some(result),
+                result = &mut execution_task => Some(result),
             };
             let Some(execution_result) = execution_result else {
-                if let Err(error) = global_state
-                    .close_session(cx, request.session_id.clone())
-                    .await
-                {
-                    error!(
-                        "Failed to close cancelled manual transaction session: {:?}",
-                        error
-                    );
-                }
-                if let Some(cache) = cache {
-                    let plan = global_state.conservative_sql_cache_invalidation_plan(
-                        &request.connection_id,
-                        request.database.as_deref(),
-                        request.schema.as_deref(),
-                    );
-                    let scopes = global_state
-                        .apply_sql_cache_invalidation_plan(&cache, &request.connection_id, &plan)
-                        .await;
-                    emit_schema_changed_events(cx, notifier.as_ref(), scopes);
-                }
+                // Dropping the GPUI task aborts the Tokio execution future and
+                // releases its session guard. The editor owns session close;
+                // close waits for that guard before disconnecting the driver.
+                drop(execution_task);
                 return None;
             };
             let execution_result = execution_result.unwrap_or_else(Err);

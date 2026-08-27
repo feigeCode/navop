@@ -4,6 +4,7 @@ use instant::Duration;
 use ropey::Rope;
 
 use crate::input::{InputState, RopeExt, popovers::HoverPopover};
+use sum_tree::Bias;
 
 /// Hover provider
 ///
@@ -33,6 +34,9 @@ impl InputState {
             return;
         }
 
+        let offset = self
+            .text
+            .clip_offset(offset.min(self.text.len()), Bias::Left);
         let Some(provider) = self.lsp.hover_provider.clone() else {
             return;
         };
@@ -43,7 +47,8 @@ impl InputState {
             }
         }
 
-        // Currently not implemented.
+        let request_generation = self.lsp.next_hover_generation();
+        let request_revision = self.document_revision;
         let task = provider.hover(&self.text, offset, window, cx);
         let mut symbol_range = self.text.word_range(offset).unwrap_or(offset..offset);
         let editor = cx.entity();
@@ -57,22 +62,55 @@ impl InputState {
 
             let result = task.await?;
 
-            _ = editor.update(cx, |editor, cx| match result {
-                Some(hover) => {
-                    if let Some(range) = hover.range {
-                        let start = editor.text.position_to_offset(&range.start);
-                        let end = editor.text.position_to_offset(&range.end);
-                        symbol_range = start..end;
-                    }
-                    let hover_popover = HoverPopover::new(cx.entity(), symbol_range, &hover, cx);
-                    editor.hover_popover = Some(hover_popover);
+            _ = editor.update(cx, |editor, cx| {
+                if !is_current_hover_request(
+                    request_generation,
+                    editor.lsp.hover_generation,
+                    request_revision,
+                    editor.document_revision,
+                ) {
+                    return;
                 }
-                None => {
-                    editor.hover_popover = None;
+
+                match result {
+                    Some(hover) => {
+                        if let Some(range) = hover.range {
+                            let start = editor.text.position_to_offset(&range.start);
+                            let end = editor.text.position_to_offset(&range.end);
+                            symbol_range = start..end;
+                        }
+                        let hover_popover =
+                            HoverPopover::new(cx.entity(), symbol_range, &hover, cx);
+                        editor.hover_popover = Some(hover_popover);
+                    }
+                    None => {
+                        editor.hover_popover = None;
+                    }
                 }
             });
 
             Ok(())
         });
+    }
+}
+
+fn is_current_hover_request(
+    expected_generation: u64,
+    current_generation: u64,
+    expected_revision: u64,
+    current_revision: u64,
+) -> bool {
+    expected_generation == current_generation && expected_revision == current_revision
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_current_hover_request;
+
+    #[test]
+    fn stale_hover_identity_is_rejected() {
+        assert!(is_current_hover_request(2, 2, 7, 7));
+        assert!(!is_current_hover_request(1, 2, 7, 7));
+        assert!(!is_current_hover_request(2, 2, 6, 7));
     }
 }

@@ -58,6 +58,7 @@ pub struct StreamingSqlParser {
     delimiter: String,
 
     pending_chars: Vec<char>,
+    pending_repeated_statement: Option<(String, usize)>,
     eof: bool,
 }
 
@@ -94,6 +95,7 @@ impl StreamingSqlParser {
             last_checked_len: 0,
             delimiter: ";".to_string(),
             pending_chars: Vec::new(),
+            pending_repeated_statement: None,
             eof: false,
         })
     }
@@ -126,6 +128,9 @@ impl StreamingSqlParser {
     }
 
     fn read_next_statement(&mut self) -> io::Result<Option<String>> {
+        if let Some(statement) = self.take_pending_statement() {
+            return Ok(Some(statement));
+        }
         if self.eof && self.buffer.is_empty() && self.pending_chars.is_empty() {
             return Ok(None);
         }
@@ -171,6 +176,9 @@ impl StreamingSqlParser {
             }
 
             if self.eof {
+                if let Some(statement) = self.take_mssql_go_batch() {
+                    return Ok(statement.or_else(|| self.take_pending_statement()));
+                }
                 let trimmed = self.buffer.trim();
                 if let Some(stmt) = self.finalize_statement(trimmed) {
                     self.buffer.clear();
@@ -182,6 +190,43 @@ impl StreamingSqlParser {
                 return Ok(None);
             }
         }
+    }
+
+    fn take_pending_statement(&mut self) -> Option<String> {
+        let (statement, remaining) = self.pending_repeated_statement.take()?;
+        if remaining > 1 {
+            self.pending_repeated_statement = Some((statement.clone(), remaining - 1));
+        }
+        Some(statement)
+    }
+
+    /// Consume a trailing SQL Server `GO [count]` separator from the current
+    /// buffer. The outer `Option` identifies a recognized separator, while the
+    /// inner `Option` is empty when the separator did not have a preceding
+    /// statement.
+    fn take_mssql_go_batch(&mut self) -> Option<Option<String>> {
+        if self.db_type != DatabaseType::MSSQL
+            || self.in_string
+            || self.in_line_comment
+            || self.in_block_comment
+            || self.dollar_quote.is_some()
+        {
+            return None;
+        }
+
+        let lines = self.buffer.lines().collect::<Vec<_>>();
+        let repeat_count = parse_go_repeat_count(lines.last().copied()?)?;
+        let statement = lines[..lines.len() - 1].join("\n").trim().to_string();
+
+        self.buffer.clear();
+        self.last_checked_len = 0;
+        if statement.is_empty() {
+            return Some(None);
+        }
+        if repeat_count > 1 {
+            self.pending_repeated_statement = Some((statement.clone(), repeat_count - 1));
+        }
+        Some(Some(statement))
     }
 
     fn process_char(&mut self, ch: char) -> Option<String> {
@@ -331,24 +376,14 @@ impl StreamingSqlParser {
         }
 
         if self.db_type == DatabaseType::MSSQL && ch == '\n' {
-            let lines: Vec<&str> = self.buffer.lines().collect();
-            if let Some(last_line) = lines.last() {
-                if last_line.trim().to_uppercase() == "GO" {
-                    let stmt_lines: Vec<&str> = lines[..lines.len() - 1].to_vec();
-                    let stmt = stmt_lines.join("\n").trim().to_string();
-                    self.buffer.clear();
-                    self.last_checked_len = 0;
-                    if !stmt.is_empty() {
-                        return Some(stmt);
-                    }
-                    return None;
-                }
+            if let Some(statement) = self.take_mssql_go_batch() {
+                return statement;
             }
         }
 
         if self.paren_depth == 0 && self.begin_depth == 0 {
             let trimmed_current = self.buffer.trim_end();
-            if trimmed_current.ends_with(&self.delimiter) {
+            if self.db_type != DatabaseType::MSSQL && trimmed_current.ends_with(&self.delimiter) {
                 let stmt = trimmed_current
                     .strip_suffix(&self.delimiter)
                     .unwrap_or(trimmed_current)
@@ -601,7 +636,7 @@ impl StreamingSqlParser {
         let last_word = &self.buffer[start..end];
         let last_word_upper = last_word.to_uppercase();
 
-        if last_word_upper == "BEGIN" {
+        if last_word_upper == "BEGIN" && self.should_track_begin_depth() {
             self.begin_depth += 1;
         } else if last_word_upper == "END" {
             self.begin_depth = (self.begin_depth - 1).max(0);
@@ -609,6 +644,65 @@ impl StreamingSqlParser {
 
         self.last_checked_len = end;
     }
+
+    fn should_track_begin_depth(&self) -> bool {
+        let normalized = self
+            .strip_leading_ignorable_lines(&self.buffer)
+            .trim_start();
+        let upper = normalized.to_ascii_uppercase();
+        match self.db_type {
+            DatabaseType::Oracle => {
+                upper.starts_with("BEGIN") || starts_with_create_routine(&upper)
+            }
+            DatabaseType::MSSQL => starts_with_create_routine(&upper),
+            DatabaseType::MySQL => {
+                starts_with_create_routine(&upper)
+                    || starts_with_mysql_standalone_begin_block(normalized)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn starts_with_mysql_standalone_begin_block(sql: &str) -> bool {
+    // A transaction-control `BEGIN;` must still be emitted immediately. A
+    // standalone compound block, on the other hand, starts with a bare BEGIN
+    // line and must keep its nested semicolons until the matching END.
+    sql.contains('\n')
+        && sql
+            .lines()
+            .next()
+            .is_some_and(|line| line.trim().eq_ignore_ascii_case("begin"))
+}
+
+fn starts_with_create_routine(sql: &str) -> bool {
+    let mut words = sql.split_whitespace();
+    if words.next() != Some("CREATE") {
+        return false;
+    }
+    let mut object_type = words.next().unwrap_or_default();
+    if object_type == "OR" {
+        let modifier = words.next().unwrap_or_default();
+        if matches!(modifier, "REPLACE" | "ALTER") {
+            object_type = words.next().unwrap_or_default();
+        }
+    }
+    matches!(object_type, "PROCEDURE" | "PROC" | "FUNCTION" | "TRIGGER")
+}
+
+fn parse_go_repeat_count(line: &str) -> Option<usize> {
+    let mut parts = line.split_whitespace();
+    if !parts
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("go"))
+    {
+        return None;
+    }
+    let repeat_count = match parts.next() {
+        Some(count) => count.parse::<usize>().ok().filter(|count| *count > 0)?,
+        None => 1,
+    };
+    parts.next().is_none().then_some(repeat_count)
 }
 
 impl Iterator for StreamingSqlParser {
@@ -834,14 +928,27 @@ DELIMITER ;
     }
 
     #[test]
-    fn test_begin_end_block() {
-        let sql = "BEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\nSELECT 3;";
-        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+    fn test_transaction_begin_does_not_swallow_following_statements() {
+        let sql = "BEGIN;\nSELECT 1;\nCOMMIT;\nSELECT 2;";
+        for database_type in [
+            DatabaseType::MySQL,
+            DatabaseType::PostgreSQL,
+            DatabaseType::SQLite,
+        ] {
+            let statements = parse_all(SqlSource::Script(sql.to_string()), database_type.clone());
+            assert_eq!(
+                statements,
+                vec!["BEGIN", "SELECT 1", "COMMIT", "SELECT 2"],
+                "{database_type:?}"
+            );
+        }
 
-        assert_eq!(statements.len(), 2);
-        assert!(statements[0].contains("BEGIN"));
-        assert!(statements[0].contains("END"));
-        assert_eq!(statements[1], "SELECT 3");
+        // SQL Server's client-side execution unit is a GO-delimited batch.
+        // Semicolons inside a batch do not split it into independent requests.
+        assert_eq!(
+            parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MSSQL),
+            vec!["BEGIN;\nSELECT 1;\nCOMMIT;\nSELECT 2"]
+        );
     }
 
     #[test]
@@ -883,6 +990,57 @@ DELIMITER ;
         assert!(statements[0].contains("CREATE TABLE"));
         assert!(statements[1].contains("INSERT"));
         assert!(statements[2].contains("SELECT"));
+    }
+
+    #[test]
+    fn test_mssql_go_repeat_count() {
+        let sql = "SELECT 1;\nGO 3\nSELECT 2;\nGO\n";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MSSQL);
+
+        assert_eq!(
+            statements,
+            vec!["SELECT 1;", "SELECT 1;", "SELECT 1;", "SELECT 2;"]
+        );
+    }
+
+    #[test]
+    fn test_mssql_go_separator_at_eof_without_newline() {
+        let sql = "SELECT 1;\nGO";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MSSQL);
+
+        assert_eq!(statements, vec!["SELECT 1;"]);
+    }
+
+    #[test]
+    fn test_mssql_go_repeat_count_at_eof_without_newline() {
+        let sql = "SELECT 1;\nGO 3";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MSSQL);
+
+        assert_eq!(statements, vec!["SELECT 1;", "SELECT 1;", "SELECT 1;"]);
+    }
+
+    #[test]
+    fn test_mssql_large_go_repeat_count_is_lazy() {
+        let sql = format!("SELECT 1;\nGO {}", usize::MAX);
+        let mut parser =
+            StreamingSqlParser::from_source(SqlSource::Script(sql), DatabaseType::MSSQL).unwrap();
+
+        assert_eq!(parser.next().unwrap().unwrap(), "SELECT 1;");
+        assert_eq!(
+            parser
+                .pending_repeated_statement
+                .as_ref()
+                .map(|(_, remaining)| *remaining),
+            Some(usize::MAX - 1)
+        );
+        assert_eq!(parser.next().unwrap().unwrap(), "SELECT 1;");
+        assert_eq!(
+            parser
+                .pending_repeated_statement
+                .as_ref()
+                .map(|(_, remaining)| *remaining),
+            Some(usize::MAX - 2)
+        );
     }
 
     #[test]

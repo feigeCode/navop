@@ -34,6 +34,7 @@ mod sidebar;
 pub mod sql_editor;
 #[cfg(test)]
 mod sql_editor_completion_tests;
+mod sql_editor_hover;
 pub mod sql_editor_view;
 pub(crate) mod sql_inline_completion;
 pub mod sql_result_tab;

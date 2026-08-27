@@ -1,15 +1,24 @@
+use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use crate::sql_editor_hover::DefaultSqlHoverProvider;
 use anyhow::Result;
 use db::plugin::SqlCompletionInfo;
+use db::sql_editor::diagnostics::{
+    SqlDiagnostic, SqlDiagnosticSeverity, SqlMetadataView, analyze_parser_diagnostics,
+    analyze_semantic_diagnostics,
+};
 use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext as InferredSqlContext};
 use db::sql_editor::sql_symbol_table::SymbolTable;
-use db::sql_editor::sql_tokenizer::SqlTokenizer;
+use db::sql_editor::sql_tokenizer::{SqlKeyword, SqlToken, SqlTokenKind, SqlTokenizer};
+use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
 use gpui::{
     App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _, Subscription, Task,
     Window,
 };
+use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
     InputState, TabSize,
@@ -25,7 +34,50 @@ use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use rust_i18n::t;
 use sum_tree::Bias;
 
-/// Simple schema hints to improve autocomplete suggestions.
+/// Kind of a table-like schema object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SqlObjectType {
+    #[default]
+    Table,
+    View,
+}
+
+impl SqlObjectType {
+    /// Stable display name used by hover content and DDL preview.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SqlObjectType::Table => "TABLE",
+            SqlObjectType::View => "VIEW",
+        }
+    }
+}
+
+/// Detailed column metadata for hover and generated DDL preview.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SqlColumnDetail {
+    pub name: String,
+    pub data_type: String,
+    pub is_nullable: bool,
+    pub is_primary_key: bool,
+    pub default_value: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// Detailed table-like object metadata for hover.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SqlTableDetail {
+    pub object_type: SqlObjectType,
+    pub schema: Option<String>,
+    pub comment: Option<String>,
+    pub engine: Option<String>,
+    pub columns: Vec<SqlColumnDetail>,
+}
+
+/// Schema hints used by autocomplete and hover.
+///
+/// The snapshot is always scoped to one connection's currently selected
+/// database/schema (see `current_database`/`current_schema`), which hover
+/// resolution uses to reject cross-database bare-name references.
 #[derive(Clone, Default)]
 pub struct SqlSchema {
     pub tables: Vec<(String, String)>,    // (name, doc)
@@ -33,6 +85,12 @@ pub struct SqlSchema {
     pub functions: Vec<(String, String)>, // (signature, doc)
     /// 表→列映射，每列包含 (name, data_type, doc)
     pub columns_by_table: std::collections::HashMap<String, Vec<(String, String, String)>>,
+    /// Database this snapshot was loaded for (scope guard for hover).
+    pub current_database: Option<String>,
+    /// Schema this snapshot was loaded for (scope guard for hover).
+    pub current_schema: Option<String>,
+    /// Detailed object info keyed by table name (as loaded), used by hover.
+    pub table_details: std::collections::HashMap<String, SqlTableDetail>,
 }
 
 impl SqlSchema {
@@ -96,6 +154,17 @@ impl SqlSchema {
         );
         self
     }
+    /// 记录本快照所属的 database/schema，供 hover 作用域校验使用。
+    pub fn with_scope(mut self, database: Option<String>, schema: Option<String>) -> Self {
+        self.current_database = database;
+        self.current_schema = schema;
+        self
+    }
+    /// 添加表的详细元数据（用于 hover 与 DDL 预览）。
+    pub fn with_table_detail(mut self, table: impl Into<String>, detail: SqlTableDetail) -> Self {
+        self.table_details.insert(table.into(), detail);
+        self
+    }
 }
 
 /// SQL context for smarter completion suggestions
@@ -121,6 +190,38 @@ pub enum SqlContext {
     DotColumn(String),
     /// After function name with open paren
     FunctionArgs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SqlDotCompletionTarget {
+    Tables,
+    Columns(String),
+    None,
+}
+
+pub(crate) fn sql_dot_completion_target(
+    schema: &SqlSchema,
+    qualifier: &str,
+) -> SqlDotCompletionTarget {
+    let is_scope = schema
+        .current_database
+        .as_deref()
+        .is_some_and(|database| database.eq_ignore_ascii_case(qualifier))
+        || schema
+            .current_schema
+            .as_deref()
+            .is_some_and(|schema| schema.eq_ignore_ascii_case(qualifier));
+    if is_scope {
+        return SqlDotCompletionTarget::Tables;
+    }
+
+    schema
+        .columns_by_table
+        .keys()
+        .find(|table| table.eq_ignore_ascii_case(qualifier))
+        .cloned()
+        .map(SqlDotCompletionTarget::Columns)
+        .unwrap_or(SqlDotCompletionTarget::None)
 }
 
 /// Priority scores for context-aware completion sorting.
@@ -386,31 +487,57 @@ pub(crate) const SQL_DATA_TYPES: &[(&str, &str)] = &[
 
 #[derive(Clone)]
 pub struct DefaultSqlCompletionProvider {
-    schema: SqlSchema,
-    db_completion_info: Option<SqlCompletionInfo>,
+    sources: Rc<RefCell<SqlCompletionSources>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SqlCompletionSources {
+    pub(crate) schema: Arc<SqlSchema>,
+    pub(crate) db_completion_info: Option<SqlCompletionInfo>,
+}
+
+impl Default for SqlCompletionSources {
+    fn default() -> Self {
+        Self {
+            schema: Arc::new(SqlSchema::default()),
+            db_completion_info: None,
+        }
+    }
 }
 
 impl DefaultSqlCompletionProvider {
     pub fn new(schema: SqlSchema) -> Self {
         Self {
-            schema,
-            db_completion_info: None,
+            sources: Rc::new(RefCell::new(SqlCompletionSources {
+                schema: Arc::new(schema),
+                db_completion_info: None,
+            })),
         }
     }
 
-    pub fn with_db_completion_info(mut self, info: SqlCompletionInfo) -> Self {
-        self.db_completion_info = Some(info);
+    pub fn with_db_completion_info(self, info: SqlCompletionInfo) -> Self {
+        self.sources.borrow_mut().db_completion_info = Some(info);
         self
+    }
+
+    /// Atomically replace metadata while keeping this provider object alive.
+    pub fn set_sources(&self, schema: SqlSchema, db_completion_info: SqlCompletionInfo) {
+        *self.sources.borrow_mut() = SqlCompletionSources {
+            schema: Arc::new(schema),
+            db_completion_info: Some(db_completion_info),
+        };
+    }
+
+    pub(crate) fn sources(&self) -> SqlCompletionSources {
+        self.sources.borrow().clone()
     }
 
     /// Parse SQL text and return both context and symbol table.
     ///
     /// This method is used when we need the symbol table for DotColumn filtering.
-    fn parse_context_with_symbols(text: &str, offset: usize) -> (SqlContext, SymbolTable) {
-        let mut tokenizer = SqlTokenizer::new(text);
-        let tokens = tokenizer.tokenize();
-        let symbol_table = SymbolTable::build_from_tokens(&tokens);
-        let inferred = ContextInferrer::infer(&tokens, offset, &symbol_table);
+    fn parse_context_with_symbols(tokens: &[SqlToken], offset: usize) -> (SqlContext, SymbolTable) {
+        let symbol_table = SymbolTable::build_from_tokens(tokens);
+        let inferred = ContextInferrer::infer(tokens, offset, &symbol_table);
         (Self::convert_context(inferred), symbol_table)
     }
 
@@ -431,6 +558,69 @@ impl DefaultSqlCompletionProvider {
     }
 }
 
+pub(crate) fn clip_sql_offset(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset = offset.saturating_sub(1);
+    }
+    offset
+}
+
+pub(crate) fn cursor_is_in_sql_literal_or_comment(
+    text: &str,
+    tokens: &[SqlToken],
+    offset: usize,
+) -> bool {
+    let offset = clip_sql_offset(text, offset);
+    tokens.iter().any(|token| {
+        if token.start >= offset || offset > token.end {
+            return false;
+        }
+
+        match token.kind {
+            SqlTokenKind::String => {
+                offset < token.end
+                    || (token.end == text.len()
+                        && !token
+                            .text
+                            .strip_prefix('\'')
+                            .is_some_and(|body| body.ends_with('\'') && !body.ends_with("''")))
+            }
+            SqlTokenKind::LineComment => offset <= token.end,
+            SqlTokenKind::BlockComment => {
+                offset < token.end
+                    || (token.end == text.len() && !token.text.trim_end().ends_with("*/"))
+            }
+            _ => false,
+        }
+    })
+}
+
+pub(crate) fn current_statement_has_from_keyword(
+    text: &str,
+    tokens: &[SqlToken],
+    offset: usize,
+) -> bool {
+    let offset = clip_sql_offset(text, offset);
+    let statement_start = tokens
+        .iter()
+        .filter(|token| token.kind == SqlTokenKind::Semicolon && token.end <= offset)
+        .map(|token| token.end)
+        .next_back()
+        .unwrap_or(0);
+    let statement_end = tokens
+        .iter()
+        .find(|token| token.kind == SqlTokenKind::Semicolon && token.start >= offset)
+        .map(|token| token.start)
+        .unwrap_or(text.len());
+
+    tokens.iter().any(|token| {
+        token.start >= statement_start
+            && token.end <= statement_end
+            && token.is_keyword_of(SqlKeyword::From)
+    })
+}
+
 impl CompletionProvider for DefaultSqlCompletionProvider {
     fn completions(
         &self,
@@ -441,17 +631,20 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
         cx: &mut Context<InputState>,
     ) -> Task<Result<CompletionResponse>> {
         let rope = rope.clone();
-        let schema = self.schema.clone();
-        let db_info = self.db_completion_info.clone();
+        let SqlCompletionSources {
+            schema,
+            db_completion_info: db_info,
+        } = self.sources();
 
         cx.background_spawn(async move {
             let text = rope.to_string();
+            let offset = rope.clip_offset(offset.min(rope.len()), Bias::Left);
+            debug_assert!(text.is_char_boundary(offset));
+            let before_cursor = &text[..offset];
 
-            // Check if inside a comment (-- style)
-            let before_cursor = &text[..offset.min(text.len())];
-            let last_newline = before_cursor.rfind('\n').map(|p| p + 1).unwrap_or(0);
-            let current_line = &before_cursor[last_newline..];
-            if current_line.contains("--") {
+            let mut tokenizer = SqlTokenizer::new(&text);
+            let tokens = tokenizer.tokenize();
+            if cursor_is_in_sql_literal_or_comment(&text, &tokens, offset) {
                 return Ok(CompletionResponse::Array(vec![]));
             }
 
@@ -461,11 +654,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
             }
 
             // Use tokenizer-based context parsing with symbol table
-            let (context, symbol_table) = Self::parse_context_with_symbols(&text, offset);
+            let (context, symbol_table) = Self::parse_context_with_symbols(&tokens, offset);
 
             // Current word - find word start by scanning backwards from offset
             // Use clip_offset to ensure we're on a char boundary
-            let mut start_offset = rope.clip_offset(offset, Bias::Left);
+            let mut start_offset = offset;
             while start_offset > 0 {
                 let prev_offset = rope.clip_offset(start_offset.saturating_sub(1), Bias::Left);
                 if prev_offset >= start_offset {
@@ -518,6 +711,46 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| alias_or_table.clone());
 
+                if sql_dot_completion_target(&schema, &resolved_table)
+                    == SqlDotCompletionTarget::Tables
+                {
+                    for (table, doc) in &schema.tables {
+                        if matches_filter(table) {
+                            let score = completion_priority::calculate_score_with_match(
+                                &SqlContext::TableName,
+                                Some(CompletionItemKind::STRUCT),
+                                match_boost(table),
+                            );
+                            items.push(CompletionItem {
+                                label: table.clone(),
+                                kind: Some(CompletionItemKind::STRUCT),
+                                detail: Some("Table".to_string()),
+                                text_edit: Some(CompletionTextEdit::InsertAndReplace(
+                                    InsertReplaceEdit {
+                                        new_text: table.clone(),
+                                        insert: replace_range,
+                                        replace: replace_range,
+                                    },
+                                )),
+                                filter_text: Some(matched_prefix(table)),
+                                documentation: Some(lsp_types::Documentation::String(doc.clone())),
+                                sort_text: Some(completion_priority::score_to_sort_text(
+                                    score, table,
+                                )),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    items.sort_by(|a, b| {
+                        a.sort_text
+                            .as_ref()
+                            .unwrap_or(&a.label)
+                            .cmp(b.sort_text.as_ref().unwrap_or(&b.label))
+                    });
+                    items.truncate(50);
+                    return Ok(CompletionResponse::Array(items));
+                }
+
                 // 处理子查询别名：显示提示信息
                 if resolved_table == "#subquery" {
                     items.push(CompletionItem {
@@ -548,6 +781,12 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
 
                 // Try to find columns for the resolved table
                 // First try exact match, then case-insensitive match
+                let resolved_table = match sql_dot_completion_target(&schema, &resolved_table) {
+                    SqlDotCompletionTarget::Columns(table) => table,
+                    SqlDotCompletionTarget::Tables | SqlDotCompletionTarget::None => {
+                        return Ok(CompletionResponse::Array(items));
+                    }
+                };
                 let columns = schema.columns_by_table.get(&resolved_table).or_else(|| {
                     // Case-insensitive lookup
                     let lower = resolved_table.to_lowercase();
@@ -697,23 +936,8 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 );
 
                 if use_table_columns {
-                    // 检查当前语句是否有 FROM 子句
-                    // 需要检查整个语句（包括光标后的部分），这样在 SELECT 列表中编辑时也能正确补全
-                    // 找到当前语句的开始位置（从光标往前找分号或文件开头）
-                    let statement_start = before_cursor.rfind(';').map(|p| p + 1).unwrap_or(0);
-
-                    // 找到当前语句的结束位置（从光标往后找分号或文件结尾）
-                    let after_cursor = &text[offset..];
-                    let statement_end = after_cursor
-                        .find(';')
-                        .map(|p| offset + p)
-                        .unwrap_or(text.len());
-
-                    // 获取完整的当前语句
-                    let current_statement = &text[statement_start..statement_end];
-
-                    // 如果当前语句没有 FROM，不显示列
-                    let has_from = current_statement.to_uppercase().contains(" FROM ");
+                    // 检查完整当前语句（包括光标后的部分），并忽略字符串/注释中的 FROM。
+                    let has_from = current_statement_has_from_keyword(&text, &tokens, offset);
 
                     if !has_from {
                         // 当前语句没有 FROM，跳过列显示
@@ -1189,8 +1413,10 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
         cx: &mut Context<InputState>,
     ) -> Task<Result<InlineCompletionResponse>> {
         let rope = rope.clone();
-        let schema = self.schema.clone();
-        let db_info = self.db_completion_info.clone();
+        let SqlCompletionSources {
+            schema,
+            db_completion_info: db_info,
+        } = self.sources();
 
         cx.background_spawn(async move {
             let text = rope.to_string();
@@ -1393,9 +1619,95 @@ impl CompletionProvider for TableMentionCompletionProvider {
     }
 }
 
+/// Result of one full-document diagnostics analysis.
+pub struct SqlDiagnosticSnapshot {
+    /// Document revision the analysis ran against. Consumers drop the result
+    /// when the current revision has moved on (spec §12.6 stale guard).
+    pub document_revision: u64,
+    /// Input-layer diagnostics ready for the squiggle renderer.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Convert a `SqlSchema` snapshot into the metadata view used by the
+/// conservative semantic checker. Identifiers are normalized to uppercase by
+/// the builder; an empty `SqlSchema::default()` yields `has_metadata() ==
+/// false` so the checker stays silent until real metadata is loaded.
+fn schema_to_metadata_view(schema: &SqlSchema) -> SqlMetadataView {
+    let mut view = SqlMetadataView::default();
+    let tables: Vec<String> = schema.tables.iter().map(|(name, _)| name.clone()).collect();
+    view = view.with_tables(tables);
+    for (table, columns) in &schema.columns_by_table {
+        let names: Vec<String> = columns.iter().map(|(name, _, _)| name.clone()).collect();
+        view = view.with_columns(table, names);
+    }
+    if let Some(schema_name) = &schema.current_schema {
+        view = view.with_current_schema(schema_name);
+    }
+    if let Some(database) = &schema.current_database {
+        view = view.with_current_database(database);
+    }
+    view
+}
+
+/// Convert a `SqlDiagnostic` (UTF-8 byte range) into the input-layer
+/// `Diagnostic` (line/character positions) used by the squiggle renderer.
+fn sql_diagnostic_to_input(diag: &SqlDiagnostic, text: &str) -> Diagnostic {
+    let rope = Rope::from_str(text);
+    let start = rope.offset_to_position(diag.range.start_byte);
+    let end = rope.offset_to_position(diag.range.end_byte);
+    Diagnostic {
+        range: start..end,
+        severity: match diag.severity {
+            SqlDiagnosticSeverity::Error => DiagnosticSeverity::Error,
+            SqlDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+            SqlDiagnosticSeverity::Information => DiagnosticSeverity::Info,
+            SqlDiagnosticSeverity::Hint => DiagnosticSeverity::Hint,
+        },
+        code: diag.code.as_deref().map(gpui::SharedString::from),
+        code_description: None,
+        source: Some("sql".into()),
+        message: diag.message.to_string().into(),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
+/// Pure full-document diagnostics analysis. The schema is an `Arc` snapshot,
+/// so callers capture the document text (one String copy) and a cheap shared
+/// schema handle on the UI thread, then hand all three to a background worker.
+fn analyze_diagnostics_pure(
+    text: String,
+    dialect: SqlDialect,
+    schema: Arc<SqlSchema>,
+    document_revision: u64,
+) -> SqlDiagnosticSnapshot {
+    let mut next_id = 0u64;
+    let snapshot = SqlStatementSnapshot::new(text.clone(), dialect);
+    let mut sql_diags = analyze_parser_diagnostics(&text, dialect, document_revision, &mut next_id);
+    let metadata = schema_to_metadata_view(&schema);
+    sql_diags.extend(analyze_semantic_diagnostics(
+        &text,
+        &snapshot,
+        &metadata,
+        document_revision,
+        &mut next_id,
+    ));
+    let diagnostics = sql_diags
+        .iter()
+        .map(|diag| sql_diagnostic_to_input(diag, &text))
+        .collect();
+    SqlDiagnosticSnapshot {
+        document_revision,
+        diagnostics,
+    }
+}
+
 /// A reusable SQL editor component built on top of `Input`.
 pub struct SqlEditor {
     editor: Entity<InputState>,
+    default_completion_provider: Rc<DefaultSqlCompletionProvider>,
+    default_hover_provider: Option<Rc<DefaultSqlHoverProvider>>,
     _subscriptions: Vec<Subscription>,
     font_cache: Option<SqlEditorFontCache>,
 }
@@ -1407,6 +1719,13 @@ struct SqlEditorFontCache {
 
 impl SqlEditor {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let default_completion_provider =
+            Rc::new(DefaultSqlCompletionProvider::new(SqlSchema::default()));
+        let default_provider_trait: Rc<dyn CompletionProvider> =
+            default_completion_provider.clone();
+        let default_hover_provider = Rc::new(DefaultSqlHoverProvider::new(SqlSchema::default()));
+        let default_hover_provider_trait: Rc<dyn HoverProvider> = default_hover_provider.clone();
+
         let editor = cx.new(|cx| {
             let mut editor = InputState::new(window, cx)
                 .code_editor("sql")
@@ -1421,9 +1740,8 @@ impl SqlEditor {
                 .placeholder(t!("Query.editor_placeholder").to_string());
 
             // Defaults: completion + hover + actions
-            let default_schema = SqlSchema::default();
-            editor.lsp.completion_provider =
-                Some(Rc::new(DefaultSqlCompletionProvider::new(default_schema)));
+            editor.lsp.completion_provider = Some(default_provider_trait);
+            editor.lsp.hover_provider = Some(default_hover_provider_trait);
 
             editor
         });
@@ -1434,9 +1752,10 @@ impl SqlEditor {
                     cx.notify()
                 }),
             ];
-
         Self {
             editor,
+            default_completion_provider,
+            default_hover_provider: Some(default_hover_provider),
             _subscriptions,
             font_cache: None,
         }
@@ -1466,16 +1785,26 @@ impl SqlEditor {
         schema: SqlSchema,
         cx: &mut Context<Self>,
     ) {
-        let completion_provider =
-            DefaultSqlCompletionProvider::new(schema).with_db_completion_info(info.clone());
-        self.editor.update(cx, |state, _| {
-            state.lsp.completion_provider = Some(Rc::new(completion_provider));
-        });
+        self.update_default_completion_sources(schema, info, cx);
     }
 
     /// Access underlying editor state.
     pub fn input(&self) -> Entity<InputState> {
         self.editor.clone()
+    }
+
+    /// Invalidate active completion popup and inline completion requests.
+    pub fn invalidate_completions(&self, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |state, cx| state.invalidate_completions(cx));
+    }
+
+    /// Invalidate metadata-dependent completion and hover state.
+    pub fn invalidate_metadata_context(&self, cx: &mut Context<Self>) {
+        self.editor.update(cx, |state, cx| {
+            state.invalidate_completions(cx);
+            state.invalidate_hover(cx);
+        });
     }
 
     /// 设置编辑器右键菜单的扩展项（支持一级和二级菜单）。
@@ -1496,16 +1825,62 @@ impl SqlEditor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor.update(cx, |state, _| {
-            state.lsp.completion_provider = Some(provider)
+        self.editor.update(cx, |state, cx| {
+            state.invalidate_completions(cx);
+            state.lsp.completion_provider = Some(provider);
         });
     }
 
     /// Set schema for default completion provider.
     pub fn set_schema(&mut self, schema: SqlSchema, _window: &mut Window, cx: &mut Context<Self>) {
+        self.update_default_completion_sources(schema, SqlCompletionInfo::default(), cx);
+    }
+
+    /// Update the default provider's metadata without replacing its trait object.
+    ///
+    /// A custom provider remains untouched because metadata refreshes must not
+    /// override an explicitly installed provider.
+    fn update_default_completion_sources(
+        &self,
+        schema: SqlSchema,
+        info: SqlCompletionInfo,
+        cx: &mut Context<Self>,
+    ) {
+        // Provider objects are intentionally kept alive across metadata
+        // refreshes, so explicitly invalidate requests that captured their old
+        // source snapshot before replacing it.
+        self.invalidate_metadata_context(cx);
+        self.update_default_hover_sources(schema.clone(), cx);
+        let default_provider = self.default_completion_provider.clone();
+        let default_provider_trait: Rc<dyn CompletionProvider> = default_provider.clone();
         self.editor.update(cx, |state, _| {
-            state.lsp.completion_provider =
-                Some(Rc::new(DefaultSqlCompletionProvider::new(schema)));
+            let is_default_provider_installed = state
+                .lsp
+                .completion_provider
+                .as_ref()
+                .is_some_and(|provider| Rc::ptr_eq(provider, &default_provider_trait));
+            if is_default_provider_installed {
+                default_provider.set_sources(schema, info);
+            }
+        });
+    }
+
+    /// Update the default hover provider's metadata without replacing its trait
+    /// object. A custom provider remains untouched (spec §25.1).
+    fn update_default_hover_sources(&self, schema: SqlSchema, cx: &mut Context<Self>) {
+        let Some(default_hover_provider) = self.default_hover_provider.clone() else {
+            return;
+        };
+        let default_hover_provider_trait: Rc<dyn HoverProvider> = default_hover_provider.clone();
+        self.editor.update(cx, |state, _| {
+            let is_default_provider_installed = state
+                .lsp
+                .hover_provider
+                .as_ref()
+                .is_some_and(|provider| Rc::ptr_eq(provider, &default_hover_provider_trait));
+            if is_default_provider_installed {
+                default_hover_provider.set_schema(schema);
+            }
         });
     }
 
@@ -1516,8 +1891,10 @@ impl SqlEditor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor
-            .update(cx, |state, _| state.lsp.hover_provider = Some(provider));
+        self.editor.update(cx, |state, cx| {
+            state.invalidate_hover(cx);
+            state.lsp.hover_provider = Some(provider);
+        });
     }
 
     /// Add a custom code action provider.
@@ -1581,6 +1958,52 @@ impl SqlEditor {
         self.editor.read(cx).text().to_string()
     }
 
+    /// Get the current schema metadata snapshot as a cheap shared `Arc`.
+    ///
+    /// This is the same source consumed by the default completion/hover
+    /// providers, so diagnostics, completion and hover always agree on scope.
+    /// Callers that only need to read schema metadata (e.g. to hand a snapshot
+    /// to a background task) never pay for a deep copy here.
+    pub fn current_schema(&self) -> Arc<SqlSchema> {
+        self.default_completion_provider.sources().schema
+    }
+
+    /// Run the full parser + semantic diagnostics analysis for the current
+    /// editor content against the current schema snapshot.
+    ///
+    /// The returned snapshot carries the document revision it was computed
+    /// against; the caller drops it if the document has moved on
+    /// (spec §12.6). Viewport-incremental analysis is a future optimization —
+    /// the squiggle layer already clips rendering to the visible range.
+    pub fn analyze_diagnostics(&self, cx: &App, dialect: SqlDialect) -> SqlDiagnosticSnapshot {
+        let input = self.editor.read(cx);
+        let text = input.text().to_string();
+        let document_revision = input.document_revision();
+        let schema = self.current_schema();
+        analyze_diagnostics_pure(text, dialect, schema, document_revision)
+    }
+
+    /// Run the full parser + semantic diagnostics analysis without blocking the
+    /// UI thread.
+    ///
+    /// The document text, revision and schema snapshot are captured on the UI
+    /// thread, then the tokenizer/semantic passes run on a background worker.
+    /// Like the synchronous variant, the caller drops the returned snapshot if
+    /// the document revision has moved on before it lands (spec §12.6).
+    pub fn analyze_diagnostics_async(
+        &self,
+        cx: &App,
+        dialect: SqlDialect,
+    ) -> Task<SqlDiagnosticSnapshot> {
+        let input = self.editor.read(cx);
+        let text = input.text().to_string();
+        let document_revision = input.document_revision();
+        let schema = self.current_schema();
+        cx.background_spawn(async move {
+            analyze_diagnostics_pure(text, dialect, schema, document_revision)
+        })
+    }
+
     /// Get the currently selected text.
     /// Returns an empty string if no text is selected.
     pub fn get_selected_text(&self, cx: &App) -> String {
@@ -1613,8 +2036,19 @@ impl Render for SqlEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqlContext, completion_priority, identifier_match_rank};
+    use super::{
+        SqlContext, SqlSchema, analyze_diagnostics_pure, completion_priority,
+        identifier_match_rank, schema_to_metadata_view, sql_diagnostic_to_input,
+    };
+    use db::sql_editor::diagnostics::{
+        SqlDiagnosticSeverity, analyze_parser_diagnostics, analyze_semantic_diagnostics,
+    };
+    use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
+    use gpui_component::highlighter::DiagnosticSeverity;
+    use gpui_component::{Rope, RopeExt};
     use lsp_types::CompletionItemKind;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn identifier_match_rank_prefers_prefix_then_boundary_then_substring() {
@@ -1697,5 +2131,173 @@ mod tests {
         assert!(!render.contains("cx.text_system().all_font_names()"));
         assert!(render.contains("AppSettings::global(cx).sql_editor_font_size"));
         assert!(render.contains(".text_size(gpui::px(font_size))"));
+    }
+
+    #[test]
+    fn empty_schema_has_no_metadata() {
+        let view = schema_to_metadata_view(&SqlSchema::default());
+        assert!(!view.has_metadata());
+        assert!(view.tables.is_empty());
+    }
+
+    #[test]
+    fn schema_to_metadata_view_maps_tables_columns_and_scope() {
+        let mut columns = HashMap::new();
+        columns.insert(
+            "Users".to_string(),
+            vec![("id".to_string(), "int".to_string(), String::new())],
+        );
+        let schema = SqlSchema {
+            tables: vec![("Users".to_string(), String::new())],
+            columns_by_table: columns,
+            current_database: Some("app".to_string()),
+            current_schema: Some("public".to_string()),
+            ..Default::default()
+        };
+        let view = schema_to_metadata_view(&schema);
+        assert!(view.has_metadata());
+        assert!(view.table_exists("users"));
+        assert!(view.table_exists("USERS"));
+        assert_eq!(view.column_status("users", "id"), Some(true));
+        assert_eq!(view.column_status("users", "missing"), Some(false));
+        assert!(view.is_schema_or_db("public"));
+        assert!(view.is_schema_or_db("app"));
+    }
+
+    #[test]
+    fn parser_diagnostic_converts_to_input_severity_and_source() {
+        let text = "SELECT 'oops FROM users";
+        let mut next_id = 0;
+        let diags = analyze_parser_diagnostics(text, SqlDialect::Standard, 7, &mut next_id);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, SqlDiagnosticSeverity::Error);
+
+        let input_diag = sql_diagnostic_to_input(&diags[0], text);
+        assert_eq!(input_diag.severity, DiagnosticSeverity::Error);
+        assert_eq!(input_diag.source.as_deref(), Some("sql"));
+        assert_eq!(input_diag.code.as_deref(), Some("parser.unclosed_string"));
+        assert!(input_diag.range.start <= input_diag.range.end);
+        // The range covers the unclosed literal token.
+        assert!(input_diag.range.start.character >= 7);
+    }
+
+    #[test]
+    fn diagnostic_byte_range_converts_for_multibyte_text() {
+        let text = "-- 中文注释\nSELECT * FROM missing;";
+        let mut next_id = 0;
+        let diags = analyze_semantic_diagnostics(
+            text,
+            &SqlStatementSnapshot::new(text.to_string(), SqlDialect::Standard),
+            &schema_to_metadata_view(&SqlSchema::default()),
+            1,
+            &mut next_id,
+        );
+        // No metadata -> semantic checker stays silent.
+        assert!(diags.is_empty());
+
+        let parser_diag_text = "SELECT '未闭合";
+        let mut parser_next_id = 0;
+        let parser_diags = analyze_parser_diagnostics(
+            parser_diag_text,
+            SqlDialect::Standard,
+            1,
+            &mut parser_next_id,
+        );
+        assert_eq!(parser_diags.len(), 1);
+        let input_diag = sql_diagnostic_to_input(&parser_diags[0], parser_diag_text);
+        let rope = Rope::from_str(parser_diag_text);
+        assert_eq!(
+            input_diag.range,
+            rope.offset_to_position(parser_diags[0].range.start_byte)
+                ..rope.offset_to_position(parser_diags[0].range.end_byte)
+        );
+    }
+
+    #[test]
+    fn diagnostics_pipeline_flags_unknown_table_with_real_schema() {
+        let text = "SELECT * FROM missing_table;\nSELECT COUNT(*) FROM users;";
+        let dialect = SqlDialect::Standard;
+        let snapshot = SqlStatementSnapshot::new(text.to_string(), dialect);
+
+        let mut columns = HashMap::new();
+        columns.insert(
+            "Users".to_string(),
+            vec![("id".to_string(), "int".to_string(), String::new())],
+        );
+        let schema = SqlSchema {
+            tables: vec![("Users".to_string(), String::new())],
+            columns_by_table: columns,
+            ..Default::default()
+        };
+        let metadata = schema_to_metadata_view(&schema);
+
+        let mut next_id = 0;
+        let mut diags = analyze_parser_diagnostics(text, dialect, 0, &mut next_id);
+        diags.extend(analyze_semantic_diagnostics(
+            text,
+            &snapshot,
+            &metadata,
+            0,
+            &mut next_id,
+        ));
+        let input_diags: Vec<_> = diags
+            .iter()
+            .map(|d| sql_diagnostic_to_input(d, text))
+            .collect();
+
+        assert_eq!(input_diags.len(), 1);
+        let start_byte = text.find("missing_table").expect("token present");
+        let rope = Rope::from_str(text);
+        assert_eq!(
+            input_diags[0].range.start,
+            rope.offset_to_position(start_byte)
+        );
+    }
+
+    #[test]
+    fn analyze_diagnostics_pure_runs_parser_and_semantic_pass_off_thread() {
+        // `analyze_diagnostics_pure` is the computation the background worker
+        // runs; the cached `Arc` schema and the document revision must flow
+        // through unchanged.
+        let text = "SELECT * FROM missing_table;\nSELECT 'oops";
+        let dialect = SqlDialect::Standard;
+        let mut columns = HashMap::new();
+        columns.insert(
+            "Users".to_string(),
+            vec![("id".to_string(), "int".to_string(), String::new())],
+        );
+        let schema = Arc::new(SqlSchema {
+            tables: vec![("Users".to_string(), String::new())],
+            columns_by_table: columns,
+            ..Default::default()
+        });
+
+        let snapshot = analyze_diagnostics_pure(text.to_string(), dialect, schema, 42);
+        assert_eq!(snapshot.document_revision, 42);
+
+        let codes: Vec<&str> = snapshot
+            .diagnostics
+            .iter()
+            .map(|diag| diag.code.as_deref().unwrap_or(""))
+            .collect();
+        // Unclosed string literal raises a parser diagnostic, and the dangling
+        // `missing_table` reference raises a semantic one against the schema.
+        assert!(
+            codes.iter().any(|code| *code == "parser.unclosed_string"),
+            "missing parser diagnostic: {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|code| code == &"semantic.unknown_table"),
+            "missing semantic diagnostic: {codes:?}"
+        );
+
+        let clean = analyze_diagnostics_pure(
+            "SELECT 1;".to_string(),
+            dialect,
+            Arc::new(SqlSchema::default()),
+            7,
+        );
+        assert_eq!(clean.document_revision, 7);
+        assert!(clean.diagnostics.is_empty());
     }
 }

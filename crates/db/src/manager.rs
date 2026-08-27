@@ -3798,6 +3798,8 @@ mod tests {
         disconnect_count: Arc<AtomicUsize>,
         executed_sql: Option<Arc<StdMutex<Vec<String>>>>,
         switched_schemas: Option<Arc<StdMutex<Vec<String>>>>,
+        execution_started: Option<Arc<AtomicBool>>,
+        execution_dropped: Option<Arc<AtomicBool>>,
         streaming_started: Option<Arc<AtomicBool>>,
         streaming_dropped: Option<Arc<AtomicBool>>,
         streaming_results: Option<Vec<SqlResult>>,
@@ -3811,6 +3813,8 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: None,
                 switched_schemas: None,
+                execution_started: None,
+                execution_dropped: None,
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
@@ -3828,6 +3832,8 @@ mod tests {
                 disconnect_count,
                 executed_sql: None,
                 switched_schemas: None,
+                execution_started: None,
+                execution_dropped: None,
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
@@ -3844,6 +3850,8 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: Some(executed_sql),
                 switched_schemas: None,
+                execution_started: None,
+                execution_dropped: None,
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
@@ -3860,6 +3868,28 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: None,
                 switched_schemas: Some(switched_schemas),
+                execution_started: None,
+                execution_dropped: None,
+                streaming_started: None,
+                streaming_dropped: None,
+                streaming_results: None,
+            }
+        }
+
+        fn with_blocking_execution(
+            config: DbConnectionConfig,
+            disconnect_count: Arc<AtomicUsize>,
+            execution_started: Arc<AtomicBool>,
+            execution_dropped: Arc<AtomicBool>,
+        ) -> Self {
+            Self {
+                config,
+                healthy: true,
+                disconnect_count,
+                executed_sql: None,
+                switched_schemas: None,
+                execution_started: Some(execution_started),
+                execution_dropped: Some(execution_dropped),
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
@@ -3878,6 +3908,8 @@ mod tests {
                 disconnect_count,
                 executed_sql: None,
                 switched_schemas: None,
+                execution_started: None,
+                execution_dropped: None,
                 streaming_started: Some(streaming_started),
                 streaming_dropped: Some(streaming_dropped),
                 streaming_results: None,
@@ -3894,6 +3926,8 @@ mod tests {
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: None,
                 switched_schemas: None,
+                execution_started: None,
+                execution_dropped: None,
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: Some(streaming_results),
@@ -4299,6 +4333,14 @@ mod tests {
             script: &str,
             _options: ExecOptions,
         ) -> Result<Vec<SqlResult>, DbError> {
+            if let (Some(execution_started), Some(execution_dropped)) =
+                (&self.execution_started, &self.execution_dropped)
+            {
+                let _drop_marker = StreamingDropMarker(execution_dropped.clone());
+                execution_started.store(true, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                unreachable!("blocking execution mock must be cancelled");
+            }
             if let Some(executed_sql) = &self.executed_sql {
                 executed_sql.lock().unwrap().push(script.to_string());
             }
@@ -5099,6 +5141,89 @@ mod tests {
                 .await
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn closing_an_executing_session_waits_for_cancellation_and_disconnects_once() {
+        let state = GlobalDbState::new();
+        let config = test_config("session-cancel-test");
+        let session_id = "session-cancel-test:session:1".to_string();
+        let disconnect_count = Arc::new(AtomicUsize::new(0));
+        let execution_started = Arc::new(AtomicBool::new(false));
+        let execution_dropped = Arc::new(AtomicBool::new(false));
+        let mut session = ConnectionSession::new(
+            Box::new(MockConnection::with_blocking_execution(
+                config.clone(),
+                disconnect_count.clone(),
+                execution_started.clone(),
+                execution_dropped.clone(),
+            )),
+            session_id.clone(),
+            false,
+        );
+        session.mark_in_use();
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        let execution_state = state.clone();
+        let execution_session_id = session_id.clone();
+        let execution = tokio::spawn(async move {
+            execution_state
+                .execute_session(
+                    execution_session_id,
+                    "SELECT pg_sleep(60)".to_string(),
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !execution_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session execution should start");
+
+        let close_state = state.clone();
+        let close_session_id = session_id.clone();
+        let mut close = tokio::spawn(async move {
+            close_state
+                .close_session_direct(&close_session_id)
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut close)
+                .await
+                .is_err(),
+            "close must wait for the active execution"
+        );
+        assert_eq!(0, disconnect_count.load(Ordering::SeqCst));
+
+        execution.abort();
+        assert!(execution.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("close should finish after execution cancellation")
+            .expect("close task should not panic")
+            .expect("session close should succeed");
+
+        assert!(execution_dropped.load(Ordering::SeqCst));
+        assert_eq!(1, disconnect_count.load(Ordering::SeqCst));
+        assert!(
+            state
+                .connection_manager
+                .list_sessions(&config.id)
+                .await
+                .is_empty()
+        );
+        assert!(state.close_session_direct(&session_id).await.is_err());
+        assert_eq!(1, disconnect_count.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gpui::{Context, EntityInputHandler, Task, Window};
+use gpui::{App, Context, EntityInputHandler, Task, Window};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionResponse, InlineCompletionContext,
     InlineCompletionItem, InlineCompletionResponse, InlineCompletionTriggerKind, InsertTextFormat,
@@ -246,6 +246,8 @@ impl InputState {
             trigger_character: Some(query.clone()),
         };
 
+        let completion_request_id = self.next_completion_request_id();
+        let document_revision = self.document_revision;
         let provider_responses =
             provider.completions(&self.text, new_offset, completion_context, window, cx);
         self._context_menu_task = cx.spawn_in(window, async move |editor, cx| {
@@ -260,6 +262,19 @@ impl InputState {
             if completions.is_empty() {
                 editor
                     .update_in(cx, |editor, window, cx| {
+                        if !editor.completion_request_is_current(
+                            completion_request_id,
+                            document_revision,
+                            new_offset,
+                            start_offset,
+                            &query,
+                            &menu,
+                            window,
+                            cx,
+                        ) {
+                            return;
+                        }
+
                         if editor.cursor() != new_offset
                             || editor
                                 .text_for_range(
@@ -290,19 +305,16 @@ impl InputState {
 
             editor
                 .update_in(cx, |editor, window, cx| {
-                    if !editor.focus_handle.is_focused(window)
-                        || editor.cursor() != new_offset
-                        || editor
-                            .text_for_range(
-                                editor.range_to_utf16(&(start_offset..new_offset)),
-                                &mut None,
-                                window,
-                                cx,
-                            )
-                            .map(|text| text.trim() != query)
-                            .unwrap_or(true)
-                        || !editor.is_active_completion_menu(&menu, start_offset, cx)
-                    {
+                    if !editor.completion_request_is_current(
+                        completion_request_id,
+                        document_revision,
+                        new_offset,
+                        start_offset,
+                        &query,
+                        &menu,
+                        window,
+                        cx,
+                    ) {
                         return;
                     }
 
@@ -316,6 +328,48 @@ impl InputState {
 
             Ok(())
         });
+    }
+
+    fn next_completion_request_id(&mut self) -> u64 {
+        self.completion_epoch = self.completion_epoch.saturating_add(1);
+        self.completion_epoch
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn completion_request_is_current(
+        &self,
+        request_id: u64,
+        document_revision: u64,
+        cursor: usize,
+        start_offset: usize,
+        query: &str,
+        expected_menu: &gpui::Entity<CompletionMenu>,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        self.completion_epoch == request_id
+            && self.document_revision == document_revision
+            && self.cursor() == cursor
+            && !self.has_ime_marked_text()
+            && self.focus_handle.is_focused(window)
+            && self.is_active_completion_menu(expected_menu, start_offset, cx)
+            && self.text.slice(start_offset..cursor).to_string().trim() == query
+    }
+
+    fn inline_completion_request_is_current(
+        &self,
+        request_id: u64,
+        document_revision: u64,
+        cursor: usize,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        self.completion_epoch == request_id
+            && self.document_revision == document_revision
+            && self.cursor() == cursor
+            && !self.has_ime_marked_text()
+            && !self.is_context_menu_open(cx)
+            && self.focus_handle.is_focused(window)
     }
 
     fn is_active_completion_menu(
@@ -348,6 +402,8 @@ impl InputState {
 
         let offset = self.cursor();
         let text = self.text.clone();
+        let completion_request_id = self.next_completion_request_id();
+        let document_revision = self.document_revision;
         let debounce = provider.inline_completion_debounce();
         let background_executor = cx.background_executor().clone();
 
@@ -357,8 +413,14 @@ impl InputState {
 
             // Now fetch the inline completion after the debounce period
             let task = editor.update_in(cx, |editor, window, cx| {
-                // Check if cursor has moved during debounce
-                if editor.cursor() != offset {
+                // Check if cursor, document, or completion context changed during debounce.
+                if !editor.inline_completion_request_is_current(
+                    completion_request_id,
+                    document_revision,
+                    offset,
+                    window,
+                    cx,
+                ) {
                     return None;
                 }
 
@@ -382,8 +444,13 @@ impl InputState {
             let response = task.await?;
 
             editor.update_in(cx, |editor, _window, cx| {
-                // Only apply if cursor still hasn't moved
-                if editor.cursor() != offset {
+                if !editor.inline_completion_request_is_current(
+                    completion_request_id,
+                    document_revision,
+                    offset,
+                    _window,
+                    cx,
+                ) {
                     return;
                 }
 
