@@ -561,6 +561,8 @@ pub struct DbTreeView {
     db_filter_search: HashMap<String, String>,
     // 数据库筛选列表状态：连接ID -> ListState
     db_filter_list_states: HashMap<String, Entity<ListState<DatabaseListDelegate>>>,
+    // 数据库筛选 Popover 是否打开：连接ID -> bool（受控模式，避免树重建/虚拟化导致 Popover 关闭）
+    db_filter_popover_open: HashMap<String, bool>,
     // 当前 Tab 跟踪的连接 ID 列表
     tracked_connection_ids: Vec<i64>,
 
@@ -810,6 +812,7 @@ impl DbTreeView {
             selected_databases: unselected_databases_map,
             db_filter_search: HashMap::new(),
             db_filter_list_states: HashMap::new(),
+            db_filter_popover_open: HashMap::new(),
             tracked_connection_ids,
             _subscriptions: subscriptions,
         }
@@ -956,6 +959,7 @@ impl DbTreeView {
         self.clear_node_all_state(connection_id);
         self.selected_databases.remove(connection_id);
         self.db_filter_list_states.remove(connection_id);
+        self.db_filter_popover_open.remove(connection_id);
 
         if let Ok(conn_id) = connection_id.parse::<i64>() {
             self.tracked_connection_ids.retain(|&id| id != conn_id);
@@ -2720,6 +2724,12 @@ impl DbTreeView {
 
         // 获取数据库筛选列表状态
         let db_filter_list = self.db_filter_list_states.get(&node_id).cloned();
+        // 数据库筛选 Popover 是否打开（在闭包外取值，避免闭包捕获 self）
+        let db_filter_popover_open = self
+            .db_filter_popover_open
+            .get(&node_id)
+            .copied()
+            .unwrap_or(false);
 
         // 样式
         let selection_bg = cx.theme().sidebar_accent;
@@ -2891,10 +2901,21 @@ impl DbTreeView {
                             let node_id_open = node_id_for_filter.clone();
 
                             this.child(
-                                Popover::new(SharedString::from(format!("db-filter-{}", ix)))
+                                // 使用 node_id 作为稳定 ID，避免树重建/虚拟化导致行号 ix 变化时
+                                // PopoverState 被销毁（ElementId 变了状态即丢，Popover 会自动关闭）
+                                Popover::new(SharedString::from(format!(
+                                    "db-filter-{}",
+                                    node_id
+                                )))
+                                    // 受控模式：即使 PopoverState 因虚拟化被销毁，重建后仍按记录状态重新打开
+                                    .open(db_filter_popover_open)
                                     .on_open_change(move |open, window, cx| {
-                                        if *open {
-                                            view_open.update(cx, |this, cx| {
+                                        let new_open = *open;
+                                        view_open.update(cx, |this, cx| {
+                                            // 记录 Popover 开关状态（关闭时也会记录，保证受控模式同步）
+                                            this.db_filter_popover_open
+                                                .insert(node_id_open.clone(), new_open);
+                                            if new_open {
                                                 let databases_data = this
                                                     .get_databases_for_connection(&node_id_open);
 
@@ -2923,9 +2944,9 @@ impl DbTreeView {
                                                     this.db_filter_list_states
                                                         .insert(node_id_open.clone(), list_state);
                                                 }
-                                                cx.notify();
-                                            });
-                                        }
+                                            }
+                                            cx.notify();
+                                        });
                                     })
                                     .when_some(db_filter_list.as_ref(), |popover, list| {
                                         popover.track_focus(&list.focus_handle(cx))
@@ -2933,7 +2954,7 @@ impl DbTreeView {
                                     .trigger(
                                         Button::new(SharedString::from(format!(
                                             "db-filter-trigger-{}",
-                                            ix
+                                            node_id
                                         )))
                                         .ghost()
                                         .small()
