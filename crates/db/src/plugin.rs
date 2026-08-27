@@ -1078,7 +1078,7 @@ pub trait DatabasePlugin: Send + Sync {
         .with_parent_context(id)
         .with_metadata(metadata.clone());
         if table_count > 0 {
-            let children: Vec<DbNode> = tables
+            let mut children: Vec<DbNode> = tables
                 .into_iter()
                 .map(|table_info| {
                     let mut meta: HashMap<String, String> = metadata.clone();
@@ -1099,6 +1099,7 @@ pub trait DatabasePlugin: Send + Sync {
                     .with_metadata(meta)
                 })
                 .collect();
+            children.sort();
             table_folder.set_children(children)
         }
         nodes.push(table_folder);
@@ -1119,7 +1120,7 @@ pub trait DatabasePlugin: Send + Sync {
             .with_parent_context(id)
             .with_metadata(metadata.clone());
             if view_count > 0 {
-                let children: Vec<DbNode> = views
+                let mut children: Vec<DbNode> = views
                     .into_iter()
                     .map(|view| {
                         let mut meta: HashMap<String, String> = metadata.clone();
@@ -1142,6 +1143,7 @@ pub trait DatabasePlugin: Send + Sync {
                         vnode
                     })
                     .collect();
+                children.sort();
                 views_folder.set_children(children);
             }
             nodes.push(views_folder);
@@ -1164,7 +1166,7 @@ pub trait DatabasePlugin: Send + Sync {
             .with_parent_context(id)
             .with_metadata(metadata.clone());
             if function_count > 0 {
-                let children: Vec<DbNode> = functions
+                let mut children: Vec<DbNode> = functions
                     .into_iter()
                     .map(|func| {
                         routine_node(
@@ -1178,6 +1180,7 @@ pub trait DatabasePlugin: Send + Sync {
                         )
                     })
                     .collect();
+                children.sort();
                 functions_folder.set_children(children);
             }
             nodes.push(functions_folder);
@@ -1200,7 +1203,7 @@ pub trait DatabasePlugin: Send + Sync {
             .with_parent_context(id)
             .with_metadata(metadata.clone());
             if procedure_count > 0 {
-                let children: Vec<DbNode> = procedures
+                let mut children: Vec<DbNode> = procedures
                     .into_iter()
                     .map(|procedure| {
                         routine_node(
@@ -1214,6 +1217,7 @@ pub trait DatabasePlugin: Send + Sync {
                         )
                     })
                     .collect();
+                children.sort();
                 procedures_folder.set_children(children);
             }
             nodes.push(procedures_folder);
@@ -1236,7 +1240,7 @@ pub trait DatabasePlugin: Send + Sync {
             .with_parent_context(id)
             .with_metadata(metadata.clone());
             if sequence_count > 0 {
-                let children: Vec<DbNode> = sequences
+                let mut children: Vec<DbNode> = sequences
                     .into_iter()
                     .map(|seq| {
                         let mut seq_meta: HashMap<String, String> = metadata.clone();
@@ -1263,6 +1267,7 @@ pub trait DatabasePlugin: Send + Sync {
                         .with_metadata(seq_meta)
                     })
                     .collect();
+                children.sort();
                 sequences_folder.set_children(children);
             }
             nodes.push(sequences_folder);
@@ -1363,7 +1368,7 @@ pub trait DatabasePlugin: Send + Sync {
         match node.node_type {
             DbNodeType::TablesFolder => {
                 let tables = self.list_tables(connection, database, schema).await?;
-                Ok(tables
+                let mut children: Vec<DbNode> = tables
                     .into_iter()
                     .map(|t| {
                         let mut meta = node.metadata.clone();
@@ -1382,14 +1387,16 @@ pub trait DatabasePlugin: Send + Sync {
                         .with_parent_context(id)
                         .with_metadata(meta)
                     })
-                    .collect())
+                    .collect();
+                children.sort();
+                Ok(children)
             }
             DbNodeType::ViewsFolder => {
                 if !self.capabilities().supports_views {
                     return Ok(Vec::new());
                 }
                 let views = self.list_views(connection, database, schema).await?;
-                Ok(views
+                let mut children: Vec<DbNode> = views
                     .into_iter()
                     .map(|v| {
                         let mut meta = node.metadata.clone();
@@ -1406,14 +1413,16 @@ pub trait DatabasePlugin: Send + Sync {
                         .with_parent_context(id)
                         .with_metadata(meta)
                     })
-                    .collect())
+                    .collect();
+                children.sort();
+                Ok(children)
             }
             DbNodeType::FunctionsFolder => {
                 let functions = self
                     .list_functions_in_schema(connection, database, schema.clone())
                     .await
                     .unwrap_or_default();
-                Ok(functions
+                let mut children: Vec<DbNode> = functions
                     .into_iter()
                     .map(|f| {
                         routine_node(
@@ -1426,14 +1435,16 @@ pub trait DatabasePlugin: Send + Sync {
                             &node.metadata,
                         )
                     })
-                    .collect())
+                    .collect();
+                children.sort();
+                Ok(children)
             }
             DbNodeType::ProceduresFolder => {
                 let procedures = self
                     .list_procedures_in_schema(connection, database, schema.clone())
                     .await
                     .unwrap_or_default();
-                Ok(procedures
+                let mut children: Vec<DbNode> = procedures
                     .into_iter()
                     .map(|p| {
                         routine_node(
@@ -1446,7 +1457,9 @@ pub trait DatabasePlugin: Send + Sync {
                             &node.metadata,
                         )
                     })
-                    .collect())
+                    .collect();
+                children.sort();
+                Ok(children)
             }
             DbNodeType::SequencesFolder => {
                 let sequences = self
@@ -1460,7 +1473,7 @@ pub trait DatabasePlugin: Send + Sync {
                         .collect(),
                     None => sequences,
                 };
-                Ok(filtered
+                let mut children: Vec<DbNode> = filtered
                     .into_iter()
                     .map(|seq| {
                         let mut meta = node.metadata.clone();
@@ -1486,7 +1499,9 @@ pub trait DatabasePlugin: Send + Sync {
                         .with_parent_context(id)
                         .with_metadata(meta)
                     })
-                    .collect())
+                    .collect();
+                children.sort();
+                Ok(children)
             }
             _ => Ok(Vec::new()),
         }
