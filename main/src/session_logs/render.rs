@@ -66,7 +66,7 @@ impl SessionLogsPage {
                     })
                     .small()
                     .ghost()
-                    .disabled(self.loading || self.favorite_saving)
+                    .disabled(self.loading || self.favorite_saving || self.deleting)
                     .on_click(cx.listener(|page, _, _, cx| page.refresh(cx))),
             )
             .child(
@@ -145,7 +145,8 @@ impl SessionLogsPage {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
         if let Some(error) = self.load_error.clone() {
-            return error_state(error, cx).into_any_element();
+            return error_state(error, self.favorite_saving || self.deleting, cx)
+                .into_any_element();
         }
         if entries.is_empty() {
             return empty_state(has_query, self.loading, cx).into_any_element();
@@ -207,7 +208,11 @@ fn empty_state(has_query: bool, loading: bool, cx: &gpui::App) -> impl IntoEleme
         )
 }
 
-fn error_state(error: String, cx: &gpui::Context<SessionLogsPage>) -> impl IntoElement {
+fn error_state(
+    error: String,
+    disabled: bool,
+    cx: &gpui::Context<SessionLogsPage>,
+) -> impl IntoElement {
     v_flex()
         .w_full()
         .min_h_0()
@@ -227,6 +232,7 @@ fn error_state(error: String, cx: &gpui::Context<SessionLogsPage>) -> impl IntoE
             Button::new("session-logs-retry")
                 .icon(IconName::Refresh)
                 .label(t!("SessionLogs.refresh").to_string())
+                .disabled(disabled)
                 .on_click(cx.listener(|page, _, _, cx| page.refresh(cx))),
         )
 }

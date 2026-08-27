@@ -1,12 +1,15 @@
 use gpui::{AppContext, Context, PathPromptOptions, Window};
-use gpui_component::{WindowExt, notification::Notification};
+use gpui_component::{
+    WindowExt, button::ButtonVariant, dialog::DialogButtonProps, notification::Notification,
+};
 use one_core::settings::AppSettings;
 use rust_i18n::t;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use terminal::recording::{
-    RecordingFileLimits, SessionLogFavorites, export_recording_text, save_session_log_favorites,
+    RecordingFileLimits, SessionLogFavorites, export_recording_text, load_session_log_favorites,
+    save_session_log_favorites,
 };
 
 use super::{SessionLogsPage, model::exported_text_base_name};
@@ -22,7 +25,128 @@ struct FavoriteSaveResult {
     result: Result<(), String>,
 }
 
+#[derive(Clone)]
+struct DeleteRequest {
+    recording_id: String,
+    path: PathBuf,
+}
+
 impl SessionLogsPage {
+    pub(super) fn request_delete(
+        &mut self,
+        recording_id: String,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.deleting {
+            return;
+        }
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let request = DeleteRequest { recording_id, path };
+        let view_entity = cx.entity().clone();
+        let delete_window_handle = window.window_handle();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let entity = view_entity.clone();
+            let window_handle = delete_window_handle;
+            let request = request.clone();
+            alert
+                .title(t!("SessionLogs.delete_title").to_string())
+                .description(
+                    t!("SessionLogs.delete_description", name = file_name.clone()).to_string(),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Common.delete").to_string())
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _window, cx| {
+                    let delete_request = request.clone();
+                    // Dialog closes on `true`; dispatch deletion through the view
+                    // so a slow filesystem removal does not block the UI.
+                    _ = cx.update_window(window_handle, |_, window, cx| {
+                        _ = entity.update(cx, |this, cx| {
+                            this.delete_log(delete_request, window, cx);
+                        });
+                    });
+                    true
+                })
+        });
+    }
+
+    fn delete_log(&mut self, request: DeleteRequest, window: &mut Window, cx: &mut Context<Self>) {
+        if self.deleting {
+            return;
+        }
+        let Some(directory) = self.directory.clone() else {
+            show_error(
+                t!("SessionLogs.data_directory_unavailable").to_string(),
+                window,
+                cx,
+            );
+            return;
+        };
+        self.begin_delete();
+        cx.notify();
+        let delete_request = request.clone();
+        let delete_task = cx.background_spawn(async move {
+            delete_session_log_file(&delete_request.path).map_err(|error| error.to_string())?;
+            if let Ok(mut favorites) = load_session_log_favorites(&directory) {
+                favorites.set(&delete_request.recording_id, false);
+                // Favorite cleanup is best-effort: the log file itself is the
+                // primary artifact, and a stale favorite ID is harmless.
+                _ = save_session_log_favorites(&directory, &favorites);
+            }
+            Ok(())
+        });
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let result = delete_task.await;
+            _ = cx.update_window(window_handle, |_, window, cx| {
+                _ = this.update(cx, |this, cx| {
+                    this.finish_delete(request, result, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn finish_delete(
+        &mut self,
+        request: DeleteRequest,
+        result: Result<(), String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.finish_delete_state();
+        match result {
+            Ok(()) => {
+                self.catalog.entries.retain(|entry| {
+                    entry.path != request.path
+                        && entry.header.navop.recording_id != request.recording_id
+                });
+                self.favorites.set(&request.recording_id, false);
+                window.push_notification(
+                    Notification::success(t!("SessionLogs.delete_success").to_string())
+                        .autohide(true),
+                    cx,
+                );
+            }
+            Err(error) => show_error(
+                t!("SessionLogs.delete_failed", error = error).to_string(),
+                window,
+                cx,
+            ),
+        }
+        cx.notify();
+        self.refresh(cx);
+    }
     pub(super) fn toggle_favorite(
         &mut self,
         change: FavoriteChange,
@@ -226,6 +350,10 @@ fn show_export_result(result: Result<PathBuf, String>, window: &mut Window, cx: 
 
 fn show_error(message: String, window: &mut Window, cx: &mut gpui::App) {
     window.push_notification(Notification::error(message).autohide(true), cx);
+}
+
+fn delete_session_log_file(path: &Path) -> io::Result<()> {
+    fs::remove_file(path)
 }
 
 #[cfg(test)]

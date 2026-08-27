@@ -32,6 +32,7 @@ pub(crate) struct SessionLogsPage {
     load_error: Option<String>,
     load_generation: u64,
     favorite_saving: bool,
+    deleting: bool,
     scroll_handle: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -59,6 +60,7 @@ impl SessionLogsPage {
             load_error: None,
             load_generation: 0,
             favorite_saving: false,
+            deleting: false,
             scroll_handle: UniformListScrollHandle::default(),
             _subscriptions: vec![subscription],
         };
@@ -85,7 +87,7 @@ impl SessionLogsPage {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.loading || self.favorite_saving {
+        if self.loading || self.favorite_saving || self.deleting {
             return;
         }
         self.load_generation = self.load_generation.wrapping_add(1);
@@ -118,6 +120,16 @@ impl SessionLogsPage {
         self.load_generation = self.load_generation.wrapping_add(1);
         self.loading = false;
         self.favorite_saving = true;
+    }
+
+    pub(super) fn begin_delete(&mut self) {
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.loading = false;
+        self.deleting = true;
+    }
+
+    pub(super) fn finish_delete_state(&mut self) {
+        self.deleting = false;
     }
 
     fn apply_refresh(

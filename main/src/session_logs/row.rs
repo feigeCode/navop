@@ -73,25 +73,45 @@ impl SessionLogsPage {
         actions: RowActions,
         cx: &gpui::Context<Self>,
     ) -> impl IntoElement {
+        let actions_disabled = self.favorite_saving || self.deleting;
+        let delete_path = actions.path.clone();
         let replay_path = actions.path.clone();
         let export_path = actions.path;
         h_flex()
             .flex_shrink_0()
             .items_center()
             .gap_1()
-            .child(self.favorite_button(actions.recording_id.clone(), actions.favorite, cx))
+            .child(self.favorite_button(
+                actions.recording_id.clone(),
+                actions.favorite,
+                actions_disabled,
+                cx,
+            ))
             .child(view_log_button(
                 actions.recording_id.clone(),
                 replay_path,
+                actions_disabled,
                 cx,
             ))
-            .child(export_button(actions.recording_id, export_path, cx))
+            .child(export_button(
+                actions.recording_id.clone(),
+                export_path,
+                actions_disabled,
+                cx,
+            ))
+            .child(delete_button(
+                actions.recording_id,
+                delete_path,
+                actions_disabled,
+                cx,
+            ))
     }
 
     fn favorite_button(
         &self,
         recording_id: String,
         favorite: bool,
+        disabled: bool,
         cx: &gpui::Context<Self>,
     ) -> Button {
         Button::new(button_id("session-log-favorite", &recording_id))
@@ -102,7 +122,7 @@ impl SessionLogsPage {
             })
             .small()
             .ghost()
-            .disabled(self.favorite_saving)
+            .disabled(disabled)
             .tooltip(if favorite {
                 t!("SessionLogs.unfavorite").to_string()
             } else {
@@ -161,12 +181,14 @@ fn entry_summary(entry: &SessionLogEntry, cx: &gpui::Context<SessionLogsPage>) -
 fn view_log_button(
     recording_id: String,
     path: PathBuf,
+    disabled: bool,
     cx: &gpui::Context<SessionLogsPage>,
 ) -> Button {
     Button::new(button_id("session-log-view", &recording_id))
         .icon(IconName::Eye)
         .small()
         .ghost()
+        .disabled(disabled)
         .tooltip(t!("SessionLogs.view_log").to_string())
         .on_click(cx.listener(move |page, _, window, cx| {
             page.view_log(path.clone(), window, cx);
@@ -176,15 +198,34 @@ fn view_log_button(
 fn export_button(
     recording_id: String,
     path: PathBuf,
+    disabled: bool,
     cx: &gpui::Context<SessionLogsPage>,
 ) -> Button {
     Button::new(button_id("session-log-export", &recording_id))
         .icon(IconName::Upload)
         .small()
         .ghost()
+        .disabled(disabled)
         .tooltip(t!("SessionLogs.export_text").to_string())
         .on_click(cx.listener(move |page, _, window, cx| {
             page.request_text_export(path.clone(), window, cx);
+        }))
+}
+
+fn delete_button(
+    recording_id: String,
+    path: PathBuf,
+    disabled: bool,
+    cx: &gpui::Context<SessionLogsPage>,
+) -> Button {
+    Button::new(button_id("session-log-delete", &recording_id))
+        .icon(IconName::Delete)
+        .small()
+        .ghost()
+        .disabled(disabled)
+        .tooltip(t!("SessionLogs.delete").to_string())
+        .on_click(cx.listener(move |page, _, window, cx| {
+            page.request_delete(recording_id.clone(), path.clone(), window, cx);
         }))
 }
 

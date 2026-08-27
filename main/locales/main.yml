@@ -797,6 +797,26 @@ SessionLogs:
     en: "Failed to export TXT: %{error}"
     zh-CN: "导出 TXT 失败：%{error}"
     zh-HK: "匯出 TXT 失敗：%{error}"
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_title:
+    en: Delete session log
+    zh-CN: 删除会话日志
+    zh-HK: 刪除工作階段日誌
+  delete_description:
+    en: "Delete %{name}? This cannot be undone."
+    zh-CN: "确定删除 %{name}？此操作无法撤销。"
+    zh-HK: "確定刪除 %{name}？此操作無法復原。"
+  delete_success:
+    en: Session log deleted.
+    zh-CN: 会话日志已删除。
+    zh-HK: 工作階段日誌已刪除。
+  delete_failed:
+    en: "Failed to delete session log: %{error}"
+    zh-CN: "删除会话日志失败：%{error}"
+    zh-HK: "刪除工作階段日誌失敗：%{error}"
   load_failed:
     en: "Failed to load session logs: %{error}"
     zh-CN: "加载会话日志失败：%{error}"
