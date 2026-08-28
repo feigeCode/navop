@@ -52,6 +52,24 @@ impl IconName {
             | Self::MacosColor
             | Self::WindowsColor
             | Self::DockerColor
+            | Self::RockyColor
+            | Self::FedoraColor
+            | Self::ArchColor
+            | Self::AlpineColor
+            | Self::AmazonColor
+            | Self::KaliColor
+            | Self::AlinuxColor
+            | Self::OpenEulerColor
+            | Self::FreebsdColor
+            | Self::CiscoColor
+            | Self::JuniperColor
+            | Self::HuaweiColor
+            | Self::H3cColor
+            | Self::HpeColor
+            | Self::MikrotikColor
+            | Self::FortinetColor
+            | Self::PaloaltoColor
+            | Self::ZyxelColor
             | Self::MongoDB
             | Self::MySQLColor
             | Self::MySQLLineColor
