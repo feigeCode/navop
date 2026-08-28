@@ -435,11 +435,7 @@ impl Sender {
             Frame::ZRINIT => self.on_zrinit(header),
             Frame::ZRPOS | Frame::ZACK => self.on_zrpos(header.count()),
             Frame::ZSKIP => self.on_zskip(),
-            Frame::ZABORT | Frame::ZCAN => {
-                self.on_abort();
-                Ok(())
-            }
-            Frame::ZFERR => {
+            Frame::ZABORT | Frame::ZCAN | Frame::ZFERR => {
                 self.on_abort();
                 Ok(())
             }
