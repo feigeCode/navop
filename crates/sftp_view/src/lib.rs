@@ -4127,11 +4127,8 @@ impl SftpView {
     }
 
     fn background_task_group(&self) -> SharedString {
-        if let Some(index) = self.tab_index {
-            format!("SFTP · {}({index})", self.connection_name).into()
-        } else {
-            format!("SFTP · {}", self.connection_name).into()
-        }
+        // 分组标题只保留「连接名称 - IP」，同一连接的多个面板合并到同一分组。
+        format!("{} - {}", self.connection_name, self.sftp_config.host).into()
     }
 
     fn register_local_background_task(

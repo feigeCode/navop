@@ -178,6 +178,9 @@ impl Render for BackgroundTaskPanelContent {
 }
 
 /// 渲染弹窗内容（不含入口按钮）。
+///
+/// 布局参考 Netcatty 传输中心：顶部一排带数量的下划线式过滤 tab，
+/// 中部为按连接分组的任务列表，底部右侧放置「全部取消」「清理已完成」。
 pub(crate) fn render_panel_content(
     manager: &Entity<BackgroundTaskManager>,
     filter: BackgroundTaskFilter,
@@ -192,24 +195,22 @@ pub(crate) fn render_panel_content(
     v_flex()
         .id("background-task-dialog-content")
         .w_full()
-        .max_h(px(500.0))
-        .gap_2()
-        .p_2()
-        .child(render_header(
-            counts,
-            manager.clone(),
-            filter,
-            update_filter,
-            cx,
-        ))
+        .max_h(px(520.0))
+        .child(render_filter_tabs(counts, filter, update_filter, cx))
         .when(tasks.is_empty(), |this| {
             this.child(
                 v_flex()
                     .id("background-task-empty")
-                    .py_8()
+                    .h(px(180.0))
                     .items_center()
                     .justify_center()
+                    .gap_1()
                     .text_color(cx.theme().muted_foreground)
+                    .child(
+                        Icon::new(IconName::ListChecks)
+                            .with_size(px(22.0))
+                            .text_color(cx.theme().muted_foreground),
+                    )
                     .child(t!("BackgroundTasks.no_tasks").to_string()),
             )
         })
@@ -217,60 +218,156 @@ pub(crate) fn render_panel_content(
             this.child(
                 v_flex()
                     .id("background-task-list")
-                    .gap_2()
+                    .flex_1()
+                    .min_h_0()
                     .max_h(px(400.0))
                     .overflow_y_scroll()
-                    .children(grouped_tasks.into_iter().map(|(group, tasks)| {
-                        v_flex()
-                            .id(SharedString::from(format!("background-task-group-{group}")))
-                            .gap_1()
-                            .child(
-                                gpui::div()
-                                    .id("background-task-group-title")
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(group),
-                            )
-                            .children(
-                                tasks
-                                    .into_iter()
-                                    .map(|task| render_task_item(task, manager.clone(), cx)),
-                            )
+                    .children(grouped_tasks.into_iter().flat_map(|(group, tasks)| {
+                        // 分组标题同为列表直接子节点，id 必须带上分组名避免同级重复。
+                        let group_header = gpui::div()
+                            .id(SharedString::from(format!(
+                                "background-task-group-title-{group}"
+                            )))
+                            .pt_1()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(group);
+                        std::iter::once(group_header.into_any_element()).chain(
+                            tasks.into_iter().map(|task| {
+                                render_task_item(task, manager.clone(), cx).into_any_element()
+                            }),
+                        )
                     })),
             )
         })
+        .child(render_footer(counts, manager, cx))
+}
+
+/// 分组标题回退文案：任务未携带连接分组（如 ZMODEM、系统级任务）时使用。
+fn group_label(group: Option<&str>) -> String {
+    match group {
+        Some(group) => group.to_string(),
+        None => t!("BackgroundTasks.group_other").to_string(),
+    }
 }
 
 fn group_tasks(tasks: &[BackgroundTask]) -> BTreeMap<String, Vec<&BackgroundTask>> {
     let mut grouped = BTreeMap::new();
     for task in tasks {
         grouped
-            .entry(task.group.as_deref().unwrap_or("Other").to_string())
+            .entry(group_label(task.group.as_deref()))
             .or_insert_with(Vec::new)
             .push(task);
     }
     grouped
 }
 
-fn render_header(
+/// 顶部过滤 tab 栏：六个互斥桶平分宽度，选中项使用主题色 + 底部下划线。
+fn render_filter_tabs(
     counts: BackgroundTaskCounts,
-    manager: Entity<BackgroundTaskManager>,
-    filter: BackgroundTaskFilter,
+    current: BackgroundTaskFilter,
     update_filter: Arc<dyn Fn(BackgroundTaskFilter, &mut App)>,
     cx: &App,
 ) -> impl IntoElement {
-    let has_cancellable_tasks = manager
-        .read(cx)
-        .tasks()
-        .iter()
-        .any(BackgroundTask::can_cancel);
     h_flex()
-        .id("background-task-header")
+        .id("background-task-filters")
+        .w_full()
+        .px_2()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .children(BackgroundTaskFilter::ALL.map(|target| {
+            render_filter_tab(target, current, counts, update_filter.clone(), cx)
+        }))
+}
+
+fn render_filter_tab(
+    target: BackgroundTaskFilter,
+    current: BackgroundTaskFilter,
+    counts: BackgroundTaskCounts,
+    update_filter: Arc<dyn Fn(BackgroundTaskFilter, &mut App)>,
+    cx: &App,
+) -> AnyElement {
+    let selected = current == target;
+    let count = target.count(counts);
+    let label = filter_label(target);
+    let text = if count > 0 {
+        format!("{label} {count}")
+    } else {
+        label
+    };
+    // 未选中 tab 也要占住 2px 底边框，避免选中切换时行高跳动。
+    let underline_color = if selected {
+        cx.theme().primary
+    } else {
+        gpui::transparent_black()
+    };
+
+    gpui::div()
+        .id(SharedString::from(format!(
+            "background-task-filter-{}",
+            filter_tab_id(target)
+        )))
+        .flex_1()
+        .min_w_0()
+        .py_2()
+        .text_center()
+        .text_sm()
+        .cursor_pointer()
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
+        .border_b_2()
+        .border_color(underline_color)
+        .when(selected, |tab| {
+            tab.text_color(cx.theme().primary)
+                .font_weight(gpui::FontWeight::MEDIUM)
+        })
+        .when(!selected, |tab| {
+            tab.text_color(cx.theme().muted_foreground)
+        })
+        .on_click(move |_, _window, cx| update_filter(target, cx))
+        .child(text)
+        .into_any_element()
+}
+
+fn filter_label(filter: BackgroundTaskFilter) -> String {
+    match filter {
+        BackgroundTaskFilter::All => t!("BackgroundTasks.filter_all").to_string(),
+        BackgroundTaskFilter::Queued => t!("BackgroundTasks.filter_queued").to_string(),
+        BackgroundTaskFilter::Running => t!("BackgroundTasks.filter_running").to_string(),
+        BackgroundTaskFilter::Succeeded => t!("BackgroundTasks.filter_succeeded").to_string(),
+        BackgroundTaskFilter::Cancelled => t!("BackgroundTasks.filter_cancelled").to_string(),
+        BackgroundTaskFilter::Failed => t!("BackgroundTasks.filter_failed").to_string(),
+    }
+}
+
+fn filter_tab_id(filter: BackgroundTaskFilter) -> &'static str {
+    match filter {
+        BackgroundTaskFilter::All => "all",
+        BackgroundTaskFilter::Queued => "queued",
+        BackgroundTaskFilter::Running => "running",
+        BackgroundTaskFilter::Succeeded => "succeeded",
+        BackgroundTaskFilter::Cancelled => "cancelled",
+        BackgroundTaskFilter::Failed => "failed",
+    }
+}
+
+/// 底部操作栏：「全部取消」「清理已完成」靠右放置。
+fn render_footer(
+    counts: BackgroundTaskCounts,
+    manager: Entity<BackgroundTaskManager>,
+    cx: &App,
+) -> impl IntoElement {
+    let has_cancellable_tasks = manager.read(cx).tasks().iter().any(BackgroundTask::can_cancel);
+    h_flex()
+        .id("background-task-footer")
+        .w_full()
         .items_center()
+        .justify_end()
         .gap_2()
-        .child(render_counts_badge(counts))
-        .child(render_filter_bar(filter, update_filter))
+        .px_2()
+        .py_1p5()
         .child(
             Button::new("background-task-cancel-all-btn")
                 .label(t!("BackgroundTasks.cancel_all").to_string())
@@ -295,108 +392,6 @@ fn render_header(
                     manager.update(cx, |manager, cx| manager.clear_finished(cx));
                 }),
         )
-}
-
-fn render_filter_bar(
-    filter: BackgroundTaskFilter,
-    update_filter: Arc<dyn Fn(BackgroundTaskFilter, &mut App)>,
-) -> impl IntoElement {
-    h_flex()
-        .id("background-task-filters")
-        .gap_1()
-        .child(render_filter_button(
-            "all",
-            t!("BackgroundTasks.filter_all").to_string(),
-            BackgroundTaskFilter::All,
-            filter,
-            update_filter.clone(),
-        ))
-        .child(render_filter_button(
-            "active",
-            t!("BackgroundTasks.filter_active").to_string(),
-            BackgroundTaskFilter::Active,
-            filter,
-            update_filter.clone(),
-        ))
-        .child(render_filter_button(
-            "finished",
-            t!("BackgroundTasks.filter_finished").to_string(),
-            BackgroundTaskFilter::Finished,
-            filter,
-            update_filter.clone(),
-        ))
-        .child(render_filter_button(
-            "failed",
-            t!("BackgroundTasks.filter_failed").to_string(),
-            BackgroundTaskFilter::Failed,
-            filter,
-            update_filter,
-        ))
-}
-
-fn render_filter_button(
-    id: &str,
-    label: String,
-    target: BackgroundTaskFilter,
-    current: BackgroundTaskFilter,
-    update_filter: Arc<dyn Fn(BackgroundTaskFilter, &mut App)>,
-) -> AnyElement {
-    let mut button = Button::new(SharedString::from(format!("background-task-filter-{id}")))
-        .label(label)
-        .ghost()
-        .small();
-    if current == target {
-        button = button.primary();
-    } else {
-        button = button.on_click(move |_, _window, cx| update_filter(target, cx));
-    }
-    button.into_any_element()
-}
-
-fn render_counts_badge(counts: BackgroundTaskCounts) -> impl IntoElement {
-    h_flex()
-        .id("background-task-counts")
-        .gap_1()
-        .text_xs()
-        .when(counts.queued > 0, |this| {
-            this.child(render_count_chip(
-                "queued",
-                &t!("BackgroundTasks.queued").to_string(),
-                counts.queued,
-            ))
-        })
-        .when(counts.running > 0, |this| {
-            this.child(render_count_chip(
-                "running",
-                &t!("BackgroundTasks.running").to_string(),
-                counts.running,
-            ))
-        })
-        .when(counts.cancelling > 0, |this| {
-            this.child(render_count_chip(
-                "cancelling",
-                &t!("BackgroundTasks.cancelling").to_string(),
-                counts.cancelling,
-            ))
-        })
-        .when(counts.failed > 0, |this| {
-            this.child(render_count_chip(
-                "failed",
-                &t!("BackgroundTasks.failed").to_string(),
-                counts.failed,
-            ))
-        })
-}
-
-fn render_count_chip(id: &str, label: &str, count: usize) -> AnyElement {
-    let id = SharedString::from(format!("background-task-count-{id}"));
-    gpui::div()
-        .id(id)
-        .px_1()
-        .rounded_sm()
-        .text_xs()
-        .child(format!("{label} {count}"))
-        .into_any_element()
 }
 
 fn render_task_item(
@@ -432,11 +427,10 @@ fn render_task_item(
     v_flex()
         .id(item_id)
         .gap_1()
-        .p_2()
-        .rounded_md()
-        .border_1()
+        .px_2()
+        .py_2()
+        .border_b_1()
         .border_color(cx.theme().border)
-        .bg(cx.theme().background)
         .child(
             h_flex()
                 .id("background-task-item-header")

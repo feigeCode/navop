@@ -241,22 +241,57 @@ pub enum BackgroundTaskEvent {
     Removed(Vec<BackgroundTaskId>),
 }
 
-/// 面板过滤器。
+/// 面板过滤器。六个取值按状态互斥划分：等待中（排队）、进行中（含取消中）、
+/// 已完成（成功）、已取消、失败，`All` 为全集。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundTaskFilter {
     All,
-    Active,
-    Finished,
+    Queued,
+    Running,
+    Succeeded,
+    Cancelled,
     Failed,
 }
 
 impl BackgroundTaskFilter {
+    /// 过滤栏的固定展示顺序。
+    pub const ALL: [Self; 6] = [
+        Self::All,
+        Self::Queued,
+        Self::Running,
+        Self::Succeeded,
+        Self::Cancelled,
+        Self::Failed,
+    ];
+
     pub fn matches(self, task: &BackgroundTask) -> bool {
         match self {
             Self::All => true,
-            Self::Active => task.status.is_active(),
-            Self::Finished => task.status.is_terminal(),
+            Self::Queued => task.status == BackgroundTaskStatus::Queued,
+            Self::Running => matches!(
+                task.status,
+                BackgroundTaskStatus::Running | BackgroundTaskStatus::Cancelling
+            ),
+            Self::Succeeded => task.status == BackgroundTaskStatus::Succeeded,
+            Self::Cancelled => task.status == BackgroundTaskStatus::Cancelled,
             Self::Failed => task.status == BackgroundTaskStatus::Failed,
+        }
+    }
+
+    /// 该过滤桶在给定聚合数量下的任务数，用于过滤 tab 上跟随的数量展示。
+    pub fn count(self, counts: BackgroundTaskCounts) -> usize {
+        match self {
+            Self::All => counts.queued
+                + counts.running
+                + counts.cancelling
+                + counts.succeeded
+                + counts.failed
+                + counts.cancelled,
+            Self::Queued => counts.queued,
+            Self::Running => counts.running + counts.cancelling,
+            Self::Succeeded => counts.succeeded,
+            Self::Cancelled => counts.cancelled,
+            Self::Failed => counts.failed,
         }
     }
 }
@@ -1419,6 +1454,83 @@ mod tests {
         assert_eq!(before.detail, after.detail);
         assert_eq!(before.result, after.result);
         assert_eq!(None, after.error);
+    }
+
+    #[gpui::test]
+    fn filter_buckets_partition_task_statuses(cx: &mut gpui::TestAppContext) {
+        let manager = new_manager(cx);
+        let (queued, running, cancelling, succeeded, failed, cancelled) = manager.update(
+            cx,
+            |m, cx| {
+                let queued = m.register(BackgroundTaskSpec::new("kind", "queued"), cx);
+                let running = m.register(BackgroundTaskSpec::new("kind", "running"), cx);
+                let cancelling = m.register(BackgroundTaskSpec::new("kind", "cancelling"), cx);
+                let succeeded = m.register(BackgroundTaskSpec::new("kind", "succeeded"), cx);
+                let failed = m.register(BackgroundTaskSpec::new("kind", "failed"), cx);
+                let cancelled = m.register(BackgroundTaskSpec::new("kind", "cancelled"), cx);
+                m.mark_running(running, cx);
+                m.mark_running(cancelling, cx);
+                m.mark_running(succeeded, cx);
+                m.mark_running(failed, cx);
+                m.mark_running(cancelled, cx);
+                m.set_cancellation(
+                    cancelling,
+                    BackgroundTaskCancellation::token(CancellationToken::new()),
+                    cx,
+                );
+                assert!(m.request_cancel(cancelling, cx));
+                m.succeed(succeeded, None, cx);
+                m.fail(failed, "broken", cx);
+                m.cancel_confirmed(cancelled, None, cx);
+                (
+                    queued, running, cancelling, succeeded, failed, cancelled,
+                )
+            },
+        );
+
+        manager.read_with(cx, |m, _| {
+            let counts = m.counts();
+            let tasks = m.tasks();
+            let ids_for = |filter: BackgroundTaskFilter| -> Vec<u64> {
+                let mut ids: Vec<u64> = tasks
+                    .iter()
+                    .filter(|task| filter.matches(task))
+                    .map(|task| task.id.as_u64())
+                    .collect();
+                ids.sort_unstable();
+                ids
+            };
+
+            for filter in BackgroundTaskFilter::ALL {
+                assert_eq!(
+                    filter.count(counts),
+                    ids_for(filter).len(),
+                    "filter count must match matched tasks for {filter:?}"
+                );
+            }
+            assert_eq!(
+                6,
+                BackgroundTaskFilter::All.count(counts),
+                "all buckets must cover every task"
+            );
+            assert_eq!(
+                vec![queued.as_u64()],
+                ids_for(BackgroundTaskFilter::Queued)
+            );
+            assert_eq!(
+                vec![running.as_u64(), cancelling.as_u64()],
+                ids_for(BackgroundTaskFilter::Running)
+            );
+            assert_eq!(
+                vec![succeeded.as_u64()],
+                ids_for(BackgroundTaskFilter::Succeeded)
+            );
+            assert_eq!(
+                vec![cancelled.as_u64()],
+                ids_for(BackgroundTaskFilter::Cancelled)
+            );
+            assert_eq!(vec![failed.as_u64()], ids_for(BackgroundTaskFilter::Failed));
+        });
     }
 
     #[test]

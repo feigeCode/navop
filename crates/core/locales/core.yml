@@ -77,18 +77,30 @@ BackgroundTasks:
     en: "All"
     zh-CN: "全部"
     zh-HK: "全部"
-  filter_active:
-    en: "Active"
+  filter_queued:
+    en: "Waiting"
+    zh-CN: "等待中"
+    zh-HK: "等待中"
+  filter_running:
+    en: "Running"
     zh-CN: "进行中"
     zh-HK: "進行中"
-  filter_finished:
-    en: "Finished"
+  filter_succeeded:
+    en: "Completed"
     zh-CN: "已完成"
     zh-HK: "已完成"
+  filter_cancelled:
+    en: "Cancelled"
+    zh-CN: "已取消"
+    zh-HK: "已取消"
   filter_failed:
     en: "Failed"
     zh-CN: "失败"
     zh-HK: "失敗"
+  group_other:
+    en: "General"
+    zh-CN: "通用"
+    zh-HK: "通用"
   result:
     en: "Result"
     zh-CN: "结果"

@@ -103,6 +103,19 @@ fn upload_progress_state(state: &SftpTransferState) -> TransferProgressState {
     }
 }
 
+/// 后台任务分组标题：只保留「连接名称 - IP」，同一连接的面板合并到同一分组。
+fn background_task_group_label(connection: &StoredConnection) -> SharedString {
+    let host = connection
+        .to_ssh_params()
+        .map(|params| params.host)
+        .unwrap_or_default();
+    if host.is_empty() {
+        connection.name.clone().into()
+    } else {
+        format!("{} - {}", connection.name, host).into()
+    }
+}
+
 fn local_progress_state(state: &TransferTaskState) -> TransferProgressState {
     match state {
         TransferTaskState::Pending => TransferProgressState::Pending,
@@ -1431,12 +1444,7 @@ impl FileManagerPanel {
             .unwrap_or_else(|| {
                 global_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
             });
-        let background_task_group = format!(
-            "Terminal · {} · {:?}",
-            stored_connection.name,
-            cx.entity_id()
-        )
-        .into();
+        let background_task_group = background_task_group_label(&stored_connection);
 
         let mut subscriptions = Vec::new();
         subscriptions.push(
@@ -3089,7 +3097,6 @@ impl FileManagerPanel {
     fn background_task_group(&self) -> SharedString {
         self.background_task_group.clone()
     }
-
     fn register_non_cancellable_background_task(
         &self,
         kind: &'static str,
