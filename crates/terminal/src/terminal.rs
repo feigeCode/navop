@@ -653,6 +653,7 @@ fn resolve_ssh_connection(
             pty_config,
             terminal_encoding,
             account_expect,
+            // 运行时注入不写远端文件，默认启用；仅显式存储的禁用值才关闭集成。
             disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
         },
         credential_prompt_policy,

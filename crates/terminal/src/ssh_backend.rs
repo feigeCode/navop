@@ -14,9 +14,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use one_core::storage::SshAccountExpect;
 
-use ssh::{
-    ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
-};
+use ssh::{ChannelEvent, PtyConfig, SshChannel, SshClient, SshSessionManager};
 
 use crate::encoding::{TerminalEncoding, TerminalOutputDecoder, encode_terminal_input};
 use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
@@ -25,11 +23,11 @@ use crate::osc::extract_osc_events;
 use crate::osc::{OscEvent, OscStreamParser};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::recording::RecordingTap;
-use crate::shell_integration::{
-    embedded_shell_integration_script, normalized_shell_integration_script,
-};
 use crate::ssh_expect::SshLoginExpect;
 use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
+use crate::ssh_shell_integration::{
+    FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady,
+};
 use crate::zmodem::{
     DetectedZmodem, ZmodemDetector, ZmodemResponder, is_channel_closed, run_transfer,
 };
@@ -40,8 +38,10 @@ use crate::{
     TerminalPerformanceMetrics, TerminalSize, TerminalTransferCancelHandle,
 };
 
-/// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
-const SHELL_INTEGRATION_SETUP_TIMEOUT: Duration = Duration::from_secs(3);
+/// Shell 类型探测只用于确认运行时注入是否安全，不会写入远端文件。
+const SHELL_INTEGRATION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+/// 运行时注入必须快速完成；超时后中断内部命令并降级为裸终端。
+const SHELL_INTEGRATION_RUNTIME_TIMEOUT: Duration = Duration::from_secs(5);
 /// 显式卸载属于用户主动操作，允许比自动探测更长的完成时间。
 const SHELL_INTEGRATION_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// 没有 OSC prompt 信号时，多行初始化命令之间留出设备处理和显示交互提示的时间。
@@ -51,6 +51,7 @@ const PLAIN_INIT_COMMAND_DELAY: Duration = Duration::from_millis(250);
 const ZMODEM_PROBE_FLUSH_DELAY: Duration = Duration::from_millis(20);
 
 type ZmodemProbeFlush = Pin<Box<Sleep>>;
+type ShellIntegrationTimeout = Pin<Box<Sleep>>;
 
 fn sync_zmodem_probe_flush(
     detector: &ZmodemDetector,
@@ -67,6 +68,14 @@ async fn wait_for_zmodem_probe_flush(pending_flush: &mut Option<ZmodemProbeFlush
     pending_flush
         .as_mut()
         .expect("pending ZMODEM probe flush should exist when polled")
+        .as_mut()
+        .await;
+}
+
+async fn wait_for_shell_integration_timeout(timeout: &mut Option<ShellIntegrationTimeout>) {
+    timeout
+        .as_mut()
+        .expect("shell integration timeout should exist when polled")
         .as_mut()
         .await;
 }
@@ -119,12 +128,6 @@ trait SshSessionAccess: Send + Sync {
 
     async fn client(&self) -> anyhow::Result<Arc<tokio::sync::Mutex<Self::Client>>>;
     async fn invalidate_client(&self, client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool;
-    async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup>;
-    async fn set_shell_integration(
-        &self,
-        client: &Arc<tokio::sync::Mutex<Self::Client>>,
-        setup: ShellIntegrationSetup,
-    );
 }
 
 #[async_trait]
@@ -139,103 +142,6 @@ impl SshSessionAccess for SshSessionManager {
         SshSessionManager::invalidate_client(self, client).await
     }
 
-    async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
-        SshSessionManager::cached_shell_integration(self).await
-    }
-
-    async fn set_shell_integration(
-        &self,
-        client: &Arc<tokio::sync::Mutex<Self::Client>>,
-        setup: ShellIntegrationSetup,
-    ) {
-        SshSessionManager::set_shell_integration(self, client, setup).await;
-    }
-}
-
-fn extract_marker_value(output: &str, marker: &str) -> Option<String> {
-    output
-        .lines()
-        .find_map(|line| line.strip_prefix(marker).map(str::to_string))
-}
-
-fn build_shell_integration_setup_script(
-    script: &str,
-    success_marker: &str,
-    home_marker: &str,
-    session_marker: &str,
-    shell_marker: &str,
-) -> String {
-    let script = normalized_shell_integration_script(script);
-    let script = shell_single_quote(&script);
-    let managed_block = shell_single_quote(&managed_shell_integration_block());
-    let success_marker = shell_single_quote(success_marker);
-    let home_marker = shell_single_quote(home_marker);
-    let session_marker = shell_single_quote(session_marker);
-    let shell_marker = shell_single_quote(shell_marker);
-
-    format!(
-        concat!(
-            "set -e\n",
-            "config_dir=\"$HOME/.config/onetcli\"\n",
-            "integration_path=\"$config_dir/shell_integration.sh\"\n",
-            "managed_block={managed_block}\n",
-            "mkdir -p \"$config_dir\"\n",
-            "rm -rf \"$integration_path\"\n",
-            "printf %s {script} > \"$integration_path\"\n",
-            "install_onetcli_block() {{\n",
-            "    rc_file=\"$1\"\n",
-            "    [ -n \"$rc_file\" ] || return 0\n",
-            "    tmp_file=\"$rc_file.onetcli.$$\"\n",
-            "    if [ -f \"$rc_file\" ]; then\n",
-            "        awk '\n",
-            "            $0 == \"# BEGIN ONETCLI SHELL INTEGRATION\" {{ skip = 1; next }}\n",
-            "            $0 == \"# END ONETCLI SHELL INTEGRATION\" {{ skip = 0; next }}\n",
-            "            skip != 1 {{ print }}\n",
-            "        ' \"$rc_file\" > \"$tmp_file\"\n",
-            "    else\n",
-            "        : > \"$tmp_file\"\n",
-            "    fi\n",
-            "    printf '%s\\n' \"$managed_block\" >> \"$tmp_file\"\n",
-            "    cat \"$tmp_file\" > \"$rc_file\"\n",
-            "    rm -f \"$tmp_file\"\n",
-            "}}\n",
-            "install_bash_login_block() {{\n",
-            "    for rc_file in \"$HOME/.bash_profile\" \"$HOME/.bash_login\" \"$HOME/.profile\"; do\n",
-            "        if [ -f \"$rc_file\" ]; then\n",
-            "            install_onetcli_block \"$rc_file\"\n",
-            "            return 0\n",
-            "        fi\n",
-            "    done\n",
-            "    install_onetcli_block \"$HOME/.bash_profile\"\n",
-            "}}\n",
-            "login_shell=\"${{SHELL:-}}\"\n",
-            "shell_name=\"${{login_shell##*/}}\"\n",
-            "case \"$shell_name\" in\n",
-            "    bash)\n",
-            "        install_onetcli_block \"$HOME/.bashrc\"\n",
-            "        install_bash_login_block\n",
-            "        ;;\n",
-            "    zsh)\n",
-            "        install_onetcli_block \"$HOME/.zshrc\"\n",
-            "        ;;\n",
-            "    *)\n",
-            "        install_onetcli_block \"$HOME/.bashrc\"\n",
-            "        install_bash_login_block\n",
-            "        install_onetcli_block \"$HOME/.zshrc\"\n",
-            "        ;;\n",
-            "esac\n",
-            "printf '%s%s\\n' {home_marker} \"$HOME\"\n",
-            "printf '%s%s\\n' {session_marker} \"$config_dir\"\n",
-            "printf '%s%s\\n' {shell_marker} \"$login_shell\"\n",
-            "printf '%s\\n' {success_marker}\n"
-        ),
-        script = script,
-        managed_block = managed_block,
-        success_marker = success_marker,
-        home_marker = home_marker,
-        session_marker = session_marker,
-        shell_marker = shell_marker,
-    )
 }
 
 fn build_shell_integration_uninstall_script(success_marker: &str, home_marker: &str) -> String {
@@ -272,24 +178,6 @@ fn build_shell_integration_uninstall_script(success_marker: &str, home_marker: &
         success_marker = success_marker,
         home_marker = home_marker,
     )
-}
-
-fn managed_shell_integration_block() -> String {
-    concat!(
-        "# BEGIN ONETCLI SHELL INTEGRATION\n",
-        "case \"$-\" in\n",
-        "    *i*) __onetcli_interactive=1 ;;\n",
-        "    *) __onetcli_interactive= ;;\n",
-        "esac\n",
-        "if [ -n \"$__onetcli_interactive\" ] && { [ -n \"${BASH_VERSION:-}\" ] || [ -n \"${ZSH_VERSION:-}\" ]; }; then\n",
-        "    __onetcli_si=\"$HOME/.config/onetcli/shell_integration.sh\"\n",
-        "    [ -r \"$__onetcli_si\" ] && . \"$__onetcli_si\"\n",
-        "    unset __onetcli_si\n",
-        "fi\n",
-        "unset __onetcli_interactive\n",
-        "# END ONETCLI SHELL INTEGRATION\n",
-    )
-    .to_string()
 }
 
 fn format_numbered_script(script: &str) -> String {
@@ -342,6 +230,7 @@ enum SshRuntimeInput<Command> {
     Actor(SshActorInput<Command>),
     FlushZmodemProbe,
     FlushTerminalInput,
+    ShellIntegrationTimeout,
 }
 
 enum DeferredSshActorInput {
@@ -780,6 +669,26 @@ impl SshBackend {
         result.map_err(add_connect_error_context)
     }
 
+    /// 真机集成测试入口：探测 + 建立裸交互 channel，返回是否请求运行时注入。
+    pub async fn establish_channel_for_test(
+        session_manager: &Arc<SshSessionManager>,
+        pty_config: &PtyConfig,
+        connection_id: Option<i64>,
+        disable_shell_integration: bool,
+    ) -> anyhow::Result<(
+        Arc<tokio::sync::Mutex<ssh::RusshClient>>,
+        ssh::RusshChannel,
+        bool,
+    )> {
+        Self::establish_channel(
+            session_manager,
+            pty_config,
+            connection_id,
+            disable_shell_integration,
+        )
+        .await
+    }
+
     pub async fn connect(request: SshBackendConnect) -> anyhow::Result<Self> {
         let responder = ZmodemResponder::new(request.event_tx.clone());
         Self::connect_with_recording(request, None, responder).await
@@ -811,7 +720,7 @@ impl SshBackend {
             expect_password.as_deref(),
         )
         .context("invalid SSH account expect configuration")?;
-        let (client, mut channel, shell_integration_active) = Self::establish_channel(
+        let (client, mut channel, shell_integration_requested) = Self::establish_channel(
             &session_manager,
             &pty_config,
             connection_id,
@@ -824,7 +733,7 @@ impl SshBackend {
         // shared consumer.
         let transport_client = client;
 
-        // 有 Shell Integration 时等待 OSC 133;B；裸终端在收到第一段远端数据后即可发送。
+        // 运行时 Shell Integration 会在首段有效输出后注入；裸终端可立即处理初始化命令。
         let pending_init = init_commands;
 
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
@@ -854,9 +763,12 @@ impl SshBackend {
             let mut osc_parser = OscStreamParser::default();
             let mut zmodem_detector = ZmodemDetector::default();
             let mut zmodem_probe_flush = None;
+            let mut shell_integration =
+                RuntimeShellIntegration::new(shell_integration_requested);
+            let mut shell_integration_timeout = None;
             let mut output_decoder = TerminalOutputDecoder::new(terminal_encoding);
             let mut exec_results = HashMap::new();
-            let mut shell_ready = !shell_integration_active;
+            let mut shell_ready = shell_integration.accepts_terminal_input();
             let mut init_sent = false;
             let mut login_expect = login_expect;
             let mut deferred_actor_inputs = VecDeque::new();
@@ -867,7 +779,12 @@ impl SshBackend {
                 // that is still waiting for bounded parser-ingress capacity.
                 let can_flush_zmodem_probe =
                     should_poll_zmodem_probe_flush(&zmodem_probe_flush, pending_ingress.is_some());
-                let runtime_input = if let Some(input) = deferred_actor_inputs.pop_front() {
+                let runtime_input = if shell_integration.accepts_terminal_input()
+                    && deferred_actor_inputs.front().is_some()
+                {
+                    let input = deferred_actor_inputs
+                        .pop_front()
+                        .expect("checked deferred SSH actor input");
                     SshRuntimeInput::Actor(match input {
                         DeferredSshActorInput::Command(command) => SshActorInput::Command(command),
                         DeferredSshActorInput::TerminalResponse(data) => {
@@ -895,6 +812,11 @@ impl SshBackend {
                         {
                             SshRuntimeInput::FlushTerminalInput
                         }
+                        _ = wait_for_shell_integration_timeout(&mut shell_integration_timeout),
+                            if shell_integration_timeout.is_some() =>
+                        {
+                            SshRuntimeInput::ShellIntegrationTimeout
+                        }
                     }
                 };
                 let mut raw_terminal_data = None;
@@ -917,9 +839,35 @@ impl SshBackend {
                         zmodem_probe_flush.take();
                         raw_terminal_data = Some(zmodem_detector.flush_plain_asterisk_prefix());
                     }
+                    SshRuntimeInput::ShellIntegrationTimeout => {
+                        shell_integration_timeout.take();
+                        if shell_integration.on_timeout() {
+                            tracing::warn!(
+                                target: "terminal.ssh.setup",
+                                connection_id,
+                                "运行时 Shell Integration 注入超时，发送 Ctrl+C 并降级为裸终端"
+                            );
+                            if let Err(error) = send_terminal_data(&mut channel, &[0x03])
+                                .await
+                                .context("failed to interrupt timed-out shell integration")
+                            {
+                                disconnect_error = Some(error);
+                                break;
+                            }
+                        }
+                    }
                     SshRuntimeInput::Actor(input) => match input {
                         SshActorInput::Command(cmd) => match cmd {
                             SshCommand::Write { source, data } => {
+                                if !shell_integration.accepts_terminal_input() {
+                                    deferred_actor_inputs.push_back(
+                                        DeferredSshActorInput::Command(SshCommand::Write {
+                                            source,
+                                            data,
+                                        }),
+                                    );
+                                    continue;
+                                }
                                 let effects = encode_exec_effects(
                                     terminal_encoding,
                                     exec_supervisor.on_input(source, &data),
@@ -1058,6 +1006,11 @@ impl SshBackend {
                             }
                         },
                         SshActorInput::TerminalResponse(data) => {
+                            if !shell_integration.accepts_terminal_input() {
+                                deferred_actor_inputs
+                                    .push_back(DeferredSshActorInput::TerminalResponse(data));
+                                continue;
+                            }
                             let _ = exec_supervisor
                                 .on_input(TerminalInputSource::TerminalResponse, &data);
                             if let Err(error) = send_terminal_data(&mut channel, &data)
@@ -1181,6 +1134,20 @@ impl SshBackend {
                         break 'actor;
                     }
                 }
+                let was_injecting = shell_integration.is_injecting();
+                let (data, integration_ready) = match shell_integration.filter_output(data) {
+                    FilteredShellOutput::Suppressed => continue,
+                    FilteredShellOutput::Forward { data, ready } => (data, ready),
+                };
+                if was_injecting && !shell_integration.is_injecting() {
+                    shell_integration_timeout.take();
+                }
+                if integration_ready == ShellIntegrationReady::Plain {
+                    shell_ready = true;
+                }
+                if data.is_empty() {
+                    continue;
+                }
                 // 解析所有 OSC 事件
                 let osc_events = osc_parser.push(&data);
                 let effects = encode_exec_effects(
@@ -1211,6 +1178,7 @@ impl SshBackend {
                             let _ = event_tx.send(TerminalEvent::InputStart);
                             // 133;B: prompt 渲染完，用户可以输入了
                             // 第一次收到时发送 init_commands
+                            shell_integration.on_input_start();
                             if !shell_ready {
                                 shell_ready = true;
                             }
@@ -1230,13 +1198,34 @@ impl SshBackend {
                     }
                 }
 
+                if shell_integration.should_inject(
+                    &data,
+                    login_expect.is_complete(),
+                    expect_responded,
+                ) {
+                    if let Err(error) = send_terminal_data(
+                        &mut channel,
+                        shell_integration.injection_command(),
+                    )
+                    .await
+                    .context("failed to inject runtime shell integration")
+                    {
+                        disconnect_error = Some(error);
+                        break 'actor;
+                    }
+                    shell_integration.begin_injection();
+                    shell_integration_timeout = Some(Box::pin(tokio::time::sleep(
+                        SHELL_INTEGRATION_RUNTIME_TIMEOUT,
+                    )));
+                }
+
                 // 自动登录完成且本轮没有刚发送应答时，再发送 init_commands。
                 // 避免用户名/密码应答和初始化命令落在同一轮输出中，被设备误当成登录输入。
                 if shell_ready && login_expect.is_complete() && !expect_responded && !init_sent {
                     init_sent = true;
                     if let Some(ref commands) = pending_init {
-                        let inter_command_delay =
-                            (!shell_integration_active).then_some(PLAIN_INIT_COMMAND_DELAY);
+                        let inter_command_delay = (!shell_integration.is_integrated())
+                            .then_some(PLAIN_INIT_COMMAND_DELAY);
                         if let Err(error) = send_init_commands(
                             &mut channel,
                             terminal_encoding,
@@ -1331,7 +1320,7 @@ impl SshBackend {
 
     /// 获取一个 interactive channel，封装了"channel open 失败时失效当前 transport generation
     /// 并重试一次"的重连逻辑。
-    /// 同时把首次 setup 成功的 `ShellIntegrationSetup` 写回 manager，供其他 terminal 复用。
+    /// Shell integration 通过运行时注入生效，这里只返回"是否请求了集成"。
     async fn establish_channel(
         session_manager: &Arc<SshSessionManager>,
         pty_config: &PtyConfig,
@@ -1365,32 +1354,22 @@ impl SshBackend {
         let mut plain_channel_only = disable_shell_integration;
         loop {
             let client = session_manager.client().await?;
-            let cached = session_manager.cached_shell_integration().await;
 
             let result = {
                 let mut guard = client.lock().await;
-                if plain_channel_only {
-                    Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
-                        .await
-                        .map(|channel| (channel, None, false))
+                let shell_integration_requested = if plain_channel_only {
+                    false
                 } else {
-                    let cached_setup_available = cached.is_some();
-                    Self::prepare_ssh_channel(&mut *guard, pty_config, connection_id, cached, false)
-                        .await
-                        .map(|(channel, new_setup)| {
-                            let shell_integration_active =
-                                cached_setup_available || new_setup.is_some();
-                            (channel, new_setup, shell_integration_active)
-                        })
-                }
+                    Self::probe_shell_integration_support(&mut *guard, connection_id).await
+                };
+                Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
+                    .await
+                    .map(|channel| (channel, shell_integration_requested))
             };
 
             match result {
-                Ok((channel, new_setup, shell_integration_active)) => {
-                    if let Some(setup) = new_setup {
-                        session_manager.set_shell_integration(&client, setup).await;
-                    }
-                    return Ok((client, channel, shell_integration_active));
+                Ok((channel, shell_integration_requested)) => {
+                    return Ok((client, channel, shell_integration_requested));
                 }
                 Err(err) if attempt == 0 && is_channel_open_failure(&err) => {
                     tracing::warn!(
@@ -1413,99 +1392,75 @@ impl SshBackend {
         }
     }
 
-    async fn prepare_ssh_channel<C: SshClient>(
-        client: &mut C,
-        pty_config: &PtyConfig,
-        connection_id: Option<i64>,
-        cached: Option<ShellIntegrationSetup>,
-        disable_shell_integration: bool,
-    ) -> anyhow::Result<(C::Channel, Option<ShellIntegrationSetup>)> {
-        if disable_shell_integration {
-            let channel = Self::prepare_plain_ssh_channel(client, pty_config).await?;
-            return Ok((channel, None));
-        }
-
-        let (setup, new_setup) = if let Some(cached) = cached {
-            (Some(cached), None)
-        } else {
-            // 首次连接：尝试安装 integration，失败降级为"无 integration"分支。
-            let setup = Self::try_install_shell_integration(client, connection_id).await;
-            (setup.clone(), setup)
-        };
-
-        let mut channel = client.open_channel().await?;
-        Self::start_interactive_shell(client, &mut channel, pty_config, setup.as_ref()).await?;
-        Ok((channel, new_setup))
-    }
-
     async fn prepare_plain_ssh_channel<C: SshClient>(
         client: &mut C,
         pty_config: &PtyConfig,
     ) -> anyhow::Result<C::Channel> {
         let mut channel = client.open_channel().await?;
-        Self::start_interactive_shell(client, &mut channel, pty_config, None).await?;
+        Self::start_interactive_shell(client, &mut channel, pty_config).await?;
         Ok(channel)
     }
 
-    /// 打开一个临时 channel 跑 integration 安装脚本。任何失败（open 失败 / setup 出错 / 超时）
-    /// 都只记 warn 日志并返回 `None`，不阻断 SSH 连接。
-    async fn try_install_shell_integration<C: SshClient>(
+    /// 通过独立 exec channel 只读探测登录 shell 是否支持运行时注入。
+    /// 任何失败（open 失败 / 探测出错 / 超时）都只记 warn 日志并返回 `false`，
+    /// 不阻断 SSH 连接，也不向远端写入任何文件。
+    async fn probe_shell_integration_support<C: SshClient>(
         client: &mut C,
         connection_id: Option<i64>,
-    ) -> Option<ShellIntegrationSetup> {
-        Self::try_install_shell_integration_with_timeout(
+    ) -> bool {
+        Self::probe_shell_integration_support_with_timeout(
             client,
             connection_id,
-            SHELL_INTEGRATION_SETUP_TIMEOUT,
+            SHELL_INTEGRATION_PROBE_TIMEOUT,
         )
         .await
     }
 
-    async fn try_install_shell_integration_with_timeout<C: SshClient>(
+    async fn probe_shell_integration_support_with_timeout<C: SshClient>(
         client: &mut C,
         connection_id: Option<i64>,
         timeout: Duration,
-    ) -> Option<ShellIntegrationSetup> {
-        let mut setup_channel = match client.open_channel().await {
+    ) -> bool {
+        let mut probe_channel = match client.open_channel().await {
             Ok(ch) => ch,
             Err(err) => {
                 tracing::warn!(
                     target: "terminal.ssh.setup",
                     connection_id,
                     error = %err,
-                    "打开 shell integration 安装通道失败，降级为无 integration 模式"
+                    "打开 shell integration 探测通道失败，降级为无 integration 模式"
                 );
-                return None;
+                return false;
             }
         };
 
-        let setup_future = Self::run_shell_integration_setup(&mut setup_channel, connection_id);
-        let result = match tokio::time::timeout(timeout, setup_future).await {
+        let probe_future = Self::run_shell_integration_probe(&mut probe_channel);
+        let result = match tokio::time::timeout(timeout, probe_future).await {
             Ok(r) => r,
             Err(_) => {
                 tracing::warn!(
                     target: "terminal.ssh.setup",
                     connection_id,
                     timeout_secs = timeout.as_secs(),
-                    "shell integration 安装超时，降级为无 integration 模式"
+                    "shell integration 探测超时，降级为无 integration 模式"
                 );
-                let _ = setup_channel.close().await;
-                return None;
+                let _ = probe_channel.close().await;
+                return false;
             }
         };
-        let _ = setup_channel.close().await;
+        let _ = probe_channel.close().await;
 
         match result {
-            Ok(setup) => Some(setup),
+            Ok(supported) => supported,
             Err(err) => {
                 tracing::warn!(
                     target: "terminal.ssh.setup",
                     connection_id,
                     error = %err,
-                    "shell integration 安装失败，降级为无 integration 模式（终端仍可使用，\
+                    "shell integration 探测失败，降级为无 integration 模式（终端仍可使用，\
                      但无 prompt hook / 命令记录）"
                 );
-                None
+                false
             }
         }
     }
@@ -1566,78 +1521,25 @@ impl SshBackend {
         }
     }
 
-    /// 在 PTY 之前写入 integration 脚本。
-    async fn run_shell_integration_setup(
+    /// 只读探测登录 shell：bash/zsh 才支持运行时注入，其余（ash/fish/受限 CLI）直接跳过。
+    /// 完整排空探测 channel（包括对端 Close），避免急切关闭与后续交互 channel 竞争复用。
+    async fn run_shell_integration_probe(
         channel: &mut dyn SshChannel,
-        connection_id: Option<i64>,
-    ) -> anyhow::Result<ShellIntegrationSetup> {
-        const SUCCESS_MARKER: &str = "__ONETCLI_SETUP_OK__";
-        const HOME_MARKER: &str = "__ONETCLI_HOME__=";
-        const SESSION_MARKER: &str = "__ONETCLI_SESSION_DIR__=";
-        const SHELL_MARKER: &str = "__ONETCLI_LOGIN_SHELL__=";
-        let script = embedded_shell_integration_script();
-        let setup_script = build_shell_integration_setup_script(
-            &script,
-            SUCCESS_MARKER,
-            HOME_MARKER,
-            SESSION_MARKER,
-            SHELL_MARKER,
-        );
-        let cmd = format!("sh -c {}", shell_single_quote(&setup_script));
+    ) -> anyhow::Result<bool> {
+        const SUPPORTED_MARKER: &str = "__ONETCLI_SHELL_SUPPORTED__=1";
+        let cmd = "case \"${SHELL:-}\" in *bash*|*zsh*) printf '%s\\n' '__ONETCLI_SHELL_SUPPORTED__=1';; esac";
+        channel.exec(cmd).await?;
 
-        channel.exec(&cmd).await?;
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
+        let mut output = String::new();
         loop {
             match channel.recv().await {
-                Some(ChannelEvent::Data(data)) => stdout.extend(data),
-                Some(ChannelEvent::ExtendedData { data, .. }) => {
-                    stderr.extend(data);
-                }
-                Some(ChannelEvent::ExitStatus(code)) => {
-                    let context = format_setup_failure_context(&setup_script, &stdout, &stderr);
-                    if code != 0 {
-                        tracing::error!(
-                            target: "terminal.ssh.setup",
-                            connection_id,
-                            exit_code = code,
-                            %context,
-                            "shell integration setup failed"
-                        );
+                Some(ChannelEvent::Data(data)) => {
+                    if output.len() < 256 {
+                        output.push_str(&String::from_utf8_lossy(&data));
                     }
-                    anyhow::ensure!(
-                        code == 0,
-                        "shell integration setup failed with exit code {code}: {context}",
-                    );
                 }
                 Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
-                    let output = String::from_utf8_lossy(&stdout);
-                    let context = format_setup_failure_context(&setup_script, &stdout, &stderr);
-                    if !output.contains(SUCCESS_MARKER) {
-                        tracing::error!(
-                            target: "terminal.ssh.setup",
-                            connection_id,
-                            %context,
-                            "shell integration setup ended before success marker"
-                        );
-                    }
-                    anyhow::ensure!(
-                        output.contains(SUCCESS_MARKER),
-                        "shell integration setup ended before confirming completion: {context}",
-                    );
-                    let home_dir = extract_marker_value(&output, HOME_MARKER)
-                        .ok_or_else(|| anyhow::anyhow!("missing setup home directory marker"))?;
-                    let session_dir = extract_marker_value(&output, SESSION_MARKER)
-                        .ok_or_else(|| anyhow::anyhow!("missing setup session directory marker"))?;
-                    let login_shell = extract_marker_value(&output, SHELL_MARKER)
-                        .filter(|value| !value.trim().is_empty());
-                    return Ok(ShellIntegrationSetup {
-                        home_dir,
-                        session_dir,
-                        login_shell,
-                    });
+                    return Ok(output.contains(SUPPORTED_MARKER));
                 }
                 _ => {}
             }
@@ -1648,7 +1550,6 @@ impl SshBackend {
         client: &C,
         channel: &mut C::Channel,
         pty_config: &PtyConfig,
-        _setup: Option<&ShellIntegrationSetup>,
     ) -> anyhow::Result<()> {
         channel.request_pty(pty_config).await?;
         Self::maybe_request_x11_forwarding(client, channel).await;
@@ -1683,8 +1584,6 @@ mod tests {
     use async_trait::async_trait;
     use ssh::SshConnectConfig;
     use std::collections::VecDeque;
-    use std::fs;
-    use std::process::Command;
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex};
     use tokio::time::sleep;
@@ -2056,17 +1955,6 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             true
         }
-
-        async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
-            None
-        }
-
-        async fn set_shell_integration(
-            &self,
-            _client: &Arc<tokio::sync::Mutex<Self::Client>>,
-            _setup: ShellIntegrationSetup,
-        ) {
-        }
     }
 
     fn recorded_ops(state: &Arc<Mutex<MockChannelState>>) -> Vec<ChannelOp> {
@@ -2287,261 +2175,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_ssh_channel_uses_plain_request_shell_for_zsh_after_setup() {
-        let (setup_channel, setup_state) = MockChannel::new(
+    async fn establish_channel_reconnects_with_one_plain_channel_after_russh_open_failure() {
+        let (probe_channel, probe_state) = MockChannel::new(
             [
-                ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
-                        .to_vec(),
-                ),
-                ChannelEvent::ExitStatus(0),
-            ],
-            true,
-        );
-        let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([setup_channel, interactive_channel]);
-
-        let result = SshBackend::prepare_ssh_channel(
-            &mut client,
-            &PtyConfig::default(),
-            Some(42),
-            None,
-            false,
-        )
-        .await;
-
-        let (_channel, new_setup) =
-            result.expect("安装 shell integration 不应占用交互 shell 的 channel");
-        assert!(
-            new_setup.is_some(),
-            "首次成功安装应返回新 setup 以便写入 manager 缓存"
-        );
-        assert_eq!(
-            recorded_ops(&setup_state),
-            vec![ChannelOp::Exec, ChannelOp::Close]
-        );
-        assert_eq!(
-            recorded_ops(&interactive_state),
-            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
-        );
-    }
-
-    #[tokio::test]
-    async fn prepare_ssh_channel_uses_plain_request_shell_for_bash_after_setup() {
-        let (setup_channel, setup_state) = MockChannel::new(
-            [
-                ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/bash\n__ONETCLI_SETUP_OK__\n"
-                        .to_vec(),
-                ),
-                ChannelEvent::ExitStatus(0),
-            ],
-            true,
-        );
-        let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([setup_channel, interactive_channel]);
-
-        let result = SshBackend::prepare_ssh_channel(
-            &mut client,
-            &PtyConfig::default(),
-            Some(42),
-            None,
-            false,
-        )
-        .await;
-
-        let (_channel, new_setup) = result.expect("bash shell wrapper 应通过独立交互 channel 启动");
-        assert!(new_setup.is_some());
-        assert_eq!(
-            recorded_ops(&setup_state),
-            vec![ChannelOp::Exec, ChannelOp::Close]
-        );
-        assert_eq!(
-            recorded_ops(&interactive_state),
-            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
-        );
-    }
-
-    #[tokio::test]
-    async fn run_shell_integration_setup_fails_without_success_signal() {
-        let (mut channel, _) = MockChannel::new([ChannelEvent::Close], false);
-
-        let result = SshBackend::run_shell_integration_setup(&mut channel, Some(42)).await;
-
-        assert!(
-            result.is_err(),
-            "仅收到 Close 不能视为 shell integration 安装成功"
-        );
-    }
-
-    #[tokio::test]
-    async fn run_shell_integration_setup_accepts_success_marker_before_close() {
-        let (mut channel, _) = MockChannel::new(
-            [
-                ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
-                        .to_vec(),
-                ),
+                ChannelEvent::Data(b"__ONETCLI_SHELL_SUPPORTED__=1\n".to_vec()),
                 ChannelEvent::Close,
             ],
             false,
         );
-
-        let result = SshBackend::run_shell_integration_setup(&mut channel, Some(42)).await;
-
-        assert!(result.is_ok(), "收到成功标记后应接受无 ExitStatus 的 Close");
-    }
-
-    #[tokio::test]
-    async fn run_shell_integration_setup_exit_status_error_includes_numbered_script_context() {
-        let (mut channel, _) = MockChannel::new(
-            [
-                ChannelEvent::ExtendedData {
-                    ext: 1,
-                    data: b"sh: 7: cannot create /tmp/x: Directory nonexistent".to_vec(),
-                },
-                ChannelEvent::ExitStatus(1),
-            ],
-            false,
-        );
-
-        let error = SshBackend::run_shell_integration_setup(&mut channel, Some(42))
-            .await
-            .expect_err("exit code 1 应返回带上下文的错误");
-        let message = error.to_string();
-
-        assert!(
-            message.contains("sh: 7: cannot create /tmp/x: Directory nonexistent"),
-            "错误消息应保留远端 stderr，实际: {message}"
-        );
-        assert!(
-            message.contains("setup script:"),
-            "错误消息应包含编号后的 setup script，实际: {message}"
-        );
-        assert!(
-            message.contains("7 |"),
-            "错误消息应包含脚本行号，实际: {message}"
-        );
-    }
-
-    #[tokio::test]
-    async fn prepare_ssh_channel_falls_back_to_plain_shell_when_setup_fails() {
-        // setup 通道返回 exit 1，应该被降级路径捕获：interactive 通道不 set_env、只 pty+shell。
-        let (setup_channel, setup_state) = MockChannel::new(
-            [
-                ChannelEvent::ExtendedData {
-                    ext: 1,
-                    data:
-                        b"mkdir: cannot create directory '/root/.config/onetcli': Permission denied"
-                            .to_vec(),
-                },
-                ChannelEvent::ExitStatus(1),
-            ],
-            false,
-        );
-        let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([setup_channel, interactive_channel]);
-
-        let (_ch, new_setup) = SshBackend::prepare_ssh_channel(
-            &mut client,
-            &PtyConfig::default(),
-            Some(42),
-            None,
-            false,
-        )
-        .await
-        .expect("setup 失败时 prepare_ssh_channel 不应整体失败");
-
-        assert!(
-            new_setup.is_none(),
-            "失败降级不应向 manager 写入任何 integration 缓存"
-        );
-        assert_eq!(
-            recorded_ops(&setup_state),
-            vec![ChannelOp::Exec, ChannelOp::Close],
-            "setup 通道仍应正常跑完 exec + close"
-        );
-        assert_eq!(
-            recorded_ops(&interactive_state),
-            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
-            "降级路径绝对不能调 set_env，也不能走 bash wrapper exec"
-        );
-    }
-
-    #[tokio::test]
-    async fn prepare_ssh_channel_skips_setup_when_cache_hit() {
-        // 命中缓存：只应打开 1 个 channel（interactive）。mock client 只提供 1 个 channel。
-        let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([interactive_channel]);
-
-        let cached = ShellIntegrationSetup {
-            home_dir: "/tmp/home".into(),
-            session_dir: "/tmp/home/.config/onetcli".into(),
-            login_shell: Some("/bin/zsh".into()),
-        };
-
-        let (_ch, new_setup) = SshBackend::prepare_ssh_channel(
-            &mut client,
-            &PtyConfig::default(),
-            Some(42),
-            Some(cached),
-            false,
-        )
-        .await
-        .expect("缓存命中时应直接复用 setup 结果");
-
-        assert!(
-            new_setup.is_none(),
-            "缓存命中不应再向 manager 写入新的 integration"
-        );
-        assert_eq!(
-            recorded_ops(&interactive_state),
-            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
-        );
-    }
-
-    #[tokio::test]
-    async fn prepare_ssh_channel_skips_setup_when_disabled() {
-        // 交换机等受限设备可能只允许一个 session channel。显式禁用时必须直接用这个
-        // channel 请求 PTY + shell，不能先开安装或卸载 channel。
-        let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([interactive_channel]);
-
-        let (_ch, new_setup) = SshBackend::prepare_ssh_channel(
-            &mut client,
-            &PtyConfig::default(),
-            Some(42),
-            None,
-            true,
-        )
-        .await
-        .expect("禁用 shell integration 时仍应建立 interactive channel");
-
-        assert!(
-            new_setup.is_none(),
-            "禁用路径不应向 manager 写入任何 integration 缓存"
-        );
-        assert_eq!(
-            recorded_ops(&interactive_state),
-            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
-            "禁用路径必须只打开一个 channel，并且只跑 PTY + shell"
-        );
-    }
-
-    #[tokio::test]
-    async fn establish_channel_reconnects_with_one_plain_channel_after_russh_open_failure() {
-        let (setup_channel, setup_state) = MockChannel::new(
-            [
-                ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
-                        .to_vec(),
-                ),
-                ChannelEvent::ExitStatus(0),
-            ],
-            false,
-        );
         let first_client = MockClient::new_with_open_error(
-            [setup_channel],
+            [probe_channel],
             "Failed to open channel (AdministrativelyProhibited)",
         );
 
@@ -2549,7 +2192,7 @@ mod tests {
         let second_client = MockClient::new([fallback_channel]);
         let manager = MockSessionManager::new([first_client, second_client]);
 
-        let (_client, _channel, shell_integration_active) =
+        let (_client, _channel, shell_integration_requested) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2560,7 +2203,7 @@ mod tests {
             .expect("russh open channel 错误后应以单通道模式重连");
 
         assert!(
-            !shell_integration_active,
+            !shell_integration_requested,
             "单通道降级后不能继续等待 OSC Shell Integration 信号"
         );
         assert_eq!(
@@ -2569,9 +2212,9 @@ mod tests {
             "首次失败后只应失效发生错误的 transport generation"
         );
         assert_eq!(
-            recorded_ops(&setup_state),
+            recorded_ops(&probe_state),
             vec![ChannelOp::Exec, ChannelOp::Close],
-            "首次连接仍按默认配置尝试 integration"
+            "首次连接仍按默认配置尝试 integration 探测"
         );
         assert_eq!(
             recorded_ops(&fallback_state),
@@ -2581,22 +2224,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn establish_channel_reports_shell_integration_active_after_successful_setup() {
-        let (setup_channel, _) = MockChannel::new(
+    async fn establish_channel_reports_shell_integration_requested_after_supported_probe() {
+        let (probe_channel, probe_state) = MockChannel::new(
             [
-                ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
-                        .to_vec(),
-                ),
-                ChannelEvent::ExitStatus(0),
+                ChannelEvent::Data(b"__ONETCLI_SHELL_SUPPORTED__=1\n".to_vec()),
+                ChannelEvent::Close,
             ],
             false,
         );
-        let (interactive_channel, _) = MockChannel::new([], false);
+        let (interactive_channel, interactive_state) = MockChannel::new([], false);
         let manager =
-            MockSessionManager::new([MockClient::new([setup_channel, interactive_channel])]);
+            MockSessionManager::new([MockClient::new([probe_channel, interactive_channel])]);
 
-        let (_client, _channel, shell_integration_active) =
+        let (_client, _channel, shell_integration_requested) =
             SshBackend::establish_channel_with_manager(
                 &manager,
                 &PtyConfig::default(),
@@ -2604,32 +2244,73 @@ mod tests {
                 false,
             )
             .await
-            .expect("标准 Shell 应完成 integration setup");
+            .expect("支持的 shell 应通过只读探测后建立交互通道");
 
         assert!(
-            shell_integration_active,
-            "安装成功后应继续等待 OSC 133;B 再发送初始化脚本"
+            shell_integration_requested,
+            "探测到 bash/zsh 后应请求运行时注入"
+        );
+        assert_eq!(
+            recorded_ops(&probe_state),
+            vec![ChannelOp::Exec, ChannelOp::Close],
+            "探测通道必须只读：exec 探测命令 + close，不写任何远端文件"
+        );
+        assert_eq!(
+            recorded_ops(&interactive_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
         );
         assert_eq!(manager.invalidation_count(), 0);
     }
 
     #[tokio::test]
-    async fn try_install_shell_integration_respects_configured_timeout() {
-        // 测试里用短 timeout 验证逻辑；生产自动探测走 3s，显式卸载仍走 10s。
-        let (setup_channel, _) = MockChannel::new_with_delay(
+    async fn establish_channel_skips_runtime_injection_when_probe_reports_unsupported_shell() {
+        let (probe_channel, probe_state) =
+            MockChannel::new([ChannelEvent::Data(b"\n".to_vec()), ChannelEvent::Close], false);
+        let (interactive_channel, interactive_state) = MockChannel::new([], false);
+        let manager =
+            MockSessionManager::new([MockClient::new([probe_channel, interactive_channel])]);
+
+        let (_client, _channel, shell_integration_requested) =
+            SshBackend::establish_channel_with_manager(
+                &manager,
+                &PtyConfig::default(),
+                Some(42),
+                false,
+            )
+            .await
+            .expect("不支持的 shell 仍应建立交互通道");
+
+        assert!(
+            !shell_integration_requested,
+            "ash/fish/受限 CLI 不能注入 bash/zsh 语法脚本"
+        );
+        assert_eq!(
+            recorded_ops(&probe_state),
+            vec![ChannelOp::Exec, ChannelOp::Close]
+        );
+        assert_eq!(
+            recorded_ops(&interactive_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_shell_integration_support_respects_configured_timeout() {
+        // 测试里用短 timeout 验证逻辑；生产探测 1s。
+        let (probe_channel, _) = MockChannel::new_with_delay(
             [ChannelEvent::Data(b"pending...".to_vec())],
             false,
             Some(Duration::from_millis(20)),
         );
-        let mut client = MockClient::new([setup_channel]);
+        let mut client = MockClient::new([probe_channel]);
 
-        let res = SshBackend::try_install_shell_integration_with_timeout(
+        let res = SshBackend::probe_shell_integration_support_with_timeout(
             &mut client,
             Some(42),
             Duration::from_millis(1),
         )
         .await;
-        assert!(res.is_none(), "探测超时后应降级为 None");
+        assert!(!res, "探测超时后应降级为不注入");
     }
 
     #[test]
@@ -2664,487 +2345,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_shell_integration_setup_command_writes_bash_managed_blocks_idempotently() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-shell-setup-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&temp_dir).expect("应创建临时目录");
 
-        let home_dir = temp_dir.join("home");
-        fs::create_dir_all(&home_dir).expect("应创建 home 目录");
-        let bashrc_path = home_dir.join(".bashrc");
-        let bash_profile_path = home_dir.join(".bash_profile");
-        fs::write(
-            &bashrc_path,
-            "# user bashrc\n# BEGIN ONETCLI SHELL INTEGRATION\nold\n# END ONETCLI SHELL INTEGRATION\n",
-        )
-        .expect("应写入用户 bashrc");
-        fs::write(&bash_profile_path, "# user bash_profile\n").expect("应写入用户 bash_profile");
-        let script = "echo 'quoted'\nPS1='prompt'\n";
-        let command = build_shell_integration_setup_script(
-            script,
-            "__TEST_OK__",
-            "__HOME__=",
-            "__SESSION__=",
-            "__SHELL__=",
-        );
 
-        for _ in 0..2 {
-            let output = Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .env("HOME", &home_dir)
-                .env("SHELL", "/bin/bash")
-                .output()
-                .expect("应能执行本地 shell setup 命令");
 
-            assert!(
-                output.status.success(),
-                "shell setup 命令应成功执行: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let lines = stdout.trim().lines().collect::<Vec<_>>();
-            let reported_home = lines
-                .first()
-                .and_then(|line| line.strip_prefix("__HOME__="))
-                .expect("应输出 shell 看到的 HOME");
-            assert!(!reported_home.is_empty());
-            let expected_session = format!("__SESSION__={reported_home}/.config/onetcli");
-            assert_eq!(lines.get(1).copied(), Some(expected_session.as_str()));
-            assert_eq!(lines.get(2).copied(), Some("__SHELL__=/bin/bash"));
-            assert_eq!(lines.get(3).copied(), Some("__TEST_OK__"));
-        }
 
-        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
-        assert_eq!(
-            fs::read_to_string(&integration_path).expect("应写入 integration 文件"),
-            script
-        );
 
-        let bashrc = fs::read_to_string(&bashrc_path).expect("应读取用户 bashrc");
-        assert!(
-            bashrc.starts_with("# user bashrc\n"),
-            "应保留用户 bashrc 原内容，实际: {bashrc}"
-        );
-        assert!(
-            !bashrc.contains("\nold\n"),
-            "再次安装应替换旧 managed block，实际: {bashrc}"
-        );
-        assert_eq!(
-            bashrc.matches("# BEGIN ONETCLI SHELL INTEGRATION").count(),
-            1,
-            "重复安装不应追加多个 begin marker: {bashrc}"
-        );
-        assert_eq!(
-            bashrc.matches("# END ONETCLI SHELL INTEGRATION").count(),
-            1,
-            "重复安装不应追加多个 end marker: {bashrc}"
-        );
-        assert!(
-            bashrc.contains("case \"$-\" in"),
-            "managed block 应先判断是否交互 shell，避免 rsync/scp 等非交互通道被 OSC 污染: {bashrc}"
-        );
-        assert!(
-            bashrc.contains("shell_integration.sh"),
-            "managed block 应 source 持久 integration 脚本: {bashrc}"
-        );
 
-        let bash_profile = fs::read_to_string(&bash_profile_path).expect("应读取用户 bash_profile");
-        assert!(
-            bash_profile.starts_with("# user bash_profile\n"),
-            "应保留用户 bash_profile 原内容，实际: {bash_profile}"
-        );
-        assert!(
-            bash_profile.contains("# BEGIN ONETCLI SHELL INTEGRATION"),
-            "bash login shell 启动文件也应写入 managed block: {bash_profile}"
-        );
 
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn build_shell_integration_setup_command_normalizes_crlf_script_contents() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-shell-setup-crlf-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&temp_dir).expect("应创建临时目录");
-
-        let home_dir = temp_dir.join("home");
-        fs::create_dir_all(&home_dir).expect("应创建 home 目录");
-
-        let command = build_shell_integration_setup_script(
-            "echo one\r\necho two\r\n",
-            "__TEST_OK__",
-            "__HOME__=",
-            "__SESSION__=",
-            "__SHELL__=",
-        );
-
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .env("HOME", &home_dir)
-            .output()
-            .expect("应能执行本地 shell setup 命令");
-
-        assert!(
-            output.status.success(),
-            "shell setup 命令应成功执行: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
-        assert_eq!(
-            fs::read_to_string(&integration_path).expect("应写入 integration 文件"),
-            "echo one\necho two\n",
-            "session integration 脚本应统一写成 LF，避免远端 bash 解析 $'\\r'"
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn build_shell_integration_setup_command_replaces_directory_at_script_path() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-shell-setup-directory-collision-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        let home_dir = temp_dir.join("home");
-        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
-        fs::create_dir_all(&integration_path).expect("应创建冲突的 integration 目录");
-        fs::write(integration_path.join("stale"), "stale\n").expect("应写入冲突目录内容");
-
-        let command = build_shell_integration_setup_script(
-            "echo recovered\n",
-            "__TEST_OK__",
-            "__HOME__=",
-            "__SESSION__=",
-            "__SHELL__=",
-        );
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .env("HOME", &home_dir)
-            .env("SHELL", "/bin/bash")
-            .output()
-            .expect("应能执行本地 shell setup 命令");
-
-        assert!(
-            output.status.success(),
-            "setup 应清理占用脚本路径的目录并继续安装: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            fs::read_to_string(&integration_path).expect("integration 路径应恢复为普通文件"),
-            "echo recovered\n"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("__TEST_OK__"),
-            "恢复安装后应输出成功标记"
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn build_shell_integration_uninstall_command_removes_managed_blocks_and_scripts() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-shell-uninstall-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        let home_dir = temp_dir.join("home");
-        let config_dir = home_dir.join(".config/onetcli");
-        fs::create_dir_all(config_dir.join("sessions/42")).expect("应创建 legacy sessions");
-        fs::write(
-            config_dir.join("shell_integration.sh"),
-            "echo integration\n",
-        )
-        .expect("应写入 integration 脚本");
-        fs::write(
-            config_dir.join("sessions/42/shell_integration.sh"),
-            "legacy\n",
-        )
-        .expect("应写入 legacy session 脚本");
-
-        let managed = managed_shell_integration_block();
-        fs::write(
-            home_dir.join(".bashrc"),
-            format!("before bash\n{managed}after bash\n"),
-        )
-        .expect("应写入 bashrc");
-        fs::write(
-            home_dir.join(".bash_profile"),
-            format!("before profile\n{managed}after profile\n"),
-        )
-        .expect("应写入 bash_profile");
-        fs::write(
-            home_dir.join(".zshrc"),
-            format!("before zsh\n{managed}after zsh\n"),
-        )
-        .expect("应写入 zshrc");
-
-        let command =
-            build_shell_integration_uninstall_script("__TEST_UNINSTALL_OK__", "__HOME__=");
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .env("HOME", &home_dir)
-            .output()
-            .expect("应能执行本地 uninstall 命令");
-
-        assert!(
-            output.status.success(),
-            "uninstall 命令应成功执行: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let lines = stdout.trim().lines().collect::<Vec<_>>();
-        let reported_home = lines
-            .first()
-            .and_then(|line| line.strip_prefix("__HOME__="))
-            .expect("应输出 shell 看到的 HOME");
-        assert!(!reported_home.is_empty());
-        assert_eq!(lines.get(1).copied(), Some("__TEST_UNINSTALL_OK__"));
-        assert_eq!(
-            fs::read_to_string(home_dir.join(".bashrc")).expect("应读取 bashrc"),
-            "before bash\nafter bash\n"
-        );
-        assert_eq!(
-            fs::read_to_string(home_dir.join(".bash_profile")).expect("应读取 bash_profile"),
-            "before profile\nafter profile\n"
-        );
-        assert_eq!(
-            fs::read_to_string(home_dir.join(".zshrc")).expect("应读取 zshrc"),
-            "before zsh\nafter zsh\n"
-        );
-        assert!(!config_dir.join("shell_integration.sh").exists());
-        assert!(!config_dir.join("sessions").exists());
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn build_shell_integration_uninstall_command_removes_directory_collision_idempotently() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-shell-uninstall-directory-collision-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        let home_dir = temp_dir.join("home");
-        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
-        fs::create_dir_all(&integration_path).expect("应创建冲突的 integration 目录");
-        fs::write(integration_path.join("stale"), "stale\n").expect("应写入冲突目录内容");
-
-        let command =
-            build_shell_integration_uninstall_script("__TEST_UNINSTALL_OK__", "__HOME__=");
-        for _ in 0..2 {
-            let output = Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .env("HOME", &home_dir)
-                .output()
-                .expect("应能执行本地 uninstall 命令");
-
-            assert!(
-                output.status.success(),
-                "uninstall 应清理占用脚本路径的目录，并允许重复执行: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                String::from_utf8_lossy(&output.stdout).contains("__TEST_UNINSTALL_OK__"),
-                "每次幂等卸载都应输出成功标记"
-            );
-        }
-        assert!(!integration_path.exists());
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[tokio::test]
-    async fn run_shell_integration_uninstall_accepts_success_marker_before_close() {
-        let (mut channel, _) = MockChannel::new(
-            [
-                ChannelEvent::Data(
-                    b"__ONETCLI_UNINSTALL_HOME__=/tmp/home\n__ONETCLI_UNINSTALL_OK__\n".to_vec(),
-                ),
-                ChannelEvent::Close,
-            ],
-            false,
-        );
-
-        let result = SshBackend::run_shell_integration_uninstall(&mut channel).await;
-
-        assert!(
-            result.is_ok(),
-            "收到卸载成功标记后应接受无 ExitStatus 的 Close"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bash_managed_block_sources_integration_only_for_onetcli_interactive_shells() {
-        if Command::new("bash").arg("--version").output().is_err() {
-            eprintln!("跳过 bash managed block 测试：当前环境未安装 bash");
-            return;
-        }
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-bash-managed-block-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&temp_dir).expect("应创建临时目录");
-
-        let home_dir = temp_dir.join("home");
-        fs::create_dir_all(&home_dir).expect("应创建 home 目录");
-
-        let script = "export __ONETCLI_INTEGRATION_LOADED=1\n";
-        let command = build_shell_integration_setup_script(
-            script,
-            "__TEST_OK__",
-            "__HOME__=",
-            "__SESSION__=",
-            "__SHELL__=",
-        );
-        let setup = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .env("HOME", &home_dir)
-            .env("SHELL", "/bin/bash")
-            .output()
-            .expect("应执行 setup 脚本");
-        assert!(
-            setup.status.success(),
-            "setup 脚本应成功: {}",
-            String::from_utf8_lossy(&setup.stderr)
-        );
-
-        let non_interactive = Command::new("bash")
-            .arg("-c")
-            .arg(". \"$HOME/.bashrc\"; echo loaded=${__ONETCLI_INTEGRATION_LOADED:-0}")
-            .env("HOME", &home_dir)
-            .output()
-            .expect("应执行非交互 bash");
-        assert!(
-            non_interactive.status.success(),
-            "非交互 bash 应成功: {}",
-            String::from_utf8_lossy(&non_interactive.stderr)
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&non_interactive.stdout).trim(),
-            "loaded=0",
-            "非交互 shell 不应 source integration"
-        );
-
-        let interactive = Command::new("bash")
-            .arg("-i")
-            .arg("-c")
-            .arg("echo loaded=${__ONETCLI_INTEGRATION_LOADED:-0}")
-            .env("HOME", &home_dir)
-            .output()
-            .expect("应执行交互 bash");
-
-        assert!(
-            interactive.status.success(),
-            "交互 bash 应成功执行: {}",
-            String::from_utf8_lossy(&interactive.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&interactive.stdout).contains("loaded=1"),
-            "OnetCli 交互 bash 应 source integration，实际 stdout: {}",
-            String::from_utf8_lossy(&interactive.stdout)
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn zsh_setup_writes_zshrc_managed_block() {
-        if Command::new("zsh").arg("--version").output().is_err() {
-            eprintln!("跳过 zsh managed block 测试：当前环境未安装 zsh");
-            return;
-        }
-        let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-zsh-managed-block-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time should be after unix epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&temp_dir).expect("应创建临时目录");
-
-        let home_dir = temp_dir.join("home");
-        fs::create_dir_all(&home_dir).expect("应创建 home 目录");
-        fs::write(home_dir.join(".zshrc"), "# user zshrc\n").expect("应写入用户 .zshrc");
-
-        let script = "export __ONETCLI_INTEGRATION_LOADED=1\n";
-        let command = build_shell_integration_setup_script(
-            script,
-            "__TEST_OK__",
-            "__HOME__=",
-            "__SESSION__=",
-            "__SHELL__=",
-        );
-        let setup = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .env("HOME", &home_dir)
-            .env("SHELL", "zsh")
-            .output()
-            .expect("应执行 setup 脚本");
-        assert!(
-            setup.status.success(),
-            "setup 脚本应成功: {}",
-            String::from_utf8_lossy(&setup.stderr)
-        );
-
-        let zshrc = fs::read_to_string(home_dir.join(".zshrc")).expect("应读取 zshrc");
-        assert!(
-            zshrc.starts_with("# user zshrc\n"),
-            "应保留用户 zshrc 原内容，实际: {zshrc}"
-        );
-        assert!(
-            zshrc.contains("# BEGIN ONETCLI SHELL INTEGRATION"),
-            "zshrc 应包含 managed block: {zshrc}"
-        );
-        assert!(
-            zshrc.contains("case \"$-\" in"),
-            "zshrc managed block 应保护非交互 shell: {zshrc}"
-        );
-        assert!(
-            !home_dir.join(".zprofile").exists(),
-            "zsh 不需要通过 ZDOTDIR/session wrapper 改写 .zprofile"
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
 
     #[test]
     fn parse_osc_payload_decodes_recorded_command() {

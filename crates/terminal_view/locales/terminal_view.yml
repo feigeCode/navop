@@ -511,14 +511,6 @@ SSH:
     en: Default working directory
     zh-CN: 默认工作目录
     zh-HK: 默認工作目錄
-  disable_shell_integration:
-    en: Disable Shell Integration
-    zh-CN: 禁用 Shell 集成
-    zh-HK: 禁用 Shell 集成
-  disable_shell_integration_desc:
-    en: Disable OSC shell hooks for future connections; command history, prompt status, working-directory tracking, and terminal/file-manager path sync will be unavailable. This does not remove remote files; use Uninstall below when cleanup is needed.
-    zh-CN: 后续连接将禁用 OSC Shell hook，无法使用命令历史、prompt 状态、工作目录跟踪及终端/文件管理器路径同步。此选项不会删除远端文件；需要清理时请点击下方“卸载”。
-    zh-HK: 後續連線將禁用 OSC Shell hook，無法使用命令歷史、prompt 狀態、工作目錄追蹤及終端/檔案管理器路徑同步。此選項不會刪除遠端檔案；需要清理時請點擊下方「解除安裝」。
   x11_forwarding:
     en: X11 Forwarding
     zh-CN: X11 转发
@@ -536,29 +528,29 @@ SSH:
     zh-CN: X11 转发不可用：XQuartz 可能未安装、未运行，或 DISPLAY 授权尚未就绪。请安装或启动 XQuartz，然后重新建立 SSH 连接。
     zh-HK: X11 轉發無法使用：XQuartz 可能未安裝、未執行，或 DISPLAY 授權尚未就緒。請安裝或啟動 XQuartz，然後重新建立 SSH 連線。
   remote_shell_integration:
-    en: Remote Shell Integration
-    zh-CN: 远端 Shell 集成
-    zh-HK: 遠端 Shell 整合
+    en: Shell Integration
+    zh-CN: Shell 集成
+    zh-HK: Shell 整合
   uninstall_shell_integration:
-    en: Uninstall
-    zh-CN: 卸载
-    zh-HK: 解除安裝
+    en: Clean up legacy files
+    zh-CN: 清理旧版文件
+    zh-HK: 清理舊版檔案
   uninstalling_shell_integration:
-    en: Uninstalling...
-    zh-CN: 卸载中...
-    zh-HK: 解除安裝中...
+    en: Cleaning up...
+    zh-CN: 清理中...
+    zh-HK: 清理中...
   uninstall_shell_integration_desc:
-    en: Remove Navop-managed rc blocks and ~/.config/onetcli shell integration scripts from the remote host. Future sessions will reinstall them when Shell integration is enabled.
-    zh-CN: 删除远端主机上由 Navop 管理的 rc 配置块和 ~/.config/onetcli Shell 集成脚本。后续会话在启用 Shell 集成时会重新安装。
-    zh-HK: 刪除遠端主機上由 Navop 管理的 rc 設定區塊和 ~/.config/onetcli Shell 整合腳本。後續工作階段在啟用 Shell 整合時會重新安裝。
+    en: Shell integration is injected at runtime for every session and never writes files to the remote host. Older Navop versions may have left persistent integration files (rc blocks and ~/.config/onetcli) behind; click once to clean them up if you no longer use that version.
+    zh-CN: Shell 集成在每次连接时运行时注入，不会在远端写入任何文件。旧版本 Navop 可能遗留过持久化集成文件（rc 配置块和 ~/.config/onetcli），如已不再使用旧版，可点击清理一次。
+    zh-HK: Shell 整合在每次連線時執行時注入，不會在遠端寫入任何檔案。舊版本 Navop 可能遺留過持久化整合檔案（rc 設定區塊和 ~/.config/onetcli），如已不再使用舊版，可點擊清理一次。
   uninstall_shell_integration_success:
-    en: Remote Shell integration uninstalled.
-    zh-CN: 已卸载远端 Shell 集成。
-    zh-HK: 已解除安裝遠端 Shell 整合。
+    en: No legacy integration files found on the remote host.
+    zh-CN: 远端没有发现旧版集成文件。
+    zh-HK: 遠端沒有發現舊版整合檔案。
   uninstall_shell_integration_failed:
-    en: "Failed to uninstall remote Shell integration: %{error}"
-    zh-CN: "卸载远端 Shell 集成失败：%{error}"
-    zh-HK: "解除安裝遠端 Shell 整合失敗：%{error}"
+    en: "Failed to clean up legacy integration files: %{error}"
+    zh-CN: "清理旧版集成文件失败：%{error}"
+    zh-HK: "清理舊版整合檔案失敗：%{error}"
   # 其他设置
   remark:
     en: Remark

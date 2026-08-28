@@ -32,7 +32,7 @@ pub use ssh::{
     AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,
     KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
     LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig,
-    ProxyType, PtyConfig, RusshChannel, RusshClient, ShellIntegrationSetup, SshAuth, SshChannel,
+    ProxyType, PtyConfig, RusshChannel, RusshClient, SshAuth, SshChannel,
     SshClient, SshConnectConfig, authenticate_session, authenticate_session_with_fallbacks,
     authenticate_with_strategy, build_client_preferred_algorithms,
     build_client_preferred_algorithms_with_legacy, connect_via_proxy, defaults,

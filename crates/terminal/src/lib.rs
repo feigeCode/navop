@@ -16,6 +16,7 @@ pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_expect;
 mod ssh_ingress;
+mod ssh_shell_integration;
 mod ssh_session_identity;
 pub mod telnet_backend;
 mod telnet_expect;
@@ -42,6 +43,7 @@ pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use selection_text::selection_text_from_term;
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
+pub use ssh_shell_integration::test_support;
 pub use ssh_session_identity::{
     PersistedSshSessionIdentity, PersistedSshSessionIdentityError, SshSessionIdentityTransition,
 };

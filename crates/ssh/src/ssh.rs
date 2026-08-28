@@ -124,17 +124,6 @@ fn host_key_algorithm_matches(candidate: &Algorithm, known: &str) -> bool {
     }
 }
 
-/// 远端 shell integration 安装后采集的"会话信息"。
-///
-/// 定义在 `ssh` crate 主要是为了让 `SshSessionManager` 能把它跟 client 绑定缓存，
-/// 避免每次新开终端都要重跑安装脚本，也方便 terminal crate 在 setup 失败时走降级分支。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShellIntegrationSetup {
-    pub home_dir: String,
-    pub session_dir: String,
-    pub login_shell: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct SshConnectConfig {
     pub host: String,

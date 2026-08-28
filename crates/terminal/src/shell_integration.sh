@@ -52,7 +52,9 @@ __onetcli_emit_recorded_command() {
 __onetcli_precmd_common() {
     local exit_code="$1"
     __onetcli_command_done "$exit_code"
-    if [[ -n "${__ONETCLI_COMMAND_STARTED:-}" ]]; then
+    if [[ -n "${_ONETCLI_RUNTIME_SETUP:-}" ]]; then
+        unset _ONETCLI_RUNTIME_SETUP __ONETCLI_COMMAND_STARTED
+    elif [[ -n "${__ONETCLI_COMMAND_STARTED:-}" ]]; then
         __onetcli_emit_recorded_command
         unset __ONETCLI_COMMAND_STARTED
     fi

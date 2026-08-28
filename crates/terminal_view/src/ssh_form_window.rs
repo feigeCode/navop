@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ColorExt as _, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px, relative,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
@@ -254,9 +254,6 @@ pub struct SshFormWindow {
 
     // 云同步开关
     sync_enabled: bool,
-
-    // 关闭 shell integration 注入(走裸 request_shell,失去 OSC 集成)
-    disable_shell_integration: bool,
 
     // 启用 X11 转发(需要本机有可用 X server,如 macOS 的 XQuartz)
     x11_forwarding: bool,
@@ -683,7 +680,6 @@ impl SshFormWindow {
         let mut enable_proxy = false;
         let mut proxy_type = ProxyTypeSelection::default();
         let mut sync_enabled = true; // 默认启用云同步
-        let mut disable_shell_integration = false;
         let mut x11_forwarding = false;
         let mut allow_legacy_algorithms = false;
         let mut sftp_account_use_custom = false;
@@ -771,7 +767,6 @@ impl SshFormWindow {
                 if let Some(ref script) = params.init_script {
                     init_script_input.update(cx, |s, cx| s.set_value(script, window, cx));
                 }
-                disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
                 terminal_encoding_select.update(cx, |select, cx| {
@@ -974,7 +969,6 @@ impl SshFormWindow {
             manual_icon,
             custom_icon_file_path,
             sync_enabled,
-            disable_shell_integration,
             x11_forwarding,
             is_testing: false,
             is_uninstalling_shell_integration: false,
@@ -1237,11 +1231,7 @@ impl SshFormWindow {
             keepalive_max,
             default_directory,
             init_script,
-            disable_shell_integration: if self.disable_shell_integration {
-                Some(true)
-            } else {
-                None
-            },
+            disable_shell_integration: None,
             x11_forwarding: if self.x11_forwarding {
                 Some(true)
             } else {
@@ -2372,34 +2362,6 @@ impl SshFormWindow {
             )
             .child(
                 self.render_form_row(
-                    &t!("SSH.disable_shell_integration"),
-                    h_flex()
-                        .w_full()
-                        .gap_2()
-                        .items_start()
-                        .child(
-                            div().flex_shrink_0().child(
-                                Checkbox::new("disable-shell-integration")
-                                    .checked(self.disable_shell_integration)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.disable_shell_integration =
-                                            !this.disable_shell_integration;
-                                        cx.notify();
-                                    })),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("SSH.disable_shell_integration_desc").to_string()),
-                        ),
-                ),
-            )
-            .child(
-                self.render_form_row(
                     &t!("SSH.x11_forwarding"),
                     h_flex()
                         .w_full()
@@ -2439,36 +2401,60 @@ impl SshFormWindow {
                 ),
             )
             .child(
-                self.render_form_row(
-                    &t!("SSH.remote_shell_integration"),
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            h_flex().gap_2().child(
-                                Button::new("uninstall-shell-integration")
-                                    .icon(IconName::Remove)
-                                    .danger()
-                                    .small()
-                                    .label(if self.is_uninstalling_shell_integration {
-                                        t!("SSH.uninstalling_shell_integration").to_string()
-                                    } else {
-                                        t!("SSH.uninstall_shell_integration").to_string()
-                                    })
-                                    .disabled(
-                                        self.is_testing || self.is_uninstalling_shell_integration,
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.on_uninstall_shell_integration(window, cx);
-                                    })),
+                // 说明性区块不占表单 label 列，通栏卡片避免长标题挤压换行。
+                div()
+                    .id("ssh-shell-integration-card")
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap_3()
+                    .px_3()
+                    .py_2p5()
+                    .rounded_md()
+                    .bg(cx.theme().muted)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .pt(px(1.0))
+                            .child(IconName::Info.color().with_size(px(14.0))),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(t!("SSH.remote_shell_integration").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .line_height(relative(1.5))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SSH.uninstall_shell_integration_desc").to_string()),
                             ),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("SSH.uninstall_shell_integration_desc").to_string()),
+                    )
+                    .child(
+                        div().flex_shrink_0().child(
+                            Button::new("uninstall-shell-integration")
+                                .icon(IconName::Remove)
+                                .ghost()
+                                .small()
+                                .label(if self.is_uninstalling_shell_integration {
+                                    t!("SSH.uninstalling_shell_integration").to_string()
+                                } else {
+                                    t!("SSH.uninstall_shell_integration").to_string()
+                                })
+                                .disabled(
+                                    self.is_testing || self.is_uninstalling_shell_integration,
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_uninstall_shell_integration(window, cx);
+                                })),
                         ),
-                ),
+                    ),
             )
     }
 

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{RusshChannel, RusshClient, ShellIntegrationSetup, SshClient, SshConnectConfig};
+use crate::{RusshChannel, RusshClient, SshClient, SshConnectConfig};
 
 /// 缓存命中时探活节流窗口：距离上次成功 ping 小于该值跳过 ping。
 const PING_THROTTLE: Duration = Duration::from_secs(5);
@@ -26,8 +26,6 @@ trait SharedSessionConnector<C>: Send + Sync {
 
 struct SessionState<C> {
     client: Option<Arc<Mutex<C>>>,
-    /// 与 `client` 同生命周期的 shell integration 结果缓存。`invalidate`/`disconnect` 会一并清空。
-    shell_integration: Option<ShellIntegrationSetup>,
     /// 正在进行的 connect 协程会登记一个 sticky completion token，其他等待者订阅它以避免并发
     /// connect。CancellationToken 的完成信号不会像一次性 Notify wakeup 那样丢失。
     connecting: Option<Arc<ConnectionFlight>>,
@@ -39,7 +37,6 @@ impl<C> Default for SessionState<C> {
     fn default() -> Self {
         Self {
             client: None,
-            shell_integration: None,
             connecting: None,
             last_ping: None,
         }
@@ -268,7 +265,6 @@ where
                         .unwrap_or_else(|error| error.into_inner());
                     if self.shutdown.is_cancelled() {
                         state.client = None;
-                        state.shell_integration = None;
                         state.last_ping = None;
                         drop(publication);
                         drop(state);
@@ -294,7 +290,6 @@ where
                             let arc = Arc::new(Mutex::new(new_client));
                             state.connecting = None;
                             state.client = Some(arc.clone());
-                            state.shell_integration = None;
                             state.last_ping = Some(Instant::now());
                             flight_guard.complete();
                             Ok(arc)
@@ -369,7 +364,6 @@ where
         if let Some(current) = &state.client {
             if Arc::ptr_eq(current, expected) {
                 state.client = None;
-                state.shell_integration = None;
                 state.last_ping = None;
                 return true;
             }
@@ -384,14 +378,12 @@ where
     async fn invalidate(&self) {
         let mut state = self.state.lock().await;
         state.client = None;
-        state.shell_integration = None;
         state.last_ping = None;
     }
 
     async fn disconnect(&self) -> Result<()> {
         let client = {
             let mut state = self.state.lock().await;
-            state.shell_integration = None;
             state.last_ping = None;
             state.client.take()
         };
@@ -425,7 +417,6 @@ where
 
         let (client, connecting) = {
             let mut state = self.state.lock().await;
-            state.shell_integration = None;
             state.last_ping = None;
             let connecting = state.connecting.clone();
             (state.client.take(), connecting)
@@ -448,24 +439,7 @@ where
         disconnect_result
     }
 
-    async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
-        self.state.lock().await.shell_integration.clone()
-    }
 
-    /// 缓存一次 shell integration 安装结果。只有 `for_client` 与当前 state 中的 client 指向同一
-    /// session 时才生效，防止我们把老 session 的 session_dir 绑到重建后的新 session 上。
-    async fn set_shell_integration(
-        &self,
-        for_client: &Arc<Mutex<C>>,
-        setup: ShellIntegrationSetup,
-    ) {
-        let mut state = self.state.lock().await;
-        if let Some(current) = &state.client {
-            if Arc::ptr_eq(current, for_client) {
-                state.shell_integration = Some(setup);
-            }
-        }
-    }
 }
 
 enum Phase1<C> {
@@ -581,28 +555,14 @@ impl SshSessionManager {
         self.inner.request_shutdown();
     }
 
-    /// 读取已缓存的 shell integration 结果；缓存会跟随当前 session 生命周期一起失效。
-    pub async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
-        self.inner.cached_shell_integration().await
-    }
 
-    /// 在当前 session 上记录 shell integration 结果。`for_client` 必须是 `client()` 返回的 Arc，
-    /// 否则写入会被静默丢弃（防止串到已重建的新 session）。
-    pub async fn set_shell_integration(
-        &self,
-        for_client: &Arc<Mutex<RusshClient>>,
-        setup: ShellIntegrationSetup,
-    ) {
-        self.inner.set_shell_integration(for_client, setup).await;
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{PING_THROTTLE, SessionPool, SharedSessionClient, SharedSessionConnector};
     use crate::{
-        HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ShellIntegrationSetup,
-        SshAuth, SshConnectConfig,
+        HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, SshAuth, SshConnectConfig,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -939,15 +899,6 @@ mod tests {
         let first = pool.client().await.expect("first client should connect");
         assert!(pool.invalidate_client(&first).await);
         let replacement = pool.client().await.expect("replacement should connect");
-        pool.set_shell_integration(
-            &replacement,
-            ShellIntegrationSetup {
-                home_dir: "/replacement/home".into(),
-                session_dir: "/replacement/session".into(),
-                login_shell: Some("/bin/zsh".into()),
-            },
-        )
-        .await;
 
         assert!(
             !pool.invalidate_client(&first).await,
@@ -960,13 +911,6 @@ mod tests {
 
         assert!(Arc::ptr_eq(&replacement, &checked_out));
         assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            pool.cached_shell_integration()
-                .await
-                .expect("replacement integration cache should survive")
-                .session_dir,
-            "/replacement/session"
-        );
     }
 
     #[tokio::test]
@@ -1288,51 +1232,5 @@ mod tests {
         }
 
         assert_eq!(ping_count.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn shell_integration_cache_invalidates_with_client() {
-        let connector = Arc::new(FakeConnector::default());
-        let pool = SessionPool::new(test_config(), connector.clone());
-
-        let first = pool.client().await.expect("首次连接应成功");
-        pool.set_shell_integration(
-            &first,
-            ShellIntegrationSetup {
-                home_dir: "/tmp/home".into(),
-                session_dir: "/tmp/home/.config/onetcli/sessions/1".into(),
-                login_shell: Some("/bin/zsh".into()),
-            },
-        )
-        .await;
-        assert!(pool.cached_shell_integration().await.is_some());
-
-        pool.invalidate().await;
-        assert!(
-            pool.cached_shell_integration().await.is_none(),
-            "invalidate 后 integration 缓存必须清空"
-        );
-    }
-
-    #[tokio::test]
-    async fn stale_integration_write_is_dropped_after_reconnect() {
-        let connector = Arc::new(FakeConnector::default());
-        let pool = SessionPool::new(test_config(), connector.clone());
-
-        let old = pool.client().await.expect("首次连接");
-        pool.invalidate().await;
-        let _new = pool.client().await.expect("重连");
-
-        // 拿旧 Arc 写缓存，不应该被接受（防止串到新 session）。
-        pool.set_shell_integration(
-            &old,
-            ShellIntegrationSetup {
-                home_dir: "/stale".into(),
-                session_dir: "/stale".into(),
-                login_shell: None,
-            },
-        )
-        .await;
-        assert!(pool.cached_shell_integration().await.is_none());
     }
 }
