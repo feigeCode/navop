@@ -128,11 +128,31 @@ pub enum SqlIndentStyle {
 }
 
 /// SQL 美化 / 压缩相关的用户设置
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SqlFormatSettings {
     pub keyword_case: SqlKeywordCase,
     pub indent: SqlIndentStyle,
+    /// 自定义嵌入脚本包裹符，空格分隔的成对起止符，如 `<% %> @{ }`
+    pub custom_wrappers: String,
+}
+
+impl SqlFormatSettings {
+    /// 解析自定义包裹符：按空白拆分成对的起止符，忽略不完整的项
+    pub fn custom_wrapper_pairs(&self) -> Vec<(String, String)> {
+        const MAX_PAIRS: usize = 16;
+        const MAX_TOKEN_LEN: usize = 32;
+
+        self.custom_wrappers
+            .split_whitespace()
+            .filter(|token| !token.is_empty() && token.chars().count() <= MAX_TOKEN_LEN)
+            .collect::<Vec<_>>()
+            .chunks(2)
+            .filter(|pair| pair.len() == 2)
+            .take(MAX_PAIRS)
+            .map(|pair| (pair[0].to_string(), pair[1].to_string()))
+            .collect()
+    }
 }
 
 impl SqlKeywordCase {
@@ -1594,14 +1614,32 @@ mod tests {
     }
 
     #[test]
+    fn sql_format_settings_parses_custom_wrapper_pairs() {
+        let settings = SqlFormatSettings {
+            custom_wrappers: "<% %>  @{ }  unclosed".to_string(),
+            ..SqlFormatSettings::default()
+        };
+        assert_eq!(
+            vec![
+                ("<%".to_string(), "%>".to_string()),
+                ("@{".to_string(), "}".to_string())
+            ],
+            settings.custom_wrapper_pairs()
+        );
+
+        assert!(SqlFormatSettings::default().custom_wrapper_pairs().is_empty());
+    }
+
+    #[test]
     fn sql_format_settings_round_trips_and_tolerates_missing_fields() {
         let settings = SqlFormatSettings {
             keyword_case: SqlKeywordCase::Upper,
             indent: SqlIndentStyle::Tabs,
+            ..SqlFormatSettings::default()
         };
         let json = serde_json::to_string(&settings).expect("serialize sql format settings");
         assert_eq!(
-            r#"{"keyword_case":"upper","indent":"tabs"}"#,
+            r#"{"keyword_case":"upper","indent":"tabs","custom_wrappers":""}"#,
             json.as_str()
         );
         assert_eq!(settings, serde_json::from_str(&json).expect("roundtrip"));
@@ -1612,6 +1650,7 @@ mod tests {
             SqlFormatSettings {
                 keyword_case: SqlKeywordCase::Lower,
                 indent: SqlIndentStyle::TwoSpaces,
+                ..SqlFormatSettings::default()
             },
             partial
         );

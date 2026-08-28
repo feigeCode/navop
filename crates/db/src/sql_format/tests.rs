@@ -100,6 +100,51 @@ fn format_sql_preserves_nested_braces_in_double_brace_block() {
 }
 
 #[test]
+fn format_sql_preserves_custom_wrappers() {
+    let sql = "SELECT * FROM t WHERE status = 1 <% if (deleted) { %> AND deleted = 0 <% } %> ORDER BY id";
+    let formatted = format_sql_with_options(
+        sql,
+        SqlFormatOptions {
+            custom_wrappers: vec![("<%".to_string(), "%>".to_string())],
+            ..SqlFormatOptions::default()
+        },
+    );
+
+    assert!(formatted.contains("<% if (deleted) { %>"), "{formatted}");
+    assert!(formatted.contains("AND deleted = 0"));
+    assert!(formatted.contains("<% } %>"));
+}
+
+#[test]
+fn custom_wrapper_takes_precedence_over_builtin_parameters() {
+    let sql = "select * from t <% ${inner} and #{x} %>";
+    let formatted = format_sql_with_options(
+        sql,
+        SqlFormatOptions {
+            custom_wrappers: vec![("<%".to_string(), "%>".to_string())],
+            ..SqlFormatOptions::default()
+        },
+    );
+
+    assert!(formatted.contains("<% ${inner} and #{x} %>"), "{formatted}");
+}
+
+#[test]
+fn custom_wrapper_with_longer_start_is_matched_first() {
+    // ${ 与自定义起始符 ${! 前缀重叠时，优先匹配更长的自定义起始符
+    let sql = "select * from t ${! keep !}";
+    let formatted = format_sql_with_options(
+        sql,
+        SqlFormatOptions {
+            custom_wrappers: vec![("${!".to_string(), "!}".to_string())],
+            ..SqlFormatOptions::default()
+        },
+    );
+
+    assert!(formatted.contains("${! keep !}"), "{formatted}");
+}
+
+#[test]
 fn format_sql_preserves_unclosed_parameter_like_text() {
     let sql = "select '${unfinished' as value";
     let formatted = format_sql(sql);

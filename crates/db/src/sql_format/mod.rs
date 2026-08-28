@@ -6,10 +6,12 @@ use sqlformat::{FormatOptions, Indent, QueryParams, format};
 use masking::mask_embedded_parameters;
 
 /// SQL 格式化选项
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SqlFormatOptions {
     pub keyword_case: SqlKeywordCase,
     pub indent: SqlIndentStyle,
+    /// 自定义嵌入脚本包裹符（起止符对），格式化时整段保护
+    pub custom_wrappers: Vec<(String, String)>,
 }
 
 impl SqlFormatOptions {
@@ -18,6 +20,7 @@ impl SqlFormatOptions {
         Self {
             keyword_case: settings.keyword_case,
             indent: settings.indent,
+            custom_wrappers: settings.custom_wrapper_pairs(),
         }
     }
 }
@@ -29,7 +32,7 @@ pub fn format_sql(sql: &str) -> String {
 }
 
 pub fn format_sql_with_options(sql: &str, options: SqlFormatOptions) -> String {
-    let (masked_sql, parameters) = mask_embedded_parameters(sql);
+    let (masked_sql, parameters) = mask_embedded_parameters(sql, &options.custom_wrappers);
     let format_options = FormatOptions {
         indent: to_sqlformat_indent(options.indent),
         uppercase: to_sqlformat_uppercase(options.keyword_case),

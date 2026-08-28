@@ -20,6 +20,7 @@ pub fn sql_format_setting_group() -> SettingGroup {
         .title(t!("Settings.General.SqlFormat.group_title"))
         .item(keyword_case_item())
         .item(indent_item())
+        .item(custom_wrappers_item())
         .item(
             SettingItem::render(|_options, window, cx| render_preview(window, cx)).search_texts([
                 t!("Settings.General.SqlFormat.preview").to_string(),
@@ -88,6 +89,24 @@ fn indent_item() -> SettingItem {
         .default_value(SharedString::from(SqlIndentStyle::TwoSpaces.as_str())),
     )
     .description(t!("Settings.General.SqlFormat.indent_desc").to_string())
+}
+
+fn custom_wrappers_item() -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.SqlFormat.custom_wrappers"),
+        SettingField::input(
+            |cx: &App| SharedString::from(AppSettings::global(cx).sql_format.custom_wrappers.clone()),
+            |val: SharedString, cx: &mut App| {
+                let value = val.trim().to_string();
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sql_format.custom_wrappers = value;
+                });
+                cx.refresh_windows();
+            },
+        )
+        .default_value(SharedString::from("")),
+    )
+    .description(t!("Settings.General.SqlFormat.custom_wrappers_desc").to_string())
 }
 
 struct SqlFormatPreview {
