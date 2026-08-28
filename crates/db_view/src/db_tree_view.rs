@@ -2903,10 +2903,7 @@ impl DbTreeView {
                             this.child(
                                 // 使用 node_id 作为稳定 ID，避免树重建/虚拟化导致行号 ix 变化时
                                 // PopoverState 被销毁（ElementId 变了状态即丢，Popover 会自动关闭）
-                                Popover::new(SharedString::from(format!(
-                                    "db-filter-{}",
-                                    node_id
-                                )))
+                                Popover::new(SharedString::from(format!("db-filter-{}", node_id)))
                                     // 受控模式：即使 PopoverState 因虚拟化被销毁，重建后仍按记录状态重新打开
                                     .open(db_filter_popover_open)
                                     .on_open_change(move |open, window, cx| {

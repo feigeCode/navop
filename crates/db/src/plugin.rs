@@ -3157,7 +3157,11 @@ where
         definitions.push(format!("    PRIMARY KEY ({})", primary_keys.join(", ")));
     }
 
-    let mut sql = format!("CREATE TABLE {} (\n{}\n)", table_ref, definitions.join(",\n"));
+    let mut sql = format!(
+        "CREATE TABLE {} (\n{}\n)",
+        table_ref,
+        definitions.join(",\n")
+    );
 
     // Best-effort table comment: drivers that cannot list table metadata are
     // still able to export the structure (columns + primary key + column comments).

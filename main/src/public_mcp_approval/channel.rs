@@ -3,8 +3,8 @@ use public_mcp::approval::{
     APPROVAL_TIMEOUT_REASON, PublicMcpApprovalFuture, PublicMcpApprovalOutcome,
     PublicMcpApprovalRequest, PublicMcpApprover,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
@@ -90,7 +90,9 @@ fn channel_approver_for_tests() -> (ChannelApprover, mpsc::Receiver<ApprovalEnve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use public_mcp::approval::{APPROVAL_TIMEOUT_REASON, PublicMcpApprovalOutcome, PublicMcpApprovalRequest};
+    use public_mcp::approval::{
+        APPROVAL_TIMEOUT_REASON, PublicMcpApprovalOutcome, PublicMcpApprovalRequest,
+    };
     use public_mcp::permissions::PublicMcpOperationKind;
     use serde_json::json;
 
@@ -171,8 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn channel_approver_times_out_with_stable_reason() {
-        let (approver, mut receiver) =
-            channel_approver(Arc::new(AtomicU64::new(50)));
+        let (approver, mut receiver) = channel_approver(Arc::new(AtomicU64::new(50)));
         let approval = tokio::spawn(async move { approver.request_approval(request()).await });
 
         let envelope = receiver.recv().await.expect("request should be queued");
@@ -191,8 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn channel_approver_zero_timeout_waits_indefinitely() {
-        let (approver, mut receiver) =
-            channel_approver(Arc::new(AtomicU64::new(0)));
+        let (approver, mut receiver) = channel_approver(Arc::new(AtomicU64::new(0)));
         let approval = tokio::spawn({
             let approver = approver.clone();
             async move { approver.request_approval(request()).await }

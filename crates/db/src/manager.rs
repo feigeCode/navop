@@ -5192,11 +5192,8 @@ mod tests {
 
         let close_state = state.clone();
         let close_session_id = session_id.clone();
-        let mut close = tokio::spawn(async move {
-            close_state
-                .close_session_direct(&close_session_id)
-                .await
-        });
+        let mut close =
+            tokio::spawn(async move { close_state.close_session_direct(&close_session_id).await });
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut close)
                 .await

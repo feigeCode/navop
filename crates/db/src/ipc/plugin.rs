@@ -1438,7 +1438,8 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             self.driver.dialect.table_reference_schema_mode,
             TableReferenceSchemaMode::PreferSchema
         );
-        let uses_true_schema = capabilities.supports_schema && !capabilities.uses_schema_as_database;
+        let uses_true_schema =
+            capabilities.supports_schema && !capabilities.uses_schema_as_database;
         if prefers_schema || uses_true_schema {
             if let Some(schema) = schema.filter(|schema| !schema.trim().is_empty()) {
                 return format!(
@@ -1997,10 +1998,8 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         // Call the shared generic builder directly: a `DatabasePlugin::method`
         // dispatch from inside an override would resolve back to this override
         // and recurse, so opt into the default body via the free function.
-        crate::plugin::default_export_table_create_sql(
-            self, connection, database, schema, table,
-        )
-        .await
+        crate::plugin::default_export_table_create_sql(self, connection, database, schema, table)
+            .await
     }
 }
 
@@ -2806,15 +2805,17 @@ mod tests {
                         "extra": null
                     }
                 ])),
-                wire_method::SCHEMA_OBJECTS if params["kinds"][0] == "table" => Ok(serde_json::json!([
-                    {
-                        "name": "events",
-                        "kind": "table",
-                        "schema": "",
-                        "comment": "event stream",
-                        "extra": null
-                    }
-                ])),
+                wire_method::SCHEMA_OBJECTS if params["kinds"][0] == "table" => {
+                    Ok(serde_json::json!([
+                        {
+                            "name": "events",
+                            "kind": "table",
+                            "schema": "",
+                            "comment": "event stream",
+                            "extra": null
+                        }
+                    ]))
+                }
                 other => Err(DbError::NotSupported(other.to_string())),
             }
         }
@@ -2915,8 +2916,7 @@ mod tests {
         ) -> Result<serde_json::Value, DbError> {
             match method {
                 wire_method::SCHEMA_DUMP_DDL => {
-                    *self.dump_params.lock().expect("dump_params mutex poisoned") =
-                        Some(params);
+                    *self.dump_params.lock().expect("dump_params mutex poisoned") = Some(params);
                     if self.empty_dump {
                         Ok(serde_json::json!({ "statements": [] }))
                     } else if self.comment_only {
@@ -3697,7 +3697,10 @@ mod tests {
         assert_eq!("public", params["objects"][0]["schema"].as_str().unwrap());
         assert_eq!("main", params["objects"][0]["database"].as_str().unwrap());
         assert_eq!(Some(false), params["options"]["if_not_exists"].as_bool());
-        assert!(params.get("conn_id").is_none(), "conn_id should be auto-injected by the host");
+        assert!(
+            params.get("conn_id").is_none(),
+            "conn_id should be auto-injected by the host"
+        );
 
         // The driver statement ends with `;`; the host strips the trailing
         // terminator because the SQL exporter appends one after the string.

@@ -202,9 +202,9 @@ fn denied_approval_result(reason: Option<String>) -> CallToolResult {
             reason.unwrap_or_else(|| "approval request timed out".to_string()),
         )
     } else {
-        permission_denied_result(reason.unwrap_or_else(|| {
-            "tool runtime call denied by approval".to_string()
-        }))
+        permission_denied_result(
+            reason.unwrap_or_else(|| "tool runtime call denied by approval".to_string()),
+        )
     }
 }
 
