@@ -957,7 +957,7 @@ impl TextElement {
             // Add extra space for fold icons
             line_number_width += FOLD_ICON_HITBOX_WIDTH
         }
-        if !state.gutter_markers.is_empty() {
+        if !state.gutter_markers.is_empty() || state.gutter_marker_lane_reserved {
             line_number_width += GUTTER_MARKER_HITBOX_WIDTH
         }
 

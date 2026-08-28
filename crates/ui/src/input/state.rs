@@ -560,6 +560,11 @@ pub struct InputState {
     /// requiring a document mutation.
     pub(super) completion_epoch: u64,
     pub(super) gutter_markers: Rc<[InputGutterMarker]>,
+    /// Once gutter markers have been installed, keep their lane width reserved
+    /// even while markers are transiently cleared (edits invalidate markers
+    /// before the owner re-sets them). Prevents the whole text from shifting
+    /// horizontally on every keystroke.
+    pub(super) gutter_marker_lane_reserved: bool,
     pub(super) range_decorations: Rc<[InputRangeDecoration]>,
     pub(super) inline_widgets: Rc<[InputInlineWidget]>,
     pub(super) display_map: DisplayMap,
@@ -729,6 +734,7 @@ impl InputState {
             document_revision: 0,
             completion_epoch: 0,
             gutter_markers: Rc::from([]),
+            gutter_marker_lane_reserved: false,
             range_decorations: Rc::from([]),
             inline_widgets: Rc::from([]),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
@@ -1169,7 +1175,6 @@ impl InputState {
         self.replace_text(value, window, cx);
         // A same-value set is model-to-view synchronization, not a content edit.
         if self.document_revision == previous_revision {
-            self.gutter_markers = Rc::from([]);
             self.range_decorations = Rc::from([]);
             self.inline_widgets = Rc::from([]);
         }
@@ -1448,9 +1453,13 @@ impl InputState {
 
     /// Replace the generic gutter markers.
     ///
-    /// Markers are invalidated automatically when the document content changes.
+    /// Markers are owner-managed: they stay visible across document edits
+    /// (avoids flicker) until the owner replaces them. Owners should encode
+    /// the document revision into marker ids so clicks on stale markers can
+    /// be rejected.
     pub fn set_gutter_markers(&mut self, markers: Vec<InputGutterMarker>, cx: &mut Context<Self>) {
         self.gutter_markers = Rc::from(markers);
+        self.gutter_marker_lane_reserved = true;
         cx.notify();
     }
 
@@ -2721,7 +2730,9 @@ impl InputState {
         // Because maybe user want to copy the selected text by AppMenuBar (will take focus handle).
 
         self.hover_definition.clear();
-        self.hover_popover = None;
+        // Keep `hover_popover`: blur here is usually the popover's own
+        // selectable text taking focus for click-to-copy. The popover's
+        // mouse-move-out / mouse-down-out handlers hide it afterwards.
         self.lsp.invalidate_hover();
         self.diagnostic_popover = None;
         self.invalidate_completions(cx);
@@ -3268,7 +3279,9 @@ impl EntityInputHandler for InputState {
         let content_changed = self.text != old_text;
         if content_changed {
             self.document_revision = self.document_revision.saturating_add(1);
-            self.gutter_markers = Rc::from([]);
+            // Gutter markers are owner-managed: keep the stale markers visible
+            // (ids encode the document revision so stale clicks fail closed)
+            // until the owner re-sets them, instead of blinking on every edit.
             self.range_decorations = Rc::from([]);
             self.inline_widgets = Rc::from([]);
             self.invalidate_completions(cx);
@@ -3362,7 +3375,6 @@ impl EntityInputHandler for InputState {
         self.text.replace(range.clone(), new_text);
         if self.text != old_text {
             self.document_revision = self.document_revision.saturating_add(1);
-            self.gutter_markers = Rc::from([]);
             self.range_decorations = Rc::from([]);
             self.inline_widgets = Rc::from([]);
         }
@@ -3589,8 +3601,10 @@ mod tests {
         );
     }
 
+    /// 编辑不清空 gutter markers：它们由 owner 管理，保持可见直到 owner 重设，
+    /// 否则 SQL 编辑器的 ▶ 运行按钮会在每次输入时闪烁。
     #[gpui::test]
-    fn gutter_markers_track_document_revision_and_are_invalidated_on_edit(cx: &mut TestAppContext) {
+    fn gutter_markers_persist_across_document_edits_until_reset(cx: &mut TestAppContext) {
         let (input, cx) = new_detached_code_editor(cx);
         let cx: &mut VisualTestContext = cx;
 
@@ -3613,13 +3627,70 @@ mod tests {
                 state.replace_text_range("select 1;".len().."select 1;".len(), "\n", window, cx);
                 let next_revision = state.document_revision();
                 assert!(next_revision > initial_revision);
-                assert!(state.gutter_markers().is_empty());
+                // Markers stay visible (stale) until the owner re-sets them.
+                assert_eq!(1, state.gutter_markers().len());
+                assert_eq!(state.gutter_markers()[0].id, "sql-statement:0:0:9");
+
+                state.set_gutter_markers(
+                    vec![InputGutterMarker::new("sql-statement:1:0:10", 1, IconName::Play)],
+                    cx,
+                );
+                assert_eq!(state.gutter_markers()[0].id, "sql-statement:1:0:10");
             });
         });
     }
 
+    /// 编辑不清空 gutter markers，marker 车道宽度也必须保持不变，
+    /// 否则 SQL 编辑器每敲一个键 gutter 忽宽忽窄，文本左右抖动。
     #[gpui::test]
-    fn same_value_set_synchronizes_view_and_clears_markers(cx: &mut TestAppContext) {
+    fn gutter_marker_lane_width_stays_stable_across_edits(
+        cx: &mut TestAppContext,
+    ) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let width_of = |input: &Entity<InputState>, cx: &mut VisualTestContext| {
+            draw_input(cx, input);
+            cx.update(|_, cx| {
+                input
+                    .read(cx)
+                    .last_layout
+                    .as_ref()
+                    .expect("layout after draw")
+                    .line_number_width
+            })
+        };
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("select 1;\nselect 2;", window, cx);
+            });
+        });
+        let base_width = width_of(&input, cx);
+
+        cx.update(|_window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_gutter_markers(
+                    vec![InputGutterMarker::new("sql-statement:0:0:9", 0, IconName::Play)],
+                    cx,
+                );
+            });
+        });
+        let width_with_markers = width_of(&input, cx);
+        assert!(width_with_markers > base_width);
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_range("select".len().."select".len(), " ", window, cx);
+                assert!(!state.gutter_markers().is_empty());
+            });
+        });
+        let width_after_edit = width_of(&input, cx);
+
+        assert_eq!(width_with_markers, width_after_edit);
+    }
+
+    #[gpui::test]
+    fn same_value_set_synchronizes_view_and_keeps_gutter_markers(cx: &mut TestAppContext) {
         let (input, cx) = new_detached_code_editor(cx);
         let cx: &mut VisualTestContext = cx;
 
@@ -3639,8 +3710,59 @@ mod tests {
                 state.set_value("select 1;", window, cx);
 
                 assert_eq!(revision, state.document_revision());
-                assert!(state.gutter_markers().is_empty());
+                assert_eq!(1, state.gutter_markers().len());
                 assert_eq!(Selection::default(), state.selected_range);
+            });
+        });
+    }
+
+    /// 构造根节点为 `Root` 的代码编辑器窗口：`on_blur` 等路径需要访问 Root。
+    fn new_rooted_code_editor(
+        cx: &mut TestAppContext,
+    ) -> (Entity<InputState>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            super::super::init(cx);
+        });
+        let slot: Rc<RefCell<Option<Entity<InputState>>>> = Rc::new(RefCell::new(None));
+        let slot_clone = slot.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let input = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
+            *slot_clone.borrow_mut() = Some(input.clone());
+            Root::new(input, window, cx)
+        });
+        let input = slot.borrow().clone().expect("input entity captured");
+        (input, cx)
+    }
+
+    /// 失焦不清 hover popover：popover 里的可选中文本被点击后会抢走焦点，
+    /// 若失焦即清理，用户永远无法选中复制 hover 内容。
+    #[gpui::test]
+    fn blur_keeps_hover_popover_for_click_to_copy(cx: &mut TestAppContext) {
+        let (input, cx) = new_rooted_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.focus_handle.focus(window, cx);
+                let hover = lsp_types::Hover {
+                    contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+                        kind: lsp_types::MarkupKind::Markdown,
+                        value: "Table: users".to_string(),
+                    }),
+                    range: None,
+                };
+                state.hover_popover = Some(HoverPopover::new(
+                    cx.entity(),
+                    0.."select".len(),
+                    &hover,
+                    cx,
+                ));
+
+                // 模拟点击 popover 文本导致的失焦路径。
+                state.on_blur(window, cx);
+
+                assert!(state.hover_popover.is_some());
             });
         });
     }

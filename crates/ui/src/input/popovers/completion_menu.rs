@@ -474,8 +474,10 @@ impl Render for CompletionMenu {
                 .when(layout.vertical_layout, |this| this.flex_col())
                 .child(
                     editor_popover("completion-menu", cx)
-                        .max_w(layout.max_width)
-                        .min_w(MIN_MENU_WIDTH)
+                        // 固定使用可用宽度（封顶 MAX_MENU_WIDTH）：内容测量按字符数选
+                        // 代表条目，字符数最宽≠像素最宽，按内容收缩会裁剪长条目
+                        // （如 SQL 大写标识符补全）。
+                        .w(layout.max_width)
                         .child(List::new(&self.list).max_h(layout.menu_max_height)),
                 )
                 .when_some(selected_documentation, |this, documentation| {
@@ -547,5 +549,22 @@ mod tests {
         assert_eq!(px(300.), layout.position.x);
         assert_eq!(MIN_MENU_WIDTH, layout.max_width);
         assert_eq!(MIN_MENU_WIDTH, layout.documentation_width);
+    }
+
+    /// 菜单必须以固定可用宽度渲染：按内容测量的宽度由“字符数最长”的条目决定，
+    /// 像素更宽的条目（如 SQL 大写标识符）会被 overflow_hidden 裁剪。
+    #[test]
+    fn completion_menu_renders_at_fixed_available_width() {
+        let source = include_str!("completion_menu.rs");
+        let render = source
+            .split("impl Render for CompletionMenu")
+            .nth(1)
+            .expect("CompletionMenu render impl exists")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render impl has an end marker");
+
+        assert!(render.contains(".w(layout.max_width)"));
+        assert!(!render.contains(".max_w(layout.max_width)"));
     }
 }
