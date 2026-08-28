@@ -16,6 +16,7 @@ pub(crate) struct FileRequest {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum SenderEvent {
     FileComplete,
+    FileSkipped,
     SessionComplete,
     Aborted,
 }
@@ -24,7 +25,6 @@ pub(crate) enum SenderEvent {
 pub(crate) enum ReceiverEvent {
     FileStart,
     FileComplete,
-    SessionComplete,
     Aborted,
 }
 
@@ -49,6 +49,7 @@ pub(crate) enum SenderPhase {
     WaitFileAck,
     WaitFileDone,
     WaitFinish,
+    FinishWriting,
     Done,
 }
 
@@ -61,5 +62,6 @@ pub(crate) enum ReceiverPhase {
     FileAcceptPending,
     FileReadingSubpacket,
     FileWaitingSubpacket,
+    SessionFinishWriting,
     SessionEnd,
 }

@@ -48,6 +48,7 @@ pub struct Receiver {
     manual_accept: bool,
     zrpos_retries: u8,
     file_active: bool,
+    session_complete_pending: bool,
 }
 
 /// Consecutive corrupt data subpackets, without any forward progress in
@@ -121,6 +122,7 @@ impl Receiver {
             manual_accept: false,
             zrpos_retries: 0,
             file_active: false,
+            session_complete_pending: false,
         };
         receiver.queue_zrinit()?;
         Ok(receiver)
@@ -262,6 +264,10 @@ impl Receiver {
         if self.outgoing_offset >= self.outgoing.len() {
             self.outgoing.clear();
             self.outgoing_offset = 0;
+            if self.state == ReceiverPhase::SessionFinishWriting {
+                self.state = ReceiverPhase::SessionEnd;
+                self.session_complete_pending = true;
+            }
         }
     }
 
@@ -340,13 +346,17 @@ impl Receiver {
                     Some(Position::new(self.file_size)),
                 )),
                 ReceiverEvent::FileComplete => Event::FileCompleted,
-                ReceiverEvent::SessionComplete => Event::SessionCompleted,
                 ReceiverEvent::Aborted => Event::Aborted,
             });
         }
 
         if self.outgoing() {
             return Action::WriteWire(self.drain_outgoing());
+        }
+
+        if self.session_complete_pending {
+            self.session_complete_pending = false;
+            return Action::Event(Event::SessionCompleted);
         }
 
         if !self.drain_file().is_empty() {
@@ -514,12 +524,13 @@ impl Receiver {
             Frame::ZFIN
                 if matches!(
                     self.state,
-                    ReceiverPhase::FileWaitingSubpacket | ReceiverPhase::FileBegin
+                    ReceiverPhase::SessionBegin
+                        | ReceiverPhase::FileWaitingSubpacket
+                        | ReceiverPhase::FileBegin
                 ) =>
             {
                 self.queue_zfin()?;
-                self.state = ReceiverPhase::SessionEnd;
-                self.push_event(ReceiverEvent::SessionComplete)?;
+                self.state = ReceiverPhase::SessionFinishWriting;
             }
             _ => {}
         }

@@ -84,6 +84,8 @@ pub enum Event<'a> {
     FileStarted(FileInfo<'a>),
     /// The current file completed.
     FileCompleted,
+    /// The receiver declined the current file with `ZSKIP`.
+    FileSkipped,
     /// The session completed successfully.
     SessionCompleted,
     /// The session was aborted.

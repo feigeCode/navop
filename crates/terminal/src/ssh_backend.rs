@@ -349,6 +349,62 @@ enum DeferredSshActorInput {
     TerminalResponse(Vec<u8>),
 }
 
+fn defer_zmodem_actor_command(
+    deferred_inputs: &mut VecDeque<DeferredSshActorInput>,
+    command: SshCommand,
+) {
+    match command {
+        SshCommand::CancelExec { id } => {
+            if let Some(result) = take_deferred_exec(deferred_inputs, id) {
+                let _ = result.send(Err(TerminalExecError::CancelledBeforeSubmit));
+            } else {
+                deferred_inputs.push_back(DeferredSshActorInput::Command(SshCommand::CancelExec {
+                    id,
+                }));
+            }
+        }
+        SshCommand::ExecTimeout { id, phase } => {
+            if let Some(result) = take_deferred_exec(deferred_inputs, id) {
+                let error = match phase {
+                    ExecPhase::WaitingForReady | ExecPhase::Observing => {
+                        TerminalExecError::ReadyTimeout
+                    }
+                    ExecPhase::ClearingInput => TerminalExecError::ClearInputTimeout,
+                };
+                let _ = result.send(Err(error));
+            } else {
+                deferred_inputs.push_back(DeferredSshActorInput::Command(
+                    SshCommand::ExecTimeout { id, phase },
+                ));
+            }
+        }
+        command => {
+            deferred_inputs.push_back(DeferredSshActorInput::Command(command));
+        }
+    }
+}
+
+fn take_deferred_exec(
+    deferred_inputs: &mut VecDeque<DeferredSshActorInput>,
+    id: u64,
+) -> Option<ExecResultSender> {
+    let index = deferred_inputs.iter().position(|input| {
+        matches!(
+            input,
+            DeferredSshActorInput::Command(SshCommand::StartExec {
+                id: deferred_id,
+                ..
+            }) if *deferred_id == id
+        )
+    })?;
+    let DeferredSshActorInput::Command(SshCommand::StartExec { result, .. }) =
+        deferred_inputs.remove(index)?
+    else {
+        return None;
+    };
+    Some(result)
+}
+
 const SSH_TERMINAL_INPUT_CHUNK_BYTES: usize = 4 * 1024;
 
 #[derive(Default)]
@@ -481,7 +537,7 @@ async fn run_zmodem_transfer_while_servicing_actor<C: SshChannel>(
                     // ZMODEM owns the SSH channel until its protocol session
                     // has ended. Keep the actor responsive without injecting
                     // terminal input, resize, or exec bytes into that session.
-                    deferred_inputs.push_back(DeferredSshActorInput::Command(command));
+                    defer_zmodem_actor_command(deferred_inputs, command);
                 }
             }
             Some(data) = terminal_response_rx.recv() => {
@@ -1710,6 +1766,28 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, ChannelOp::SendData(data) if data.as_slice() == crate::zmodem::ZCAN)),
             "cancelled transfer should still notify the remote rz/sz process with ZCAN"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_exec_is_removed_from_zmodem_deferred_inputs() {
+        let mut deferred_inputs = VecDeque::new();
+        let (result_tx, result_rx) = oneshot::channel();
+        defer_zmodem_actor_command(
+            &mut deferred_inputs,
+            SshCommand::StartExec {
+                id: 42,
+                request: request("must-not-run"),
+                result: result_tx,
+            },
+        );
+
+        defer_zmodem_actor_command(&mut deferred_inputs, SshCommand::CancelExec { id: 42 });
+
+        assert!(deferred_inputs.is_empty());
+        assert_eq!(
+            Err(TerminalExecError::CancelledBeforeSubmit),
+            result_rx.await.expect("deferred result")
         );
     }
 

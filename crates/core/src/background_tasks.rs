@@ -254,11 +254,13 @@ impl BackgroundTaskFilter {
 }
 
 type CancelCallback = Arc<dyn Fn() + Send + Sync>;
+type CancelResultCallback = Arc<dyn Fn() -> bool + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct BackgroundTaskCancellation {
     token: Option<CancellationToken>,
     callback: Option<CancelCallback>,
+    result_callback: Option<CancelResultCallback>,
 }
 
 impl BackgroundTaskCancellation {
@@ -266,6 +268,7 @@ impl BackgroundTaskCancellation {
         Self {
             token: Some(token),
             callback: None,
+            result_callback: None,
         }
     }
 
@@ -273,6 +276,7 @@ impl BackgroundTaskCancellation {
         Self {
             token: None,
             callback: Some(Arc::new(callback)),
+            result_callback: None,
         }
     }
 
@@ -283,6 +287,15 @@ impl BackgroundTaskCancellation {
         Self {
             token: Some(token),
             callback: Some(Arc::new(callback)),
+            result_callback: None,
+        }
+    }
+
+    pub fn callback_with_result(callback: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            token: None,
+            callback: None,
+            result_callback: Some(Arc::new(callback)),
         }
     }
 
@@ -295,11 +308,12 @@ impl BackgroundTaskCancellation {
             cb();
             true
         });
-        token_cancelled || callback_called
+        let result_callback_called = self.result_callback.as_ref().is_some_and(|cb| cb());
+        token_cancelled || callback_called || result_callback_called
     }
 
     fn is_configured(&self) -> bool {
-        self.token.is_some() || self.callback.is_some()
+        self.token.is_some() || self.callback.is_some() || self.result_callback.is_some()
     }
 }
 
@@ -380,6 +394,14 @@ impl BackgroundTaskManager {
         self.tasks
             .iter()
             .find(|task| task.status.is_active() && task.key.as_deref() == Some(key))
+            .map(|task| task.id)
+    }
+
+    pub fn find_latest_by_key(&self, key: &str) -> Option<BackgroundTaskId> {
+        self.tasks
+            .iter()
+            .rev()
+            .find(|task| task.key.as_deref() == Some(key))
             .map(|task| task.id)
     }
 
@@ -605,6 +627,12 @@ impl BackgroundTaskManager {
                             // 更新的百分比（如下载 98/100 即成功时仍显示 98%）。
                             if let Some(total) = progress.total {
                                 progress.current = total;
+                            } else if progress.current > 0 {
+                                // 总量未知的任务也要在成功时显示 100%，而不是停在 0。
+                                progress.total = Some(progress.current);
+                            } else {
+                                progress.current = 1;
+                                progress.total = Some(1);
                             }
                             progress.message = None;
                         }
@@ -1098,6 +1126,7 @@ mod tests {
                     callback: Some(Arc::new(move || {
                         called_for_cb.store(true, Ordering::SeqCst);
                     })),
+                    result_callback: None,
                 },
                 cx,
             )
@@ -1228,6 +1257,24 @@ mod tests {
     }
 
     #[gpui::test]
+    fn rejected_cancellation_callback_keeps_task_running(cx: &mut gpui::TestAppContext) {
+        let manager = new_manager(cx);
+        let id = manager.update(cx, |m, cx| {
+            let id = m.register(BackgroundTaskSpec::new("kind", "task"), cx);
+            m.set_cancellation(
+                id,
+                BackgroundTaskCancellation::callback_with_result(|| false),
+                cx,
+            );
+            m.mark_running(id, cx);
+            id
+        });
+
+        manager.update(cx, |m, cx| assert!(!m.request_cancel(id, cx)));
+        assert_eq!(BackgroundTaskStatus::Running, task(&manager, id, cx).status);
+    }
+
+    #[gpui::test]
     fn cancellation_wins_over_late_success_or_failure(cx: &mut gpui::TestAppContext) {
         let manager = new_manager(cx);
         let id = manager.update(cx, |m, cx| {
@@ -1302,6 +1349,30 @@ mod tests {
         let progress = task.progress.expect("progress should be kept");
         assert_eq!(100, progress.percent());
         assert_eq!(Some(progress.current), progress.total);
+    }
+
+    #[gpui::test]
+    fn succeeded_task_with_unknown_total_pins_to_one_hundred(cx: &mut gpui::TestAppContext) {
+        let manager = new_manager(cx);
+        let id = manager.update(cx, |m, cx| {
+            let id = m.register(
+                BackgroundTaskSpec::new("kind", "download")
+                    .progress_unit(BackgroundTaskProgressUnit::Bytes),
+                cx,
+            );
+            m.mark_running(id, cx);
+            // 下载开始时总大小未知（total = None），成功时也应显示 100%。
+            m.update_progress(id, 5_897, None, None, None, cx);
+            m.succeed(id, None, cx);
+            id
+        });
+
+        let task = task(&manager, id, cx);
+        assert_eq!(BackgroundTaskStatus::Succeeded, task.status);
+        let progress = task.progress.expect("progress should be kept");
+        assert_eq!(100, progress.percent());
+        assert_eq!(Some(progress.current), progress.total);
+        assert_eq!(5_897, progress.current);
     }
 
     #[gpui::test]

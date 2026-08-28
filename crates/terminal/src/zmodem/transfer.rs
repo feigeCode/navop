@@ -12,11 +12,15 @@ pub(crate) const ZCAN: &[u8] = b"\x18\x18\x18\x18\x18\x18\x18\x18\x08\x08\x08\x0
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const CANCEL_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(10);
+const FINISH_RECEIVE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_PICKER_WIRE_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_PROTOCOL_TIMEOUTS: usize = 6;
 
 #[derive(Debug)]
 struct ChannelClosed;
+
+#[derive(Debug)]
+struct TransferCancelled;
 
 impl fmt::Display for ChannelClosed {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -25,6 +29,14 @@ impl fmt::Display for ChannelClosed {
 }
 
 impl StdError for ChannelClosed {}
+
+impl fmt::Display for TransferCancelled {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ZMODEM transfer was cancelled")
+    }
+}
+
+impl StdError for TransferCancelled {}
 
 pub(crate) async fn run_transfer(
     channel: &mut dyn SshChannel,
@@ -48,7 +60,7 @@ pub(crate) async fn run_transfer(
         match result {
             Ok(_) => ZmodemTransferOutcome::Succeeded,
             Err(ref error) => {
-                if was_cancelled {
+                if was_cancelled || error.downcast_ref::<TransferCancelled>().is_some() {
                     ZmodemTransferOutcome::Cancelled
                 } else {
                     ZmodemTransferOutcome::Failed(format!("{error:#}"))
@@ -78,7 +90,7 @@ async fn run_selected_transfer(
     match direction {
         ZmodemDirection::Upload => {
             let ZmodemPickerResponse::UploadFiles(paths) = response else {
-                bail!("ZMODEM upload was cancelled");
+                return Err(TransferCancelled.into());
             };
             let request = super::upload::UploadRequest {
                 initial_wire: wire,
@@ -90,7 +102,7 @@ async fn run_selected_transfer(
         }
         ZmodemDirection::Download => {
             let ZmodemPickerResponse::DownloadDirectory(directory) = response else {
-                bail!("ZMODEM download was cancelled");
+                return Err(TransferCancelled.into());
             };
             super::download::run_download(
                 channel,
@@ -134,7 +146,7 @@ pub(super) async fn consume_hex_header_terminator(
         return Ok(());
     }
     while pending.len() < 2 {
-        let Some(data) = receive_wire(channel, cancellation).await? else {
+        let Some(data) = receive_finish_wire(channel, cancellation).await? else {
             return Ok(());
         };
         pending.extend(data);
@@ -200,10 +212,25 @@ pub(super) async fn receive_wire(
     channel: &mut dyn SshChannel,
     cancellation: &CancellationToken,
 ) -> Result<Option<Vec<u8>>> {
+    receive_wire_with_timeout(channel, cancellation, RECEIVE_TIMEOUT).await
+}
+
+pub(super) async fn receive_finish_wire(
+    channel: &mut dyn SshChannel,
+    cancellation: &CancellationToken,
+) -> Result<Option<Vec<u8>>> {
+    receive_wire_with_timeout(channel, cancellation, FINISH_RECEIVE_TIMEOUT).await
+}
+
+async fn receive_wire_with_timeout(
+    channel: &mut dyn SshChannel,
+    cancellation: &CancellationToken,
+    receive_timeout: Duration,
+) -> Result<Option<Vec<u8>>> {
     loop {
         let event = tokio::select! {
             _ = cancellation.cancelled() => bail!("ZMODEM transfer was cancelled"),
-            result = timeout(RECEIVE_TIMEOUT, channel.recv()) => {
+            result = timeout(receive_timeout, channel.recv()) => {
                 match result {
                     Ok(event) => event,
                     Err(_) => return Ok(None),

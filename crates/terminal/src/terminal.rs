@@ -109,11 +109,12 @@ pub enum TerminalModelEvent {
     /// SSH ZMODEM 文件选择请求状态变化
     ZmodemRequestChanged,
     /// SSH ZMODEM 文件传输进度变化
-    ZmodemProgressChanged(ZmodemTransferId),
+    ZmodemProgressChanged(ZmodemTransferProgress),
     /// SSH ZMODEM 文件传输结束
     ZmodemTransferFinished {
         transfer_id: ZmodemTransferId,
         outcome: ZmodemTransferOutcome,
+        progress: Option<ZmodemTransferProgress>,
     },
     /// shell 开始渲染新的 prompt（OSC 133;A）
     PromptStart,
@@ -3144,16 +3145,18 @@ impl Terminal {
             TerminalEvent::ZmodemRequestChanged => {
                 cx.emit(TerminalModelEvent::ZmodemRequestChanged);
             }
-            TerminalEvent::ZmodemProgressChanged(transfer_id) => {
-                cx.emit(TerminalModelEvent::ZmodemProgressChanged(transfer_id));
+            TerminalEvent::ZmodemProgressChanged(progress) => {
+                cx.emit(TerminalModelEvent::ZmodemProgressChanged(progress));
             }
             TerminalEvent::ZmodemTransferFinished {
                 transfer_id,
                 outcome,
+                progress,
             } => {
                 cx.emit(TerminalModelEvent::ZmodemTransferFinished {
                     transfer_id,
                     outcome,
+                    progress,
                 });
             }
             TerminalEvent::PromptStart => {

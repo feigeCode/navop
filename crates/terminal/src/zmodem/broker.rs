@@ -249,11 +249,13 @@ impl ZmodemResponder {
     }
 
     fn release_picker_claim(&self, request_id: u64) {
-        let released = self
-            .state
-            .lock()
-            .ok()
-            .is_some_and(|mut state| state.picker_claim.take() == Some(request_id));
+        let released = self.state.lock().ok().is_some_and(|mut state| {
+            if state.picker_claim != Some(request_id) {
+                return false;
+            }
+            state.picker_claim = None;
+            true
+        });
         if released {
             self.notify_changed();
         }
@@ -472,6 +474,39 @@ mod tests {
         assert!(responder.pending_request().is_some());
         let claim = responder.try_claim_picker(second_id).unwrap();
         assert!(claim.submit(ZmodemPickerResponse::Cancel));
+        assert!(second.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn dropping_stale_picker_claim_does_not_release_new_claim() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = ZmodemResponder::new(event_tx);
+        let first_responder = responder.clone();
+        let first =
+            tokio::spawn(
+                async move { first_responder.request(ZmodemPickerKind::UploadFiles).await },
+            );
+        event_rx.recv().await.expect("first request event");
+        let first_id = responder.pending_request().unwrap().id();
+        let stale_claim = responder.try_claim_picker(first_id).unwrap();
+
+        assert!(responder.cancel());
+        assert!(first.await.unwrap().is_err());
+        event_rx.recv().await.expect("first clear event");
+
+        let second_responder = responder.clone();
+        let second = tokio::spawn(async move {
+            second_responder
+                .request(ZmodemPickerKind::DownloadDirectory)
+                .await
+        });
+        event_rx.recv().await.expect("second request event");
+        let second_id = responder.pending_request().unwrap().id();
+        let second_claim = responder.try_claim_picker(second_id).unwrap();
+
+        drop(stale_claim);
+
+        assert!(second_claim.submit(ZmodemPickerResponse::Cancel));
         assert!(second.await.unwrap().is_ok());
     }
 }

@@ -5,12 +5,15 @@
 //! Protocol-level unit tests exercising crate-internal framing and the
 //! public poll/submit API.
 
+extern crate std;
+
 use crate::buffer::Buffer;
 use crate::header::{Encoding, EscapeMode, Frame, Header, Zrinit, write_slice_escaped};
 use crate::receiver::MAX_ZRPOS_RETRIES;
 use crate::wire::{BufferWriter, HeaderReader, SliceReader, SubpacketType};
 use crate::{Action, Error, Event, FileInfo, Position, Receiver, Sender, ZDLE, ZPAD};
 use rstest::rstest;
+use std::{vec, vec::Vec};
 
 fn write_header(header: Header) -> Vec<u8> {
     let mut buf = Buffer::<64>::new();
@@ -532,7 +535,7 @@ fn test_sender_timeout_retries_zfile_while_waiting_for_zrpos() {
 }
 
 #[test]
-fn test_sender_skips_file_on_zskip() {
+fn test_sender_reports_skipped_file_on_zskip() {
     let mut sender = Sender::new().unwrap();
     drain_wire_sender(&mut sender);
     sender
@@ -546,7 +549,98 @@ fn test_sender_skips_file_on_zskip() {
     let zskip = write_header(Header::new(Encoding::ZHEX, Frame::ZSKIP, [0; 4]));
     sender.submit_wire(&zskip).unwrap();
 
+    assert_eq!(sender.poll(), Action::Event(Event::FileSkipped));
+}
+
+#[test]
+fn skipped_last_file_still_finishes_the_session() {
+    let mut sender = Sender::new().unwrap();
+    drain_wire_sender(&mut sender);
+    sender
+        .start_file(FileInfo::new(b"skip.bin", Some(Position::new(16))))
+        .unwrap();
+    sender.finish().unwrap();
+
+    let zrinit = write_header(Header::new(Encoding::ZHEX, Frame::ZRINIT, [0; 4]));
+    sender.submit_wire(&zrinit).unwrap();
+    drain_wire_sender(&mut sender);
+    let zskip = write_header(Header::new(Encoding::ZHEX, Frame::ZSKIP, [0; 4]));
+    sender.submit_wire(&zskip).unwrap();
+
+    assert_eq!(sender.poll(), Action::Event(Event::FileSkipped));
+    match sender.poll() {
+        Action::WriteWire(bytes) => assert_eq!(parse_first_header(bytes).frame(), Frame::ZFIN),
+        action => panic!("skipped final file should send ZFIN, got {action:?}"),
+    }
+}
+
+#[test]
+fn receiver_accepts_empty_session_zfin() {
+    let mut receiver = Receiver::new().unwrap();
+    drain_wire_receiver(&mut receiver);
+    let zfin = write_header(Header::new(Encoding::ZHEX, Frame::ZFIN, [0; 4]));
+    receiver.submit_wire(&zfin).unwrap();
+
+    let Action::WriteWire(bytes) = receiver.poll() else {
+        panic!("receiver should acknowledge empty session ZFIN");
+    };
+    let len = bytes.len();
+    receiver.wire_written(len);
+    assert_eq!(receiver.poll(), Action::Event(Event::SessionCompleted));
+}
+
+#[test]
+fn sender_waits_for_zfin_and_flushes_oo_before_session_complete() {
+    let mut sender = Sender::new().unwrap();
+    drain_wire_sender(&mut sender);
+    sender
+        .start_file(FileInfo::new(b"done.bin", Some(Position::new(1))))
+        .unwrap();
+    sender.finish().unwrap();
+
+    let zrinit = write_header(Header::new(Encoding::ZHEX, Frame::ZRINIT, [0; 4]));
+    sender.submit_wire(&zrinit).unwrap();
+    drain_wire_sender(&mut sender);
+
+    let zrpos0 = write_header(Header::new(Encoding::ZHEX, Frame::ZRPOS, [0; 4]));
+    sender.submit_wire(&zrpos0).unwrap();
+    let Action::ReadFile { .. } = sender.poll() else {
+        panic!("sender should request file data");
+    };
+    sender.submit_file(&[1]).unwrap();
+    drain_wire_sender(&mut sender);
+
+    let zrpos1 = write_header(Header::new(
+        Encoding::ZHEX,
+        Frame::ZRPOS,
+        1_u32.to_le_bytes(),
+    ));
+    sender.submit_wire(&zrpos1).unwrap();
+    drain_wire_sender(&mut sender);
+    sender.submit_wire(&zrinit).unwrap();
     assert_eq!(sender.poll(), Action::Event(Event::FileCompleted));
+    drain_wire_sender(&mut sender);
+
+    sender.submit_wire(&zrinit).unwrap();
+    match sender.poll() {
+        Action::WriteWire(bytes) => {
+            assert_eq!(parse_first_header(bytes).frame(), Frame::ZFIN);
+            let len = bytes.len();
+            sender.wire_written(len);
+        }
+        action => panic!("duplicate ZRINIT should retry ZFIN, got {action:?}"),
+    }
+    assert_eq!(sender.poll(), Action::Idle);
+
+    let zfin = write_header(Header::new(Encoding::ZHEX, Frame::ZFIN, [0; 4]));
+    sender.submit_wire(&zfin).unwrap();
+    let Action::WriteWire(bytes) = sender.poll() else {
+        panic!("sender should flush OO before completion");
+    };
+    assert_eq!(bytes, b"OO");
+    let len = bytes.len();
+    sender.wire_written(len);
+    assert_eq!(sender.poll(), Action::Event(Event::SessionCompleted));
 }
 
 #[test]

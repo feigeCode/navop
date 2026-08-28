@@ -71,15 +71,16 @@ impl TerminalView {
             TerminalModelEvent::ZmodemRequestChanged => {
                 self.sync_zmodem_picker(cx);
             }
-            TerminalModelEvent::ZmodemProgressChanged(transfer_id) => {
-                self.sync_zmodem_background_task(Some(*transfer_id), cx);
+            TerminalModelEvent::ZmodemProgressChanged(progress) => {
+                self.sync_zmodem_background_task(Some(progress.clone()), cx);
                 cx.notify();
             }
             TerminalModelEvent::ZmodemTransferFinished {
                 transfer_id,
                 outcome,
+                progress,
             } => {
-                self.finish_zmodem_background_task(*transfer_id, outcome, cx);
+                self.finish_zmodem_background_task(*transfer_id, outcome, progress.clone(), cx);
                 cx.notify();
             }
             TerminalModelEvent::PromptStart

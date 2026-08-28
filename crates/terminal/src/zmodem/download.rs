@@ -1,7 +1,10 @@
 use super::{
     ZmodemResponder, ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferProgress,
     download_path,
-    transfer::{MAX_PROTOCOL_TIMEOUTS, consume_hex_header_terminator, receive_wire, send_wire},
+    transfer::{
+        MAX_PROTOCOL_TIMEOUTS, consume_hex_header_terminator, receive_finish_wire, receive_wire,
+        send_wire,
+    },
 };
 use anyhow::{Context as _, Result, bail};
 use ssh::SshChannel;
@@ -45,6 +48,20 @@ pub(super) async fn run_download(
 ) -> Result<Vec<u8>> {
     validate_directory(&directory).await?;
     let mut receiver = Receiver::new().context("create ZMODEM receiver")?;
+    if !initial_wire.is_empty() {
+        // The receiver pre-queues a ZRINIT before it has seen the remote
+        // ZRQINIT. In the transfer flow the initial wire already contains
+        // that request, so drop the premature handshake and let the
+        // ZRQINIT handler emit the response. This prevents lrzsz `sz -e`
+        // from restarting its handshake when it receives a duplicate ZRINIT.
+        let initial_wire_len = match receiver.poll() {
+            zmodem2::Action::WriteWire(bytes) => Some(bytes.len()),
+            _ => None,
+        };
+        if let Some(initial_wire_len) = initial_wire_len {
+            receiver.wire_written(initial_wire_len);
+        }
+    }
     let mut current = None;
     let mut progress = DownloadProgressTracker {
         responder,
@@ -132,7 +149,7 @@ async fn finish_download(
         if pending.len() >= 2 || pending.first().is_some_and(|byte| *byte != b'O') {
             return Ok(pending);
         }
-        let Some(data) = receive_wire(channel, cancellation).await? else {
+        let Some(data) = receive_finish_wire(channel, cancellation).await? else {
             return Ok(pending);
         };
         pending.extend(data);

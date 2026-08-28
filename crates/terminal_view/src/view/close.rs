@@ -16,6 +16,7 @@ impl TerminalView {
         self.unregister_broadcast_input(cx);
         self.unregister_public_mcp_session(cx);
         self.release_active_connection(cx);
+        self.cancel_zmodem_background_tasks(cx);
         self.terminal.read(cx).shutdown();
     }
 

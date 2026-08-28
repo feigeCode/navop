@@ -483,10 +483,9 @@ fn zmodem_progress_uses_only_the_global_background_task_panel() {
     assert!(!view_source.contains("mod zmodem_progress;"));
     assert!(!render_source.contains("render_zmodem_progress"));
     assert!(event_source.contains("self.sync_zmodem_background_task(None, cx);"));
-    assert!(event_source.contains("self.sync_zmodem_background_task(Some(*transfer_id), cx);"));
-    assert!(
-        event_source.contains("self.finish_zmodem_background_task(*transfer_id, outcome, cx);")
-    );
+    assert!(event_source.contains("self.sync_zmodem_background_task(Some(progress.clone()), cx);"));
+    assert!(event_source.contains("self.finish_zmodem_background_task("));
+    assert!(event_source.contains("progress.clone(),"));
     assert!(background_task_source.contains(r#"BackgroundTaskSpec::new("zmodem-transfer""#));
 }
 

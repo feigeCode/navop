@@ -79,6 +79,16 @@ async fn cancelled_picker_sends_zcan() {
     let response_task = tokio::spawn(async move {
         event_rx.recv().await.expect("picker request event");
         assert!(task_responder.submit(ZmodemPickerResponse::Cancel));
+        loop {
+            match event_rx.recv().await.expect("transfer outcome event") {
+                TerminalEvent::ZmodemTransferFinished {
+                    outcome: super::ZmodemTransferOutcome::Cancelled,
+                    ..
+                } => break,
+                TerminalEvent::ZmodemRequestChanged | TerminalEvent::ZmodemProgressChanged(_) => {}
+                event => panic!("unexpected terminal event: {event:?}"),
+            }
+        }
     });
     let mut channel = MockChannel::default();
     let sent = channel.sent.clone();
@@ -114,6 +124,7 @@ async fn cancellation_during_picker_reports_cancelled_outcome() {
                 TerminalEvent::ZmodemTransferFinished {
                     transfer_id: _,
                     outcome: super::ZmodemTransferOutcome::Cancelled,
+                    ..
                 } => {
                     break;
                 }

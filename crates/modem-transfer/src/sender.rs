@@ -274,6 +274,10 @@ impl Sender {
         if self.outgoing_offset >= self.outgoing.len() {
             self.outgoing.clear();
             self.outgoing_offset = 0;
+            if self.state == SenderPhase::FinishWriting {
+                self.state = SenderPhase::Done;
+                self.pending_event = Some(SenderEvent::SessionComplete);
+            }
         }
     }
 
@@ -291,6 +295,8 @@ impl Sender {
         match self.state {
             SenderPhase::WaitReceiverInit => self.queue_zrqinit()?,
             SenderPhase::WaitFilePos => self.queue_zfile()?,
+            SenderPhase::WaitFileDone => self.queue_zeof(self.file_size)?,
+            SenderPhase::WaitFinish => self.queue_zfin()?,
             _ => {}
         }
         Ok(())
@@ -312,6 +318,7 @@ impl Sender {
         if let Some(event) = self.pending_event.take() {
             return Action::Event(match event {
                 SenderEvent::FileComplete => Event::FileCompleted,
+                SenderEvent::FileSkipped => Event::FileSkipped,
                 SenderEvent::SessionComplete => Event::SessionCompleted,
                 SenderEvent::Aborted => Event::Aborted,
             });
@@ -427,14 +434,21 @@ impl Sender {
         match header.frame() {
             Frame::ZRINIT => self.on_zrinit(header),
             Frame::ZRPOS | Frame::ZACK => self.on_zrpos(header.count()),
-            Frame::ZSKIP => {
-                self.on_zskip();
-                Ok(())
-            }
+            Frame::ZSKIP => self.on_zskip(),
             Frame::ZABORT | Frame::ZCAN => {
                 self.on_abort();
                 Ok(())
             }
+            Frame::ZFERR => {
+                self.on_abort();
+                Ok(())
+            }
+            Frame::ZNAK => match self.state {
+                SenderPhase::WaitFilePos => self.queue_zfile(),
+                SenderPhase::WaitFileDone => self.queue_zeof(self.file_size),
+                SenderPhase::WaitFinish => self.queue_zfin(),
+                _ => Ok(()),
+            },
             Frame::ZFIN => self.on_zfin(),
             _ => {
                 if self.state == SenderPhase::WaitReceiverInit {
@@ -470,11 +484,7 @@ impl Sender {
                     self.state = SenderPhase::ReadyForFile;
                 }
             }
-            SenderPhase::WaitFinish => {
-                self.queue_oo()?;
-                self.state = SenderPhase::Done;
-                self.pending_event = Some(SenderEvent::SessionComplete);
-            }
+            SenderPhase::WaitFinish => self.queue_zfin()?,
             _ => {}
         }
         Ok(())
@@ -534,7 +544,7 @@ impl Sender {
         Ok(())
     }
 
-    fn on_zskip(&mut self) {
+    fn on_zskip(&mut self) -> Result<(), Error> {
         if matches!(
             self.state,
             SenderPhase::WaitFilePos
@@ -545,9 +555,15 @@ impl Sender {
             self.has_file = false;
             self.pending_request = None;
             self.frame_remaining = 0;
-            self.pending_event = Some(SenderEvent::FileComplete);
-            self.state = SenderPhase::ReadyForFile;
+            self.pending_event = Some(SenderEvent::FileSkipped);
+            if self.finish_requested {
+                self.queue_zfin()?;
+                self.state = SenderPhase::WaitFinish;
+            } else {
+                self.state = SenderPhase::ReadyForFile;
+            }
         }
+        Ok(())
     }
 
     fn on_abort(&mut self) {
@@ -559,8 +575,7 @@ impl Sender {
     fn on_zfin(&mut self) -> Result<(), Error> {
         if self.state == SenderPhase::WaitFinish {
             self.queue_oo()?;
-            self.state = SenderPhase::Done;
-            self.pending_event = Some(SenderEvent::SessionComplete);
+            self.state = SenderPhase::FinishWriting;
         }
         Ok(())
     }

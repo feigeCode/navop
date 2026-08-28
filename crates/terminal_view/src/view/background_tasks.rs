@@ -8,22 +8,15 @@ impl TerminalView {
     /// 将 ZMODEM 传输进度同步到全局后台任务面板。
     pub(super) fn sync_zmodem_background_task(
         &mut self,
-        expected_transfer_id: Option<ZmodemTransferId>,
+        progress: Option<terminal::zmodem::ZmodemTransferProgress>,
         cx: &mut Context<Self>,
     ) {
-        let Some(progress) = self.terminal.read(cx).zmodem_transfer_progress() else {
+        let Some(progress) = progress.or_else(|| self.terminal.read(cx).zmodem_transfer_progress())
+        else {
             return;
         };
-        if expected_transfer_id.is_some_and(|id| id != progress.transfer_id()) {
-            return;
-        }
         let direction = progress.direction();
-        let entity_id = self.terminal.entity_id().as_u64();
-        let key = SharedString::from(format!(
-            "zmodem-{}:{entity_id}:{}",
-            direction.as_str(),
-            progress.transfer_id().as_u64()
-        ));
+        let key = self.zmodem_background_task_key(&progress);
         let title = progress.file_name().to_string();
         let file_number = progress.file_index().saturating_add(1);
         let file_count = progress.file_count();
@@ -42,15 +35,17 @@ impl TerminalView {
                 format_zmodem_bytes(total)
             )
         };
-        let detail = format!("{file_progress} · {byte_progress}");
+        let detail = format!("{title} · {file_progress} · {byte_progress}");
 
         let manager = background_tasks::global(cx);
 
+        let active_id = manager.read(cx).find_by_key(&key);
         let existing_id = self
             .zmodem_background_tasks
             .get(&progress.transfer_id())
             .copied()
-            .filter(|id| manager.read(cx).find_by_key(&key) == Some(*id));
+            .filter(|id| active_id == Some(*id))
+            .or(active_id);
         let id = if let Some(id) = existing_id {
             id
         } else {
@@ -69,8 +64,8 @@ impl TerminalView {
                 if let Some(cancellation) = cancellation {
                     manager.set_cancellation(
                         id,
-                        BackgroundTaskCancellation::callback(move || {
-                            cancellation.cancel();
+                        BackgroundTaskCancellation::callback_with_result(move || {
+                            cancellation.cancel()
                         }),
                         cx,
                     );
@@ -100,16 +95,56 @@ impl TerminalView {
         &mut self,
         transfer_id: ZmodemTransferId,
         outcome: &ZmodemTransferOutcome,
+        progress: Option<terminal::zmodem::ZmodemTransferProgress>,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.zmodem_background_tasks.remove(&transfer_id) else {
+        let manager = background_tasks::global(cx);
+        let mut id = self.zmodem_background_tasks.remove(&transfer_id);
+        if id.is_none() {
+            if let Some(progress) = progress.as_ref() {
+                let key = self.zmodem_background_task_key(progress);
+                id = manager.read(cx).find_latest_by_key(&key);
+            }
+        }
+        if id.is_none() {
+            if let Some(progress) = progress {
+                self.sync_zmodem_background_task(Some(progress), cx);
+                id = self.zmodem_background_tasks.remove(&transfer_id);
+            }
+        }
+        let Some(id) = id else {
             return;
         };
-        let manager = background_tasks::global(cx);
         manager.update(cx, |manager, cx| match outcome {
             ZmodemTransferOutcome::Succeeded => manager.succeed(id, None, cx),
             ZmodemTransferOutcome::Cancelled => manager.cancel_confirmed(id, None, cx),
             ZmodemTransferOutcome::Failed(error) => manager.fail(id, error.clone(), cx),
+        });
+    }
+
+    fn zmodem_background_task_key(
+        &self,
+        progress: &terminal::zmodem::ZmodemTransferProgress,
+    ) -> SharedString {
+        let entity_id = self.terminal.entity_id().as_u64();
+        SharedString::from(format!(
+            "zmodem-{}:{entity_id}:{}",
+            progress.direction().as_str(),
+            progress.transfer_id().as_u64()
+        ))
+    }
+
+    pub(super) fn cancel_zmodem_background_tasks(&mut self, cx: &mut App) {
+        self.terminal.read(cx).cancel_zmodem_transfer();
+        let transfer_tasks = std::mem::take(&mut self.zmodem_background_tasks);
+        if transfer_tasks.is_empty() {
+            return;
+        }
+        let manager = background_tasks::global(cx);
+        manager.update(cx, |manager, cx| {
+            for task_id in transfer_tasks.into_values() {
+                manager.cancel_confirmed(task_id, None, cx);
+            }
         });
     }
 }

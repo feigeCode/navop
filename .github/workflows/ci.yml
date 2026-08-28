@@ -166,6 +166,12 @@ jobs:
       - name: Install system dependencies
         if: ${{ matrix.platform != 'windows' }}
         run: script/bootstrap
+      - name: Install lrzsz on Linux
+        if: ${{ matrix.platform == 'linux' }}
+        run: sudo apt-get update && sudo apt-get install -y lrzsz
+      - name: Install lrzsz on macOS
+        if: ${{ matrix.platform == 'macos' }}
+        run: brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
       - name: Install wasm-tools
         run: cargo install wasm-tools --locked --version 1.251.0
       - name: Test Linux

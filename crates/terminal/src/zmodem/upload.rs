@@ -187,6 +187,11 @@ async fn drive_sender(
             progress.start_file(current.as_ref());
             Ok(SenderStep::Progress)
         }
+        Action::Event(Event::FileSkipped) => {
+            *current = start_next(sender, queue, progress.file_count).await?;
+            progress.start_file(current.as_ref());
+            Ok(SenderStep::Progress)
+        }
         Action::Event(Event::SessionCompleted) => Ok(SenderStep::Complete),
         Action::Event(Event::Aborted) => bail!("remote aborted ZMODEM upload"),
         Action::Event(Event::FileStarted(_)) | Action::WriteFile(_) => {

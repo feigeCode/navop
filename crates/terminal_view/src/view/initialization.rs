@@ -296,6 +296,7 @@ impl TerminalView {
         this.sync_ssh_mfa_inputs(window, cx);
         this.register_broadcast_input(cx);
         this.start_performance_diagnostics(connection_id, connection_kind, cx);
+        cx.on_release(|this, cx| this.cancel_zmodem_background_tasks(cx));
         this
     }
 }
