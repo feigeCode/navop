@@ -544,9 +544,9 @@ SSH:
     zh-CN: Shell 集成在每次连接时运行时注入，不会在远端写入任何文件。旧版本 Navop 可能遗留过持久化集成文件（rc 配置块和 ~/.config/onetcli），如已不再使用旧版，可点击清理一次。
     zh-HK: Shell 整合在每次連線時執行時注入，不會在遠端寫入任何檔案。舊版本 Navop 可能遺留過持久化整合檔案（rc 設定區塊和 ~/.config/onetcli），如已不再使用舊版，可點擊清理一次。
   uninstall_shell_integration_success:
-    en: No legacy integration files found on the remote host.
-    zh-CN: 远端没有发现旧版集成文件。
-    zh-HK: 遠端沒有發現舊版整合檔案。
+    en: Shell integration uninstalled successfully.
+    zh-CN: Shell 集成已成功卸载。
+    zh-HK: Shell 整合已成功解除安裝。
   uninstall_shell_integration_failed:
     en: "Failed to clean up legacy integration files: %{error}"
     zh-CN: "清理旧版集成文件失败：%{error}"
