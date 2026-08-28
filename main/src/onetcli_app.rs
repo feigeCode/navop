@@ -1780,6 +1780,10 @@ impl OnetCliApp {
 
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_main_window_state(window, cx);
+        if self.tab_container.read(cx).is_empty() {
+            self.confirm_quit(window, cx);
+            return;
+        }
         if self.quit_state.request() == QuitRequestDecision::OpenPrompt {
             self.show_quit_confirmation(window, cx);
         }
@@ -2420,6 +2424,21 @@ mod tests {
         assert!(save.contains(".display(cx)"));
         assert!(save.contains("display.uuid()"));
         assert!(save.contains("settings.main_window_state = Some(state)"));
+    }
+
+    #[test]
+    fn request_quit_skips_confirmation_when_no_tabs_are_open() {
+        let source = include_str!("onetcli_app.rs");
+        let request_start = source.find("fn request_quit").expect("request_quit");
+        let request_end = source[request_start..]
+            .find("\n    fn show_quit_confirmation")
+            .map(|offset| request_start + offset)
+            .expect("request_quit end");
+        let request_quit = &source[request_start..request_end];
+
+        assert!(request_quit.contains("self.tab_container.read(cx).is_empty()"));
+        assert!(request_quit.contains("self.confirm_quit(window, cx);"));
+        assert!(request_quit.contains("show_quit_confirmation"));
     }
 
     #[test]
