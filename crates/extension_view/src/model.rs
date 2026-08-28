@@ -161,6 +161,20 @@ pub fn filter_marketplace(
         .collect()
 }
 
+/// 过滤出市场上存在可用新版本的市场条目，与“有更新”过滤和更新通知共用同一判定。
+pub fn filter_updatable_marketplace(
+    entries: &[MarketplaceEntry],
+    installed: &[ExtensionSummary],
+) -> Vec<MarketplaceEntry> {
+    entries
+        .iter()
+        .filter(|entry| {
+            marketplace_install_state(installed, entry) == MarketplaceInstallState::UpdateAvailable
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn marketplace_entry_install_id(entry: &MarketplaceEntry) -> &str {
     if entry.id.trim().is_empty() {
         entry.name.as_str()

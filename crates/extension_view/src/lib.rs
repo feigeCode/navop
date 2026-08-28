@@ -14,7 +14,8 @@ pub use host::ExtensionViewHost;
 pub use model::{
     DownloadedMarketplaceExtension, ExtensionKind, ExtensionSummary, MarketplaceEntry,
     MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, filter_installed,
-    filter_marketplace, marketplace_entry_install_id, marketplace_install_state,
+    filter_marketplace, filter_updatable_marketplace, marketplace_entry_install_id,
+    marketplace_install_state,
 };
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
@@ -24,7 +25,8 @@ mod tests {
 
     use super::{
         ExtensionKind, ExtensionSummary, MarketplaceEntry, MarketplaceInstallState,
-        filter_installed, filter_marketplace, marketplace_install_state,
+        filter_installed, filter_marketplace, filter_updatable_marketplace,
+        marketplace_install_state,
     };
 
     #[test]
@@ -109,6 +111,36 @@ mod tests {
             1,
             filter_marketplace(&[entry], "codex", Some(ExtensionKind::AcpAgent)).len()
         );
+    }
+
+    #[test]
+    fn updatable_marketplace_filter_keeps_only_newer_versions() {
+        let installed = vec![summary(ExtensionKind::DatabaseDriver, "fake_pg", "1.2.0")];
+        let entries = vec![
+            marketplace_entry(ExtensionKind::DatabaseDriver, "fake_pg", "1.3.0"),
+            marketplace_entry(ExtensionKind::DatabaseDriver, "mysql", "0.1.0"),
+            marketplace_entry(ExtensionKind::DatabaseDriver, "legacy", "1.2.0"),
+        ];
+
+        let filtered = filter_updatable_marketplace(&entries, &installed);
+
+        assert_eq!(["fake_pg"], filtered.iter().map(|e| e.id.as_str()).collect::<Vec<_>>().as_slice());
+    }
+
+    #[test]
+    fn updatable_marketplace_filter_matches_across_kinds() {
+        let installed = vec![
+            summary(ExtensionKind::DatabaseDriver, "fake_pg", "1.2.0"),
+            summary(ExtensionKind::AcpAgent, "codex", "2.0.0"),
+        ];
+        let entries = vec![
+            marketplace_entry(ExtensionKind::DatabaseDriver, "fake_pg", "1.2.0"),
+            marketplace_entry(ExtensionKind::AcpAgent, "codex", "2.1.0"),
+        ];
+
+        let filtered = filter_updatable_marketplace(&entries, &installed);
+
+        assert_eq!(["codex"], filtered.iter().map(|e| e.id.as_str()).collect::<Vec<_>>().as_slice());
     }
 
     fn summary(kind: ExtensionKind, name: &str, version: &str) -> ExtensionSummary {

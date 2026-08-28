@@ -17,17 +17,18 @@ use rust_i18n::t;
 
 use crate::{
     ExtensionKind, ExtensionManagerMode, ExtensionManagerView, ExtensionSummary, MarketplaceEntry,
-    MarketplaceInstallState, filter_installed, filter_marketplace, marketplace_install_state,
+    MarketplaceInstallState, filter_installed, filter_marketplace, filter_updatable_marketplace,
+    marketplace_install_state,
     state::{MarketplaceLoadState, install_progress_value, marketplace_filter_query},
 };
 
 const INSTALL_PROGRESS_WIDTH: f32 = 144.0;
-const EXTENSION_KINDS: [ExtensionKind; 7] = [
+// MCP 助手由设置页与内部安装链路管理，不再作为扩展页的浏览分类
+const EXTENSION_KINDS: [ExtensionKind; 6] = [
     ExtensionKind::Language,
     ExtensionKind::LanguageBundle,
     ExtensionKind::DatabaseDriver,
     ExtensionKind::RemoteDesktopProvider,
-    ExtensionKind::McpHelper,
     ExtensionKind::AcpAgent,
     ExtensionKind::Composite,
 ];
@@ -169,9 +170,7 @@ impl ExtensionManagerView {
             .label(label)
             .when(self.mode == mode, |button| button.primary())
             .on_click(cx.listener(move |view, _, _, cx| {
-                view.mode = mode;
-                view.ensure_marketplace_loaded(cx);
-                cx.notify();
+                view.set_mode(mode, cx);
             }))
     }
 
@@ -186,6 +185,20 @@ impl ExtensionManagerView {
                     .into_iter()
                     .map(|kind| self.render_kind_filter_button(Some(kind), kind_label(kind), cx)),
             )
+            .when(self.mode == ExtensionManagerMode::Marketplace, |row| {
+                row.child(self.render_updates_only_button(cx))
+            })
+    }
+
+    fn render_updates_only_button(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("extension-manager-updates-only")
+            .small()
+            .label(t!("Extension.updates_only").to_string())
+            .when(self.updates_only, |button| button.primary())
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.updates_only = !view.updates_only;
+                cx.notify();
+            }))
     }
 
     fn render_kind_filter_button(
@@ -227,7 +240,17 @@ impl ExtensionManagerView {
     }
 
     fn render_marketplace(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
-        let list = filter_marketplace(&self.marketplace_entries, query, self.selected_kind);
+        let updatable_entries;
+        let entries: &[MarketplaceEntry] = if self.updates_only {
+            updatable_entries = filter_updatable_marketplace(
+                &self.marketplace_entries,
+                &self.installed,
+            );
+            &updatable_entries
+        } else {
+            &self.marketplace_entries
+        };
+        let list = filter_marketplace(entries, query, self.selected_kind);
         if !list.is_empty() {
             return v_flex()
                 .w_full()
@@ -235,6 +258,16 @@ impl ExtensionManagerView {
                 .children(
                     list.into_iter()
                         .map(|entry| self.render_marketplace_item(entry, cx)),
+                )
+                .into_any_element();
+        }
+
+        if self.updates_only && entries.is_empty() && !self.marketplace_entries.is_empty() {
+            return ContentState::empty(t!("Extension.no_updates_available").to_string())
+                .icon(
+                    Icon::new(IconName::ExtensionsColor)
+                        .color()
+                        .with_size(IconSize::Large),
                 )
                 .into_any_element();
         }

@@ -2,16 +2,15 @@ use std::sync::Arc;
 
 use extension_runtime::MainExtensionViewHost;
 use extension_view::{
-    ExtensionManagerView, ExtensionViewHost, MarketplaceEntry, MarketplaceInstallState,
-    marketplace_install_state,
+    ExtensionManagerView, ExtensionViewHost, MarketplaceEntry, filter_updatable_marketplace,
 };
 use gpui::http_client::HttpClient;
-use gpui::{App, AppContext, Window};
+use gpui::{App, AppContext, Entity, Window};
 use gpui_component::WindowExt;
 use gpui_component::button::Button;
 use gpui_component::notification::Notification;
 use one_core::gpui_tokio::Tokio;
-use one_core::tab_container::TabItem;
+use one_core::tab_container::{TabContainer, TabItem};
 use rust_i18n::t;
 
 use crate::onetcli_app::GlobalTabContainer;
@@ -73,12 +72,7 @@ async fn check_for_plugin_updates(
 ) -> anyhow::Result<Vec<MarketplaceEntry>> {
     let installed = host.list_installed()?;
     let entries = host.load_marketplace_entries(http_client).await?;
-    Ok(entries
-        .into_iter()
-        .filter(|entry| {
-            marketplace_install_state(&installed, entry) == MarketplaceInstallState::UpdateAvailable
-        })
-        .collect())
+    Ok(filter_updatable_marketplace(&entries, &installed))
 }
 
 fn show_plugin_update_notification(
@@ -103,7 +97,10 @@ fn show_plugin_update_notification(
     });
 }
 
-/// 打开「扩展市场」页签，让用户可以一键为插件选择更新。
+/// 打开「扩展市场」页签并只保留需要更新的扩展。
+///
+/// 页签已存在时 `activate_or_add_tab_lazy` 只会激活、不会重建视图，
+/// 因此无论新建还是复用，都要对最终视图统一应用“有更新”过滤。
 fn open_extension_marketplace(window: &mut Window, cx: &mut App) {
     let Some(tab_container) = cx
         .try_global::<GlobalTabContainer>()
@@ -124,8 +121,19 @@ fn open_extension_marketplace(window: &mut Window, cx: &mut App) {
                 window,
                 cx,
             );
+            if let Some(view) = extension_manager_view(tc) {
+                view.update(cx, |view, cx| view.show_updates_only(window, cx));
+            }
         });
     });
+}
+
+fn extension_manager_view(tc: &mut TabContainer) -> Option<Entity<ExtensionManagerView>> {
+    let tab = tc
+        .tabs()
+        .iter()
+        .find(|tab| tab.id() == "extensions-marketplace")?;
+    tab.content().view().downcast::<ExtensionManagerView>().ok()
 }
 
 /// 依据更新集合计算签名：按插件 id 排序后拼接 `id@version`，保证结果稳定。

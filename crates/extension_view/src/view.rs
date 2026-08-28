@@ -24,6 +24,7 @@ pub struct ExtensionManagerView {
     pub(crate) mode: ExtensionManagerMode,
     pub(crate) search: Entity<InputState>,
     pub(crate) selected_kind: Option<ExtensionKind>,
+    pub(crate) updates_only: bool,
     pub(crate) installed: Vec<ExtensionSummary>,
     pub(crate) marketplace_entries: Vec<MarketplaceEntry>,
     pub(crate) marketplace_load_attempted: bool,
@@ -63,6 +64,31 @@ impl ExtensionManagerView {
         )
     }
 
+    /// 切换到扩展市场并只显示有可用更新的扩展。
+    ///
+    /// 供更新通知的“查看更新”入口复用：无论页签是新建还是已打开，都保证
+    /// 清空搜索与分类过滤，避免旧过滤条件遮住需要更新的扩展。
+    pub fn show_updates_only(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = ExtensionManagerMode::Marketplace;
+        self.updates_only = true;
+        self.selected_kind = None;
+        self.search.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        self.ensure_marketplace_loaded(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn set_mode(&mut self, mode: ExtensionManagerMode, cx: &mut Context<Self>) {
+        self.mode = mode;
+        // 已安装列表无法判断更新状态，切回已安装页签时关闭“有更新”过滤
+        if mode == ExtensionManagerMode::Installed {
+            self.updates_only = false;
+        }
+        self.ensure_marketplace_loaded(cx);
+        cx.notify();
+    }
+
     fn new_with_mode(
         host: Arc<dyn ExtensionViewHost>,
         mode: ExtensionManagerMode,
@@ -93,6 +119,7 @@ impl ExtensionManagerView {
             mode,
             search,
             selected_kind: None,
+            updates_only: false,
             installed: Vec::new(),
             marketplace_entries: Vec::new(),
             marketplace_load_attempted: false,

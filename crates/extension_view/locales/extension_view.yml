@@ -71,6 +71,14 @@ Extension:
     en: No matching marketplace extensions
     zh-CN: 没有匹配的市场扩展
     zh-HK: 沒有匹配的市場擴展
+  updates_only:
+    en: Has Update
+    zh-CN: 有更新
+    zh-HK: 有更新
+  no_updates_available:
+    en: All extensions are up to date
+    zh-CN: 没有需要更新的扩展
+    zh-HK: 沒有需要更新的擴展
   retry:
     en: Retry
     zh-CN: 重试
