@@ -21,6 +21,14 @@ on:
           - linux-arm64-portable
           - windows-x64
           - windows-x86
+      build_mode:
+        description: "fast 关闭 fat LTO（构建快、体积略大）；release 使用完整 fat LTO"
+        required: true
+        type: choice
+        default: release
+        options:
+          - release
+          - fast
 
 permissions:
   actions: write
@@ -44,6 +52,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       tag: ${{ steps.release.outputs.tag }}
       platform: ${{ steps.release.outputs.platform }}
+      build_mode: ${{ steps.release.outputs.build_mode }}
 
     steps:
       - name: Validate release request
@@ -52,8 +61,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_PLATFORM: ${{ inputs.platform }}
+          BUILD_MODE: ${{ inputs.build_mode }}
         run: |
           set -euo pipefail
+          if [ "$BUILD_MODE" != "release" ] && [ "$BUILD_MODE" != "fast" ]; then
+            echo "::error::Unsupported build mode: $BUILD_MODE"
+            exit 1
+          fi
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid release tag: $RELEASE_TAG"
             exit 1
@@ -62,8 +76,11 @@ jobs:
           if [ "$RELEASE_PLATFORM" != "all" ]; then
             gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           fi
-          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "platform=$RELEASE_PLATFORM" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$RELEASE_TAG"
+            echo "platform=$RELEASE_PLATFORM"
+            echo "build_mode=$BUILD_MODE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check out release tag
         uses: actions/checkout@v7
@@ -299,7 +316,10 @@ jobs:
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
         run: |
           set -euo pipefail
-          if [ "${{ matrix.arm_linux }}" = "true" ]; then
+          if [ "${{ needs.prepare.outputs.build_mode }}" = "fast" ]; then
+            export CARGO_PROFILE_RELEASE_LTO=false
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+          elif [ "${{ matrix.arm_linux }}" = "true" ]; then
             export CARGO_BUILD_JOBS=2
             export CARGO_PROFILE_RELEASE_LTO=thin
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -358,6 +378,11 @@ jobs:
           cargo --version
           rustc --version
           Write-Host "Using MSVC linker for ${target}: $linker"
+          if ("${{ needs.prepare.outputs.build_mode }}" -eq "fast") {
+            $env:CARGO_PROFILE_RELEASE_LTO = "false"
+            $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
+            Write-Host "Fast build mode: LTO disabled, codegen-units=16"
+          }
           cargo build `
             --release `
             -p main `
