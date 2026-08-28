@@ -10,6 +10,7 @@ use tracing::info;
 
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlResult;
+use crate::SqlFormatOptions;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
@@ -1109,9 +1110,8 @@ impl DatabasePlugin for MsSqlPlugin {
         Box::new(sqlparser::dialect::MsSqlDialect {})
     }
 
-    fn format_sql(&self, sql: &str) -> String {
-        let formatted = crate::format_sql(sql);
-        fix_mssql_brackets(&formatted)
+    fn format_sql_with_options(&self, sql: &str, options: SqlFormatOptions) -> String {
+        fix_mssql_brackets(&crate::format_sql_with_options(sql, options))
     }
 
     async fn list_schemas(

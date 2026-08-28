@@ -1,4 +1,5 @@
 use crate::QueryResult;
+use crate::SqlFormatOptions;
 use crate::connection::{DbConnection, DbError};
 use crate::executor::{SqlResult, SqlSource, StatementType};
 use crate::import_export::{
@@ -402,7 +403,12 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Format SQL for display (each database can customize this)
     fn format_sql(&self, sql: &str) -> String {
-        crate::format_sql(sql)
+        self.format_sql_with_options(sql, SqlFormatOptions::default())
+    }
+
+    /// Format SQL with user-configurable options (each database can customize this)
+    fn format_sql_with_options(&self, sql: &str, options: SqlFormatOptions) -> String {
+        crate::format_sql_with_options(sql, options)
     }
 
     /// Check if a SQL statement is a query (returns rows)

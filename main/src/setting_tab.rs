@@ -19,6 +19,7 @@ use crate::settings::notes_shortcuts::{
     render_group as render_notes_shortcuts_group, search_texts as notes_shortcut_search_texts,
 };
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
+use crate::settings::sql_format_settings::sql_format_setting_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
@@ -1120,6 +1121,7 @@ impl SettingsPanel {
                                 t!("Settings.General.Database.table_row_height_desc").to_string(),
                             ),
                         ]),
+                    sql_format_setting_group(),
                     mcp_tool_exposure_setting_group(&default_settings.tool_exposure),
                     agent_setting_group(&default_settings.ai_chat),
                     agent_tool_exposure_setting_group(&default_settings.tool_exposure),

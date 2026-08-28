@@ -16,7 +16,7 @@ use db::sql_editor::statement_ranges::{
     WindowedStatementScan, line_scans_neutral, statement_starting_on_line,
 };
 use db::types::TableObjectType;
-use db::{DbManager, GlobalDbState, format_sql};
+use db::{DbManager, GlobalDbState, SqlFormatOptions, format_sql_with_options};
 use futures::channel::oneshot;
 use futures::stream::{self, StreamExt};
 use gpui::prelude::*;
@@ -39,6 +39,7 @@ use gpui_component::{
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
+use one_core::settings::AppSettings;
 use one_core::storage::{DatabaseType, QueryDirectoryScope, default_query_directory};
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -3449,8 +3450,9 @@ impl SqlEditorTab {
         let format_revision = self.editor.read(cx).input().read(cx).document_revision();
         let format_context_generation = self.context_generation.load(Ordering::SeqCst);
         let window_option = cx.active_window();
+        let format_options = SqlFormatOptions::from_settings(&AppSettings::global(cx).sql_format);
         // 格式化在后台线程执行，避免大文本卡住 UI 线程；完成后回到主线程写回编辑器。
-        let heavy = cx.background_spawn(async move { format_sql(&text) });
+        let heavy = cx.background_spawn(async move { format_sql_with_options(&text, format_options) });
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let formatted = heavy.await;
             entity

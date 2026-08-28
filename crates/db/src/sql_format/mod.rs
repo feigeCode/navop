@@ -1,13 +1,41 @@
-use sqlformat::{FormatOptions, QueryParams, format};
+mod masking;
 
-/// SQL 美化：将 SQL 格式化为可读性更好的多行形式
+use one_core::settings::{SqlIndentStyle, SqlKeywordCase};
+use sqlformat::{FormatOptions, Indent, QueryParams, format};
+
+use masking::mask_embedded_parameters;
+
+/// SQL 格式化选项
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SqlFormatOptions {
+    pub keyword_case: SqlKeywordCase,
+    pub indent: SqlIndentStyle,
+}
+
+impl SqlFormatOptions {
+    /// 从用户设置构造格式化选项
+    pub fn from_settings(settings: &one_core::settings::SqlFormatSettings) -> Self {
+        Self {
+            keyword_case: settings.keyword_case,
+            indent: settings.indent,
+        }
+    }
+}
+
+/// SQL 美化：将 SQL 格式化为可读性更好的多行形式。
+/// 默认保持关键字大小写原样，2 空格缩进。
 pub fn format_sql(sql: &str) -> String {
+    format_sql_with_options(sql, SqlFormatOptions::default())
+}
+
+pub fn format_sql_with_options(sql: &str, options: SqlFormatOptions) -> String {
     let (masked_sql, parameters) = mask_embedded_parameters(sql);
-    let options = FormatOptions {
-        uppercase: Some(false),
+    let format_options = FormatOptions {
+        indent: to_sqlformat_indent(options.indent),
+        uppercase: to_sqlformat_uppercase(options.keyword_case),
         ..FormatOptions::default()
     };
-    let mut formatted = format(&masked_sql, &QueryParams::None, &options);
+    let mut formatted = format(&masked_sql, &QueryParams::None, &format_options);
 
     for (marker, parameter) in parameters {
         formatted = formatted.replace(&marker, &parameter);
@@ -21,111 +49,22 @@ pub fn compress_sql(sql: &str) -> String {
     sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn mask_embedded_parameters(sql: &str) -> (String, Vec<(String, String)>) {
-    let marker_prefix = unique_marker_prefix(sql);
-    let mut masked = String::with_capacity(sql.len());
-    let mut parameters = Vec::new();
-    let mut cursor = 0;
-
-    while cursor < sql.len() {
-        let remaining = &sql[cursor..];
-        let (closing, closing_len) = if remaining.starts_with("{{") {
-            ("}}", 2)
-        } else if remaining.starts_with("${") || remaining.starts_with("#{") {
-            ("}", 1)
-        } else {
-            let char_len = remaining
-                .chars()
-                .next()
-                .expect("cursor is before the end of the SQL")
-                .len_utf8();
-            masked.push_str(&remaining[..char_len]);
-            cursor += char_len;
-            continue;
-        };
-
-        let search_start = 2;
-        let Some(relative_end) = remaining[search_start..].find(closing) else {
-            let char_len = remaining
-                .chars()
-                .next()
-                .expect("cursor is before the end of the SQL")
-                .len_utf8();
-            masked.push_str(&remaining[..char_len]);
-            cursor += char_len;
-            continue;
-        };
-        let parameter_end = search_start + relative_end + closing_len;
-        let parameter = &remaining[..parameter_end];
-        let marker = format!("{marker_prefix}{}__", parameters.len());
-        masked.push_str(&marker);
-        parameters.push((marker, parameter.to_owned()));
-        cursor += parameter_end;
+fn to_sqlformat_indent(indent: SqlIndentStyle) -> Indent {
+    match indent {
+        SqlIndentStyle::TwoSpaces => Indent::Spaces(2),
+        SqlIndentStyle::FourSpaces => Indent::Spaces(4),
+        SqlIndentStyle::Tabs => Indent::Tabs,
     }
-
-    (masked, parameters)
 }
 
-fn unique_marker_prefix(sql: &str) -> String {
-    let base = "__navop_sql_parameter_";
-    let mut prefix = base.to_owned();
-
-    while sql.contains(&prefix) {
-        prefix.push('_');
+/// `None` 表示保持原文大小写，交给 sqlformat 原样输出
+fn to_sqlformat_uppercase(keyword_case: SqlKeywordCase) -> Option<bool> {
+    match keyword_case {
+        SqlKeywordCase::Preserve => None,
+        SqlKeywordCase::Upper => Some(true),
+        SqlKeywordCase::Lower => Some(false),
     }
-
-    prefix
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_sql_normalizes_keywords_to_lowercase() {
-        let sql = "selecT id, name frOM users WHERe id = 1";
-        let formatted = format_sql(sql);
-        assert!(formatted.starts_with("select"));
-        assert!(formatted.contains("\nfrom\n"));
-        assert!(formatted.contains("\nwhere\n"));
-        assert!(!formatted.contains("selecT"));
-        assert!(!formatted.contains("frOM"));
-        assert!(!formatted.contains("WHERe"));
-    }
-
-    #[test]
-    fn format_sql_preserves_embedded_parameters() {
-        let sql = "selecT * frOM ${table_name} WHERe ds = '${bizdate}' and id = #{userId} and created_at >= {{ params.start_date }}";
-        let formatted = format_sql(sql);
-
-        assert!(formatted.starts_with("select"));
-        assert!(formatted.contains("${table_name}"));
-        assert!(formatted.contains("'${bizdate}'"));
-        assert!(formatted.contains("#{userId}"));
-        assert!(formatted.contains("{{ params.start_date }}"));
-    }
-
-    #[test]
-    fn format_sql_preserves_unclosed_parameter_like_text() {
-        let sql = "select '${unfinished' as value";
-        let formatted = format_sql(sql);
-
-        assert!(formatted.contains("'${unfinished'"));
-    }
-
-    #[test]
-    fn format_sql_handles_parameter_marker_text_in_input() {
-        let sql = "select '__navop_sql_parameter_0__', ${actual}";
-        let formatted = format_sql(sql);
-
-        assert!(formatted.contains("'__navop_sql_parameter_0__'"));
-        assert!(formatted.contains("${actual}"));
-    }
-
-    #[test]
-    fn test_compress_sql() {
-        let sql = "SELECT\n  id,\n  name\nFROM\n  users\nWHERE\n  id = 1";
-        let compressed = compress_sql(sql);
-        assert_eq!(compressed, "SELECT id, name FROM users WHERE id = 1");
-    }
-}
+mod tests;

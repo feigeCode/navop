@@ -32,8 +32,8 @@ use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
     BinaryCell, ColumnInfo, DatabasePlugin, DbManager, ExecOptions, GlobalDbState, IndexInfo,
-    QueryResult, SqlResult, TableCellChange, TableCellValue, TableDataRequest, TableRowChange,
-    TableSaveRequest, binary_value::format_binary_input,
+    QueryResult, SqlFormatOptions, SqlResult, TableCellChange, TableCellValue, TableDataRequest,
+    TableRowChange, TableSaveRequest, binary_value::format_binary_input,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
@@ -2841,7 +2841,9 @@ impl DataGrid {
                 if trimmed.is_empty() || trimmed == t!("TableDataGrid.no_changes_sql_marker") {
                     Err(t!("TableDataGrid.no_changes").to_string())
                 } else {
-                    Ok(plugin.format_sql(&sql))
+                    let format_options =
+                        SqlFormatOptions::from_settings(&cx.global::<AppSettings>().sql_format);
+                    Ok(plugin.format_sql_with_options(&sql, format_options))
                 }
             }
             Err(_) => Err(t!("TableDataGrid.plugin_unavailable").to_string()),

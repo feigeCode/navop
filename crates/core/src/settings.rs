@@ -107,6 +107,70 @@ pub enum HomePageStyle {
     Modern,
 }
 
+/// SQL 格式化时的关键字大小写策略；Preserve 保持用户原文不改变大小写
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlKeywordCase {
+    #[default]
+    Preserve,
+    Upper,
+    Lower,
+}
+
+/// SQL 格式化的缩进风格
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlIndentStyle {
+    #[default]
+    TwoSpaces,
+    FourSpaces,
+    Tabs,
+}
+
+/// SQL 美化 / 压缩相关的用户设置
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SqlFormatSettings {
+    pub keyword_case: SqlKeywordCase,
+    pub indent: SqlIndentStyle,
+}
+
+impl SqlKeywordCase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Preserve => "preserve",
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "upper" => Self::Upper,
+            "lower" => Self::Lower,
+            _ => Self::Preserve,
+        }
+    }
+}
+
+impl SqlIndentStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TwoSpaces => "two_spaces",
+            Self::FourSpaces => "four_spaces",
+            Self::Tabs => "tabs",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "four_spaces" => Self::FourSpaces,
+            "tabs" => Self::Tabs,
+            _ => Self::TwoSpaces,
+        }
+    }
+}
+
 impl HomePageStyle {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -913,6 +977,9 @@ pub struct AppSettings {
     /// SQL 查询默认最大返回行数，0 表示不限制
     #[serde(default = "default_sql_query_max_rows")]
     pub sql_query_max_rows: u32,
+    /// SQL 美化格式化设置
+    #[serde(default)]
+    pub sql_format: SqlFormatSettings,
     #[serde(default)]
     pub custom_keybindings: HashMap<String, Vec<String>>,
 }
@@ -1236,6 +1303,7 @@ impl Default for AppSettings {
             system_hotkey_other: default_system_hotkey_other(),
             table_row_height: default_table_row_height(),
             sql_query_max_rows: default_sql_query_max_rows(),
+            sql_format: SqlFormatSettings::default(),
             custom_keybindings: HashMap::new(),
         }
     }
@@ -1506,7 +1574,8 @@ mod tests {
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
         HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
+        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
+        SqlKeywordCase, StartupDefaultPage, SyncProvider,
         default_grid_font_fallback_families, default_grid_monospace_font_family,
         grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
@@ -1515,6 +1584,37 @@ mod tests {
     #[test]
     fn app_settings_disables_sync_by_default() {
         assert!(!AppSettings::default().sync_enabled);
+    }
+
+    #[test]
+    fn sql_format_settings_default_preserves_keyword_case() {
+        let settings = AppSettings::default().sql_format;
+        assert_eq!(SqlKeywordCase::Preserve, settings.keyword_case);
+        assert_eq!(SqlIndentStyle::TwoSpaces, settings.indent);
+    }
+
+    #[test]
+    fn sql_format_settings_round_trips_and_tolerates_missing_fields() {
+        let settings = SqlFormatSettings {
+            keyword_case: SqlKeywordCase::Upper,
+            indent: SqlIndentStyle::Tabs,
+        };
+        let json = serde_json::to_string(&settings).expect("serialize sql format settings");
+        assert_eq!(
+            r#"{"keyword_case":"upper","indent":"tabs"}"#,
+            json.as_str()
+        );
+        assert_eq!(settings, serde_json::from_str(&json).expect("roundtrip"));
+
+        let partial: SqlFormatSettings =
+            serde_json::from_str(r#"{"keyword_case":"lower"}"#).expect("partial deserialize");
+        assert_eq!(
+            SqlFormatSettings {
+                keyword_case: SqlKeywordCase::Lower,
+                indent: SqlIndentStyle::TwoSpaces,
+            },
+            partial
+        );
     }
 
     #[test]

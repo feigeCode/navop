@@ -2543,6 +2543,60 @@ Settings:
         zh-CN: 覆盖此扩展在当前设备上提供的可执行文件路径
         zh-HK: 覆蓋此擴充套件在目前裝置上提供的可執行檔路徑
 
+    SqlFormat:
+      group_title:
+        en: SQL Formatting
+        zh-CN: SQL 格式化
+        zh-HK: SQL 格式化
+      keyword_case:
+        en: Keyword Case
+        zh-CN: 关键字大小写
+        zh-HK: 關鍵字大小寫
+      keyword_case_desc:
+        en: Controls how SQL keywords are cased when formatting; "Preserve" keeps the text as written
+        zh-CN: 格式化时 SQL 关键字的大小写策略；“保持原样”不改变原文大小写
+        zh-HK: 格式化時 SQL 關鍵字的大小寫策略；“保持原樣”不改變原文大小寫
+      keyword_case_preserve:
+        en: Preserve as written
+        zh-CN: 保持原样
+        zh-HK: 保持原樣
+      keyword_case_upper:
+        en: UPPERCASE
+        zh-CN: 全部大写
+        zh-HK: 全部大寫
+      keyword_case_lower:
+        en: lowercase
+        zh-CN: 全部小写
+        zh-HK: 全部小寫
+      indent:
+        en: Indentation
+        zh-CN: 缩进风格
+        zh-HK: 縮排風格
+      indent_desc:
+        en: Indentation used for formatted SQL
+        zh-CN: 格式化后 SQL 使用的缩进
+        zh-HK: 格式化後 SQL 使用的縮排
+      indent_two_spaces:
+        en: 2 spaces
+        zh-CN: 2 空格
+        zh-HK: 2 空格
+      indent_four_spaces:
+        en: 4 spaces
+        zh-CN: 4 空格
+        zh-HK: 4 空格
+      indent_tabs:
+        en: Tabs
+        zh-CN: Tab 缩进
+        zh-HK: Tab 縮排
+      preview:
+        en: Live Preview
+        zh-CN: 实时预览
+        zh-HK: 實時預覽
+      preview_desc:
+        en: Edit the sample SQL below; the result is formatted live with the current settings. ${...} / #{...} / {{...}} template fragments are preserved verbatim.
+        zh-CN: 编辑示例 SQL，下方按当前配置实时显示格式化结果；${...}、#{...}、{{...}} 模板片段会原样保留。
+        zh-HK: 編輯示例 SQL，下方按當前配置實時顯示格式化結果；${...}、#{...}、{{...}} 模板片段會原樣保留。
+
     # 数据库设置
     Database:
       group_title:
