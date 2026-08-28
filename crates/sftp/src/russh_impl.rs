@@ -747,6 +747,13 @@ where
     F: FnOnce(SftpFile) -> Fut,
     Fut: Future<Output = Result<(SftpFile, u64)>>,
 {
+    // Preserve the existing target's ownership and permissions across the
+    // replace. The staged file is created fresh and would otherwise inherit the
+    // login user's uid/gid, silently changing ownership when overwriting a file
+    // owned by another account (e.g. root overwriting a user's file). Only root
+    // can chown to an arbitrary uid, which is exactly the problematic scenario.
+    let preserved_attributes = preserve_target_attributes(sftp, target).await;
+
     let (mut temporary, file) = RemoteReplaceTemp::create(sftp, target).await?;
     let (mut file, written) = match operation(file).await {
         Ok(result) => result,
@@ -807,7 +814,89 @@ where
     }
 
     temporary.commit(sftp, target).await?;
+
+    // Restore the original ownership and permissions now that the staged file
+    // has replaced the target. A failure here must not downgrade an already
+    // successful transfer: the content is live and correct, only the metadata
+    // diverged. Log so operators can spot permission drift, but keep the upload
+    // green so callers do not retry a transfer that already succeeded.
+    if let Err(error) = restore_target_attributes(sftp, target, preserved_attributes).await {
+        tracing::warn!(
+            target = %target,
+            error = %error,
+            "remote file was replaced but its original ownership/permissions could not be restored"
+        );
+    }
+
     Ok(written)
+}
+
+/// Selects the ownership and permission attributes that must survive a replace.
+/// Only uid/gid/permissions/mtime are kept so a subsequent SETSTAT cannot clobber
+/// size or atime. Returns `None` when none of these fields are present, so the
+/// restore step is skipped entirely (e.g. first upload to a new path).
+fn preserved_replace_attributes(attrs: FileAttributes) -> Option<FileAttributes> {
+    let preserved = FileAttributes {
+        uid: attrs.uid,
+        gid: attrs.gid,
+        permissions: attrs.permissions,
+        mtime: attrs.mtime,
+        size: None,
+        user: None,
+        group: None,
+        atime: None,
+    };
+
+    if preserved.uid.is_none()
+        && preserved.gid.is_none()
+        && preserved.permissions.is_none()
+        && preserved.mtime.is_none()
+    {
+        None
+    } else {
+        Some(preserved)
+    }
+}
+
+/// Reads the existing target's ownership and permission attributes so they can
+/// be restored after the replace. Returns `None` when the target does not exist
+/// yet (first upload) or the server omits these fields, in which case nothing
+/// needs restoring. Uses `metadata` (follows symlinks) because `target` is the
+/// concrete path being replaced.
+async fn preserve_target_attributes(
+    sftp: &SftpSession,
+    target: &str,
+) -> Option<FileAttributes> {
+    match sftp.metadata(target).await {
+        Ok(attrs) => preserved_replace_attributes(attrs),
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => None,
+        Err(error) => {
+            tracing::warn!(
+                target = %target,
+                error = %error,
+                "could not read existing target metadata before replace; ownership may change"
+            );
+            None
+        }
+    }
+}
+
+/// Restores the preserved ownership and permissions onto the replaced target
+/// via SETSTAT. Only the attributes captured by [`preserve_target_attributes`]
+/// are sent; unset fields are omitted from the request so size/atime are left
+/// untouched.
+async fn restore_target_attributes(
+    sftp: &SftpSession,
+    target: &str,
+    attributes: Option<FileAttributes>,
+) -> Result<()> {
+    let Some(attributes) = attributes else {
+        return Ok(());
+    };
+
+    sftp.set_metadata(target, attributes).await.map_err(|error| {
+        anyhow!("Failed to restore ownership/permissions for {target}: {error}")
+    })
 }
 
 fn expected_chunk_len(offset: u64, total_size: u64) -> Result<usize> {
@@ -3793,5 +3882,72 @@ mod tests {
         assert_eq!(Some(&"deploy".to_string()), owners.get(&1000));
         assert!(!owners.contains_key(&1001));
         assert_eq!(2, owners.len());
+    }
+
+    #[test]
+    fn preserved_replace_attributes_keeps_ownership_permissions_and_mtime_only() {
+        // Root overwriting a non-root file: the server reports uid/gid plus
+        // permissions and mtime, alongside size/atime/user/group that must not
+        // be echoed back by a SETSTAT (size would truncate, atime would drift).
+        let original = FileAttributes {
+            size: Some(4096),
+            uid: Some(1000),
+            user: Some("deploy".to_string()),
+            gid: Some(1000),
+            group: Some("deploy".to_string()),
+            permissions: Some(0o644),
+            atime: Some(1_700_000_000),
+            mtime: Some(1_700_000_001),
+        };
+
+        let preserved = preserved_replace_attributes(original)
+            .expect("uid/gid/permissions/mtime must be preserved");
+
+        assert_eq!(preserved.uid, Some(1000));
+        assert_eq!(preserved.gid, Some(1000));
+        assert_eq!(preserved.permissions, Some(0o644));
+        assert_eq!(preserved.mtime, Some(1_700_000_001));
+        // Echoing size back via SETSTAT could truncate the freshly written file.
+        assert_eq!(preserved.size, None);
+        // atime is not preserved, so the access time is left to the server.
+        assert_eq!(preserved.atime, None);
+        // Display-only names are server-derived; only numeric ids are restored.
+        assert_eq!(preserved.user, None);
+        assert_eq!(preserved.group, None);
+    }
+
+    #[test]
+    fn preserved_replace_attributes_returns_none_for_first_upload() {
+        // A brand-new target has no existing metadata to preserve, so there is
+        // nothing to restore. The function signals this with None so the caller
+        // skips the SETSTAT round-trip entirely.
+        let empty = FileAttributes {
+            size: None,
+            uid: None,
+            user: None,
+            gid: None,
+            group: None,
+            permissions: None,
+            atime: None,
+            mtime: None,
+        };
+
+        assert!(preserved_replace_attributes(empty).is_none());
+    }
+
+    #[test]
+    fn preserved_replace_attributes_preserves_partial_metadata() {
+        // Some servers omit mtime or report only permissions. As long as any of
+        // the four restorable fields is present, the SETSTAT must still run.
+        let permissions_only = FileAttributes {
+            permissions: Some(0o600),
+            ..FileAttributes::empty()
+        };
+        let preserved = preserved_replace_attributes(permissions_only)
+            .expect("permissions alone must trigger a restore");
+        assert_eq!(preserved.permissions, Some(0o600));
+        assert_eq!(preserved.uid, None);
+        assert_eq!(preserved.gid, None);
+        assert_eq!(preserved.mtime, None);
     }
 }
