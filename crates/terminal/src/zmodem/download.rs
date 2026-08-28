@@ -8,7 +8,7 @@ use super::{
 };
 use anyhow::{Context as _, Result, bail};
 use ssh::SshChannel;
-use std::{path::PathBuf, string::String};
+use std::{io::ErrorKind, path::PathBuf, string::String};
 use tokio::{
     fs::{File, OpenOptions},
     io::AsyncWriteExt as _,
@@ -224,13 +224,8 @@ async fn open_download_file(
     remote_name: &[u8],
     advertised_size: Option<Position>,
 ) -> Result<DownloadFile> {
-    let path = download_path(directory, remote_name)?;
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .await
-        .with_context(|| format!("create ZMODEM download file {}", path.display()))?;
+    let requested_path = download_path(directory, remote_name)?;
+    let (path, file) = create_download_target(&requested_path).await?;
     Ok(DownloadFile {
         path,
         remote_name: String::from_utf8_lossy(remote_name).into_owned(),
@@ -238,6 +233,47 @@ async fn open_download_file(
         written: 0,
         file,
     })
+}
+
+pub(super) async fn create_download_target(
+    requested_path: &std::path::Path,
+) -> Result<(PathBuf, File)> {
+    const MAX_DUPLICATE_SUFFIX: usize = 10_000;
+
+    for suffix in 0..=MAX_DUPLICATE_SUFFIX {
+        let path = if suffix == 0 {
+            requested_path.to_path_buf()
+        } else {
+            suffixed_download_path(requested_path, suffix)
+        };
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("create ZMODEM download file {}", path.display()));
+            }
+        }
+    }
+
+    bail!(
+        "could not allocate a unique ZMODEM download path for {}",
+        requested_path.display()
+    )
+}
+
+fn suffixed_download_path(path: &std::path::Path, suffix: usize) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let name = match path.extension() {
+        Some(extension) => format!("{stem} ({suffix}).{}", extension.to_string_lossy()),
+        None => format!("{stem} ({suffix})"),
+    };
+    path.with_file_name(name)
 }
 
 async fn write_file_chunk(current: &mut Option<DownloadFile>, bytes: &[u8]) -> Result<()> {

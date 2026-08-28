@@ -26,7 +26,19 @@ impl TerminalView {
             format!("{file_number} / {file_count}")
         };
         let total = progress.total();
-        let byte_progress = if total == 0 {
+        let (progress_current, progress_total) = zmodem_progress_values(
+            progress.transferred(),
+            total,
+            progress.current_file_transferred(),
+            progress.current_file_total(),
+        );
+        let byte_progress = if total == 0 && progress.current_file_total() > 0 {
+            format!(
+                "{} / {}",
+                format_zmodem_bytes(progress.current_file_transferred()),
+                format_zmodem_bytes(progress.current_file_total())
+            )
+        } else if total == 0 {
             format_zmodem_bytes(progress.transferred())
         } else {
             format!(
@@ -81,8 +93,8 @@ impl TerminalView {
             manager.mark_running(id, cx);
             manager.update_progress(
                 id,
-                progress.transferred(),
-                (total > 0).then_some(total),
+                progress_current,
+                progress_total,
                 Some(detail.into()),
                 None,
                 cx,
@@ -165,9 +177,27 @@ fn format_zmodem_bytes(bytes: u64) -> String {
     }
 }
 
+fn zmodem_progress_values(
+    transferred: u64,
+    total: u64,
+    current_file_transferred: u64,
+    current_file_total: u64,
+) -> (u64, Option<u64>) {
+    if total > 0 {
+        (transferred.min(total), Some(total))
+    } else if current_file_total > 0 {
+        (
+            current_file_transferred.min(current_file_total),
+            Some(current_file_total),
+        )
+    } else {
+        (transferred, None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::format_zmodem_bytes;
+    use super::{format_zmodem_bytes, zmodem_progress_values};
     use std::collections::HashMap;
     use terminal::zmodem::ZmodemTransferId;
 
@@ -176,6 +206,19 @@ mod tests {
         assert_eq!("0 B", format_zmodem_bytes(0));
         assert_eq!("1.0 KB", format_zmodem_bytes(1024));
         assert_eq!("1.0 MB", format_zmodem_bytes(1024 * 1024));
+    }
+
+    #[test]
+    fn download_uses_current_file_total_when_batch_total_is_unknown() {
+        assert_eq!((512, Some(1024)), zmodem_progress_values(512, 0, 512, 1024));
+    }
+
+    #[test]
+    fn upload_prefers_known_batch_total() {
+        assert_eq!(
+            (1536, Some(4096)),
+            zmodem_progress_values(1536, 4096, 512, 1024)
+        );
     }
 
     #[test]

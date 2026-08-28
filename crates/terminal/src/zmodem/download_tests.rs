@@ -1,4 +1,7 @@
-use super::{DetectedZmodem, ZmodemDirection, ZmodemPickerResponse, ZmodemResponder, run_transfer};
+use super::{
+    DetectedZmodem, ZmodemDirection, ZmodemPickerResponse, ZmodemResponder,
+    download::create_download_target, run_transfer,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use ssh::{ChannelEvent, ForwardRequest, PtyConfig, SshChannel};
@@ -178,6 +181,19 @@ impl SshChannel for SenderPeerChannel {
     async fn close(&mut self) -> Result<()> {
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn existing_download_file_uses_a_unique_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let requested = directory.path().join("skills-lock.json");
+    tokio::fs::write(&requested, b"existing").await.unwrap();
+
+    let (path, file) = create_download_target(&requested).await.unwrap();
+
+    drop(file);
+    assert_eq!(path, directory.path().join("skills-lock (1).json"));
+    assert_eq!(tokio::fs::read(&requested).await.unwrap(), b"existing");
 }
 
 #[tokio::test]
