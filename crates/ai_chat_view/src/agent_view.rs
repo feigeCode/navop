@@ -4610,9 +4610,9 @@ fn kind_icon(kind: &ResourceKind) -> &'static str {
 
 fn tool_execution_mode_from_id(id: &str) -> ToolExecutionMode {
     match id {
+        "auto" => ToolExecutionMode::Auto,
         "readonly" => ToolExecutionMode::ReadOnly,
-        "manual" => ToolExecutionMode::Manual,
-        _ => ToolExecutionMode::Auto,
+        _ => ToolExecutionMode::Manual,
     }
 }
 
@@ -7230,7 +7230,7 @@ mod tests {
             ToolExecutionMode::Manual,
             tool_execution_mode_from_id("manual")
         );
-        assert_eq!(ToolExecutionMode::Auto, tool_execution_mode_from_id("nope"));
+        assert_eq!(ToolExecutionMode::Manual, tool_execution_mode_from_id("nope"));
     }
 
     #[test]
@@ -7574,7 +7574,20 @@ mod tests {
     }
 
     #[gpui::test]
-    fn gpui_defaults_to_auto_execution_mode(cx: &mut TestAppContext) {
+    fn gpui_defaults_to_manual_execution_mode(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let runtime = test_runtime("m");
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.read_with(cx, |view, _| {
+            assert_eq!(ToolExecutionMode::Manual, view.tool_execution_mode);
+        });
+    }
+
+    #[gpui::test]
+    fn gpui_explicit_auto_execution_mode_takes_effect(cx: &mut TestAppContext) {
         init_test_ui(cx);
         cx.update(|cx| {
             AppSettings::update(cx, |settings| {

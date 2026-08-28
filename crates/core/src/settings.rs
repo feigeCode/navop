@@ -493,9 +493,9 @@ impl Default for McpSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiChatToolExecutionMode {
-    #[default]
     Auto,
     ReadOnly,
+    #[default]
     Manual,
 }
 
@@ -2313,12 +2313,12 @@ mod tests {
     }
 
     #[test]
-    fn ai_chat_tool_execution_mode_defaults_to_auto() {
+    fn ai_chat_tool_execution_mode_defaults_to_manual() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
             .expect("旧版设置应能反序列化");
 
         assert_eq!(
-            AiChatToolExecutionMode::Auto,
+            AiChatToolExecutionMode::Manual,
             settings.ai_chat.tool_execution_mode
         );
     }
