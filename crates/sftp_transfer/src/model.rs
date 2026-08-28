@@ -113,6 +113,7 @@ pub struct SftpUploadRequest {
     pub directory_conflict_policy: DirectoryConflictPolicy,
     pub display_name: String,
     pub title: SharedString,
+    pub task_group: Option<SharedString>,
     pub task_key: Option<SharedString>,
 }
 
@@ -136,6 +137,7 @@ pub struct SftpDownloadRequest {
     pub is_dir: bool,
     pub display_name: String,
     pub title: SharedString,
+    pub task_group: Option<SharedString>,
     pub task_key: Option<SharedString>,
 }
 
@@ -163,6 +165,7 @@ pub struct SftpDeleteRemoteRequest {
     pub remote_dir: String,
     pub display_name: String,
     pub title: SharedString,
+    pub task_group: Option<SharedString>,
     pub task_key: Option<SharedString>,
 }
 

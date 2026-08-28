@@ -249,6 +249,7 @@ fn progress_updates_snapshot_and_background_task(cx: &mut TestAppContext) {
 
     let manager = cx.update(one_core::background_tasks::global);
     let task = background_task_by_title(&manager, "Upload progress", cx);
+    assert_eq!(task.group.as_deref(), Some("Test SFTP"));
     let progress = task.progress.expect("background progress should exist");
     assert_eq!(progress.current, 64);
     assert_eq!(progress.total, Some(128));

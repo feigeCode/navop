@@ -48,6 +48,7 @@ pub(super) fn download_request(
         is_dir: false,
         display_name: name.to_string(),
         title: format!("Download {name}").into(),
+        task_group: Some("Test SFTP".into()),
         task_key: None,
     }
 }
@@ -72,6 +73,7 @@ pub(super) fn delete_remote_request(
         remote_dir: "/remote".to_string(),
         display_name: name.to_string(),
         title: format!("Delete {name}").into(),
+        task_group: Some("Test SFTP".into()),
         task_key: None,
     }
 }
@@ -90,6 +92,7 @@ fn upload_request_with_source(
         directory_conflict_policy: DirectoryConflictPolicy::Merge,
         display_name: name.to_string(),
         title: format!("Upload {name}").into(),
+        task_group: Some("Test SFTP".into()),
         task_key: None,
     }
 }

@@ -139,6 +139,7 @@ impl BackgroundTaskProgress {
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskSpec {
     pub kind: SharedString,
+    pub group: Option<SharedString>,
     pub title: SharedString,
     pub detail: Option<SharedString>,
     pub key: Option<SharedString>,
@@ -150,12 +151,18 @@ impl BackgroundTaskSpec {
     pub fn new(kind: impl Into<SharedString>, title: impl Into<SharedString>) -> Self {
         Self {
             kind: kind.into(),
+            group: None,
             title: title.into(),
             detail: None,
             key: None,
             cancellable: true,
             progress_unit: BackgroundTaskProgressUnit::Steps,
         }
+    }
+
+    pub fn group(mut self, group: impl Into<SharedString>) -> Self {
+        self.group = Some(group.into());
+        self
     }
 
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
@@ -191,6 +198,7 @@ pub enum BackgroundTaskOutcome {
 #[derive(Debug, Clone)]
 pub struct BackgroundTask {
     pub id: BackgroundTaskId,
+    pub group: Option<SharedString>,
     pub key: Option<SharedString>,
     pub kind: SharedString,
     pub title: SharedString,
@@ -352,6 +360,7 @@ impl BackgroundTaskManager {
         let now = Utc::now();
         self.tasks.push(BackgroundTask {
             id,
+            group: spec.group,
             key: spec.key,
             kind: spec.kind,
             title: spec.title,

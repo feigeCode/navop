@@ -109,6 +109,9 @@ pub(super) fn register_background_task(
     let mut spec = BackgroundTaskSpec::new(request.background_kind(), request.title())
         .detail(request.background_detail())
         .progress_unit(BackgroundTaskProgressUnit::Bytes);
+    if let Some(group) = request.task_group() {
+        spec = spec.group(group);
+    }
     if let Some(key) = request.task_key() {
         spec = spec.key(key);
     }

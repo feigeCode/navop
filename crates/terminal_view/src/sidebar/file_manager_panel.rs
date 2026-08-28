@@ -30,6 +30,8 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use one_core::background_task_panel::open_background_task_dialog;
+use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::models::StoredConnection;
@@ -54,7 +56,7 @@ use sftp_transfer::{
     self, SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpRemoteDeleteEntry,
     SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
     SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, SftpUploadRequest,
-    delete_remote_task_key, upload_task_key,
+    delete_remote_task_key, download_task_key, upload_task_key,
 };
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -111,10 +113,8 @@ fn local_progress_state(state: &TransferTaskState) -> TransferProgressState {
     }
 }
 
-// ── 传输相关类型 ──────────────────────────────────────────────
-
-/// 传输操作类型
 #[derive(Clone)]
+#[allow(dead_code)]
 enum TransferOperation {
     Download {
         remote_path: String,
@@ -123,7 +123,6 @@ enum TransferOperation {
     },
 }
 
-/// 传输任务状态
 #[derive(Clone, PartialEq)]
 enum TransferTaskState {
     Pending,
@@ -133,17 +132,16 @@ enum TransferTaskState {
     Cancelled,
 }
 
-/// 跨线程共享的进度数据（原子操作，无需加锁）
 struct SharedProgress {
     transferred: AtomicU64,
     total: AtomicU64,
-    /// 存储 f64::to_bits() 的速度值
     speed: AtomicU64,
     cancelled: Arc<AtomicBool>,
     current_file: std::sync::RwLock<Option<String>>,
 }
 
 impl SharedProgress {
+    #[allow(dead_code)]
     fn new() -> Arc<Self> {
         Arc::new(Self {
             transferred: AtomicU64::new(0),
@@ -155,7 +153,6 @@ impl SharedProgress {
     }
 }
 
-/// 传输任务
 #[derive(Clone)]
 struct TransferTask {
     id: usize,
@@ -335,10 +332,9 @@ struct DownloadTarget {
     is_dir: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 struct ActiveExtract {
-    name: String,
-    path: String,
+    background_task: BackgroundTaskHandle,
 }
 
 struct RemoteCommandOutput {
@@ -347,7 +343,6 @@ struct RemoteCommandOutput {
     exit_status: u32,
 }
 
-/// 传输队列（单任务串行执行）
 struct TransferQueue {
     tasks: Vec<TransferTask>,
     pending: VecDeque<usize>,
@@ -374,21 +369,19 @@ impl TransferQueue {
             .count()
     }
 
+    #[allow(dead_code)]
     fn enqueue(&mut self, task: TransferTask) {
         self.pending.push_back(task.id);
         self.tasks.push(task);
     }
 
-    /// 将已经收到取消信号、但尚未启动的任务直接落为取消终态。
     fn take_cancelled_pending(&mut self) -> Vec<TransferTask> {
         let mut retained = VecDeque::with_capacity(self.pending.len());
         let mut cancelled = Vec::new();
-
         while let Some(task_id) = self.pending.pop_front() {
             let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) else {
                 continue;
             };
-
             if task.state == TransferTaskState::Pending
                 && task.shared_progress.cancelled.load(Ordering::Relaxed)
             {
@@ -399,34 +392,26 @@ impl TransferQueue {
                 retained.push_back(task_id);
             }
         }
-
         self.pending = retained;
         cancelled
     }
 
-    /// 取出下一个可执行的任务（串行：仅当没有 Running 时才启动）
     fn next_startable(&mut self) -> Option<TransferTask> {
         if self.running_count() > 0 {
             return None;
         }
-
         while let Some(task_id) = self.pending.pop_front() {
-            let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) else {
+            let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) else {
                 continue;
             };
-
-            if task.state != TransferTaskState::Pending {
-                continue;
+            if task.state == TransferTaskState::Pending {
+                task.state = TransferTaskState::Running;
+                return Some(task.clone());
             }
-
-            task.state = TransferTaskState::Running;
-            return Some(task.clone());
         }
-
         None
     }
 
-    /// 获取当前活跃任务（用于进度显示）
     fn active_task(&self) -> Option<&TransferTask> {
         self.tasks
             .iter()
@@ -438,11 +423,10 @@ impl TransferQueue {
             })
     }
 
-    /// 排队中的任务数（不含正在执行的）
     fn pending_count(&self) -> usize {
         self.tasks
             .iter()
-            .filter(|t| t.state == TransferTaskState::Pending)
+            .filter(|task| task.state == TransferTaskState::Pending)
             .count()
     }
 }
@@ -1397,19 +1381,15 @@ pub struct FileManagerPanel {
     global_executor: Entity<SftpTransferExecutor>,
     /// 当前连接在全局传输执行器中的稳定身份。
     upload_connection_identity: SftpConnectionIdentity,
+    background_task_group: SharedString,
     /// 面板提交的、尚未终结的全局远程删除。
     pending_global_deletes: HashMap<SftpTransferId, GlobalDeleteView>,
-    /// 独立的传输 SFTP 连接（懒创建）
     transfer_client: Option<Arc<Mutex<RusshSftpClient>>>,
-    /// 是否正在建立传输连接，避免同一连接代次重复发起连接。
     transfer_connecting: bool,
-    /// 传输连接代次；重连时递增，使旧连接 future 的结果失效。
     transfer_generation: u64,
-    /// 传输队列
     transfer_queue: TransferQueue,
-    /// 下一个任务 ID
+    #[allow(dead_code)]
     next_task_id: usize,
-    /// 进度刷新定时器
     progress_refresh_task: Option<gpui::Task<()>>,
     active_extract: Option<ActiveExtract>,
     /// 仅测试注入；记录远程目录刷新次数。
@@ -1451,6 +1431,12 @@ impl FileManagerPanel {
             .unwrap_or_else(|| {
                 global_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
             });
+        let background_task_group = format!(
+            "Terminal · {} · {:?}",
+            stored_connection.name,
+            cx.entity_id()
+        )
+        .into();
 
         let mut subscriptions = Vec::new();
         subscriptions.push(
@@ -1535,6 +1521,7 @@ impl FileManagerPanel {
             _subscriptions: subscriptions,
             global_executor,
             upload_connection_identity,
+            background_task_group,
             pending_global_deletes: HashMap::new(),
             transfer_client: None,
             transfer_connecting: false,
@@ -2583,6 +2570,7 @@ impl FileManagerPanel {
     // ── 传输调度 ──────────────────────────────────────────────
 
     /// 分配下一个任务 ID
+    #[allow(dead_code)]
     fn alloc_task_id(&mut self) -> usize {
         let id = self.next_task_id;
         self.next_task_id += 1;
@@ -2636,6 +2624,7 @@ impl FileManagerPanel {
     }
 
     /// 创建传输专用连接（首次传输时懒创建），然后执行排队任务
+    #[allow(dead_code)]
     fn ensure_transfer_client_and_schedule(&mut self, cx: &mut Context<Self>) {
         if self.transfer_client.is_some() {
             self.schedule_transfers(cx);
@@ -2902,6 +2891,9 @@ impl FileManagerPanel {
 
     /// 将待上传项加入传输队列
     fn enqueue_pending_uploads(&mut self, uploads: Vec<PendingUpload>, cx: &mut Context<Self>) {
+        if uploads.is_empty() {
+            return;
+        }
         for upload in uploads {
             let title_prefix = if upload.is_dir {
                 t!("FileManager.upload_folder")
@@ -2924,12 +2916,14 @@ impl FileManagerPanel {
                 directory_conflict_policy: upload.directory_conflict_policy,
                 display_name: upload.name.clone(),
                 title: format!("{title_prefix} · {}", upload.name).into(),
+                task_group: Some(self.background_task_group()),
                 task_key: Some(task_key),
             };
             self.global_executor
                 .update(cx, |executor, cx| executor.submit(request, cx));
         }
 
+        self.show_background_tasks(cx);
         cx.notify();
     }
 
@@ -3059,19 +3053,59 @@ impl FileManagerPanel {
         is_dir: bool,
         cx: &mut Context<Self>,
     ) {
-        let task = TransferTask {
-            id: self.alloc_task_id(),
-            operation: TransferOperation::Download {
-                remote_path,
-                local_path,
-                is_dir,
-            },
-            state: TransferTaskState::Pending,
-            shared_progress: SharedProgress::new(),
-            error: None,
+        let name = local_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&remote_path)
+            .to_string();
+        let request = sftp_transfer::SftpDownloadRequest {
+            connection: self.upload_connection_identity.clone(),
+            connection_source: SftpUploadConnection::SessionManager(self.session_manager.clone()),
+            remote_path: remote_path.clone(),
+            local_path: local_path.clone(),
+            is_dir,
+            display_name: name.clone(),
+            title: format!("{} · {name}", t!("FileManager.download")).into(),
+            task_group: Some(self.background_task_group()),
+            task_key: Some(download_task_key(
+                &self.upload_connection_identity,
+                &remote_path,
+                &local_path,
+            )),
         };
-        self.transfer_queue.enqueue(task);
-        self.ensure_transfer_client_and_schedule(cx);
+        self.global_executor
+            .update(cx, |executor, cx| executor.submit_download(request, cx));
+    }
+
+    fn show_background_tasks(&self, cx: &mut Context<Self>) {
+        let manager = one_core::background_tasks::global(cx);
+        if let Some(window) = cx.active_window() {
+            let _ = window.update(cx, |_, window, cx| {
+                open_background_task_dialog(manager, window, cx);
+            });
+        }
+    }
+
+    fn background_task_group(&self) -> SharedString {
+        self.background_task_group.clone()
+    }
+
+    fn register_non_cancellable_background_task(
+        &self,
+        kind: &'static str,
+        title: String,
+        cx: &mut Context<Self>,
+    ) -> BackgroundTaskHandle {
+        let manager = one_core::background_tasks::global(cx);
+        let spec = BackgroundTaskSpec::new(kind, title)
+            .group(self.background_task_group())
+            .cancellable(false);
+        let id = manager.update(cx, |manager, cx| {
+            let id = manager.register(spec, cx);
+            manager.mark_running(id, cx);
+            id
+        });
+        BackgroundTaskHandle::new(manager.downgrade(), id)
     }
 
     fn enqueue_delete(
@@ -3101,6 +3135,7 @@ impl FileManagerPanel {
             remote_dir: remote_dir.clone(),
             display_name: display_name.clone(),
             title: format!("{} · {}", t!("FileManager.delete"), display_name).into(),
+            task_group: Some(self.background_task_group()),
             task_key: Some(task_key),
         };
         let id = self.global_executor.update(cx, |executor, cx| {
@@ -3108,6 +3143,7 @@ impl FileManagerPanel {
         });
         self.pending_global_deletes
             .insert(id, GlobalDeleteView { remote_dir });
+        self.show_background_tasks(cx);
         cx.notify();
     }
 
@@ -3620,7 +3656,7 @@ impl FileManagerPanel {
     fn start_extract_archive(
         &mut self,
         name: String,
-        path: String,
+        _path: String,
         command: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -3630,10 +3666,13 @@ impl FileManagerPanel {
             return;
         }
 
-        self.active_extract = Some(ActiveExtract {
-            name: name.clone(),
-            path: path.clone(),
-        });
+        let background_task = self.register_non_cancellable_background_task(
+            "sftp-extract",
+            format!("{} · {name}", t!("FileManager.extract_running")),
+            cx,
+        );
+        self.active_extract = Some(ActiveExtract { background_task });
+        self.show_background_tasks(cx);
         cx.notify();
 
         let session_manager = self.session_manager.clone();
@@ -3646,7 +3685,9 @@ impl FileManagerPanel {
             .spawn(cx, async move |cx| match task.await {
                 Ok(Ok(_)) => {
                     let _ = view.update_in(cx, |this, window, cx| {
-                        this.active_extract = None;
+                        if let Some(extract) = this.active_extract.take() {
+                            extract.background_task.succeed(None, cx);
+                        }
                         window.push_notification(
                             Notification::success(t!("FileManager.extract_success")),
                             cx,
@@ -3657,14 +3698,18 @@ impl FileManagerPanel {
                 Ok(Err(error)) => {
                     let message = t!("FileManager.extract_failed", error = error).to_string();
                     let _ = view.update_in(cx, |this, window, cx| {
-                        this.active_extract = None;
+                        if let Some(extract) = this.active_extract.take() {
+                            extract.background_task.fail(message.clone(), cx);
+                        }
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
                 Err(error) => {
                     let message = t!("FileManager.extract_failed", error = error).to_string();
                     let _ = view.update_in(cx, |this, window, cx| {
-                        this.active_extract = None;
+                        if let Some(extract) = this.active_extract.take() {
+                            extract.background_task.fail(message.clone(), cx);
+                        }
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
@@ -3852,6 +3897,7 @@ impl FileManagerPanel {
                                 cx,
                             );
                         }
+                        this.show_background_tasks(cx);
                     });
                 }
             }
@@ -5076,6 +5122,12 @@ impl FileManagerPanel {
     fn upload_progress_view(&self, cx: &mut Context<Self>) -> Option<TransferProgressView> {
         self.global_executor.read_with(cx, |executor, _| {
             let snapshot = executor.active_for_connection(&self.upload_connection_identity)?;
+            if matches!(
+                snapshot.operation,
+                SftpTransferOperation::Upload | SftpTransferOperation::Download
+            ) {
+                return None;
+            }
             let icon = match snapshot.operation {
                 SftpTransferOperation::Upload => IconName::ArrowUp,
                 SftpTransferOperation::Download => IconName::ArrowDown,
@@ -5238,51 +5290,6 @@ impl FileManagerPanel {
         }
     }
 
-    fn render_extract_progress(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(extract) = self.active_extract.clone() else {
-            return div().into_any_element();
-        };
-        let tooltip_label = extract.path.clone();
-        let border = self.colors.border;
-        let panel = self.colors.muted;
-        let muted_foreground = self.colors.muted_foreground;
-
-        h_flex()
-            .border_t_1()
-            .border_color(border)
-            .bg(panel)
-            .px_2()
-            .py_1()
-            .gap_2()
-            .items_center()
-            .child(Spinner::new().small())
-            .child(
-                Icon::new(IconName::Unarchive)
-                    .xsmall()
-                    .text_color(muted_foreground),
-            )
-            .child(
-                div()
-                    .id("fm-extract-name")
-                    .flex_1()
-                    .text_xs()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .child(extract.name)
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(tooltip_label.clone()).build(window, cx)
-                    }),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted_foreground)
-                    .child(t!("FileManager.extract_running")),
-            )
-            .into_any_element()
-    }
-
     /// 渲染连接中状态
     fn render_connecting(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let muted_foreground = self.colors.muted_foreground;
@@ -5404,7 +5411,6 @@ impl FileManagerPanel {
         let scroll_handle = self.scroll_handle.clone();
         let is_loading = self.loading;
         let has_active_transfer = self.transfer_queue.has_active();
-        let has_active_extract = self.active_extract.is_some();
         let background = self.colors.background;
         let foreground = self.colors.foreground;
         let hover = self.colors.muted.opacity(0.72);
@@ -5571,9 +5577,6 @@ impl FileManagerPanel {
             .when(has_active_transfer, |el| {
                 el.child(self.render_transfer_progress(cx))
             })
-            .when(!has_active_transfer && has_active_extract, |el| {
-                el.child(self.render_extract_progress(cx))
-            })
     }
 }
 
@@ -5676,9 +5679,10 @@ mod tests {
     use sftp::DirectoryConflictPolicy;
     use sftp::ProgressCallback;
     use sftp_transfer::{
-        SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpRemoteDeleteEntry,
-        SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
-        SftpTransferProvider, SftpTransferState, SftpUploadExecution, delete_remote_task_key,
+        SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpDownloadExecution,
+        SftpRemoteDeleteEntry, SftpTransferEvent, SftpTransferExecutor, SftpTransferId,
+        SftpTransferOperation, SftpTransferProvider, SftpTransferState, SftpUploadExecution,
+        delete_remote_task_key,
     };
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig, SshSessionManager};
     use std::collections::{HashMap, HashSet};
@@ -5783,6 +5787,7 @@ mod tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum FileManagerTestOperation {
         Upload,
+        Download,
         DeleteRemote,
     }
 
@@ -5884,10 +5889,17 @@ mod tests {
 
         async fn download(
             &self,
-            _execution: sftp_transfer::SftpDownloadExecution,
+            execution: SftpDownloadExecution,
             _progress: ProgressCallback,
         ) -> Result<()> {
-            unimplemented!("this slice does not migrate downloads")
+            self.run(
+                execution.id,
+                FileManagerTestOperation::Download,
+                execution.remote_path,
+                None,
+                execution.cancelled,
+            )
+            .await
         }
 
         async fn delete_remote(
@@ -6003,6 +6015,24 @@ mod tests {
         })
     }
 
+    fn submit_download(
+        cx: &mut TestAppContext,
+        panel: &Entity<super::FileManagerPanel>,
+        local_path: PathBuf,
+    ) -> SftpTransferId {
+        panel.update(cx, |this, cx| {
+            this.enqueue_download("/remote/report.txt".to_string(), local_path, false, cx);
+        });
+        panel.read_with(cx, |panel, cx| {
+            panel
+                .global_executor
+                .read(cx)
+                .active_for_connection(&panel.upload_connection_identity)
+                .expect("download should be globally queued")
+                .id
+        })
+    }
+
     fn executor_state(
         cx: &TestAppContext,
         panel: &Entity<super::FileManagerPanel>,
@@ -6057,6 +6087,28 @@ mod tests {
             }),
             0
         );
+    }
+
+    #[gpui::test]
+    fn download_request_maps_to_global_executor(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (provider, executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+        let local_path = temp_dir.path().join("report.txt");
+        let id = submit_download(&mut cx, &panel, local_path.clone());
+
+        wait_until(&mut cx, |_| {
+            provider.operation(id) == Some(FileManagerTestOperation::Download)
+        });
+
+        let snapshot = executor
+            .read_with(cx, |executor, _| executor.snapshot(id))
+            .expect("download snapshot should exist");
+        assert_eq!(snapshot.operation, SftpTransferOperation::Download);
+        assert_eq!(snapshot.remote_path, "/remote/report.txt");
+        assert_eq!(snapshot.local_path, local_path);
+        panel.read_with(cx, |panel, _| {
+            assert!(!panel.transfer_queue.has_active());
+        });
     }
 
     #[gpui::test]

@@ -23,6 +23,7 @@ use gpui_component::{
     h_flex, v_flex,
 };
 use rust_i18n::t;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// 面板状态实体，由 `TabContainer` 持有一个实例。
@@ -186,6 +187,7 @@ pub(crate) fn render_panel_content(
     let tasks = manager.read(cx).filtered_tasks(filter);
     let counts = manager.read(cx).counts();
     let manager = manager.clone();
+    let grouped_tasks = group_tasks(&tasks);
 
     v_flex()
         .id("background-task-dialog-content")
@@ -218,13 +220,37 @@ pub(crate) fn render_panel_content(
                     .gap_2()
                     .max_h(px(400.0))
                     .overflow_y_scroll()
-                    .children(
-                        tasks
-                            .iter()
-                            .map(|task| render_task_item(task, manager.clone(), cx)),
-                    ),
+                    .children(grouped_tasks.into_iter().map(|(group, tasks)| {
+                        v_flex()
+                            .id(SharedString::from(format!("background-task-group-{group}")))
+                            .gap_1()
+                            .child(
+                                gpui::div()
+                                    .id("background-task-group-title")
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(group),
+                            )
+                            .children(
+                                tasks
+                                    .into_iter()
+                                    .map(|task| render_task_item(task, manager.clone(), cx)),
+                            )
+                    })),
             )
         })
+}
+
+fn group_tasks(tasks: &[BackgroundTask]) -> BTreeMap<String, Vec<&BackgroundTask>> {
+    let mut grouped = BTreeMap::new();
+    for task in tasks {
+        grouped
+            .entry(task.group.as_deref().unwrap_or("Other").to_string())
+            .or_insert_with(Vec::new)
+            .push(task);
+    }
+    grouped
 }
 
 fn render_header(
@@ -540,6 +566,7 @@ fn render_task_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::background_tasks::BackgroundTaskSpec;
 
     #[test]
     fn badge_text_prefers_failed_count() {
@@ -574,5 +601,20 @@ mod tests {
                 ..Default::default()
             }
         ));
+    }
+
+    #[gpui::test]
+    fn tasks_are_grouped_by_owner_label(cx: &mut gpui::TestAppContext) {
+        let manager = cx.update(|cx| BackgroundTaskManager::new(cx));
+        manager.update(cx, |manager, cx| {
+            manager.register(BackgroundTaskSpec::new("upload", "a").group("SFTP A"), cx);
+            manager.register(BackgroundTaskSpec::new("download", "b").group("SFTP B"), cx);
+            manager.register(BackgroundTaskSpec::new("delete", "c").group("SFTP A"), cx);
+        });
+        let tasks = manager.read_with(cx, |manager, _| manager.tasks());
+        let groups = group_tasks(&tasks);
+
+        assert_eq!(groups["SFTP A"].len(), 2);
+        assert_eq!(groups["SFTP B"].len(), 1);
     }
 }

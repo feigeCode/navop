@@ -44,6 +44,10 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use one_core::background_tasks::{
+    BackgroundTaskCancellation, BackgroundTaskHandle, BackgroundTaskProgressUnit,
+    BackgroundTaskSpec,
+};
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{ActiveConnections, StoredConnection};
@@ -294,6 +298,7 @@ struct TransferTask {
     state: TransferTaskState,
     shared_progress: Arc<SharedProgress>,
     error: Option<String>,
+    background_task: Option<BackgroundTaskHandle>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -342,6 +347,7 @@ struct PendingTransfer {
 struct SftpUploadContext {
     connection: SftpConnectionIdentity,
     connection_source: SftpUploadConnection,
+    task_group: SharedString,
 }
 
 struct PreparedGlobalUpload {
@@ -365,10 +371,9 @@ enum TransferRefreshTarget {
     Local(PathBuf),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 struct ActiveExtract {
-    name: String,
-    path: String,
+    background_task: BackgroundTaskHandle,
 }
 
 struct RemoteCommandOutput {
@@ -583,12 +588,7 @@ impl TransferQueue {
     fn bottom_visible_tasks(&self) -> Vec<TransferTask> {
         self.active_tasks()
             .into_iter()
-            .filter(|task| {
-                !matches!(
-                    &task.operation,
-                    TransferOperation::Upload { .. } | TransferOperation::Download { .. }
-                )
-            })
+            .filter(|task| task.external_transfer_id.is_none() && task.background_task.is_none())
             .collect()
     }
 }
@@ -1116,6 +1116,7 @@ fn prepare_global_upload(
         directory_conflict_policy,
         display_name: transfer.name.clone(),
         title: format!("{title_prefix} · {}", transfer.name).into(),
+        task_group: Some(context.task_group.clone()),
         task_key: Some(upload_task_key(
             &context.connection,
             &transfer.local_path,
@@ -1144,6 +1145,7 @@ fn prepare_global_download(
         is_dir: transfer.is_dir,
         display_name: transfer.name.clone(),
         title: format!("{} · {}", t!("Common.download"), transfer.name).into(),
+        task_group: Some(context.task_group.clone()),
         task_key: Some(download_task_key(
             &context.connection,
             &transfer.remote_path,
@@ -1182,6 +1184,7 @@ fn prepare_global_remote_delete(
         remote_dir: remote_dir.to_string(),
         display_name: display_name.clone(),
         title: format!("{} · {display_name}", t!("Common.delete")).into(),
+        task_group: Some(context.task_group.clone()),
         task_key: None,
     };
     let request = SftpDeleteRemoteRequest {
@@ -1215,6 +1218,7 @@ fn commit_external_transfer(
         state: TransferTaskState::Pending,
         shared_progress: new_shared_progress(),
         error: None,
+        background_task: None,
     };
 
     if !queue.track_external(task) {
@@ -3496,6 +3500,9 @@ impl SftpView {
         }
 
         for task in startable {
+            if let Some(handle) = task.background_task.as_ref() {
+                handle.mark_running(cx);
+            }
             self.start_transfer_task(task, cx);
         }
 
@@ -3976,6 +3983,7 @@ impl SftpView {
                 if !is_closing {
                     this.refresh_local_dir(cx);
                 }
+                this.sync_local_background_tasks(cx);
                 this.schedule_transfers(cx);
                 cx.notify();
             });
@@ -4032,6 +4040,7 @@ impl SftpView {
             self.refresh_panel_for_operation(&operation, cx);
         }
         self.close_direct_copy_prompt_for_task(task_id, cx);
+        self.sync_local_background_tasks(cx);
     }
 
     fn refresh_panel_for_operation(
@@ -4077,6 +4086,7 @@ impl SftpView {
         let upload_context = SftpUploadContext {
             connection: self.upload_connection_identity.clone(),
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+            task_group: self.background_task_group(),
         };
         let mut submitted = false;
         for transfer in transfers {
@@ -4101,17 +4111,120 @@ impl SftpView {
         }
 
         if submitted {
-            self.notify_background_transfer_started(cx);
+            self.show_background_tasks(cx);
         }
         self.start_progress_refresh(cx);
         cx.notify();
     }
 
-    fn notify_background_transfer_started(&self, cx: &mut Context<Self>) {
-        self.push_notification(
-            Notification::info(t!("Transfer.view_in_background_tasks").to_string()).autohide(true),
-            cx,
-        );
+    fn show_background_tasks(&self, cx: &mut Context<Self>) {
+        let manager = one_core::background_tasks::global(cx);
+        if let Some(window) = cx.active_window() {
+            let _ = window.update(cx, |_, window, cx| {
+                one_core::background_task_panel::open_background_task_dialog(manager, window, cx);
+            });
+        }
+    }
+
+    fn background_task_group(&self) -> SharedString {
+        if let Some(index) = self.tab_index {
+            format!("SFTP · {}({index})", self.connection_name).into()
+        } else {
+            format!("SFTP · {}", self.connection_name).into()
+        }
+    }
+
+    fn register_local_background_task(
+        &self,
+        kind: &'static str,
+        title: String,
+        progress_unit: BackgroundTaskProgressUnit,
+        progress: &Arc<SharedProgress>,
+        cx: &mut Context<Self>,
+    ) -> BackgroundTaskHandle {
+        let manager = one_core::background_tasks::global(cx);
+        let spec = BackgroundTaskSpec::new(kind, title)
+            .group(self.background_task_group())
+            .progress_unit(progress_unit);
+        let cancelled = progress.cancelled.clone();
+        let id = manager.update(cx, |manager, cx| {
+            let id = manager.register(spec, cx);
+            manager.set_cancellation(
+                id,
+                BackgroundTaskCancellation::callback(move || {
+                    cancelled.store(true, Ordering::Relaxed);
+                }),
+                cx,
+            );
+            id
+        });
+        BackgroundTaskHandle::new(manager.downgrade(), id)
+    }
+
+    fn register_non_cancellable_background_task(
+        &self,
+        kind: &'static str,
+        title: String,
+        cx: &mut Context<Self>,
+    ) -> BackgroundTaskHandle {
+        let manager = one_core::background_tasks::global(cx);
+        let spec = BackgroundTaskSpec::new(kind, title)
+            .group(self.background_task_group())
+            .cancellable(false);
+        let id = manager.update(cx, |manager, cx| {
+            let id = manager.register(spec, cx);
+            manager.mark_running(id, cx);
+            id
+        });
+        BackgroundTaskHandle::new(manager.downgrade(), id)
+    }
+
+    fn sync_local_background_tasks(&mut self, cx: &mut Context<Self>) {
+        for task in &mut self.transfer_queue.tasks {
+            let Some(handle) = task.background_task.clone() else {
+                continue;
+            };
+            match task.state {
+                TransferTaskState::Pending => {}
+                TransferTaskState::Running => {
+                    let current = task.shared_progress.transferred.load(Ordering::Relaxed);
+                    let total = task.shared_progress.total.load(Ordering::Relaxed);
+                    let detail = task
+                        .shared_progress
+                        .current_file
+                        .read()
+                        .ok()
+                        .and_then(|value| value.clone())
+                        .map(Into::into);
+                    let speed = f64::from_bits(task.shared_progress.speed.load(Ordering::Relaxed));
+                    let speed = (speed > 0.0).then(|| format_speed(speed).into());
+                    handle.update_progress(
+                        current,
+                        (total > 0).then_some(total),
+                        detail,
+                        speed,
+                        cx,
+                    );
+                }
+                TransferTaskState::Completed => {
+                    handle.succeed(None, cx);
+                    task.background_task = None;
+                }
+                TransferTaskState::Failed => {
+                    handle.fail(
+                        task.error
+                            .clone()
+                            .unwrap_or_else(|| "Task failed".to_string()),
+                        cx,
+                    );
+                    task.background_task = None;
+                }
+                TransferTaskState::Cancelled => {
+                    handle.cancel_confirmed(None, cx);
+                    task.background_task = None;
+                }
+            }
+        }
     }
 
     fn start_progress_refresh(&mut self, cx: &mut Context<Self>) {
@@ -4129,6 +4242,7 @@ impl SftpView {
                         let has_active = this.transfer_queue.has_active();
 
                         if has_active {
+                            this.sync_local_background_tasks(cx);
                             cx.notify();
                             true
                         } else {
@@ -4299,6 +4413,7 @@ impl SftpView {
         let download_context = SftpUploadContext {
             connection: self.upload_connection_identity.clone(),
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+            task_group: self.background_task_group(),
         };
         let mut submitted = false;
         for transfer in transfers {
@@ -4322,7 +4437,7 @@ impl SftpView {
             submitted = true;
         }
         if submitted {
-            self.notify_background_transfer_started(cx);
+            self.show_background_tasks(cx);
         }
         self.start_progress_refresh(cx);
         cx.notify();
@@ -4428,7 +4543,7 @@ impl SftpView {
             speed: AtomicU64::new(0),
             cancelled: Arc::new(AtomicBool::new(false)),
             scanning: AtomicBool::new(false),
-            current_file: std::sync::RwLock::new(first_file),
+            current_file: std::sync::RwLock::new(first_file.clone()),
             current_file_transferred: AtomicU64::new(0),
             current_file_total: AtomicU64::new(1),
         });
@@ -4446,9 +4561,39 @@ impl SftpView {
             state: TransferTaskState::Pending,
             shared_progress,
             error: None,
+            background_task: None,
         }) {
             tracing::debug!("Ignoring local delete after transfer admission was frozen");
             return;
+        }
+
+        let task_progress = self
+            .transfer_queue
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.shared_progress.clone());
+        if let Some(task_progress) = task_progress {
+            let handle = self.register_local_background_task(
+                "sftp-delete-local",
+                format!(
+                    "{} · {}",
+                    t!("Common.delete"),
+                    first_file.unwrap_or_default()
+                ),
+                BackgroundTaskProgressUnit::Items,
+                &task_progress,
+                cx,
+            );
+            if let Some(task) = self
+                .transfer_queue
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+            {
+                task.background_task = Some(handle);
+            }
+            self.show_background_tasks(cx);
         }
 
         self.schedule_transfers(cx);
@@ -4557,6 +4702,7 @@ impl SftpView {
         let context = SftpUploadContext {
             connection: self.upload_connection_identity.clone(),
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+            task_group: self.background_task_group(),
         };
         let prepared = prepare_global_remote_delete(&entries, &remote_path, &context);
         let reservation = self.upload_executor.update(cx, |executor, _| {
@@ -4575,6 +4721,7 @@ impl SftpView {
         };
         let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
         self.refresh_transfer_target_if_visible(refresh_target, cx);
+        self.show_background_tasks(cx);
         self.start_progress_refresh(cx);
         cx.notify();
     }
@@ -5147,6 +5294,7 @@ impl SftpView {
         if items.is_empty() {
             return;
         }
+        let item_count = items.len();
 
         let progress = Arc::new(SharedProgress {
             transferred: AtomicU64::new(0),
@@ -5172,9 +5320,34 @@ impl SftpView {
             state: TransferTaskState::Pending,
             shared_progress: progress,
             error: None,
+            background_task: None,
         }) {
             tracing::debug!("Ignoring server copy after transfer admission was frozen");
             return;
+        }
+        let task_progress = self
+            .transfer_queue
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.shared_progress.clone());
+        if let Some(task_progress) = task_progress {
+            let handle = self.register_local_background_task(
+                "sftp-server-copy",
+                t!("Transfer.server_copy_n_items", count = item_count).to_string(),
+                BackgroundTaskProgressUnit::Bytes,
+                &task_progress,
+                cx,
+            );
+            if let Some(task) = self
+                .transfer_queue
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+            {
+                task.background_task = Some(handle);
+            }
+            self.show_background_tasks(cx);
         }
         self.schedule_transfers(cx);
     }
@@ -5726,46 +5899,10 @@ impl SftpView {
             .into_any_element()
     }
 
-    fn render_extract_queue_row(
-        &self,
-        extract: ActiveExtract,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let tooltip_name = extract.path.clone();
-
-        h_flex()
-            .gap_2()
-            .items_center()
-            .child(Spinner::new().small())
-            .child(Icon::new(IconName::Unarchive).small())
-            .child(
-                div()
-                    .id("extract-name")
-                    .text_sm()
-                    .min_w(px(120.))
-                    .max_w(px(250.))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(extract.name)
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(tooltip_name.clone()).build(window, cx)
-                    }),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_xs()
-                    .w(px(90.))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("Extract.running").to_string()),
-            )
-            .into_any_element()
-    }
-
     fn render_transfer_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active_tasks = self.transfer_queue.bottom_visible_tasks();
 
-        if active_tasks.is_empty() && self.active_extract.is_none() {
+        if active_tasks.is_empty() {
             return div().into_any_element();
         }
 
@@ -5944,10 +6081,6 @@ impl SftpView {
                     )
                     .into_any_element(),
             );
-        }
-
-        if let Some(extract) = self.active_extract.clone() {
-            rows.push(self.render_extract_queue_row(extract, cx));
         }
 
         v_flex()
@@ -7277,6 +7410,7 @@ mod tests {
                 current_file_total: AtomicU64::new(0),
             }),
             error: None,
+            background_task: None,
         }
     }
 
@@ -8284,6 +8418,7 @@ mod tests {
         let context = SftpUploadContext {
             connection: SftpConnectionIdentity::Runtime(3),
             connection_source: SftpUploadConnection::Config(transfer_pool_config()),
+            task_group: "Test SFTP".into(),
         };
         let transfer = PendingTransfer {
             name: "archive".to_string(),
@@ -8315,6 +8450,7 @@ mod tests {
         let context = SftpUploadContext {
             connection: SftpConnectionIdentity::Runtime(3),
             connection_source: SftpUploadConnection::Config(transfer_pool_config()),
+            task_group: "Test SFTP".into(),
         };
         let transfer = PendingTransfer {
             name: "archive".to_string(),
@@ -8351,6 +8487,7 @@ mod tests {
         let context = SftpUploadContext {
             connection: SftpConnectionIdentity::Runtime(3),
             connection_source: SftpUploadConnection::Config(transfer_pool_config()),
+            task_group: "Test SFTP".into(),
         };
         let entries = vec![
             remote_delete_entry("archive", true),

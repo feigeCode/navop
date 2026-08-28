@@ -79,6 +79,14 @@ impl TransferRequest {
         }
     }
 
+    pub(super) fn task_group(&self) -> Option<SharedString> {
+        match self {
+            Self::Upload(request) => request.task_group.clone(),
+            Self::Download(request) => request.task_group.clone(),
+            Self::DeleteRemote(request) => request.task_group.clone(),
+        }
+    }
+
     pub(super) fn background_kind(&self) -> &'static str {
         match self {
             Self::Upload(_) => "sftp-upload",

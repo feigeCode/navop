@@ -265,7 +265,7 @@ pub trait ContextMenuHandler {
     fn extract_archive(
         &mut self,
         name: String,
-        full_path: String,
+        _full_path: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) where
@@ -274,7 +274,7 @@ pub trait ContextMenuHandler {
     fn show_extract_conflict_dialog(
         &mut self,
         name: String,
-        full_path: String,
+        _full_path: String,
         overwrite_command: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -284,7 +284,7 @@ pub trait ContextMenuHandler {
     fn start_extract_archive(
         &mut self,
         name: String,
-        full_path: String,
+        _full_path: String,
         command: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1112,7 +1112,7 @@ impl ContextMenuHandler for SftpView {
     fn start_extract_archive(
         &mut self,
         name: String,
-        full_path: String,
+        _full_path: String,
         command: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1122,10 +1122,13 @@ impl ContextMenuHandler for SftpView {
             return;
         }
 
-        self.active_extract = Some(ActiveExtract {
-            name: name.clone(),
-            path: full_path.clone(),
-        });
+        let background_task = self.register_non_cancellable_background_task(
+            "sftp-extract",
+            format!("{} · {name}", t!("Extract.running")),
+            cx,
+        );
+        self.active_extract = Some(ActiveExtract { background_task });
+        self.show_background_tasks(cx);
         cx.notify();
 
         let session_manager = Arc::new(SshSessionManager::new(self.sftp_config.clone()));
@@ -1138,7 +1141,9 @@ impl ContextMenuHandler for SftpView {
             .spawn(cx, async move |cx| match task.await {
                 Ok(Ok(_)) => {
                     let _ = view.update_in(cx, |this, window, cx| {
-                        this.active_extract = None;
+                        if let Some(extract) = this.active_extract.take() {
+                            extract.background_task.succeed(None, cx);
+                        }
                         window.push_notification(
                             Notification::success(t!("Notification.extract_success")),
                             cx,
@@ -1149,14 +1154,18 @@ impl ContextMenuHandler for SftpView {
                 Ok(Err(error)) => {
                     let message = t!("Error.extract_failed", error = error).to_string();
                     let _ = view.update_in(cx, |this, window, cx| {
-                        this.active_extract = None;
+                        if let Some(extract) = this.active_extract.take() {
+                            extract.background_task.fail(message.clone(), cx);
+                        }
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
                 Err(error) => {
                     let message = t!("Error.extract_failed", error = error).to_string();
                     let _ = view.update_in(cx, |this, window, cx| {
-                        this.active_extract = None;
+                        if let Some(extract) = this.active_extract.take() {
+                            extract.background_task.fail(message.clone(), cx);
+                        }
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
