@@ -48,10 +48,8 @@ impl SessionLogsPage {
             .unwrap_or_else(|| path.to_string_lossy().to_string());
         let request = DeleteRequest { recording_id, path };
         let view_entity = cx.entity().clone();
-        let delete_window_handle = window.window_handle();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let entity = view_entity.clone();
-            let window_handle = delete_window_handle;
             let request = request.clone();
             alert
                 .title(t!("SessionLogs.delete_title").to_string())
@@ -66,14 +64,15 @@ impl SessionLogsPage {
                         .cancel_text(t!("Common.cancel").to_string())
                         .show_cancel(true),
                 )
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, window, cx| {
                     let delete_request = request.clone();
-                    // Dialog closes on `true`; dispatch deletion through the view
-                    // so a slow filesystem removal does not block the UI.
-                    _ = cx.update_window(window_handle, |_, window, cx| {
-                        _ = entity.update(cx, |this, cx| {
-                            this.delete_log(delete_request, window, cx);
-                        });
+                    // The on_ok callback runs inside this window's update;
+                    // re-entering `update_window` for the same window would
+                    // fail silently, so update the view entity directly. The
+                    // actual file removal stays on a background task so it
+                    // does not block the UI.
+                    entity.update(cx, |this, cx| {
+                        this.delete_log(delete_request, window, cx);
                     });
                     true
                 })
