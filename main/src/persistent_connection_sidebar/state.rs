@@ -65,7 +65,7 @@ impl PersistentConnectionSidebar {
     }
 
     /// 点击设置、扩展、AI 工作台等非连接区域时，若开启了自动隐藏且连接树已展开，则收起连接树。
-    pub(super) fn collapse_if_auto_hide(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn collapse_if_auto_hide(&mut self, cx: &mut gpui::Context<Self>) {
         if self.auto_hide_tree && self.tree_expanded {
             self.set_tree_expanded(false, cx);
             cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded: false });

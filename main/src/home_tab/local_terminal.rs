@@ -18,7 +18,7 @@ impl HomePage {
                 Button::new("local-terminal-button")
                     .icon(IconName::SquareTerminalColor.color())
                     .label(t!("Home.local_terminal").to_string())
-                    .tooltip(t!("Home.local_terminal_tooltip").to_string())
+                    .tooltip(super::modern_home_shortcuts::terminal_tooltip(cx))
                     .on_click(window.listener_for(&view, move |this, _, window, cx| {
                         this.add_terminal_tab_with_profile(default_kind, window, cx);
                     })),

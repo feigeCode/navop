@@ -1,18 +1,20 @@
 use gpui::{
-    AnyElement, ColorExt as _, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Anchor, AnyElement, ColorExt as _, FontWeight, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable, StyledExt,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, Icon, IconName, IconSize, Sizable, StyledExt,
+    button::{Button, ButtonVariants as _, IconButton, IconButtonRole},
+    menu::{DropdownMenu as _, PopupMenuItem},
     h_flex, v_flex,
 };
 use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
 use super::{
-    HomePage, HomeSyncButtonContext, HomeSyncButtonState, home_sync_button_state,
-    modern_home_shortcuts::{new_connection_shortcut, quick_open_shortcut, terminal_shortcut},
+    HomePage, HomeSyncButtonContext, HomeSyncButtonState, card_connection_info,
+    home_sync_button_state,
+    modern_home_shortcuts::{new_connection_tooltip, quick_open_tooltip},
     should_show_team_management_entry, sync_route,
 };
 use crate::connection_visuals::ConnectionVisualSize;
@@ -25,7 +27,7 @@ use crate::onetcli_app::GlobalOnetCliApp;
 use one_core::license::Feature;
 use one_core::settings::{AppSettings, StartupDefaultPage};
 
-const START_CENTER_MAX_WIDTH: gpui::Pixels = px(1040.0);
+const START_CENTER_MAX_WIDTH: gpui::Pixels = px(1200.0);
 const START_CENTER_MAIN_COLUMN_WIDTH: gpui::Pixels = px(580.0);
 const START_CENTER_SIDE_COLUMN_WIDTH: gpui::Pixels = px(300.0);
 const START_CENTER_BRAND_WIDTH: gpui::Pixels = px(300.0);
@@ -71,6 +73,7 @@ impl HomePage {
                     v_flex()
                         .w_full()
                         .min_h_0()
+                        .h_full()
                         .max_w(START_CENTER_MAX_WIDTH)
                         .gap_3()
                         .child(self.render_start_center_hero(view, window, cx))
@@ -153,45 +156,26 @@ impl HomePage {
                     .flex_wrap()
                     .gap_2()
                     .child(
-                        h_flex()
-                            .flex_none()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Button::new("modern-home-new-connection")
-                                    .icon(IconName::Plus)
-                                    .primary()
-                                    .large()
-                                    .label(t!("Home.new_connection"))
-                                    .on_click(window.listener_for(&view, |home, _, window, cx| {
-                                        home.show_new_connection_dialog(window, cx);
-                                    })),
-                            )
-                            .child(new_connection_shortcut(cx)),
+                        Button::new("modern-home-new-connection")
+                            .icon(IconName::Plus)
+                            .primary()
+                            .large()
+                            .label(t!("Home.new_connection"))
+                            .tooltip(new_connection_tooltip(cx))
+                            .on_click(window.listener_for(&view, |home, _, window, cx| {
+                                home.show_new_connection_dialog(window, cx);
+                            })),
                     )
+                    .child(self.render_local_terminal_button(window, cx))
                     .child(
-                        h_flex()
-                            .flex_none()
-                            .items_center()
-                            .gap_2()
-                            .child(self.render_local_terminal_button(window, cx))
-                            .child(terminal_shortcut(cx)),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_none()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Button::new("modern-home-quick-open")
-                                    .icon(IconName::Search)
-                                    .outline()
-                                    .label(t!("Home.StartCenter.quick_open"))
-                                    .on_click(window.listener_for(&view, |home, _, window, cx| {
-                                        home.show_connection_quick_open(window, cx);
-                                    })),
-                            )
-                            .child(quick_open_shortcut(cx)),
+                        Button::new("modern-home-quick-open")
+                            .icon(IconName::Search)
+                            .outline()
+                            .label(t!("Home.StartCenter.quick_open"))
+                            .tooltip(quick_open_tooltip(cx))
+                            .on_click(window.listener_for(&view, |home, _, window, cx| {
+                                home.show_connection_quick_open(window, cx);
+                            })),
                     )
                     .text_color(cx.theme().foreground),
             )
@@ -212,8 +196,9 @@ impl HomePage {
             .cloned()
             .collect();
         recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at));
+        // badge 显示真实最近连接总数，而不是截断后可见的行数。
+        let recent_total = recent.len();
         recent.truncate(8);
-        let recent_count = recent.len();
 
         // 最近列表在面板内部滚动：外层负责 flex/裁剪，内层承载滚动。
         surface_panel("modern-home-recent-panel", cx)
@@ -223,7 +208,7 @@ impl HomePage {
             .child(
                 panel_header(
                     t!("Home.StartCenter.recent"),
-                    Some(recent_count.to_string()),
+                    Some(recent_total.to_string()),
                     cx,
                 )
                 .child(
@@ -269,10 +254,15 @@ impl HomePage {
     ) -> AnyElement {
         let icon = self.connection_icon(&conn, ConnectionVisualSize::Inline);
         let name = conn.name.clone();
-        let type_label = conn.connection_type.label().to_string();
-        let open_connection = conn.clone();
+        let subtitle = card_connection_info(&conn)
+            .map(|info| format!("{info} · {}", conn.connection_type.label()))
+            .unwrap_or_else(|| conn.connection_type.label().to_string());
+        let row_open_connection = conn.clone();
+        let menu_open_connection = conn.clone();
+        let edit_connection = conn.clone();
         let hover_border = cx.theme().list_active_border;
         let hover_background = cx.theme().muted;
+        let view = cx.entity();
 
         h_flex()
             .id(SharedString::from(format!(
@@ -290,11 +280,9 @@ impl HomePage {
             .border_color(cx.theme().border)
             .cursor_pointer()
             .hover(move |style| style.bg(hover_background).border_color(hover_border))
-            .on_double_click(
-                window.listener_for(&cx.entity(), move |home, _, window, cx| {
-                    home.open_connection_from_quick(&open_connection, window, cx);
-                }),
-            )
+            .on_click(window.listener_for(&view, move |home, _, window, cx| {
+                home.open_connection_from_quick(&row_open_connection, window, cx);
+            }))
             .child(
                 div()
                     .flex_none()
@@ -325,13 +313,74 @@ impl HomePage {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(type_label),
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(subtitle),
                     ),
             )
             .child(
-                Icon::new(IconName::ChevronRight)
-                    .with_size(IconSize::Small)
-                    .text_color(cx.theme().muted_foreground),
+                IconButton::new(
+                    SharedString::from(format!(
+                        "recent-conn-menu-{}",
+                        conn.id.unwrap_or(0)
+                    )),
+                    IconName::ChevronRight,
+                )
+                .role(IconButtonRole::Compact)
+                .text_color(cx.theme().muted_foreground)
+                .tooltip(t!("Home.recent_actions_tooltip").to_string())
+                .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                    let open_view = view.clone();
+                    let open_conn = menu_open_connection.clone();
+                    let new_tab_view = view.clone();
+                    let new_tab_conn = menu_open_connection.clone();
+                    let edit_view = view.clone();
+                    let edit_conn = edit_connection.clone();
+                    let remove_view = view.clone();
+                    let remove_conn_id = conn.id;
+                    menu.item(
+                        PopupMenuItem::new(t!("Home.open").to_string())
+                            .icon(IconName::ExternalLink)
+                            .on_click(move |_, window, cx| {
+                                open_view.update(cx, |home, cx| {
+                                    home.open_connection_from_quick(&open_conn, window, cx);
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new(t!("Home.open_in_new_tab").to_string())
+                            .icon(IconName::PanelRight)
+                            .on_click(move |_, window, cx| {
+                                new_tab_view.update(cx, |home, cx| {
+                                    home.open_connection_from_quick_with_mode(
+                                        &new_tab_conn,
+                                        one_core::tab_container::TabOpenMode::Background,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new(t!("Common.edit").to_string())
+                            .icon(IconName::Edit)
+                            .on_click(move |_, window, cx| {
+                                edit_view.update(cx, |home, cx| {
+                                    home.edit_connection(edit_conn.clone(), window, cx);
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new(t!("Home.remove_recent").to_string())
+                            .icon(IconName::Remove)
+                            .on_click(move |_, _window, cx| {
+                                remove_view.update(cx, |home, cx| {
+                                    home.remove_recent_connection(remove_conn_id, cx);
+                                });
+                            }),
+                    )
+                }),
             )
             .into_any_element()
     }
@@ -394,51 +443,50 @@ fn render_side_panel(
         sync_button_state,
         view,
     } = state;
-    surface_panel("modern-home-side-panel", cx)
-        .h_full()
-        .gap_0()
-        .p_0()
-        .overflow_hidden()
-        .child(render_create_panel(view.clone(), window, cx))
-        .child(div().h(px(1.0)).w_full().bg(cx.theme().border))
-        .child(render_status_panel(
-            syncing,
-            sync_button_state,
-            view.clone(),
-            window,
-            cx,
-        ))
-        .child(div().h(px(1.0)).w_full().bg(cx.theme().border))
-        .child(render_account_panel(user, view, cx))
-}
 
-fn render_create_panel(
-    view: gpui::Entity<HomePage>,
-    window: &mut Window,
-    cx: &mut gpui::Context<HomePage>,
-) -> impl IntoElement {
+    // 侧栏拆成两张卡：「创建与导入」是行动区，「状态 + 账户」是当前环境状态区。
     v_flex()
-        .id("modern-home-create-panel")
         .w_full()
-        .gap_2()
-        .p_3()
-        .child(panel_header(
-            t!("Home.StartCenter.create_and_import"),
-            None,
-            cx,
-        ))
-        .child(utility_row(
-            "modern-home-import",
-            IconName::Upload,
-            t!("Home.other_app_import").to_string(),
-            t!("Home.StartCenter.import_description").to_string(),
-            view,
-            window,
-            |_, window, cx| {
-                show_connection_import_window(cx.entity(), window, cx);
-            },
-            cx,
-        ))
+        .min_h_0()
+        .h_full()
+        .gap_3()
+        .child(
+            surface_panel("modern-home-create-panel", cx)
+                .flex_shrink_0()
+                .child(panel_header(
+                    t!("Home.StartCenter.create_and_import"),
+                    None,
+                    cx,
+                ))
+                .child(utility_row(
+                    "modern-home-import",
+                    IconName::Upload,
+                    t!("Home.other_app_import").to_string(),
+                    t!("Home.StartCenter.import_description").to_string(),
+                    view.clone(),
+                    window,
+                    |_, window, cx| {
+                        show_connection_import_window(cx.entity(), window, cx);
+                    },
+                    cx,
+                )),
+        )
+        .child(
+            surface_panel("modern-home-side-panel", cx)
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(panel_header(t!("Home.StartCenter.status"), None, cx))
+                .child(render_status_panel(
+                    syncing,
+                    sync_button_state,
+                    view.clone(),
+                    window,
+                    cx,
+                ))
+                .child(div().h(px(1.0)).w_full().bg(cx.theme().border))
+                .child(render_account_panel(user, view, window, cx)),
+        )
 }
 
 /// Every application entry that used to sit in the persistent navigation rail
@@ -459,7 +507,14 @@ fn render_applications_panel(cx: &mut gpui::Context<HomePage>) -> impl IntoEleme
     }
 
     surface_panel("modern-home-applications-panel", cx)
-        .child(panel_header(t!("Home.StartCenter.applications"), None, cx))
+        .child(
+            panel_header(t!("Home.StartCenter.applications"), None, cx).child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.StartCenter.applications_description")),
+            ),
+        )
         .child(
             div()
                 .w_full()
@@ -485,7 +540,7 @@ fn application_tile(
         .flex_grow_1()
         .items_center()
         .gap_1()
-        .p_1()
+        .p_2()
         .rounded_md()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_background))
@@ -495,17 +550,17 @@ fn application_tile(
         }))
         .child(
             div()
-                .size(px(32.0))
+                .size(px(36.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded_md()
-                .bg(cx.theme().secondary)
-                .text_color(cx.theme().secondary_foreground)
+                .bg(cx.theme().primary.opacity(0.06))
+                .text_color(cx.theme().primary)
                 .child(
                     Icon::new(application.icon())
                         .mono()
-                        .text_color(cx.theme().foreground)
+                        .text_color(cx.theme().primary)
                         .with_size(IconSize::Medium),
                 ),
         )
@@ -554,24 +609,66 @@ fn collapse_connection_sidebar_if_auto_hide(cx: &mut gpui::Context<HomePage>) {
 fn render_account_panel(
     user: Option<&one_core::cloud_sync::UserInfo>,
     view: gpui::Entity<HomePage>,
-    cx: &gpui::App,
+    window: &mut Window,
+    cx: &mut gpui::Context<HomePage>,
 ) -> impl IntoElement {
-    v_flex()
+    // 账户区只占自然高度，撑满会把状态行挤出首屏。
+    let panel = v_flex()
         .id("modern-home-account-panel")
         .w_full()
+        .flex_shrink_0()
         .gap_2()
         .p_3()
-        .child(panel_header(t!("Home.StartCenter.account"), None, cx))
-        .child(crate::user_avatar::render_user_avatar(
-            user,
-            view,
-            |home, window, cx| {
-                if home.current_user.is_none() {
+        .child(panel_header(t!("Home.StartCenter.account"), None, cx));
+
+    let panel = if user.is_none() {
+        // 未登录时补一行说明，让账户卡承担同步转化入口，而不是只有一个孤立按钮。
+        panel
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.StartCenter.account_login_description")),
+            )
+            .child(crate::user_avatar::render_user_avatar(
+                None,
+                view,
+                |home, window, cx| {
                     home.show_login_dialog(window, cx);
-                }
-            },
-            cx,
-        ))
+                },
+                cx,
+            ))
+    } else {
+        // 已登录时头像占一行，右侧留登出入口，避免账户卡只有展示没有操作。
+        panel.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(crate::user_avatar::render_user_avatar(
+                            user,
+                            view.clone(),
+                            |_, _, _| {},
+                            cx,
+                        )),
+                )
+                .child(
+                    IconButton::new("account-logout-button", IconName::Close)
+                        .role(IconButtonRole::Compact)
+                        .text_color(cx.theme().muted_foreground)
+                        .tooltip(t!("Auth.logout").to_string())
+                        .on_click(window.listener_for(&view, |home, _, _window, cx| {
+                            home.sign_out(cx);
+                        })),
+                ),
+        )
+    };
+
+    panel
 }
 
 fn render_status_panel(
@@ -585,14 +682,12 @@ fn render_status_panel(
     let sync_view = view.clone();
     let key_view = view;
 
+    // 状态区只占内容自然高度，不吸收侧栏剩余空间，账户面板因此紧跟其上。
     v_flex()
         .id("modern-home-status-panel")
         .w_full()
-        // 状态区只占内容自然高度，不吸收侧栏剩余空间，账户面板因此紧跟其上。
         .flex_shrink_0()
         .gap_2()
-        .p_3()
-        .child(panel_header(t!("Home.StartCenter.status"), None, cx))
         .child(
             v_flex()
                 .w_full()
@@ -610,7 +705,11 @@ fn render_status_panel(
                         } else {
                             t!("Home.sync").to_string()
                         },
-                        t!("Home.StartCenter.sync_description").to_string(),
+                        if syncing {
+                            t!("Home.StartCenter.sync_description_syncing").to_string()
+                        } else {
+                            t!("Home.StartCenter.sync_description").to_string()
+                        },
                         !sync_button_state.is_disabled(),
                         cx,
                     )

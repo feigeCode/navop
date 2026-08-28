@@ -117,6 +117,18 @@ pub(crate) fn trailing_navigation_applications() -> Vec<NavigationApplication> {
     vec![NavigationApplication::Settings]
 }
 
+/// Every navigation application in display order: the pinned entries, the
+/// secondary entries, and settings last. The modern home lays these out as
+/// tiles instead of collapsing them behind a menu.
+pub(crate) fn all_navigation_applications(
+    availability: NavigationAvailability,
+) -> Vec<NavigationApplication> {
+    let mut applications = leading_navigation_applications(availability);
+    applications.extend(overflow_navigation_applications());
+    applications.extend(trailing_navigation_applications());
+    applications
+}
+
 impl NavigationApplication {
     pub(crate) fn label(self) -> String {
         match self {
@@ -133,6 +145,10 @@ impl NavigationApplication {
             Self::Extensions => t!("Home.extensions").to_string(),
             Self::Settings => t!("Common.settings").to_string(),
         }
+    }
+
+    pub(crate) fn icon(self) -> gpui_component::IconName {
+        delegate::application_icon(self)
     }
 }
 

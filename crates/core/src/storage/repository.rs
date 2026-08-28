@@ -449,6 +449,17 @@ impl ConnectionRepository {
         })
     }
 
+    /// 清除最近使用时间，使连接从"最近使用"列表中消失；同样不影响内容更新时间和云同步判断。
+    pub fn clear_last_used(&self, id: i64) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET last_used_at = NULL WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 暂停连接拖拽排序：当前连接列表以 LRU 为准，后续重新设计手动排序与 LRU 的关系后再启用。
     #[allow(dead_code)]
     pub fn update_sort_orders(&self, orders: &[(i64, i32)]) -> Result<()> {
@@ -1193,6 +1204,39 @@ mod tests {
             Some(new_id),
             repo.list().unwrap().first().and_then(|c| c.id)
         );
+    }
+
+    #[test]
+    fn clear_last_used_removes_recent_use_timestamp_without_touching_updated_at() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("recent");
+        let id = repo.insert(&mut connection).unwrap();
+
+        repo.touch_last_used(id).unwrap();
+        let (updated_at, last_used_at): (i64, Option<i64>) = conn
+            .with_connection(|conn| {
+                Ok(conn.query_row(
+                    "SELECT updated_at, last_used_at FROM connections WHERE id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        // 触摸最近使用只更新 last_used_at，不改变内容更新时间。
+        assert!(last_used_at.is_some());
+        assert!(updated_at > 0);
+
+        repo.clear_last_used(id).unwrap();
+        let (_, last_used_at): (i64, Option<i64>) = conn
+            .with_connection(|conn| {
+                Ok(conn.query_row(
+                    "SELECT updated_at, last_used_at FROM connections WHERE id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert!(last_used_at.is_none());
     }
 
     #[test]

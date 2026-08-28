@@ -154,4 +154,20 @@ impl HomePage {
             this.verify_otp(email, otp, cx);
         });
     }
+
+    /// 退出登录：清除本地 License 与认证数据，并同步首页与全局用户状态。
+    pub(super) fn sign_out(&mut self, cx: &mut Context<Self>) {
+        crate::license::get_license_service(cx).clear();
+        let auth = self.auth_service.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            auth.sign_out().await;
+            _ = this.update(cx, |this, cx| {
+                this.current_user = None;
+                this.team_permissions.clear();
+                GlobalCurrentUser::set_user(None, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
 }

@@ -1,38 +1,33 @@
-use gpui::{AnyElement, IntoElement, ParentElement, Styled, div};
-use gpui_component::ActiveTheme;
 use one_core::keybindings::{action_id, shortcuts_for};
+use rust_i18n::t;
 
 use super::{OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER};
 
-pub(super) fn quick_open_shortcut(cx: &gpui::App) -> AnyElement {
-    shortcut_badge_for(action_id::HOME_QUICK_OPEN, quick_open_default(), cx)
+/// 快捷键不再以独立 badge 占据首屏视觉，统一收进按钮 tooltip（"标签（快捷键）"）。
+pub(super) fn quick_open_tooltip(cx: &gpui::App) -> String {
+    let shortcut = shortcut_text_for(action_id::HOME_QUICK_OPEN, quick_open_default(), cx);
+    tooltip_with_shortcut(t!("Home.StartCenter.quick_open"), &shortcut)
 }
 
-pub(super) fn new_connection_shortcut(cx: &gpui::App) -> AnyElement {
-    shortcut_badge_for(action_id::HOME_NEW_CONNECTION, new_default(), cx)
+pub(super) fn new_connection_tooltip(cx: &gpui::App) -> String {
+    let shortcut = shortcut_text_for(action_id::HOME_NEW_CONNECTION, new_default(), cx);
+    tooltip_with_shortcut(t!("Home.new_connection"), &shortcut)
 }
 
-pub(super) fn terminal_shortcut(cx: &gpui::App) -> AnyElement {
-    shortcut_badge_for(action_id::HOME_OPEN_LOCAL_TERMINAL, terminal_default(), cx)
+pub(super) fn terminal_tooltip(cx: &gpui::App) -> String {
+    let shortcut = shortcut_text_for(action_id::HOME_OPEN_LOCAL_TERMINAL, terminal_default(), cx);
+    tooltip_with_shortcut(t!("Home.local_terminal"), &shortcut)
 }
 
-fn shortcut_badge_for(action: &str, fallback: &str, cx: &gpui::App) -> AnyElement {
-    let shortcut = shortcuts_for(cx, action, &[fallback])
+fn shortcut_text_for(action: &str, fallback: &str, cx: &gpui::App) -> String {
+    shortcuts_for(cx, action, &[fallback])
         .into_iter()
         .next()
-        .unwrap_or_else(|| fallback.to_string());
+        .unwrap_or_else(|| fallback.to_string())
+}
 
-    div()
-        .px_1p5()
-        .py_0p5()
-        .rounded_md()
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().background)
-        .text_xs()
-        .text_color(cx.theme().muted_foreground)
-        .child(shortcut)
-        .into_any_element()
+fn tooltip_with_shortcut(label: std::borrow::Cow<'_, str>, shortcut: &str) -> String {
+    format!("{label}（{shortcut}）")
 }
 
 fn quick_open_default() -> &'static str {

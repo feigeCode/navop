@@ -157,7 +157,7 @@ impl PersistentConnectionSidebar {
             .w_full()
             .h_10()
             .flex_shrink_0()
-            .gap_2()
+            .gap_1()
             .items_center()
             .px_2()
             .bg(palette.background)
@@ -185,6 +185,7 @@ impl PersistentConnectionSidebar {
                         .caret_color(palette.foreground),
                 ),
             )
+            .child(self.render_tree_filter_button(palette, cx))
             .into_any_element()
     }
 
@@ -204,11 +205,10 @@ impl PersistentConnectionSidebar {
             .h(layout.embedded_panel_header)
             .flex_shrink_0()
             .pr_2()
-            // Leave a full control-sized gap after the macOS traffic lights;
-            // the narrower padding made the title look attached to the green
-            // window button even though the bounds did not overlap.
+            // The navigation rail is gone, so on macOS the header starts at
+            // the window edge and must clear the full traffic-light strip.
             .when(cfg!(target_os = "macos"), |this| {
-                this.pl(layout.macos_compact_title_bar_content_padding)
+                this.pl(layout.macos_title_bar_content_padding)
             })
             .when(!cfg!(target_os = "macos"), |this| this.pl_2())
             .items_center()
@@ -270,7 +270,7 @@ mod tests {
     fn macos_connection_header_clears_the_traffic_lights() {
         let source = include_str!("tree.rs");
         assert!(source.contains("cfg!(target_os = \"macos\")"));
-        assert!(source.contains("layout.macos_compact_title_bar_content_padding"));
+        assert!(source.contains("layout.macos_title_bar_content_padding"));
     }
 
     #[test]

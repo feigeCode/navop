@@ -403,8 +403,7 @@ mod tests {
     fn session_logs_open_from_both_home_sidebars_as_a_stable_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let legacy_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let persistent_source =
-            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let modern_home_source = include_str!("../home_tab/modern_home.rs");
         let navigation_source = include_str!("../home_tab/navigation.rs");
 
         assert!(tabs_source.contains("fn add_session_logs_tab"));
@@ -417,9 +416,9 @@ mod tests {
         assert!(
             legacy_source.contains("home.activate_navigation_application(application, window, cx)")
         );
-        assert!(persistent_source.contains("\"persistent-open-session-logs\""));
+        assert!(modern_home_source.contains("\"home-app-session-logs\""));
         assert!(
-            persistent_source
+            modern_home_source
                 .contains("home.activate_navigation_application(application, window, cx)")
         );
         assert!(navigation_source.contains(
@@ -432,10 +431,8 @@ mod tests {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let toolbar_source = include_str!("../home_tab/toolbar.rs");
         let legacy_sidebar_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let persistent_sidebar_source =
-            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
-        let navigation_source = include_str!("../home_tab/navigation.rs");
         let modern_home_source = include_str!("../home_tab/modern_home.rs");
+        let navigation_source = include_str!("../home_tab/navigation.rs");
         let settings_source = include_str!("../setting_tab.rs");
         let actions_source = include_str!("../credential_vault/actions.rs");
 
@@ -450,14 +447,13 @@ mod tests {
             legacy_sidebar_source
                 .contains("home.activate_navigation_application(application, window, cx)")
         );
-        assert!(persistent_sidebar_source.contains("\"persistent-open-credential-vault\""));
+        assert!(modern_home_source.contains("\"home-app-credential-vault\""));
         assert!(
-            persistent_sidebar_source
+            modern_home_source
                 .contains("home.activate_navigation_application(application, window, cx)")
         );
         assert!(navigation_source.contains("NavigationApplication::CredentialVault =>"));
         assert!(navigation_source.contains("self.add_credential_vault_tab(window, cx)"));
-        assert!(!modern_home_source.contains("\"modern-home-credential-vault\""));
         assert!(!toolbar_source.contains("\"credential-vault-button\""));
         assert!(!toolbar_source.contains("add_credential_vault_tab"));
         assert!(!settings_source.contains("SettingPage::new(\"钥匙串\")"));
@@ -482,10 +478,9 @@ mod tests {
     }
 
     #[test]
-    fn both_home_sidebars_place_credential_vault_with_workspace_tools() {
+    fn both_home_layouts_place_credential_vault_with_their_application_entries() {
         let legacy_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let persistent_source =
-            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let modern_home_source = include_str!("../home_tab/modern_home.rs");
 
         for id in [
             "\"legacy-open-notes\"",
@@ -496,34 +491,36 @@ mod tests {
             assert!(legacy_source.contains(id));
         }
         for id in [
-            "\"persistent-open-notes\"",
-            "\"persistent-open-session-logs\"",
-            "\"persistent-open-credential-vault\"",
-            "\"persistent-open-extensions\"",
+            "\"home-app-notes\"",
+            "\"home-app-session-logs\"",
+            "\"home-app-credential-vault\"",
+            "\"home-app-extensions\"",
+            "\"home-app-settings\"",
         ] {
-            assert!(persistent_source.contains(id));
+            assert!(modern_home_source.contains(id));
         }
         assert!(legacy_source.contains("show_application_navigation_quick_open"));
-        assert!(persistent_source.contains("show_application_navigation_quick_open"));
+        assert!(modern_home_source.contains("all_navigation_applications("));
     }
 
     #[test]
-    fn persistent_sidebar_home_entry_is_the_first_primary_navigation_item() {
-        let source = include_str!("../persistent_connection_sidebar/rail.rs");
-        let home = source.find("\"persistent-open-home\"").unwrap();
-        let filters = source.find("render_filter_buttons(").unwrap();
+    fn persistent_sidebar_tree_toggle_leads_and_home_follows_in_the_tab_bar() {
+        // 常驻 rail 已移除：Home 与连接树折叠按钮都收进顶部标签栏。
+        // 折叠按钮贴着窗口边缘（与 macOS 红绿灯对齐的导航位），Home 紧随其后。
+        let source = include_str!("../../../crates/core/src/tab_container.rs");
+        let home = source.find("\"tab-bar-home\"").unwrap();
+        let tree_toggle = source.find("\"navigation-sidebar-toggle\"").unwrap();
 
-        assert!(home < filters);
+        assert!(tree_toggle < home);
         assert!(source.contains("IconName::Home"));
-        assert!(source.contains("HomePage::show_home(home, window, cx)"));
+        assert!(source.contains("set_home_button_active("));
     }
 
     #[test]
     fn persistent_sidebar_home_entry_avoids_reentrant_home_page_updates() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let tabs_impl = tabs_source.split_once("\nimpl HomePage {\n").unwrap().1;
-        let rail_source =
-            include_str!("../persistent_connection_sidebar/rail.rs").replace("\r\n", "\n");
+        let app_source = include_str!("../onetcli_app.rs").replace("\r\n", "\n");
         let show_home_start = tabs_impl
             .find(
                 "pub(crate) fn show_home(home_page: &Entity<Self>, window: &mut Window, cx: &mut App)",
@@ -539,7 +536,10 @@ mod tests {
         assert!(show_home_source.contains("try_global::<GlobalOnetCliApp>()"));
         assert!(show_home_source.contains("app.show_home(window, cx)"));
         assert!(!show_home_source.contains("activate_base_content"));
-        assert!(rail_source.contains("|home, window, cx| HomePage::show_home(home, window, cx)"));
+        assert!(
+            app_source.contains("HomePage::show_home(&home_page, window, cx);"),
+            "顶部 Home 按钮应走与旧 rail 相同的 show_home 入口"
+        );
     }
 
     #[test]
@@ -595,29 +595,25 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_uses_shared_rail_geometry_and_icon_scale() {
-        let source = include_str!("../persistent_connection_sidebar/rail.rs").replace("\r\n", "\n");
-        let sections = include_str!("../persistent_connection_sidebar/navigation_sections.rs")
-            .replace("\r\n", "\n");
-        let geometry = include_str!("../../../crates/ui/src/theme/geometry.rs");
+    fn persistent_filter_button_uses_the_shared_rail_icon_geometry() {
+        let filter_bar =
+            include_str!("../persistent_connection_sidebar/filter_bar.rs").replace("\r\n", "\n");
         let visuals = include_str!("../connection_visuals.rs");
 
-        assert!(sections.contains("items_center().gap_1().p_1()"));
-        assert!(source.contains("let rail_width = layout.global_rail"));
-        assert!(source.contains("let rail_item_size = Size::Size(layout.global_rail_item)"));
-        assert!(sections.contains("connection_type_rail_icon(filter)"));
+        assert!(filter_bar.contains("persistent-filter-button"));
+        assert!(filter_bar.contains("IconName::Filter"));
+        assert!(filter_bar.contains("IconButtonRole::Compact"));
+        assert!(filter_bar.contains("connection_type_rail_icon(filter)"));
         assert!(visuals.contains("Self::Inline | Self::Rail => IconSize::Medium"));
-        assert!(geometry.contains("global_rail: px(52.)"));
-        assert!(geometry.contains("global_rail_item: px(40.)"));
-        assert!(source.contains(".hit_size(rail_item_size)"));
-        assert!(sections.matches(".hit_size(visuals.item_size)").count() >= 2);
-        assert!(source.contains(".with_size(IconSize::Medium)"));
-        assert!(sections.contains(".glyph_size(IconSize::Medium)"));
+        assert!(filter_bar.contains("ConnectionType::all()"));
+        assert!(filter_bar.contains(".checked(selected_filter == filter)"));
     }
 
     #[test]
     fn persistent_sidebar_uses_line_style_rail_icons() {
-        let sections = include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let filter_bar = include_str!("../persistent_connection_sidebar/filter_bar.rs");
+        let modern_home = include_str!("../home_tab/modern_home.rs");
+        let user_avatar = include_str!("../user_avatar.rs");
         let icons = include_str!("../../../crates/ui/src/icon.rs");
         let visuals = include_str!("../connection_visuals.rs");
         let remote_render = include_str!("../../../crates/remote_desktop_view/src/view/render.rs");
@@ -626,8 +622,10 @@ mod tests {
         let rdp = include_str!("../../../crates/assets/assets/icons/rdp.svg");
         let vnc = include_str!("../../../crates/assets/assets/icons/vnc.svg");
 
-        assert!(sections.contains("IconName::User"));
-        assert!(sections.contains("connection_type_rail_icon"));
+        assert!(filter_bar.contains("connection_type_rail_icon"));
+        assert!(modern_home.contains("Icon::new(application.icon())"));
+        assert!(modern_home.contains("render_user_avatar("));
+        assert!(user_avatar.contains("IconName::User"));
         assert!(visuals.contains("ConnectionType::All => IconName::ServerLine"));
         assert!(visuals.contains("ConnectionType::SshSftp => IconName::TerminalLine"));
         assert!(visuals.contains("ConnectionType::Rdp => IconName::RdpLine"));
@@ -657,15 +655,13 @@ mod tests {
     #[test]
     fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let rail_source = include_str!("../persistent_connection_sidebar/rail.rs");
-        let persistent_navigation_source =
-            include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+        let modern_home_source = include_str!("../home_tab/modern_home.rs");
         let legacy_sidebar_source = include_str!("../home_tab/sidebar_navigation.rs");
         let legacy_sidebar_layout_source = include_str!("../home_tab/sidebar.rs");
         let navigation_source = include_str!("../home_tab/navigation.rs");
 
-        assert!(persistent_navigation_source.contains("persistent-open-ai-workbench"));
-        assert!(rail_source.contains("StartupDefaultPage::Home"));
+        assert!(modern_home_source.contains("home-app-ai-workbench"));
+        assert!(modern_home_source.contains("StartupDefaultPage::Home"));
         assert!(legacy_sidebar_source.contains("legacy-open-ai-workbench"));
         assert!(legacy_sidebar_layout_source.contains("StartupDefaultPage::Home"));
         assert!(
@@ -673,7 +669,7 @@ mod tests {
                 .contains("home.activate_navigation_application(application, window, cx)")
         );
         assert!(
-            persistent_navigation_source
+            modern_home_source
                 .contains("home.activate_navigation_application(application, window, cx)")
         );
         assert!(navigation_source.contains(
@@ -868,10 +864,6 @@ impl HomePage {
         cx.try_global::<GlobalTabContainer>()
             .map(|global| global.primary_pane())
             .unwrap_or_else(|| self.tab_container.clone())
-    }
-
-    pub(crate) fn is_home_active(&self) -> bool {
-        self.home_active
     }
 
     pub(crate) fn set_home_active(&mut self, active: bool, cx: &mut Context<Self>) {

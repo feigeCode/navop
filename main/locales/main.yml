@@ -111,6 +111,22 @@ Home:
     en: New Connection
     zh-CN: 新建连接
     zh-HK: 新建連線
+  open:
+    en: Open
+    zh-CN: 打开
+    zh-HK: 開啟
+  open_in_new_tab:
+    en: Open in New Tab
+    zh-CN: 在新标签打开
+    zh-HK: 在新標籤開啟
+  remove_recent:
+    en: Remove from Recent
+    zh-CN: 移除最近记录
+    zh-HK: 移出最近記錄
+  recent_actions_tooltip:
+    en: Connection actions
+    zh-CN: 连接操作
+    zh-HK: 連線操作
   local_terminal:
     en: Terminal
     zh-CN: 终端
@@ -179,6 +195,10 @@ Home:
     en: Search applications...
     zh-CN: 搜索应用...
     zh-HK: 搜尋應用...
+  connection_filter:
+    en: Filter connections
+    zh-CN: 筛选连接
+    zh-HK: 篩選連線
   credential_vault:
     en: Keychain
     zh-CN: 钥匙串
@@ -212,6 +232,18 @@ Home:
       en: Workspace Tools
       zh-CN: 工作台工具
       zh-HK: 工作台工具
+    applications:
+      en: Applications
+      zh-CN: 应用
+      zh-HK: 應用
+    applications_description:
+      en: Workspaces, tools, and utilities
+      zh-CN: 工作区、工具与实用程序
+      zh-HK: 工作區、工具與實用程式
+    account:
+      en: Account
+      zh-CN: 账户
+      zh-HK: 帳戶
     status:
       en: Status
       zh-CN: 状态
@@ -225,9 +257,13 @@ Home:
       zh-CN: 打开连接后会显示在这里
       zh-HK: 開啟連線後會顯示在這裡
     sync_description:
-      en: Keep connection data synchronized
-      zh-CN: 保持连接数据同步
-      zh-HK: 保持連線資料同步
+      en: Connection data is synchronized
+      zh-CN: 连接数据已同步
+      zh-HK: 連線資料已同步
+    sync_description_syncing:
+      en: Syncing connection data
+      zh-CN: 正在同步连接数据
+      zh-HK: 正在同步連線資料
     key_description_unlocked:
       en: Personal key is ready
       zh-CN: 个人密钥已就绪
@@ -244,6 +280,10 @@ Home:
       en: Import saved connections from supported applications
       zh-CN: 从受支持的应用导入已有连接
       zh-HK: 從支援的應用程式匯入現有連線
+    account_login_description:
+      en: Sign in to sync connections, keys, and settings across devices
+      zh-CN: 登录后可跨设备同步连接、密钥与设置
+      zh-HK: 登入後可跨裝置同步連線、金鑰與設定
     notes_description:
       en: Keep commands, snippets, and operational notes together
       zh-CN: 集中记录命令、片段和运维笔记

@@ -171,7 +171,7 @@ fn render_target_icon(target: NavigationTarget, cx: &App) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn application_icon(application: NavigationApplication) -> IconName {
+pub(super) fn application_icon(application: NavigationApplication) -> IconName {
     match application {
         NavigationApplication::AiWorkbench => IconName::AILine,
         NavigationApplication::Team => IconName::TeamLine,

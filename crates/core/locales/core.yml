@@ -108,6 +108,12 @@ Window:
     zh-CN: 窗口置顶
     zh-HK: 視窗置頂
 
+Home:
+  title:
+    en: Home
+    zh-CN: 主页
+    zh-HK: 主頁
+
 Sidebar:
   hide_navigation:
     en: Hide connection tree

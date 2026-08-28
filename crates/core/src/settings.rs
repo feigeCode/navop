@@ -1507,8 +1507,8 @@ mod tests {
         HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family, grid_monospace_font,
-        installed_grid_monospace_font, is_installed_font_family,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
     };
 

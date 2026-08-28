@@ -140,9 +140,8 @@ fn quick_open_renders_business_selection_separately_from_keyboard_selection() {
 fn quick_open_uses_monochrome_navigation_icons_without_recoloring_color_assets() {
     let delegate = include_str!("delegate.rs");
     let legacy_sidebar = include_str!("../home_tab/sidebar_navigation.rs");
-    let persistent_rail = include_str!("../persistent_connection_sidebar/rail.rs");
-    let persistent_sections =
-        include_str!("../persistent_connection_sidebar/navigation_sections.rs");
+    let filter_bar = include_str!("../persistent_connection_sidebar/filter_bar.rs");
+    let modern_home = include_str!("../home_tab/modern_home.rs");
 
     assert!(delegate.contains("connection_type_navigation_icon("));
     assert!(delegate.contains("ConnectionVisualSize::Inline"));
@@ -152,8 +151,9 @@ fn quick_open_uses_monochrome_navigation_icons_without_recoloring_color_assets()
     assert!(!delegate.contains(".color()"));
     assert!(legacy_sidebar.contains("Icon::new(icon).mono()"));
     assert!(!legacy_sidebar.contains("Icon::new(icon).color()"));
-    assert!(persistent_rail.contains("Icon::new(icon)\n            .mono()"));
-    assert!(persistent_sections.contains("Icon::new(IconName::Ellipsis)\n            .mono()"));
+    assert!(filter_bar.contains("Icon::new(IconName::Filter)"));
+    assert!(filter_bar.contains("connection_type_rail_icon(filter)"));
+    assert!(modern_home.contains("Icon::new(application.icon())\n                        .mono()"));
     for color_icon in [
         "IconName::AI,",
         "IconName::TeamColor",

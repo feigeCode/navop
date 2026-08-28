@@ -158,13 +158,25 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     assert!(!card.contains(".shadow_sm()\n            .group"));
     assert!(render.contains("self.render_modern_home(window, cx)"));
     assert!(modern_home.contains("modern-home-start-center"));
-    assert!(modern_home.contains("START_CENTER_MAX_WIDTH: gpui::Pixels = px(1040.0)"));
+    assert!(modern_home.contains("START_CENTER_MAX_WIDTH: gpui::Pixels = px(1200.0)"));
     assert!(modern_home.contains(".max_w(START_CENTER_MAX_WIDTH)"));
     assert!(modern_home.contains("modern-home-hero"));
     assert!(modern_home.contains("modern-home-recent-column"));
     assert!(modern_home.contains("modern-home-side-column"));
     assert!(!modern_home.contains("render_connection_card"));
-    assert!(!modern_home.contains("view.update(cx, |home"));
+    // Direct view.update is only allowed inside the recent-row dropdown menu
+    // (PopupMenuItem callbacks do not go through window.listener_for).
+    assert!(
+        !modern_home.replace(
+            "open_view.update(cx, |home, cx| {\n                                    home.open_connection_from_quick(&open_conn, window, cx);\n                                });",
+            ""
+        ).replace(
+            "edit_view.update(cx, |home, cx| {\n                                    home.edit_connection(edit_conn.clone(), window, cx);\n                                });",
+            ""
+        ).replace("new_tab_view.update", "")
+        .replace("remove_view.update", "")
+        .contains("view.update(cx, |home")
+    );
     assert!(modern_home.contains("modern-home-sync"));
     assert!(modern_home.contains("modern-home-keys"));
     // 开始中心固定在窗口高度内，不允许整页滚动。
@@ -217,11 +229,13 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
         "状态面板拉伸会把账户面板挤出首屏"
     );
     assert!(modern_home.contains("surface_panel(\"modern-home-side-panel\", cx)"));
+    // 创建与导入是独立卡片，不再挤在 side-panel 内部。
+    assert!(modern_home.contains("surface_panel(\"modern-home-create-panel\", cx)"));
+    assert!(!modern_home.contains("fn render_create_panel"));
     assert!(modern_home.contains(".self_stretch()"));
     assert!(modern_home.contains(".id(\"modern-home-status-panel\")"));
-    assert!(modern_home.contains(".h_full()"));
+    assert!(modern_home.contains(".flex_1()"));
     assert!(modern_home.contains("render_recent_connections_panel"));
-    assert!(modern_home.contains("render_create_panel"));
     assert!(modern_home.contains("render_applications_panel"));
     assert!(modern_home.contains("render_status_panel"));
     assert!(modern_home.contains("render_account_panel"));
@@ -235,22 +249,44 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
     assert!(modern_home.contains(".min_h(px(50.0))"));
     assert!(modern_home.contains(".min_h(px(140.0))"));
     assert!(!modern_home.contains(".min_h(px(210.0))"));
-    assert!(modern_home.contains("home.open_connection_from_quick(&open_connection, window, cx)"));
-    // Quick-open rows intentionally open on double click so a single
-    // accidental click cannot yank the user away from the start center.
-    assert!(modern_home.contains(".on_double_click("));
+    assert!(modern_home.contains("home.open_connection_from_quick(&row_open_connection, window, cx)"));
+    // Quick-open rows open on a single click: the start center is a dashboard,
+    // and double-click adds friction to the most frequent recovery action.
+    assert!(modern_home.contains(".on_click(window.listener_for(&view, move |home, _, window, cx|"));
+    assert!(!modern_home.contains(".on_double_click("));
+    // Rows carry a context menu on the trailing chevron for secondary actions.
+    assert!(modern_home.contains("recent-conn-menu-"));
+    assert!(modern_home.contains("Home.recent_actions_tooltip"));
+    assert!(modern_home.contains("IconName::ExternalLink"));
+    assert!(modern_home.contains("IconName::Edit"));
+    // 菜单还提供"在新标签打开"，复用 quick-open 的后台打开模式。
+    assert!(modern_home.contains("Home.open_in_new_tab"));
+    assert!(modern_home.contains("IconName::PanelRight"));
+    assert!(modern_home.contains("TabOpenMode::Background"));
+    // 以及"移除最近记录"，仅清空最近使用时间，不删除连接本身。
+    assert!(modern_home.contains("Home.remove_recent"));
+    assert!(modern_home.contains("IconName::Remove"));
+    assert!(modern_home.contains("remove_recent_connection(remove_conn_id, cx)"));
+    // Subtitle shows the connection endpoint, not just the type label.
+    assert!(modern_home.contains("card_connection_info(&conn)"));
+    assert!(modern_home.contains("conn.connection_type.label()"));
 }
 
 #[test]
 fn modern_start_center_shortcuts_are_attached_to_their_actions() {
     let modern_home = include_str!("../modern_home.rs");
     let shortcuts = include_str!("../modern_home_shortcuts.rs");
+    let local_terminal = include_str!("../local_terminal.rs");
 
-    assert!(modern_home.contains("new_connection_shortcut(cx)"));
-    assert!(modern_home.contains("terminal_shortcut(cx)"));
-    assert!(modern_home.contains("quick_open_shortcut(cx)"));
-    assert!(!modern_home.contains("render_shortcuts(cx)"));
-    assert!(shortcuts.contains("fn shortcut_badge_for"));
+    // Shortcuts live in button tooltips, not as standalone badges that
+    // fragment the hero action row.
+    assert!(modern_home.contains("new_connection_tooltip(cx)"));
+    assert!(modern_home.contains("quick_open_tooltip(cx)"));
+    assert!(!modern_home.contains("new_connection_shortcut(cx)"));
+    assert!(!modern_home.contains("quick_open_shortcut(cx)"));
+    assert!(!modern_home.contains("terminal_shortcut(cx)"));
+    assert!(local_terminal.contains("modern_home_shortcuts::terminal_tooltip(cx)"));
+    assert!(shortcuts.contains("fn shortcut_text_for"));
     assert!(shortcuts.contains("action_id::HOME_QUICK_OPEN"));
     assert!(shortcuts.contains("action_id::HOME_NEW_CONNECTION"));
     assert!(shortcuts.contains("action_id::HOME_OPEN_LOCAL_TERMINAL"));

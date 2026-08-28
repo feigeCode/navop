@@ -233,6 +233,28 @@ impl HomePage {
         }
         self.load_connections(cx);
     }
+
+    /// 把连接从"最近使用"列表移除（仅清空最近使用时间，不删除连接本身）。
+    pub(super) fn remove_recent_connection(
+        &mut self,
+        connection_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connection_id) = connection_id else {
+            return;
+        };
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result = storage
+            .get::<ConnectionRepository>()
+            .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))
+            .and_then(|repo| repo.clear_last_used(connection_id));
+
+        if let Err(err) = result {
+            tracing::warn!("清除连接最近使用时间失败: {err}");
+            return;
+        }
+        self.load_connections(cx);
+    }
 }
 
 pub(crate) fn resolve_connection_credentials(
