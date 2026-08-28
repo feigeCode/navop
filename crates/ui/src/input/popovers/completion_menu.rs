@@ -13,6 +13,9 @@ const MAX_MENU_WIDTH: Pixels = px(320.);
 const MIN_MENU_WIDTH: Pixels = px(120.);
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
+/// Preferred width of the completion documentation (hover) panel.
+/// Documentation prose wraps poorly at the menu width, so give it more room.
+const MAX_DOCUMENTATION_WIDTH: Pixels = px(480.);
 
 use crate::{
     ActiveTheme, IndexPath, Selectable, actions, h_flex,
@@ -210,11 +213,13 @@ fn completion_menu_layout(
     };
     let menu_max_height = MAX_MENU_HEIGHT.min((window_size.height - abs_y).max(px(80.)));
     let vertical_layout =
-        abs_x + MAX_MENU_WIDTH + POPOVER_GAP + MAX_MENU_WIDTH + POPOVER_GAP > window_size.width;
+        abs_x + MAX_MENU_WIDTH + POPOVER_GAP + MAX_DOCUMENTATION_WIDTH + POPOVER_GAP
+            > window_size.width;
     let documentation_width = if vertical_layout {
         max_width
     } else {
-        MAX_MENU_WIDTH
+        let remaining = window_size.width - abs_x - max_width - POPOVER_GAP * 2.;
+        MAX_DOCUMENTATION_WIDTH.min(remaining.max(MIN_MENU_WIDTH))
     };
 
     CompletionMenuLayout {
@@ -501,8 +506,23 @@ impl Render for CompletionMenu {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_MENU_HEIGHT, MIN_MENU_WIDTH, POPOVER_GAP, completion_menu_layout};
+    use super::{
+        MAX_DOCUMENTATION_WIDTH, MAX_MENU_HEIGHT, MIN_MENU_WIDTH, POPOVER_GAP,
+        completion_menu_layout,
+    };
     use gpui::{Point, px, size};
+
+    #[test]
+    fn completion_menu_documentation_uses_wider_panel_when_space_allows() {
+        let layout = completion_menu_layout(
+            Point::new(px(100.), px(100.)),
+            Point::new(px(0.), px(0.)),
+            size(px(1280.), px(800.)),
+        );
+
+        assert!(!layout.vertical_layout);
+        assert_eq!(MAX_DOCUMENTATION_WIDTH, layout.documentation_width);
+    }
 
     #[test]
     fn completion_menu_flips_above_when_bottom_space_is_tight() {

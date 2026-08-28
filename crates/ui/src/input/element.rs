@@ -689,6 +689,7 @@ impl TextElement {
         for p in outline.iter().skip(1) {
             fill_builder.line_to(path_origin + *p);
         }
+        fill_builder.close();
         let fill = fill_builder.build().ok()?;
 
         let mut stroke_builder = gpui::PathBuilder::stroke(px(1.));
@@ -696,6 +697,7 @@ impl TextElement {
         for p in outline.iter().skip(1) {
             stroke_builder.line_to(path_origin + *p);
         }
+        stroke_builder.close();
         let stroke = stroke_builder.build().ok()?;
 
         Some(CurrentStatementFrame {
@@ -1700,6 +1702,11 @@ fn frame_outline_points(corners: &[Corners<Point<Pixels>>]) -> Vec<Point<Pixels>
     }
 
     // Bottom edge.
+    // The right-side loop above already ends at `last.1` for two or more
+    // rects, but a single-rect outline still needs its bottom-right corner.
+    if points.last() != Some(&last.1) {
+        points.push(last.1);
+    }
     points.push(point(last.0.x, last.1.y));
 
     // Left side, bottom to top.
@@ -2984,5 +2991,63 @@ mod tests {
         assert_eq!(result[3].color, gpui::black());
         assert_eq!(result[4].color, gpui::black());
         assert_eq!(result[5].color, gpui::blue());
+    }
+
+    #[test]
+    fn frame_outline_points_single_rect_is_closed_rectangle() {
+        let corners = vec![Corners {
+            top_left: point(px(10.), px(0.)),
+            top_right: point(px(100.), px(0.)),
+            bottom_left: point(px(10.), px(20.)),
+            bottom_right: point(px(100.), px(20.)),
+        }];
+
+        let outline = frame_outline_points(&corners);
+
+        assert_eq!(
+            outline,
+            vec![
+                point(px(10.), px(0.)),
+                point(px(100.), px(0.)),
+                point(px(100.), px(20.)),
+                point(px(10.), px(20.)),
+            ]
+        );
+    }
+
+    #[test]
+    fn frame_outline_points_multi_rect_traces_union() {
+        // Two stacked rects: first wider, second narrower and indented.
+        let corners = vec![
+            Corners {
+                top_left: point(px(0.), px(0.)),
+                top_right: point(px(200.), px(0.)),
+                bottom_left: point(px(0.), px(20.)),
+                bottom_right: point(px(200.), px(20.)),
+            },
+            Corners {
+                top_left: point(px(10.), px(20.)),
+                top_right: point(px(80.), px(20.)),
+                bottom_left: point(px(10.), px(40.)),
+                bottom_right: point(px(80.), px(40.)),
+            },
+        ];
+
+        let outline = frame_outline_points(&corners);
+
+        assert_eq!(
+            outline,
+            vec![
+                point(px(0.), px(0.)),
+                point(px(200.), px(0.)),
+                point(px(200.), px(20.)),
+                point(px(80.), px(20.)),
+                point(px(80.), px(40.)),
+                point(px(10.), px(40.)),
+                point(px(10.), px(20.)),
+                point(px(0.), px(20.)),
+                point(px(0.), px(0.)),
+            ]
+        );
     }
 }

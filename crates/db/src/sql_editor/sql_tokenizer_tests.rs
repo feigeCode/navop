@@ -7,6 +7,26 @@ mod tests {
     use crate::sql_editor::sql_tokenizer::{SqlTokenKind, SqlTokenizer};
     use proptest::prelude::*;
 
+    #[test]
+    fn tokenizes_backtick_bracket_and_dollar_quoted_regions() {
+        let sql = "SELECT `Mixed Name`, [Order]]Id], $tag$semi;🙂$tag$";
+        let tokens = SqlTokenizer::new(sql).tokenize();
+        let special = tokens
+            .iter()
+            .filter(|token| matches!(token.kind, SqlTokenKind::QuotedIdent | SqlTokenKind::String))
+            .map(|token| (token.kind.clone(), token.text.clone()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec![
+                (SqlTokenKind::QuotedIdent, "`Mixed Name`".to_string()),
+                (SqlTokenKind::QuotedIdent, "[Order]]Id]".to_string()),
+                (SqlTokenKind::String, "$tag$semi;🙂$tag$".to_string()),
+            ],
+            special
+        );
+    }
+
     // =========================================================================
     // **Feature: sql-smart-completion, Property 1: Tokenizer Special Region Handling**
     // *For any* SQL text containing strings (single-quoted) or comments

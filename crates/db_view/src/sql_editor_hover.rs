@@ -242,10 +242,15 @@ fn part_from_token(token: &db::sql_editor::sql_tokenizer::SqlToken) -> SqlIdenti
 /// Strip surrounding double quotes and unescape `""` inside a quoted identifier.
 pub fn unquote_ident(raw: &str) -> String {
     let trimmed = raw.trim();
-    let Some(body) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
-        return trimmed.to_string();
-    };
-    body.replace("\"\"", "\"")
+    if let Some(body) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        body.replace("\"\"", "\"")
+    } else if let Some(body) = trimmed.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+        body.replace("``", "`")
+    } else if let Some(body) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        body.replace("]]", "]")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn prev_non_trivia(
@@ -522,7 +527,7 @@ fn offset_to_lsp_position(text: &str, offset: usize) -> LspPosition {
     let before = &text[..offset];
     let line = before.matches('\n').count();
     let line_start = before.rfind('\n').map(|p| p + 1).unwrap_or(0);
-    let character = before[line_start..].chars().count();
+    let character = before[line_start..].encode_utf16().count();
     LspPosition::new(line as u32, character as u32)
 }
 
@@ -784,6 +789,17 @@ mod tests {
         // column is measured in characters, not bytes
         assert_eq!(range.start.character, 17);
         assert_eq!(range.end.character, 22);
+    }
+
+    #[test]
+    fn lsp_range_uses_utf16_columns_after_emoji() {
+        let schema = sample_schema();
+        let text = "select '🙂', users";
+        let hover = hover(text, text.len(), &schema).expect("users hover");
+        let range = hover.range.expect("hover range");
+
+        assert_eq!(13, range.start.character);
+        assert_eq!(18, range.end.character);
     }
 
     #[test]

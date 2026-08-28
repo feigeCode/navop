@@ -26,7 +26,7 @@ enum CompletionMenuAction {
 fn completion_menu_action(
     has_active_menu: bool,
     is_trigger: bool,
-    full_text: &str,
+    document_is_blank: bool,
     new_offset: usize,
     start_offset: usize,
 ) -> CompletionMenuAction {
@@ -42,7 +42,7 @@ fn completion_menu_action(
         return CompletionMenuAction::Ignore;
     }
 
-    if has_active_menu && full_text.trim().is_empty() {
+    if has_active_menu && document_is_blank {
         return CompletionMenuAction::Hide;
     }
 
@@ -192,10 +192,11 @@ impl InputState {
             .as_ref()
             .and_then(|menu| menu.read(cx).trigger_start_offset)
             .unwrap_or(start);
+        let document_is_blank = active_menu.is_some() && self.text.chars().all(char::is_whitespace);
         let action = completion_menu_action(
             active_menu.is_some(),
             is_trigger,
-            &self.text.to_string(),
+            document_is_blank,
             new_offset,
             start_offset,
         );
@@ -511,11 +512,11 @@ mod tests {
     #[test]
     fn ignores_non_trigger_without_existing_menu() {
         assert_eq!(
-            completion_menu_action(false, false, "name", 4, 0),
+            completion_menu_action(false, false, false, 4, 0),
             CompletionMenuAction::Ignore
         );
         assert_eq!(
-            completion_menu_action(false, false, "@中1", 5, 4),
+            completion_menu_action(false, false, false, 5, 4),
             CompletionMenuAction::Ignore
         );
     }
@@ -523,11 +524,11 @@ mod tests {
     #[test]
     fn hides_existing_menu_when_text_becomes_empty() {
         assert_eq!(
-            completion_menu_action(true, false, "", 0, 0),
+            completion_menu_action(true, false, true, 0, 0),
             CompletionMenuAction::Hide
         );
         assert_eq!(
-            completion_menu_action(true, false, "   ", 0, 0),
+            completion_menu_action(true, false, true, 0, 0),
             CompletionMenuAction::Hide
         );
     }
@@ -535,7 +536,7 @@ mod tests {
     #[test]
     fn hides_existing_menu_when_cursor_moves_before_trigger_start() {
         assert_eq!(
-            completion_menu_action(true, false, "na", 0, 1),
+            completion_menu_action(true, false, false, 0, 1),
             CompletionMenuAction::Hide
         );
     }
@@ -543,7 +544,7 @@ mod tests {
     #[test]
     fn ignores_trigger_without_existing_menu_when_cursor_is_before_trigger_start() {
         assert_eq!(
-            completion_menu_action(false, true, "n", 1, 3),
+            completion_menu_action(false, true, false, 1, 3),
             CompletionMenuAction::Ignore
         );
     }
@@ -551,7 +552,7 @@ mod tests {
     #[test]
     fn refreshes_existing_menu_on_delete_when_text_still_has_context() {
         assert_eq!(
-            completion_menu_action(true, false, "n", 1, 0),
+            completion_menu_action(true, false, false, 1, 0),
             CompletionMenuAction::Refresh(CompletionTriggerKind::INVOKED)
         );
     }
@@ -559,11 +560,11 @@ mod tests {
     #[test]
     fn refreshes_active_menu_for_cjk_and_numeric_query_updates() {
         assert_eq!(
-            completion_menu_action(true, false, "@中", 4, 0),
+            completion_menu_action(true, false, false, 4, 0),
             CompletionMenuAction::Refresh(CompletionTriggerKind::INVOKED)
         );
         assert_eq!(
-            completion_menu_action(true, false, "@中1", 5, 0),
+            completion_menu_action(true, false, false, 5, 0),
             CompletionMenuAction::Refresh(CompletionTriggerKind::INVOKED)
         );
     }
@@ -571,7 +572,7 @@ mod tests {
     #[test]
     fn refreshes_with_trigger_character_for_normal_typing() {
         assert_eq!(
-            completion_menu_action(false, true, "na", 2, 2),
+            completion_menu_action(false, true, false, 2, 2),
             CompletionMenuAction::Refresh(CompletionTriggerKind::TRIGGER_CHARACTER)
         );
     }

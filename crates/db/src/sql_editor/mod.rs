@@ -1,4 +1,7 @@
 pub mod diagnostics;
+pub mod execution;
+#[cfg(test)]
+mod execution_tests;
 pub mod sql_context_inferrer;
 #[cfg(test)]
 mod sql_context_inferrer_tests;

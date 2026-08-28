@@ -14,6 +14,7 @@ pub struct SymbolTable {
     /// alias -> (table_name, scope_id)
     /// Uses lowercase keys for case-insensitive lookup
     aliases: HashMap<String, (String, usize)>,
+    projected_columns: HashMap<String, Vec<String>>,
     /// Current scope depth (0 = top level, increments for subqueries)
     current_scope: usize,
 }
@@ -23,6 +24,7 @@ impl SymbolTable {
     pub fn new() -> Self {
         Self {
             aliases: HashMap::new(),
+            projected_columns: HashMap::new(),
             current_scope: 0,
         }
     }
@@ -44,6 +46,18 @@ impl SymbolTable {
     pub fn resolve(&self, alias: &str) -> Option<&str> {
         let key = alias.to_lowercase();
         self.aliases.get(&key).map(|(table, _)| table.as_str())
+    }
+
+    pub fn projected_columns(&self, alias: &str) -> Option<&[String]> {
+        self.projected_columns
+            .get(&alias.to_lowercase())
+            .map(Vec::as_slice)
+    }
+
+    fn register_projected_columns(&mut self, alias: &str, columns: Vec<String>) {
+        if !columns.is_empty() {
+            self.projected_columns.insert(alias.to_lowercase(), columns);
+        }
     }
 
     /// Check if an identifier is a known alias.
@@ -203,6 +217,7 @@ impl SymbolTable {
         while i < tokens.len() {
             // Skip subqueries (parenthesized expressions)
             if matches!(tokens[i].kind, SqlTokenKind::LParen) {
+                let projection_start = i + 1;
                 let mut depth = 1;
                 i += 1;
                 while i < tokens.len() && depth > 0 {
@@ -213,6 +228,9 @@ impl SymbolTable {
                     }
                     i += 1;
                 }
+                let projection_end = i.saturating_sub(1);
+                let projected_columns =
+                    Self::projection_columns(&tokens[projection_start..projection_end]);
                 // After subquery, check for alias
                 if i < tokens.len() {
                     // Skip AS if present
@@ -225,6 +243,7 @@ impl SymbolTable {
                         // 这样补全代码可以识别它是子查询而不是普通表
                         let alias = Self::extract_ident_text(tokens[i]);
                         symbol_table.register_alias(&alias, "#subquery");
+                        symbol_table.register_projected_columns(&alias, projected_columns);
                         i += 1;
                     }
                 }
@@ -375,6 +394,7 @@ impl SymbolTable {
             }
 
             // Skip the CTE subquery (parenthesized expression)
+            let projection_start = i + 1;
             let mut depth = 1;
             i += 1;
             while i < tokens.len() && depth > 0 {
@@ -385,9 +405,13 @@ impl SymbolTable {
                 }
                 i += 1;
             }
+            let projection_end = i.saturating_sub(1);
+            let projected_columns =
+                Self::projection_columns(&tokens[projection_start..projection_end]);
 
             // 注册 CTE 名称为 "#cte" 标记
             symbol_table.register_alias(&cte_name, "#cte");
+            symbol_table.register_projected_columns(&cte_name, projected_columns);
 
             // Check for comma (multiple CTEs)
             if i < tokens.len() && matches!(tokens[i].kind, SqlTokenKind::Comma) {
@@ -406,15 +430,75 @@ impl SymbolTable {
     fn extract_ident_text(token: &SqlToken) -> String {
         match token.kind {
             SqlTokenKind::QuotedIdent => {
-                // Remove surrounding quotes and unescape doubled quotes
                 let s = &token.text;
-                if s.len() >= 2 {
-                    s[1..s.len() - 1].replace("\"\"", "\"")
+                if let Some(body) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                    body.replace("\"\"", "\"")
+                } else if let Some(body) = s.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+                    body.replace("``", "`")
+                } else if let Some(body) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                    body.replace("]]", "]")
                 } else {
                     s.clone()
                 }
             }
             _ => token.text.clone(),
+        }
+    }
+
+    fn projection_columns(tokens: &[&SqlToken]) -> Vec<String> {
+        let Some(select_index) = tokens
+            .iter()
+            .position(|token| token.is_keyword_of(SqlKeyword::Select))
+        else {
+            return Vec::new();
+        };
+        let mut columns = Vec::new();
+        let mut segment_start = select_index + 1;
+        let mut depth = 0usize;
+        for index in segment_start..=tokens.len() {
+            let at_end = index == tokens.len();
+            if !at_end {
+                match tokens[index].kind {
+                    SqlTokenKind::LParen => depth += 1,
+                    SqlTokenKind::RParen => depth = depth.saturating_sub(1),
+                    SqlTokenKind::Keyword(SqlKeyword::From) if depth == 0 => {
+                        Self::push_projection_column(&tokens[segment_start..index], &mut columns);
+                        break;
+                    }
+                    SqlTokenKind::Comma if depth == 0 => {
+                        Self::push_projection_column(&tokens[segment_start..index], &mut columns);
+                        segment_start = index + 1;
+                    }
+                    _ => {}
+                }
+            } else {
+                Self::push_projection_column(&tokens[segment_start..index], &mut columns);
+            }
+        }
+        columns
+    }
+
+    fn push_projection_column(tokens: &[&SqlToken], columns: &mut Vec<String>) {
+        if tokens.is_empty() || tokens.iter().any(|token| token.text == "*") {
+            return;
+        }
+        if let Some(as_index) = tokens
+            .iter()
+            .rposition(|token| token.is_keyword_of(SqlKeyword::As))
+        {
+            if let Some(alias) = tokens.get(as_index + 1) {
+                if matches!(alias.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+                    columns.push(Self::extract_ident_text(alias));
+                }
+            }
+            return;
+        }
+        if let Some(last) = tokens
+            .iter()
+            .rev()
+            .find(|token| matches!(token.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent))
+        {
+            columns.push(Self::extract_ident_text(last));
         }
     }
 }
@@ -434,6 +518,24 @@ mod tests {
         assert_eq!(st.resolve("u"), Some("users"));
         assert!(st.is_alias("u"));
         assert!(st.is_alias("U")); // case-insensitive
+    }
+
+    #[test]
+    fn records_cte_and_derived_table_projection_columns() {
+        let sql = "WITH recent AS (SELECT id, total AS amount FROM orders) \
+                   SELECT r.id, d.label FROM recent r \
+                   JOIN (SELECT user_id, name label FROM users) d ON d.user_id = r.id";
+        let tokens = SqlTokenizer::new(sql).tokenize();
+        let symbols = SymbolTable::build_from_tokens(&tokens);
+
+        assert_eq!(
+            Some(["id".to_string(), "amount".to_string()].as_slice()),
+            symbols.projected_columns("recent")
+        );
+        assert_eq!(
+            Some(["user_id".to_string(), "label".to_string()].as_slice()),
+            symbols.projected_columns("d")
+        );
     }
 
     #[test]

@@ -38,6 +38,7 @@ rust-i18n.workspace = true
 json5.workspace = true
 image.workspace = true
 regex.workspace = true
+ropey.workspace = true
 parking_lot.workspace = true
 once_cell.workspace = true
 [dev-dependencies]

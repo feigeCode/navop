@@ -301,6 +301,20 @@ impl<'a> SqlTokenizer<'a> {
             return self.scan_quoted_ident(start);
         }
 
+        if ch == '`' {
+            return self.scan_backtick_ident(start);
+        }
+
+        if ch == '[' {
+            return self.scan_bracket_ident(start);
+        }
+
+        if ch == '$' {
+            if let Some(token) = self.scan_dollar_quoted_string(start) {
+                return token;
+            }
+        }
+
         // Number
         if ch.is_ascii_digit() {
             return self.scan_number(start);
@@ -498,6 +512,83 @@ impl<'a> SqlTokenizer<'a> {
         }
         let text = &self.input[start..self.pos];
         SqlToken::new(SqlTokenKind::QuotedIdent, text.to_string(), start, self.pos)
+    }
+
+    fn scan_backtick_ident(&mut self, start: usize) -> SqlToken {
+        self.advance();
+        loop {
+            match self.chars.peek().copied() {
+                Some((_, '`')) => {
+                    self.advance();
+                    if let Some(&(_, '`')) = self.chars.peek() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                Some((_, _)) => {
+                    self.advance();
+                }
+                None => break,
+            }
+        }
+        SqlToken::new(
+            SqlTokenKind::QuotedIdent,
+            self.input[start..self.pos].to_string(),
+            start,
+            self.pos,
+        )
+    }
+
+    fn scan_bracket_ident(&mut self, start: usize) -> SqlToken {
+        self.advance();
+        loop {
+            match self.chars.peek().copied() {
+                Some((_, ']')) => {
+                    self.advance();
+                    if let Some(&(_, ']')) = self.chars.peek() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                Some((_, _)) => {
+                    self.advance();
+                }
+                None => break,
+            }
+        }
+        SqlToken::new(
+            SqlTokenKind::QuotedIdent,
+            self.input[start..self.pos].to_string(),
+            start,
+            self.pos,
+        )
+    }
+
+    fn scan_dollar_quoted_string(&mut self, start: usize) -> Option<SqlToken> {
+        let rest = &self.input[start..];
+        let tag_end = rest[1..].find('$').map(|offset| offset + 1)?;
+        let tag_body = &rest[1..tag_end];
+        if !tag_body
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return None;
+        }
+        let delimiter = &rest[..=tag_end];
+        let body = &rest[delimiter.len()..];
+        let close = body.find(delimiter)?;
+        let end = start + delimiter.len() + close + delimiter.len();
+        while self.pos < end {
+            self.advance();
+        }
+        Some(SqlToken::new(
+            SqlTokenKind::String,
+            self.input[start..end].to_string(),
+            start,
+            end,
+        ))
     }
 }
 

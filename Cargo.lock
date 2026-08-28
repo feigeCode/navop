@@ -3077,6 +3077,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "regex",
+ "ropey",
  "rust-i18n",
  "rust_xlsxwriter",
  "serde",

@@ -2,6 +2,8 @@ use std::ops::Range;
 
 use one_core::storage::DatabaseType;
 
+use super::sql_tokenizer::{SqlTokenKind, SqlTokenizer};
+
 /// The SQL dialect behavior required by the editor statement range engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SqlDialect {
@@ -105,7 +107,7 @@ impl SqlStatementSnapshot {
     }
 
     pub fn statement_at_cursor(&self, cursor_byte: usize) -> Option<&SqlStatementRange> {
-        statement_at_cursor_inner(&self.ranges, &self.text, cursor_byte)
+        statement_at_cursor_inner(&self.ranges, &self.text, 0, self.text.len(), cursor_byte)
     }
 
     pub fn statement_text(&self, statement: &SqlStatementRange) -> &str {
@@ -113,8 +115,173 @@ impl SqlStatementSnapshot {
     }
 }
 
+/// A statement scan over a window (slice) of the full document.
+///
+/// Produced for large documents where scanning the whole text on every edit is
+/// too expensive: only the rows around the viewport are tokenized. All ranges
+/// are shifted back into full-document coordinates (bytes and lines), so
+/// windowed results can be keyed and compared exactly like full-document
+/// results produced by [`SqlStatementSnapshot`].
+///
+/// Statements whose `hit_start_byte` lies before the window base may be
+/// missing entirely (the scanner never saw their start); call sites must
+/// refresh the window when the viewport leaves the analyzed row range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowedStatementScan {
+    base_byte: usize,
+    base_line: usize,
+    text: String,
+    ranges: Vec<SqlStatementRange>,
+}
+
+impl WindowedStatementScan {
+    /// Scan `text` (a slice of the document starting at `base_byte` /
+    /// `base_line`) and shift every range into document coordinates.
+    ///
+    /// `base_byte` must be a UTF-8 boundary of the original document and
+    /// `base_line` the 0-based document line of `base_byte`; callers are
+    /// expected to pick a statement boundary (see [`line_scans_neutral`]) so
+    /// the window never starts inside a string/comment/dollar-quoted body.
+    pub fn scan(text: String, dialect: SqlDialect, base_byte: usize, base_line: usize) -> Self {
+        let mut ranges = Scanner::new(&text, dialect).scan();
+        for range in &mut ranges {
+            range.hit_start_byte += base_byte;
+            range.sql_range.start_byte += base_byte;
+            range.sql_range.end_byte += base_byte;
+            if let Some(delimiter) = &mut range.delimiter_range {
+                delimiter.start_byte += base_byte;
+                delimiter.end_byte += base_byte;
+            }
+            range.start_line += base_line;
+        }
+        Self {
+            base_byte,
+            base_line,
+            text,
+            ranges,
+        }
+    }
+
+    /// Byte offset of the window start in the full document.
+    pub fn base_byte(&self) -> usize {
+        self.base_byte
+    }
+
+    /// 0-based document line of the window start.
+    pub fn base_line(&self) -> usize {
+        self.base_line
+    }
+
+    /// The window text (a slice of the document), not the full document.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn statement_ranges(&self) -> &[SqlStatementRange] {
+        &self.ranges
+    }
+
+    /// Resolve the statement owning `cursor_byte` (a document offset).
+    ///
+    /// A cursor outside the window clamps to the window edges, which yields
+    /// `None` for cursors before the first in-window statement, matching the
+    /// full-document behavior for whitespace before the first statement.
+    pub fn statement_at_cursor(&self, cursor_byte: usize) -> Option<&SqlStatementRange> {
+        self.statement_at_cursor_doc_len(cursor_byte, self.base_byte + self.text.len())
+    }
+
+    /// Same as [`Self::statement_at_cursor`], but the caller provides the full
+    /// document length so the last in-window statement only claims trailing
+    /// whitespace ownership when the window actually reaches the document end.
+    /// A truncated trailing statement (more text below the window) reports no
+    /// ownership past its own sql range instead of swallowing everything to
+    /// the window end.
+    pub fn statement_at_cursor_doc_len(
+        &self,
+        cursor_byte: usize,
+        doc_len: usize,
+    ) -> Option<&SqlStatementRange> {
+        statement_at_cursor_inner(
+            &self.ranges,
+            &self.text,
+            self.base_byte,
+            doc_len,
+            cursor_byte,
+        )
+    }
+}
+
+/// Whether tokenizing this line in isolation ends in a neutral state: no
+/// unterminated string literal, quoted identifier, or block comment.
+///
+/// Used to pick window start lines for [`WindowedStatementScan`]: combined
+/// with a line that ends a statement (trailing `;`), a neutral line is a safe
+/// re-synchronization point because no quoting context leaks across it. This
+/// mirrors the closed-token checks in the parser diagnostics (`String`,
+/// `QuotedIdent` quote parity, `BlockComment` ending in `*/`).
+///
+/// Known limitation: PostgreSQL dollar-quoted bodies (`$$ ... $$`) are not
+/// tracked by the tokenizer, so a neutral line may still sit inside a
+/// dollar-quoted function body; the windowed scan can then mis-split until the
+/// window is recomputed. Display-only consumers (gutter markers, statement
+/// frame) tolerate this; execution paths always rescan the full document.
+pub fn line_scans_neutral(line: &str) -> bool {
+    SqlTokenizer::new(line)
+        .tokenize()
+        .iter()
+        .all(|token| match token.kind {
+            SqlTokenKind::String => token.text.matches('\'').count() % 2 == 0,
+            SqlTokenKind::QuotedIdent => token.text.matches('"').count() % 2 == 0,
+            SqlTokenKind::BlockComment => token.text.ends_with("*/"),
+            _ => true,
+        })
+}
+
 pub fn split_sql_statement_ranges(sql: &str, dialect: SqlDialect) -> Vec<SqlStatementRange> {
     Scanner::new(sql, dialect).scan()
+}
+
+/// Read-only statement index shared by full-document snapshots and windowed
+/// scans, so display consumers (gutter markers, current-statement frame) can
+/// work against either source.
+pub trait StatementIndex {
+    fn statement_ranges(&self) -> &[SqlStatementRange];
+
+    /// Resolve the statement owning `cursor_byte` (a document offset).
+    ///
+    /// `doc_len` is the full document length in bytes; windowed indexes use it
+    /// to decide whether their window reaches the document end, full-document
+    /// indexes ignore it.
+    fn statement_at_cursor(&self, cursor_byte: usize, doc_len: usize)
+    -> Option<&SqlStatementRange>;
+}
+
+impl StatementIndex for SqlStatementSnapshot {
+    fn statement_ranges(&self) -> &[SqlStatementRange] {
+        &self.ranges
+    }
+
+    fn statement_at_cursor(
+        &self,
+        cursor_byte: usize,
+        _doc_len: usize,
+    ) -> Option<&SqlStatementRange> {
+        self.statement_at_cursor(cursor_byte)
+    }
+}
+
+impl StatementIndex for WindowedStatementScan {
+    fn statement_ranges(&self) -> &[SqlStatementRange] {
+        &self.ranges
+    }
+
+    fn statement_at_cursor(
+        &self,
+        cursor_byte: usize,
+        doc_len: usize,
+    ) -> Option<&SqlStatementRange> {
+        self.statement_at_cursor_doc_len(cursor_byte, doc_len)
+    }
 }
 
 pub fn statement_at_cursor<'a>(
@@ -122,15 +289,25 @@ pub fn statement_at_cursor<'a>(
     sql: &str,
     cursor_byte: usize,
 ) -> Option<&'a SqlStatementRange> {
-    statement_at_cursor_inner(statements, sql, cursor_byte)
+    statement_at_cursor_inner(statements, sql, 0, sql.len(), cursor_byte)
 }
 
 fn statement_at_cursor_inner<'a>(
     statements: &'a [SqlStatementRange],
-    sql: &str,
+    window: &str,
+    base_byte: usize,
+    doc_len: usize,
     cursor_byte: usize,
 ) -> Option<&'a SqlStatementRange> {
-    let cursor = clamp_utf8_boundary(sql, cursor_byte);
+    // A cursor before the window belongs to a statement the scan never saw;
+    // report nothing and let the caller recompute the window.
+    if cursor_byte < base_byte {
+        return None;
+    }
+    // Clamp the document-space cursor into the window, then back into
+    // document coordinates; a cursor before the window lands on the window
+    // start, which no statement owns unless one starts exactly there.
+    let cursor = base_byte + clamp_utf8_boundary(window, cursor_byte.saturating_sub(base_byte));
 
     for (index, statement) in statements.iter().enumerate() {
         if cursor < statement.hit_start_byte {
@@ -153,10 +330,10 @@ fn statement_at_cursor_inner<'a>(
             // subsequent statement's hit range (same-line batches) and never
             // into a following blank/comment-only line, which yields `None`
             // (spec §5.5 rule 5).
-            let line_end = sql[delimiter.end_byte..]
+            let line_end = window[delimiter.end_byte - base_byte..]
                 .find('\n')
                 .map(|index| delimiter.end_byte + index + 1)
-                .unwrap_or(sql.len() + 1);
+                .unwrap_or(base_byte + window.len() + 1);
             let next_hit_start = statements
                 .get(index + 1)
                 .map(|next| next.hit_start_byte)
@@ -165,6 +342,14 @@ fn statement_at_cursor_inner<'a>(
                 return Some(statement);
             }
             continue;
+        }
+
+        // When the window does not reach the document end, the trailing
+        // statement may be truncated: more of it exists below the window.
+        // Claim ownership only inside its sql range so cursor ownership past
+        // the window is answered by a freshly recomputed window instead.
+        if base_byte + window.len() < doc_len {
+            return None;
         }
 
         // The final statement has no delimiter. Trailing whitespace can still be
@@ -360,9 +545,7 @@ impl<'a> Scanner<'a> {
                     self.current_hit_start = self.position + 1;
                 }
                 self.position += 1;
-            } else if self.bytes[self.position..].starts_with(b"--")
-                || (self.dialect == SqlDialect::MySql && self.bytes[self.position] == b'#')
-            {
+            } else if self.is_line_comment_start() {
                 let line_end = self.text[self.position..]
                     .find('\n')
                     .map(|index| self.position + index + 1)
@@ -386,6 +569,19 @@ impl<'a> Scanner<'a> {
         }
 
         self.position > start
+    }
+
+    fn is_line_comment_start(&self) -> bool {
+        if self.bytes[self.position..].starts_with(b"--") {
+            return self.dialect != SqlDialect::MySql
+                || self
+                    .bytes
+                    .get(self.position + 2)
+                    .is_none_or(|byte| byte.is_ascii_whitespace());
+        }
+        self.dialect == SqlDialect::MySql
+            && self.bytes[self.position] == b'#'
+            && self.bytes.get(self.position + 1) != Some(&b'{')
     }
 
     fn line_after(&self, offset: usize) -> usize {

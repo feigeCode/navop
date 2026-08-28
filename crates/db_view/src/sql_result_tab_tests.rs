@@ -1,3 +1,38 @@
+use db::sql_editor::execution::{SqlExecutionResultSource, sql_fingerprint};
+use db::sql_editor::statement_ranges::SqlTextRange;
+
+use crate::sql_result_tab::SqlResultTab;
+
+#[test]
+fn result_tab_preserves_execution_source_identity() {
+    let source = SqlExecutionResultSource {
+        request_id: 3,
+        document_revision: 7,
+        source_range: Some(SqlTextRange {
+            start_byte: 10,
+            end_byte: 18,
+        }),
+        sql_fingerprint: sql_fingerprint("select 2"),
+        statement_index: Some(1),
+    };
+    let tab = SqlResultTab {
+        sql: "select 2".to_string(),
+        result: db::SqlResult::Exec(db::ExecResult {
+            sql: "select 2".to_string(),
+            rows_affected: 0,
+            elapsed_ms: 0,
+            message: None,
+        }),
+        execution_time: "0ms".to_string(),
+        rows_count: "0 rows".to_string(),
+        data_grid: None,
+        content: None,
+        source,
+    };
+
+    assert_eq!(source, tab.source);
+}
+
 #[test]
 fn statement_summary_has_a_clipped_scroll_boundary_and_visible_scrollbar() {
     let source = include_str!("sql_result_tab.rs");

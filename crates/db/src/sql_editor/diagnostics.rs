@@ -104,9 +104,19 @@ impl SqlMetadataView {
             || self.current_database.is_some()
     }
 
-    /// Case-insensitive existence check for a bare table reference.
+    /// Case-insensitive existence check for a bare unquoted table reference.
     pub fn table_exists(&self, name: &str) -> bool {
-        self.tables.contains(&normalize_ident(name))
+        self.tables
+            .iter()
+            .any(|table| table.eq_ignore_ascii_case(name))
+    }
+
+    fn table_exists_with_quote(&self, name: &str, quoted: bool) -> bool {
+        if quoted {
+            self.tables.contains(name)
+        } else {
+            self.table_exists(name)
+        }
     }
 
     /// True when `name` is the current database/schema or a known schema.
@@ -129,22 +139,29 @@ impl SqlMetadataView {
     /// columns are loaded and the column is missing; `None` when the table's
     /// columns have not been loaded (caller must skip the check).
     pub fn column_status(&self, table: &str, column: &str) -> Option<bool> {
-        let columns = self.columns_by_table.get(&normalize_ident(table))?;
+        self.column_status_with_quote(table, column, false)
+    }
+
+    fn column_status_with_quote(&self, table: &str, column: &str, quoted: bool) -> Option<bool> {
+        let columns = self
+            .columns_by_table
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(table))?
+            .1;
         if columns.is_empty() {
             return None;
         }
-        Some(
+        Some(if quoted {
+            columns.iter().any(|candidate| candidate == column)
+        } else {
             columns
                 .iter()
-                .any(|c| normalize_ident(c) == normalize_ident(column)),
-        )
+                .any(|candidate| candidate.eq_ignore_ascii_case(column))
+        })
     }
 
     pub fn with_tables(mut self, tables: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.tables = tables
-            .into_iter()
-            .map(|t| normalize_ident(&t.into()))
-            .collect();
+        self.tables = tables.into_iter().map(Into::into).collect();
         self
     }
 
@@ -153,13 +170,8 @@ impl SqlMetadataView {
         table: impl Into<String>,
         columns: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.columns_by_table.insert(
-            normalize_ident(&table.into()),
-            columns
-                .into_iter()
-                .map(|c| normalize_ident(&c.into()))
-                .collect(),
-        );
+        self.columns_by_table
+            .insert(table.into(), columns.into_iter().map(Into::into).collect());
         self
     }
 
@@ -290,6 +302,7 @@ struct TableRef {
     display: String,
     token_index: usize,
     check_existence: bool,
+    quoted: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -394,6 +407,7 @@ fn analyze_statement_semantic(
                         display: real_table.clone(),
                         token_index: k,
                         check_existence: false,
+                        quoted: meaningful[k].kind == SqlTokenKind::QuotedIdent,
                     });
                     j = k + 1;
                 } else {
@@ -405,6 +419,7 @@ fn analyze_statement_semantic(
                     display: table_name.clone(),
                     token_index: j,
                     check_existence: true,
+                    quoted: meaningful[j].kind == SqlTokenKind::QuotedIdent,
                 });
                 j += 1;
                 // Optional alias (identifier that is not a keyword).
@@ -429,7 +444,7 @@ fn analyze_statement_semantic(
                 continue;
             }
         }
-        if !metadata.table_exists(&tr.display) {
+        if !metadata.table_exists_with_quote(&tr.display, tr.quoted) {
             *next_id += 1;
             out.push(SqlDiagnostic::build(
                 *next_id,
@@ -529,7 +544,11 @@ fn analyze_statement_semantic(
                 }
             };
             if let Some(table) = table {
-                if let Some(known) = metadata.column_status(&table, &name) {
+                if let Some(known) = metadata.column_status_with_quote(
+                    &table,
+                    &name,
+                    token.kind == SqlTokenKind::QuotedIdent,
+                ) {
                     if !known {
                         *next_id += 1;
                         out.push(SqlDiagnostic::build(
@@ -561,7 +580,11 @@ fn analyze_statement_semantic(
             continue;
         }
         let display = &known_tables[0].display;
-        if let Some(known) = metadata.column_status(display, &name) {
+        if let Some(known) = metadata.column_status_with_quote(
+            display,
+            &name,
+            token.kind == SqlTokenKind::QuotedIdent,
+        ) {
             if !known {
                 *next_id += 1;
                 out.push(SqlDiagnostic::build(
@@ -592,8 +615,12 @@ fn ident_text(token: &SqlToken) -> String {
     match token.kind {
         SqlTokenKind::QuotedIdent => {
             let s = &token.text;
-            if s.len() >= 2 {
-                s[1..s.len() - 1].replace("\"\"", "\"")
+            if let Some(body) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                body.replace("\"\"", "\"")
+            } else if let Some(body) = s.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+                body.replace("``", "`")
+            } else if let Some(body) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                body.replace("]]", "]")
             } else {
                 s.clone()
             }
@@ -733,6 +760,19 @@ mod tests {
                 .iter()
                 .any(|d| d.message.as_ref().contains("`phone`"))
         );
+    }
+
+    #[test]
+    fn quoted_identifiers_use_case_sensitive_metadata_matching() {
+        let metadata = SqlMetadataView::default()
+            .with_tables(["Users"])
+            .with_columns("Users", ["Id"]);
+
+        let exact = analyze("SELECT \"Id\" FROM \"Users\";", metadata.clone());
+        assert!(semantic_codes(&exact).is_empty());
+
+        let wrong_case = analyze("SELECT \"id\" FROM \"Users\";", metadata);
+        assert!(semantic_codes(&wrong_case).contains(&"semantic.unknown_column"));
     }
 
     #[test]

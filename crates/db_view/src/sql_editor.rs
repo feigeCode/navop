@@ -621,6 +621,110 @@ pub(crate) fn current_statement_has_from_keyword(
     })
 }
 
+pub(crate) fn dot_completion_qualifier(text: &str, offset: usize) -> Option<String> {
+    let mut tokenizer = SqlTokenizer::new(text);
+    let tokens = tokenizer.tokenize();
+    let meaningful: Vec<&SqlToken> = tokens
+        .iter()
+        .filter(|token| token.end <= offset && !token.is_whitespace() && !token.is_comment())
+        .collect();
+    let dot = meaningful
+        .iter()
+        .rposition(|token| token.kind == SqlTokenKind::Dot)?;
+    meaningful
+        .get(dot.checked_sub(1)?)
+        .filter(|token| matches!(token.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent))
+        .map(|token| completion_identifier_text(token))
+}
+
+pub(crate) fn insert_column_target_table(text: &str, offset: usize) -> Option<String> {
+    let meaningful = meaningful_tokens_before(text, offset);
+    let into = meaningful
+        .iter()
+        .rposition(|token| token.is_keyword_of(SqlKeyword::Into))?;
+    let (table, target_end) = qualified_table_after(&meaningful, into + 1)?;
+    let mut stack = Vec::new();
+    let mut values_before_open = false;
+    for token in meaningful.iter().skip(target_end) {
+        match token.kind {
+            SqlTokenKind::LParen => stack.push(token),
+            SqlTokenKind::RParen => {
+                stack.pop();
+            }
+            SqlTokenKind::Keyword(SqlKeyword::Values) if stack.is_empty() => {
+                values_before_open = true;
+            }
+            _ => {}
+        }
+    }
+    (!values_before_open && !stack.is_empty()).then_some(table)
+}
+
+pub(crate) fn update_target_table(text: &str, offset: usize) -> Option<String> {
+    let meaningful = meaningful_tokens_before(text, offset);
+    let update = meaningful
+        .iter()
+        .rposition(|token| token.is_keyword_of(SqlKeyword::Update))?;
+    qualified_table_after(&meaningful, update + 1).map(|(table, _)| table)
+}
+
+fn meaningful_tokens_before(text: &str, offset: usize) -> Vec<SqlToken> {
+    let mut tokenizer = SqlTokenizer::new(text);
+    tokenizer
+        .tokenize()
+        .into_iter()
+        .filter(|token| {
+            token.end <= offset
+                && !token.is_whitespace()
+                && !token.is_comment()
+                && token.kind != SqlTokenKind::Eof
+        })
+        .collect()
+}
+
+fn qualified_table_after(tokens: &[SqlToken], start: usize) -> Option<(String, usize)> {
+    let first = tokens.get(start)?;
+    if !matches!(first.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+        return None;
+    }
+    let mut table = completion_identifier_text(first);
+    let mut index = start + 1;
+    while tokens
+        .get(index)
+        .is_some_and(|token| token.kind == SqlTokenKind::Dot)
+    {
+        let part = tokens.get(index + 1)?;
+        if !matches!(part.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+            break;
+        }
+        table = completion_identifier_text(part);
+        index += 2;
+    }
+    Some((table, index))
+}
+
+fn completion_identifier_text(token: &SqlToken) -> String {
+    let text = &token.text;
+    if let Some(body) = text
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        body.replace("\"\"", "\"")
+    } else if let Some(body) = text
+        .strip_prefix('`')
+        .and_then(|value| value.strip_suffix('`'))
+    {
+        body.replace("``", "`")
+    } else if let Some(body) = text
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        body.replace("]]", "]")
+    } else {
+        text.clone()
+    }
+}
+
 impl CompletionProvider for DefaultSqlCompletionProvider {
     fn completions(
         &self,
@@ -701,15 +805,94 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 }
             };
 
+            let target_table = insert_column_target_table(&text, offset).or_else(|| {
+                matches!(context, SqlContext::SetClause)
+                    .then(|| update_target_table(&text, offset))
+                    .flatten()
+            });
+            if let Some(target_table) = target_table {
+                if let Some(columns) = find_schema_columns(&schema, &target_table) {
+                    for (column, data_type, doc) in columns {
+                        if !matches_filter(column) {
+                            continue;
+                        }
+                        let score = completion_priority::calculate_score_with_match(
+                            &SqlContext::SetClause,
+                            Some(CompletionItemKind::FIELD),
+                            match_boost(column),
+                        );
+                        items.push(CompletionItem {
+                            label: column.clone(),
+                            kind: Some(CompletionItemKind::FIELD),
+                            detail: Some(if data_type.is_empty() {
+                                format!("{target_table}.{column}")
+                            } else {
+                                format!("{column}: {data_type}")
+                            }),
+                            text_edit: Some(CompletionTextEdit::InsertAndReplace(
+                                InsertReplaceEdit {
+                                    new_text: column.clone(),
+                                    insert: replace_range,
+                                    replace: replace_range,
+                                },
+                            )),
+                            filter_text: Some(matched_prefix(column)),
+                            documentation: Some(lsp_types::Documentation::String(doc.clone())),
+                            sort_text: Some(completion_priority::score_to_sort_text(score, column)),
+                            ..Default::default()
+                        });
+                    }
+                }
+                items.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
+                items.truncate(50);
+                return Ok(CompletionResponse::Array(items));
+            }
+
             // Handle dot context (table.column) - highest priority
             // Uses SymbolTable to resolve alias to actual table name
             if let SqlContext::DotColumn(alias_or_table) = &context {
+                let qualifier = dot_completion_qualifier(&text, offset)
+                    .unwrap_or_else(|| alias_or_table.clone());
                 // Resolve alias to table name using symbol table
                 // If alias is found, use the resolved table name; otherwise use as-is
                 let resolved_table = symbol_table
-                    .resolve(alias_or_table)
+                    .resolve(&qualifier)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| alias_or_table.clone());
+
+                let projected_columns = symbol_table
+                    .projected_columns(&qualifier)
+                    .or_else(|| symbol_table.projected_columns(&resolved_table));
+                if let Some(columns) = projected_columns {
+                    for column in columns {
+                        if !matches_filter(column) {
+                            continue;
+                        }
+                        let score = completion_priority::calculate_score_with_match(
+                            &context,
+                            Some(CompletionItemKind::FIELD),
+                            match_boost(column),
+                        );
+                        items.push(CompletionItem {
+                            label: column.clone(),
+                            kind: Some(CompletionItemKind::FIELD),
+                            detail: Some(format!("{qualifier}.{column}")),
+                            text_edit: Some(CompletionTextEdit::InsertAndReplace(
+                                InsertReplaceEdit {
+                                    new_text: column.clone(),
+                                    insert: replace_range,
+                                    replace: replace_range,
+                                },
+                            )),
+                            filter_text: Some(matched_prefix(column)),
+                            sort_text: Some(completion_priority::score_to_sort_text(score, column)),
+                            ..Default::default()
+                        });
+                    }
+                    items.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
+                    items.truncate(50);
+                    return Ok(CompletionResponse::Array(items));
+                }
 
                 if sql_dot_completion_target(&schema, &resolved_table)
                     == SqlDotCompletionTarget::Tables
@@ -1448,6 +1631,19 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
     }
 }
 
+fn find_schema_columns<'a>(
+    schema: &'a SqlSchema,
+    table: &str,
+) -> Option<&'a Vec<(String, String, String)>> {
+    schema.columns_by_table.get(table).or_else(|| {
+        schema
+            .columns_by_table
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(table))
+            .map(|(_, columns)| columns)
+    })
+}
+
 impl DefaultSqlCompletionProvider {
     /// 检查给定文本是否应该触发自动完成。
     /// 此方法可在测试中直接调用，无需 GPUI Context。
@@ -1651,8 +1847,7 @@ fn schema_to_metadata_view(schema: &SqlSchema) -> SqlMetadataView {
 
 /// Convert a `SqlDiagnostic` (UTF-8 byte range) into the input-layer
 /// `Diagnostic` (line/character positions) used by the squiggle renderer.
-fn sql_diagnostic_to_input(diag: &SqlDiagnostic, text: &str) -> Diagnostic {
-    let rope = Rope::from_str(text);
+fn sql_diagnostic_to_input(diag: &SqlDiagnostic, rope: &Rope) -> Diagnostic {
     let start = rope.offset_to_position(diag.range.start_byte);
     let end = rope.offset_to_position(diag.range.end_byte);
     Diagnostic {
@@ -1683,19 +1878,21 @@ fn analyze_diagnostics_pure(
     document_revision: u64,
 ) -> SqlDiagnosticSnapshot {
     let mut next_id = 0u64;
-    let snapshot = SqlStatementSnapshot::new(text.clone(), dialect);
-    let mut sql_diags = analyze_parser_diagnostics(&text, dialect, document_revision, &mut next_id);
+    let snapshot = SqlStatementSnapshot::new(text, dialect);
+    let text = snapshot.text();
+    let mut sql_diags = analyze_parser_diagnostics(text, dialect, document_revision, &mut next_id);
     let metadata = schema_to_metadata_view(&schema);
     sql_diags.extend(analyze_semantic_diagnostics(
-        &text,
+        text,
         &snapshot,
         &metadata,
         document_revision,
         &mut next_id,
     ));
+    let rope = Rope::from_str(text);
     let diagnostics = sql_diags
         .iter()
-        .map(|diag| sql_diagnostic_to_input(diag, &text))
+        .map(|diag| sql_diagnostic_to_input(diag, &rope))
         .collect();
     SqlDiagnosticSnapshot {
         document_revision,
@@ -2172,7 +2369,8 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, SqlDiagnosticSeverity::Error);
 
-        let input_diag = sql_diagnostic_to_input(&diags[0], text);
+        let rope = Rope::from_str(text);
+        let input_diag = sql_diagnostic_to_input(&diags[0], &rope);
         assert_eq!(input_diag.severity, DiagnosticSeverity::Error);
         assert_eq!(input_diag.source.as_deref(), Some("sql"));
         assert_eq!(input_diag.code.as_deref(), Some("parser.unclosed_string"));
@@ -2204,8 +2402,8 @@ mod tests {
             &mut parser_next_id,
         );
         assert_eq!(parser_diags.len(), 1);
-        let input_diag = sql_diagnostic_to_input(&parser_diags[0], parser_diag_text);
         let rope = Rope::from_str(parser_diag_text);
+        let input_diag = sql_diagnostic_to_input(&parser_diags[0], &rope);
         assert_eq!(
             input_diag.range,
             rope.offset_to_position(parser_diags[0].range.start_byte)
@@ -2240,9 +2438,10 @@ mod tests {
             0,
             &mut next_id,
         ));
+        let rope = Rope::from_str(text);
         let input_diags: Vec<_> = diags
             .iter()
-            .map(|d| sql_diagnostic_to_input(d, text))
+            .map(|d| sql_diagnostic_to_input(d, &rope))
             .collect();
 
         assert_eq!(input_diags.len(), 1);

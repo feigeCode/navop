@@ -13,6 +13,128 @@ fn ranges(sql: &str, dialect: SqlDialect) -> Vec<(usize, usize, usize)> {
         .collect()
 }
 
+/// Byte offset of the start of `row` (0-based) in `sql`.
+fn line_start_byte(sql: &str, row: usize) -> usize {
+    sql.match_indices('\n')
+        .nth(row.saturating_sub(1))
+        .map(|(index, _)| index + 1)
+        .unwrap_or(0)
+        .min(sql.len())
+}
+
+#[test]
+fn windowed_scan_matches_full_scan_inside_window() {
+    let sql = "SELECT 1;\n\nSELECT ';' AS semi;\nSELECT 3;\nSELECT 4\n";
+    let base_line = 2; // "SELECT ';' AS semi;"
+    let base_byte = line_start_byte(sql, base_line);
+    let window_text = &sql[base_byte..];
+
+    let scan = WindowedStatementScan::scan(
+        window_text.to_string(),
+        SqlDialect::Standard,
+        base_byte,
+        base_line,
+    );
+    let full = split_sql_statement_ranges(sql, SqlDialect::Standard);
+    let full_in_window: Vec<_> = full
+        .into_iter()
+        .filter(|range| range.hit_start_byte >= base_byte)
+        .collect();
+
+    assert_eq!(scan.statement_ranges(), full_in_window.as_slice());
+    assert_eq!(scan.statement_ranges()[0].start_line, 2);
+}
+
+#[test]
+fn windowed_statement_at_cursor_matches_full_snapshot() {
+    let sql = "SELECT 1;\n\nSELECT ';' AS semi;\nSELECT 3;\nSELECT 4\n";
+    let base_line = 2;
+    let base_byte = line_start_byte(sql, base_line);
+    let scan = WindowedStatementScan::scan(
+        sql[base_byte..].to_string(),
+        SqlDialect::Standard,
+        base_byte,
+        base_line,
+    );
+    let full = SqlStatementSnapshot::new(sql, SqlDialect::Standard);
+
+    // For every cursor position inside the window the windowed scan must
+    // resolve the same statement as the full snapshot, including the
+    // whitespace gap after the first in-window delimiter.
+    for cursor in base_byte..=sql.len() {
+        assert_eq!(
+            scan.statement_at_cursor_doc_len(cursor, sql.len()),
+            full.statement_at_cursor(cursor),
+            "cursor {cursor}"
+        );
+    }
+}
+
+#[test]
+fn windowed_statement_at_cursor_ignores_text_before_window() {
+    let sql = "SELECT 1;\nSELECT 2;\n";
+    let base_byte = line_start_byte(sql, 1);
+    let scan = WindowedStatementScan::scan(
+        sql[base_byte..].to_string(),
+        SqlDialect::Standard,
+        base_byte,
+        1,
+    );
+
+    // A cursor in the hidden first statement resolves to nothing.
+    assert_eq!(scan.statement_at_cursor(2), None);
+    assert_eq!(
+        scan.statement_at_cursor(base_byte + 2)
+            .map(|range| range.sql_range.to_range()),
+        Some(base_byte..base_byte + 8)
+    );
+}
+
+#[test]
+fn windowed_trailing_statement_stops_at_window_end() {
+    let sql = "SELECT 1;\nSELECT 2\nSELECT 3\n";
+    let base_byte = line_start_byte(sql, 1);
+    // Window covers only "SELECT 2\n"; "SELECT 3" exists below the window.
+    let scan =
+        WindowedStatementScan::scan("SELECT 2\n".to_string(), SqlDialect::Standard, base_byte, 1);
+
+    // With the true doc length the truncated statement must not own the
+    // whitespace at the window edge (a refreshed window will answer instead).
+    assert_eq!(
+        scan.statement_at_cursor_doc_len(base_byte + 9, sql.len()),
+        None
+    );
+    // A window that does reach the document end keeps the old ownership.
+    // Note: without a `;` the two SELECTs merge into one trailing statement.
+    let full_tail = WindowedStatementScan::scan(
+        sql[base_byte..].to_string(),
+        SqlDialect::Standard,
+        base_byte,
+        1,
+    );
+    assert_eq!(
+        full_tail
+            .statement_at_cursor_doc_len(sql.len(), sql.len())
+            .map(|range| range.sql_range.to_range()),
+        Some(base_byte..sql.len() - 1)
+    );
+}
+
+#[test]
+fn line_scans_neutral_detects_open_constructs() {
+    assert!(line_scans_neutral("SELECT 1;"));
+    assert!(line_scans_neutral("-- a comment"));
+    assert!(line_scans_neutral("/* closed */ SELECT 1;"));
+    assert!(line_scans_neutral("SELECT 'it''s';"));
+    assert!(!line_scans_neutral("SELECT 'open"));
+    assert!(!line_scans_neutral("SELECT \"open"));
+    assert!(!line_scans_neutral("/* open comment"));
+    // Escaped quotes inside a string still balance.
+    assert!(line_scans_neutral(
+        "SELECT 'a'; -- 'trailing quote in comment"
+    ));
+}
+
 #[test]
 fn splits_top_level_statements_and_ignores_delimiters_in_literals() {
     let sql = "SELECT 1;\nSELECT ';', \"a;b\", `c;d`;";
@@ -256,6 +378,30 @@ fn mysql_hash_comment_is_statement_delimiter_safe() {
     assert_eq!(
         snapshot.statement_text(snapshot.statement_ranges().last().unwrap()),
         "select 2"
+    );
+}
+
+#[test]
+fn mysql_mybatis_placeholder_is_not_treated_as_hash_comment() {
+    let sql = "select * from users where id = #{id};\nselect 2;";
+    let snapshot = SqlStatementSnapshot::new(sql, SqlDialect::MySql);
+
+    assert_eq!(2, snapshot.statement_ranges().len());
+    assert_eq!(
+        "select * from users where id = #{id}",
+        snapshot.statement_text(&snapshot.statement_ranges()[0])
+    );
+}
+
+#[test]
+fn mysql_double_dash_requires_following_whitespace() {
+    let sql = "select 1--2;\nselect 3;";
+    let snapshot = SqlStatementSnapshot::new(sql, SqlDialect::MySql);
+
+    assert_eq!(2, snapshot.statement_ranges().len());
+    assert_eq!(
+        "select 1--2",
+        snapshot.statement_text(&snapshot.statement_ranges()[0])
     );
 }
 

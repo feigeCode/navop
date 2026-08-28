@@ -7,7 +7,8 @@ mod tests {
     use crate::sql_editor::{
         DefaultSqlCompletionProvider, SqlCompletionSources, SqlDotCompletionTarget, SqlSchema,
         TableMentionCompletionProvider, clip_sql_offset, current_statement_has_from_keyword,
-        cursor_is_in_sql_literal_or_comment, sql_dot_completion_target,
+        cursor_is_in_sql_literal_or_comment, dot_completion_qualifier, insert_column_target_table,
+        sql_dot_completion_target, update_target_table,
     };
     use db::plugin::SqlCompletionInfo;
     use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext};
@@ -1151,6 +1152,30 @@ mod tests {
         assert_eq!(
             SqlDotCompletionTarget::None,
             sql_dot_completion_target(&schema, "missing")
+        );
+    }
+
+    #[test]
+    fn completion_context_resolves_insert_and_update_target_tables() {
+        let insert = "INSERT INTO users (na";
+        assert_eq!(
+            Some("users".to_string()),
+            insert_column_target_table(insert, insert.len())
+        );
+
+        let update = "UPDATE users SET na";
+        assert_eq!(
+            Some("users".to_string()),
+            update_target_table(update, update.len())
+        );
+    }
+
+    #[test]
+    fn dot_completion_keeps_the_source_qualifier_before_alias_resolution() {
+        let sql = "SELECT r. FROM recent r";
+        assert_eq!(
+            Some("r".to_string()),
+            dot_completion_qualifier(sql, sql.find("r. ").unwrap() + 2)
         );
     }
 
