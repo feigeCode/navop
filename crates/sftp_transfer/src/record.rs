@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     SftpTransferExecutor, SftpTransferId, SftpTransferSnapshot, SftpTransferState,
     operation::{TransferExecution, TransferRequest},
-    progress::progress_detail,
+    progress::{progress_detail, progress_speed},
 };
 
 pub(super) struct TransferRecord {
@@ -60,7 +60,7 @@ impl TransferRecord {
             progress.transferred,
             Some(progress.total),
             progress_detail(progress),
-            None,
+            progress_speed(progress),
             cx,
         );
     }

@@ -253,6 +253,7 @@ fn progress_updates_snapshot_and_background_task(cx: &mut TestAppContext) {
     assert_eq!(progress.current, 64);
     assert_eq!(progress.total, Some(128));
     assert_eq!(progress.unit, BackgroundTaskProgressUnit::Bytes);
+    assert_eq!(progress.message.as_deref(), Some("32 B/s"));
     assert_eq!(task.detail.as_deref(), Some("nested/file.txt"));
 }
 

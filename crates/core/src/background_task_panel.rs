@@ -14,8 +14,7 @@ use crate::background_tasks::{
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
-    Window,
-    prelude::FluentBuilder, px,
+    Window, prelude::FluentBuilder, px,
 };
 use gpui_component::progress::Progress;
 use gpui_component::{
@@ -59,19 +58,34 @@ impl BackgroundTaskPanel {
     /// 渲染完整入口（Button）。作为标签栏末尾的固定 flex item。
     fn render_entry(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let counts = self.manager.read(cx).counts();
-        Button::new("background-task-button")
-            .icon(IconName::ListChecks)
-            .ghost()
-            .compact()
-            .tooltip(t!("BackgroundTasks.open").to_string())
-            .when(counts.active > 0 || counts.failed > 0, |btn| {
-                btn.label(Self::badge_text(&counts))
-            })
-            .on_click({
-                let manager = self.manager.clone();
-                move |_, window, cx| {
-                    open_background_task_dialog(manager.clone(), window, cx);
-                }
+        gpui::div()
+            .relative()
+            .child(
+                Button::new("background-task-button")
+                    .icon(IconName::ListChecks)
+                    .ghost()
+                    .compact()
+                    .tooltip(t!("BackgroundTasks.open").to_string())
+                    .when(counts.active > 0 || counts.failed > 0, |btn| {
+                        btn.label(Self::badge_text(&counts))
+                    })
+                    .on_click({
+                        let manager = self.manager.clone();
+                        move |_, window, cx| {
+                            open_background_task_dialog(manager.clone(), window, cx);
+                        }
+                    }),
+            )
+            .when(Self::shows_running_dot(&counts), |entry| {
+                entry.child(
+                    gpui::div()
+                        .absolute()
+                        .top(px(2.0))
+                        .right(px(2.0))
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(cx.theme().danger),
+                )
             })
     }
 
@@ -82,6 +96,10 @@ impl BackgroundTaskPanel {
         } else {
             active.to_string()
         }
+    }
+
+    fn shows_running_dot(counts: &BackgroundTaskCounts) -> bool {
+        counts.active > 0
     }
 }
 
@@ -461,6 +479,7 @@ fn render_task_item(
         })
         .when_some(task.progress.clone(), |this, progress| {
             let percent = progress.percent();
+            let speed = progress.message.clone();
             this.child(
                 h_flex()
                     .id("background-task-item-progress")
@@ -484,7 +503,16 @@ fn render_task_item(
                             } else {
                                 t!("BackgroundTasks.progress_unknown_total").to_string()
                             }),
-                    ),
+                    )
+                    .when_some(speed, |row, speed| {
+                        row.child(
+                            gpui::div()
+                                .id("background-task-item-speed")
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(speed),
+                        )
+                    }),
             )
         })
         .when_some(task.result.clone(), |this, result| {
@@ -529,5 +557,22 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(BackgroundTaskPanel::badge_text(&counts), "3");
+    }
+
+    #[test]
+    fn running_dot_is_visible_for_active_tasks_only() {
+        assert!(BackgroundTaskPanel::shows_running_dot(
+            &BackgroundTaskCounts {
+                running: 1,
+                active: 1,
+                ..Default::default()
+            }
+        ));
+        assert!(!BackgroundTaskPanel::shows_running_dot(
+            &BackgroundTaskCounts {
+                failed: 1,
+                ..Default::default()
+            }
+        ));
     }
 }

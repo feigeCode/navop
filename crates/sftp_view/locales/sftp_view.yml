@@ -760,6 +760,10 @@ Transfer:
     en: Continue in Background
     zh-CN: 转到后台继续
     zh-HK: 轉到背景繼續
+  view_in_background_tasks:
+    en: Uploads and downloads run in the background. View progress and speed in Background Tasks.
+    zh-CN: 上传和下载已转到后台运行，请前往“后台任务”查看进度和网速。
+    zh-HK: 上傳和下載已轉到背景執行，請前往「後台任務」查看進度和網速。
   cancel_and_close:
     en: Cancel Transfers and Close
     zh-CN: 取消传输并关闭

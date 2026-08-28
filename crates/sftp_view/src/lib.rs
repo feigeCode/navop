@@ -579,6 +579,18 @@ impl TransferQueue {
             .cloned()
             .collect()
     }
+
+    fn bottom_visible_tasks(&self) -> Vec<TransferTask> {
+        self.active_tasks()
+            .into_iter()
+            .filter(|task| {
+                !matches!(
+                    &task.operation,
+                    TransferOperation::Upload { .. } | TransferOperation::Download { .. }
+                )
+            })
+            .collect()
+    }
 }
 
 async fn acquire_transfer_client(
@@ -4066,6 +4078,7 @@ impl SftpView {
             connection: self.upload_connection_identity.clone(),
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
         };
+        let mut submitted = false;
         for transfer in transfers {
             let prepared = prepare_global_upload(&transfer, conflict_policy, &upload_context);
             let reservation = self
@@ -4084,10 +4097,21 @@ impl SftpView {
             };
             let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
             self.refresh_transfer_target_if_visible(refresh_target, cx);
+            submitted = true;
         }
 
+        if submitted {
+            self.notify_background_transfer_started(cx);
+        }
         self.start_progress_refresh(cx);
         cx.notify();
+    }
+
+    fn notify_background_transfer_started(&self, cx: &mut Context<Self>) {
+        self.push_notification(
+            Notification::info(t!("Transfer.view_in_background_tasks").to_string()).autohide(true),
+            cx,
+        );
     }
 
     fn start_progress_refresh(&mut self, cx: &mut Context<Self>) {
@@ -4276,6 +4300,7 @@ impl SftpView {
             connection: self.upload_connection_identity.clone(),
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
         };
+        let mut submitted = false;
         for transfer in transfers {
             let prepared = prepare_global_download(&transfer, &download_context);
             let reservation = self.upload_executor.update(cx, |executor, _| {
@@ -4294,6 +4319,10 @@ impl SftpView {
             };
             let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
             self.refresh_transfer_target_if_visible(refresh_target, cx);
+            submitted = true;
+        }
+        if submitted {
+            self.notify_background_transfer_started(cx);
         }
         self.start_progress_refresh(cx);
         cx.notify();
@@ -5734,7 +5763,7 @@ impl SftpView {
     }
 
     fn render_transfer_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_tasks = self.transfer_queue.active_tasks();
+        let active_tasks = self.transfer_queue.bottom_visible_tasks();
 
         if active_tasks.is_empty() && self.active_extract.is_none() {
             return div().into_any_element();
@@ -7964,6 +7993,44 @@ mod tests {
         );
         assert!(queue.pending.is_empty());
         assert_eq!(TransferTaskState::Pending, queue.tasks[1].state);
+    }
+
+    #[test]
+    fn bottom_queue_hides_global_uploads_and_downloads() {
+        let mut queue = TransferQueue::new(2);
+        let mut upload = transfer_task(1);
+        upload.external_transfer_id = Some(SftpTransferId::new(7));
+        upload.operation = TransferOperation::Upload {
+            local_path: PathBuf::from("/local/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            is_dir: false,
+            directory_conflict_policy: DirectoryConflictPolicy::Merge,
+            remote_dir: "/remote".to_string(),
+        };
+        let mut download = transfer_task(2);
+        download.external_transfer_id = Some(SftpTransferId::new(8));
+        download.operation = TransferOperation::Download {
+            remote_path: "/remote/file.txt".to_string(),
+            local_dir: PathBuf::from("/local"),
+        };
+        let local_delete = TransferTask {
+            operation: TransferOperation::DeleteLocal {
+                entries: Vec::new(),
+                local_dir: PathBuf::from("/local"),
+            },
+            ..transfer_task(3)
+        };
+
+        assert!(queue.track_external(upload));
+        assert!(queue.track_external(download));
+        assert!(queue.enqueue(local_delete));
+
+        let visible = queue.bottom_visible_tasks();
+
+        assert_eq!(
+            vec![3],
+            visible.iter().map(|task| task.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -59,3 +59,17 @@ async fn coalesce_progress(cx: &mut AsyncApp, receiver: &mut tokio::sync::mpsc::
 pub(super) fn progress_detail(progress: &TransferProgress) -> Option<gpui::SharedString> {
     progress.current_file.clone().map(Into::into)
 }
+
+pub(super) fn progress_speed(progress: &TransferProgress) -> Option<gpui::SharedString> {
+    (progress.speed > 0.0).then(|| format_transfer_speed(progress.speed).into())
+}
+
+fn format_transfer_speed(bytes_per_second: f64) -> String {
+    if bytes_per_second >= 1024.0 * 1024.0 {
+        format!("{:.1} MB/s", bytes_per_second / (1024.0 * 1024.0))
+    } else if bytes_per_second >= 1024.0 {
+        format!("{:.1} KB/s", bytes_per_second / 1024.0)
+    } else {
+        format!("{bytes_per_second:.0} B/s")
+    }
+}
