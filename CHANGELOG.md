@@ -4,6 +4,68 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.13.0] - 2026-08-28
+
+### 中文
+
+#### 更新内容
+
+- SQL 编辑器大幅增强：支持函数签名提示、行内内联小组件与编辑器生命周期管理；多语句执行、`@set` 变量、IN 列表与 INSERT 子句智能提示、通配符补全；执行错误映射到准确源码位置，配合来源映射便于定位问题。
+- 终端新增运行时 SSH Shell 集成：无需写入远端即可实时感知提示符、命令开始/结束与当前目录，为自动化执行与脚本提示提供基础。
+- 后台任务能力升级：文件操作支持按标签页分组显示；SFTP 传输、远程删除等转移为全局后台任务；终端与后台任务面板新增传输进度展示。
+- 连接树自动隐藏模式优化：点击设置、扩展、AI 工作台等非连接区域时自动收起连接树；同时支持将连接树固定为常驻侧栏。
+- 连接支持自定义 SSH 图标。
+- MCP 审批等待时间可配置，超时后返回 `approval_timeout`。
+- AI 工具调用默认改为「手动确认」模式：模型请求业务工具前需用户确认，降低误操作风险。
+- 刷新内置模型目录，接入最新模型列表。
+- 会话日志支持删除操作。
+
+#### 修复与优化
+
+- 修复 zmodem 上传/下载的传输竞态、任务生命周期与帧解析问题，进度更新更准确且不冲突。
+- 修复终端大段粘贴导致 SSH 超时的问题。
+- 修复 Redis 空用户名存储为 null 导致默认用户认证超时的问题。
+- 修复数据库表/对象树未按字母排序的问题，子节点排序更稳定。
+- 修复带注释的 DDL 导出：补充主键、表/列注释的导出，并在驱动仅返回注释时回退到 DDL 构建器。
+- 修复真 schema 驱动在表导出时错误附加数据库限定名的问题。
+- 修复后台任务进度完成时未固定到 100% 的问题；进度条默认使用主题主色。
+- 修复连接树浮层滚动事件传播到标签内容的问题。
+- 修复文件管理器面包屑标签过长时未截断的问题。
+- 后台任务展示由浮层改为独立对话框，信息更完整。
+- 转发窗口表单高度调整，避免内容挤压。
+
+---
+
+### English
+
+#### What's New
+
+- Major SQL editor upgrade: function signature hints, inline widgets and editor lifecycle management; multi-statement execution, `@set` variables, IN-list and INSERT-clause smart completion, and wildcard completion; execution errors now map to precise source locations for easier troubleshooting.
+- The terminal gains runtime SSH shell integration: prompts, command start/end, and the current directory are sensed in real time without any writes to the remote host, laying the groundwork for automation and script hints.
+- Background task capabilities improved: file operations can be grouped by tab; SFTP transfers and remote deletes move to global background tasks; transfer progress is shown in the terminal and the background task panel.
+- Connection tree auto-hide mode refined: clicking non-connection areas such as Settings, Extensions, or the AI Workbench now collapses the tree automatically; the tree can also be pinned as a fixed sidebar.
+- Connections support custom SSH icons.
+- MCP approval wait time is configurable and returns `approval_timeout` when it expires.
+- AI tool calls now default to manual confirmation: the user confirms before the model runs business tools, reducing the risk of accidental operations.
+- Refreshed the built-in model catalog with the latest model list.
+- Session logs support deletion.
+
+#### Fixes and Improvements
+
+- Fixed zmodem upload/download transfer races, task lifecycle, and frame parsing issues; progress updates are more accurate and no longer collide.
+- Fixed SSH timeouts caused by large terminal pastes.
+- Fixed Redis storing an empty username as null, which caused default-user auth timeouts.
+- Fixed database table/object tree children not sorted alphabetically.
+- Fixed DDL export for commented objects: PRIMARY KEY and table/column comments are now exported, with a fallback to the DDL builder when a driver returns only comments.
+- Fixed true-schema drivers incorrectly appending a database qualifier during table export.
+- Fixed background task progress not pinning to 100% when complete; the progress bar now uses the theme primary color by default.
+- Fixed scroll events from the floating connection tree propagating into tab content.
+- Fixed file manager breadcrumb labels not truncating when too long.
+- Background tasks now show in a dedicated dialog instead of a popover for a fuller view.
+- Adjusted the forwarding window form height to avoid content squeezing.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.12.1...v0.13.0
+
 ## [v0.12.1] - 2026-08-26
 
 ### 中文
