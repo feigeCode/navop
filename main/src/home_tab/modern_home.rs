@@ -13,17 +13,29 @@ use rust_i18n::t;
 use super::{
     HomePage, HomeSyncButtonContext, HomeSyncButtonState, home_sync_button_state,
     modern_home_shortcuts::{new_connection_shortcut, quick_open_shortcut, terminal_shortcut},
-    sync_route,
+    should_show_team_management_entry, sync_route,
 };
 use crate::connection_visuals::ConnectionVisualSize;
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::license::is_feature_enabled;
+use crate::navigation_quick_open::{
+    NavigationApplication, NavigationAvailability, all_navigation_applications,
+};
+use crate::onetcli_app::GlobalOnetCliApp;
 use one_core::license::Feature;
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, StartupDefaultPage};
 
 const START_CENTER_MAX_WIDTH: gpui::Pixels = px(1040.0);
 const START_CENTER_MAIN_COLUMN_WIDTH: gpui::Pixels = px(580.0);
 const START_CENTER_SIDE_COLUMN_WIDTH: gpui::Pixels = px(300.0);
+const START_CENTER_BRAND_WIDTH: gpui::Pixels = px(300.0);
+
+struct SidePanelState<'a> {
+    user: Option<&'a one_core::cloud_sync::UserInfo>,
+    syncing: bool,
+    sync_button_state: HomeSyncButtonState,
+    view: gpui::Entity<HomePage>,
+}
 
 impl HomePage {
     pub(super) fn render_modern_home(
@@ -48,21 +60,26 @@ impl HomePage {
         });
         let syncing = self.syncing || personal_syncing;
 
+        // 开始中心固定在窗口高度内：最近连接列表内部滚动，页面本身不出
+        // 现整页滚动条（滚动容器需外层裁剪，见 AGENTS 布局经验）。
         div()
             .id("modern-home-start-center")
             .size_full()
-            .overflow_y_scroll()
-            .scrollbar_width(px(0.0))
+            .overflow_hidden()
             .child(
-                v_flex().w_full().items_center().px_5().py_3().child(
+                v_flex().size_full().items_center().px_5().py_3().child(
                     v_flex()
                         .w_full()
+                        .min_h_0()
                         .max_w(START_CENTER_MAX_WIDTH)
                         .gap_3()
                         .child(self.render_start_center_hero(view, window, cx))
+                        .child(render_applications_panel(cx))
                         .child(
                             h_flex()
                                 .w_full()
+                                .min_h_0()
+                                .flex_1()
                                 .min_w_0()
                                 .items_stretch()
                                 .flex_wrap()
@@ -70,24 +87,28 @@ impl HomePage {
                                 .child(
                                     div()
                                         .id("modern-home-recent-column")
+                                        .self_stretch()
                                         .min_w_0()
+                                        .min_h_0()
                                         .flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)
                                         .flex_grow_factor(2.0)
                                         .child(self.render_recent_connections_panel(window, cx)),
                                 )
                                 .child(
                                     v_flex()
+                                        .self_stretch()
                                         .id("modern-home-side-column")
                                         .min_w_0()
+                                        .min_h_0()
                                         .flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)
                                         .flex_grow_1()
-                                        .gap_3()
-                                        .child(render_create_panel(cx.entity(), window, cx))
-                                        .child(render_workspace_tools(cx.entity(), window, cx))
-                                        .child(render_status_panel(
-                                            syncing,
-                                            sync_button_state,
-                                            cx.entity(),
+                                        .child(render_side_panel(
+                                            SidePanelState {
+                                                user: self.current_user.as_ref(),
+                                                syncing,
+                                                sync_button_state,
+                                                view: cx.entity(),
+                                            },
                                             window,
                                             cx,
                                         )),
@@ -104,25 +125,33 @@ impl HomePage {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
-        v_flex()
+        h_flex()
             .id("modern-home-hero")
             .w_full()
             .min_w_0()
+            .items_center()
+            .justify_between()
+            .flex_wrap()
             .gap_3()
-            .px_5()
-            .py_4()
+            .px_4()
+            .py_3()
             .rounded_xl()
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
-            .child(render_brand(cx))
+            .border_color(cx.theme().primary.opacity(0.14))
+            .bg(cx.theme().primary.opacity(0.04))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_basis(START_CENTER_BRAND_WIDTH)
+                    .flex_grow_1()
+                    .child(render_brand(cx)),
+            )
             .child(
                 h_flex()
-                    .w_full()
                     .min_w_0()
                     .items_center()
                     .flex_wrap()
-                    .gap_3()
+                    .gap_2()
                     .child(
                         h_flex()
                             .flex_none()
@@ -186,7 +215,11 @@ impl HomePage {
         recent.truncate(8);
         let recent_count = recent.len();
 
+        // 最近列表在面板内部滚动：外层负责 flex/裁剪，内层承载滚动。
         surface_panel("modern-home-recent-panel", cx)
+            .h_full()
+            .min_h_0()
+            .overflow_hidden()
             .child(
                 panel_header(
                     t!("Home.StartCenter.recent"),
@@ -201,15 +234,28 @@ impl HomePage {
                 ),
             )
             .child(if recent.is_empty() {
-                render_empty_recent(cx).into_any_element()
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(render_empty_recent(cx))
+                    .into_any_element()
             } else {
-                v_flex()
-                    .w_full()
-                    .gap_1()
-                    .children(
-                        recent
-                            .into_iter()
-                            .map(|conn| self.render_recent_connection_row(conn, window, cx)),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(
+                        v_flex()
+                            .id("modern-home-recent-list")
+                            .w_full()
+                            .overflow_y_scroll()
+                            .children(
+                                recent.into_iter().map(|conn| {
+                                    self.render_recent_connection_row(conn, window, cx)
+                                }),
+                            ),
                     )
                     .into_any_element()
             })
@@ -240,10 +286,8 @@ impl HomePage {
             .gap_2()
             .px_3()
             .py_1()
-            .rounded_lg()
-            .border_1()
+            .border_b_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().background)
             .cursor_pointer()
             .hover(move |style| style.bg(hover_background).border_color(hover_border))
             .on_double_click(
@@ -298,15 +342,15 @@ fn render_brand(cx: &gpui::App) -> impl IntoElement {
         .w_full()
         .min_w_0()
         .items_center()
-        .gap_4()
+        .gap_3()
         .child(
             div()
                 .flex_none()
-                .size(px(44.0))
+                .size(px(40.0))
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_lg()
+                .rounded_md()
                 .bg(cx.theme().primary.opacity(0.1))
                 .text_color(cx.theme().primary)
                 .child(Icon::new(IconName::ServerLine).with_size(IconSize::Large)),
@@ -325,7 +369,7 @@ fn render_brand(cx: &gpui::App) -> impl IntoElement {
                 )
                 .child(
                     div()
-                        .text_2xl()
+                        .text_xl()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(cx.theme().foreground)
                         .child("Navop"),
@@ -339,12 +383,45 @@ fn render_brand(cx: &gpui::App) -> impl IntoElement {
         )
 }
 
+fn render_side_panel(
+    state: SidePanelState<'_>,
+    window: &mut Window,
+    cx: &mut gpui::Context<HomePage>,
+) -> impl IntoElement {
+    let SidePanelState {
+        user,
+        syncing,
+        sync_button_state,
+        view,
+    } = state;
+    surface_panel("modern-home-side-panel", cx)
+        .h_full()
+        .gap_0()
+        .p_0()
+        .overflow_hidden()
+        .child(render_create_panel(view.clone(), window, cx))
+        .child(div().h(px(1.0)).w_full().bg(cx.theme().border))
+        .child(render_status_panel(
+            syncing,
+            sync_button_state,
+            view.clone(),
+            window,
+            cx,
+        ))
+        .child(div().h(px(1.0)).w_full().bg(cx.theme().border))
+        .child(render_account_panel(user, view, cx))
+}
+
 fn render_create_panel(
     view: gpui::Entity<HomePage>,
     window: &mut Window,
-    cx: &gpui::App,
+    cx: &mut gpui::Context<HomePage>,
 ) -> impl IntoElement {
-    surface_panel("modern-home-create-panel", cx)
+    v_flex()
+        .id("modern-home-create-panel")
+        .w_full()
+        .gap_2()
+        .p_3()
         .child(panel_header(
             t!("Home.StartCenter.create_and_import"),
             None,
@@ -364,58 +441,137 @@ fn render_create_panel(
         ))
 }
 
-fn render_workspace_tools(
+/// Every application entry that used to sit in the persistent navigation rail
+/// now lives on the start center as an icon tile grid. Visibility gating
+/// (workbench/team availability) mirrors the old rail rules.
+fn render_applications_panel(cx: &mut gpui::Context<HomePage>) -> impl IntoElement {
+    let availability = NavigationAvailability {
+        show_ai_workbench: AppSettings::current(cx).startup_default_page
+            == StartupDefaultPage::Home,
+        show_team: should_show_team_management_entry(is_feature_enabled(
+            Feature::TeamManagement,
+            cx,
+        )),
+    };
+    let mut tiles = Vec::new();
+    for application in all_navigation_applications(availability) {
+        tiles.push(application_tile(application, cx));
+    }
+
+    surface_panel("modern-home-applications-panel", cx)
+        .child(panel_header(t!("Home.StartCenter.applications"), None, cx))
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_wrap()
+                .justify_between()
+                .gap_1()
+                .children(tiles),
+        )
+}
+
+fn application_tile(
+    application: NavigationApplication,
+    cx: &mut gpui::Context<HomePage>,
+) -> impl IntoElement + use<> {
+    let hover_background = cx.theme().muted;
+
+    v_flex()
+        .id(home_application_id(application))
+        .min_w(px(88.0))
+        .max_w(px(112.0))
+        .flex_basis(px(88.0))
+        .flex_grow_1()
+        .items_center()
+        .gap_1()
+        .p_1()
+        .rounded_md()
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover_background))
+        .on_click(cx.listener(move |home, _, window, cx| {
+            home.activate_navigation_application(application, window, cx);
+            collapse_connection_sidebar_if_auto_hide(cx);
+        }))
+        .child(
+            div()
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .bg(cx.theme().secondary)
+                .text_color(cx.theme().secondary_foreground)
+                .child(
+                    Icon::new(application.icon())
+                        .mono()
+                        .text_color(cx.theme().foreground)
+                        .with_size(IconSize::Medium),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .text_xs()
+                .text_center()
+                .text_color(cx.theme().foreground)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(application.label()),
+        )
+}
+
+fn home_application_id(application: NavigationApplication) -> &'static str {
+    match application {
+        NavigationApplication::AiWorkbench => "home-app-ai-workbench",
+        NavigationApplication::Team => "home-app-team",
+        NavigationApplication::Notes => "home-app-notes",
+        #[cfg(feature = "api-testing")]
+        NavigationApplication::ApiTesting => "home-app-api-testing",
+        NavigationApplication::JsonFormatter => "home-app-json-formatter",
+        NavigationApplication::SessionLogs => "home-app-session-logs",
+        NavigationApplication::CredentialVault => "home-app-credential-vault",
+        NavigationApplication::Extensions => "home-app-extensions",
+        NavigationApplication::Settings => "home-app-settings",
+    }
+}
+
+/// The floating connection tree overlays the home content, so opening any
+/// application from a home tile should fold it back when auto-hide is on.
+/// HomePage cannot reach the sidebar entity directly, hence the global hop.
+fn collapse_connection_sidebar_if_auto_hide(cx: &mut gpui::Context<HomePage>) {
+    if let Some(app) = cx
+        .try_global::<GlobalOnetCliApp>()
+        .map(|global| global.app.clone())
+    {
+        app.update(cx, |app, cx| {
+            app.collapse_connection_sidebar_if_auto_hide(cx);
+        });
+    }
+}
+
+fn render_account_panel(
+    user: Option<&one_core::cloud_sync::UserInfo>,
     view: gpui::Entity<HomePage>,
-    window: &mut Window,
     cx: &gpui::App,
 ) -> impl IntoElement {
-    surface_panel("modern-home-tools-panel", cx)
-        .child(panel_header(
-            t!("Home.StartCenter.workspace_tools"),
-            None,
+    v_flex()
+        .id("modern-home-account-panel")
+        .w_full()
+        .gap_2()
+        .p_3()
+        .child(panel_header(t!("Home.StartCenter.account"), None, cx))
+        .child(crate::user_avatar::render_user_avatar(
+            user,
+            view,
+            |home, window, cx| {
+                if home.current_user.is_none() {
+                    home.show_login_dialog(window, cx);
+                }
+            },
             cx,
         ))
-        .child(
-            v_flex()
-                .w_full()
-                .gap_1()
-                .child(utility_row(
-                    "modern-home-notes",
-                    IconName::BookOpen,
-                    t!("Home.notes").to_string(),
-                    t!("Home.StartCenter.notes_description").to_string(),
-                    view.clone(),
-                    window,
-                    |home, window, cx| {
-                        home.add_notes_tab(window, cx);
-                    },
-                    cx,
-                ))
-                .child(utility_row(
-                    "modern-home-ai",
-                    IconName::Bot,
-                    t!("Settings.General.Startup.default_page_ai_workbench").to_string(),
-                    t!("Home.StartCenter.ai_description").to_string(),
-                    view.clone(),
-                    window,
-                    |home, window, cx| {
-                        home.add_ai_workbench_tab(window, cx);
-                    },
-                    cx,
-                ))
-                .child(utility_row(
-                    "modern-home-extensions",
-                    IconName::Apps,
-                    t!("Home.extensions").to_string(),
-                    t!("Home.StartCenter.extensions_description").to_string(),
-                    view,
-                    window,
-                    |home, window, cx| {
-                        home.add_extensions_tab(window, cx);
-                    },
-                    cx,
-                )),
-        )
 }
 
 fn render_status_panel(
@@ -429,8 +585,13 @@ fn render_status_panel(
     let sync_view = view.clone();
     let key_view = view;
 
-    surface_panel("modern-home-status-panel", cx)
-        .flex_grow_1()
+    v_flex()
+        .id("modern-home-status-panel")
+        .w_full()
+        // 状态区只占内容自然高度，不吸收侧栏剩余空间，账户面板因此紧跟其上。
+        .flex_shrink_0()
+        .gap_2()
+        .p_3()
         .child(panel_header(t!("Home.StartCenter.status"), None, cx))
         .child(
             v_flex()

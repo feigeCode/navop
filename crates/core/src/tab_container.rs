@@ -27,8 +27,8 @@ use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme, Colorize as _, Disableable, ElementExt as _, Icon, IconName, IconSize,
-    InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, WindowExt as _, h_flex,
-    notification::Notification, v_flex,
+    InteractiveElementExt as _, LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _,
+    h_flex, notification::Notification, v_flex,
 };
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -1055,6 +1055,8 @@ pub struct TabContainer {
     left_padding: Option<gpui::Pixels>,
     top_padding: Option<gpui::Pixels>,
     navigation_sidebar_expanded: Option<bool>,
+    home_active: Option<bool>,
+    on_home: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     tab_bar_scroll_handle: ScrollHandle,
     closing_tabs: HashSet<SharedString>,
     activity_tabs: HashSet<String>,
@@ -1113,6 +1115,8 @@ impl TabContainer {
             left_padding: None,
             top_padding: None,
             navigation_sidebar_expanded: None,
+            home_active: None,
+            on_home: None,
             tab_bar_scroll_handle: ScrollHandle::new(),
             closing_tabs: HashSet::new(),
             activity_tabs: HashSet::new(),
@@ -1191,6 +1195,43 @@ impl TabContainer {
     pub fn with_navigation_sidebar_toggle(mut self, expanded: bool) -> Self {
         self.navigation_sidebar_expanded = Some(expanded);
         self
+    }
+
+    /// Renders a Home button at the leading edge of the tab bar, next to the
+    /// navigation sidebar toggle. Used by app styles that keep Home outside
+    /// the tab strip (e.g. the modern persistent connection sidebar) where
+    /// Home is a main-content view rather than a pinned tab.
+    pub fn with_home_button(
+        mut self,
+        active: bool,
+        on_home: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
+    ) -> Self {
+        self.home_active = Some(active);
+        self.on_home = Some(on_home);
+        self
+    }
+
+    /// Adds or removes the tab-bar Home button after construction, e.g. when
+    /// the user switches home page styles.
+    pub fn set_home_button(
+        &mut self,
+        config: Option<(bool, Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let (active, on_home) = match config {
+            Some((active, on_home)) => (Some(active), Some(on_home)),
+            None => (None, None),
+        };
+        self.home_active = active;
+        self.on_home = on_home;
+        cx.notify();
+    }
+
+    pub fn set_home_button_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.on_home.is_some() && self.home_active != Some(active) {
+            self.home_active = Some(active);
+            cx.notify();
+        }
     }
 
     pub fn with_tab_bar_when_empty(mut self, show: bool) -> Self {
@@ -3812,18 +3853,21 @@ impl TabContainer {
         let mut left_padding = self.left_padding.unwrap_or(px(8.0));
         let pinned_tab_count = self.pinned_tabs.len();
         let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
+        let home_active = self.home_active;
+        let on_home = self.on_home.clone();
         let titlebar_platform = self.titlebar_platform();
         let layout = theme.geometry.layout;
         let tab_bar_height = layout.tab_bar;
         let tab_item_height = layout.tab_item;
 
         // On macOS reserve the title-bar area occupied by the traffic-light
-        // controls. The navigation sidebar now floats (absolute) instead of
-        // pushing the tab bar, so the reservation must stay constant in both
-        // the collapsed and expanded states; otherwise the toggle button
-        // jumps left when toggled.
-        if titlebar_platform.is_macos && navigation_sidebar_expanded.is_some() {
-            left_padding = layout.macos_compact_title_bar_content_padding;
+        // controls only when the tab bar spans the full window width
+        // (sidebar collapsed or Legacy Home-only tab bar). When the
+        // navigation sidebar is expanded it owns the left edge itself and
+        // the tab bar starts to its right, so an extra reservation would
+        // double-indent the toggle and Home buttons.
+        if titlebar_platform.is_macos && navigation_sidebar_expanded != Some(true) {
+            left_padding = layout.macos_title_bar_content_padding;
         }
 
         // Window dragging is limited to explicit blank regions so tab drag remains independent.
@@ -3924,6 +3968,28 @@ impl TabContainer {
                                     });
                                     cx.notify();
                                 })),
+                        ),
+                )
+            })
+            .when_some(on_home, |this, on_home| {
+                let active = home_active.unwrap_or_default();
+                this.child(
+                    div()
+                        .id("tab-bar-home-boundary")
+                        .flex_shrink_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .px_1()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new("tab-bar-home")
+                                .icon(IconName::Home)
+                                .ghost()
+                                .small()
+                                .selected(active)
+                                .tooltip(t!("Home.title").to_string())
+                                .on_click(move |_, window, cx| (on_home)(window, cx)),
                         ),
                 )
             })
@@ -5090,11 +5156,55 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn home_button_state_can_be_configured_updated_and_removed(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let clicked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let clicked_on_home = clicked.clone();
+                let container = cx.new(|cx| {
+                    TabContainer::new(window, cx).with_home_button(
+                        true,
+                        Arc::new(move |_, _| {
+                            clicked_on_home.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }),
+                    )
+                });
+                assert_eq!(Some(true), container.read(cx).home_active);
+                assert!(container.read(cx).on_home.is_some());
+
+                container.update(cx, |container, cx| {
+                    container.set_home_button_active(false, cx);
+                });
+                assert_eq!(Some(false), container.read(cx).home_active);
+
+                container.update(cx, |container, cx| {
+                    container.set_home_button(None, cx);
+                });
+                let container_read = container.read(cx);
+                assert_eq!(None, container_read.home_active);
+                assert!(container_read.on_home.is_none());
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
     #[test]
     fn collapsed_navigation_sidebar_reserves_macos_titlebar_controls() {
         let source = include_str!("tab_container.rs");
-        assert!(source.contains("navigation_sidebar_expanded == Some(false)"));
-        assert!(source.contains("left_padding = layout.macos_compact_title_bar_content_padding"));
+        let implementation = source.split("mod tests").next().unwrap();
+        // Only a collapsed (or toggle-less Legacy) tab bar spans the full
+        // window width and must clear the traffic-light strip; an expanded
+        // sidebar owns the left edge and must not double-indent the buttons.
+        assert!(implementation.contains("navigation_sidebar_expanded != Some(true)"));
+        // The Home button leads the tab bar, so the reservation must clear
+        // the full traffic-light strip instead of the compact padding.
+        assert!(implementation.contains("left_padding = layout.macos_title_bar_content_padding"));
+        let compact = ["macos_compact", "_title_bar_content_padding"].concat();
+        assert!(!implementation.contains(&format!("left_padding = layout.{compact}")));
     }
 
     #[test]
