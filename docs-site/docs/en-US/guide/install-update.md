@@ -6,7 +6,7 @@ Navop provides desktop builds for macOS, Windows, and Linux. Match the package t
 
 Choose the latest stable release from [GitHub Releases](https://github.com/feigeCode/navop/releases). On macOS, select Apple Silicon or Intel and move the app into Applications. On Windows, run the matching installer. On Linux, use the package format documented on the release page and ensure that the desktop environment permits graphical applications.
 
-If Gatekeeper blocks the first macOS launch, verify the official release source and allow the app in Privacy & Security. Treat Windows or Linux security warnings the same way: confirm provenance rather than disabling system-wide protections. Managed devices may require administrator approval.
+If Gatekeeper blocks the first macOS launch, verify the official release source and allow the app in Privacy & Security. If the app is still quarantined after the source is confirmed, run `sudo xattr -rd com.apple.quarantine /Applications/Navop.app` and reopen it. Treat Windows or Linux security warnings the same way: confirm provenance rather than disabling system-wide protections. Managed devices may require administrator approval.
 
 ## Choose an installation package
 
@@ -145,6 +145,17 @@ $env:NAVOP_DATA_DIR = "E:\NavopData"
 ```
 
 `NAVOP_PORTABLE` accepts `1`, `true`, `yes`, or `on`. Data-location precedence is `--data-dir`, `--portable`, `NAVOP_DATA_DIR`, `NAVOP_PORTABLE`/`navop.portable`, and finally standard installed mode. The selected directory must be writable. Prefer an absolute path because a relative path is resolved from the process's current working directory.
+
+## Linux Flatpak
+
+Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a developer-endorsed community Flatpak package. Add the FlatPark remote and install Navop for the current user:
+
+```bash
+flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak --user install flatpark dev.navop.Navop
+```
+
+The Flatpak package runs in a sandbox, so some integrations may require additional permissions. See the [FlatPark package page](https://flatpark.org/apps/dev.navop.Navop/) for details and troubleshooting guidance.
 
 ## Complete first-launch setup
 

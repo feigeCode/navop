@@ -39,6 +39,7 @@
 
   <p>
     <a href="README_CN.md">中文</a> ·
+    <a href="https://docs.navop.dev/en-US/">Documentation</a> ·
     <a href="#features">Features</a> ·
     <a href="#screenshots">Screenshots</a> ·
     <a href="#install">Install</a> ·
@@ -53,99 +54,43 @@
 
 ### Databases and data tools
 
-- Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse.
-- Install extension drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and Oracle without Instant Client.
-- Browse database objects, edit and run SQL, inspect execution plans, import or export data, compare schemas and data, and visualize relationships with ER diagrams. Run SQL queries in unlimited-results mode and cancel in-flight execution when needed.
-- Edit MySQL stored procedures and functions and PostgreSQL functions and procedures, with overload-aware routine navigation and table information such as sizes and index counts.
-- Review persistent SQL execution history, compare schemas and data across databases with improved type mapping and target matching, and choose Native or pure-Go Oracle drivers, including Oracle 11g query-limit support.
-- Work with Redis and MongoDB through dedicated interfaces.
-- Route supported network connections through SOCKS5 or HTTP CONNECT proxies and SSH tunnels.
+- Built-in support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse; extension drivers add Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and Oscar.
+- Browse database objects, edit and run SQL with execution plans, import and export data, compare schemas and data, and visualize relationships with ER diagrams.
+- Dedicated Redis and MongoDB interfaces, persistent SQL history, stored procedure and function editing, and proxy or SSH-tunnel routing for supported connections.
 
 ### Remote access and operations
 
-- Use SSH and local terminals with draggable split panes in any direction, quick commands (including execute-on-click), history, broadcast input, shell integration, and terminal AI. Configure SSH encodings (UTF-8, GBK, Big5, Shift_JIS, and more) and terminal types to match legacy environments.
-- Lock sessions with a password, lock all active sessions at once, or hide the output of the current session. Tabs can show SecureCRT-style status badges for connected, disconnected, and locked states.
-- Record sessions and replay them in a read-only timeline viewer that blocks input and online operations.
-- Duplicate tabs with automatic numbering that reuses freed numbers (e.g. `192.168.1.1` → `192.168.1.1(1)`), and tab widths adapt to content so long titles are not truncated.
-- Connect over Telnet with automatic login scripts, manual credential overrides, and configurable backspace codes.
-- Review SSH, serial, and local terminal session logs in a static history viewer with scrollback, selection, search, and TXT export.
-- Manage remote files with SFTP uploads, directory uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy; transfer files over SSH with ZMODEM.
-- Import SecureCRT sessions and quick commands, and batch-manage connections from the sidebar.
-- Create reusable local, remote (`ssh -R`), and dynamic SOCKS port-forwarding connections.
-- Confirm SSH and SFTP host-key changes with explicit fingerprint warnings, and enable legacy SSH algorithms only when a server requires them; Windows also supports Pageant authentication.
-- Forward remote X11 GUI applications to a local X server over SSH, with automatic detection of the local X11 environment (XMing on Windows, XQuartz on macOS).
-- Open serial connections, monitor servers, and connect to remote desktops through installable RDP and VNC providers. On Windows, dedicated fullscreen RDP windows open through the system Remote Desktop client (`mstsc.exe`).
+- SSH and local terminals with draggable split panes, quick commands, broadcast input, shell integration, session lock, recording and replay, and session logs; Telnet and serial connections are also supported.
+- Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, ZMODEM transfer, and server-to-server copy.
+- Reusable local, remote (`ssh -R`), and dynamic SOCKS port forwarding; X11 forwarding; host-key change warnings with explicit fingerprints; optional legacy SSH algorithms.
+- Import SecureCRT sessions, monitor servers, and connect to remote desktops through installable RDP and VNC providers.
 
 ### Editing, AI, and extensibility
 
-- Edit local Markdown notes with syntax highlighting, Mermaid diagrams, math rendering, relative media, and export to HTML, PDF, or DOCX through a sandboxed WASM exporter.
-- Enlarge Mermaid diagrams and math formulas, and switch between their source and preview views while editing.
-- Use AI for SQL generation and explanation, data analysis, charts, terminal assistance, tool calling, and agent workflows.
-- Connect external agents through ACP extensions for Codex, Claude Code, and OpenCode.
-- Use Agent Hub to keep a terminal agent, project files, Git branches, changes, and side-by-side diffs in one workspace.
-- Add database drivers, remote desktop providers, document renderers, and other capabilities through the extension marketplace.
+- Local Markdown notes with Mermaid diagrams, math rendering, and export to HTML, PDF, or DOCX.
+- AI for SQL generation and explanation, data analysis, charts, terminal assistance, tool calling, and agent workflows; connect external agents through ACP for Codex, Claude Code, and OpenCode.
+- Agent Hub keeps a terminal agent, project files, Git branches, changes, and side-by-side diffs in one workspace; the extension marketplace adds database drivers, remote desktop providers, document renderers, connection importers, and external editors. First-party extensions are built and published from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository.
 
 ### Native desktop experience
 
-- Native GPUI interface with GPU-accelerated rendering.
-- Light, dark, and system themes, importable application and terminal themes, accent colors, and window opacity controls.
+- Native GPUI interface with GPU-accelerated rendering; light, dark, and system themes, importable themes, accent colors, and window opacity.
 - English, Simplified Chinese, and Traditional Chinese interfaces.
-- Reusable keychain references and encrypted synchronization of personal connections, credentials, and settings across devices.
-- Sort connection lists by natural name order (IP-friendly, case-insensitive) or most recently used, configurable under **Settings > General > Connection Display**.
+- Encrypted synchronization of personal connections, credentials, and settings across devices.
 
 ## Public MCP, Navop CLI, and Agent Skill
 
-Navop can expose selected host-authoritative tools to external Codex, Claude, MCP clients, and automation. Enable the server under **Settings > General > MCP > MCP Server**, choose a permission profile, and select the required groups under **Tool Exposure**.
+Navop can expose selected host-authoritative tools to external Codex, Claude, MCP clients, and automation. Enable the server under **Settings > General > MCP > MCP Server**, choose a permission profile (Safe / Confirm / Auto), and select the required groups under **Tool Exposure**. The runtime listens on a dynamic loopback-only port and authenticates clients with a user-only discovery token; Navop remains authoritative for live tools, schemas, permissions, approvals, and audit records.
 
-The runtime listens on a dynamic loopback-only port and authenticates clients with the token in Navop's user-only discovery file. Navop remains authoritative for live tools and schemas, Tool Exposure, permissions, approvals, resource IDs, sessions, results, and audit records. The CLI and Skill do not implement SSH, SFTP, terminal, database, Redis, or MongoDB business logic.
-
-For terminal-capable Agents, install Node.js 20+, the [`@navop/cli`](https://github.com/feigeCode/navop-mcp) package, and the bundled Navop Skill:
+For terminal-capable agents, install the [`@navop/cli`](https://github.com/feigeCode/navop-mcp) package and the bundled Navop Skill:
 
 ```bash
-navop --version
 npm install -g @navop/cli@latest
-navop --version
 
 # Install the Skill for Codex, or use --target agents for Agents-compatible clients
 navop skill install --target codex --scope user
 ```
 
-The Skill keeps a compact workflow in context and discovers commands and live schemas only when needed. Every Agent-initiated operational command must include `--json`; use `--help` only to discover syntax. Start with runtime status, then inspect the live command and tool surface:
-
-```bash
-navop status --json
-navop --help
-navop tool list --json
-navop tool schema <tool-name> --json
-navop db query --help
-navop db exec --help
-```
-
-Read `permissionMode`, `availableTools`, `toolGroups`, `disabledToolGroups`, and `guidance` from `navop status --json`. The running host's `tools/list` response, `navop.runtime_status` result, and live schemas are authoritative; never assume a capability exists because the CLI exposes a convenience command.
-
-Prefer a domain command shown by `navop --help`. For SQL, use `navop db query` for read-only statements and `navop db exec` for DDL, DML, scripts, and other write-capable SQL. Use the low-level host tool fallback only when no domain command can represent the live schema:
-
-```bash
-navop tool call <tool-name> --arguments '<json-object-matching-live-schema>' --json
-```
-
-Never guess tool names, arguments, resource IDs, or session IDs. Use only values returned by the running Navop instance, preserve its approval decisions, and do not retry a mutation after a timeout or connection loss because its outcome may be unknown.
-
-Actual capabilities depend on the running application, open resources, enabled Tool Exposure groups, and permission profile:
-
-| Profile | Behavior |
-| --- | --- |
-| Safe / `deny` | Allows read-only discovery and denies mutations |
-| Confirm / `ask` | Requires approval in the Navop UI for mutations |
-| Auto / `allow` | Runs mutations automatically; destructive intent must still be explicit |
-
-The separate [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package is only the stdio bridge for native MCP clients:
-
-```bash
-npx -y @navop/mcp@latest
-```
-
-See the [Navop MCP and CLI repository](https://github.com/feigeCode/navop-mcp) for installation, updates, command reference, and client configuration.
+The separate [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package is only the stdio bridge for native MCP clients (`npx -y @navop/mcp@latest`). See the [Navop MCP and CLI repository](https://github.com/feigeCode/navop-mcp) and the [Public MCP guide](https://docs.navop.dev/en-US/guide/public-mcp) for the full command reference and client configuration.
 
 ## Screenshots
 
@@ -175,43 +120,18 @@ See the [Navop MCP and CLI repository](https://github.com/feigeCode/navop-mcp) f
 
 ## Install
 
-Download the latest build from [GitHub Releases](https://github.com/feigeCode/navop/releases/latest). Each release includes `sha256sums.txt` for checksum verification. Release assets follow the `navop-<version>-<platform>-<arch>.<ext>` convention — for example `navop-0.11.0-macos-arm64.dmg`, `navop-0.11.0-windows-x64.msi`, and `navop-0.11.0-linux-x64.tar.gz`; 32-bit Windows builds use the `win32` label (e.g. `navop-0.11.0-win32.msi`). Linux `.deb` and `.AppImage` installers keep their distro naming (`navop_<version>_amd64.deb` / `navop_<version>_amd64.AppImage`).
+Download the latest build from [GitHub Releases](https://github.com/feigeCode/navop/releases/latest). Each release includes `sha256sums.txt` for checksum verification. Artifacts are available for macOS (DMG and tar.gz, Apple Silicon / Intel), Windows (MSI and EXE installers, plus standard and portable ZIP), and Linux (tar.gz, deb, rpm, and AppImage), following the `navop-<version>-<platform>-<arch>.<ext>` naming convention.
 
-| Platform | Architecture | Artifacts |
-| --- | --- | --- |
-| macOS | Apple Silicon | `navop-<version>-macos-arm64.dmg`, `navop-<version>-macos-arm64.tar.gz` |
-| macOS | Intel | `navop-<version>-macos-x64.dmg`, `navop-<version>-macos-x64.tar.gz` |
-| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`, `navop-<version>-linux-x64-portable.tar.gz`, `navop_<version>_amd64.deb`, `navop-<version>-1.x86_64.rpm`, `navop_<version>_amd64.AppImage` |
-| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz`, `navop-<version>-linux-arm64-portable.tar.gz` |
-| Windows | x86_64 | `navop-<version>-windows-x64.msi`, `navop-<version>-windows-x64.exe`, `navop-<version>-windows-x64.zip`, `navop-<version>-windows-x64-portable.zip` |
-| Windows | x86 (32-bit) | `navop-<version>-win32.msi`, `navop-<version>-win32.exe`, `navop-<version>-win32.zip`, `navop-<version>-win32-portable.zip` |
-
-### Linux Flatpak
-
-Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a developer-endorsed community Flatpak package. Add the FlatPark remote and install Navop for the current user:
+Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a community Flatpak package:
 
 ```bash
 flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
 flatpak --user install flatpark dev.navop.Navop
 ```
 
-The Flatpak package runs in a sandbox, so some integrations may require additional permissions. See the [FlatPark package page](https://flatpark.org/apps/dev.navop.Navop/) for details and troubleshooting guidance.
+If macOS Gatekeeper reports that Apple cannot check the app, run `sudo xattr -rd com.apple.quarantine /Applications/Navop.app`.
 
-The Windows `.msi` and `.exe` are bilingual per-user installers and do not require administrator privileges when using the default location. The EXE installer wraps the same MSI installation. The standard `.zip` requires no installation but still uses the normal per-user data directories and supports remembered master-key unlock. Use `-portable.zip` only when the application data must stay beside the executable. Portable archives (Linux and Windows) ask for the master key on every start by default. You may explicitly choose in Settings to store an encrypted, automatically recoverable copy under `data/state/key_storage`, but this uses a key embedded in the application rather than device-bound protection; anyone who obtains both the application and the complete `data` directory may be able to recover the master key.
-
-> **Upgrading from the Windows ZIP in v0.10.1 or earlier:** those archives enabled portable mode. Download the new `-portable.zip`, extract it to a new directory, and copy the complete existing `data` directory into it. Extracting the new standard `.zip` to a different directory, or switching to the MSI/EXE installer, uses the normal Windows user data location and does not automatically migrate portable data. The old connections and settings may therefore appear missing even though the original portable data has not been deleted.
-
-### macOS Gatekeeper
-
-If macOS reports that Apple cannot check the app for malicious software after installing the DMG, run:
-
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/Navop.app
-```
-
-### Oracle
-
-The built-in Oracle driver requires [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html). Alternatively, install the pure-Go Oracle driver from the extension marketplace to use Oracle without Instant Client.
+For the full artifact table, Windows portable-mode notes, upgrade migration from v0.10.1 or earlier ZIPs, and the Oracle Instant Client / pure-Go driver note, see the [Install & update guide](https://docs.navop.dev/en-US/guide/install-update).
 
 ## Build from source
 

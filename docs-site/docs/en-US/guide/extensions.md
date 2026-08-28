@@ -8,6 +8,20 @@ Database drivers add connection types. ACP Agent extensions connect external age
 
 A product name in a compatibility list does not mean its driver is installed. Check the marketplace entry, current platform, and Navop version first.
 
+## First-party extension repository
+
+First-party extensions are built and published independently from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository; official marketplace entries come from that repository. The current catalog, grouped by kind:
+
+- **Database drivers**: DuckDB, Redis, MongoDB (4.2+ / 3.6 / 3.2–3.4 tiers), Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, Oscar, and a pure-Go Oracle driver that needs no Oracle Instant Client.
+- **Remote desktop providers**: RDP and VNC.
+- **ACP Agents**: Codex, Claude Code, and OpenCode.
+- **Connection importers**: SecureCRT, Xshell, WindTerm, OpenSSH config, Navicat, DBeaver, JetBrains DataGrip, MongoDB Compass, Redis Desktop, and TablePlus.
+- **External editors**: Zed, Notepad++, and Notepad--.
+- **Notes rendering and export**: Mermaid diagrams, LaTeX math rendering, and HTML / PDF / Word export.
+- **Language packs**: a Tree-sitter based syntax-highlighting bundle for common languages.
+
+Platform support, minimum versions, and method contracts are defined by each marketplace entry and the repository docs; drivers targeting EOL servers (such as legacy MongoDB) intentionally omit newer features such as SRV and TLS.
+
 ## Install, update, and reload
 
 Review publisher, description, permissions, and release notes before installation. Reload extensions or restart when requested. Navop refreshes capabilities by extension kind and keeps language parsers lazy, so an unrelated extension change does not compile every language WASM parser. Save work before updating a driver or provider because connection behavior may change.

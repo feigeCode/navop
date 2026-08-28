@@ -2,6 +2,8 @@
 
 Navop 內建 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 與 ClickHouse，並可透過擴充加入達夢、金倉、GBase 8s、OceanBase、openGauss、IoTDB 等驅動。欄位與能力依驅動和伺服器版本而異。
 
+內建 Oracle 驅動需要 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)；若不想安裝 Instant Client，可從擴充市場安裝純 Go Oracle 驅動。連線 Oracle 時可依需求選擇 Native 或 Go 驅動。
+
 ## 建立網路資料庫連線
 
 選擇類型，填寫名稱、主機、連接埠、使用者、密碼和預設資料庫。先測試網路、驗證與驅動再儲存。失敗時依序檢查 DNS、連接埠、防火牆、帳號權限、資料庫狀態和版本，不要一次修改多個變數。

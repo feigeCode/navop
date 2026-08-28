@@ -148,6 +148,17 @@ $env:NAVOP_DATA_DIR = "E:\NavopData"
 
 `NAVOP_PORTABLE` 支持 `1`、`true`、`yes` 或 `on`。数据目录的选择优先级为 `--data-dir`、`--portable`、`NAVOP_DATA_DIR`、`NAVOP_PORTABLE`/`navop.portable`，最后才是常规安装模式。指定的数据目录必须可写；建议使用绝对路径，因为相对路径会按启动 Navop 时的当前工作目录解析。
 
+## Linux Flatpak
+
+Navop 也在 [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) 上架为开发者认可的社区 Flatpak 软件包。添加 FlatPark 软件源并为当前用户安装：
+
+```bash
+flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak --user install flatpark dev.navop.Navop
+```
+
+Flatpak 软件包运行在沙盒中，部分集成功能可能需要授予额外权限。详细说明与问题排查请参阅 [FlatPark 软件包页面](https://flatpark.org/apps/dev.navop.Navop/)。
+
 ## 首次启动与本地权限
 
 启动后先选择界面语言、主题和默认启动页。SSH、SFTP、网络数据库和远程桌面需要访问局域网或互联网；系统弹出本地网络、防火墙或钥匙串权限时，应根据实际连接范围授权。Notes 目录、外部编辑器和自定义字体需要相应文件系统权限。
@@ -168,7 +179,7 @@ MSI、EXE 安装版和普通 ZIP 版可在设置的“更新”区域开启自�
 4. 记录当前 Navop 版本和已安装扩展版本。
 5. 安装更新并重启后，先测试一个低风险连接，再恢复日常工作。
 
-macOS 如果确认安装包来源可信但仍被系统隔离，可以使用项目 README 中的 Gatekeeper 处理命令；不要把关闭系统保护作为长期安装方案。
+macOS 如果确认安装包来源可信但仍被系统隔离，可执行 `sudo xattr -rd com.apple.quarantine /Applications/Navop.app` 后重新打开；不要把关闭系统保护作为长期安装方案。
 
 ## 文件关联与命令行打开
 

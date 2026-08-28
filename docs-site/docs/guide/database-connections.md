@@ -2,6 +2,8 @@
 
 Navop 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse，并可通过扩展增加达梦、金仓、GBase 8s、OceanBase、openGauss、IoTDB 等数据库。具体字段和能力取决于驱动与服务器版本。
 
+内置 Oracle 驱动依赖 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)；若不希望安装 Instant Client，可从扩展市场安装纯 Go Oracle 驱动。连接 Oracle 时可按需选择 Native 或 Go 驱动。
+
 ![数据库工作区](/images/database.png)
 
 本页先介绍所有数据库都通用的连接流程；驱动特有的参数、SQL 方言和对象能力以实际连接表单和驱动版本为准。
