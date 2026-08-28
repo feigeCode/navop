@@ -3,12 +3,14 @@ mod completion_menu;
 mod context_menu;
 mod diagnostic_popover;
 mod hover_popover;
+mod signature_help_popover;
 
 pub(crate) use code_action_menu::*;
 pub(crate) use completion_menu::*;
 pub(crate) use context_menu::*;
 pub(crate) use diagnostic_popover::*;
 pub(crate) use hover_popover::*;
+pub(crate) use signature_help_popover::*;
 
 use gpui::{
     App, Div, ElementId, Entity, InteractiveElement as _, IntoElement, SharedString, Stateful,

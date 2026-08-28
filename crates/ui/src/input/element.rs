@@ -707,6 +707,30 @@ impl TextElement {
         })
     }
 
+    /// Layout the Highlight-style preview decorations into faint fills.
+    ///
+    /// These are caller-owned ranges that should look like a preview selection
+    /// (e.g. the values region of an INSERT statement), rendered before the
+    /// actual selection so they never fight it visually.
+    fn layout_preview_decorations(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Vec<(Path<Pixels>, Hsla)> {
+        let state = self.state.read(cx);
+        let color = cx.theme().primary.opacity(0.07);
+        state
+            .range_decorations
+            .iter()
+            .filter(|decoration| decoration.style == InputRangeDecorationStyle::Highlight)
+            .filter_map(|decoration| {
+                Self::layout_match_range(decoration.range.clone(), last_layout, bounds)
+                    .map(|path| (path, color))
+            })
+            .collect()
+    }
+
     fn layout_search_matches(
         &self,
         last_layout: &LastLayout,
@@ -1609,6 +1633,8 @@ pub(super) struct PrepaintState {
     search_match_paths: Vec<(Path<Pixels>, bool)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     current_statement_frame: Option<CurrentStatementFrame>,
+    /// Faint fills for Highlight-style preview decorations.
+    preview_decorations: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
     bounds: Bounds<Pixels>,
@@ -2076,6 +2102,8 @@ impl Element for TextElement {
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let current_statement_frame =
             self.layout_current_statement_frame(&last_layout, &bounds, cx);
+        let preview_decorations =
+            self.layout_preview_decorations(&last_layout, &bounds, cx);
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
@@ -2196,6 +2224,7 @@ impl Element for TextElement {
             search_match_paths,
             hover_highlight_path,
             current_statement_frame,
+            preview_decorations,
             hover_definition_hitbox,
             document_color_paths,
             indent_guides_path,
@@ -2348,6 +2377,11 @@ impl Element for TextElement {
             window.paint_path(frame.stroke, frame.color);
         }
 
+        // Paint Highlight-style preview decorations (before selections).
+        for (path, color) in prepaint.preview_decorations.iter() {
+            window.paint_path(path.clone(), *color);
+        }
+
         // Paint selections
         if window.is_window_active() {
             let secondary_selection = cx.theme().selection.saturation(0.1);
@@ -2451,6 +2485,17 @@ impl Element for TextElement {
                 }
             }
         }
+
+        // Paint non-editable inline widgets (e.g. INSERT value hints) on top of
+        // the text but underneath the caret.
+        self.paint_inline_widgets(
+            prepaint,
+            origin,
+            scroll_offset,
+            text_align,
+            window,
+            cx,
+        );
 
         // Paint blinking cursor
         if focused && show_cursor {
@@ -2588,6 +2633,55 @@ impl TextElement {
     ) {
         for (_, icon) in layout.icons.iter_mut() {
             icon.paint(window, cx);
+        }
+    }
+
+    /// Paint caller-owned non-editable inline widgets (e.g. INSERT value hints)
+    /// as muted text anchored immediately before each widget's byte offset.
+    ///
+    /// Positions are derived from the current layout each frame, so widgets
+    /// follow scrolling, wrapping, and folding. Widgets are never selectable or
+    /// editable (spec §14.4).
+    fn paint_inline_widgets(
+        &self,
+        prepaint: &PrepaintState,
+        origin: Point<Pixels>,
+        scroll_offset: Pixels,
+        text_align: TextAlign,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let state = self.state.read(cx);
+        if state.inline_widgets.is_empty() {
+            return;
+        }
+        let line_height = prepaint.last_layout.line_height;
+        let style = window.text_style();
+        let text_size = style.font_size.to_pixels(window.rem_size());
+        let hint_color = cx.theme().muted_foreground;
+
+        let widgets = state
+            .inline_widgets
+            .iter()
+            .filter_map(|widget| {
+                let (_, _, pos) = state.line_and_position_for_offset(widget.offset);
+                pos.map(|pos| (widget.text.clone(), pos))
+            })
+            .collect::<Vec<_>>();
+
+        for (text, pos) in widgets {
+            let widget_origin = point(origin.x + pos.x + scroll_offset, origin.y + pos.y);
+            let runs = [TextRun {
+                len: text.len(),
+                font: style.font(),
+                color: hint_color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+                letter_spacing: None,
+            }];
+            let shaped = window.text_system().shape_line(text, text_size, &runs, None);
+            let _ = shaped.paint(widget_origin, line_height, text_align, None, window, cx);
         }
     }
 }

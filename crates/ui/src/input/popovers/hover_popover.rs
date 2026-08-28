@@ -74,7 +74,20 @@ pub(crate) struct Popover {
     editor: Entity<InputState>,
     range: Range<usize>,
     width_limit: Range<Pixels>,
+    /// Mouse-driven dismissal behavior for this popover.
+    dismiss: PopoverDismiss,
     content_builder: Box<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+}
+
+/// How a [`Popover`] reacts to mouse events outside its content.
+pub(crate) enum PopoverDismiss {
+    /// Hide on mouse-down outside and on mouse-out of the trigger + content.
+    /// Used by hover popovers.
+    Hover,
+    /// Never hide from mouse events; the owning feature drives dismissal from
+    /// editor state (e.g. signature help closes when the cursor leaves the
+    /// call).
+    Persistent,
 }
 
 impl Styled for Popover {
@@ -100,8 +113,15 @@ impl Popover {
             range,
             style: StyleRefinement::default(),
             width_limit: px(200.)..px(500.),
+            dismiss: PopoverDismiss::Hover,
             content_builder: Box::new(move |window, cx| (f)(window, cx).into_any_element()),
         }
+    }
+
+    /// Set how this popover dismisses on mouse events.
+    pub(crate) fn dismiss(mut self, dismiss: PopoverDismiss) -> Self {
+        self.dismiss = dismiss;
+        self
     }
 
     /// Get the bounds of the range in the editor, if it is visible.
@@ -266,6 +286,10 @@ impl Element for Popover {
         };
 
         popover.paint(window, cx);
+
+        if matches!(self.dismiss, PopoverDismiss::Persistent) {
+            return;
+        }
 
         let editor = self.editor.clone();
         // Mouse down out to hide.

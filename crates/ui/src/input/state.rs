@@ -40,7 +40,7 @@ use crate::input::{
     HoverDefinition, InlineCompletion, Lsp, Position, RopeExt as _, Selection,
     display_map::LineLayout,
     element::RIGHT_MARGIN,
-    popovers::{ContextMenu, DiagnosticPopover, HoverPopover, InputContextMenu},
+    popovers::{ContextMenu, DiagnosticPopover, HoverPopover, InputContextMenu, SignatureHelpPopover},
     search::{self, SearchPanel},
 };
 use crate::menu::PopupMenu;
@@ -186,6 +186,8 @@ pub enum InputRangeDecorationStyle {
     /// Draw a thin frame around the range.
     #[default]
     Frame,
+    /// Draw a faint fill behind the range (preview highlight).
+    Highlight,
     /// No visual presentation; kept as a no-op alternative.
     None,
 }
@@ -216,6 +218,31 @@ impl InputRangeDecoration {
     pub fn style(mut self, style: InputRangeDecorationStyle) -> Self {
         self.style = style;
         self
+    }
+}
+
+/// A non-editable inline hint anchored to a byte offset in the document.
+///
+/// The hint text is rendered immediately before the anchored offset in a muted
+/// style (spec §14.4). It is not part of the document text: it cannot be
+/// edited, selected, or included in copied text. Offsets are UTF-8 byte
+/// offsets into the current text; editing invalidates all installed widgets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputInlineWidget {
+    pub id: SharedString,
+    /// Byte offset the widget is anchored before.
+    pub offset: usize,
+    /// Hint text rendered before the offset.
+    pub text: SharedString,
+}
+
+impl InputInlineWidget {
+    pub fn new(id: impl Into<SharedString>, offset: usize, text: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            offset,
+            text: text.into(),
+        }
     }
 }
 
@@ -534,6 +561,7 @@ pub struct InputState {
     pub(super) completion_epoch: u64,
     pub(super) gutter_markers: Rc<[InputGutterMarker]>,
     pub(super) range_decorations: Rc<[InputRangeDecoration]>,
+    pub(super) inline_widgets: Rc<[InputInlineWidget]>,
     pub(super) display_map: DisplayMap,
     pub(super) history: History<Change>,
     pub(super) blink_cursor: Entity<BlinkCursor>,
@@ -611,6 +639,11 @@ pub struct InputState {
     /// A flag to indicate if we are currently inserting a completion item.
     pub(super) completion_inserting: bool,
     pub(super) hover_popover: Option<Entity<HoverPopover>>,
+    /// The active signature help popover (function call argument help).
+    pub(super) signature_help_popover: Option<Entity<SignatureHelpPopover>>,
+    /// (cursor offset, document revision) of the last signature help request,
+    /// used to coalesce requests that would resolve to identical output.
+    pub(super) last_signature_help_request: Option<(usize, u64)>,
     /// The LSP definitions locations for "Go to Definition" feature.
     pub(super) hover_definition: HoverDefinition,
 
@@ -697,6 +730,7 @@ impl InputState {
             completion_epoch: 0,
             gutter_markers: Rc::from([]),
             range_decorations: Rc::from([]),
+            inline_widgets: Rc::from([]),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
             blink_cursor,
             history,
@@ -753,6 +787,8 @@ impl InputState {
             enable_context_menu: true,
             completion_inserting: false,
             hover_popover: None,
+            signature_help_popover: None,
+            last_signature_help_request: None,
             hover_definition: HoverDefinition::default(),
             silent_replace_text: false,
             emit_events: true,
@@ -1135,6 +1171,7 @@ impl InputState {
         if self.document_revision == previous_revision {
             self.gutter_markers = Rc::from([]);
             self.range_decorations = Rc::from([]);
+            self.inline_widgets = Rc::from([]);
         }
         self.history.ignore = false;
         self.emit_events = true;
@@ -1436,6 +1473,19 @@ impl InputState {
 
     pub fn range_decorations(&self) -> &[InputRangeDecoration] {
         &self.range_decorations
+    }
+
+    /// Replace the caller-owned inline widgets.
+    ///
+    /// Widgets are invalidated automatically when the document content changes,
+    /// matching the decoration/marker contract.
+    pub fn set_inline_widgets(&mut self, widgets: Vec<InputInlineWidget>, cx: &mut Context<Self>) {
+        self.inline_widgets = Rc::from(widgets);
+        cx.notify();
+    }
+
+    pub fn inline_widgets(&self) -> &[InputInlineWidget] {
+        &self.inline_widgets
     }
 
     /// Return the portion of the value within the input field that
@@ -3220,10 +3270,14 @@ impl EntityInputHandler for InputState {
             self.document_revision = self.document_revision.saturating_add(1);
             self.gutter_markers = Rc::from([]);
             self.range_decorations = Rc::from([]);
+            self.inline_widgets = Rc::from([]);
             self.invalidate_completions(cx);
             self.hover_definition.clear();
             self.hover_popover = None;
+            self.signature_help_popover = None;
+            self.last_signature_help_request = None;
             self.lsp.invalidate_hover();
+            self.lsp.invalidate_signature_help();
         }
 
         let mut new_offset = (range.start + actual_text.len())
@@ -3274,6 +3328,7 @@ impl EntityInputHandler for InputState {
         self.mode.update_auto_grow(&self.display_map);
         if !self.silent_replace_text {
             self.handle_completion_trigger(&range, &actual_text, window, cx);
+            self.handle_signature_help_edit(&actual_text, window, cx);
         }
         if self.emit_events {
             cx.emit(InputEvent::Change);
@@ -3297,6 +3352,8 @@ impl EntityInputHandler for InputState {
         self.lsp.reset();
         self.hover_definition.clear();
         self.hover_popover = None;
+        self.signature_help_popover = None;
+        self.last_signature_help_request = None;
         self.invalidate_completions(cx);
 
         let range = self.composition_replacement_range_from_utf16(range_utf16.as_ref());
@@ -3307,6 +3364,7 @@ impl EntityInputHandler for InputState {
             self.document_revision = self.document_revision.saturating_add(1);
             self.gutter_markers = Rc::from([]);
             self.range_decorations = Rc::from([]);
+            self.inline_widgets = Rc::from([]);
         }
 
         if self.mode.is_single_line() {
@@ -3467,6 +3525,7 @@ impl Render for InputState {
             .children(self.diagnostic_popover.clone())
             .children(self.context_menu_content.as_ref().map(|menu| menu.render()))
             .children(self.hover_popover.clone())
+            .children(self.signature_help_popover.clone())
     }
 }
 
@@ -3667,6 +3726,72 @@ mod tests {
                 state.replace_text_range("select 1;".len().."select 1;".len(), "\n", window, cx);
                 assert!(state.document_revision() > revision);
                 assert!(state.range_decorations().is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn highlight_decoration_style_is_preserved(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("INSERT INTO t (a) VALUES (1);", window, cx);
+                state.set_range_decorations(
+                    vec![
+                        InputRangeDecoration::new("insert-values:0:0:28", 21..27)
+                            .style(InputRangeDecorationStyle::Highlight),
+                    ],
+                    cx,
+                );
+                assert_eq!(
+                    InputRangeDecorationStyle::Highlight,
+                    state.range_decorations()[0].style
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn inline_widgets_are_cleared_on_document_edit(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("INSERT INTO t (a) VALUES ('x');", window, cx);
+                let revision = state.document_revision();
+                state.set_inline_widgets(
+                    vec![
+                        InputInlineWidget::new("insert-hint:0:0:26", 26, "a"),
+                        InputInlineWidget::new("insert-hint:0:0:27", 27, "b"),
+                    ],
+                    cx,
+                );
+                assert_eq!(revision, state.document_revision());
+                assert_eq!(2, state.inline_widgets().len());
+
+                state.replace_text_range(25..26, "y", window, cx);
+                assert!(state.document_revision() > revision);
+                assert!(state.inline_widgets().is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn inline_widget_builder_round_trips_values(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("INSERT INTO t (a) VALUES (1);", window, cx);
+                let widget = InputInlineWidget::new("insert-hint:0", 21, "a");
+                state.set_inline_widgets(vec![widget], cx);
+                assert_eq!("insert-hint:0", state.inline_widgets()[0].id.to_string());
+                assert_eq!(21, state.inline_widgets()[0].offset);
+                assert_eq!("a", state.inline_widgets()[0].text.to_string());
             });
         });
     }

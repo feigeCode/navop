@@ -9,6 +9,8 @@ use db::sql_editor::execution::{
     SqlDocumentSnapshot, SqlExecutionRequest, SqlExecutionResultSource, SqlExecutionTarget,
     SqlMetadataScope, SqlTransactionMode as SqlExecutionTransactionMode,
 };
+use db::sql_editor::insert_hints::{SqlInsertValueHint, insert_value_hints};
+use db::sql_editor::sql_tokenizer::{SqlKeyword, SqlTokenKind, SqlTokenizer};
 use db::sql_editor::statement_ranges::{
     SqlDialect, SqlStatementRange, SqlStatementSnapshot, SqlTextRange, StatementIndex,
     WindowedStatementScan, line_scans_neutral, statement_starting_on_line,
@@ -27,7 +29,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{
     Input, InputContextMenuItem, InputEvent, InputGutterMarker, InputGutterMarkerState,
-    InputRangeDecoration, InputState,
+    InputInlineWidget, InputRangeDecoration, InputRangeDecorationStyle, InputState,
 };
 use gpui_component::notification::Notification;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
@@ -268,19 +270,35 @@ fn statement_marker_id(revision: u64, statement: &SqlStatementRange) -> String {
 /// The frame covers the executable statement the cursor sits in, extended
 /// through its trailing delimiter so it visually matches the gutter range.
 /// A non-empty selection suppresses the frame (run-selection mode), and an
-/// empty statement produces no decoration.
+/// empty statement produces no decoration. When a values-region highlight is
+/// available (INSERT value hints), it is appended as a Highlight decoration.
 fn current_statement_frame_decorations(
     index: &dyn StatementIndex,
     revision: u64,
     cursor: usize,
     selection: &Range<usize>,
     doc_len: usize,
+    values_highlight: Option<Range<usize>>,
 ) -> Vec<InputRangeDecoration> {
+    let mut decorations = Vec::new();
+    if let Some(highlight) = values_highlight {
+        let start = highlight.start.min(doc_len);
+        let end = highlight.end.min(doc_len).max(start);
+        if start < end {
+            decorations.push(
+                InputRangeDecoration::new(
+                    format!("insert-values:{revision}:{start}:{end}"),
+                    start..end,
+                )
+                .style(InputRangeDecorationStyle::Highlight),
+            );
+        }
+    }
     if !selection.is_empty() {
-        return vec![];
+        return decorations;
     }
     let Some(statement) = index.statement_at_cursor(cursor, doc_len) else {
-        return vec![];
+        return decorations;
     };
     let len = doc_len;
     let start = statement.sql_range.start_byte.min(len);
@@ -289,12 +307,65 @@ fn current_statement_frame_decorations(
         end = end.max(delimiter.end_byte.min(len));
     }
     if start >= end {
-        return vec![];
+        return decorations;
     }
-    vec![InputRangeDecoration::new(
+    decorations.push(InputRangeDecoration::new(
         format!("sql-frame:{revision}:{start}:{end}"),
         start..end,
-    )]
+    ));
+    decorations
+}
+
+/// Extract the target table name of an INSERT statement (`INSERT [INTO] t`).
+///
+/// Returns `None` when the statement has no INSERT keyword or no identifier
+/// follows it. Quoted identifiers keep their inner value after unquoting.
+fn insert_target_table(statement: &str) -> Option<String> {
+    let tokens = SqlTokenizer::new(statement).tokenize();
+    let insert = tokens.iter().position(|token| {
+        matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Insert))
+    })?;
+    let mut name: Option<String> = None;
+    for token in &tokens[insert + 1..] {
+        match token.kind {
+            SqlTokenKind::Whitespace | SqlTokenKind::Keyword(SqlKeyword::Into) => {}
+            SqlTokenKind::Ident | SqlTokenKind::QuotedIdent => {
+                name = Some(token.text.trim().to_string());
+                break;
+            }
+            _ => break,
+        }
+    }
+    name.map(|name| unquote_sql_identifier(&name))
+}
+
+/// Look up a table's columns (case-insensitively) for INSERT ordinal hints.
+fn lookup_table_columns(schema: &SqlSchema, table: &str) -> Option<Vec<String>> {
+    if let Some(columns) = schema.columns_by_table.get(table) {
+        return Some(columns.iter().map(|(name, _, _)| name.clone()).collect());
+    }
+    schema.columns_by_table.iter().find_map(|(key, columns)| {
+        key.eq_ignore_ascii_case(table)
+            .then(|| columns.iter().map(|(name, _, _)| name.clone()).collect())
+    })
+}
+
+/// Strip quoting from a SQL identifier (`"name"`, `` `name` ``, `[name]`).
+fn unquote_sql_identifier(text: &str) -> String {
+    let trimmed = text.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"')
+            || (first == b'`' && last == b'`')
+            || (first == b'[' && last == b']')
+        {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            return inner.replace("\"\"", "\"").replace("``", "`");
+        }
+    }
+    trimmed.to_string()
 }
 
 /// Resolve the gutter marker id for a statement whose text exactly matches the
@@ -1043,6 +1114,18 @@ pub struct SqlEditorTab {
     statement_run_id: Arc<AtomicU64>,
     /// 在途的语句快照后台分析任务（防抖的 onChange 生效路径）。
     _statement_task: Option<Task<()>>,
+    /// 最新元数据快照，供 INSERT 值提示等本地消费（与 completion source 同步更新）。
+    schema_snapshot: Arc<RwLock<SqlSchema>>,
+    /// 当前语句的 INSERT 值槽提示（相对语句文本的字节偏移），用于安装内联控件。
+    insert_hints: Vec<SqlInsertValueHint>,
+    /// `insert_hints` 所基于的语句在文档中的起始字节偏移。
+    insert_hints_statement_start: usize,
+    /// 值提示区域在文档中的字节范围，用于预览 (Highlight) 装饰。
+    insert_values_highlight: Option<Range<usize>>,
+    /// 最近一次计算插入提示的 (光标, 版本)，避免游标在语句内移动时重复计算。
+    last_insert_hints_key: Option<(usize, u64)>,
+    /// 最近一次触发签名帮助刷新的光标，避免每次 notify 都重新请求。
+    last_signature_cursor: Option<usize>,
 }
 
 impl SqlEditorTab {
@@ -1164,6 +1247,12 @@ impl SqlEditorTab {
             _diagnostic_task: None,
             statement_run_id: statement_run_id.clone(),
             _statement_task: None,
+            schema_snapshot: Arc::new(RwLock::new(SqlSchema::default())),
+            insert_hints: Vec::new(),
+            insert_hints_statement_start: 0,
+            insert_values_highlight: None,
+            last_insert_hints_key: None,
+            last_signature_cursor: None,
         };
 
         instance.configure_editor_context_menu(cx);
@@ -1172,7 +1261,7 @@ impl SqlEditorTab {
         instance.bind_auto_save(auto_save_seq, is_dirty, requires_name, window, cx);
         instance.bind_gutter_marker_event(window, cx);
         instance.bind_execution_marker_event(cx);
-        instance.bind_editor_input_observe(cx);
+        instance.bind_editor_input_observe(window, cx);
         instance.bind_connection_data_event(window, cx);
         instance.refresh_statement_snapshot(cx);
         instance.run_diagnostics(cx);
@@ -1383,6 +1472,7 @@ impl SqlEditorTab {
         self.statement_revision = revision;
         self.set_statement_gutter_markers(cx);
         self.refresh_current_statement_frame(cx);
+        self.refresh_insert_value_hints(cx);
     }
 
     fn set_statement_gutter_markers(&self, cx: &mut Context<Self>) {
@@ -1439,6 +1529,7 @@ impl SqlEditorTab {
             cursor,
             &selection,
             doc_len,
+            self.insert_values_highlight.clone(),
         );
         self.editor
             .read(cx)
@@ -1447,6 +1538,96 @@ impl SqlEditorTab {
 
         self.last_frame_cursor = Some(cursor);
         self.last_frame_selection = Some(selection);
+    }
+
+    /// Compute INSERT value hints for the statement under the cursor and
+    /// install them as inline widgets, plus a Highlight decoration over the
+    /// values region (spec §14).
+    ///
+    /// Only the cursor's current statement is analyzed, so large documents stay
+    /// cheap. Cached by (statement start, revision): moving the cursor within
+    /// the same statement is a no-op, while editing recomputes the offsets.
+    fn refresh_insert_value_hints(&mut self, cx: &mut Context<Self>) {
+        let (cursor, revision) = {
+            let sql_editor = self.editor.read(cx);
+            let input = sql_editor.input().read(cx);
+            (sql_editor.cursor_offset(cx), input.document_revision())
+        };
+
+        let index = match &self.viewport_statements {
+            Some(viewport) => &viewport.scan as &dyn StatementIndex,
+            None => &self.statement_snapshot,
+        };
+        let doc = self.get_sql_text(cx);
+        let statement_start = index
+            .statement_at_cursor(cursor, doc.len())
+            .map(|statement| statement.sql_range.start_byte.min(doc.len()))
+            .unwrap_or(0);
+
+        if self.last_insert_hints_key == Some((statement_start, revision)) {
+            return;
+        }
+        self.last_insert_hints_key = Some((statement_start, revision));
+
+        let statement_text = index
+            .statement_at_cursor(cursor, doc.len())
+            .map(|statement| {
+                let start = statement.sql_range.start_byte.min(doc.len());
+                let end = statement.sql_range.end_byte.min(doc.len()).max(start);
+                doc[start..end].to_string()
+            })
+            .unwrap_or_default();
+
+        let schema = self.schema_snapshot.read().clone();
+        let ordinal_columns = insert_target_table(&statement_text)
+            .and_then(|table| lookup_table_columns(&schema, &table))
+            .unwrap_or_default();
+
+        let hints = insert_value_hints(&statement_text, &ordinal_columns);
+        let widgets = hints
+            .iter()
+            .map(|hint| {
+                InputInlineWidget::new(
+                    format!(
+                        "insert-hint:{revision}:{statement_start}:{}",
+                        hint.offset
+                    ),
+                    statement_start + hint.offset,
+                    hint.column.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let values_highlight = hints
+            .first()
+            .zip(hints.last())
+            .map(|(first, last)| {
+                statement_start + first.offset..statement_start + last.offset + 1
+            });
+
+        self.insert_hints = hints;
+        self.insert_hints_statement_start = statement_start;
+        self.insert_values_highlight = values_highlight;
+
+        self.editor
+            .read(cx)
+            .input()
+            .update(cx, |input, cx| input.set_inline_widgets(widgets, cx));
+        self.refresh_current_statement_frame(cx);
+    }
+
+    /// Refresh signature help when the cursor moves into a function call.
+    ///
+    /// Coalesced to actual cursor changes: the editor observer fires on every
+    /// notify, so this avoids re-requesting on unrelated repaints (spec §19.2).
+    fn refresh_signature_help(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cursor = self.editor.read(cx).cursor_offset(cx);
+        if self.last_signature_cursor == Some(cursor) {
+            return;
+        }
+        self.last_signature_cursor = Some(cursor);
+        self.editor.read(cx).input().update(cx, |state, cx| {
+            state.refresh_signature_help(window, cx);
+        });
     }
 
     /// Schedule a statement-snapshot refresh after the document settles.
@@ -1555,14 +1736,19 @@ impl SqlEditorTab {
 
     /// Observe editor input notification so cursor/selection movement refreshes
     /// the current-statement frame without requiring a document change.
-    fn bind_editor_input_observe(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// Also refreshes INSERT value hints and signature help, which depend on
+    /// the cursor's current statement/call.
+    fn bind_editor_input_observe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editor_input = self.editor.read(cx).input();
         self._editor_input_subscription =
-            Some(cx.observe(&editor_input, |this, _editor_input, cx| {
+            Some(cx.observe_in(&editor_input, window, |this, _editor_input, window, cx| {
                 if this.viewport_statement_scan_is_stale(cx) {
                     this.schedule_statement_snapshot_refresh(cx);
                 }
                 this.refresh_current_statement_frame(cx);
+                this.refresh_insert_value_hints(cx);
+                this.refresh_signature_help(window, cx);
             }));
     }
 
@@ -2506,6 +2692,7 @@ impl SqlEditorTab {
         if !self.is_metadata_scope_current(&scope, cx) {
             return;
         }
+        *self.schema_snapshot.write() = schema.clone();
         _ = editor.update(cx, |e, cx| {
             e.set_db_completion_info(db_completion_info, schema, cx);
         });
@@ -3990,6 +4177,12 @@ impl Clone for SqlEditorTab {
             _diagnostic_task: None,
             statement_run_id: self.statement_run_id.clone(),
             _statement_task: None,
+            schema_snapshot: self.schema_snapshot.clone(),
+            insert_hints: self.insert_hints.clone(),
+            insert_hints_statement_start: self.insert_hints_statement_start,
+            insert_values_highlight: self.insert_values_highlight.clone(),
+            last_insert_hints_key: self.last_insert_hints_key,
+            last_signature_cursor: self.last_signature_cursor,
         }
     }
 }
@@ -4019,6 +4212,30 @@ impl TabContent for SqlEditorTab {
 
     fn closeable(&self, _cx: &App) -> bool {
         true
+    }
+
+    /// Deactivate the tab: drop in-flight async state without destroying the
+    /// editor entity or its undo history (spec §19.4).
+    ///
+    /// Completion/hover/signature requests that captured the deactivated editor
+    /// are invalidated, debounced tasks are cancelled, and transient popovers
+    /// are cleared so stale results never repaint a hidden tab.
+    fn on_deactivate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            editor.invalidate_metadata_context(cx);
+            editor.invalidate_completions(cx);
+        });
+        self.diagnostic_run_id.fetch_add(1, Ordering::SeqCst);
+        self._diagnostic_task.take();
+        self._statement_task.take();
+    }
+
+    /// Activate the tab: re-sync metadata-dependent decorations and schedule
+    /// visible diagnostics for the restored viewport (spec §19.4).
+    fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_statement_snapshot(cx);
+        self.refresh_insert_value_hints(cx);
+        self.run_diagnostics(cx);
     }
 
     fn try_close(
@@ -4135,21 +4352,22 @@ mod tests {
         SQL_EDITOR_INPUT_CONTEXT, SqlDiagnosticIdentity, SqlMetadataScope, StatementScanInput,
         ToggleLineComment, can_start_query_execution, can_switch_query_connection, collect_bounded,
         current_statement_frame_decorations, initial_database_select_value,
-        is_current_diagnostic_identity, is_current_manual_transaction_owner,
+        insert_target_table, is_current_diagnostic_identity, is_current_manual_transaction_owner,
         is_current_manual_transaction_start, is_current_query_context_generation,
-        manual_sql_execution_action, manual_transaction_control_sql,
+        lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
         match_sql_to_statement_marker, metadata_scope_selection, query_connection_context_label,
         query_connection_ids, query_file_path_for_name, query_toolbar_action,
         schema_changed_event_matches_scope, should_render_schema_select, sql_text_for_run_all,
         sql_text_for_toolbar_run, statement_marker_id, supports_manual_transactions,
-        toggle_sql_line_comments, viewport_statement_scan_input, write_new_sql_file,
-        write_sql_file,
+        toggle_sql_line_comments, unquote_sql_identifier, viewport_statement_scan_input,
+        write_new_sql_file, write_sql_file,
     };
     use db::DbManager;
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
     use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
     use gpui_component::input;
+    use gpui_component::input::InputRangeDecorationStyle;
     use one_core::storage::DatabaseType;
     use ropey::Rope;
     use std::path::PathBuf;
@@ -4822,7 +5040,7 @@ mod tests {
         // Cursor inside the second statement.
         let cursor = sql.find("用户表").unwrap() + "用户".len();
         let decorations =
-            current_statement_frame_decorations(&snapshot, 5, cursor, &(0..0), sql.len());
+            current_statement_frame_decorations(&snapshot, 5, cursor, &(0..0), sql.len(), None);
 
         assert_eq!(decorations.len(), 1);
         let decoration = &decorations[0];
@@ -4848,7 +5066,7 @@ mod tests {
         let sql = "select 1;\nselect 2;";
         let snapshot = SqlStatementSnapshot::new(sql, SqlDialect::from(&DatabaseType::MySQL));
 
-        let decorations = current_statement_frame_decorations(&snapshot, 3, 2, &(0..9), sql.len());
+        let decorations = current_statement_frame_decorations(&snapshot, 3, 2, &(0..9), sql.len(), None);
 
         assert!(decorations.is_empty());
     }
@@ -4856,7 +5074,7 @@ mod tests {
     #[test]
     fn frame_decorations_empty_outside_statement() {
         let snapshot = SqlStatementSnapshot::new("", SqlDialect::from(&DatabaseType::MySQL));
-        let decorations = current_statement_frame_decorations(&snapshot, 3, 0, &(0..0), 0);
+        let decorations = current_statement_frame_decorations(&snapshot, 3, 0, &(0..0), 0, None);
         assert!(decorations.is_empty());
     }
 
@@ -5364,5 +5582,83 @@ mod tests {
         sorted.sort_unstable();
         let expected: Vec<usize> = (0..128).collect();
         assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn insert_target_table_resolves_into_target() {
+        assert_eq!(
+            Some("users".to_string()),
+            insert_target_table("INSERT INTO users (name) VALUES (1)")
+        );
+        assert_eq!(
+            Some("orders".to_string()),
+            insert_target_table("insert into orders\n  (id) values (1)")
+        );
+        assert_eq!(
+            Some("My Table".to_string()),
+            insert_target_table("INSERT INTO \"My Table\" (a) VALUES (1)")
+        );
+        assert_eq!(
+            Some("t".to_string()),
+            insert_target_table("INSERT t (a) VALUES (1)")
+        );
+        assert_eq!(None, insert_target_table("SELECT * FROM users"));
+        assert_eq!(None, insert_target_table(""));
+    }
+
+    #[test]
+    fn unquote_sql_identifier_strips_quoting() {
+        assert_eq!("users", unquote_sql_identifier("users"));
+        assert_eq!("My Table", unquote_sql_identifier("\"My Table\""));
+        assert_eq!("a`b", unquote_sql_identifier("`a``b`"));
+        assert_eq!("t", unquote_sql_identifier("[t]"));
+        assert_eq!("x", unquote_sql_identifier("  x  "));
+    }
+
+    #[test]
+    fn lookup_table_columns_finds_case_insensitive() {
+        let schema = crate::sql_editor::SqlSchema::default().with_table_columns_typed(
+            "users",
+            [("id", "int", ""), ("name", "text", "")],
+        );
+        assert_eq!(
+            Some(vec!["id".to_string(), "name".to_string()]),
+            lookup_table_columns(&schema, "users")
+        );
+        assert_eq!(
+            Some(vec!["id".to_string(), "name".to_string()]),
+            lookup_table_columns(&schema, "USERS")
+        );
+        assert_eq!(None, lookup_table_columns(&schema, "orders"));
+    }
+
+    #[test]
+    fn current_statement_frame_merges_values_highlight() {
+        let text = "INSERT INTO t (a, b) VALUES (1, 2);";
+        let snapshot = SqlStatementSnapshot::new(
+            text.to_string(),
+            SqlDialect::from(&DatabaseType::MySQL),
+        );
+        let statement = snapshot.statement_at_cursor(5).unwrap();
+        let start = statement.sql_range.start_byte;
+        let end = statement
+            .delimiter_range
+            .map(|delimiter| delimiter.end_byte)
+            .unwrap_or(statement.sql_range.end_byte);
+        let values = start..end;
+
+        let decorations = current_statement_frame_decorations(
+            &snapshot,
+            7,
+            5,
+            &(0..0),
+            text.len(),
+            Some(values.clone()),
+        );
+        assert_eq!(2, decorations.len());
+        assert_eq!(InputRangeDecorationStyle::Highlight, decorations[0].style);
+        assert_eq!(values, decorations[0].range.clone());
+        assert_eq!(InputRangeDecorationStyle::Frame, decorations[1].style);
+        assert_eq!(values, decorations[1].range.clone());
     }
 }

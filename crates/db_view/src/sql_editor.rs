@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::sql_editor_hover::DefaultSqlHoverProvider;
+use crate::sql_editor_signature::DefaultSqlSignatureHelpProvider;
 use anyhow::Result;
 use db::plugin::SqlCompletionInfo;
 use db::sql_editor::diagnostics::{
@@ -21,7 +22,7 @@ use gpui::{
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
-    InputState, TabSize,
+    InputState, SignatureHelpProvider, TabSize,
 };
 use gpui_component::scroll::ScrollbarShow;
 use gpui_component::{Rope, RopeExt};
@@ -1905,6 +1906,7 @@ pub struct SqlEditor {
     editor: Entity<InputState>,
     default_completion_provider: Rc<DefaultSqlCompletionProvider>,
     default_hover_provider: Option<Rc<DefaultSqlHoverProvider>>,
+    default_signature_help_provider: Option<Rc<DefaultSqlSignatureHelpProvider>>,
     _subscriptions: Vec<Subscription>,
     font_cache: Option<SqlEditorFontCache>,
 }
@@ -1922,6 +1924,10 @@ impl SqlEditor {
             default_completion_provider.clone();
         let default_hover_provider = Rc::new(DefaultSqlHoverProvider::new(SqlSchema::default()));
         let default_hover_provider_trait: Rc<dyn HoverProvider> = default_hover_provider.clone();
+        let default_signature_help_provider =
+            Rc::new(DefaultSqlSignatureHelpProvider::new(SqlSchema::default()));
+        let default_signature_help_provider_trait: Rc<dyn SignatureHelpProvider> =
+            default_signature_help_provider.clone();
 
         let editor = cx.new(|cx| {
             let mut editor = InputState::new(window, cx)
@@ -1936,9 +1942,10 @@ impl SqlEditor {
                 .soft_wrap(false)
                 .placeholder(t!("Query.editor_placeholder").to_string());
 
-            // Defaults: completion + hover + actions
+            // Defaults: completion + hover + signature help + actions
             editor.lsp.completion_provider = Some(default_provider_trait);
             editor.lsp.hover_provider = Some(default_hover_provider_trait);
+            editor.lsp.signature_help_provider = Some(default_signature_help_provider_trait);
 
             editor
         });
@@ -1953,6 +1960,7 @@ impl SqlEditor {
             editor,
             default_completion_provider,
             default_hover_provider: Some(default_hover_provider),
+            default_signature_help_provider: Some(default_signature_help_provider),
             _subscriptions,
             font_cache: None,
         }
@@ -2001,6 +2009,7 @@ impl SqlEditor {
         self.editor.update(cx, |state, cx| {
             state.invalidate_completions(cx);
             state.invalidate_hover(cx);
+            state.close_signature_help(cx);
         });
     }
 
@@ -2048,6 +2057,7 @@ impl SqlEditor {
         // source snapshot before replacing it.
         self.invalidate_metadata_context(cx);
         self.update_default_hover_sources(schema.clone(), cx);
+        self.update_default_signature_sources(schema.clone(), cx);
         let default_provider = self.default_completion_provider.clone();
         let default_provider_trait: Rc<dyn CompletionProvider> = default_provider.clone();
         self.editor.update(cx, |state, _| {
@@ -2091,6 +2101,40 @@ impl SqlEditor {
         self.editor.update(cx, |state, cx| {
             state.invalidate_hover(cx);
             state.lsp.hover_provider = Some(provider);
+        });
+    }
+
+    /// Update the default signature help provider's schema without replacing
+    /// its trait object. A custom provider remains untouched (spec §25.1).
+    fn update_default_signature_sources(&self, schema: SqlSchema, cx: &mut Context<Self>) {
+        let Some(default_signature_provider) = self.default_signature_help_provider.clone() else {
+            return;
+        };
+        let default_signature_provider_trait: Rc<dyn SignatureHelpProvider> =
+            default_signature_provider.clone();
+        self.editor.update(cx, |state, cx| {
+            let is_default_provider_installed = state
+                .lsp
+                .signature_help_provider
+                .as_ref()
+                .is_some_and(|provider| Rc::ptr_eq(provider, &default_signature_provider_trait));
+            if is_default_provider_installed {
+                default_signature_provider.set_schema(schema);
+                state.close_signature_help(cx);
+            }
+        });
+    }
+
+    /// Replace signature help provider.
+    pub fn set_signature_help_provider(
+        &mut self,
+        provider: Rc<dyn SignatureHelpProvider>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor.update(cx, |state, cx| {
+            state.close_signature_help(cx);
+            state.lsp.signature_help_provider = Some(provider);
         });
     }
 
