@@ -390,11 +390,16 @@ async fn detect_remote_os_id(client: &mut RusshClient) -> Option<String> {
     .await
     .ok()??;
 
-    parse_os_release_id(&output).or_else(|| match output.trim() {
-        // 无 os-release 的系统回退到 uname（如 macOS）
+    parse_os_release_id(&output).or_else(|| parse_uname_os_id(&output))
+}
+
+/// 无 os-release 时按 `uname -s` 输出识别操作系统 ID（如 macOS、FreeBSD）。
+fn parse_uname_os_id(output: &str) -> Option<String> {
+    match output.trim() {
         "Darwin" => Some("macos".to_string()),
+        "FreeBSD" => Some("freebsd".to_string()),
         _ => None,
-    })
+    }
 }
 
 /// 从 /etc/os-release 内容中解析 ID 字段（统一小写）。
@@ -3084,8 +3089,8 @@ mod tests {
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
         connection_test_host_key_request, connection_test_needs_xquartz_warning,
         credential_capabilities_for_auth, format_connection_error,
-        format_connection_error_for_platform, parse_os_release_id, validate_save_state,
-        xquartz_installation_warning_required,
+        format_connection_error_for_platform, parse_os_release_id, parse_uname_os_id,
+        validate_save_state, xquartz_installation_warning_required,
     };
     use anyhow::Context as _;
     use connection_form::credential::CredentialCapabilities;
@@ -3739,6 +3744,20 @@ mod tests {
         assert_eq!(None, parse_os_release_id("ID_LIKE=debian\n"));
         assert_eq!(None, parse_os_release_id("ID=\n"));
         assert_eq!(None, parse_os_release_id("Linux\n"));
+    }
+
+    #[test]
+    fn uname_fallback_maps_darwin_and_freebsd_only() {
+        assert_eq!(
+            Some("macos".to_string()),
+            parse_uname_os_id("Darwin\n")
+        );
+        assert_eq!(
+            Some("freebsd".to_string()),
+            parse_uname_os_id("FreeBSD\n")
+        );
+        assert_eq!(None, parse_uname_os_id("Linux\n"));
+        assert_eq!(None, parse_uname_os_id(""));
     }
 
     #[test]

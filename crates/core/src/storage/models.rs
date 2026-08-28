@@ -484,8 +484,26 @@ pub const SSH_ICON_IDS: &[&str] = &[
     "debian",
     "redhat",
     "centos",
+    "rocky",
+    "fedora",
     "almalinux",
+    "alpine",
+    "arch",
     "opensuse",
+    "kali",
+    "amzn",
+    "alinux",
+    "openeuler",
+    "freebsd",
+    "cisco",
+    "juniper",
+    "huawei",
+    "h3c",
+    "hpe",
+    "mikrotik",
+    "fortinet",
+    "paloalto",
+    "zyxel",
     "macos",
     "windows",
     "docker",
@@ -498,11 +516,29 @@ pub fn ssh_os_icon(os_id: Option<&str>) -> IconName {
         Some("ubuntu") => IconName::UbuntuColor,
         Some("debian") => IconName::DebianColor,
         Some("centos") => IconName::CentosColor,
+        Some("rocky") => IconName::RockyColor,
+        Some("fedora") => IconName::FedoraColor,
         Some("almalinux") => IconName::AlmalinuxColor,
-        Some("rhel" | "redhat" | "fedora" | "rocky" | "ol" | "amzn") => IconName::RedhatColor,
+        Some("alpine") => IconName::AlpineColor,
+        Some("arch" | "archarm" | "manjaro") => IconName::ArchColor,
+        Some("rhel" | "redhat" | "ol") => IconName::RedhatColor,
         Some("opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "suse") => {
             IconName::OpensuseColor
         }
+        Some("kali") => IconName::KaliColor,
+        Some("amzn") => IconName::AmazonColor,
+        Some("alinux") => IconName::AlinuxColor,
+        Some("openeuler") => IconName::OpenEulerColor,
+        Some("freebsd") => IconName::FreebsdColor,
+        Some("cisco" | "ios" | "ios-xe") => IconName::CiscoColor,
+        Some("juniper" | "junos") => IconName::JuniperColor,
+        Some("huawei" | "vrp") => IconName::HuaweiColor,
+        Some("h3c" | "comware") => IconName::H3cColor,
+        Some("hpe") => IconName::HpeColor,
+        Some("mikrotik" | "routeros") => IconName::MikrotikColor,
+        Some("fortinet" | "fortios") => IconName::FortinetColor,
+        Some("paloalto" | "palo-alto" | "panos") => IconName::PaloaltoColor,
+        Some("zyxel") => IconName::ZyxelColor,
         Some("macos" | "darwin") => IconName::MacosColor,
         Some("windows") => IconName::WindowsColor,
         Some("docker") => IconName::DockerColor,
@@ -3171,10 +3207,31 @@ mod serial_tests {
             IconName::WindowsColor
         ));
         assert!(matches!(ssh_os_icon(Some("docker")), IconName::DockerColor));
-        for id in ["rhel", "redhat", "rocky", "fedora"] {
+        for (id, expected) in [
+            ("rhel", IconName::RedhatColor),
+            ("redhat", IconName::RedhatColor),
+            ("rocky", IconName::RockyColor),
+            ("fedora", IconName::FedoraColor),
+            ("alpine", IconName::AlpineColor),
+            ("arch", IconName::ArchColor),
+            ("kali", IconName::KaliColor),
+            ("amzn", IconName::AmazonColor),
+            ("alinux", IconName::AlinuxColor),
+            ("openeuler", IconName::OpenEulerColor),
+            ("freebsd", IconName::FreebsdColor),
+            ("cisco", IconName::CiscoColor),
+            ("juniper", IconName::JuniperColor),
+            ("huawei", IconName::HuaweiColor),
+            ("h3c", IconName::H3cColor),
+            ("hpe", IconName::HpeColor),
+            ("mikrotik", IconName::MikrotikColor),
+            ("fortinet", IconName::FortinetColor),
+            ("paloalto", IconName::PaloaltoColor),
+            ("zyxel", IconName::ZyxelColor),
+        ] {
             assert!(
-                matches!(ssh_os_icon(Some(id)), IconName::RedhatColor),
-                "{id} 应映射到 RedHat 图标"
+                matches!(ssh_os_icon(Some(id)), x if x == expected),
+                "{id} 应映射到 {expected:?} 图标"
             );
         }
         assert!(matches!(
