@@ -1,3 +1,7 @@
+use super::credential_capture::{
+    CaptureOutcome, CredentialCapture, connection_notice_text, sanitize_notice_text,
+    should_emit_connecting_notice,
+};
 use super::*;
 
 impl TerminalView {
@@ -36,8 +40,7 @@ impl TerminalView {
         match event {
             TerminalModelEvent::Wakeup => {
                 self.sync_recording_ticker(cx);
-                self.sync_credential_inputs(window, cx);
-                self.sync_ssh_mfa_inputs(window, cx);
+                self.sync_credential_capture(cx);
                 self.sync_zmodem_background_task(None, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
@@ -54,17 +57,17 @@ impl TerminalView {
                 self.refresh_history_prompt_matches(cx);
             }
             TerminalModelEvent::SshCredentialChanged => {
-                self.sync_credential_inputs(window, cx);
+                self.sync_credential_capture(cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
             TerminalModelEvent::TelnetCredentialChanged => {
-                self.sync_credential_inputs(window, cx);
+                self.sync_credential_capture(cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
             TerminalModelEvent::SshMfaChanged => {
-                self.sync_ssh_mfa_inputs(window, cx);
+                self.sync_credential_capture(cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
@@ -124,163 +127,198 @@ impl TerminalView {
         if current == self.last_connection_status {
             return;
         }
+        let previous = self.last_connection_status;
         self.last_connection_status = current;
+        self.emit_connection_status_notice(previous, current, cx);
         cx.emit(TabContentEvent::StateChanged);
         cx.notify();
     }
 
-    pub(super) fn sync_credential_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let request = {
+    /// 连接状态变化时把提示直接写入终端网格（MobaXterm 风格），替代原
+    /// 浮动横条。只在 PTY 不再产出内容的 Connecting/Disconnected 状态注入。
+    fn emit_connection_status_notice(
+        &mut self,
+        previous: Option<one_core::tab_container::TabConnectionStatus>,
+        current: Option<one_core::tab_container::TabConnectionStatus>,
+        cx: &mut Context<Self>,
+    ) {
+        use one_core::tab_container::TabConnectionStatus;
+        let has_host_key_request = {
             let terminal = self.terminal.read(cx);
-            terminal
-                .ssh_credential_request()
-                .map(TerminalCredentialRequest::Ssh)
-                .or_else(|| {
-                    terminal
-                        .telnet_credential_request()
-                        .map(TerminalCredentialRequest::Telnet)
-                })
+            terminal.host_key_verification_request().is_some()
         };
-        let Some(request) = request else {
-            self.credential_inputs = None;
+        if has_host_key_request {
+            // 主机指纹确认有自己的对话框；此处不注入断线提示避免误导。
+            return;
+        }
+        match current {
+            Some(TabConnectionStatus::Connecting) if should_emit_connecting_notice(previous) => {
+                self.inject_terminal_notice(
+                    &connection_notice_text(&ConnectionState::Connecting),
+                    cx,
+                );
+            }
+            Some(TabConnectionStatus::Disconnected) => {
+                let state = self.terminal.read(cx).connection_state().clone();
+                let mut text = String::new();
+                if self
+                    .terminal_frame_snapshot
+                    .mode
+                    .contains(TermMode::ALT_SCREEN)
+                {
+                    // 会话已死，全屏应用不会再重绘；先回主屏让提示可见。
+                    text.push_str("\x1b[?1049l");
+                }
+                text.push_str(&connection_notice_text(&state));
+                self.inject_terminal_notice(&text, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn inject_terminal_notice(&self, text: &str, cx: &mut Context<Self>) {
+        self.terminal.update(cx, |terminal, cx| {
+            terminal.inject_system_message(text, cx);
+        });
+    }
+
+    pub(super) fn sync_credential_capture(&mut self, cx: &mut Context<Self>) {
+        let active = credential_capture::active_capture_request(&self.terminal.read(cx));
+        let already_active = self
+            .credential_capture
+            .as_ref()
+            .is_some_and(|capture| Some(capture.request().clone()) == active);
+        if already_active {
+            return;
+        }
+        match active {
+            Some(request) => {
+                let capture = CredentialCapture::for_request(request);
+                self.inject_capture_prompt(&capture, cx);
+                self.credential_capture = Some(capture);
+            }
+            None => {
+                self.credential_capture = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn inject_capture_prompt(&self, capture: &CredentialCapture, cx: &mut Context<Self>) {
+        let mut text = String::from("\r\n");
+        if let Some((name, instructions)) = capture.mfa_prelude() {
+            if !name.is_empty() {
+                text.push_str(&format!(
+                    "\x1b[1m{}\x1b[0m\r\n",
+                    sanitize_notice_text(&name)
+                ));
+            }
+            if !instructions.is_empty() {
+                text.push_str(&format!("{}\r\n", sanitize_notice_text(&instructions)));
+            }
+        }
+        text.push_str(&capture.prompt_line());
+        self.inject_terminal_notice(&text, cx);
+    }
+
+    pub(super) fn handle_credential_capture_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        // Xshell 风格：凭据等待期间 Ctrl+D 关闭当前窗口。
+        if modifiers.control && !modifiers.alt && !modifiers.platform && event.keystroke.key == "d"
+        {
+            one_core::window_close::request_close_window(window.window_handle(), cx);
+            return;
+        }
+        let plain = !modifiers.control && !modifiers.alt && !modifiers.platform;
+        match event.keystroke.key.as_str() {
+            "enter" if plain => self.handle_credential_capture_submit(window, cx),
+            "backspace" if plain => {
+                if self
+                    .credential_capture
+                    .as_mut()
+                    .is_some_and(|capture| capture.backspace())
+                {
+                    self.inject_terminal_notice("\x08 \x08", cx);
+                }
+            }
+            "escape" => self.handle_credential_capture_cancel(cx),
+            // 终端直觉：Ctrl+C 中止验证码/OTP 输入（MFA 可取消）。
+            "c" if modifiers.control && !modifiers.alt && !modifiers.platform => {
+                self.handle_credential_capture_cancel(cx)
+            }
+            key if plain && key.len() == 1 => self.capture_append_text(key, cx),
+            _ => {}
+        }
+    }
+
+    pub(super) fn capture_append_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let echo = self
+            .credential_capture
+            .as_mut()
+            .is_some_and(|capture| capture.append(text));
+        if echo {
+            self.inject_terminal_notice(text, cx);
+        }
+    }
+
+    fn handle_credential_capture_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(capture) = self.credential_capture.as_mut() else {
             return;
         };
-
-        let inputs_match_request = self
-            .credential_inputs
-            .as_ref()
-            .is_some_and(|inputs| inputs.request == request);
-
-        if !inputs_match_request {
-            let is_telnet = request.is_telnet();
-            let username = request.username().then(|| {
-                cx.new(|cx| {
-                    InputState::new(window, cx).placeholder(
-                        if is_telnet {
-                            t!("TelnetSession.username")
-                        } else {
-                            t!("SshSession.username")
-                        }
-                        .to_string(),
-                    )
-                })
-            });
-            let password = request.password().then(|| {
-                cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder(
-                            if is_telnet {
-                                t!("TelnetSession.password")
-                            } else {
-                                t!("SshSession.password")
-                            }
-                            .to_string(),
-                        )
-                        .masked(true)
-                })
-            });
-            self.credential_inputs = Some(TerminalCredentialInputs {
-                request,
+        match capture.submit_current() {
+            CaptureOutcome::Advanced => {
+                let prompt = capture.prompt_line();
+                self.inject_terminal_notice(&format!("\r\n{prompt}"), cx);
+            }
+            CaptureOutcome::Credentials {
+                fields,
                 username,
                 password,
-            });
-        }
-
-        let first_input = self
-            .credential_inputs
-            .as_ref()
-            .and_then(|inputs| inputs.username.as_ref().or(inputs.password.as_ref()))
-            .cloned();
-        if let Some(input) = first_input {
-            input.update(cx, |state, cx| state.focus(window, cx));
-        }
-    }
-
-    pub(super) fn submit_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(inputs) = self.credential_inputs.as_ref() else {
-            return;
-        };
-        let generation = inputs.request.generation();
-        let username = inputs
-            .username
-            .as_ref()
-            .map(|input| input.read(cx).text().to_string());
-        let password = inputs
-            .password
-            .as_ref()
-            .map(|input| input.read(cx).text().to_string());
-        let submitted = match &inputs.request {
-            TerminalCredentialRequest::Ssh(_) => self.terminal.update(cx, |terminal, cx| {
-                terminal.submit_ssh_credentials(
-                    generation,
-                    TerminalSshCredentials { username, password },
-                    cx,
-                )
-            }),
-            TerminalCredentialRequest::Telnet(_) => self.terminal.update(cx, |terminal, cx| {
-                terminal.submit_telnet_credentials(
-                    generation,
-                    TerminalTelnetCredentials { username, password },
-                    cx,
-                )
-            }),
-        };
-        if submitted {
-            self.credential_inputs = None;
-            self.focus_terminal_after_connect = true;
-            self.focus_terminal_after_connect_if_ready(window, cx);
+            } => {
+                self.inject_terminal_notice("\r\n", cx);
+                let submitted = self.terminal.update(cx, |terminal, cx| {
+                    if fields.is_telnet {
+                        terminal.submit_telnet_credentials(
+                            fields.generation,
+                            TerminalTelnetCredentials { username, password },
+                            cx,
+                        )
+                    } else {
+                        terminal.submit_ssh_credentials(
+                            fields.generation,
+                            TerminalSshCredentials { username, password },
+                            cx,
+                        )
+                    }
+                });
+                if submitted {
+                    self.focus_terminal_after_connect = true;
+                    self.focus_terminal_after_connect_if_ready(window, cx);
+                }
+            }
+            CaptureOutcome::Mfa(responses) => {
+                self.inject_terminal_notice("\r\n", cx);
+                self.terminal.read(cx).submit_ssh_mfa(responses);
+                // capture 状态由随后的 SshMfaChanged 事件统一清理。
+            }
+            CaptureOutcome::Rejected => {}
         }
         cx.notify();
     }
 
-    pub(super) fn sync_ssh_mfa_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(request) = self.terminal.read(cx).ssh_mfa_request() else {
-            self.ssh_mfa_inputs.clear();
+    fn handle_credential_capture_cancel(&mut self, cx: &mut Context<Self>) {
+        let Some(capture) = self.credential_capture.as_ref() else {
             return;
         };
-
-        let inputs_match_request = self.ssh_mfa_inputs.len() == request.prompts.len()
-            && self
-                .ssh_mfa_inputs
-                .iter()
-                .zip(request.prompts.iter())
-                .all(|(input, prompt)| input.prompt == prompt.prompt && input.echo == prompt.echo);
-
-        if !inputs_match_request {
-            self.ssh_mfa_inputs = request
-                .prompts
-                .iter()
-                .map(|prompt| SshMfaInput {
-                    prompt: prompt.prompt.clone(),
-                    echo: prompt.echo,
-                    input: cx.new(|cx| {
-                        let mut state =
-                            InputState::new(window, cx).placeholder(prompt.prompt.clone());
-                        if !prompt.echo {
-                            state = state.masked(true);
-                        }
-                        state
-                    }),
-                })
-                .collect();
+        if capture.cancellable() {
+            self.inject_terminal_notice("\r\n", cx);
+            self.terminal.read(cx).cancel_ssh_mfa();
         }
-        if let Some(input) = self.ssh_mfa_inputs.first() {
-            input.input.update(cx, |state, cx| state.focus(window, cx));
-        }
-    }
-
-    pub(super) fn submit_ssh_mfa(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let responses = self
-            .ssh_mfa_inputs
-            .iter()
-            .map(|input| input.input.read(cx).text().to_string())
-            .collect();
-        if self.terminal.read(cx).submit_ssh_mfa(responses) {
-            self.ssh_mfa_inputs.clear();
-            self.focus_terminal_after_connect = true;
-            self.focus_terminal_after_connect_if_ready(window, cx);
-        }
-        cx.notify();
     }
 
     pub(super) fn focus_terminal_after_connect_if_ready(

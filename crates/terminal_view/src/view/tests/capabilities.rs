@@ -737,7 +737,7 @@ fn status_badge_sync_emits_state_changed_only_on_transition() {
     let sync = function_region(
         source,
         "fn sync_connection_status_badge",
-        "fn sync_credential_inputs",
+        "fn emit_connection_status_notice",
     );
     assert!(sync.contains("self.last_connection_status = current"));
     assert_guard_precedes(

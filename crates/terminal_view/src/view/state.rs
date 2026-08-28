@@ -39,51 +39,6 @@ pub(super) struct PendingTerminalSearch {
     pub(super) repetitions: u16,
 }
 
-pub(super) struct SshMfaInput {
-    pub(super) prompt: String,
-    pub(super) echo: bool,
-    pub(super) input: Entity<InputState>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum TerminalCredentialRequest {
-    Ssh(TerminalSshCredentialRequest),
-    Telnet(TerminalTelnetCredentialRequest),
-}
-
-impl TerminalCredentialRequest {
-    pub(super) fn generation(&self) -> u64 {
-        match self {
-            Self::Ssh(request) => request.generation(),
-            Self::Telnet(request) => request.generation(),
-        }
-    }
-
-    pub(super) fn username(&self) -> bool {
-        match self {
-            Self::Ssh(request) => request.username,
-            Self::Telnet(request) => request.username,
-        }
-    }
-
-    pub(super) fn password(&self) -> bool {
-        match self {
-            Self::Ssh(request) => request.password,
-            Self::Telnet(request) => request.password,
-        }
-    }
-
-    pub(super) fn is_telnet(&self) -> bool {
-        matches!(self, Self::Telnet(_))
-    }
-}
-
-pub(super) struct TerminalCredentialInputs {
-    pub(super) request: TerminalCredentialRequest,
-    pub(super) username: Option<Entity<InputState>>,
-    pub(super) password: Option<Entity<InputState>>,
-}
-
 #[derive(Clone)]
 pub(crate) enum TerminalDuplicateSource {
     Local(LocalConfig),

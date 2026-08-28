@@ -35,6 +35,14 @@ impl TerminalView {
 
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if !self.accepts_live_terminal_input(cx) {
+            // 凭据/MFA 捕获期间（仅活会话会出现）粘贴直接进入内联输入缓冲。
+            if self.credential_capture.is_some() {
+                if let Some(clipboard) = cx.read_from_clipboard() {
+                    if let Some(text) = clipboard.text() {
+                        self.capture_append_text(&text, cx);
+                    }
+                }
+            }
             return;
         }
         if let Some(clipboard) = cx.read_from_clipboard() {

@@ -1,125 +1,50 @@
 use super::*;
 
 #[test]
-fn pending_host_key_confirmation_suppresses_connection_overlay() {
-    for connection_state in [
-        ConnectionState::Disconnected { error: None },
-        ConnectionState::Connecting,
-    ] {
-        assert!(!should_show_connection_overlay(&connection_state, true));
-    }
-}
-
-#[test]
-fn connection_overlay_returns_after_host_key_confirmation_finishes() {
-    for connection_state in [
-        ConnectionState::Disconnected { error: None },
-        ConnectionState::Connecting,
-    ] {
-        assert!(should_show_connection_overlay(&connection_state, false));
-    }
-    assert!(!should_show_connection_overlay(
-        &ConnectionState::Connected,
-        false
-    ));
-}
-
-#[test]
-fn disconnected_terminal_uses_a_non_blocking_status_banner() {
-    assert_eq!(
-        Some(ConnectionStatusPresentation::Banner),
-        connection_status_presentation(
-            &ConnectionState::Disconnected { error: None },
-            false,
-            false,
-            false,
-        )
-    );
-    assert_eq!(
-        Some(ConnectionStatusPresentation::Banner),
-        connection_status_presentation(&ConnectionState::Connecting, false, false, false)
-    );
-}
-
-#[test]
-fn terminal_credentials_and_ssh_mfa_keep_the_blocking_connection_dialog() {
-    assert_eq!(
-        Some(ConnectionStatusPresentation::Dialog),
-        connection_status_presentation(&ConnectionState::Connecting, false, true, false)
-    );
-    assert_eq!(
-        Some(ConnectionStatusPresentation::Dialog),
-        connection_status_presentation(&ConnectionState::Connecting, false, false, true)
-    );
-    assert_eq!(
-        Some(ConnectionStatusPresentation::Dialog),
-        connection_status_presentation(&ConnectionState::Connecting, false, true, true)
-    );
-}
-
-#[test]
-fn host_key_confirmation_and_connected_state_hide_connection_status() {
-    assert_eq!(
-        None,
-        connection_status_presentation(
-            &ConnectionState::Disconnected { error: None },
-            true,
-            true,
-            true,
-        )
-    );
-    assert_eq!(
-        None,
-        connection_status_presentation(&ConnectionState::Connected, false, true, true)
-    );
-}
-
-#[test]
-fn connection_status_rendering_does_not_restore_the_full_screen_backdrop() {
-    let source = include_str!("../connection_overlay.rs");
-
-    assert!(source.contains("render_connection_banner"));
-    assert!(source.contains("render_connection_dialog"));
-    assert!(
-        !source.contains(".bg(Hsla {"),
-        "ordinary reconnect feedback must not cover the terminal with a dark backdrop"
-    );
-}
-
-#[test]
-fn connection_error_banner_shows_scrollable_multiline_details() {
-    let source = include_str!("../connection_overlay.rs");
-    let error_block = source
-        .split(".when_some(error_msg")
-        .nth(1)
-        .expect("connection overlay should render an error block");
+fn connection_status_renders_inline_notices_instead_of_overlays() {
+    let render_surface = include_str!("../render_surface.rs");
+    let terminal_events = include_str!("../terminal_events.rs");
 
     assert!(
-        error_block.contains(".whitespace_normal()"),
-        "terminal connection error details should wrap instead of staying on one line"
+        !render_surface.contains("render_connection_banner")
+            && !render_surface.contains("render_connection_dialog"),
+        "connection status must not render floating overlay cards anymore"
     );
-    assert!(
-        error_block.contains(".overflow_scrollbar()"),
-        "long terminal connection error details, including unbroken tokens, should remain inspectable"
-    );
-    assert!(
-        error_block.contains(".max_h(px("),
-        "the scrollable terminal connection error area should have a bounded height"
-    );
-    assert!(
-        !error_block.contains(".truncate()"),
-        "terminal connection error details must not be visually truncated"
-    );
+    assert!(terminal_events.contains("fn emit_connection_status_notice"));
+    assert!(terminal_events.contains("inject_system_message"));
 }
 
 #[test]
-fn credential_dialog_supports_ssh_and_telnet_runtime_prompts() {
-    let source = include_str!("../connection_overlay.rs");
+fn disconnected_notice_invites_enter_to_reconnect() {
+    let locales = include_str!("../../../locales/terminal_view.yml");
 
-    assert!(source.contains("SshSession.credentials_required"));
-    assert!(source.contains("TelnetSession.credentials_required"));
-    assert!(source.contains("submit-terminal-credentials"));
-    assert!(source.contains("submit_credentials"));
+    assert!(locales.contains("press_enter_to_reconnect:"));
+    assert!(locales.contains("按 Enter 重新连接。"));
+}
+
+#[test]
+fn credential_capture_intercepts_input_before_the_pty_write_path() {
+    let text_input = include_str!("../text_input.rs");
+    let clipboard = include_str!("../clipboard.rs");
+
+    assert!(text_input.contains("if self.credential_capture.is_some()"));
+    assert!(text_input.contains("handle_credential_capture_key_event"));
+    assert!(text_input.contains("fn try_reconnect_on_enter"));
+    assert!(clipboard.contains("if self.credential_capture.is_some()"));
+}
+
+#[test]
+fn dialog_based_credential_input_plumbing_is_removed() {
+    let view_source = include_str!("../../view.rs");
+    let terminal_events = include_str!("../terminal_events.rs");
+
+    assert!(!view_source.contains("ssh_mfa_inputs"));
+    assert!(!view_source.contains("credential_inputs"));
+    assert!(
+        !terminal_events.contains("sync_credential_inputs")
+            && !terminal_events.contains("sync_ssh_mfa_inputs"),
+        "dialog input-entity sync must be gone; capture mode replaces it"
+    );
 }
 
 #[test]
@@ -150,11 +75,10 @@ fn reconnect_follow_up_is_only_armed_after_an_ssh_reconnect_starts() {
 
 #[test]
 fn initial_connecting_status_does_not_claim_that_it_is_reconnecting() {
-    let overlay = include_str!("../connection_overlay.rs");
+    let capture = include_str!("../credential_capture.rs");
     let locales = include_str!("../../../locales/terminal_view.yml");
 
-    assert!(overlay.contains("SshSession.connecting_preserves_terminal"));
-    assert!(overlay.contains("SshSession.reconnecting_preserves_terminal"));
+    assert!(capture.contains("SshSession.connecting"));
     assert!(locales.contains("connecting_preserves_terminal:"));
 }
 

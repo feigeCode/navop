@@ -3507,6 +3507,13 @@ impl Terminal {
             .is_some_and(|responder| responder.submit(responses))
     }
 
+    /// 取消等待中的 SSH keyboard-interactive/MFA 输入；返回是否有请求被清除。
+    pub fn cancel_ssh_mfa(&self) -> bool {
+        self.ssh_mfa_responder
+            .as_ref()
+            .is_some_and(|responder| responder.cancel())
+    }
+
     pub fn zmodem_picker_request(&self) -> Option<ZmodemPickerRequest> {
         self.zmodem_responder
             .as_ref()
@@ -3895,6 +3902,28 @@ impl Terminal {
         if let Some(ref backend) = self.backend {
             backend.write(data.to_vec());
         }
+    }
+
+    /// 向终端网格注入一段模型侧合成文本（连接状态提示、内联凭据回显等）。
+    ///
+    /// 只应在 PTY 不再产出内容的场景使用（断开、等待凭据/MFA），否则注入
+    /// 内容可能与远端输出互相覆盖。注入后自动滚动到底部并触发重绘。
+    pub fn inject_system_message(&self, text: &str, cx: &mut Context<Self>) {
+        if self.inject_system_text(text) {
+            cx.emit(TerminalModelEvent::Wakeup);
+        }
+    }
+
+    fn inject_system_text(&self, text: &str) -> bool {
+        if self.is_read_only() || text.is_empty() {
+            return false;
+        }
+        let mut term = self.term.lock();
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut *term, text.as_bytes());
+        term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        drop(term);
+        true
     }
 
     /// 写入来自外部集成的输入，例如 Public MCP。
@@ -6368,6 +6397,78 @@ mod tests {
         assert!(responder.pending_request().is_none());
         assert!(task.await.unwrap().is_err());
         assert!(!responder.cancel());
+    }
+
+    #[test]
+    fn inject_system_text_writes_into_the_grid_and_scrolls_to_bottom() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let terminal = test_terminal_with_recording_runtime(Ok(runtime));
+
+        // 预写一段输出并向上滚动，模拟用户正在回看历史
+        {
+            let mut term = terminal.term.lock();
+            let mut processor: Processor<StdSyncHandler> = Processor::new();
+            processor.advance(&mut *term, b"remote output\r\n");
+            term.scroll_display(alacritty_terminal::grid::Scroll::Top);
+        }
+
+        assert!(terminal.inject_system_text(
+            "\r\n\x1b[33m[connection lost]\x1b[0m\r\n\x1b[2mpress enter to reconnect\x1b[0m\r\n"
+        ));
+
+        let snapshot = recent_text_from_term(&terminal.term, 10);
+        assert!(snapshot.text.contains("[connection lost]"));
+        assert!(snapshot.text.contains("press enter to reconnect"));
+        assert!(snapshot.text.contains("remote output"));
+        assert_eq!(0, terminal.term.lock().grid().display_offset());
+        assert!(!terminal.inject_system_text(""));
+    }
+
+    #[test]
+    fn inject_system_text_ignores_read_only_surfaces() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        terminal.session_mode = TerminalSessionMode::RecordingPlayback;
+
+        assert!(!terminal.inject_system_text("should not appear\r\n"));
+        let snapshot = recent_text_from_term(&terminal.term, 5);
+        assert!(!snapshot.text.contains("should not appear"));
+    }
+
+    #[tokio::test]
+    async fn cancel_ssh_mfa_reports_whether_a_request_was_pending() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        assert!(!terminal.cancel_ssh_mfa());
+
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = TerminalMfaResponder::new(event_tx, None, None);
+        terminal.ssh_mfa_responder = Some(responder);
+        let pending = terminal.ssh_mfa_responder.as_ref().unwrap().clone();
+        let task = tokio::spawn(async move {
+            pending
+                .respond(KeyboardInteractiveRequest {
+                    target: ssh::KeyboardInteractiveTarget::TargetServer,
+                    name: "MFA".to_string(),
+                    instructions: String::new(),
+                    prompts: vec![ssh::KeyboardInteractivePrompt {
+                        prompt: "Verification code:".to_string(),
+                        echo: false,
+                    }],
+                })
+                .await
+        });
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+
+        assert!(terminal.cancel_ssh_mfa());
+        assert!(task.await.unwrap().is_err());
+        assert!(!terminal.cancel_ssh_mfa());
     }
 
     #[test]

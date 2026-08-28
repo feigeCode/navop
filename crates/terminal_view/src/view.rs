@@ -8,7 +8,6 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
@@ -115,9 +114,9 @@ use terminal::LocalConfig;
 use terminal::selection_text_from_term;
 use terminal::terminal::{
     ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
-    TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, TerminalScrollSnapshot,
-    TerminalSshCredentialRequest, TerminalSshCredentials, TerminalTelnetCredentialRequest,
-    TerminalTelnetCredentials, resolve_local_working_dir,
+    TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalModelEvent,
+    TerminalScrollProxy, TerminalScrollSnapshot, TerminalSshCredentials, TerminalTelnetCredentials,
+    resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
@@ -131,8 +130,8 @@ mod close;
 mod command_bar;
 mod command_bar_events;
 mod command_bar_model;
-mod connection_overlay;
 mod constructors;
+mod credential_capture;
 mod helpers;
 mod history_actions;
 mod history_query;
@@ -294,8 +293,7 @@ pub struct TerminalView {
     cd_completion_cache: CdCompletionCache,
     /// 当前正在加载目录候选的父目录
     cd_completion_loading_parent: Option<String>,
-    credential_inputs: Option<TerminalCredentialInputs>,
-    ssh_mfa_inputs: Vec<SshMfaInput>,
+    credential_capture: Option<credential_capture::CredentialCapture>,
     /// 当前已打开系统选择器的 ZMODEM 请求 ID，用于去重和拒绝过期结果。
     zmodem_picker_request_id: Option<u64>,
     /// 已桥接到全局后台任务面板、尚未收到终态的 ZMODEM 传输任务。

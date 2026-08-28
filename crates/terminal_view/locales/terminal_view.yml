@@ -1876,6 +1876,10 @@ SshSession:
     en: Reconnect
     zh-CN: 重新连接
     zh-HK: 重新連接
+  press_enter_to_reconnect:
+    en: Press Enter to reconnect.
+    zh-CN: 按 Enter 重新连接。
+    zh-HK: 按 Enter 重新連線。
   host_key_title:
     en: Verify SSH Host Key
     zh-CN: 验证 SSH 主机指纹

@@ -41,3 +41,20 @@ fn read_only_terminals_surface_no_status_badge() {
         None
     );
 }
+
+#[test]
+fn connecting_notice_is_injected_only_for_reconnects() {
+    use super::super::credential_capture::should_emit_connecting_notice;
+    use one_core::tab_container::TabConnectionStatus;
+
+    assert!(
+        !should_emit_connecting_notice(None),
+        "first-time connections must keep the terminal screen clean"
+    );
+    assert!(!should_emit_connecting_notice(Some(
+        TabConnectionStatus::Connected
+    )));
+    assert!(should_emit_connecting_notice(Some(
+        TabConnectionStatus::Disconnected
+    )));
+}

@@ -1,9 +1,6 @@
 use super::preferences::reconnect_follow_up_state;
 use super::recording_footer::{format_recording_elapsed, recording_output_path};
-use super::render_surface::{
-    ConnectionStatusPresentation, connection_status_presentation, should_show_connection_overlay,
-    terminal_viewport_bounds,
-};
+use super::render_surface::terminal_viewport_bounds;
 use super::tab_content::recording_playback_tab_title;
 use super::terminal_layout::terminal_grid_size;
 use super::workspace_support::map_connection_status;

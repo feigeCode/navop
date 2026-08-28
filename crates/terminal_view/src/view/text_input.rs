@@ -36,12 +36,40 @@ impl TerminalView {
 
     pub(super) fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if !self.accepts_live_terminal_input(cx) {
+            if self.credential_capture.is_some() {
+                self.capture_append_text(text, cx);
+            }
             return;
         }
         if !text.is_empty() {
             self.apply_inline_input_to_history_prompt(text, cx);
             self.write_to_pty(text.as_bytes().to_vec(), cx);
         }
+    }
+
+    /// 断开状态下按 Enter 立即重连；返回是否已消费该按键。
+    fn try_reconnect_on_enter(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let reconnectable = {
+            let terminal = self.terminal.read(cx);
+            matches!(
+                terminal.connection_state(),
+                ConnectionState::Disconnected { .. }
+            ) && terminal.can_reconnect()
+        };
+        if !reconnectable {
+            return false;
+        }
+        let modifiers = &keystroke.modifiers;
+        if keystroke.key != "enter" || modifiers.control || modifiers.alt || modifiers.platform {
+            return false;
+        }
+        self.reconnect(window, cx);
+        true
     }
 
     pub(super) fn set_marked_text(
@@ -83,6 +111,17 @@ impl TerminalView {
             &shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT]),
         ) {
             self.copy(&Copy, _window, cx);
+            return;
+        }
+
+        // 凭据/MFA 等待期间按键进入终端内联捕获，不透传 PTY。
+        if self.credential_capture.is_some() {
+            self.handle_credential_capture_key_event(event, _window, cx);
+            return;
+        }
+
+        // 断开状态下 Enter 直接触发重连（提示已写入终端网格）。
+        if self.try_reconnect_on_enter(&event.keystroke, _window, cx) {
             return;
         }
 

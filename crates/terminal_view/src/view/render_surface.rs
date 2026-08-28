@@ -2,11 +2,6 @@ use super::*;
 
 struct TerminalViewportState {
     font_family: SharedString,
-    connection_state: ConnectionState,
-    can_reconnect: bool,
-    has_pending_host_key_verification: bool,
-    has_credential_request: bool,
-    has_ssh_mfa_request: bool,
     has_selection: bool,
     selection_text: Option<String>,
     accepts_live_input: bool,
@@ -14,28 +9,6 @@ struct TerminalViewportState {
     show_scrollbar: bool,
     is_locked: bool,
     hide_output: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ConnectionStatusPresentation {
-    Banner,
-    Dialog,
-}
-
-pub(super) fn connection_status_presentation(
-    connection_state: &ConnectionState,
-    has_pending_host_key_verification: bool,
-    has_credential_request: bool,
-    has_ssh_mfa_request: bool,
-) -> Option<ConnectionStatusPresentation> {
-    if has_pending_host_key_verification || matches!(connection_state, ConnectionState::Connected) {
-        return None;
-    }
-    if has_credential_request || has_ssh_mfa_request {
-        Some(ConnectionStatusPresentation::Dialog)
-    } else {
-        Some(ConnectionStatusPresentation::Banner)
-    }
 }
 
 pub(super) fn terminal_viewport_bounds(
@@ -54,20 +27,6 @@ pub(super) fn terminal_viewport_bounds(
             (intersection.bottom() - surface_bounds.origin.y).max(px(0.0)),
         ),
     )
-}
-
-#[cfg(test)]
-pub(super) fn should_show_connection_overlay(
-    connection_state: &ConnectionState,
-    has_pending_host_key_verification: bool,
-) -> bool {
-    connection_status_presentation(
-        connection_state,
-        has_pending_host_key_verification,
-        false,
-        false,
-    )
-    .is_some()
 }
 
 impl TerminalView {
@@ -100,8 +59,6 @@ impl TerminalView {
     ) -> TerminalViewportState {
         let accepts_live_input = self.accepts_live_terminal_input(cx);
         let terminal = self.terminal.read(cx);
-        let connection_state = terminal.connection_state().clone();
-        let can_reconnect = terminal.can_reconnect();
         let selection_text = self
             .terminal_frame_snapshot
             .block_selection_text
@@ -113,12 +70,6 @@ impl TerminalView {
         let history_size = self.terminal_frame_snapshot.history_size;
         TerminalViewportState {
             font_family,
-            connection_state,
-            can_reconnect,
-            has_pending_host_key_verification: terminal.host_key_verification_request().is_some(),
-            has_credential_request: terminal.ssh_credential_request().is_some()
-                || terminal.telnet_credential_request().is_some(),
-            has_ssh_mfa_request: terminal.ssh_mfa_request().is_some(),
             has_selection,
             selection_text,
             accepts_live_input,
@@ -136,12 +87,6 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus_handle = self.focus_handle.clone();
-        let connection_status = connection_status_presentation(
-            &state.connection_state,
-            state.has_pending_host_key_verification,
-            state.has_credential_request,
-            state.has_ssh_mfa_request,
-        );
         div()
             .track_focus(&focus_handle)
             .key_context(TERMINAL_CONTEXT)
@@ -180,14 +125,6 @@ impl TerminalView {
             .when_some(self.render_addon_tooltip(), |this, tooltip| {
                 this.child(tooltip)
             })
-            .when(
-                connection_status == Some(ConnectionStatusPresentation::Banner),
-                |this| this.child(self.render_connection_banner(state.can_reconnect, cx)),
-            )
-            .when(
-                connection_status == Some(ConnectionStatusPresentation::Dialog),
-                |this| this.child(self.render_connection_dialog(cx)),
-            )
             .into_any_element()
     }
 
