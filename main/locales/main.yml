@@ -2588,14 +2588,6 @@ Settings:
         en: Tabs
         zh-CN: Tab 缩进
         zh-HK: Tab 縮排
-      custom_wrappers:
-        en: Custom Script Wrappers
-        zh-CN: 自定义脚本包裹符
-        zh-HK: 自定義腳本包裹符
-      custom_wrappers_desc:
-        en: Space-separated start/end pairs kept as-is when formatting, e.g. <% %> @{ }
-        zh-CN: 格式化时整段保留的成对起止符，用空格分隔，如 <% %> @{ }
-        zh-HK: 格式化時整段保留的成對起止符，用空格分隔，如 <% %> @{ }
       preview:
         en: Live Preview
         zh-CN: 实时预览

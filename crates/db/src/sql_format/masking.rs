@@ -1,20 +1,8 @@
-use std::cmp::Reverse;
-
-/// 内嵌参数掩码：把 `${...}`、`#{...}`、`{{...}}` 以及用户自定义包裹符片段
-/// 替换为占位标记，避免 sqlformat 把动态 SQL 片段当作普通文本排版破坏。
-/// 内置片段按大括号配平计数，字符串字面量（含反斜杠转义）内的大括号不参与配平；
-/// 自定义包裹符按起止符字面匹配。起始符更长者优先，避免前缀重叠误匹配。
-pub(super) fn mask_embedded_parameters(
-    sql: &str,
-    custom_wrappers: &[(String, String)],
-) -> (String, Vec<(String, String)>) {
+/// 内嵌参数掩码：把 `${...}`、`#{...}`、`{{...}}` 模板片段替换为占位标记，
+/// 避免 sqlformat 把动态 SQL 片段当作普通文本排版破坏。
+/// 扫描按大括号配平计数，字符串字面量（含反斜杠转义）内的大括号不参与配平。
+pub(super) fn mask_embedded_parameters(sql: &str) -> (String, Vec<(String, String)>) {
     let marker_prefix = unique_marker_prefix(sql);
-    let mut custom: Vec<(&str, &str)> = custom_wrappers
-        .iter()
-        .map(|(start, end)| (start.as_str(), end.as_str()))
-        .collect();
-    custom.sort_by_key(|(start, _)| Reverse(start.len()));
-
     let mut masked = String::with_capacity(sql.len());
     let mut parameters = Vec::new();
     let mut cursor = 0;
@@ -22,9 +10,8 @@ pub(super) fn mask_embedded_parameters(
     while cursor < sql.len() {
         let remaining = &sql[cursor..];
 
-        let Some(parameter_end) = scan_custom(remaining, &custom)
-            .or_else(|| scan_builtin(remaining))
-        else {
+        let Some(parameter_end) = scan_builtin(remaining) else {
+            // 未闭合的片段原样保留，交由后续字符逐个透传
             push_char(remaining, &mut masked, &mut cursor);
             continue;
         };
@@ -37,16 +24,6 @@ pub(super) fn mask_embedded_parameters(
     }
 
     (masked, parameters)
-}
-
-/// 匹配用户自定义包裹符，返回消耗的字节数
-fn scan_custom(remaining: &str, custom: &[(&str, &str)]) -> Option<usize> {
-    let (start, end) = custom
-        .iter()
-        .find(|(start, _)| remaining.starts_with(start))?;
-    let content = &remaining[start.len()..];
-    let relative_end = content.find(end)?;
-    Some(start.len() + relative_end + end.len())
 }
 
 /// 匹配内置模板片段（`${`/`#{` 单括号配平，`{{` 双括号配平），返回消耗的字节数
