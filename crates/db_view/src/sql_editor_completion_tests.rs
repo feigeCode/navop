@@ -2058,6 +2058,11 @@ mod tests {
         assert_eq!(item_new_text(&items[0]), "test2.");
         assert_eq!(items[0].kind, Some(CompletionItemKind::MODULE));
 
+        let current =
+            qualifier_name_items(&schema, &LocalSqlContext::TableName, "AP", hover_range());
+        assert_eq!(item_labels(&current), vec!["app".to_string()]);
+        assert_eq!(item_new_text(&current[0]), "app.");
+
         // 不匹配的前缀不出现在列表
         let none = qualifier_name_items(&schema, &LocalSqlContext::TableName, "zzz", hover_range());
         assert!(none.is_empty());
@@ -2131,7 +2136,16 @@ mod cross_schema_provider_tests {
             })
             .unwrap()
         });
-        let (qualifiers, tables, columns, from_tables, from_prefix, scoped_tables) = handle
+        let (
+            qualifiers,
+            current_qualifier,
+            tables,
+            columns,
+            from_tables,
+            from_prefix,
+            from_current_qualifier,
+            scoped_tables,
+        ) = handle
             .update(cx, |root, window, cx| {
                 let input = root.0.clone();
                 let mut run = |rope: Rope| {
@@ -2144,11 +2158,13 @@ mod cross_schema_provider_tests {
                     })
                 };
                 let t1 = run(Rope::from_str("SELECT te"));
-                let t2 = run(Rope::from_str("SELECT * FROM test2."));
-                let t3 = run(Rope::from_str("SELECT test2.t1."));
-                let t4 = run(Rope::from_str("SELECT * FROM "));
-                let t5 = run(Rope::from_str("SELECT * FROM us"));
-                let t6 = run(Rope::from_str("SELECT * FROM app."));
+                let t2 = run(Rope::from_str("SELECT ap"));
+                let t3 = run(Rope::from_str("SELECT * FROM test2."));
+                let t4 = run(Rope::from_str("SELECT test2.t1."));
+                let t5 = run(Rope::from_str("SELECT * FROM "));
+                let t6 = run(Rope::from_str("SELECT * FROM us"));
+                let t7 = run(Rope::from_str("SELECT * FROM ap"));
+                let t8 = run(Rope::from_str("SELECT * FROM app."));
                 cx.spawn(async move |_, _| {
                     let labels = |response: anyhow::Result<CompletionResponse>| -> anyhow::Result<Vec<String>> {
                         let items = match response? {
@@ -2164,6 +2180,8 @@ mod cross_schema_provider_tests {
                         labels(t4.await)?,
                         labels(t5.await)?,
                         labels(t6.await)?,
+                        labels(t7.await)?,
+                        labels(t8.await)?,
                     ))
                 })
             })
@@ -2174,6 +2192,10 @@ mod cross_schema_provider_tests {
         assert!(
             qualifiers.iter().any(|label| label == "test2"),
             "输入库名前缀应提示其他数据库，实际 {qualifiers:?}"
+        );
+        assert!(
+            current_qualifier.iter().any(|label| label == "app"),
+            "输入当前库前缀应提示选中的数据库，实际 {current_qualifier:?}"
         );
         assert!(
             tables.iter().any(|label| label == "t1"),
@@ -2190,6 +2212,10 @@ mod cross_schema_provider_tests {
         assert!(
             from_prefix.iter().any(|label| label == "users"),
             "`FROM us` 应按前缀提示当前数据库的表，实际 {from_prefix:?}"
+        );
+        assert!(
+            from_current_qualifier.iter().any(|label| label == "app"),
+            "`FROM ap` 应提示选中的数据库，实际 {from_current_qualifier:?}"
         );
         assert!(
             scoped_tables.iter().any(|label| label == "users"),

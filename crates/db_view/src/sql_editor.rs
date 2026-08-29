@@ -101,9 +101,9 @@ pub struct SqlSchema {
     pub functions: Vec<(String, String)>, // (signature, doc)
     /// 表→列映射，每列包含 (name, data_type, doc)
     pub columns_by_table: std::collections::HashMap<String, Vec<(String, String, String)>>,
-    /// 其他可用 database/schema（qualifier）列表，由视图层按方言填充
-    /// （MySQL/ClickHouse 等为其他数据库；PG/MSSQL 等为当前库的其他 schema）。
-    /// 不包含当前 database/schema。
+    /// 可用 database/schema（qualifier）列表，由视图层按方言填充。
+    /// 当前 database/schema 由 `current_database` / `current_schema` 单独保存，
+    /// completion 构建时与这里的外部 qualifier 合并。
     pub qualifiers: Vec<(String, String)>,
     /// 已懒加载的外部 qualifier 元数据，key 为 qualifier 小写名。
     pub foreign_schemas: std::collections::HashMap<String, ForeignSchema>,
@@ -1047,7 +1047,7 @@ pub(crate) fn column_list_items(
     sort_and_truncate(items)
 }
 
-/// 其他 database/schema（qualifier）名补全项，接受后插入 `name.` 触发表名补全。
+/// database/schema（qualifier）名补全项，接受后插入 `name.` 触发表名补全。
 pub(crate) fn qualifier_name_items(
     schema: &SqlSchema,
     context: &SqlContext,
@@ -1059,9 +1059,36 @@ pub(crate) fn qualifier_name_items(
         current_word,
         replace_range,
     };
-    let mut items = Vec::new();
+    let mut candidates = Vec::new();
+    if let Some(database) = &schema.current_database {
+        candidates.push((
+            database.clone(),
+            t!("SqlEditor.database_object").to_string(),
+        ));
+    }
+    if let Some(current_schema) = &schema.current_schema {
+        if !candidates
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(current_schema))
+        {
+            candidates.push((
+                current_schema.clone(),
+                t!("SqlEditor.schema_object").to_string(),
+            ));
+        }
+    }
     for (name, doc) in &schema.qualifiers {
-        if !ctx.matches(name) {
+        if !candidates
+            .iter()
+            .any(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        {
+            candidates.push((name.clone(), doc.clone()));
+        }
+    }
+
+    let mut items = Vec::new();
+    for (name, doc) in candidates {
+        if !ctx.matches(&name) {
             continue;
         }
         ctx.push(
@@ -1071,7 +1098,7 @@ pub(crate) fn qualifier_name_items(
             CompletionItemKind::MODULE,
             completion_priority::QUALIFIERS_BASE,
             Some(doc.clone()),
-            (!doc.is_empty()).then(|| doc.clone()),
+            (!doc.is_empty()).then_some(doc),
         );
     }
     sort_and_truncate(items)
