@@ -12,15 +12,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
-use db::sql_editor::signature::{
-    SqlRoutineSignature, SqlSignatureHelp, signature_help,
-};
+use db::sql_editor::signature::{SqlRoutineSignature, SqlSignatureHelp, signature_help};
 use gpui::{App, AppContext, Task, Window};
 use gpui_component::Rope;
 use gpui_component::input::SignatureHelpProvider;
 use lsp_types::{
-    Documentation, ParameterInformation, ParameterLabel,
-    SignatureHelp as LspSignatureHelp, SignatureInformation,
+    Documentation, ParameterInformation, ParameterLabel, SignatureHelp as LspSignatureHelp,
+    SignatureInformation,
 };
 
 use crate::sql_editor::SqlSchema;
@@ -102,10 +100,7 @@ pub fn routines_from_schema(schema: &SqlSchema) -> Vec<SqlRoutineSignature> {
 }
 
 /// Parse a `name(arg1, arg2)` fragment into a [`SqlRoutineSignature`].
-pub fn routine_signature_from_fragment(
-    fragment: &str,
-    doc: &str,
-) -> Option<SqlRoutineSignature> {
+pub fn routine_signature_from_fragment(fragment: &str, doc: &str) -> Option<SqlRoutineSignature> {
     let trimmed = fragment.trim();
     if trimmed.is_empty() {
         return None;
@@ -179,10 +174,7 @@ pub fn help_to_lsp(help: &SqlSignatureHelp) -> LspSignatureHelp {
                 .collect::<Vec<_>>();
             let mut information = SignatureInformation {
                 label: signature.label.clone(),
-                documentation: signature
-                    .documentation
-                    .clone()
-                    .map(Documentation::String),
+                documentation: signature.documentation.clone().map(Documentation::String),
                 parameters: Some(parameters),
                 active_parameter: None,
             };
@@ -209,10 +201,7 @@ mod tests {
             ("count(*)", "Count all rows"),
             ("count(col)", "Count non-NULL values"),
             ("coalesce(a, b, c)", "Return first non-NULL"),
-            (
-                "substring(s, start, len)",
-                "Extract a substring",
-            ),
+            ("substring(s, start, len)", "Extract a substring"),
             ("noargs()", "Takes no arguments"),
         ])
     }
@@ -227,8 +216,7 @@ mod tests {
 
     #[test]
     fn parse_multi_param_fragment() {
-        let signature =
-            routine_signature_from_fragment("coalesce(a, b, c)", "").unwrap();
+        let signature = routine_signature_from_fragment("coalesce(a, b, c)", "").unwrap();
         assert_eq!(vec!["a", "b", "c"], signature.parameters);
         assert_eq!("coalesce(a, b, c)", signature.label);
     }

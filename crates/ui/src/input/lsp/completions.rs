@@ -6,6 +6,9 @@ use lsp_types::{
     request::Completion,
 };
 use ropey::Rope;
+use sum_tree::Bias;
+
+use crate::input::RopeExt;
 use std::{cell::RefCell, ops::Range, rc::Rc, time::Duration};
 
 use crate::input::{
@@ -158,6 +161,30 @@ impl InputState {
                     insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
                 });
         cx.notify();
+    }
+
+    /// 以当前光标前最后一个字符重新触发一次补全查询。
+    ///
+    /// 用于元数据（如外部 database/schema）异步就绪后刷新补全弹窗：
+    /// `invalidate_completions` 只会关闭弹窗，不会重新查询。
+    /// 光标前不是可触发字符（空格、行首等）时不做任何事。
+    pub fn refresh_completion_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.completion_inserting {
+            return;
+        }
+        let cursor = self.cursor();
+        let start = self
+            .text
+            .clip_offset(cursor.saturating_sub(1), Bias::Left);
+        let Some(last_char) = self.text.char_at(start) else {
+            return;
+        };
+        if !(last_char.is_ascii_alphanumeric() || last_char == '_' || last_char == '.') {
+            return;
+        }
+        let range = start..cursor;
+        let new_text = self.text.slice(range.clone()).to_string();
+        self.handle_completion_trigger(&range, &new_text, window, cx);
     }
 
     pub(crate) fn handle_completion_trigger(

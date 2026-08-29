@@ -863,21 +863,15 @@ pub(crate) fn find_columns_with_foreign<'a>(
     table: &str,
 ) -> Option<&'a Vec<(String, String, String)>> {
     find_schema_columns(schema, table).or_else(|| {
-        schema
-            .foreign_schemas
-            .values()
-            .find_map(|foreign| {
+        schema.foreign_schemas.values().find_map(|foreign| {
+            foreign.columns_by_table.get(table).or_else(|| {
                 foreign
                     .columns_by_table
-                    .get(table)
-                    .or_else(|| {
-                        foreign
-                            .columns_by_table
-                            .iter()
-                            .find(|(key, _)| key.eq_ignore_ascii_case(table))
-                            .map(|(_, value)| value)
-                    })
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(table))
+                    .map(|(_, value)| value)
             })
+        })
     })
 }
 
@@ -904,7 +898,10 @@ impl ItemBuildContext<'_> {
     fn matched_prefix(&self, label: &str) -> String {
         let upper = label.to_uppercase();
         if !self.current_word.is_empty() && upper.starts_with(self.current_word) {
-            label.chars().take(self.current_word.chars().count()).collect()
+            label
+                .chars()
+                .take(self.current_word.chars().count())
+                .collect()
         } else {
             String::new()
         }
@@ -945,7 +942,8 @@ impl ItemBuildContext<'_> {
         doc: Option<String>,
     ) {
         let filter_text = self.matched_prefix(&label);
-        let sort_text = completion_priority::score_to_sort_text(self.score(&label, kind, base), &label);
+        let sort_text =
+            completion_priority::score_to_sort_text(self.score(&label, kind, base), &label);
         items.push(CompletionItem {
             label,
             kind: Some(kind),
@@ -1103,7 +1101,10 @@ pub(crate) fn pending_foreign_qualifiers(text: &str, schema: &SqlSchema) -> Vec<
         if pair[1].kind != SqlTokenKind::Dot {
             continue;
         }
-        if !matches!(pair[0].kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+        if !matches!(
+            pair[0].kind,
+            SqlTokenKind::Ident | SqlTokenKind::QuotedIdent
+        ) {
             continue;
         }
         let name = completion_identifier_text(&pair[0]);
@@ -1114,8 +1115,14 @@ pub(crate) fn pending_foreign_qualifiers(text: &str, schema: &SqlSchema) -> Vec<
         else {
             continue;
         };
-        let cached = schema.foreign_schemas.contains_key(&qualifier.to_lowercase());
-        if !cached && !found.iter().any(|item| item.eq_ignore_ascii_case(qualifier)) {
+        let cached = schema
+            .foreign_schemas
+            .contains_key(&qualifier.to_lowercase());
+        if !cached
+            && !found
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(qualifier))
+        {
             found.push(qualifier.clone());
         }
     }
@@ -1257,19 +1264,18 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 // 多级限定链（db.tbl. / schema.tbl.）直接按元数据解析，不走别名解析
                 if chain.len() >= 2 {
                     let items = match sql_dot_completion_target_for_chain(&schema, &chain) {
-                        SqlDotCompletionTarget::ForeignTables(name) => find_foreign_schema(
-                            &schema,
-                            &name,
-                        )
-                        .map(|foreign| {
-                            foreign_table_items(
-                                foreign,
-                                &SqlContext::TableName,
-                                &current_word,
-                                replace_range,
-                            )
-                        })
-                        .unwrap_or_default(),
+                        SqlDotCompletionTarget::ForeignTables(name) => {
+                            find_foreign_schema(&schema, &name)
+                                .map(|foreign| {
+                                    foreign_table_items(
+                                        foreign,
+                                        &SqlContext::TableName,
+                                        &current_word,
+                                        replace_range,
+                                    )
+                                })
+                                .unwrap_or_default()
+                        }
                         SqlDotCompletionTarget::ForeignColumns(qualifier, table) => {
                             find_foreign_schema(&schema, &qualifier)
                                 .map(|foreign| {
@@ -1569,6 +1575,17 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     }
                 }
                 // 其他 database/schema 候选（接受后插入 `name.`）
+                items.extend(qualifier_name_items(
+                    &schema,
+                    &context,
+                    &current_word,
+                    replace_range,
+                ));
+            }
+
+            // 限定引用在列位置同样合法（SELECT test2.tbl. / WHERE test2.tbl.col = ...），
+            // 因此列上下文也要提供其他 database/schema 候选。
+            if show_columns {
                 items.extend(qualifier_name_items(
                     &schema,
                     &context,

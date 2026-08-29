@@ -7,8 +7,8 @@ mod tests {
     use crate::sql_editor::{
         DefaultSqlCompletionProvider, SqlCompletionSources, SqlDotCompletionTarget, SqlSchema,
         TableMentionCompletionProvider, clip_sql_offset, current_statement_has_from_keyword,
-        cursor_is_in_sql_literal_or_comment, insert_column_target_table,
-        sql_dot_completion_target, update_target_table,
+        cursor_is_in_sql_literal_or_comment, insert_column_target_table, sql_dot_completion_target,
+        update_target_table,
     };
     use db::plugin::SqlCompletionInfo;
     use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext};
@@ -1906,7 +1906,10 @@ mod tests {
         );
 
         let sql = "SELECT test.us";
-        assert_eq!(dot_qualifier_chain(sql, sql.len()), vec!["test".to_string()]);
+        assert_eq!(
+            dot_qualifier_chain(sql, sql.len()),
+            vec!["test".to_string()]
+        );
 
         let sql = "SELECT a.b.c.";
         assert_eq!(
@@ -1915,7 +1918,10 @@ mod tests {
         );
 
         let sql = "SELECT users.";
-        assert_eq!(dot_qualifier_chain(sql, sql.len()), vec!["users".to_string()]);
+        assert_eq!(
+            dot_qualifier_chain(sql, sql.len()),
+            vec!["users".to_string()]
+        );
 
         assert!(dot_qualifier_chain("SELECT 1", 8).is_empty());
     }
@@ -2000,7 +2006,9 @@ mod tests {
         );
 
         // 已缓存后不再触发
-        let cached_schema = pending_schema.clone().with_foreign_schema(foreign_schema_fixture());
+        let cached_schema = pending_schema
+            .clone()
+            .with_foreign_schema(foreign_schema_fixture());
         assert!(pending_foreign_qualifiers(sql, &cached_schema).is_empty());
     }
 
@@ -2045,23 +2053,13 @@ mod tests {
     #[test]
     fn qualifier_items_insert_trailing_dot() {
         let schema = cross_schema_fixture();
-        let items = qualifier_name_items(
-            &schema,
-            &LocalSqlContext::TableName,
-            "TE",
-            hover_range(),
-        );
+        let items = qualifier_name_items(&schema, &LocalSqlContext::TableName, "TE", hover_range());
         assert_eq!(item_labels(&items), vec!["test2".to_string()]);
         assert_eq!(item_new_text(&items[0]), "test2.");
         assert_eq!(items[0].kind, Some(CompletionItemKind::MODULE));
 
         // 不匹配的前缀不出现在列表
-        let none = qualifier_name_items(
-            &schema,
-            &LocalSqlContext::TableName,
-            "zzz",
-            hover_range(),
-        );
+        let none = qualifier_name_items(&schema, &LocalSqlContext::TableName, "zzz", hover_range());
         assert!(none.is_empty());
     }
 
@@ -2079,5 +2077,101 @@ mod tests {
 
         // 都没有 → None
         assert!(find_columns_with_foreign(&schema, "missing").is_none());
+    }
+}
+
+// =========================================================================
+// **Feature: 跨库限定名补全 —— provider 端到端行为（gpui 测试）**
+// =========================================================================
+
+#[cfg(test)]
+mod cross_schema_provider_tests {
+    use crate::sql_editor::{DefaultSqlCompletionProvider, ForeignSchema, SqlSchema};
+    use gpui::{div, AppContext, Context, Entity, IntoElement, Render, Window};
+    use gpui_component::input::{CompletionProvider, InputState};
+    use gpui_component::{Rope, Theme};
+    use lsp_types::{CompletionContext, CompletionTriggerKind, CompletionResponse};
+    use std::collections::HashMap;
+
+    struct Root(Entity<InputState>);
+
+    impl Render for Root {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn cross_schema_fixture() -> SqlSchema {
+        let mut columns_by_table = HashMap::new();
+        columns_by_table.insert(
+            "t1".to_string(),
+            vec![("c1".to_string(), "INT".to_string(), String::new())],
+        );
+        SqlSchema::default()
+            .with_scope(Some("app".to_string()), None)
+            .with_tables([("users", "")])
+            .with_qualifiers(vec![("test2".to_string(), "Database".to_string())])
+            .with_foreign_schema(ForeignSchema {
+                name: "test2".to_string(),
+                tables: vec![("t1".to_string(), String::new())],
+                columns_by_table,
+                table_details: HashMap::new(),
+            })
+    }
+
+    #[gpui::test]
+    async fn provider_completes_qualifiers_tables_and_columns(cx: &mut gpui::TestAppContext) {
+        let provider = DefaultSqlCompletionProvider::new(cross_schema_fixture());
+
+        let handle = cx.update(|cx| {
+            cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                let input = cx.new(|cx| InputState::new(window, cx));
+                cx.new(|_| Root(input))
+            })
+            .unwrap()
+        });
+        let (qualifiers, tables, columns) = handle
+            .update(cx, |root, window, cx| {
+                let input = root.0.clone();
+                let mut run = |rope: Rope| {
+                    input.update(cx, |_state, cx| {
+                        let trigger = CompletionContext {
+                            trigger_kind: CompletionTriggerKind::INVOKED,
+                            trigger_character: None,
+                        };
+                        provider.completions(&rope, rope.len(), trigger, window, cx)
+                    })
+                };
+                let t1 = run(Rope::from_str("SELECT te"));
+                let t2 = run(Rope::from_str("SELECT * FROM test2."));
+                let t3 = run(Rope::from_str("SELECT test2.t1."));
+                cx.spawn(async move |_, _| {
+                    let labels = |response: anyhow::Result<CompletionResponse>| -> anyhow::Result<Vec<String>> {
+                        let items = match response? {
+                            CompletionResponse::Array(items) => items,
+                            CompletionResponse::List(list) => list.items,
+                        };
+                        Ok(items.into_iter().map(|item| item.label).collect())
+                    };
+                    anyhow::Ok((labels(t1.await)?, labels(t2.await)?, labels(t3.await)?))
+                })
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert!(
+            qualifiers.iter().any(|label| label == "test2"),
+            "输入库名前缀应提示其他数据库，实际 {qualifiers:?}"
+        );
+        assert!(
+            tables.iter().any(|label| label == "t1"),
+            "`db.` 应提示该库的表，实际 {tables:?}"
+        );
+        assert!(
+            columns.iter().any(|label| label == "c1"),
+            "`db.tbl.` 应提示该表的列，实际 {columns:?}"
+        );
     }
 }

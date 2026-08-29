@@ -8,6 +8,7 @@ use crate::sql_result_tab::{
     emit_schema_changed_events,
 };
 use db::cache_manager::{GlobalNodeCache, SchemaInvalidationPlan};
+use db::plugin::SqlCompletionInfo;
 use db::sql_editor::execution::{
     SqlDocumentSnapshot, SqlExecutionRequest, SqlExecutionResultSource, SqlExecutionTarget,
     SqlMetadataScope, SqlTransactionMode as SqlExecutionTransactionMode,
@@ -18,7 +19,6 @@ use db::sql_editor::statement_ranges::{
     SqlDialect, SqlStatementRange, SqlStatementSnapshot, SqlTextRange, StatementIndex,
     WindowedStatementScan, line_scans_neutral, statement_starting_on_line,
 };
-use db::plugin::SqlCompletionInfo;
 use db::types::TableObjectType;
 use db::{DbManager, GlobalDbState, SqlFormatOptions, format_sql_with_options};
 use futures::channel::oneshot;
@@ -327,9 +327,9 @@ fn current_statement_frame_decorations(
 /// follows it. Quoted identifiers keep their inner value after unquoting.
 fn insert_target_table(statement: &str) -> Option<String> {
     let tokens = SqlTokenizer::new(statement).tokenize();
-    let insert = tokens.iter().position(|token| {
-        matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Insert))
-    })?;
+    let insert = tokens
+        .iter()
+        .position(|token| matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Insert)))?;
     let mut name: Option<String> = None;
     for token in &tokens[insert + 1..] {
         match token.kind {
@@ -1045,6 +1045,9 @@ enum QueryToolbarAction {
 /// 查询工具栏高度，参考 dbx EditorToolbar 的单行紧凑布局。
 const QUERY_TOOLBAR_HEIGHT: Pixels = px(36.0);
 
+/// 工具栏下拉框与图标按钮的统一控件高度（Button Small），保证单行对齐。
+const QUERY_TOOLBAR_CONTROL_HEIGHT: Pixels = px(28.0);
+
 /// 查询工具栏图标按钮的描述。
 struct QueryToolbarButtonSpec {
     id: &'static str,
@@ -1340,10 +1343,12 @@ impl SqlEditorTab {
             )
             .searchable(true)
         });
-        let database_select =
-            cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx));
-        let schema_select =
-            cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx));
+        let database_select = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
+        });
+        let schema_select = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(vec![]), None, window, cx).searchable(true)
+        });
         let transaction_mode_select = cx.new(|cx| {
             SelectState::new(
                 transaction_mode_options(),
@@ -1773,10 +1778,7 @@ impl SqlEditorTab {
             .iter()
             .map(|hint| {
                 InputInlineWidget::new(
-                    format!(
-                        "insert-hint:{revision}:{statement_start}:{}",
-                        hint.offset
-                    ),
+                    format!("insert-hint:{revision}:{statement_start}:{}", hint.offset),
                     statement_start + hint.offset,
                     hint.column.clone(),
                 )
@@ -1785,9 +1787,7 @@ impl SqlEditorTab {
         let values_highlight = hints
             .first()
             .zip(hints.last())
-            .map(|(first, last)| {
-                statement_start + first.offset..statement_start + last.offset + 1
-            });
+            .map(|(first, last)| statement_start + first.offset..statement_start + last.offset + 1);
 
         self.insert_hints = hints;
         self.insert_hints_statement_start = statement_start;
@@ -1927,14 +1927,16 @@ impl SqlEditorTab {
     fn bind_editor_input_observe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editor_input = self.editor.read(cx).input();
         self._editor_input_subscription =
-            Some(cx.observe_in(&editor_input, window, |this, _editor_input, window, cx| {
-                if this.viewport_statement_scan_is_stale(cx) {
-                    this.schedule_statement_snapshot_refresh(cx);
-                }
-                this.refresh_current_statement_frame(cx);
-                this.refresh_insert_value_hints(cx);
-                this.refresh_signature_help(window, cx);
-            }));
+            Some(
+                cx.observe_in(&editor_input, window, |this, _editor_input, window, cx| {
+                    if this.viewport_statement_scan_is_stale(cx) {
+                        this.schedule_statement_snapshot_refresh(cx);
+                    }
+                    this.refresh_current_statement_frame(cx);
+                    this.refresh_insert_value_hints(cx);
+                    this.refresh_signature_help(window, cx);
+                }),
+            );
     }
 
     fn viewport_statement_scan_is_stale(&self, cx: &App) -> bool {
@@ -2217,6 +2219,7 @@ impl SqlEditorTab {
         let editor_input = self.editor.read(cx).input();
         let file_path = self.file_path.clone();
         let editor_entity = self.editor.clone();
+        let window_handle = window.window_handle();
 
         cx.subscribe_in(
             &editor_input,
@@ -2226,7 +2229,7 @@ impl SqlEditorTab {
                     this.schedule_statement_snapshot_refresh(cx);
                     this.schedule_diagnostics(cx);
                     // 跨库/跨 schema 限定名引用的元数据懒加载
-                    this.schedule_foreign_schema_prefetch(cx);
+                    this.schedule_foreign_schema_prefetch(window_handle, cx);
                     // 标记为已修改
                     is_dirty.store(true, Ordering::Relaxed);
 
@@ -2918,19 +2921,28 @@ impl SqlEditorTab {
     }
 
     /// 文本变化时检测外部 qualifier 引用（`q.` 模式）并触发元数据懒加载。
-    fn schedule_foreign_schema_prefetch(&mut self, cx: &mut Context<Self>) {
+    fn schedule_foreign_schema_prefetch(
+        &mut self,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         let text = self.get_sql_text(cx);
         if text.is_empty() {
             return;
         }
         let schema = self.schema_snapshot.read().clone();
         for name in pending_foreign_qualifiers(&text, &schema) {
-            self.spawn_foreign_schema_fetch(name, cx);
+            self.spawn_foreign_schema_fetch(name, window_handle, cx);
         }
     }
 
     /// 懒加载一个外部 qualifier 的表/列元数据，完成后合并进补全快照。
-    fn spawn_foreign_schema_fetch(&mut self, qualifier: String, cx: &mut Context<Self>) {
+    fn spawn_foreign_schema_fetch(
+        &mut self,
+        qualifier: String,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         if !self
             .foreign_prefetch_inflight
             .lock()
@@ -2947,6 +2959,7 @@ impl SqlEditorTab {
 
         let global_state = cx.global::<GlobalDbState>().clone();
         let connection_id = self.connection_id.clone();
+        let editor = self.editor.clone();
         let task = Tokio::spawn_result(cx, {
             let global_state = global_state.clone();
             let connection_id = connection_id.clone();
@@ -2969,6 +2982,15 @@ impl SqlEditorTab {
             match result {
                 Ok(foreign) => {
                     let _ = this.update(cx, |this, cx| this.merge_foreign_schema(foreign, cx));
+                    // 元数据异步就绪后主动重新触发补全查询，弹窗无需再等下一次击键
+                    let _ = cx.update_window(window_handle, move |_view, window, cx| {
+                        editor.update(cx, |editor, cx| {
+                            let input = editor.input();
+                            input.update(cx, |state, cx| {
+                                state.refresh_completion_popup(window, cx)
+                            });
+                        });
+                    });
                 }
                 Err(e) => {
                     error!("Failed to lazy-load schema '{qualifier}': {e}");
@@ -3754,7 +3776,8 @@ impl SqlEditorTab {
         let window_option = cx.active_window();
         let format_options = SqlFormatOptions::from_settings(&AppSettings::global(cx).sql_format);
         // 格式化在后台线程执行，避免大文本卡住 UI 线程；完成后回到主线程写回编辑器。
-        let heavy = cx.background_spawn(async move { format_sql_with_options(&text, format_options) });
+        let heavy =
+            cx.background_spawn(async move { format_sql_with_options(&text, format_options) });
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let formatted = heavy.await;
             entity
@@ -4230,7 +4253,8 @@ impl SqlEditorTab {
         } else {
             query_toolbar_action(is_query_executing, has_selection)
         };
-        let transaction_finishing = is_manual_transaction_starting || is_manual_transaction_finishing;
+        let transaction_finishing =
+            is_manual_transaction_starting || is_manual_transaction_finishing;
         let transaction_unavailable =
             is_query_executing || transaction_finishing || !has_manual_transaction;
 
@@ -4315,11 +4339,14 @@ impl SqlEditorTab {
                 toolbar
                     .child(query_toolbar_divider(cx))
                     .child(
-                        Select::new(&transaction_mode_select)
-                            .with_size(Size::Small)
-                            .title_prefix(t!("Query.transaction_mode_prefix"))
-                            .disabled(is_query_executing || has_manual_transaction_lifecycle)
-                            .w(px(128.)),
+                        h_flex().h(QUERY_TOOLBAR_CONTROL_HEIGHT).child(
+                            Select::new(&transaction_mode_select)
+                                .with_size(Size::Small)
+                                .title_prefix(t!("Query.transaction_mode_prefix"))
+                                .disabled(is_query_executing || has_manual_transaction_lifecycle)
+                                .h(QUERY_TOOLBAR_CONTROL_HEIGHT)
+                                .w(px(128.)),
+                        ),
                     )
                     .when(is_manual_mode, |group| {
                         group
@@ -4349,21 +4376,28 @@ impl SqlEditorTab {
             })
             .child(div().flex_1())
             .child(
-                Select::new(&connection_select)
-                    .with_size(Size::Small)
-                    .placeholder(t!("Query.select_connection"))
-                    .search_placeholder(t!("Query.search_connection"))
-                    .disabled(is_query_executing || has_manual_transaction_lifecycle)
-                    .w(px(220.)),
+                h_flex().h(QUERY_TOOLBAR_CONTROL_HEIGHT).child(
+                    Select::new(&connection_select)
+                        .with_size(Size::Small)
+                        .placeholder(t!("Query.select_connection"))
+                        .search_placeholder(t!("Query.search_connection"))
+                        .disabled(is_query_executing || has_manual_transaction_lifecycle)
+                        .h(QUERY_TOOLBAR_CONTROL_HEIGHT)
+                        .w(px(220.)),
+                ),
             )
             .when(!uses_schema_as_database, |toolbar| {
                 toolbar.child(
                     // Database selector (for non-Oracle databases)
-                    Select::new(&database_select)
-                        .with_size(Size::Small)
-                        .placeholder(t!("Query.select_database"))
-                        .disabled(has_manual_transaction_lifecycle)
-                        .w(px(200.)),
+                    h_flex().h(QUERY_TOOLBAR_CONTROL_HEIGHT).child(
+                        Select::new(&database_select)
+                            .with_size(Size::Small)
+                            .placeholder(t!("Query.select_database"))
+                            .search_placeholder(t!("Query.search_database"))
+                            .disabled(has_manual_transaction_lifecycle)
+                            .h(QUERY_TOOLBAR_CONTROL_HEIGHT)
+                            .w(px(200.)),
+                    ),
                 )
             })
             .when(
@@ -4371,15 +4405,19 @@ impl SqlEditorTab {
                 |toolbar| {
                     toolbar.child(
                         // Schema selector for PostgreSQL
-                        Select::new(&schema_select)
-                            .with_size(Size::Small)
-                            .placeholder(t!("Query.select_schema"))
-                            .disabled(has_manual_transaction_lifecycle)
-                            .w(if uses_schema_as_database {
-                                px(200.)
-                            } else {
-                                px(150.)
-                            }),
+                        h_flex().h(QUERY_TOOLBAR_CONTROL_HEIGHT).child(
+                            Select::new(&schema_select)
+                                .with_size(Size::Small)
+                                .placeholder(t!("Query.select_schema"))
+                                .search_placeholder(t!("Query.search_schema"))
+                                .disabled(has_manual_transaction_lifecycle)
+                                .h(QUERY_TOOLBAR_CONTROL_HEIGHT)
+                                .w(if uses_schema_as_database {
+                                    px(200.)
+                                } else {
+                                    px(150.)
+                                }),
+                        ),
                     )
                 },
             )
@@ -4524,7 +4562,8 @@ impl Clone for SqlEditorTab {
             _statement_task: None,
             schema_snapshot: self.schema_snapshot.clone(),
             db_completion_info: self.db_completion_info.clone(),
-            foreign_prefetch_inflight: self.foreign_prefetch_inflight.clone(),            insert_hints: self.insert_hints.clone(),
+            foreign_prefetch_inflight: self.foreign_prefetch_inflight.clone(),
+            insert_hints: self.insert_hints.clone(),
             insert_hints_statement_start: self.insert_hints_statement_start,
             insert_values_highlight: self.insert_values_highlight.clone(),
             last_insert_hints_key: self.last_insert_hints_key,
@@ -4697,8 +4736,8 @@ mod tests {
         RunCurrentQuery, SCHEMA_COLUMN_FETCH_CONCURRENCY, SQL_EDITOR_CONTEXT,
         SQL_EDITOR_INPUT_CONTEXT, SqlDiagnosticIdentity, SqlMetadataScope, StatementScanInput,
         ToggleLineComment, can_start_query_execution, can_switch_query_connection, collect_bounded,
-        current_statement_frame_decorations, initial_database_select_value,
-        insert_target_table, is_current_diagnostic_identity, is_current_manual_transaction_owner,
+        current_statement_frame_decorations, initial_database_select_value, insert_target_table,
+        is_current_diagnostic_identity, is_current_manual_transaction_owner,
         is_current_manual_transaction_start, is_current_query_context_generation,
         lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
@@ -5412,7 +5451,8 @@ mod tests {
         let sql = "select 1;\nselect 2;";
         let snapshot = SqlStatementSnapshot::new(sql, SqlDialect::from(&DatabaseType::MySQL));
 
-        let decorations = current_statement_frame_decorations(&snapshot, 3, 2, &(0..9), sql.len(), None);
+        let decorations =
+            current_statement_frame_decorations(&snapshot, 3, 2, &(0..9), sql.len(), None);
 
         assert!(decorations.is_empty());
     }
@@ -6004,10 +6044,8 @@ mod tests {
 
     #[test]
     fn lookup_table_columns_finds_case_insensitive() {
-        let schema = crate::sql_editor::SqlSchema::default().with_table_columns_typed(
-            "users",
-            [("id", "int", ""), ("name", "text", "")],
-        );
+        let schema = crate::sql_editor::SqlSchema::default()
+            .with_table_columns_typed("users", [("id", "int", ""), ("name", "text", "")]);
         assert_eq!(
             Some(vec!["id".to_string(), "name".to_string()]),
             lookup_table_columns(&schema, "users")
@@ -6022,10 +6060,8 @@ mod tests {
     #[test]
     fn current_statement_frame_merges_values_highlight() {
         let text = "INSERT INTO t (a, b) VALUES (1, 2);";
-        let snapshot = SqlStatementSnapshot::new(
-            text.to_string(),
-            SqlDialect::from(&DatabaseType::MySQL),
-        );
+        let snapshot =
+            SqlStatementSnapshot::new(text.to_string(), SqlDialect::from(&DatabaseType::MySQL));
         let statement = snapshot.statement_at_cursor(5).unwrap();
         let start = statement.sql_range.start_byte;
         let end = statement
