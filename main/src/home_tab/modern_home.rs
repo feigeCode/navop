@@ -70,9 +70,15 @@ impl HomePage {
             .size_full()
             .overflow_hidden()
             .child(
+                // 最近使用两列行依赖 flex_1 + 百分比高度；父级 items_center
+                // 会把该行一次性按内容自然高度布局（taffy 未定义宽度 pass），
+                // 导致行高度被内容“撑爆”，最终表现为最近列表缩成一条。
+                // 改成外层居中外框、内容列自身 self_stretch 占满整行，
+                // 两列行的布局链上不再经过 cross-axis center。
                 v_flex().size_full().items_center().px_5().py_3().child(
                     v_flex()
-                        .w_full()
+                        .self_stretch()
+                        .min_w_0()
                         .min_h_0()
                         .h_full()
                         .max_w(START_CENTER_MAX_WIDTH)
