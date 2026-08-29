@@ -511,6 +511,14 @@ SSH:
     en: Default working directory
     zh-CN: 默认工作目录
     zh-HK: 默認工作目錄
+  sftp_default_directory:
+    en: SFTP Initial Directory
+    zh-CN: SFTP 初始目录
+    zh-HK: SFTP 初始目錄
+  sftp_default_directory_placeholder:
+    en: Directory to open when SFTP connects
+    zh-CN: SFTP 连接后打开的目录
+    zh-HK: SFTP 連接後打開的目錄
   x11_forwarding:
     en: X11 Forwarding
     zh-CN: X11 转发

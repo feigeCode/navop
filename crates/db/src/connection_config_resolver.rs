@@ -125,6 +125,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "bastion.example.com".to_string(),
                 port: 2222,

@@ -149,6 +149,7 @@ mod tests {
         StoredConnection::new_ssh(
             "source".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "source.internal".to_string(),
                 port: 2222,

@@ -407,6 +407,7 @@ mod sensitive_copy_tests {
         StoredConnection::new_ssh(
             "Sensitive SSH".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "ssh.example.test".to_string(),
                 port: 22,

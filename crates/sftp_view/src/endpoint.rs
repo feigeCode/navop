@@ -180,6 +180,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: format!("{name}.internal"),
                 port: 22,

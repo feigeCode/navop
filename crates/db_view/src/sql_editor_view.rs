@@ -1,5 +1,8 @@
 use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
-use crate::sql_editor::{SqlColumnDetail, SqlEditor, SqlObjectType, SqlSchema, SqlTableDetail};
+use crate::sql_editor::{
+    ForeignSchema, SqlColumnDetail, SqlEditor, SqlObjectType, SqlSchema, SqlTableDetail,
+    pending_foreign_qualifiers,
+};
 use crate::sql_result_tab::{
     ExecutionState, SessionSchemaInvalidation, SessionSqlRun, SqlResultTabContainer,
     emit_schema_changed_events,
@@ -15,18 +18,19 @@ use db::sql_editor::statement_ranges::{
     SqlDialect, SqlStatementRange, SqlStatementSnapshot, SqlTextRange, StatementIndex,
     WindowedStatementScan, line_scans_neutral, statement_starting_on_line,
 };
+use db::plugin::SqlCompletionInfo;
 use db::types::TableObjectType;
 use db::{DbManager, GlobalDbState, SqlFormatOptions, format_sql_with_options};
 use futures::channel::oneshot;
 use futures::stream::{self, StreamExt};
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity,
-    EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent,
-    NoAction, ParentElement, Pixels, Point, Render, SharedString, Styled, Subscription, Task,
-    WeakEntity, Window, div, px,
+    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, ColorExt, Context,
+    Element, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding,
+    MouseMoveEvent, MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, SharedString,
+    Styled, Subscription, Task, WeakEntity, Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::input::{
     Input, InputContextMenuItem, InputEvent, InputGutterMarker, InputGutterMarkerState,
     InputInlineWidget, InputRangeDecoration, InputRangeDecorationStyle, InputState,
@@ -48,7 +52,7 @@ use parking_lot::{Mutex, RwLock};
 use ropey::{LineType, Rope};
 use rust_i18n::t;
 use smol::Timer;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::future::Future;
 use std::io;
@@ -409,6 +413,147 @@ fn is_current_diagnostic_identity(
     expected == current
 }
 
+/// 加载其他 database/schema（qualifier）名称列表，用于跨库限定名补全。
+///
+/// MySQL/ClickHouse 等 uses_schema_as_database 方言取其他数据库；
+/// PG/MSSQL/Oracle 等取当前库的其他 schema。排除当前 database/schema，
+/// 只取名字，完整元数据按需懒加载（见 `schedule_foreign_schema_prefetch`）。
+async fn load_foreign_qualifier_names(
+    global_state: &GlobalDbState,
+    cx: &mut AsyncApp,
+    connection_id: String,
+    scope: &SqlMetadataScope,
+    uses_schema_as_database: bool,
+    supports_schema: bool,
+) -> Vec<(String, String)> {
+    if !uses_schema_as_database && !supports_schema {
+        return Vec::new();
+    }
+    let kind_label = if uses_schema_as_database {
+        t!("SqlEditor.database_object").to_string()
+    } else {
+        t!("SqlEditor.schema_object").to_string()
+    };
+    let names = if uses_schema_as_database {
+        global_state
+            .list_databases(cx, connection_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        let database = scope.database.clone().unwrap_or_default();
+        global_state
+            .list_schemas(cx, connection_id, database)
+            .await
+            .unwrap_or_default()
+    };
+    let excluded = |name: &str| {
+        scope
+            .database
+            .as_deref()
+            .is_some_and(|current| current.eq_ignore_ascii_case(name))
+            || scope
+                .schema
+                .as_deref()
+                .is_some_and(|current| current.eq_ignore_ascii_case(name))
+    };
+    let mut seen = HashSet::new();
+    names
+        .into_iter()
+        .filter(|name| !name.is_empty() && !excluded(name) && seen.insert(name.to_lowercase()))
+        .map(|name| (name, kind_label.clone()))
+        .collect()
+}
+
+/// 在 Tokio runtime 内拉取一个外部 qualifier 的表/列元数据（懒加载）。
+/// 必须通过 `Tokio::spawn_result` 调用，不能在 GPUI executor 上直接轮询。
+async fn fetch_foreign_schema_metadata(
+    global_state: &GlobalDbState,
+    connection_id: &str,
+    database: &str,
+    schema: Option<String>,
+    qualifier: &str,
+) -> anyhow::Result<ForeignSchema> {
+    let tables = global_state
+        .list_tables_direct(connection_id, database, schema.clone())
+        .await?;
+    // 先拷贝出表名，避免借用闭包在 Tokio 'static future 中的高阶生命周期推断问题
+    let mut table_names: Vec<(usize, String)> = Vec::with_capacity(tables.len());
+    for (index, table) in tables.iter().enumerate() {
+        table_names.push((index, table.name.clone()));
+    }
+    let column_results = collect_bounded(
+        table_names,
+        SCHEMA_COLUMN_FETCH_CONCURRENCY,
+        |(index, table_name)| {
+            let global_state = global_state.clone();
+            let connection_id = connection_id.to_string();
+            let database = database.to_string();
+            let schema = schema.clone();
+            async move {
+                let columns = global_state
+                    .list_columns_direct(&connection_id, &database, schema, &table_name)
+                    .await;
+                (index, columns)
+            }
+        },
+    )
+    .await;
+
+    let mut foreign = ForeignSchema {
+        name: qualifier.to_string(),
+        tables: Vec::with_capacity(tables.len()),
+        columns_by_table: HashMap::new(),
+        table_details: HashMap::new(),
+    };
+    for (table_index, columns) in column_results {
+        let Some(table) = tables.get(table_index) else {
+            continue;
+        };
+        let description = match &table.comment {
+            Some(comment) => format!("Table: {} - {}", table.name, comment),
+            None => format!("Table: {}", table.name),
+        };
+        foreign.tables.push((table.name.clone(), description));
+        if let Ok(columns) = columns {
+            foreign.columns_by_table.insert(
+                table.name.clone(),
+                columns
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.name.clone(),
+                            c.data_type.clone(),
+                            c.comment.clone().unwrap_or_default(),
+                        )
+                    })
+                    .collect(),
+            );
+            let detail = SqlTableDetail {
+                object_type: match table.object_type {
+                    TableObjectType::Table => SqlObjectType::Table,
+                    TableObjectType::View => SqlObjectType::View,
+                },
+                schema: table.schema.clone(),
+                comment: table.comment.clone(),
+                engine: table.engine.clone(),
+                columns: columns
+                    .iter()
+                    .map(|c| SqlColumnDetail {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        is_nullable: c.is_nullable,
+                        is_primary_key: c.is_primary_key,
+                        default_value: c.default_value.clone(),
+                        comment: c.comment.clone(),
+                    })
+                    .collect(),
+            };
+            foreign.table_details.insert(table.name.clone(), detail);
+        }
+    }
+    Ok(foreign)
+}
+
 /// Poll a stream of futures with a fixed upper bound on how many are in flight
 /// at once, collecting every output in arbitrary completion order.
 ///
@@ -575,6 +720,17 @@ fn initial_database_select_value(
     } else {
         non_empty_initial_value(initial_database)
     }
+}
+
+/// 返回连接登录配置中的默认数据库，但仅当它仍在可选数据库列表中时才生效，
+/// 避免默认选中一个当前账号不可见或不可执行的库。
+fn preferred_default_database(
+    login_database: Option<String>,
+    available_databases: &[String],
+) -> Option<String> {
+    let database = login_database.map(|database| database.trim().to_string());
+    non_empty_initial_value(database)
+        .filter(|database| available_databases.iter().any(|item| item == database))
 }
 
 fn set_select_items_with_initial_value(
@@ -886,6 +1042,28 @@ enum QueryToolbarAction {
     Stop,
 }
 
+/// 查询工具栏高度，参考 dbx EditorToolbar 的单行紧凑布局。
+const QUERY_TOOLBAR_HEIGHT: Pixels = px(36.0);
+
+/// 查询工具栏图标按钮的描述。
+struct QueryToolbarButtonSpec {
+    id: &'static str,
+    icon: IconName,
+    color: Hsla,
+    tooltip: SharedString,
+    disabled: bool,
+}
+
+/// 工具栏按钮组之间的竖向分隔线。
+fn query_toolbar_divider(cx: &App) -> impl IntoElement {
+    div()
+        .h_4()
+        .w(px(1.0))
+        .mx_0p5()
+        .flex_shrink_0()
+        .bg(cx.theme().border)
+}
+
 fn query_toolbar_action(is_executing: bool, has_selection: bool) -> QueryToolbarAction {
     if is_executing {
         QueryToolbarAction::Stop
@@ -1117,6 +1295,10 @@ pub struct SqlEditorTab {
     _statement_task: Option<Task<()>>,
     /// 最新元数据快照，供 INSERT 值提示等本地消费（与 completion source 同步更新）。
     schema_snapshot: Arc<RwLock<SqlSchema>>,
+    /// 最近一次加载的数据库特定补全信息（合并外部 qualifier 元数据时复用）。
+    db_completion_info: Arc<RwLock<Option<SqlCompletionInfo>>>,
+    /// 在途的外部 qualifier 元数据懒加载任务（key 为 qualifier 小写名）。
+    foreign_prefetch_inflight: Arc<Mutex<HashSet<String>>>,
     /// 当前语句的 INSERT 值槽提示（相对语句文本的字节偏移），用于安装内联控件。
     insert_hints: Vec<SqlInsertValueHint>,
     /// `insert_hints` 所基于的语句在文档中的起始字节偏移。
@@ -1249,6 +1431,8 @@ impl SqlEditorTab {
             statement_run_id: statement_run_id.clone(),
             _statement_task: None,
             schema_snapshot: Arc::new(RwLock::new(SqlSchema::default())),
+            db_completion_info: Arc::new(RwLock::new(None)),
+            foreign_prefetch_inflight: Arc::new(Mutex::new(HashSet::new())),
             insert_hints: Vec::new(),
             insert_hints_statement_start: 0,
             insert_values_highlight: None,
@@ -2041,6 +2225,8 @@ impl SqlEditorTab {
                 if let InputEvent::Change = event {
                     this.schedule_statement_snapshot_refresh(cx);
                     this.schedule_diagnostics(cx);
+                    // 跨库/跨 schema 限定名引用的元数据懒加载
+                    this.schedule_foreign_schema_prefetch(cx);
                     // 标记为已修改
                     is_dirty.store(true, Ordering::Relaxed);
 
@@ -2461,8 +2647,18 @@ impl SqlEditorTab {
                 return;
             }
 
+            // issue #125：未显式指定数据库时，默认选中与连接登录配置一致的数据库，
+            // 而不是任意取列表第一项；登录数据库不在可选列表中时才回退到第一项。
+            let login_database = if uses_schema_as_database {
+                None
+            } else {
+                global_state
+                    .get_config(&connection_id)
+                    .and_then(|config| config.database)
+            };
             let selected_name = initial_database
                 .clone()
+                .or_else(|| preferred_default_database(login_database, &select_items))
                 .or_else(|| select_items.first().cloned());
             let resolved_database = selected_name.clone();
 
@@ -2577,6 +2773,8 @@ impl SqlEditorTab {
 
         let mut schema = SqlSchema::default();
         schema = schema.with_scope(scope.database.clone(), scope.schema.clone());
+        // 保留已缓存的外部 qualifier 元数据（跨库/跨 schema 补全懒加载缓存）
+        schema.foreign_schemas = self.schema_snapshot.read().foreign_schemas.clone();
 
         // Add tables to schema
         let table_items: Vec<(String, String)> = tables
@@ -2689,17 +2887,121 @@ impl SqlEditorTab {
             schema = schema.with_functions(function_items);
         }
 
+        // Load other database/schema qualifier names (cross-qualified completion)
+        // Names only — full metadata is lazily fetched on demand (see prefetch).
+        let qualifier_items = load_foreign_qualifier_names(
+            &global_state,
+            cx,
+            connection_id.clone(),
+            &scope,
+            self.uses_schema_as_database,
+            self.supports_schema,
+        )
+        .await;
+        if !self.is_metadata_scope_current(&scope, cx) {
+            return;
+        }
+        schema = schema.with_qualifiers(qualifier_items);
+
         // Update editor with schema and database-specific completion info
         if !self.is_metadata_scope_current(&scope, cx) {
             return;
         }
         *self.schema_snapshot.write() = schema.clone();
+        *self.db_completion_info.write() = Some(db_completion_info.clone());
         _ = editor.update(cx, |e, cx| {
             e.set_db_completion_info(db_completion_info, schema, cx);
         });
         // Metadata changed: re-run diagnostics immediately so squiggles track
         // the refreshed schema (unknown tables/columns may appear or clear).
         let _ = cx.update(|cx| self.run_diagnostics(cx));
+    }
+
+    /// 文本变化时检测外部 qualifier 引用（`q.` 模式）并触发元数据懒加载。
+    fn schedule_foreign_schema_prefetch(&mut self, cx: &mut Context<Self>) {
+        let text = self.get_sql_text(cx);
+        if text.is_empty() {
+            return;
+        }
+        let schema = self.schema_snapshot.read().clone();
+        for name in pending_foreign_qualifiers(&text, &schema) {
+            self.spawn_foreign_schema_fetch(name, cx);
+        }
+    }
+
+    /// 懒加载一个外部 qualifier 的表/列元数据，完成后合并进补全快照。
+    fn spawn_foreign_schema_fetch(&mut self, qualifier: String, cx: &mut Context<Self>) {
+        if !self
+            .foreign_prefetch_inflight
+            .lock()
+            .insert(qualifier.to_lowercase())
+        {
+            return;
+        }
+        let Some((database, schema_name)) = self.foreign_fetch_scope(&qualifier, cx) else {
+            self.foreign_prefetch_inflight
+                .lock()
+                .remove(&qualifier.to_lowercase());
+            return;
+        };
+
+        let global_state = cx.global::<GlobalDbState>().clone();
+        let connection_id = self.connection_id.clone();
+        let task = Tokio::spawn_result(cx, {
+            let global_state = global_state.clone();
+            let connection_id = connection_id.clone();
+            let qualifier = qualifier.clone();
+            async move {
+                fetch_foreign_schema_metadata(
+                    &global_state,
+                    &connection_id,
+                    &database,
+                    schema_name,
+                    &qualifier,
+                )
+                .await
+            }
+        });
+        let inflight = self.foreign_prefetch_inflight.clone();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            inflight.lock().remove(&qualifier.to_lowercase());
+            match result {
+                Ok(foreign) => {
+                    let _ = this.update(cx, |this, cx| this.merge_foreign_schema(foreign, cx));
+                }
+                Err(e) => {
+                    error!("Failed to lazy-load schema '{qualifier}': {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 计算外部 qualifier 对应的 list_tables 参数：(database, schema)。
+    fn foreign_fetch_scope(&self, qualifier: &str, cx: &App) -> Option<(String, Option<String>)> {
+        if self.uses_schema_as_database {
+            Some((qualifier.to_string(), None))
+        } else if self.supports_schema {
+            let database = self.database_select.read(cx).selected_value().cloned()?;
+            Some((database, Some(qualifier.to_string())))
+        } else {
+            None
+        }
+    }
+
+    /// 将懒加载完成的外部 qualifier 元数据合并进快照并刷新补全。
+    fn merge_foreign_schema(&mut self, foreign: ForeignSchema, cx: &mut Context<Self>) {
+        let mut schema = self.schema_snapshot.read().clone();
+        schema
+            .foreign_schemas
+            .insert(foreign.name.to_lowercase(), foreign);
+        *self.schema_snapshot.write() = schema.clone();
+        if let Some(info) = self.db_completion_info.read().clone() {
+            self.editor.update(cx, |editor, cx| {
+                editor.set_db_completion_info(info, schema, cx)
+            });
+        }
     }
 
     fn get_sql_text(&self, cx: &App) -> String {
@@ -3870,173 +4172,15 @@ impl SqlEditorTab {
 
     fn render_sql_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.clone();
-        let connection_select = self.connection_select.clone();
-        let database_select = self.database_select.clone();
-        let schema_select = self.schema_select.clone();
-        let transaction_mode_select = self.transaction_mode_select.clone();
-        let supports_schema = self.supports_schema;
-        let uses_schema_as_database = self.uses_schema_as_database;
-        let supports_transactions = supports_manual_transactions(&self.database_type);
-        let is_manual_mode = self.transaction_mode == SqlTransactionMode::Manual;
-        let has_manual_transaction = self.manual_transaction.is_some();
-        let is_manual_transaction_starting = self.manual_transaction_starting;
-        let is_manual_transaction_finishing = self.manual_transaction_finishing;
-        let has_manual_transaction_lifecycle = self.has_manual_transaction_lifecycle();
 
         // Check if there are any results and if the panel is visible
         let has_results = self.sql_result_tab_container.read(cx).has_results(cx);
         let results_visible = self.sql_result_tab_container.read(cx).is_visible(cx);
-        let is_query_executing = self.sql_result_tab_container.read(cx).is_executing(cx);
-
-        // Check if there is selected text in the editor
-        let has_selection = !self.editor.read(cx).get_selected_text(cx).trim().is_empty();
-        let toolbar_action = if is_manual_transaction_starting {
-            QueryToolbarAction::Stop
-        } else {
-            query_toolbar_action(is_query_executing, has_selection)
-        };
 
         v_flex()
             .size_full()
             .gap_2()
-            .child(
-                // Toolbar
-                h_flex()
-                    .gap_2()
-                    .p_2()
-                    .bg(cx.theme().muted)
-                    .rounded_md()
-                    .items_center()
-                    .w_full()
-                    .child(
-                        Select::new(&connection_select)
-                            .with_size(Size::Small)
-                            .placeholder(t!("Query.select_connection"))
-                            .search_placeholder(t!("Query.search_connection"))
-                            .disabled(is_query_executing || has_manual_transaction_lifecycle)
-                            .w(px(220.)),
-                    )
-                    .when(!uses_schema_as_database, |this| {
-                        this.child(
-                            // Database selector (for non-Oracle databases)
-                            Select::new(&database_select)
-                                .with_size(Size::Small)
-                                .placeholder(t!("Query.select_database"))
-                                .disabled(has_manual_transaction_lifecycle)
-                                .w(px(200.)),
-                        )
-                    })
-                    .when(
-                        should_render_schema_select(supports_schema, uses_schema_as_database),
-                        |this| {
-                            this.child(
-                                // Schema selector for PostgreSQL
-                                Select::new(&schema_select)
-                                    .with_size(Size::Small)
-                                    .placeholder(t!("Query.select_schema"))
-                                    .disabled(has_manual_transaction_lifecycle)
-                                    .w(if uses_schema_as_database {
-                                        px(200.)
-                                    } else {
-                                        px(150.)
-                                    }),
-                            )
-                        },
-                    )
-                    .when(supports_transactions, |this| {
-                        this.child(
-                            Select::new(&transaction_mode_select)
-                                .with_size(Size::Small)
-                                .title_prefix(t!("Query.transaction_mode_prefix"))
-                                .disabled(is_query_executing || has_manual_transaction_lifecycle)
-                                .w(px(128.)),
-                        )
-                    })
-                    .when(is_manual_mode, |this| {
-                        this.child(
-                            Button::new("transaction-commit")
-                                .with_size(Size::Small)
-                                .ghost()
-                                .disabled(
-                                    is_query_executing
-                                        || is_manual_transaction_starting
-                                        || is_manual_transaction_finishing
-                                        || !has_manual_transaction,
-                                )
-                                .label(t!("Query.transaction_commit"))
-                                .icon(IconName::Check)
-                                .on_click(cx.listener(Self::handle_commit_transaction)),
-                        )
-                        .child(
-                            Button::new("transaction-rollback")
-                                .with_size(Size::Small)
-                                .ghost()
-                                .disabled(
-                                    is_query_executing
-                                        || is_manual_transaction_starting
-                                        || is_manual_transaction_finishing
-                                        || !has_manual_transaction,
-                                )
-                                .label(t!("Query.transaction_rollback"))
-                                .icon(IconName::Undo)
-                                .on_click(cx.listener(Self::handle_rollback_transaction)),
-                        )
-                    })
-                    .child(match toolbar_action {
-                        QueryToolbarAction::Stop => Button::new("stop-query")
-                            .with_size(Size::Small)
-                            .danger()
-                            .label(t!("Query.stop"))
-                            .icon(IconName::CircleX)
-                            .on_click(cx.listener(Self::handle_stop_query)),
-                        QueryToolbarAction::RunSelected => Button::new("run-query")
-                            .with_size(Size::Small)
-                            .primary()
-                            .disabled(
-                                is_manual_transaction_starting || is_manual_transaction_finishing,
-                            )
-                            .label(t!("Query.run_selected"))
-                            .icon(IconName::ArrowRight)
-                            .on_click(cx.listener(Self::handle_run_query)),
-                        QueryToolbarAction::Run => Button::new("run-query")
-                            .with_size(Size::Small)
-                            .primary()
-                            .disabled(
-                                is_manual_transaction_starting || is_manual_transaction_finishing,
-                            )
-                            .label(t!("Query.run"))
-                            .icon(IconName::ArrowRight)
-                            .on_click(cx.listener(Self::handle_run_query)),
-                    })
-                    .child(
-                        Button::new("explain-sql")
-                            .with_size(Size::Small)
-                            .ghost()
-                            .disabled(
-                                is_query_executing
-                                    || is_manual_transaction_starting
-                                    || is_manual_transaction_finishing,
-                            )
-                            .label(t!("Query.explain"))
-                            .on_click(cx.listener(Self::handle_explain_sql)),
-                    )
-                    .child(
-                        Button::new("format-query")
-                            .with_size(Size::Small)
-                            .ghost()
-                            .label(t!("Query.format"))
-                            .icon(IconName::Star)
-                            .on_click(cx.listener(Self::handle_format_query)),
-                    )
-                    .child(
-                        Button::new("save-query")
-                            .with_size(Size::Small)
-                            .ghost()
-                            .label(t!("Query.save"))
-                            .icon(IconName::Plus)
-                            .on_click(cx.listener(Self::handle_save_query)),
-                    ),
-            )
+            .child(self.render_query_toolbar(cx))
             .child(
                 // Editor
                 v_flex()
@@ -4061,6 +4205,205 @@ impl SqlEditorTab {
                         )
                     }),
             )
+    }
+
+    /// 参考 dbx EditorToolbar 的紧凑工具栏：左侧彩色图标按钮，右侧连接/数据库选择。
+    /// 手动事务组（模式切换 + 提交/回滚）保留在左侧动作区之后。
+    fn render_query_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let connection_select = self.connection_select.clone();
+        let database_select = self.database_select.clone();
+        let schema_select = self.schema_select.clone();
+        let transaction_mode_select = self.transaction_mode_select.clone();
+        let supports_schema = self.supports_schema;
+        let uses_schema_as_database = self.uses_schema_as_database;
+        let supports_transactions = supports_manual_transactions(&self.database_type);
+        let is_manual_mode = self.transaction_mode == SqlTransactionMode::Manual;
+        let has_manual_transaction = self.manual_transaction.is_some();
+        let is_manual_transaction_starting = self.manual_transaction_starting;
+        let is_manual_transaction_finishing = self.manual_transaction_finishing;
+        let has_manual_transaction_lifecycle = self.has_manual_transaction_lifecycle();
+
+        let is_query_executing = self.sql_result_tab_container.read(cx).is_executing(cx);
+        let has_selection = !self.editor.read(cx).get_selected_text(cx).trim().is_empty();
+        let toolbar_action = if is_manual_transaction_starting {
+            QueryToolbarAction::Stop
+        } else {
+            query_toolbar_action(is_query_executing, has_selection)
+        };
+        let transaction_finishing = is_manual_transaction_starting || is_manual_transaction_finishing;
+        let transaction_unavailable =
+            is_query_executing || transaction_finishing || !has_manual_transaction;
+
+        h_flex()
+            .w_full()
+            .h(QUERY_TOOLBAR_HEIGHT)
+            .px_2()
+            .gap_1()
+            .items_center()
+            .bg(cx.theme().background)
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(match toolbar_action {
+                QueryToolbarAction::Stop => Self::query_toolbar_button(
+                    QueryToolbarButtonSpec {
+                        id: "stop-query",
+                        icon: IconName::CircleX,
+                        color: cx.theme().danger,
+                        tooltip: t!("Query.stop").into(),
+                        disabled: false,
+                    },
+                    cx.listener(Self::handle_stop_query),
+                    cx,
+                ),
+                QueryToolbarAction::RunSelected => Self::query_toolbar_button(
+                    QueryToolbarButtonSpec {
+                        id: "run-query",
+                        icon: IconName::Play,
+                        color: cx.theme().success,
+                        tooltip: t!("Query.run_selected").into(),
+                        disabled: transaction_finishing,
+                    },
+                    cx.listener(Self::handle_run_query),
+                    cx,
+                ),
+                QueryToolbarAction::Run => Self::query_toolbar_button(
+                    QueryToolbarButtonSpec {
+                        id: "run-query",
+                        icon: IconName::Play,
+                        color: cx.theme().success,
+                        tooltip: t!("Query.run").into(),
+                        disabled: transaction_finishing,
+                    },
+                    cx.listener(Self::handle_run_query),
+                    cx,
+                ),
+            })
+            .child(Self::query_toolbar_button(
+                QueryToolbarButtonSpec {
+                    id: "explain-sql",
+                    icon: IconName::GitBranch,
+                    color: cx.theme().info,
+                    tooltip: t!("Query.explain").into(),
+                    disabled: is_query_executing || transaction_finishing,
+                },
+                cx.listener(Self::handle_explain_sql),
+                cx,
+            ))
+            .child(Self::query_toolbar_button(
+                QueryToolbarButtonSpec {
+                    id: "format-query",
+                    icon: IconName::AlignLeft,
+                    color: cx.theme().warning,
+                    tooltip: t!("Query.format").into(),
+                    disabled: false,
+                },
+                cx.listener(Self::handle_format_query),
+                cx,
+            ))
+            .child(Self::query_toolbar_button(
+                QueryToolbarButtonSpec {
+                    id: "save-query",
+                    icon: IconName::Save,
+                    color: cx.theme().primary,
+                    tooltip: t!("Query.save").into(),
+                    disabled: false,
+                },
+                cx.listener(Self::handle_save_query),
+                cx,
+            ))
+            .when(supports_transactions, |toolbar| {
+                toolbar
+                    .child(query_toolbar_divider(cx))
+                    .child(
+                        Select::new(&transaction_mode_select)
+                            .with_size(Size::Small)
+                            .title_prefix(t!("Query.transaction_mode_prefix"))
+                            .disabled(is_query_executing || has_manual_transaction_lifecycle)
+                            .w(px(128.)),
+                    )
+                    .when(is_manual_mode, |group| {
+                        group
+                            .child(Self::query_toolbar_button(
+                                QueryToolbarButtonSpec {
+                                    id: "transaction-commit",
+                                    icon: IconName::Check,
+                                    color: cx.theme().success,
+                                    tooltip: t!("Query.transaction_commit").into(),
+                                    disabled: transaction_unavailable,
+                                },
+                                cx.listener(Self::handle_commit_transaction),
+                                cx,
+                            ))
+                            .child(Self::query_toolbar_button(
+                                QueryToolbarButtonSpec {
+                                    id: "transaction-rollback",
+                                    icon: IconName::Undo,
+                                    color: cx.theme().danger,
+                                    tooltip: t!("Query.transaction_rollback").into(),
+                                    disabled: transaction_unavailable,
+                                },
+                                cx.listener(Self::handle_rollback_transaction),
+                                cx,
+                            ))
+                    })
+            })
+            .child(div().flex_1())
+            .child(
+                Select::new(&connection_select)
+                    .with_size(Size::Small)
+                    .placeholder(t!("Query.select_connection"))
+                    .search_placeholder(t!("Query.search_connection"))
+                    .disabled(is_query_executing || has_manual_transaction_lifecycle)
+                    .w(px(220.)),
+            )
+            .when(!uses_schema_as_database, |toolbar| {
+                toolbar.child(
+                    // Database selector (for non-Oracle databases)
+                    Select::new(&database_select)
+                        .with_size(Size::Small)
+                        .placeholder(t!("Query.select_database"))
+                        .disabled(has_manual_transaction_lifecycle)
+                        .w(px(200.)),
+                )
+            })
+            .when(
+                should_render_schema_select(supports_schema, uses_schema_as_database),
+                |toolbar| {
+                    toolbar.child(
+                        // Schema selector for PostgreSQL
+                        Select::new(&schema_select)
+                            .with_size(Size::Small)
+                            .placeholder(t!("Query.select_schema"))
+                            .disabled(has_manual_transaction_lifecycle)
+                            .w(if uses_schema_as_database {
+                                px(200.)
+                            } else {
+                                px(150.)
+                            }),
+                    )
+                },
+            )
+    }
+
+    /// 无文字、仅带主题色图标与 tooltip 的工具栏按钮。
+    fn query_toolbar_button(
+        spec: QueryToolbarButtonSpec,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        cx: &App,
+    ) -> Button {
+        let color = spec.color;
+        Button::new(spec.id)
+            .with_size(Size::Small)
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(color)
+                    .hover(color.opacity(0.1))
+                    .active(color.opacity(0.16)),
+            )
+            .disabled(spec.disabled)
+            .tooltip(spec.tooltip)
+            .icon(spec.icon)
+            .on_click(on_click)
     }
 }
 
@@ -4180,7 +4523,8 @@ impl Clone for SqlEditorTab {
             statement_run_id: self.statement_run_id.clone(),
             _statement_task: None,
             schema_snapshot: self.schema_snapshot.clone(),
-            insert_hints: self.insert_hints.clone(),
+            db_completion_info: self.db_completion_info.clone(),
+            foreign_prefetch_inflight: self.foreign_prefetch_inflight.clone(),            insert_hints: self.insert_hints.clone(),
             insert_hints_statement_start: self.insert_hints_statement_start,
             insert_values_highlight: self.insert_values_highlight.clone(),
             last_insert_hints_key: self.last_insert_hints_key,
@@ -4358,12 +4702,12 @@ mod tests {
         is_current_manual_transaction_start, is_current_query_context_generation,
         lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
-        match_sql_to_statement_marker, metadata_scope_selection, query_connection_context_label,
-        query_connection_ids, query_file_path_for_name, query_toolbar_action,
-        schema_changed_event_matches_scope, should_render_schema_select, sql_text_for_run_all,
-        sql_text_for_toolbar_run, statement_marker_id, supports_manual_transactions,
-        toggle_sql_line_comments, unquote_sql_identifier, viewport_statement_scan_input,
-        write_new_sql_file, write_sql_file,
+        match_sql_to_statement_marker, metadata_scope_selection, preferred_default_database,
+        query_connection_context_label, query_connection_ids, query_file_path_for_name,
+        query_toolbar_action, schema_changed_event_matches_scope, should_render_schema_select,
+        sql_text_for_run_all, sql_text_for_toolbar_run, statement_marker_id,
+        supports_manual_transactions, toggle_sql_line_comments, unquote_sql_identifier,
+        viewport_statement_scan_input, write_new_sql_file, write_sql_file,
     };
     use db::DbManager;
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
@@ -5404,6 +5748,47 @@ mod tests {
                 Some("public".to_string()),
                 false,
             )
+        );
+    }
+
+    #[test]
+    fn preferred_default_database_matches_login_database_in_list() {
+        let available = vec!["information_schema".to_string(), "app_db".to_string()];
+
+        assert_eq!(
+            Some("app_db".to_string()),
+            preferred_default_database(Some("app_db".to_string()), &available)
+        );
+    }
+
+    #[test]
+    fn preferred_default_database_ignores_login_database_missing_from_list() {
+        let available = vec!["information_schema".to_string()];
+
+        assert_eq!(
+            None,
+            preferred_default_database(Some("app_db".to_string()), &available)
+        );
+    }
+
+    #[test]
+    fn preferred_default_database_ignores_empty_login_database() {
+        let available = vec!["app_db".to_string()];
+
+        assert_eq!(None, preferred_default_database(None, &available));
+        assert_eq!(
+            None,
+            preferred_default_database(Some("   ".to_string()), &available)
+        );
+    }
+
+    #[test]
+    fn preferred_default_database_trims_login_database() {
+        let available = vec!["app_db".to_string()];
+
+        assert_eq!(
+            Some("app_db".to_string()),
+            preferred_default_database(Some("  app_db  ".to_string()), &available)
         );
     }
 

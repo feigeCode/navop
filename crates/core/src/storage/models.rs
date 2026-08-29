@@ -382,6 +382,9 @@ pub struct SshParams {
     /// 独立的 SFTP 账户（可选）；`None` 表示 SFTP 复用主账户。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sftp_account: Option<SftpAccount>,
+    /// SFTP 面板连接成功后进入的初始目录；`None` 表示使用服务器登录目录。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sftp_default_directory: Option<String>,
     /// Optional field-level reference to the local credential vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_reference: Option<CredentialReference>,
@@ -2079,6 +2082,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "bastion.example.com".to_string(),
                 port: 2222,
@@ -2272,6 +2276,7 @@ mod tests {
         );
 
         let ssh = SshParams {
+            sftp_default_directory: None,
             sftp_account: None,
             host: "localhost".to_string(),
             port: 22,
@@ -3244,6 +3249,7 @@ mod serial_tests {
     #[test]
     fn ssh_params_os_id_round_trips_through_json() {
         let mut params = SshParams {
+            sftp_default_directory: None,
             sftp_account: None,
             host: "example.com".to_string(),
             port: 22,
@@ -3388,6 +3394,39 @@ mod serial_tests {
     }
 
     #[test]
+    fn ssh_params_sftp_default_directory_round_trips_and_legacy_json_defaults_none() {
+        let params: SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": "Agent",
+            "sftp_default_directory": "/data/upload"
+        }))
+        .expect("带 SFTP 初始目录的配置应可反序列化");
+        assert_eq!(
+            params.sftp_default_directory,
+            Some("/data/upload".to_string())
+        );
+
+        let json = serde_json::to_string(&params).expect("SSH 配置应可序列化");
+        assert!(json.contains("\"sftp_default_directory\""));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SSH 配置应可再次反序列化");
+        assert_eq!(
+            parsed.sftp_default_directory,
+            params.sftp_default_directory
+        );
+
+        let legacy: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧 SSH 配置应可反序列化");
+        assert_eq!(legacy.sftp_default_directory, None);
+        let legacy_json = serde_json::to_string(&legacy).expect("旧 SSH 配置应可序列化");
+        assert!(!legacy_json.contains("sftp_default_directory"));
+    }
+
+    #[test]
     fn ssh_params_credential_prompt_policy_is_backward_compatible() {
         let mut params: SshParams = serde_json::from_str(
             r#"{"host":"example.com","port":22,"username":"root","auth_method":{"Password":{"password":"secret"}}}"#,
@@ -3449,6 +3488,7 @@ mod serial_tests {
         let mut connection = StoredConnection::new_ssh(
             "example".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "example.com".to_string(),
                 port: 22,

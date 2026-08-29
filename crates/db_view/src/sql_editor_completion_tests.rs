@@ -7,7 +7,7 @@ mod tests {
     use crate::sql_editor::{
         DefaultSqlCompletionProvider, SqlCompletionSources, SqlDotCompletionTarget, SqlSchema,
         TableMentionCompletionProvider, clip_sql_offset, current_statement_has_from_keyword,
-        cursor_is_in_sql_literal_or_comment, dot_completion_qualifier, insert_column_target_table,
+        cursor_is_in_sql_literal_or_comment, insert_column_target_table,
         sql_dot_completion_target, update_target_table,
     };
     use db::plugin::SqlCompletionInfo;
@@ -1173,10 +1173,8 @@ mod tests {
     #[test]
     fn dot_completion_keeps_the_source_qualifier_before_alias_resolution() {
         let sql = "SELECT r. FROM recent r";
-        assert_eq!(
-            Some("r".to_string()),
-            dot_completion_qualifier(sql, sql.find("r. ").unwrap() + 2)
-        );
+        let chain = dot_qualifier_chain(sql, sql.find("r. ").unwrap() + 2);
+        assert_eq!(chain.last().map(String::as_str), Some("r"));
     }
 
     /// 测试：左括号触发自动完成（函数参数）
@@ -1849,5 +1847,237 @@ mod tests {
             TableMentionCompletionProvider::format_table_mention("user info"),
             "@`user info` "
         );
+    }
+
+    // =========================================================================
+    // **Feature: 跨 database/schema 限定名补全（懒加载）**
+    // =========================================================================
+
+    use crate::sql_editor::{
+        ForeignSchema, SqlContext as LocalSqlContext, dot_qualifier_chain,
+        find_columns_with_foreign, foreign_column_items, foreign_table_items,
+        pending_foreign_qualifiers, qualifier_name_items, sql_dot_completion_target_for_chain,
+    };
+    use lsp_types::{CompletionItem, CompletionTextEdit, Position, Range as LspRange};
+
+    fn hover_range() -> LspRange {
+        LspRange::new(Position::new(0, 0), Position::new(0, 0))
+    }
+
+    fn item_labels(items: &[CompletionItem]) -> Vec<String> {
+        items.iter().map(|item| item.label.clone()).collect()
+    }
+
+    fn item_new_text(item: &CompletionItem) -> String {
+        match &item.text_edit {
+            Some(CompletionTextEdit::InsertAndReplace(edit)) => edit.new_text.clone(),
+            _ => item.label.clone(),
+        }
+    }
+
+    fn foreign_schema_fixture() -> ForeignSchema {
+        let mut columns_by_table = HashMap::new();
+        columns_by_table.insert(
+            "t1".to_string(),
+            vec![("c1".to_string(), "INT".to_string(), String::new())],
+        );
+        ForeignSchema {
+            name: "test2".to_string(),
+            tables: vec![("t1".to_string(), "Foreign table".to_string())],
+            columns_by_table,
+            table_details: HashMap::new(),
+        }
+    }
+
+    fn cross_schema_fixture() -> SqlSchema {
+        SqlSchema::default()
+            .with_scope(Some("app".to_string()), Some("public".to_string()))
+            .with_qualifiers(vec![("test2".to_string(), "Database".to_string())])
+            .with_foreign_schema(foreign_schema_fixture())
+            .with_table_columns_typed("users", vec![("id", "INT", "用户ID")])
+    }
+
+    #[test]
+    fn dot_qualifier_chain_parses_trailing_qualified_prefix() {
+        let sql = "SELECT test2.users.";
+        assert_eq!(
+            dot_qualifier_chain(sql, sql.len()),
+            vec!["test2".to_string(), "users".to_string()]
+        );
+
+        let sql = "SELECT test.us";
+        assert_eq!(dot_qualifier_chain(sql, sql.len()), vec!["test".to_string()]);
+
+        let sql = "SELECT a.b.c.";
+        assert_eq!(
+            dot_qualifier_chain(sql, sql.len()),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+
+        let sql = "SELECT users.";
+        assert_eq!(dot_qualifier_chain(sql, sql.len()), vec!["users".to_string()]);
+
+        assert!(dot_qualifier_chain("SELECT 1", 8).is_empty());
+    }
+
+    #[test]
+    fn dot_completion_target_resolves_foreign_chain() {
+        let schema = cross_schema_fixture();
+
+        // 当前 scope 前缀 → 当前库表列表
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["app".to_string()]),
+            SqlDotCompletionTarget::Tables
+        );
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["public".to_string()]),
+            SqlDotCompletionTarget::Tables
+        );
+
+        // 已知外部 qualifier → 外部表列表
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["test2".to_string()]),
+            SqlDotCompletionTarget::ForeignTables("test2".to_string())
+        );
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["TEST2".to_string()]),
+            SqlDotCompletionTarget::ForeignTables("test2".to_string())
+        );
+
+        // 当前库表名 → 列
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["users".to_string()]),
+            SqlDotCompletionTarget::Columns("users".to_string())
+        );
+
+        // 外部 qualifier.表 → 外部列
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["test2".to_string(), "t1".to_string()]),
+            SqlDotCompletionTarget::ForeignColumns("test2".to_string(), "t1".to_string())
+        );
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["TEST2".to_string(), "t1".to_string()]),
+            SqlDotCompletionTarget::ForeignColumns("test2".to_string(), "t1".to_string())
+        );
+
+        // 当前库前缀.表 → 列（等价于裸表名）
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["app".to_string(), "users".to_string()]),
+            SqlDotCompletionTarget::Columns("users".to_string())
+        );
+
+        // 未知 qualifier → None
+        assert_eq!(
+            sql_dot_completion_target_for_chain(&schema, &["missing".to_string()]),
+            SqlDotCompletionTarget::None
+        );
+        assert_eq!(
+            sql_dot_completion_target_for_chain(
+                &schema,
+                &["missing".to_string(), "t1".to_string()]
+            ),
+            SqlDotCompletionTarget::None
+        );
+        // 超过两级限定链暂不支持
+        assert_eq!(
+            sql_dot_completion_target_for_chain(
+                &schema,
+                &["a".to_string(), "b".to_string(), "c".to_string()]
+            ),
+            SqlDotCompletionTarget::None
+        );
+    }
+
+    #[test]
+    fn pending_foreign_qualifiers_dedupe_and_skip_cached() {
+        let sql = "SELECT test2.t1 FROM app.users; SELECT test2.t2";
+        let pending_schema = SqlSchema::default()
+            .with_scope(Some("app".to_string()), None)
+            .with_qualifiers(vec![("test2".to_string(), "Database".to_string())]);
+        assert_eq!(
+            pending_foreign_qualifiers(sql, &pending_schema),
+            vec!["test2".to_string()]
+        );
+
+        // 已缓存后不再触发
+        let cached_schema = pending_schema.clone().with_foreign_schema(foreign_schema_fixture());
+        assert!(pending_foreign_qualifiers(sql, &cached_schema).is_empty());
+    }
+
+    #[test]
+    fn foreign_items_respect_prefix_filter_and_insert_text() {
+        let schema = cross_schema_fixture();
+
+        let tables = foreign_table_items(
+            find_foreign_fixture(&schema),
+            &LocalSqlContext::TableName,
+            "T",
+            hover_range(),
+        );
+        assert_eq!(item_labels(&tables), vec!["t1".to_string()]);
+        assert_eq!(item_new_text(&tables[0]), "t1");
+
+        let all_tables = foreign_table_items(
+            find_foreign_fixture(&schema),
+            &LocalSqlContext::TableName,
+            "",
+            hover_range(),
+        );
+        assert_eq!(item_labels(&all_tables), vec!["t1".to_string()]);
+
+        let columns = foreign_column_items(
+            find_foreign_fixture(&schema),
+            "t1",
+            &LocalSqlContext::DotColumn("test2".to_string()),
+            "C",
+            hover_range(),
+        );
+        assert_eq!(item_labels(&columns), vec!["c1".to_string()]);
+    }
+
+    fn find_foreign_fixture(schema: &SqlSchema) -> &ForeignSchema {
+        schema
+            .foreign_schemas
+            .get("test2")
+            .expect("foreign schema fixture should be cached")
+    }
+
+    #[test]
+    fn qualifier_items_insert_trailing_dot() {
+        let schema = cross_schema_fixture();
+        let items = qualifier_name_items(
+            &schema,
+            &LocalSqlContext::TableName,
+            "TE",
+            hover_range(),
+        );
+        assert_eq!(item_labels(&items), vec!["test2".to_string()]);
+        assert_eq!(item_new_text(&items[0]), "test2.");
+        assert_eq!(items[0].kind, Some(CompletionItemKind::MODULE));
+
+        // 不匹配的前缀不出现在列表
+        let none = qualifier_name_items(
+            &schema,
+            &LocalSqlContext::TableName,
+            "zzz",
+            hover_range(),
+        );
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn find_columns_with_foreign_falls_back_to_foreign_cache() {
+        let schema = cross_schema_fixture();
+
+        // 当前库表优先
+        let current = find_columns_with_foreign(&schema, "users").unwrap();
+        assert_eq!(current[0].0, "id");
+
+        // 当前库没有时回退到外部缓存
+        let foreign = find_columns_with_foreign(&schema, "t1").unwrap();
+        assert_eq!(foreign[0].0, "c1");
+
+        // 都没有 → None
+        assert!(find_columns_with_foreign(&schema, "missing").is_none());
     }
 }

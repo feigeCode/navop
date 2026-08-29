@@ -921,6 +921,7 @@ mod tests {
 
     fn ssh_params(host: &str) -> SshParams {
         SshParams {
+            sftp_default_directory: None,
             sftp_account: None,
             host: host.to_string(),
             port: 22,

@@ -5630,6 +5630,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "Latest SSH".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "latest.example".to_string(),
                 port: 2222,
@@ -5696,6 +5697,7 @@ mod tests {
         let connection = StoredConnection::new_ssh(
             "Prompted SSH".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "prompted.example".to_string(),
                 port: 22,
@@ -5769,6 +5771,7 @@ mod tests {
         let connection = StoredConnection::new_ssh(
             "No keyboard-interactive".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "no-ki.example".to_string(),
                 port: 22,
@@ -5828,6 +5831,7 @@ mod tests {
         let connection = StoredConnection::new_ssh(
             "Host-key retry".to_string(),
             SshParams {
+                sftp_default_directory: None,
                 sftp_account: None,
                 host: "host-key.example".to_string(),
                 port: 22,

@@ -3033,6 +3033,14 @@ SqlEditor:
     en: Table
     zh-CN: 表
     zh-HK: 表
+  database_object:
+    en: Database
+    zh-CN: 数据库
+    zh-HK: 數據庫
+  schema_object:
+    en: Schema
+    zh-CN: Schema
+    zh-HK: Schema
 QueryWorkflow:
   warning_block:
     en: "> ⚠️ %{warning}\n\n"

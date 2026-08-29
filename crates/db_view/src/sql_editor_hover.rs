@@ -21,7 +21,9 @@ use lsp_types::{
     Range as LspRange,
 };
 
-use crate::sql_editor::{SqlColumnDetail, SqlObjectType, SqlSchema, SqlTableDetail};
+use crate::sql_editor::{
+    ForeignSchema, SqlColumnDetail, SqlObjectType, SqlSchema, SqlTableDetail, find_foreign_schema,
+};
 
 /// One part of a qualified SQL identifier (e.g. the `users` in `db.users`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -306,6 +308,10 @@ pub fn resolve_hover(schema: &SqlSchema, ident: &SqlQualifiedIdentifier) -> Opti
                     return Some(SqlHoverObject::Table { name, detail });
                 }
             }
+            // 其他 database/schema 的表：qualifier.table
+            if let Some((name, detail)) = find_foreign_table_detail(schema, a, b) {
+                return Some(SqlHoverObject::Table { name, detail });
+            }
             // table.column
             if let Some((table, detail)) = find_table_detail(schema, a)
                 && let Some(column) = find_column(&detail, b)
@@ -336,6 +342,12 @@ pub fn resolve_hover(schema: &SqlSchema, ident: &SqlQualifiedIdentifier) -> Opti
                 {
                     return Some(SqlHoverObject::Column { table, column });
                 }
+            }
+            // 其他 database/schema 的列：qualifier.table.column
+            if let Some((table, detail)) = find_foreign_table_detail(schema, a, b)
+                && let Some(column) = find_column(&detail, c)
+            {
+                return Some(SqlHoverObject::Column { table, column });
             }
             None
         }
@@ -373,6 +385,20 @@ fn looks_like_current_database(schema: &SqlSchema, name: &str) -> bool {
 
 fn find_table_detail(schema: &SqlSchema, name: &str) -> Option<(String, SqlTableDetail)> {
     schema
+        .table_details
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(key, detail)| (key.clone(), detail.clone()))
+}
+
+/// 在外部 qualifier（其他 database/schema）缓存中查表详情。
+fn find_foreign_table_detail(
+    schema: &SqlSchema,
+    qualifier: &str,
+    name: &str,
+) -> Option<(String, SqlTableDetail)> {
+    let foreign: &ForeignSchema = find_foreign_schema(schema, qualifier)?;
+    foreign
         .table_details
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))

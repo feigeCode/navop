@@ -74,6 +74,21 @@ pub struct SqlTableDetail {
     pub columns: Vec<SqlColumnDetail>,
 }
 
+/// 外部 database/schema（qualifier）的表/列元数据快照，用于跨库限定名补全。
+///
+/// 由视图层懒加载并按 qualifier 名（小写键）缓存在 [`SqlSchema::foreign_schemas`]。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ForeignSchema {
+    /// qualifier 原始名称（保持大小写）。
+    pub name: String,
+    /// (表名, 说明)
+    pub tables: Vec<(String, String)>,
+    /// 表→列映射，每列为 (name, data_type, doc)
+    pub columns_by_table: std::collections::HashMap<String, Vec<(String, String, String)>>,
+    /// 表名→详细信息（供 hover 复用）。
+    pub table_details: std::collections::HashMap<String, SqlTableDetail>,
+}
+
 /// Schema hints used by autocomplete and hover.
 ///
 /// The snapshot is always scoped to one connection's currently selected
@@ -86,6 +101,12 @@ pub struct SqlSchema {
     pub functions: Vec<(String, String)>, // (signature, doc)
     /// 表→列映射，每列包含 (name, data_type, doc)
     pub columns_by_table: std::collections::HashMap<String, Vec<(String, String, String)>>,
+    /// 其他可用 database/schema（qualifier）列表，由视图层按方言填充
+    /// （MySQL/ClickHouse 等为其他数据库；PG/MSSQL 等为当前库的其他 schema）。
+    /// 不包含当前 database/schema。
+    pub qualifiers: Vec<(String, String)>,
+    /// 已懒加载的外部 qualifier 元数据，key 为 qualifier 小写名。
+    pub foreign_schemas: std::collections::HashMap<String, ForeignSchema>,
     /// Database this snapshot was loaded for (scope guard for hover).
     pub current_database: Option<String>,
     /// Schema this snapshot was loaded for (scope guard for hover).
@@ -161,6 +182,23 @@ impl SqlSchema {
         self.current_schema = schema;
         self
     }
+    /// 设置其他可用 database/schema（qualifier）候选列表。
+    pub fn with_qualifiers(
+        mut self,
+        qualifiers: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.qualifiers = qualifiers
+            .into_iter()
+            .map(|(n, d)| (n.into(), d.into()))
+            .collect();
+        self
+    }
+    /// 缓存一个外部 qualifier 的元数据（key 归一化为小写）。
+    pub fn with_foreign_schema(mut self, foreign: ForeignSchema) -> Self {
+        self.foreign_schemas
+            .insert(foreign.name.to_lowercase(), foreign);
+        self
+    }
     /// 添加表的详细元数据（用于 hover 与 DDL 预览）。
     pub fn with_table_detail(mut self, table: impl Into<String>, detail: SqlTableDetail) -> Self {
         self.table_details.insert(table.into(), detail);
@@ -195,34 +233,123 @@ pub enum SqlContext {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SqlDotCompletionTarget {
+    /// 当前 database/schema 的表列表。
     Tables,
+    /// 当前库表名 → 列。
     Columns(String),
+    /// 外部 database/schema → 表列表。
+    ForeignTables(String),
+    /// 外部 qualifier + 表名 → 列。
+    ForeignColumns(String, String),
     None,
 }
 
-pub(crate) fn sql_dot_completion_target(
-    schema: &SqlSchema,
-    qualifier: &str,
-) -> SqlDotCompletionTarget {
-    let is_scope = schema
+fn scope_matches(schema: &SqlSchema, qualifier: &str) -> bool {
+    schema
         .current_database
         .as_deref()
         .is_some_and(|database| database.eq_ignore_ascii_case(qualifier))
         || schema
             .current_schema
             .as_deref()
-            .is_some_and(|schema| schema.eq_ignore_ascii_case(qualifier));
-    if is_scope {
-        return SqlDotCompletionTarget::Tables;
-    }
+            .is_some_and(|schema| schema.eq_ignore_ascii_case(qualifier))
+}
 
+/// 解析点号补全目标。`chain` 是光标前最后一个点号之前的限定链。
+/// 返回值使用元数据中的规范名（大小写以元数据为准）。
+pub(crate) fn sql_dot_completion_target_for_chain(
+    schema: &SqlSchema,
+    chain: &[String],
+) -> SqlDotCompletionTarget {
+    match chain {
+        [name] => {
+            if scope_matches(schema, name) {
+                return SqlDotCompletionTarget::Tables;
+            }
+            if let Some(qualifier) = canonical_qualifier(schema, name) {
+                return SqlDotCompletionTarget::ForeignTables(qualifier);
+            }
+            table_name_in_schema(schema, name)
+                .map(SqlDotCompletionTarget::Columns)
+                .unwrap_or(SqlDotCompletionTarget::None)
+        }
+        [qualifier, table] => {
+            if let Some(canonical) = canonical_qualifier(schema, qualifier) {
+                return SqlDotCompletionTarget::ForeignColumns(canonical, table.clone());
+            }
+            if scope_matches(schema, qualifier) {
+                return table_name_in_schema(schema, table)
+                    .map(SqlDotCompletionTarget::Columns)
+                    .unwrap_or(SqlDotCompletionTarget::None);
+            }
+            SqlDotCompletionTarget::None
+        }
+        _ => SqlDotCompletionTarget::None,
+    }
+}
+
+/// 返回元数据中的规范 qualifier 名（大小写不敏感匹配）。
+fn canonical_qualifier(schema: &SqlSchema, name: &str) -> Option<String> {
+    schema
+        .qualifiers
+        .iter()
+        .find(|(qualifier, _)| qualifier.eq_ignore_ascii_case(name))
+        .map(|(qualifier, _)| qualifier.clone())
+}
+
+/// 返回元数据中的规范表名（优先列映射键，其次表列表）。
+fn table_name_in_schema(schema: &SqlSchema, name: &str) -> Option<String> {
     schema
         .columns_by_table
         .keys()
-        .find(|table| table.eq_ignore_ascii_case(qualifier))
+        .find(|table| table.eq_ignore_ascii_case(name))
         .cloned()
-        .map(SqlDotCompletionTarget::Columns)
-        .unwrap_or(SqlDotCompletionTarget::None)
+        .or_else(|| {
+            schema
+                .tables
+                .iter()
+                .find(|(table, _)| table.eq_ignore_ascii_case(name))
+                .map(|(table, _)| table.clone())
+        })
+}
+
+pub(crate) fn sql_dot_completion_target(
+    schema: &SqlSchema,
+    qualifier: &str,
+) -> SqlDotCompletionTarget {
+    sql_dot_completion_target_for_chain(schema, &[qualifier.to_string()])
+}
+
+/// 解析光标前最后一个点号之前的限定链：`db.tbl.` → ["db","tbl"]。
+///
+/// 只收集点号之前的标识符；正在输入的最后一个词（点号之后）不属于链。
+pub(crate) fn dot_qualifier_chain(text: &str, offset: usize) -> Vec<String> {
+    let mut tokenizer = SqlTokenizer::new(text);
+    let tokens = tokenizer.tokenize();
+    let meaningful: Vec<&SqlToken> = tokens
+        .iter()
+        .filter(|token| token.end <= offset && !token.is_whitespace() && !token.is_comment())
+        .collect();
+    let Some(mut index) = meaningful
+        .iter()
+        .rposition(|token| token.kind == SqlTokenKind::Dot)
+    else {
+        return Vec::new();
+    };
+    let mut chain = Vec::new();
+    while index > 0 {
+        let token = meaningful[index - 1];
+        if !matches!(token.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+            break;
+        }
+        chain.insert(0, completion_identifier_text(token));
+        if index >= 2 && meaningful[index - 2].kind == SqlTokenKind::Dot {
+            index -= 2;
+        } else {
+            break;
+        }
+    }
+    chain
 }
 
 /// Priority scores for context-aware completion sorting.
@@ -241,6 +368,8 @@ pub mod completion_priority {
     pub const KEYWORDS_BASE: i32 = 1000;
     pub const DATA_TYPES_BASE: i32 = 1500;
     pub const TABLES_BASE: i32 = 2000;
+    /// 外部 database/schema（qualifier）名补全，排在当前库表之后、列之前。
+    pub const QUALIFIERS_BASE: i32 = 2800;
     pub const COLUMNS_BASE: i32 = 3000;
     pub const SNIPPETS_BASE: i32 = 4000;
     pub const OPERATORS_BASE: i32 = 4500;
@@ -622,22 +751,6 @@ pub(crate) fn current_statement_has_from_keyword(
     })
 }
 
-pub(crate) fn dot_completion_qualifier(text: &str, offset: usize) -> Option<String> {
-    let mut tokenizer = SqlTokenizer::new(text);
-    let tokens = tokenizer.tokenize();
-    let meaningful: Vec<&SqlToken> = tokens
-        .iter()
-        .filter(|token| token.end <= offset && !token.is_whitespace() && !token.is_comment())
-        .collect();
-    let dot = meaningful
-        .iter()
-        .rposition(|token| token.kind == SqlTokenKind::Dot)?;
-    meaningful
-        .get(dot.checked_sub(1)?)
-        .filter(|token| matches!(token.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent))
-        .map(|token| completion_identifier_text(token))
-}
-
 pub(crate) fn insert_column_target_table(text: &str, offset: usize) -> Option<String> {
     let meaningful = meaningful_tokens_before(text, offset);
     let into = meaningful
@@ -726,6 +839,289 @@ fn completion_identifier_text(token: &SqlToken) -> String {
     }
 }
 
+/// 查找已缓存的外部 qualifier 元数据（大小写不敏感）。
+pub(crate) fn find_foreign_schema<'a>(
+    schema: &'a SqlSchema,
+    qualifier: &str,
+) -> Option<&'a ForeignSchema> {
+    schema
+        .foreign_schemas
+        .get(&qualifier.to_lowercase())
+        .or_else(|| {
+            schema
+                .foreign_schemas
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(qualifier))
+                .map(|(_, value)| value)
+        })
+}
+
+/// 当前列查找：先当前库，再回退到外部 qualifier 缓存
+/// （SymbolTable 对 `FROM db.tbl` 只保留表名，跨库表靠兜底解析）。
+pub(crate) fn find_columns_with_foreign<'a>(
+    schema: &'a SqlSchema,
+    table: &str,
+) -> Option<&'a Vec<(String, String, String)>> {
+    find_schema_columns(schema, table).or_else(|| {
+        schema
+            .foreign_schemas
+            .values()
+            .find_map(|foreign| {
+                foreign
+                    .columns_by_table
+                    .get(table)
+                    .or_else(|| {
+                        foreign
+                            .columns_by_table
+                            .iter()
+                            .find(|(key, _)| key.eq_ignore_ascii_case(table))
+                            .map(|(_, value)| value)
+                    })
+            })
+    })
+}
+
+/// 补全项构建上下文，统一过滤、匹配加权和 text_edit 生成。
+struct ItemBuildContext<'a> {
+    context: &'a SqlContext,
+    current_word: &'a str,
+    replace_range: LspRange,
+}
+
+impl ItemBuildContext<'_> {
+    fn matches(&self, label: &str) -> bool {
+        identifier_match_rank(label, self.current_word).is_some()
+    }
+
+    fn match_boost(&self, label: &str) -> i32 {
+        match identifier_match_rank(label, self.current_word) {
+            Some(0) => completion_priority::PREFIX_MATCH_BOOST,
+            Some(1) => completion_priority::BOUNDARY_MATCH_BOOST,
+            _ => 0,
+        }
+    }
+
+    fn matched_prefix(&self, label: &str) -> String {
+        let upper = label.to_uppercase();
+        if !self.current_word.is_empty() && upper.starts_with(self.current_word) {
+            label.chars().take(self.current_word.chars().count()).collect()
+        } else {
+            String::new()
+        }
+    }
+
+    fn kind_base(kind: CompletionItemKind) -> i32 {
+        match kind {
+            CompletionItemKind::KEYWORD => completion_priority::KEYWORDS_BASE,
+            CompletionItemKind::TYPE_PARAMETER => completion_priority::DATA_TYPES_BASE,
+            CompletionItemKind::STRUCT => completion_priority::TABLES_BASE,
+            CompletionItemKind::FIELD => completion_priority::COLUMNS_BASE,
+            CompletionItemKind::FUNCTION => completion_priority::FUNCTIONS_BASE,
+            CompletionItemKind::OPERATOR => completion_priority::OPERATORS_BASE,
+            CompletionItemKind::SNIPPET => completion_priority::SNIPPETS_BASE,
+            _ => completion_priority::COLUMNS_BASE,
+        }
+    }
+
+    /// 以 `base` 作为类型基准分（默认类型基准之外的自定义基准，如 QUALIFIERS_BASE）。
+    fn score(&self, label: &str, kind: CompletionItemKind, base: i32) -> i32 {
+        completion_priority::calculate_score_with_match(
+            self.context,
+            Some(kind),
+            self.match_boost(label),
+        ) - Self::kind_base(kind)
+            + base
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        &self,
+        items: &mut Vec<CompletionItem>,
+        label: String,
+        new_text: String,
+        kind: CompletionItemKind,
+        base: i32,
+        detail: Option<String>,
+        doc: Option<String>,
+    ) {
+        let filter_text = self.matched_prefix(&label);
+        let sort_text = completion_priority::score_to_sort_text(self.score(&label, kind, base), &label);
+        items.push(CompletionItem {
+            label,
+            kind: Some(kind),
+            detail,
+            text_edit: Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
+                new_text,
+                insert: self.replace_range,
+                replace: self.replace_range,
+            })),
+            filter_text: Some(filter_text),
+            documentation: doc.map(lsp_types::Documentation::String),
+            sort_text: Some(sort_text),
+            ..Default::default()
+        });
+    }
+}
+
+/// 外部 qualifier 的表列表补全项。
+pub(crate) fn foreign_table_items(
+    foreign: &ForeignSchema,
+    context: &SqlContext,
+    current_word: &str,
+    replace_range: LspRange,
+) -> Vec<CompletionItem> {
+    let ctx = ItemBuildContext {
+        context,
+        current_word,
+        replace_range,
+    };
+    let mut items = Vec::new();
+    for (table, doc) in &foreign.tables {
+        if !ctx.matches(table) {
+            continue;
+        }
+        ctx.push(
+            &mut items,
+            table.clone(),
+            table.clone(),
+            CompletionItemKind::STRUCT,
+            completion_priority::TABLES_BASE,
+            Some("Table".to_string()),
+            Some(doc.clone()),
+        );
+    }
+    sort_and_truncate(items)
+}
+
+/// 外部 qualifier 内某张表的列补全项。
+pub(crate) fn foreign_column_items(
+    foreign: &ForeignSchema,
+    table: &str,
+    context: &SqlContext,
+    current_word: &str,
+    replace_range: LspRange,
+) -> Vec<CompletionItem> {
+    let Some(columns) = foreign.columns_by_table.get(table).or_else(|| {
+        foreign
+            .columns_by_table
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(table))
+            .map(|(_, value)| value)
+    }) else {
+        return Vec::new();
+    };
+    column_list_items(columns, table, context, current_word, replace_range)
+}
+
+/// 列补全项（label 为列名，detail 展示类型或来源表）。
+pub(crate) fn column_list_items(
+    columns: &[(String, String, String)],
+    table: &str,
+    context: &SqlContext,
+    current_word: &str,
+    replace_range: LspRange,
+) -> Vec<CompletionItem> {
+    let ctx = ItemBuildContext {
+        context,
+        current_word,
+        replace_range,
+    };
+    let mut items = Vec::new();
+    for (column, data_type, doc) in columns {
+        if !ctx.matches(column) {
+            continue;
+        }
+        let detail = if data_type.is_empty() {
+            format!("{table}.{column}")
+        } else {
+            format!("{column}: {data_type}")
+        };
+        ctx.push(
+            &mut items,
+            column.clone(),
+            column.clone(),
+            CompletionItemKind::FIELD,
+            completion_priority::COLUMNS_BASE,
+            Some(detail),
+            (!doc.is_empty()).then(|| doc.clone()),
+        );
+    }
+    sort_and_truncate(items)
+}
+
+/// 其他 database/schema（qualifier）名补全项，接受后插入 `name.` 触发表名补全。
+pub(crate) fn qualifier_name_items(
+    schema: &SqlSchema,
+    context: &SqlContext,
+    current_word: &str,
+    replace_range: LspRange,
+) -> Vec<CompletionItem> {
+    let ctx = ItemBuildContext {
+        context,
+        current_word,
+        replace_range,
+    };
+    let mut items = Vec::new();
+    for (name, doc) in &schema.qualifiers {
+        if !ctx.matches(name) {
+            continue;
+        }
+        ctx.push(
+            &mut items,
+            name.clone(),
+            format!("{name}."),
+            CompletionItemKind::MODULE,
+            completion_priority::QUALIFIERS_BASE,
+            Some(doc.clone()),
+            (!doc.is_empty()).then(|| doc.clone()),
+        );
+    }
+    sort_and_truncate(items)
+}
+
+fn sort_and_truncate(items: Vec<CompletionItem>) -> Vec<CompletionItem> {
+    let mut items = items;
+    items.sort_by(|a, b| {
+        a.sort_text
+            .as_ref()
+            .unwrap_or(&a.label)
+            .cmp(b.sort_text.as_ref().unwrap_or(&b.label))
+    });
+    items.truncate(50);
+    items
+}
+
+/// 扫描文本中出现的、已知且尚未缓存的外部 qualifier（`q.` 模式），供懒加载触发。
+pub(crate) fn pending_foreign_qualifiers(text: &str, schema: &SqlSchema) -> Vec<String> {
+    if schema.qualifiers.is_empty() {
+        return Vec::new();
+    }
+    let mut tokenizer = SqlTokenizer::new(text);
+    let tokens = tokenizer.tokenize();
+    let mut found: Vec<String> = Vec::new();
+    for pair in tokens.windows(2) {
+        if pair[1].kind != SqlTokenKind::Dot {
+            continue;
+        }
+        if !matches!(pair[0].kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+            continue;
+        }
+        let name = completion_identifier_text(&pair[0]);
+        let Some((qualifier, _)) = schema
+            .qualifiers
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(&name))
+        else {
+            continue;
+        };
+        let cached = schema.foreign_schemas.contains_key(&qualifier.to_lowercase());
+        if !cached && !found.iter().any(|item| item.eq_ignore_ascii_case(qualifier)) {
+            found.push(qualifier.clone());
+        }
+    }
+    found
+}
+
 impl CompletionProvider for DefaultSqlCompletionProvider {
     fn completions(
         &self,
@@ -812,7 +1208,7 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     .flatten()
             });
             if let Some(target_table) = target_table {
-                if let Some(columns) = find_schema_columns(&schema, &target_table) {
+                if let Some(columns) = find_columns_with_foreign(&schema, &target_table) {
                     for (column, data_type, doc) in columns {
                         if !matches_filter(column) {
                             continue;
@@ -852,8 +1248,59 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
             // Handle dot context (table.column) - highest priority
             // Uses SymbolTable to resolve alias to actual table name
             if let SqlContext::DotColumn(alias_or_table) = &context {
-                let qualifier = dot_completion_qualifier(&text, offset)
+                let chain = dot_qualifier_chain(&text, offset);
+                let qualifier = chain
+                    .last()
+                    .cloned()
                     .unwrap_or_else(|| alias_or_table.clone());
+
+                // 多级限定链（db.tbl. / schema.tbl.）直接按元数据解析，不走别名解析
+                if chain.len() >= 2 {
+                    let items = match sql_dot_completion_target_for_chain(&schema, &chain) {
+                        SqlDotCompletionTarget::ForeignTables(name) => find_foreign_schema(
+                            &schema,
+                            &name,
+                        )
+                        .map(|foreign| {
+                            foreign_table_items(
+                                foreign,
+                                &SqlContext::TableName,
+                                &current_word,
+                                replace_range,
+                            )
+                        })
+                        .unwrap_or_default(),
+                        SqlDotCompletionTarget::ForeignColumns(qualifier, table) => {
+                            find_foreign_schema(&schema, &qualifier)
+                                .map(|foreign| {
+                                    foreign_column_items(
+                                        foreign,
+                                        &table,
+                                        &context,
+                                        &current_word,
+                                        replace_range,
+                                    )
+                                })
+                                .unwrap_or_default()
+                        }
+                        SqlDotCompletionTarget::Columns(table) => {
+                            find_columns_with_foreign(&schema, &table)
+                                .map(|columns| {
+                                    column_list_items(
+                                        columns,
+                                        &table,
+                                        &context,
+                                        &current_word,
+                                        replace_range,
+                                    )
+                                })
+                                .unwrap_or_default()
+                        }
+                        SqlDotCompletionTarget::Tables | SqlDotCompletionTarget::None => Vec::new(),
+                    };
+                    return Ok(CompletionResponse::Array(items));
+                }
+
                 // Resolve alias to table name using symbol table
                 // If alias is found, use the resolved table name; otherwise use as-is
                 let resolved_table = symbol_table
@@ -925,6 +1372,13 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                             });
                         }
                     }
+                    // 其他 database/schema 候选（接受后插入 `name.`）
+                    items.extend(qualifier_name_items(
+                        &schema,
+                        &SqlContext::TableName,
+                        &current_word,
+                        replace_range,
+                    ));
                     items.sort_by(|a, b| {
                         a.sort_text
                             .as_ref()
@@ -932,6 +1386,24 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                             .cmp(b.sort_text.as_ref().unwrap_or(&b.label))
                     });
                     items.truncate(50);
+                    return Ok(CompletionResponse::Array(items));
+                }
+
+                // 外部 database/schema 前缀（q.）→ 该库/schema 的表列表
+                // 元数据未加载时返回空列表，视图层懒加载完成后会刷新补全。
+                if let SqlDotCompletionTarget::ForeignTables(name) =
+                    sql_dot_completion_target_for_chain(&schema, &chain)
+                {
+                    let items = find_foreign_schema(&schema, &name)
+                        .map(|foreign| {
+                            foreign_table_items(
+                                foreign,
+                                &SqlContext::TableName,
+                                &current_word,
+                                replace_range,
+                            )
+                        })
+                        .unwrap_or_default();
                     return Ok(CompletionResponse::Array(items));
                 }
 
@@ -967,19 +1439,10 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 // First try exact match, then case-insensitive match
                 let resolved_table = match sql_dot_completion_target(&schema, &resolved_table) {
                     SqlDotCompletionTarget::Columns(table) => table,
-                    SqlDotCompletionTarget::Tables | SqlDotCompletionTarget::None => {
-                        return Ok(CompletionResponse::Array(items));
-                    }
+                    _ => return Ok(CompletionResponse::Array(items)),
                 };
-                let columns = schema.columns_by_table.get(&resolved_table).or_else(|| {
-                    // Case-insensitive lookup
-                    let lower = resolved_table.to_lowercase();
-                    schema
-                        .columns_by_table
-                        .iter()
-                        .find(|(k, _)| k.to_lowercase() == lower)
-                        .map(|(_, v)| v)
-                });
+                // 当前库查不到时回退外部 qualifier 缓存（FROM db.tbl 只解析出裸表名）
+                let columns = find_columns_with_foreign(&schema, &resolved_table);
 
                 if let Some(cols) = columns {
                     for (column, data_type, doc) in cols {
@@ -1105,6 +1568,13 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                         });
                     }
                 }
+                // 其他 database/schema 候选（接受后插入 `name.`）
+                items.extend(qualifier_name_items(
+                    &schema,
+                    &context,
+                    &current_word,
+                    replace_range,
+                ));
             }
 
             // Columns - priority based on context (Requirements 5.3, 5.4)

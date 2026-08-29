@@ -238,6 +238,7 @@ impl IconName {
             | Self::Unarchive
             | Self::Frame
             | Self::GalleryVerticalEnd
+            | Self::GitBranch
             | Self::Globe
             | Self::Heart
             | Self::HeartOff
@@ -270,6 +271,7 @@ impl IconName {
             | Self::Redo
             | Self::Redo2
             | Self::Replace
+            | Self::Save
             | Self::Search
             | Self::Settings
             | Self::Settings2

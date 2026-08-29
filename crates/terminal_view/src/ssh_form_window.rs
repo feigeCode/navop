@@ -240,6 +240,7 @@ pub struct SshFormWindow {
     // 初始化
     init_script_input: Entity<InputState>,
     default_directory_input: Entity<InputState>,
+    sftp_default_directory_input: Entity<InputState>,
 
     // 其他设置
     remark_input: Entity<InputState>,
@@ -634,6 +635,9 @@ impl SshFormWindow {
         let default_directory_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("SSH.default_directory_placeholder"))
         });
+        let sftp_default_directory_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("SSH.sftp_default_directory_placeholder"))
+        });
 
         // 其他设置
         let remark_input = cx.new(|cx| {
@@ -768,6 +772,9 @@ impl SshFormWindow {
                 // 加载初始化设置
                 if let Some(ref dir) = params.default_directory {
                     default_directory_input.update(cx, |s, cx| s.set_value(dir, window, cx));
+                }
+                if let Some(ref dir) = params.sftp_default_directory {
+                    sftp_default_directory_input.update(cx, |s, cx| s.set_value(dir, window, cx));
                 }
                 if let Some(ref script) = params.init_script {
                     init_script_input.update(cx, |s, cx| s.set_value(script, window, cx));
@@ -968,6 +975,7 @@ impl SshFormWindow {
             allow_legacy_algorithms,
             init_script_input,
             default_directory_input,
+            sftp_default_directory_input,
             remark_input,
             last_tested_signature: None,
             detected_os_id,
@@ -1107,6 +1115,10 @@ impl SshFormWindow {
             let s = self.init_script_input.read(cx).text().to_string();
             if s.is_empty() { None } else { Some(s) }
         };
+        let sftp_default_directory = {
+            let s = self.sftp_default_directory_input.read(cx).text().to_string();
+            if s.is_empty() { None } else { Some(s) }
+        };
         // 跳板机配置
         let jump_server = if self.enable_jump_server {
             let jump_host = self.jump_host_input.read(cx).text().to_string();
@@ -1236,6 +1248,7 @@ impl SshFormWindow {
             keepalive_max,
             default_directory,
             init_script,
+            sftp_default_directory,
             disable_shell_integration: None,
             x11_forwarding: if self.x11_forwarding {
                 Some(true)
@@ -2367,6 +2380,13 @@ impl SshFormWindow {
             )
             .child(
                 self.render_form_row(
+                    &t!("SSH.sftp_default_directory"),
+                    self.render_form_input(&self.sftp_default_directory_input),
+                )
+                .debug_selector(|| "ssh-sftp-default-directory-row".to_string()),
+            )
+            .child(
+                self.render_form_row(
                     &t!("SSH.x11_forwarding"),
                     h_flex()
                         .w_full()
@@ -3108,6 +3128,7 @@ mod tests {
     fn sample_params() -> SshParams {
         SshParams {
             sftp_account: None,
+            sftp_default_directory: None,
             host: "127.0.0.1".to_string(),
             port: 22,
             username: "root".to_string(),
@@ -3388,6 +3409,39 @@ mod tests {
                 username: "sftp-user".to_string(),
                 password: "sftp-secret".to_string(),
             })
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_form_loads_and_builds_sftp_default_directory(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.sftp_default_directory = Some("/data/upload".to_string());
+        let initial_connection =
+            StoredConnection::new_ssh("sftp-dir".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("预填 SFTP 初始目录的表单应能构建参数");
+        assert_eq!(
+            built.sftp_default_directory,
+            Some("/data/upload".to_string())
         );
     }
 
