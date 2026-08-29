@@ -62,7 +62,7 @@
 - SSH and local terminals with draggable split panes, quick commands, broadcast input, shell integration, session lock, recording and replay, and session logs; Telnet and serial connections are also supported.
 - Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, ZMODEM transfer, and server-to-server copy.
 - Reusable local, remote (`ssh -R`), and dynamic SOCKS port forwarding; X11 forwarding; host-key change warnings with explicit fingerprints; optional legacy SSH algorithms.
-- Import SecureCRT sessions, monitor servers, and connect to remote desktops through installable RDP and VNC providers.
+- Import SecureCRT sessions, monitor servers, and connect to remote desktops over RDP and VNC. On Windows, native MSTSC integration embeds the Microsoft RDP ActiveX control directly in the app via a C++ host, so you can use it inside a tab, in a fullscreen window, or launch the native `mstsc.exe` client; across platforms a pure-Rust IronRDP canvas backend renders RDP sessions.
 
 ### Editing, AI, and extensibility
 
