@@ -133,19 +133,37 @@ fn sidebar_center_clips_active_view_intrinsic_size_at_every_flex_boundary() {
         .expect("tab content renderer");
     let renderer = &source[renderer_start..renderer_end];
 
+    // 中心区域两条分支（有无底栏）都以绝对定位包裹层承载 active view，
+    // 每一层直接边界（包裹层 → tab-sidebar-center → 内容层）都必须截断
+    // intrinsic size，避免图片/远程桌面等内容反向挤压窗口 chrome。
     let center_start = renderer
-        .find("let center_content = div()")
-        .expect("sidebar center content");
-    let center_end = renderer[center_start..]
         .find("let center = if bottom.is_empty()")
-        .map(|offset| center_start + offset)
         .expect("sidebar center layout");
+    let center_end = renderer[center_start..]
+        .find("let mut root = div()")
+        .map(|offset| center_start + offset)
+        .expect("sidebar root layout");
     let center = &renderer[center_start..center_end];
 
-    assert!(center.contains(".size_full()"));
-    assert!(center.contains(".min_w_0()"));
-    assert!(center.contains(".min_h_0()"));
-    assert!(center.contains(".overflow_hidden()"));
+    assert_eq!(
+        center.matches(".absolute()").count(),
+        2,
+        "both center branches must float so panels never enter the flex flow"
+    );
+    // min_w_0/min_h_0 出现 4 次：两个包裹层分支 + tab-sidebar-center + 内容层
+    assert!(
+        center.matches(".min_w_0()").count() >= 4,
+        "every center boundary must zero its min width"
+    );
+    assert!(
+        center.matches(".min_h_0()").count() >= 4,
+        "every center boundary must zero its min height"
+    );
+    assert!(
+        center.matches(".overflow_hidden()").count() >= 4,
+        "every center boundary must clip overflow"
+    );
+    assert!(center.contains(".flex_1()"));
 
     let bottom_center_start = renderer
         .find(".id(\"tab-sidebar-center\")")

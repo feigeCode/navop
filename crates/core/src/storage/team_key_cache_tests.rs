@@ -137,7 +137,9 @@ fn seed_pre_scope_database(connection: &Connection) {
              );
              CREATE TABLE connections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                connection_type TEXT NOT NULL,
+                params TEXT NOT NULL
              );
              CREATE TABLE workspaces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,6 +151,16 @@ fn seed_pre_scope_database(connection: &Connection) {
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE personal_sync_conflicts (
+                backend_profile_id TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                data_type TEXT NOT NULL,
+                conflict_type TEXT NOT NULL,
+                local_snapshot TEXT,
+                remote_snapshot TEXT,
+                detected_at INTEGER NOT NULL,
+                PRIMARY KEY (backend_profile_id, record_id)
              );
              INSERT INTO team_key_cache VALUES (
                 'team-1', 'Platform', 1, 'unsafe-secret', 1, 1, 'admin', 'verify'
