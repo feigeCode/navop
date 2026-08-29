@@ -18,7 +18,7 @@ const screenshots = [
   "remote_file_editor.png",
   "redis.png",
   "mongodb.png",
-  "chatdb.png",
+  "ai_chat.png",
   "monitor.png",
   "er.png",
   "extension.png",

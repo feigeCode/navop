@@ -2,7 +2,7 @@
 
 AI 工作台把模型对话放在数据库、终端、文件和 Notes 等真实资源旁边。模型输出可能不正确，工具调用则可能真实执行；应根据任务选择 Ask、Plan 或 Auto，并保持最小权限和人工核验。
 
-![AI 工作台](/images/chatdb.png)
+![AI 工作台](/images/ai_chat.png)
 
 ## 配置 LLM Provider
 
