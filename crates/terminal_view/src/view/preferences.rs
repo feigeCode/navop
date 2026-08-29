@@ -1,15 +1,5 @@
 use super::*;
 
-pub(super) fn reconnect_follow_up_state(
-    reconnect_started: bool,
-    connection_kind: TerminalConnectionKind,
-) -> (bool, bool) {
-    (
-        reconnect_started,
-        reconnect_started && connection_kind == TerminalConnectionKind::Ssh,
-    )
-}
-
 impl TerminalView {
     pub fn sync_sidebar_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = self.current_theme.clone();
@@ -166,7 +156,7 @@ impl TerminalView {
         self.line_height_scale
     }
 
-    pub fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn reconnect(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.accepts_live_terminal_input(cx) {
             return;
         }
@@ -187,11 +177,15 @@ impl TerminalView {
             Ok(source) => source,
             Err(error) => {
                 tracing::error!(%error, "Failed to load latest SSH connection for reconnect");
-                window.push_notification(
-                    Notification::error(
-                        t!("TerminalView.reconnect_load_latest_failed", error = error).to_string(),
-                    )
-                    .autohide(true),
+                self.inject_terminal_notice(
+                    &format!(
+                        "\r\n\x1b[31m{}\x1b[0m\r\n",
+                        t!(
+                            "TerminalView.reconnect_load_latest_failed",
+                            locale = "en",
+                            error = error
+                        )
+                    ),
                     cx,
                 );
                 return;
@@ -206,12 +200,15 @@ impl TerminalView {
                     Ok(connection) => connection,
                     Err(error) => {
                         tracing::error!(%error, "Failed to resolve latest SSH credentials for reconnect");
-                        window.push_notification(
-                            Notification::error(
-                                t!("TerminalView.reconnect_load_latest_failed", error = error)
-                                    .to_string(),
-                            )
-                            .autohide(true),
+                        self.inject_terminal_notice(
+                            &format!(
+                                "\r\n\x1b[31m{}\x1b[0m\r\n",
+                                t!(
+                                    "TerminalView.reconnect_load_latest_failed",
+                                    locale = "en",
+                                    error = error
+                                )
+                            ),
                             cx,
                         );
                         return;
@@ -226,11 +223,15 @@ impl TerminalView {
             });
             if let Err(error) = apply_result {
                 tracing::error!(%error, "Failed to apply latest SSH connection for reconnect");
-                window.push_notification(
-                    Notification::error(
-                        t!("TerminalView.reconnect_apply_latest_failed", error = error).to_string(),
-                    )
-                    .autohide(true),
+                self.inject_terminal_notice(
+                    &format!(
+                        "\r\n\x1b[31m{}\x1b[0m\r\n",
+                        t!(
+                            "TerminalView.reconnect_apply_latest_failed",
+                            locale = "en",
+                            error = error
+                        )
+                    ),
                     cx,
                 );
                 return;
@@ -247,14 +248,10 @@ impl TerminalView {
             .read(cx)
             .current_working_dir()
             .map(str::to_string);
-        let connection_kind = self.terminal.read(cx).connection_kind();
         let reconnect_started = self
             .terminal
             .update(cx, |terminal, cx| terminal.reconnect(cx));
-        (
-            self.focus_terminal_after_connect,
-            self.reconnect_success_pending,
-        ) = reconnect_follow_up_state(reconnect_started, connection_kind);
+        self.focus_terminal_after_connect = reconnect_started;
         if !reconnect_started {
             return;
         }

@@ -550,11 +550,13 @@ impl TelnetDisconnectReason {
     fn user_message(&self) -> Option<String> {
         match self {
             Self::Eof | Self::Shutdown => None,
-            Self::Read(error) => Some(format!("读取 Telnet 数据失败: {error}")),
-            Self::Write { operation, error } => {
-                Some(format!("Telnet 写入失败（{operation}）: {error}"))
+            Self::Read(error) => Some(format!("failed to read Telnet data: {error}")),
+            Self::Write { operation, error } => Some(format!(
+                "failed to write Telnet data ({operation}): {error}"
+            )),
+            Self::OutputQueue(error) => {
+                Some(format!("Telnet terminal output queue error: {error}"))
             }
-            Self::OutputQueue(error) => Some(format!("Telnet 终端输出队列异常: {error}")),
         }
     }
 }
@@ -724,11 +726,15 @@ async fn connect_telnet_stream(params: &TelnetParams) -> anyhow::Result<TcpStrea
             Ok(stream)
         }
         Ok(Err(error)) => Err(anyhow::anyhow!(
-            "连接 {}:{} 失败: {error}",
+            "failed to connect to {}:{}: {error}",
             params.host,
             params.port
         )),
-        Err(_) => Err(anyhow::anyhow!("连接 {}:{} 超时", params.host, params.port)),
+        Err(_) => Err(anyhow::anyhow!(
+            "connection to {}:{} timed out",
+            params.host,
+            params.port
+        )),
     }
 }
 
@@ -766,7 +772,7 @@ async fn write_telnet_bytes_with_timeout(
                             operation,
                             error: io::Error::new(
                                 io::ErrorKind::WriteZero,
-                                "无法继续写入 Telnet socket",
+                                "could not write further bytes into the Telnet socket",
                             ),
                         });
                     }
@@ -780,7 +786,7 @@ async fn write_telnet_bytes_with_timeout(
                             error: io::Error::new(
                                 io::ErrorKind::TimedOut,
                                 format!(
-                                    "连续 {} 秒无写入进展",
+                                    "no write progress for {} seconds",
                                     stall_timeout.as_secs_f64()
                                 ),
                             ),
@@ -980,7 +986,7 @@ async fn run_telnet_worker(
                                 &mut writer,
                                 &mut codec,
                                 &response,
-                                "协商应答/子协商应答",
+                                "negotiation reply",
                                 &mut record_pending_cr,
                                 &mut pending_cr_flush,
                                 recording_tap.as_ref(),
@@ -1012,7 +1018,7 @@ async fn run_telnet_worker(
                                     tracing::warn!(
                                         target: "terminal.telnet.ingress",
                                         error = %error,
-                                        "Telnet 终端输出数据无法投递"
+                                        "Telnet terminal output data could not be delivered"
                                     );
                                     break TelnetDisconnectReason::OutputQueue(error.to_string());
                                 }
@@ -1025,7 +1031,7 @@ async fn run_telnet_worker(
                                 &mut writer,
                                 &mut codec,
                                 &send,
-                                "登录脚本发送",
+                                "login script",
                                 false,
                                 &mut record_pending_cr,
                                 &mut pending_cr_flush,
@@ -1052,7 +1058,7 @@ async fn run_telnet_worker(
                             &mut writer,
                             &mut codec,
                             &data,
-                            "用户输入发送",
+                            "user input",
                             source.is_recordable_user_input(),
                             &mut record_pending_cr,
                             &mut pending_cr_flush,
@@ -1082,7 +1088,7 @@ async fn run_telnet_worker(
                         &mut writer,
                         &mut codec,
                         &message,
-                        "NAWS 窗口尺寸更新",
+                        "NAWS window size update",
                         &mut record_pending_cr,
                         &mut pending_cr_flush,
                         recording_tap.as_ref(),
@@ -1102,7 +1108,7 @@ async fn run_telnet_worker(
                     &mut writer,
                     &mut codec,
                     &response,
-                    "终端响应回写",
+                    "terminal response",
                     false,
                     &mut record_pending_cr,
                     &mut pending_cr_flush,
@@ -1141,7 +1147,7 @@ async fn run_telnet_worker(
                         tracing::warn!(
                             target: "terminal.telnet.ingress",
                             error = %error,
-                            "Telnet 待决终端输出数据无法投递"
+                            "Telnet pending terminal output data could not be delivered"
                         );
                         break TelnetDisconnectReason::OutputQueue(error.to_string());
                     }
@@ -1171,7 +1177,7 @@ async fn run_telnet_worker(
         let _ = tx.send(disconnect_detail.clone());
     }
     if let Some(detail) = &disconnect_detail {
-        let message = format!("\r\nTelnet 连接中断: {detail}\r\n");
+        let message = format!("\r\nTelnet connection lost: {detail}\r\n");
         let _ = producer.try_send_data(message.into_bytes());
     }
     producer.close_source();
@@ -1628,12 +1634,12 @@ mod tests {
 
         let write_error = io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe");
         let message = TelnetDisconnectReason::Write {
-            operation: "用户输入发送",
+            operation: "user input",
             error: write_error,
         }
         .user_message()
         .expect("write error should be visible");
-        assert!(message.contains("用户输入发送"));
+        assert!(message.contains("user input"));
         assert!(message.contains("broken pipe"));
 
         let read_error = io::Error::new(io::ErrorKind::ConnectionReset, "reset");
@@ -1641,7 +1647,7 @@ mod tests {
             TelnetDisconnectReason::Read(read_error)
                 .user_message()
                 .expect("read error should be visible")
-                .contains("读取 Telnet 数据失败")
+                .contains("failed to read Telnet data")
         );
     }
 
@@ -1841,7 +1847,7 @@ mod tests {
             &mut writer,
             &mut codec,
             b"secret\r",
-            "登录脚本发送",
+            "login script",
             false,
             &mut record_pending_cr,
             &mut pending_cr_flush,
@@ -1877,7 +1883,7 @@ mod tests {
             &mut writer,
             &mut codec,
             b"user\r",
-            "用户输入发送",
+            "user input",
             true,
             &mut record_pending_cr,
             &mut pending_cr_flush,

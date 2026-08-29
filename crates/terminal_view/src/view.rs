@@ -299,7 +299,6 @@ pub struct TerminalView {
     /// 已桥接到全局后台任务面板、尚未收到终态的 ZMODEM 传输任务。
     zmodem_background_tasks: HashMap<terminal::zmodem::ZmodemTransferId, BackgroundTaskId>,
     focus_terminal_after_connect: bool,
-    reconnect_success_pending: bool,
 
     current_theme: TerminalTheme,
 

@@ -111,12 +111,14 @@ fn is_timeout_failure(err: &anyhow::Error) -> bool {
 fn add_connect_error_context(err: anyhow::Error) -> anyhow::Error {
     if is_channel_open_failure(&err) {
         return err.context(
-            "服务器拒绝打开 SSH 会话 channel；请检查账号的交互式 CLI/EXEC 权限、设备 SSH service-type，以及 VTY/并发会话上限",
+            "the server refused to open an SSH session channel; check the account's \
+             interactive CLI/EXEC permission, the device SSH service-type, and the VTY \
+             / concurrent session limit",
         );
     }
 
     if is_timeout_failure(&err) {
-        return err.context("连接超时，检查网络/代理/跳板机可达性");
+        return err.context("connection timed out; check network/proxy/jump-host reachability");
     }
 
     err
@@ -2315,7 +2317,7 @@ mod tests {
         let message = add_connect_error_context(err).to_string();
 
         assert!(
-            message.contains("服务器拒绝打开 SSH 会话 channel"),
+            message.contains("the server refused to open an SSH session channel"),
             "channel open 错误应补充设备权限和会话限制提示，实际: {message}"
         );
     }
@@ -2336,7 +2338,7 @@ mod tests {
         let message = add_connect_error_context(err).to_string();
 
         assert!(
-            message.contains("连接超时"),
+            message.contains("connection timed out"),
             "timeout 错误应补充网络/代理排查提示，实际: {message}"
         );
     }

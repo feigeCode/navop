@@ -48,28 +48,18 @@ fn dialog_based_credential_input_plumbing_is_removed() {
 }
 
 #[test]
-fn reconnect_success_reports_that_a_new_remote_shell_was_opened() {
+fn reconnect_outcome_stays_inline_in_the_terminal_grid() {
     let terminal_events = include_str!("../terminal_events.rs");
-    let locales = include_str!("../../../locales/terminal_view.yml");
+    let preferences = include_str!("../preferences.rs");
 
-    assert!(terminal_events.contains("SshSession.reconnected_new_shell"));
-    assert!(locales.contains("reconnected_new_shell:"));
-    assert!(locales.contains("已重新连接并打开新的远端 Shell"));
-}
-
-#[test]
-fn reconnect_follow_up_is_only_armed_after_an_ssh_reconnect_starts() {
-    assert_eq!(
-        (false, false),
-        reconnect_follow_up_state(false, TerminalConnectionKind::Ssh)
+    assert!(
+        !terminal_events.contains("push_notification"),
+        "connection lifecycle feedback must stay inline in the terminal grid"
     );
-    assert_eq!(
-        (true, false),
-        reconnect_follow_up_state(true, TerminalConnectionKind::Serial)
-    );
-    assert_eq!(
-        (true, true),
-        reconnect_follow_up_state(true, TerminalConnectionKind::Ssh)
+    assert!(
+        !preferences.contains("reconnect_follow_up_state")
+            && !preferences.contains("push_notification"),
+        "reconnect failures must be reported inline in English, not via floating notifications"
     );
 }
 
@@ -79,6 +69,7 @@ fn initial_connecting_status_does_not_claim_that_it_is_reconnecting() {
     let locales = include_str!("../../../locales/terminal_view.yml");
 
     assert!(capture.contains("SshSession.connecting"));
+    assert!(capture.contains("locale = \"en\""));
     assert!(locales.contains("connecting_preserves_terminal:"));
 }
 

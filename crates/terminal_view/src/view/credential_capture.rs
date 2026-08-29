@@ -51,15 +51,20 @@ pub(super) fn should_emit_connecting_notice(
 }
 
 /// Connecting/Disconnected 状态写入终端网格的内联提示文本。
+///
+/// 终端内联提示固定英文（MobaXterm 风格），不跟随 UI 语言。
 pub(super) fn connection_notice_text(state: &ConnectionState) -> String {
     match state {
         ConnectionState::Connecting => {
-            format!("\r\n\x1b[36m{}\x1b[0m\r\n", t!("SshSession.connecting"))
+            format!(
+                "\r\n\x1b[36m{}\x1b[0m\r\n",
+                t!("SshSession.connecting", locale = "en")
+            )
         }
         ConnectionState::Disconnected { error } => {
             let mut text = format!(
                 "\r\n\x1b[31m{}\x1b[0m\r\n",
-                t!("SshSession.connection_lost")
+                t!("SshSession.connection_lost", locale = "en")
             );
             if let Some(error) = error.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
                 text.push_str(&format!(
@@ -69,7 +74,7 @@ pub(super) fn connection_notice_text(state: &ConnectionState) -> String {
             }
             text.push_str(&format!(
                 "\x1b[2m{}\x1b[0m\r\n\r\n",
-                t!("SshSession.press_enter_to_reconnect")
+                t!("SshSession.press_enter_to_reconnect", locale = "en")
             ));
             text
         }
@@ -169,22 +174,23 @@ impl CredentialCapture {
     }
 
     /// 当前字段的提示行文本；MFA 提示直接使用服务端下发的原文。
+    /// 提示行固定英文，不跟随 UI 语言。
     pub(super) fn prompt_line(&self) -> String {
         match &self.field {
             CaptureField::Username => format!(
                 "{}: ",
                 if self.request_is_telnet() {
-                    t!("TelnetSession.username")
+                    t!("TelnetSession.username", locale = "en")
                 } else {
-                    t!("SshSession.username")
+                    t!("SshSession.username", locale = "en")
                 }
             ),
             CaptureField::Password => format!(
                 "{}: ",
                 if self.request_is_telnet() {
-                    t!("TelnetSession.password")
+                    t!("TelnetSession.password", locale = "en")
                 } else {
-                    t!("SshSession.password")
+                    t!("SshSession.password", locale = "en")
                 }
             ),
             CaptureField::MfaPrompt(index) => {

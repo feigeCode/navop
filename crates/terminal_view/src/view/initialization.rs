@@ -268,7 +268,6 @@ impl TerminalView {
             zmodem_picker_request_id: None,
             zmodem_background_tasks: HashMap::new(),
             focus_terminal_after_connect: false,
-            reconnect_success_pending: false,
             current_theme: default_theme,
             tab_index,
             cursor_blink_enabled: false,

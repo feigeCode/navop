@@ -1876,10 +1876,6 @@ SshSession:
     en: Password
     zh-CN: 密码
     zh-HK: 密碼
-  reconnected_new_shell:
-    en: Reconnected. A new remote shell was opened below the preserved terminal output.
-    zh-CN: 已重新连接并打开新的远端 Shell，之前的终端内容已保留。
-    zh-HK: 已重新連線並開啟新的遠端 Shell，之前的終端內容已保留。
   reconnect:
     en: Reconnect
     zh-CN: 重新连接
