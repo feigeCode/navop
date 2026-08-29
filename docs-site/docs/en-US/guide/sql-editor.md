@@ -6,11 +6,13 @@ The SQL editor writes, saves, explains, and executes statements. Execution scope
 
 Open a query from a database workspace, choose the active database or schema, and enter SQL. Queries can be saved, renamed, and reopened. Auto-save preserves editor content according to Settings, but it neither executes SQL nor replaces version control and backups.
 
-Formatting and compacting change presentation, not correctness. Preserve an original copy of complex migrations and validate them in a test database.
+The editor offers smart completion: function signature hints, IN-list and INSERT-clause suggestions, wildcard completion, and cross-database/schema qualified completion with lazy loading. After `FROM`, tables from the active database are suggested; selecting a database continues to suggest qualifier metadata with isolated scopes. Suggestions come from live connection metadata and do not guarantee the object is accessible.
+
+Formatting and compacting change presentation, not correctness. Format settings can preserve keyword case and tune indentation with a live preview; template masking prevents sample code or placeholders from being mangled. Preserve an original copy of complex migrations and validate them in a test database.
 
 ## Choose the execution scope
 
-Run selected SQL, the statement under the cursor, or the entire editor. Inspect selection boundaries before running. With no selection, place the cursor inside the intended statement. Run All is suitable only for a fully reviewed script, not a scratch file containing examples and temporary DELETE statements.
+Run selected SQL, the statement under the cursor, or the entire editor. Inspect selection boundaries before running. With no selection, place the cursor inside the intended statement. Run All is suitable only for a fully reviewed multi-statement script, where `@set` variables can pass values between statements, not a scratch file containing examples and temporary DELETE statements.
 
 The result area shows rows, affected counts, or errors. Result tabs can be switched independently and keep scrolling within a stable viewport, even for long or multi-statement results. The maximum-row setting prevents huge previews from exhausting memory. Use export for complete datasets rather than raising the limit without bounds.
 
@@ -28,6 +30,6 @@ Before changing database or schema, or closing the editor, Navop asks you to fin
 
 ## Recover from errors safely
 
-Reduce syntax, permission, constraint, or timeout errors to one statement and read the server response. Do not repeatedly execute while transaction state is unknown. For UPDATE or DELETE, first run the same WHERE clause as SELECT and verify the target rows.
+Reduce syntax, permission, constraint, or timeout errors to one statement and read the server response. Execution errors map to precise source locations, which helps locate the failing statement in a multi-statement script. Do not repeatedly execute while transaction state is unknown. For UPDATE or DELETE, first run the same WHERE clause as SELECT and verify the target rows.
 
 Remove passwords, tokens, personal data, and production literals before sharing saved queries or issue reports.

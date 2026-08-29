@@ -4,7 +4,7 @@ Extensions add database drivers, ACP Agents, connection importers, remote deskto
 
 ## Understand extension types
 
-Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales.
+Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. An "updates available" filter in the marketplace shows only extensions with newer releases.
 
 A product name in a compatibility list does not mean its driver is installed. Check the marketplace entry, current platform, and Navop version first.
 
@@ -25,6 +25,8 @@ Platform support, minimum versions, and method contracts are defined by each mar
 ## Install, update, and reload
 
 Review publisher, description, permissions, and release notes before installation. Reload extensions or restart when requested. Navop refreshes capabilities by extension kind and keeps language parsers lazy, so an unrelated extension change does not compile every language WASM parser. Save work before updating a driver or provider because connection behavior may change.
+
+On startup, Navop checks the marketplace in the background and compares it with installed versions. When updates are found, a notification links straight to the marketplace; each batch is announced only once. The "updates available" filter in the marketplace page shows only extensions that can be updated.
 
 For failures, disable and re-enable or reload the extension, then inspect logs and versions. Do not update the driver currently handling a production task.
 

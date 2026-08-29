@@ -4,7 +4,7 @@ The SFTP manager provides navigation, favorites, transfer, permissions, extracti
 
 ## Navigate and coordinate with terminal
 
-Browse folders, show hidden files when needed, and favorite common paths. Open a terminal in the current directory; with shell integration, the terminal path can synchronize back to the file manager. Access remains limited by the remote account.
+Browse folders, show hidden files when needed, and favorite common paths. The SFTP left remote panel honors the configured SFTP initial directory and opens there. Open a terminal in the current directory; with shell integration, the terminal path can synchronize back to the file manager. Access remains limited by the remote account.
 
 Confirm the current path before creating or renaming. Renaming a live configuration or script can break services and links.
 

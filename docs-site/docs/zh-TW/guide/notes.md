@@ -1,6 +1,6 @@
 # Notes Markdown 筆記
 
-Notes 目前用於開啟和編輯本機 Markdown 檔案，提供**唯讀預覽**與**原始碼編輯**兩種模式。白板、自由畫布，以及 HTML、PDF、Word 匯出等能力目前不再提供。
+Notes 用於開啟和編輯本機 Markdown 檔案，提供**唯讀預覽**與**原始碼編輯**兩種模式，並可透過擴充獲得 HTML、PDF、Word 匯出以及 Mermaid 圖、LaTeX 數學公式渲染等能力。白板、自由畫布等能力目前不再提供。
 
 ![Markdown 原始碼編輯器](/images/markdown.png)
 

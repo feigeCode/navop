@@ -6,7 +6,7 @@ Navop 提供 macOS、Windows 和 Linux 桌面版本。安装包、系统架构�
 
 ## 下载并安装
 
-从 [GitHub Releases](https://github.com/feigeCode/navop/releases) 选择最新稳定版。macOS 根据设备选择 Apple Silicon 或 Intel 构建，将应用拖入“应用程序”；Windows 使用对应安装包完成安装；Linux 按发布页提供的格式安装，并确认桌面环境允许启动图形应用。
+从[官网下载中心](https://navop.dev/zh-CN/extensions)选择最新稳定版。macOS 根据设备选择 Apple Silicon 或 Intel 构建，将应用拖入“应用程序”；Windows 使用对应安装包完成安装；Linux 按发布页提供的格式安装，并确认桌面环境允许启动图形应用。
 
 首次启动若被 macOS Gatekeeper 拦截，应先确认安装包来自项目正式发布页，再到“系统设置 → 隐私与安全性”允许打开。Windows 或 Linux 的安全软件提示也应先核对文件来源和版本，不要通过关闭全局安全策略来规避检查。企业设备如受管理员策略管理，请由管理员批准安装。
 

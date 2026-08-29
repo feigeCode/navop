@@ -4,7 +4,7 @@ Navop provides desktop builds for macOS, Windows, and Linux. Match the package t
 
 ## Download and install
 
-Choose the latest stable release from [GitHub Releases](https://github.com/feigeCode/navop/releases). On macOS, select Apple Silicon or Intel and move the app into Applications. On Windows, run the matching installer. On Linux, use the package format documented on the release page and ensure that the desktop environment permits graphical applications.
+Choose the latest stable release from the [official Download Center](https://navop.dev/en-US/extensions). On macOS, select Apple Silicon or Intel and move the app into Applications. On Windows, run the matching installer. On Linux, use the package format documented on the release page and ensure that the desktop environment permits graphical applications.
 
 If Gatekeeper blocks the first macOS launch, verify the official release source and allow the app in Privacy & Security. If the app is still quarantined after the source is confirmed, run `sudo xattr -rd com.apple.quarantine /Applications/Navop.app` and reopen it. Treat Windows or Linux security warnings the same way: confirm provenance rather than disabling system-wide protections. Managed devices may require administrator approval.
 

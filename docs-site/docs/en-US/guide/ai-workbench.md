@@ -22,7 +22,9 @@ Skills supply focused workflows and rules. The Navop Skill lets terminal-capable
 
 ## Manage sessions and approvals
 
-Create, rename, archive, and delete conversations or tasks. Archiving is organization, not a guarantee that an external model provider has erased previously transmitted data. Tool views show calls, plans, and approvals; inspect tool name, resource, parameters, and side effects.
+Create, rename, archive, and delete conversations or tasks. Archiving is organization, not a guarantee that an external model provider has erased previously transmitted data. Tool views show calls, plans, and approvals. AI tool calls default to manual confirmation, so the model asks you to approve business tools before running them, reducing the risk of accidental operations. You can choose a looser mode per task, but always inspect tool name, resource, parameters, and side effects.
+
+The approval wait time is configurable; when it elapses, the approval is treated as timed out and the result reflects it. Read the tool purpose and parameters before confirming, and raise the wait time in Settings when you need more time to judge.
 
 Agents may use plans or sub-agents, but their results still require verification. Recheck connection and file state before acting on a long-running plan.
 

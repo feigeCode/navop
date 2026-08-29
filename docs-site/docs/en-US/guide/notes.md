@@ -1,6 +1,6 @@
 # Notes Markdown workspace
 
-Notes currently opens and edits local Markdown files through two modes: a **read-only preview** and a **source editor**. Whiteboards, freeform canvases, and HTML, PDF, or Word export are not currently available.
+Notes opens and edits local Markdown files through two modes: a **read-only preview** and a **source editor**. Extensions add HTML, PDF, and Word export plus Mermaid and LaTeX math rendering. Whiteboards and freeform canvases are not currently available.
 
 ![Markdown source editor](/images/markdown.png)
 

@@ -12,7 +12,7 @@ The connection list order is configurable under **Settings → General → Conne
 
 ![Connection cards and workspace groups](/images/app.png)
 
-The persistent connection sidebar stays available while other tabs are open. Use it to search, expand or collapse workspace groups, resize the navigation area, and move quickly between resources. A single click selects or focuses a home card or sidebar row; a double-click opens the connection directly. Before sharing a screen, review any visible hostnames, accounts, team labels, and internal addresses.
+The connection tree opens as a floating panel and no longer squeezes or pushes the terminal or tab bar when expanded, and clicking a connection does not accidentally collapse the sidebar. Clicking non-connection areas such as Settings, Extensions, or the AI Workbench collapses the tree automatically; you can also pin the tree as a persistent sidebar while other tabs are open. Use it to search, expand or collapse workspace groups, resize the navigation area, and move quickly between resources. A single click selects or focuses a home card or sidebar row; a double-click opens the connection directly. Before sharing a screen, review any visible hostnames, accounts, team labels, and internal addresses.
 
 Before deleting a workspace, review what happens to its saved entries. A workspace is an organizational layer, but removing or moving entries can still affect local navigation and sync state.
 

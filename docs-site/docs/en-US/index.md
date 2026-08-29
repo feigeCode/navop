@@ -2,13 +2,15 @@
 
 Navop is the dev and ops workspace for the AI era, bringing databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, Notes, AI, and team sync into one native workspace.
 
-## Current release: v0.11.0
+## Current release: v0.14.0
 
-[Download Navop v0.11.0](https://github.com/feigeCode/navop/releases/tag/v0.11.0)
+Download the latest stable release from the [official Download Center](https://navop.dev/en-US/extensions).
 
-- Added a configurable "Connection Sorting" option under **Settings → General → Connection Display**, defaulting to natural name order (IP addresses compared by value, case-insensitive) with "Most Recently Used" also available; the Home connection list, Redis/MongoDB workspace tabs, and the persistent sidebar connection tree all honor the setting.
-- SSH now offers opt-in compatibility for legacy servers that only support DSA host keys, SHA-1 key exchange/MAC, or 1024-bit DH group negotiation.
-- Duplicated tabs are automatically numbered (reusing freed numbers) and tab widths adapt to content so long titles are not truncated.
+- SQL editor now supports cross-database/schema qualified completion with lazy loading, plus database hints after FROM, selected-database qualifier suggestions, and isolated qualifier metadata scopes.
+- SQL formatting preserves keyword case; new format settings (keyword case, indentation) with live preview and balanced template masking so sample code/placeholders are not mangled.
+- Terminal shows connection status and auth prompts inline instead of interrupting with popups; the background task dialog is reworked with counted filter tabs for clearer grouped file operations.
+- SSH jump server config is retained when disabled for quick re-enable; the SFTP left remote panel honors the configured SFTP initial directory.
+- The extension marketplace supports an "updates available" filter; update notifications jump only to updatable extensions and the MCP Assistant category is removed.
 
 ## Start here
 

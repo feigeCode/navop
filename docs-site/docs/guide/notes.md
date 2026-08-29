@@ -1,6 +1,6 @@
 # Notes Markdown 笔记
 
-Notes 目前用于打开和编辑本地 Markdown 文件，提供**只读预览**与**源码编辑**两种模式。白板、自由画布以及 HTML、PDF、Word 导出等能力当前不再提供。
+Notes 用于打开和编辑本地 Markdown 文件，提供**只读预览**与**源码编辑**两种模式，并可通过扩展获得 HTML、PDF、Word 导出以及 Mermaid 图、LaTeX 数学公式渲染等能力。白板、自由画布等能力当前不再提供。
 
 ![Markdown 源码编辑器](/images/markdown.png)
 

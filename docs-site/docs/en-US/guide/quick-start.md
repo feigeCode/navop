@@ -4,7 +4,7 @@ Navop puts databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, ser
 
 ## Finish a first task in five minutes
 
-Download the correct build from [GitHub Releases](https://github.com/feigeCode/navop/releases), launch Navop, and choose New Connection. Create a database or SSH connection, enter the address and authentication details, and run Test Connection before saving.
+Download the correct build from the [official Download Center](https://navop.dev/en-US/extensions), launch Navop, and choose New Connection. Create a database or SSH connection, enter the address and authentication details, and run Test Connection before saving.
 
 - For a database, expand a schema, open the SQL editor, and run a read-only query.
 - For a server, open an SSH terminal, run low-risk commands such as `pwd`, then browse the same host with SFTP.

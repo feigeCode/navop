@@ -8,7 +8,7 @@ Navop 把数据库、Redis、MongoDB、SSH、SFTP、终端、远程桌面、串�
 
 ## 五分钟完成第一个任务
 
-从 [GitHub Releases](https://github.com/feigeCode/navop/releases) 下载与操作系统匹配的安装包并启动 Navop。在首页选择“新建连接”，创建数据库或 SSH 连接，填写地址、端口和认证信息，然后先执行“测试连接”。测试成功后打开连接，即可进入相应工作区。
+从[官网下载中心](https://navop.dev/zh-CN/extensions)下载与操作系统匹配的安装包并启动 Navop。在首页选择“新建连接”，创建数据库或 SSH 连接，填写地址、端口和认证信息，然后先执行“测试连接”。测试成功后打开连接，即可进入相应工作区。
 
 - 数据库用户可以展开 Schema 和表，打开 SQL 编辑器并执行一条只读查询。
 - 服务器用户可以打开 SSH 终端，执行 `pwd`、`whoami` 等低风险命令，再进入 SFTP 查看远程目录。
@@ -50,7 +50,7 @@ ORDER BY order_count DESC;
 4. 回到表数据页，分页查看一张表，并打开一条记录的大文本或 JSON 编辑器。
 5. 关闭查询和数据页，保留连接卡片，继续阅读数据库连接或 SQL 编辑器章节。
 
-如果首页没有演示数据库，先确认应用完成过首次启动初始化；也可以直接从 [GitHub Releases](https://github.com/feigeCode/navop/releases) 下载当前稳定版后重新启动。不要把演示数据库当作生产数据备份或同步源。
+如果首页没有演示数据库，先确认应用完成过首次启动初始化；也可以直接从[官网下载中心](https://navop.dev/zh-CN/extensions)下载当前稳定版后重新启动。不要把演示数据库当作生产数据备份或同步源。
 
 ## 完成检查
 

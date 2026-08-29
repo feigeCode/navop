@@ -4,7 +4,7 @@ Navop 提供 macOS、Windows 與 Linux 桌面版本。安裝包必須符合系�
 
 ## 下載與安裝
 
-從 [GitHub Releases](https://github.com/feigeCode/navop/releases) 選擇最新穩定版。macOS 依裝置選 Apple Silicon 或 Intel，將應用程式移入「應用程式」；Windows 執行相符安裝包；Linux 依發佈頁提供的格式安裝。
+從[官網下載中心](https://navop.dev/zh-TW/extensions)選擇最新穩定版。macOS 依裝置選 Apple Silicon 或 Intel，將應用程式移入「應用程式」；Windows 執行相符安裝包；Linux 依發佈頁提供的格式安裝。
 
 若 macOS Gatekeeper 阻擋首次啟動，先確認來源為正式發佈頁，再到「隱私權與安全性」允許開啟。若確認來源可信但仍被系統隔離，可執行 `sudo xattr -rd com.apple.quarantine /Applications/Navop.app` 後重新開啟。Windows 或 Linux 的安全警告也應核對來源，不要關閉全域防護。受管理裝置可能需要管理員核准。
 

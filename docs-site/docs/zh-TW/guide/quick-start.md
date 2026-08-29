@@ -4,7 +4,7 @@ Navop 把資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、串�
 
 ## 五分鐘完成第一項任務
 
-從 [GitHub Releases](https://github.com/feigeCode/navop/releases) 下載與作業系統及架構相符的版本。啟動後選擇「新增連線」，建立資料庫或 SSH 連線，填寫位址、連接埠與驗證資料，先測試再儲存。
+從[官網下載中心](https://navop.dev/zh-TW/extensions)下載與作業系統及架構相符的版本。啟動後選擇「新增連線」，建立資料庫或 SSH 連線，填寫位址、連接埠與驗證資料，先測試再儲存。
 
 - 資料庫使用者可展開 Schema 與資料表，開啟 SQL 編輯器並執行唯讀查詢。
 - 伺服器使用者可開啟 SSH 終端，先執行 `pwd` 等低風險命令，再進入 SFTP 瀏覽目錄。

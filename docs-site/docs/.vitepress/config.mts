@@ -122,7 +122,7 @@ function localeTheme(options: LocaleOptions): DefaultTheme.LocaleConfig<DefaultT
     nav: [
       { text: options.quickStart, link: `${options.prefix}/guide/quick-start` },
       { text: options.productSite, link: "https://navop.dev", target: "_blank", rel: "noopener" },
-      { text: options.releases, link: "https://github.com/feigeCode/navop/releases", target: "_blank", rel: "noopener" }
+      { text: options.releases, link: `https://navop.dev${options.prefix}/extensions`, target: "_blank", rel: "noopener" }
     ],
     sidebar: guideItems(options),
     outline: { level: [2, 3], label: options.outline },

@@ -65,7 +65,7 @@ Custom regular-expression highlighting and presets can emphasize errors or ident
 
 ## Integrate shell and files
 
-Shell integration can synchronize the SSH current directory with the file manager. Compatibility depends on the remote shell and initialization. Clipboard images can be uploaded to SSH and their path inserted into the terminal; confirm destination, permissions, and sensitivity before upload.
+Shell integration can synchronize the SSH current directory with the file manager. Runtime SSH shell integration senses prompts, command start/end, and the current directory in real time without writing to the remote host, laying the groundwork for automation and script hints. Compatibility depends on the remote shell and initialization; do not fabricate path state when synchronization fails. The terminal shows connection status and auth prompts inline instead of interrupting with popups. Clipboard images can be uploaded to SSH and their path inserted into the terminal; confirm destination, permissions, and sensitivity before upload.
 
 Server monitoring deployment and privacy are covered in the remote-access chapter.
 

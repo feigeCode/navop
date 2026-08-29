@@ -20,7 +20,7 @@ Network drives and cloud-synced folders can introduce locking or consistency pro
 
 Use SOCKS5 or HTTP CONNECT when direct access is unavailable, with proxy authentication if required. A proxy changes the route; it does not replace database TLS or authorization. Test the proxy address, credentials, destination, and policy separately.
 
-An SSH tunnel can reuse a saved SSH/SFTP connection or define a jump host manually. Authentication supports passwords, private-key files, private-key contents, and SSH Agent. Configure the actual tunnel target when the database is not on the SSH host itself. Test SSH first, then the database.
+An SSH tunnel can reuse a saved SSH/SFTP connection or define a jump host manually. Authentication supports passwords, private-key files, private-key contents, and SSH Agent. Configure the actual tunnel target when the database is not on the SSH host itself. Test SSH first, then the database. Disabling a jump host preserves its configuration so you can re-enable it quickly without re-entering credentials.
 
 ## Configure SSL/TLS
 
