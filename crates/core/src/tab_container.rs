@@ -1074,6 +1074,10 @@ pub struct TabContainer {
     /// 是否在标签栏最右侧显示后台任务入口。只有顶部主标签栏展示，
     /// 内嵌的页签容器（如数据库页签）通过 `with_background_task_panel(false)` 关闭。
     show_background_task_panel: bool,
+    /// macOS 下是否为 traffic-light 控件预留左侧缩进。只有占据窗口
+    /// 左上角的主标签栏需要；内嵌页签容器（如数据库页签）不在窗口
+    /// 顶部，开启会导致标签栏整体右移漂移。
+    macos_titlebar_inset: bool,
     #[cfg(test)]
     force_windows_titlebar_for_test: bool,
     /// 窗口置顶切换回调，由上层注入；为 None 时不渲染置顶按钮
@@ -1132,6 +1136,7 @@ impl TabContainer {
             presentation_obscured_by_legacy_caller: false,
             show_window_controls: false,
             show_background_task_panel: true,
+            macos_titlebar_inset: false,
             #[cfg(test)]
             force_windows_titlebar_for_test: false,
             on_toggle_always_on_top: None,
@@ -1184,6 +1189,12 @@ impl TabContainer {
 
     pub fn with_left_padding(mut self, padding: gpui::Pixels) -> Self {
         self.left_padding = Some(padding);
+        self
+    }
+
+    /// 开启 macOS traffic-light 左侧缩进预留，仅主窗口根标签栏使用。
+    pub fn with_macos_titlebar_inset(mut self, inset: bool) -> Self {
+        self.macos_titlebar_inset = inset;
         self
     }
 
@@ -3861,12 +3872,18 @@ impl TabContainer {
         let tab_item_height = layout.tab_item;
 
         // On macOS reserve the title-bar area occupied by the traffic-light
-        // controls only when the tab bar spans the full window width
-        // (sidebar collapsed or Legacy Home-only tab bar). When the
-        // navigation sidebar is expanded it owns the left edge itself and
-        // the tab bar starts to its right, so an extra reservation would
-        // double-indent the toggle and Home buttons.
-        if titlebar_platform.is_macos && navigation_sidebar_expanded != Some(true) {
+        // controls only when this is the main tab bar spanning the full
+        // window width and the sidebar is collapsed (or Legacy Home-only
+        // tab bar). Embedded tab containers (database tabs etc.) do not sit
+        // at the window's top-left corner and must never take the inset.
+        // When the navigation sidebar is expanded it owns the left edge
+        // itself and the tab bar starts to its right, so an extra
+        // reservation would double-indent the toggle and Home buttons.
+        let macos_titlebar_inset = self.macos_titlebar_inset;
+        if titlebar_platform.is_macos
+            && macos_titlebar_inset
+            && navigation_sidebar_expanded != Some(true)
+        {
             left_padding = layout.macos_title_bar_content_padding;
         }
 
@@ -5205,6 +5222,17 @@ mod tests {
         assert!(implementation.contains("left_padding = layout.macos_title_bar_content_padding"));
         let compact = ["macos_compact", "_title_bar_content_padding"].concat();
         assert!(!implementation.contains(&format!("left_padding = layout.{compact}")));
+    }
+
+    #[test]
+    fn macos_titlebar_inset_is_opt_in_for_embedded_tab_bars() {
+        let source = include_str!("tab_container.rs");
+        let implementation = source.split("mod tests").next().unwrap();
+        // The traffic-light reservation must be gated on the explicit
+        // opt-in flag so embedded tab containers (database tabs etc.)
+        // never take the macOS title-bar indent and drift right.
+        assert!(implementation.contains("macos_titlebar_inset: false"));
+        assert!(implementation.contains("&& macos_titlebar_inset"));
     }
 
     #[test]

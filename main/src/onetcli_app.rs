@@ -1332,6 +1332,7 @@ impl OnetCliApp {
             #[cfg(target_os = "macos")]
             {
                 container = container
+                    .with_macos_titlebar_inset(true)
                     .with_left_padding(if home_page_style.uses_persistent_sidebar() {
                         px(0.0)
                     } else {
