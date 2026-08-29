@@ -105,9 +105,9 @@ The separate [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package is o
 |:-:|:-:|
 | [![SFTP](sftp.png)](sftp.png) | [![Redis](redis.png)](redis.png) |
 
-| MongoDB | AI Chat |
-|:-:|:-:|
-| [![MongoDB](mongodb.png)](mongodb.png) | [![AI Chat](chatdb.png)](chatdb.png) |
+| MongoDB |                AI Chat                |
+|:-:|:-------------------------------------:|
+| [![MongoDB](mongodb.png)](mongodb.png) | [![AI Chat](ai_chat.png)](ai_chat.png) |
 
 | Agent Hub | Extensions |
 |:-:|:-:|

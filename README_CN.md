@@ -105,9 +105,9 @@ navop skill install --target codex --scope user
 |:-:|:-:|
 | [![SFTP](sftp.png)](sftp.png) | [![Redis](redis.png)](redis.png) |
 
-| MongoDB | AI 对话 |
-|:-:|:-:|
-| [![MongoDB](mongodb.png)](mongodb.png) | [![AI 对话](chatdb.png)](chatdb.png) |
+| MongoDB |                AI 对话                 |
+|:-:|:------------------------------------:|
+| [![MongoDB](mongodb.png)](mongodb.png) | [![AI 对话](ai_chat.png)](ai_chat.png) |
 
 | Agent Hub | 扩展市场 |
 |:-:|:-:|
