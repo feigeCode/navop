@@ -1,0 +1,4 @@
+interface:
+  display_name: "Navop Release Notes"
+  short_description: "Generate and publish bilingual Navop release notes."
+  default_prompt: "Use $navop-release-notes to generate bilingual notes for the latest Navop version and save them to the matching GitHub Release."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "IPC Driver Development"
+  short_description: "Build onetcli IPC database drivers"
+  default_prompt: "Use $ipc-driver-development to design or implement an onetcli IPC database driver."

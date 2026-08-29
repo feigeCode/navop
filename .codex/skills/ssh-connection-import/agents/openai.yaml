@@ -1,0 +1,4 @@
+interface:
+  display_name: "SSH Connection Import"
+  short_description: "Debug SSH connection importers"
+  default_prompt: "Use $ssh-connection-import to debug an onetcli SSH connection importer."

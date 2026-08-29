@@ -1,13 +1,15 @@
 ---
 name: navop-release-notes
-description: Use when working in the Navop repository on version tags or GitHub Releases, especially when release notes must be generated, reviewed, published, or verified in Chinese and English.
+description: Use when working in the Navop repository on CHANGELOG.md, version-tag preparation, GitHub Releases, or R2 updater release notes, especially when bilingual Chinese and English notes must be generated, reviewed, synchronized, published, or verified.
 ---
 
 # Navop Release Notes
 
 ## Overview
 
-Generate Navop GitHub Release notes from git history. Preserve established Release style when it exists; otherwise use the bilingual default in this skill. Use `gh` for GitHub reads and writes, and verify the remote Release after saving.
+Maintain Navop's repository-root `CHANGELOG.md` as the single source of truth for user-facing release notes. Generate a bilingual entry before creating the version tag. The Release workflows extract that tagged entry to set both the GitHub Release body and the R2 updater manifest's `release_notes`.
+
+Do not treat GitHub or R2 as the primary editing surface. For a normal release, update and review `CHANGELOG.md`, commit it, and only then create the tag. Only edit an existing GitHub Release directly when the user explicitly asks for a manual synchronization or repair.
 
 ## Required Context
 
@@ -20,14 +22,21 @@ rtk git tag --sort=-creatordate
 rtk gh release list --limit 8
 ```
 
-Default version boundary is the newest two version tags, for example `v0.8.8..v0.8.9`. If the user names versions, use those exact tags. Never update a release until the target tag and previous tag are explicit.
+Confirm all four release inputs:
 
-Before writing notes, inspect recent Release style:
+- Target version tag, for example `v0.10.1`.
+- Previous version tag, for example `v0.10.0`.
+- Source ref containing the release changes: normally `HEAD` before tagging, or the target tag after it exists.
+- ISO release date, for example `2026-08-01`.
+
+If the user names versions, use those exact versions. Otherwise infer the previous tag from the newest stable version tag, but do not invent the target version. Never create a tag, commit, push, or publish unless the user explicitly requested that operation.
+
+Before writing notes, inspect recent Release style. Read the target Release only if it already exists:
 
 ```bash
-rtk gh release view <target-tag> --json tagName,name,body,publishedAt,url
 rtk gh release view <previous-tag> --json tagName,name,body,publishedAt,url
 rtk gh release view <older-tag> --json tagName,name,body,publishedAt,url
+rtk gh release view <target-tag> --json tagName,name,body,publishedAt,url # existing release/repair only
 ```
 
 If Navop has no established Release style yet, use this bilingual shape:
@@ -39,7 +48,7 @@ If Navop has no established Release style yet, use this bilingual shape:
 
 - ...
 
-### 修复与调整
+### 修复与优化
 
 - ...
 
@@ -47,11 +56,11 @@ If Navop has no established Release style yet, use this bilingual shape:
 
 ## English
 
-### Changes
+### What's New
 
 - ...
 
-### Fixes
+### Fixes and Improvements
 
 - ...
 
@@ -65,9 +74,10 @@ For larger releases, add short overview paragraphs and extra sections only when 
 Read commits and changed files:
 
 ```bash
-rtk git log --reverse --format='%H%n%s%n%b%n---END---' <previous-tag>..<target-tag>
-rtk git diff --stat <previous-tag>..<target-tag>
-rtk git diff --name-status <previous-tag>..<target-tag>
+TARGET_REF=HEAD # or the existing target tag
+rtk git log --reverse --format='%H%n%s%n%b%n---END---' <previous-tag>.."$TARGET_REF"
+rtk git diff --stat <previous-tag>.."$TARGET_REF"
+rtk git diff --name-status <previous-tag>.."$TARGET_REF"
 ```
 
 For unclear commits, inspect targeted diffs:
@@ -80,13 +90,13 @@ rtk git show --format=medium --find-renames <commit> -- <path>
 Summarize user-facing behavior, not implementation trivia. Use categories:
 
 - Chinese `更新内容`: features, UX improvements, performance, workflow improvements.
-- Chinese `修复与调整`: bug fixes, compatibility, stability, maintenance with user impact.
-- English `Changes`: faithful English version of `更新内容`.
-- English `Fixes`: faithful English version of `修复与调整`.
+- Chinese `修复与优化`: bug fixes, compatibility, stability, maintenance with user impact.
+- English `What's New`: faithful English version of `更新内容`.
+- English `Fixes and Improvements`: faithful English version of `修复与优化`.
 
 Include maintenance bullets only when visible in commits and useful to release readers. Keep internal refactors out unless they explain a visible behavior change.
 
-## Save Locally
+## Prepare The Changelog Entry
 
 Save the generated body to a temporary Markdown file first. Prefer `/private/tmp` on this machine:
 
@@ -106,25 +116,75 @@ The file must contain both `## 中文` and `## English`, and the final compare l
 **Full Changelog**: https://github.com/feigeCode/navop/compare/<previous-tag>...<target-tag>
 ```
 
-## Save To GitHub
-
-Use GitHub CLI release commands, not manual browser editing:
+Upsert the reviewed body into `CHANGELOG.md`:
 
 ```bash
-rtk gh release edit <target-tag> --notes-file /private/tmp/navop-<target-tag>-release-notes.md
+python3 script/changelog.py upsert \
+  --tag <target-tag> \
+  --date <YYYY-MM-DD> \
+  --notes-file "$NOTES" \
+  --changelog CHANGELOG.md
 ```
 
-If the release name is also wrong, set it explicitly:
+The tool inserts the newest version after `<!-- NAVOP_RELEASES -->`, preserves older entries, and replaces an existing target entry idempotently.
+
+Extract it back before approving the entry:
 
 ```bash
-rtk gh release edit <target-tag> --title "Navop <target-tag>" --notes-file /private/tmp/navop-<target-tag>-release-notes.md
+EXTRACTED=/private/tmp/navop-<target-tag>-release-notes-from-changelog.md
+python3 script/changelog.py extract \
+  --tag <target-tag> \
+  --changelog CHANGELOG.md \
+  --output "$EXTRACTED"
+
+diff -u "$NOTES" "$EXTRACTED"
+rtk git diff -- CHANGELOG.md
 ```
 
-Do not overwrite a non-empty hand-written Release body until you have read it and intentionally preserved or replaced the relevant parts.
+The extracted file must match the generated body. Small newline-only differences can be normalized, but content, headings, ordering, and compare URL must be identical.
+
+Commit the reviewed changelog before tagging. `script/release-tag.sh` and `script/bump-version.sh` validate the target entry and fail before tagging if it is missing or malformed.
+
+## Workflow Publishing
+
+For normal releases, do not run `gh release edit` yourself:
+
+1. The Release workflow checks out the requested tag.
+2. `script/changelog.py extract` produces the GitHub Release body.
+3. The same extracted Markdown is added to R2 `updates/latest.json` as `release_notes`.
+4. The application renders either GitHub's Release body or R2's `release_notes`, depending on the selected update source.
+
+Tags older than the changelog infrastructure are legacy-only. Repair workflows may preserve an already-existing GitHub Release body, but they must not create a new changelog-less Release.
+
+## Manual Synchronization
+
+Only when explicitly asked to synchronize an existing GitHub Release, extract from `CHANGELOG.md` first and use that file:
+
+```bash
+EXTRACTED=/private/tmp/navop-<target-tag>-release-notes-from-changelog.md
+python3 script/changelog.py extract \
+  --tag <target-tag> \
+  --changelog CHANGELOG.md \
+  --output "$EXTRACTED"
+
+rtk gh release edit <target-tag> \
+  --title "Navop <target-tag>" \
+  --notes-file "$EXTRACTED"
+```
+
+Do not compose a different body directly in GitHub. If the desired text changes, update `CHANGELOG.md` first.
 
 ## Verify
 
-Before saying the release notes are saved, run a fresh read:
+Always validate the local entry:
+
+```bash
+python3 script/changelog.py validate \
+  --tag <target-tag> \
+  --changelog CHANGELOG.md
+```
+
+If a GitHub Release was published or synchronized, run a fresh read:
 
 ```bash
 rtk gh release view <target-tag> --json tagName,name,body,publishedAt,url
@@ -134,7 +194,13 @@ Verify:
 
 - `tagName` is the intended target tag.
 - `body` contains `## 中文`, `## English`, and the expected compare URL.
-- The visible content matches the local notes file.
+- The visible content matches the file extracted from `CHANGELOG.md`.
+
+If R2 was published, read its public updater manifest and verify:
+
+- `version` matches the target tag without the leading `v`.
+- `release_notes` contains the same Chinese and English Markdown.
+- Download URLs and checksums remain present.
 
 Also check the working tree so unrelated local edits are not mistaken for release-note work:
 
@@ -142,15 +208,18 @@ Also check the working tree so unrelated local edits are not mistaken for releas
 rtk git status --short --branch
 ```
 
-Report the target URL and the verification command result summary.
+Report the changed changelog entry, whether it was committed/tagged/published, and the verification result. Never claim GitHub or R2 was updated unless a fresh remote read confirms it.
 
 ## Common Mistakes
 
 | Mistake | Correct Action |
 | --- | --- |
 | Using only Chinese notes | Publish matching Chinese and English sections. |
+| Creating the tag before the changelog | Generate, review, and commit the target `CHANGELOG.md` entry first. |
+| Editing GitHub and changelog separately | Treat `CHANGELOG.md` as authoritative and extract the GitHub body from it. |
+| Omitting R2 notes | Confirm `latest.json.release_notes` is populated from the same extracted entry. |
 | Assuming legacy repository details | Confirm the remote is `feigeCode/navop` and use Navop URLs, titles, and temp-file names. |
 | Comparing the wrong tags | Confirm newest two tags or use user-specified tags before writing. |
 | Listing raw commits | Group commits into release-reader categories. |
-| Losing existing release text | Read the existing body first and decide whether to preserve or replace. |
-| Claiming saved without verification | Re-read the GitHub Release with `gh release view` first. |
+| Replacing a legacy Release accidentally | Only use the legacy fallback for an already-existing pre-changelog Release. |
+| Claiming saved without verification | Validate locally and re-read each remote destination that was actually published. |

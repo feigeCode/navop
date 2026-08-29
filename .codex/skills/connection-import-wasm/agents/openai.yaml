@@ -1,0 +1,4 @@
+interface:
+  display_name: "Connection Import WASM"
+  short_description: "Build app import extensions"
+  default_prompt: "Use $connection-import-wasm to implement a new onetcli application import extension."
