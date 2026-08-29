@@ -268,6 +268,7 @@ fn repo() -> Arc<ConnectionRepository> {
 fn ssh_params() -> SshParams {
     SshParams {
         sftp_default_directory: None,
+        disabled_jump_server: None,
         sftp_account: None,
         host: "127.0.0.1".to_string(),
         port: 22,

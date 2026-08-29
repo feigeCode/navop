@@ -277,6 +277,7 @@ mod tests {
             "production".to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: "target.example.com".to_string(),
                 port: 22,

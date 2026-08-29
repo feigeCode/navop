@@ -5742,6 +5742,7 @@ mod tests {
             "Terminal file manager test".to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: "terminal-file-manager-test.internal".to_string(),
                 port: 2222,

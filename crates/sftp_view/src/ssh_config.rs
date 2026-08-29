@@ -165,8 +165,8 @@ fn ssh_auth(method: SshAuthMethod) -> SshAuth {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_ssh_connection, sftp_initial_directory, sftp_initial_directory_of,
-        ssh_config_for, ssh_config_with_runtime_credentials,
+        resolve_ssh_connection, sftp_initial_directory, sftp_initial_directory_of, ssh_config_for,
+        ssh_config_with_runtime_credentials,
     };
     use one_core::storage::{SftpAccount, SshAuthMethod, SshParams, StoredConnection};
     use ssh::SshAuth;
@@ -176,6 +176,7 @@ mod tests {
             "source".to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: "source.internal".to_string(),
                 port: 2222,
@@ -370,7 +371,10 @@ mod tests {
 
         let resolved = resolve_ssh_connection(&connection).expect("valid SSH connection");
 
-        assert_eq!(resolved.sftp_initial_directory, Some("/data/upload".to_string()));
+        assert_eq!(
+            resolved.sftp_initial_directory,
+            Some("/data/upload".to_string())
+        );
     }
 
     #[test]

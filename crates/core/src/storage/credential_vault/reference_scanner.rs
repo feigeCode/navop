@@ -209,6 +209,14 @@ pub(super) fn ssh_locations(
                 .and_then(|jump| jump.credential_reference.as_ref()),
         ),
         (
+            // 停用保留的跳板机仍持有凭据引用，删除凭据前必须一并提示
+            CredentialReferenceLocation::JumpServer,
+            params
+                .disabled_jump_server
+                .as_ref()
+                .and_then(|jump| jump.credential_reference.as_ref()),
+        ),
+        (
             CredentialReferenceLocation::Proxy,
             params
                 .proxy

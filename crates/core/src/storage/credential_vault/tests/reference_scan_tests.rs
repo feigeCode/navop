@@ -36,6 +36,7 @@ pub(super) fn ssh_connection(id: i64) -> StoredConnection {
         "SSH".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "ssh.example.com".to_string(),
             port: 22,
@@ -330,4 +331,38 @@ fn reference_scanner_finds_telnet_primary_reference() {
     );
     assert_eq!(CredentialReferenceLocation::Primary, hits[0].location);
     assert_eq!(None, hits[0].via_ssh_connection_id);
+}
+
+#[test]
+fn reference_scanner_finds_disabled_jump_server_reference() {
+    let (_temp, _connection, repository) = repositories();
+    let credential_id = insert_credential(&repository);
+    let mut connection = ssh_connection(credential_id);
+    {
+        let mut params = connection.to_ssh_params().expect("SSH params");
+        params.jump_server = None;
+        params.disabled_jump_server = Some(JumpServerConfig {
+            host: "jump.example.com".to_string(),
+            port: 22,
+            username: String::new(),
+            auth_method: SshAuthMethod::Password {
+                password: String::new(),
+            },
+            credential_reference: Some(reference(credential_id)),
+        });
+        connection.params = serde_json::to_string(&params).expect("serialize SSH params");
+    }
+    let connection_id = repository
+        .insert(&mut connection)
+        .expect("insert connection");
+
+    let hits = repository
+        .credential_repository()
+        .referencing_connections(credential_id)
+        .expect("scan references");
+
+    assert!(hits.iter().any(|hit| {
+        hit.connection_id == connection_id
+            && hit.location == CredentialReferenceLocation::JumpServer
+    }));
 }

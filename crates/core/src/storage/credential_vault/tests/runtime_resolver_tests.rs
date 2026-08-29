@@ -33,6 +33,7 @@ fn insert_vault_ssh(repository: &ConnectionRepository) -> i64 {
         "Shared bastion".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "bastion.example.com".to_string(),
             port: 2222,

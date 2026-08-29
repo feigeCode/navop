@@ -312,6 +312,7 @@ fn stored_connection() -> StoredConnection {
             username: "user".to_string(),
             auth_method: SshAuthMethod::Agent,
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             credential_reference: None,
             prompt_username: None,

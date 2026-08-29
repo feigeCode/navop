@@ -402,6 +402,7 @@ mod tests {
             "SSH".to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: "2001:db8::1".to_string(),
                 port: 2222,

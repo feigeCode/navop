@@ -199,6 +199,7 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
         "docker ssh".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "127.0.0.1".to_string(),
             port,

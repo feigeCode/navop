@@ -924,6 +924,7 @@ mod tests {
             name.to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: format!("{name}.example.com"),
                 port: 22,
@@ -1402,6 +1403,7 @@ mod tests {
         let connection_id = repo.insert(&mut connection).expect("connection");
         let plaintext_params = serde_json::to_string(&SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "sensitive-readable.example.com".to_string(),
             port: 22,

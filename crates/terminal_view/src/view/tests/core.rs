@@ -58,6 +58,7 @@ fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
         "ssh".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "localhost".to_string(),
             port: 22,
@@ -189,6 +190,7 @@ fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
         "ssh".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "localhost".to_string(),
             port: 22,
@@ -245,6 +247,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
         "ssh".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "bad.example".to_string(),
             port: 22,
@@ -279,6 +282,7 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
     let mut latest = original.clone();
     latest.params = serde_json::to_string(&SshParams {
         sftp_default_directory: None,
+        disabled_jump_server: None,
         sftp_account: None,
         host: "good.example".to_string(),
         port: 2222,

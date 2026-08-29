@@ -1803,7 +1803,9 @@ impl SftpView {
                 Some(dir) => match client.realpath(&dir).await.ok() {
                     Some(path) => Some(path),
                     None => {
-                        tracing::warn!("Configured SFTP initial directory could not be resolved: {dir}");
+                        tracing::warn!(
+                            "Configured SFTP initial directory could not be resolved: {dir}"
+                        );
                         client.realpath(".").await.ok()
                     }
                 },
@@ -7597,6 +7599,7 @@ mod tests {
             "SFTP entity test".to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: "sftp-entity-test.internal".to_string(),
                 port: 2222,

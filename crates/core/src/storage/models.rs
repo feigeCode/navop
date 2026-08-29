@@ -435,6 +435,9 @@ pub struct SshParams {
     /// 跳板机配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_server: Option<JumpServerConfig>,
+    /// 停用保留的跳板机配置：启用/停用只是切换 `jump_server`，已填信息保存在这里以便恢复。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_jump_server: Option<JumpServerConfig>,
     /// 代理配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
@@ -2082,6 +2085,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
             SshParams {
+                disabled_jump_server: None,
                 sftp_default_directory: None,
                 sftp_account: None,
                 host: "bastion.example.com".to_string(),
@@ -2276,6 +2280,7 @@ mod tests {
         );
 
         let ssh = SshParams {
+            disabled_jump_server: None,
             sftp_default_directory: None,
             sftp_account: None,
             host: "localhost".to_string(),
@@ -3249,6 +3254,7 @@ mod serial_tests {
     #[test]
     fn ssh_params_os_id_round_trips_through_json() {
         let mut params = SshParams {
+            disabled_jump_server: None,
             sftp_default_directory: None,
             sftp_account: None,
             host: "example.com".to_string(),
@@ -3412,10 +3418,7 @@ mod serial_tests {
         assert!(json.contains("\"sftp_default_directory\""));
 
         let parsed: SshParams = serde_json::from_str(&json).expect("SSH 配置应可再次反序列化");
-        assert_eq!(
-            parsed.sftp_default_directory,
-            params.sftp_default_directory
-        );
+        assert_eq!(parsed.sftp_default_directory, params.sftp_default_directory);
 
         let legacy: SshParams = serde_json::from_str(
             r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
@@ -3424,6 +3427,49 @@ mod serial_tests {
         assert_eq!(legacy.sftp_default_directory, None);
         let legacy_json = serde_json::to_string(&legacy).expect("旧 SSH 配置应可序列化");
         assert!(!legacy_json.contains("sftp_default_directory"));
+    }
+
+    #[test]
+    fn ssh_params_disabled_jump_server_round_trips_and_legacy_json_defaults_none() {
+        let params: SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth_method": "Agent",
+            "disabled_jump_server": {
+                "host": "jump.example.com",
+                "port": 2222,
+                "username": "jump",
+                "auth_method": {"Password": {"password": "secret"}}
+            }
+        }))
+        .expect("带停用跳板机配置的参数应可反序列化");
+        let stash = params
+            .disabled_jump_server
+            .as_ref()
+            .expect("停用跳板机配置应存在");
+        assert_eq!(stash.host, "jump.example.com");
+        assert_eq!(stash.port, 2222);
+
+        let json = serde_json::to_string(&params).expect("SSH 配置应可序列化");
+        assert!(json.contains("\"disabled_jump_server\""));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SSH 配置应可再次反序列化");
+        let parsed_stash = parsed
+            .disabled_jump_server
+            .as_ref()
+            .expect("序列化往返后停用跳板机配置应保留");
+        assert_eq!(parsed_stash.host, stash.host);
+        assert_eq!(parsed_stash.port, stash.port);
+        assert_eq!(parsed_stash.username, stash.username);
+
+        let legacy: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧 SSH 配置应可反序列化");
+        assert!(legacy.disabled_jump_server.is_none());
+        let legacy_json = serde_json::to_string(&legacy).expect("旧 SSH 配置应可序列化");
+        assert!(!legacy_json.contains("disabled_jump_server"));
     }
 
     #[test]
@@ -3488,6 +3534,7 @@ mod serial_tests {
         let mut connection = StoredConnection::new_ssh(
             "example".to_string(),
             SshParams {
+                disabled_jump_server: None,
                 sftp_default_directory: None,
                 sftp_account: None,
                 host: "example.com".to_string(),

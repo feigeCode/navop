@@ -10,6 +10,7 @@ fn ssh_connection() -> StoredConnection {
         "Production SSH".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "ssh.example.test".to_string(),
             port: 2222,
@@ -96,6 +97,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
         "Nested SSH".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "ssh.example.test".to_string(),
             port: 22,
@@ -160,6 +162,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
         "Sensitive SSH".to_string(),
         SshParams {
             sftp_default_directory: None,
+            disabled_jump_server: None,
             sftp_account: None,
             host: "ssh.example.test".to_string(),
             port: 22,

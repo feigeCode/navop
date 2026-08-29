@@ -181,6 +181,7 @@ mod tests {
             name.to_string(),
             SshParams {
                 sftp_default_directory: None,
+                disabled_jump_server: None,
                 sftp_account: None,
                 host: format!("{name}.internal"),
                 port: 22,
