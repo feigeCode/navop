@@ -30,28 +30,26 @@ rtk gh release view <previous-tag> --json tagName,name,body,publishedAt,url
 rtk gh release view <older-tag> --json tagName,name,body,publishedAt,url
 ```
 
-If Navop has no established Release style yet, use this bilingual shape:
+If Navop has no established Release style yet, use this bilingual shape. Entries carry no `## 中文` / `## English` language headings; each entry must include the CNB mirror download line:
 
 ```markdown
-## 中文
-
 ### 更新内容
 
 - ...
 
-### 修复与调整
+### 修复与优化
 
 - ...
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/<target-tag>) 下载桌面端安装包
 
 ---
 
-## English
-
-### Changes
+### What's New
 
 - ...
 
-### Fixes
+### Fixes and Improvements
 
 - ...
 
@@ -80,9 +78,9 @@ rtk git show --format=medium --find-renames <commit> -- <path>
 Summarize user-facing behavior, not implementation trivia. Use categories:
 
 - Chinese `更新内容`: features, UX improvements, performance, workflow improvements.
-- Chinese `修复与调整`: bug fixes, compatibility, stability, maintenance with user impact.
-- English `Changes`: faithful English version of `更新内容`.
-- English `Fixes`: faithful English version of `修复与调整`.
+- Chinese `修复与优化`: bug fixes, compatibility, stability, maintenance with user impact.
+- English `What's New`: faithful English version of `更新内容`.
+- English `Fixes and Improvements`: faithful English version of `修复与优化`.
 
 Include maintenance bullets only when visible in commits and useful to release readers. Keep internal refactors out unless they explain a visible behavior change.
 
@@ -100,7 +98,7 @@ Create the file with normal editing tools, then review it:
 rtk sed -n '1,240p' /private/tmp/navop-<target-tag>-release-notes.md
 ```
 
-The file must contain both `## 中文` and `## English`, and the final compare link must use three dots:
+The file must contain at least one Chinese content section (`### 更新内容` or `### 修复与优化`) and one English content section (`### What's New` or `### Fixes and Improvements`), the CNB mirror download line, and the final compare link must use three dots:
 
 ```markdown
 **Full Changelog**: https://github.com/feigeCode/navop/compare/<previous-tag>...<target-tag>
@@ -133,7 +131,7 @@ rtk gh release view <target-tag> --json tagName,name,body,publishedAt,url
 Verify:
 
 - `tagName` is the intended target tag.
-- `body` contains `## 中文`, `## English`, and the expected compare URL.
+- `body` contains the Chinese `更新内容` and English `What's New` sections, the CNB mirror download line, and the expected compare URL.
 - The visible content matches the local notes file.
 
 Also check the working tree so unrelated local edits are not mistaken for release-note work:

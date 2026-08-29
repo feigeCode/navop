@@ -48,9 +48,18 @@ def validate_iso_date(value: str) -> str:
 def validate_release_notes(notes: str) -> None:
     if not notes.strip():
         raise ChangelogError("release notes are empty")
-    for heading in ("中文", "English"):
-        if re.search(rf"^## {re.escape(heading)}[ \t]*$", notes, re.MULTILINE) is None:
-            raise ChangelogError(f"release notes are missing the '## {heading}' section")
+    chinese_sections = ("更新内容", "修复与优化")
+    english_sections = ("What's New", "Fixes and Improvements")
+    if not any(
+        re.search(rf"^### {re.escape(section)}[ \t]*$", notes, re.MULTILINE)
+        for section in chinese_sections
+    ):
+        raise ChangelogError("release notes are missing a Chinese content section")
+    if not any(
+        re.search(rf"^### {re.escape(section)}[ \t]*$", notes, re.MULTILINE)
+        for section in english_sections
+    ):
+        raise ChangelogError("release notes are missing an English content section")
 
 
 def transform_headings(markdown: str, delta: int) -> str:

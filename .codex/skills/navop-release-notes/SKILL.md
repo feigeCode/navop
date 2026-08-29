@@ -39,11 +39,9 @@ rtk gh release view <older-tag> --json tagName,name,body,publishedAt,url
 rtk gh release view <target-tag> --json tagName,name,body,publishedAt,url # existing release/repair only
 ```
 
-If Navop has no established Release style yet, use this bilingual shape:
+If Navop has no established Release style yet, use this bilingual shape. Entries carry no `## 中文` / `## English` language headings; each entry must include the CNB mirror download line:
 
 ```markdown
-## 中文
-
 ### 更新内容
 
 - ...
@@ -52,9 +50,9 @@ If Navop has no established Release style yet, use this bilingual shape:
 
 - ...
 
----
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/<target-tag>) 下载桌面端安装包
 
-## English
+---
 
 ### What's New
 
@@ -110,7 +108,7 @@ Create the file with normal editing tools, then review it:
 rtk sed -n '1,240p' /private/tmp/navop-<target-tag>-release-notes.md
 ```
 
-The file must contain both `## 中文` and `## English`, and the final compare link must use three dots:
+The file must contain at least one Chinese content section (`### 更新内容` or `### 修复与优化`) and one English content section (`### What's New` or `### Fixes and Improvements`), the CNB mirror download line, and the final compare link must use three dots:
 
 ```markdown
 **Full Changelog**: https://github.com/feigeCode/navop/compare/<previous-tag>...<target-tag>
@@ -193,7 +191,7 @@ rtk gh release view <target-tag> --json tagName,name,body,publishedAt,url
 Verify:
 
 - `tagName` is the intended target tag.
-- `body` contains `## 中文`, `## English`, and the expected compare URL.
+- `body` contains the Chinese `更新内容` and English `What's New` sections, the CNB mirror download line, and the expected compare URL.
 - The visible content matches the file extracted from `CHANGELOG.md`.
 
 If R2 was published, read its public updater manifest and verify:

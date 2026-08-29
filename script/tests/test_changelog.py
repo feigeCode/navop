@@ -22,8 +22,6 @@ Navop release notes.
 """
 
 NOTES = """\
-## 中文
-
 ### 更新内容
 
 - 新功能
@@ -32,9 +30,9 @@ NOTES = """\
 
 - 修复问题
 
----
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v1.2.0) 下载桌面端安装包
 
-## English
+---
 
 ### What's New
 
@@ -55,9 +53,8 @@ class ChangelogTests(unittest.TestCase):
 
         notes = changelog.extract_release_notes(text, "v0.10.0")
 
-        self.assertIn("## 中文", notes)
         self.assertIn("### 更新内容", notes)
-        self.assertIn("## English", notes)
+        self.assertIn("### What's New", notes)
         self.assertIn(
             "compare/v0.9.8...v0.10.0",
             notes,
@@ -109,12 +106,12 @@ class ChangelogTests(unittest.TestCase):
             changelog.extract_release_notes(updated, "v9.9.9")
 
     def test_missing_bilingual_section_fails(self) -> None:
-        with self.assertRaisesRegex(changelog.ChangelogError, "## English"):
+        with self.assertRaisesRegex(changelog.ChangelogError, "English content section"):
             changelog.upsert_release(
                 HEADER,
                 "v1.2.0",
                 "2026-08-01",
-                "## 中文\n\n### 更新内容\n\n- 只有中文\n",
+                "### 更新内容\n\n- 只有中文\n",
             )
 
     def test_missing_target_entry_fails(self) -> None:

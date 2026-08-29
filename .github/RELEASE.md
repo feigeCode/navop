@@ -19,7 +19,7 @@ python3 script/changelog.py extract \
 git diff -- CHANGELOG.md
 ```
 
-Review the extracted Markdown and make sure it matches the source notes, including both `## 中文` and `## English`. Commit the changelog entry before creating or pushing the tag.
+Review the extracted Markdown and make sure it matches the source notes, including both the Chinese `更新内容` / `修复与优化` and English `What's New` / `Fixes and Improvements` content sections and the CNB mirror download line. Commit the changelog entry before creating or pushing the tag.
 
 The normal release sequence is:
 
@@ -40,8 +40,6 @@ The newest entry belongs immediately after the `<!-- NAVOP_RELEASES -->` marker:
 ```markdown
 ## [v0.10.1] - 2026-08-01
 
-### 中文
-
 #### 更新内容
 
 - ...
@@ -50,9 +48,9 @@ The newest entry belongs immediately after the `<!-- NAVOP_RELEASES -->` marker:
 
 - ...
 
----
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.10.1) 下载桌面端安装包
 
-### English
+---
 
 #### What's New
 
@@ -65,7 +63,7 @@ The newest entry belongs immediately after the `<!-- NAVOP_RELEASES -->` marker:
 **Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.0...v0.10.1
 ```
 
-Do not edit generated GitHub or R2 release notes independently for a normal release. Update `CHANGELOG.md`, create a new tag when appropriate, and let the workflows extract the entry. The extraction tool promotes the entry's headings by one level so the GitHub Release body keeps the established `## 中文` / `## English` layout.
+Do not edit generated GitHub or R2 release notes independently for a normal release. Update `CHANGELOG.md`, create a new tag when appropriate, and let the workflows extract the entry. The extraction tool demotes the entry's headings by one level; entries no longer carry the `## 中文` / `## English` language headings, and every new entry must include the CNB mirror download line so the GitHub Release body and R2 `release_notes` show it automatically.
 
 ## Repair one platform
 

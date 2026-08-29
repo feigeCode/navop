@@ -6,8 +6,6 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 ## [v0.14.0] - 2026-08-29
 
-### 中文
-
 #### 更新内容
 
 - SQL 编辑器新增跨数据库/跨 Schema 限定名补全（惰性加载），并优化 FROM 子句的数据库提示、选中数据库限定符建议与限定符元数据作用域隔离。
@@ -31,9 +29,9 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 修复回到首页时连接侧边栏折叠状态丢失的问题。
 - 内部改进：统一 rustfmt 格式、修复存量测试失败、CI 新增 fast 构建模式（跳过 fat LTO 加快构建）。
 
----
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.14.0) 下载桌面端安装包
 
-### English
+---
 
 #### What's New
 
