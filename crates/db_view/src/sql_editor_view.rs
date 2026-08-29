@@ -471,6 +471,10 @@ fn foreign_qualifier_fetch_scope(
     }
 }
 
+fn foreign_prefetch_key(scope: &SqlMetadataScope, qualifier: &str) -> (SqlMetadataScope, String) {
+    (scope.clone(), qualifier.to_lowercase())
+}
+
 /// 加载其他 database/schema（qualifier）名称列表，用于跨库限定名补全。
 ///
 /// 数据库型 qualifier（MySQL/ClickHouse）取其他数据库；schema 型 qualifier
@@ -483,21 +487,19 @@ async fn load_foreign_qualifier_names(
     scope: &SqlMetadataScope,
     uses_schema_as_database: bool,
     supports_schema: bool,
-) -> Vec<(String, String)> {
+) -> anyhow::Result<Vec<(String, String)>> {
     let qualifier_scope = foreign_qualifier_scope(scope, uses_schema_as_database, supports_schema);
     let kind_label = match qualifier_scope.kind {
         ForeignQualifierKind::Databases => t!("SqlEditor.database_object").to_string(),
         ForeignQualifierKind::Schemas => t!("SqlEditor.schema_object").to_string(),
     };
     let names = match qualifier_scope.kind {
-        ForeignQualifierKind::Databases => global_state
-            .list_databases(cx, connection_id)
-            .await
-            .unwrap_or_default(),
-        ForeignQualifierKind::Schemas => global_state
-            .list_schemas(cx, connection_id, qualifier_scope.database.clone())
-            .await
-            .unwrap_or_default(),
+        ForeignQualifierKind::Databases => global_state.list_databases(cx, connection_id).await?,
+        ForeignQualifierKind::Schemas => {
+            global_state
+                .list_schemas(cx, connection_id, qualifier_scope.database.clone())
+                .await?
+        }
     };
     let excluded = |name: &str| {
         qualifier_scope
@@ -506,11 +508,11 @@ async fn load_foreign_qualifier_names(
             .is_some_and(|current| current.eq_ignore_ascii_case(name))
     };
     let mut seen = HashSet::new();
-    names
+    Ok(names
         .into_iter()
         .filter(|name| !name.is_empty() && !excluded(name) && seen.insert(name.to_lowercase()))
         .map(|name| (name, kind_label.clone()))
-        .collect()
+        .collect())
 }
 
 /// 在 Tokio runtime 内拉取一个外部 qualifier 的表/列元数据（懒加载）。
@@ -1349,8 +1351,8 @@ pub struct SqlEditorTab {
     schema_snapshot: Arc<RwLock<SqlSchema>>,
     /// 最近一次加载的数据库特定补全信息（合并外部 qualifier 元数据时复用）。
     db_completion_info: Arc<RwLock<Option<SqlCompletionInfo>>>,
-    /// 在途的外部 qualifier 元数据懒加载任务（key 为 qualifier 小写名）。
-    foreign_prefetch_inflight: Arc<Mutex<HashSet<String>>>,
+    /// 在途的外部 qualifier 元数据懒加载任务（按 metadata scope + qualifier 隔离）。
+    foreign_prefetch_inflight: Arc<Mutex<HashSet<(SqlMetadataScope, String)>>>,
     /// 当前语句的 INSERT 值槽提示（相对语句文本的字节偏移），用于安装内联控件。
     insert_hints: Vec<SqlInsertValueHint>,
     /// `insert_hints` 所基于的语句在文档中的起始字节偏移。
@@ -1361,6 +1363,13 @@ pub struct SqlEditorTab {
     last_insert_hints_key: Option<(usize, u64)>,
     /// 最近一次触发签名帮助刷新的光标，避免每次 notify 都重新请求。
     last_signature_cursor: Option<usize>,
+}
+
+struct SqlSchemaUpdateRequest {
+    database: String,
+    generation: u64,
+    window_handle: AnyWindowHandle,
+    entity: WeakEntity<SqlEditorTab>,
 }
 
 impl SqlEditorTab {
@@ -1629,10 +1638,12 @@ impl SqlEditorTab {
                         instance
                             .update_schema_for_db(
                                 global_state,
-                                &db,
-                                generation,
-                                window_handle,
-                                handle.clone(),
+                                SqlSchemaUpdateRequest {
+                                    database: db,
+                                    generation,
+                                    window_handle,
+                                    entity: handle,
+                                },
                                 cx,
                             )
                             .await;
@@ -1662,10 +1673,12 @@ impl SqlEditorTab {
                             instance
                                 .update_schema_for_db(
                                     global_state,
-                                    &db,
-                                    generation,
-                                    window_handle,
-                                    handle,
+                                    SqlSchemaUpdateRequest {
+                                        database: db,
+                                        generation,
+                                        window_handle,
+                                        entity: handle,
+                                    },
                                     cx,
                                 )
                                 .await;
@@ -1691,6 +1704,8 @@ impl SqlEditorTab {
 
     fn next_context_generation(&self, cx: &mut Context<Self>) -> u64 {
         let generation = self.context_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.schema_snapshot.write() = SqlSchema::default();
+        self.foreign_prefetch_inflight.lock().clear();
         self.editor.update(cx, |editor, cx| {
             editor.invalidate_metadata_context(cx);
         });
@@ -2563,10 +2578,12 @@ impl SqlEditorTab {
             instance
                 .update_schema_for_db(
                     global_state,
-                    &target_database,
-                    generation,
-                    window_handle,
-                    handle,
+                    SqlSchemaUpdateRequest {
+                        database: target_database,
+                        generation,
+                        window_handle,
+                        entity: handle,
+                    },
                     cx,
                 )
                 .await;
@@ -2792,10 +2809,12 @@ impl SqlEditorTab {
                     instance
                         .update_schema_for_db(
                             global_state,
-                            db,
-                            generation,
-                            window_handle,
-                            handle,
+                            SqlSchemaUpdateRequest {
+                                database: db.clone(),
+                                generation,
+                                window_handle,
+                                entity: handle,
+                            },
                             cx,
                         )
                         .await;
@@ -2806,17 +2825,20 @@ impl SqlEditorTab {
     }
 
     /// Update SQL editor schema with tables and columns from current database
-    pub async fn update_schema_for_db(
+    async fn update_schema_for_db(
         &self,
         global_state: GlobalDbState,
-        database: &str,
-        generation: u64,
-        window_handle: AnyWindowHandle,
-        entity: WeakEntity<SqlEditorTab>,
+        request: SqlSchemaUpdateRequest,
         cx: &mut AsyncApp,
     ) {
+        let SqlSchemaUpdateRequest {
+            database,
+            generation,
+            window_handle,
+            entity,
+        } = request;
         let connection_id = self.connection_id.clone();
-        let Some(scope) = self.current_metadata_scope(generation, Some(database), cx) else {
+        let Some(scope) = self.current_metadata_scope(generation, Some(&database), cx) else {
             return;
         };
         let (db, selected_schema) = (
@@ -2857,8 +2879,6 @@ impl SqlEditorTab {
 
         let mut schema = SqlSchema::default();
         schema = schema.with_scope(scope.database.clone(), scope.schema.clone());
-        // 保留已缓存的外部 qualifier 元数据（跨库/跨 schema 补全懒加载缓存）
-        schema.foreign_schemas = self.schema_snapshot.read().foreign_schemas.clone();
 
         // Add tables to schema
         let table_items: Vec<(String, String)> = tables
@@ -2973,7 +2993,7 @@ impl SqlEditorTab {
 
         // Load other database/schema qualifier names (cross-qualified completion)
         // Names only — full metadata is lazily fetched on demand (see prefetch).
-        let qualifier_items = load_foreign_qualifier_names(
+        let qualifier_items = match load_foreign_qualifier_names(
             &global_state,
             cx,
             connection_id.clone(),
@@ -2981,7 +3001,14 @@ impl SqlEditorTab {
             self.uses_schema_as_database,
             self.supports_schema,
         )
-        .await;
+        .await
+        {
+            Ok(items) => items,
+            Err(error) => {
+                error!("Failed to load SQL completion qualifiers: {error}");
+                Vec::new()
+            }
+        };
         if !self.is_metadata_scope_current(&scope, cx) {
             return;
         }
@@ -3036,17 +3063,21 @@ impl SqlEditorTab {
         window_handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
-        if !self
-            .foreign_prefetch_inflight
-            .lock()
-            .insert(qualifier.to_lowercase())
-        {
+        let generation = self.context_generation.load(Ordering::SeqCst);
+        let Some(scope) = self.current_metadata_scope(generation, None, cx) else {
+            return;
+        };
+        let key = foreign_prefetch_key(&scope, &qualifier);
+        if !self.foreign_prefetch_inflight.lock().insert(key.clone()) {
             return;
         }
-        let Some((database, schema_name)) = self.foreign_fetch_scope(&qualifier, cx) else {
-            self.foreign_prefetch_inflight
-                .lock()
-                .remove(&qualifier.to_lowercase());
+        let Some((database, schema_name)) = foreign_qualifier_fetch_scope(
+            &scope,
+            &qualifier,
+            self.uses_schema_as_database,
+            self.supports_schema,
+        ) else {
+            self.foreign_prefetch_inflight.lock().remove(&key);
             return;
         };
 
@@ -3071,10 +3102,25 @@ impl SqlEditorTab {
         let inflight = self.foreign_prefetch_inflight.clone();
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            inflight.lock().remove(&qualifier.to_lowercase());
+            inflight.lock().remove(&key);
             match result {
                 Ok(foreign) => {
-                    let _ = this.update(cx, |this, cx| this.merge_foreign_schema(foreign, cx));
+                    let merged = this
+                        .update(cx, |this, cx| {
+                            if this
+                                .current_metadata_scope(scope.generation, None, cx)
+                                .as_ref()
+                                != Some(&scope)
+                            {
+                                return false;
+                            }
+                            this.merge_foreign_schema(foreign, cx);
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !merged {
+                        return;
+                    }
                     // 元数据异步就绪后主动重新触发补全查询，弹窗无需再等下一次击键
                     let _ = cx.update_window(window_handle, move |_view, window, cx| {
                         editor.update(cx, |editor, cx| {
@@ -3090,18 +3136,6 @@ impl SqlEditorTab {
             }
         })
         .detach();
-    }
-
-    /// 计算外部 qualifier 对应的 list_tables 参数：(database, schema)。
-    fn foreign_fetch_scope(&self, qualifier: &str, cx: &App) -> Option<(String, Option<String>)> {
-        let generation = self.context_generation.load(Ordering::SeqCst);
-        let scope = self.current_metadata_scope(generation, None, cx)?;
-        foreign_qualifier_fetch_scope(
-            &scope,
-            qualifier,
-            self.uses_schema_as_database,
-            self.supports_schema,
-        )
     }
 
     /// 将懒加载完成的外部 qualifier 元数据合并进快照并刷新补全。
@@ -4831,17 +4865,17 @@ mod tests {
         SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, SqlDiagnosticIdentity, SqlMetadataScope,
         StatementScanInput, ToggleLineComment, can_start_query_execution,
         can_switch_query_connection, collect_bounded, current_statement_frame_decorations,
-        foreign_qualifier_fetch_scope, foreign_qualifier_scope, initial_database_select_value,
-        insert_target_table, is_current_diagnostic_identity, is_current_manual_transaction_owner,
-        is_current_manual_transaction_start, is_current_query_context_generation,
-        lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
-        manual_transaction_invalidation_mode, manual_transaction_stop_action,
-        match_sql_to_statement_marker, metadata_scope_selection, preferred_default_database,
-        query_connection_context_label, query_connection_ids, query_file_path_for_name,
-        query_toolbar_action, schema_changed_event_matches_scope, should_render_schema_select,
-        sql_text_for_run_all, sql_text_for_toolbar_run, statement_marker_id,
-        supports_manual_transactions, toggle_sql_line_comments, unquote_sql_identifier,
-        viewport_statement_scan_input, write_new_sql_file, write_sql_file,
+        foreign_prefetch_key, foreign_qualifier_fetch_scope, foreign_qualifier_scope,
+        initial_database_select_value, insert_target_table, is_current_diagnostic_identity,
+        is_current_manual_transaction_owner, is_current_manual_transaction_start,
+        is_current_query_context_generation, lookup_table_columns, manual_sql_execution_action,
+        manual_transaction_control_sql, manual_transaction_invalidation_mode,
+        manual_transaction_stop_action, match_sql_to_statement_marker, metadata_scope_selection,
+        preferred_default_database, query_connection_context_label, query_connection_ids,
+        query_file_path_for_name, query_toolbar_action, schema_changed_event_matches_scope,
+        should_render_schema_select, sql_text_for_run_all, sql_text_for_toolbar_run,
+        statement_marker_id, supports_manual_transactions, toggle_sql_line_comments,
+        unquote_sql_identifier, viewport_statement_scan_input, write_new_sql_file, write_sql_file,
     };
     use db::DbManager;
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
@@ -4856,6 +4890,27 @@ mod tests {
     use std::time::Duration;
 
     const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
+
+    #[test]
+    fn foreign_prefetch_keys_are_isolated_by_metadata_scope() {
+        let first = SqlMetadataScope::new("connection", DatabaseType::MySQL, 1)
+            .with_database(Some("app".into()));
+        let next_generation = SqlMetadataScope::new("connection", DatabaseType::MySQL, 2)
+            .with_database(Some("app".into()));
+        let other_database = SqlMetadataScope::new("connection", DatabaseType::MySQL, 1)
+            .with_database(Some("other".into()));
+
+        let first_key = foreign_prefetch_key(&first, "Analytics");
+        assert_eq!(first_key.1, "analytics");
+        assert_ne!(
+            first_key,
+            foreign_prefetch_key(&next_generation, "analytics")
+        );
+        assert_ne!(
+            first_key,
+            foreign_prefetch_key(&other_database, "analytics")
+        );
+    }
 
     #[test]
     fn foreign_qualifier_scopes_match_database_capabilities() {
