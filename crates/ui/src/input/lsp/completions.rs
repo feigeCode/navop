@@ -26,6 +26,10 @@ enum CompletionMenuAction {
     Refresh(lsp_types::CompletionTriggerKind),
 }
 
+fn can_refresh_completion_after(last_char: char) -> bool {
+    last_char.is_ascii_alphanumeric() || last_char == '_' || last_char == '.' || last_char == ' '
+}
+
 fn completion_menu_action(
     has_active_menu: bool,
     is_trigger: bool,
@@ -167,19 +171,17 @@ impl InputState {
     ///
     /// 用于元数据（如外部 database/schema）异步就绪后刷新补全弹窗：
     /// `invalidate_completions` 只会关闭弹窗，不会重新查询。
-    /// 光标前不是可触发字符（空格、行首等）时不做任何事。
+    /// 光标前不是可触发字符（换行、Tab、行首等）时不做任何事。
     pub fn refresh_completion_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.completion_inserting {
             return;
         }
         let cursor = self.cursor();
-        let start = self
-            .text
-            .clip_offset(cursor.saturating_sub(1), Bias::Left);
+        let start = self.text.clip_offset(cursor.saturating_sub(1), Bias::Left);
         let Some(last_char) = self.text.char_at(start) else {
             return;
         };
-        if !(last_char.is_ascii_alphanumeric() || last_char == '_' || last_char == '.') {
+        if !can_refresh_completion_after(last_char) {
             return;
         }
         let range = start..cursor;
@@ -533,8 +535,21 @@ impl InputState {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionMenuAction, completion_menu_action};
+    use super::{CompletionMenuAction, can_refresh_completion_after, completion_menu_action};
     use lsp_types::CompletionTriggerKind;
+
+    #[test]
+    fn metadata_refresh_accepts_sql_space_but_not_layout_whitespace() {
+        for ch in ['a', '7', '_', '.', ' '] {
+            assert!(
+                can_refresh_completion_after(ch),
+                "expected {ch:?} to refresh"
+            );
+        }
+        for ch in ['\n', '\r', '\t', ',', '('] {
+            assert!(!can_refresh_completion_after(ch), "expected {ch:?} to skip");
+        }
+    }
 
     #[test]
     fn ignores_non_trigger_without_existing_menu() {

@@ -413,11 +413,69 @@ fn is_current_diagnostic_identity(
     expected == current
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForeignQualifierKind {
+    Databases,
+    Schemas,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ForeignQualifierScope {
+    kind: ForeignQualifierKind,
+    database: String,
+    current_name: Option<String>,
+}
+
+fn foreign_qualifier_scope(
+    scope: &SqlMetadataScope,
+    uses_schema_as_database: bool,
+    supports_schema: bool,
+) -> ForeignQualifierScope {
+    if uses_schema_as_database {
+        ForeignQualifierScope {
+            kind: ForeignQualifierKind::Schemas,
+            database: String::new(),
+            current_name: scope.schema.clone(),
+        }
+    } else if supports_schema {
+        ForeignQualifierScope {
+            kind: ForeignQualifierKind::Schemas,
+            database: scope.database.clone().unwrap_or_default(),
+            current_name: scope.schema.clone(),
+        }
+    } else {
+        ForeignQualifierScope {
+            kind: ForeignQualifierKind::Databases,
+            database: String::new(),
+            current_name: scope.database.clone(),
+        }
+    }
+}
+
+fn foreign_qualifier_fetch_scope(
+    scope: &SqlMetadataScope,
+    qualifier: &str,
+    uses_schema_as_database: bool,
+    supports_schema: bool,
+) -> Option<(String, Option<String>)> {
+    let qualifier_scope = foreign_qualifier_scope(scope, uses_schema_as_database, supports_schema);
+    match qualifier_scope.kind {
+        ForeignQualifierKind::Databases => Some((qualifier.to_string(), None)),
+        ForeignQualifierKind::Schemas if uses_schema_as_database => {
+            Some((String::new(), Some(qualifier.to_string())))
+        }
+        ForeignQualifierKind::Schemas if qualifier_scope.database.is_empty() => None,
+        ForeignQualifierKind::Schemas => {
+            Some((qualifier_scope.database, Some(qualifier.to_string())))
+        }
+    }
+}
+
 /// 加载其他 database/schema（qualifier）名称列表，用于跨库限定名补全。
 ///
-/// MySQL/ClickHouse 等 uses_schema_as_database 方言取其他数据库；
-/// PG/MSSQL/Oracle 等取当前库的其他 schema。排除当前 database/schema，
-/// 只取名字，完整元数据按需懒加载（见 `schedule_foreign_schema_prefetch`）。
+/// 数据库型 qualifier（MySQL/ClickHouse）取其他数据库；schema 型 qualifier
+/// （PG/MSSQL/Oracle）取其他 schema。排除当前 qualifier，只取名字，
+/// 完整元数据按需懒加载（见 `schedule_foreign_schema_prefetch`）。
 async fn load_foreign_qualifier_names(
     global_state: &GlobalDbState,
     cx: &mut AsyncApp,
@@ -426,35 +484,26 @@ async fn load_foreign_qualifier_names(
     uses_schema_as_database: bool,
     supports_schema: bool,
 ) -> Vec<(String, String)> {
-    if !uses_schema_as_database && !supports_schema {
-        return Vec::new();
-    }
-    let kind_label = if uses_schema_as_database {
-        t!("SqlEditor.database_object").to_string()
-    } else {
-        t!("SqlEditor.schema_object").to_string()
+    let qualifier_scope = foreign_qualifier_scope(scope, uses_schema_as_database, supports_schema);
+    let kind_label = match qualifier_scope.kind {
+        ForeignQualifierKind::Databases => t!("SqlEditor.database_object").to_string(),
+        ForeignQualifierKind::Schemas => t!("SqlEditor.schema_object").to_string(),
     };
-    let names = if uses_schema_as_database {
-        global_state
+    let names = match qualifier_scope.kind {
+        ForeignQualifierKind::Databases => global_state
             .list_databases(cx, connection_id)
             .await
-            .unwrap_or_default()
-    } else {
-        let database = scope.database.clone().unwrap_or_default();
-        global_state
-            .list_schemas(cx, connection_id, database)
+            .unwrap_or_default(),
+        ForeignQualifierKind::Schemas => global_state
+            .list_schemas(cx, connection_id, qualifier_scope.database.clone())
             .await
-            .unwrap_or_default()
+            .unwrap_or_default(),
     };
     let excluded = |name: &str| {
-        scope
-            .database
+        qualifier_scope
+            .current_name
             .as_deref()
             .is_some_and(|current| current.eq_ignore_ascii_case(name))
-            || scope
-                .schema
-                .as_deref()
-                .is_some_and(|current| current.eq_ignore_ascii_case(name))
     };
     let mut seen = HashSet::new();
     names
@@ -1564,7 +1613,7 @@ impl SqlEditorTab {
                     }
                     let db = db_name.clone();
                     let instance = this.clone();
-                    cx.spawn(async move |_handle, cx| {
+                    cx.spawn(async move |handle, cx| {
                         if instance.supports_schema && !instance.uses_schema_as_database {
                             instance
                                 .load_schemas_for_db(
@@ -1578,7 +1627,14 @@ impl SqlEditorTab {
                                 .await;
                         }
                         instance
-                            .update_schema_for_db(global_state, &db, generation, cx)
+                            .update_schema_for_db(
+                                global_state,
+                                &db,
+                                generation,
+                                window_handle,
+                                handle.clone(),
+                                cx,
+                            )
                             .await;
                     })
                     .detach();
@@ -1590,10 +1646,11 @@ impl SqlEditorTab {
         cx.subscribe_in(
             &self.schema_select,
             window,
-            |this, _select, event: &SelectEvent<SearchableVec<String>>, _window, cx| {
+            |this, _select, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                 let global_state = cx.global::<GlobalDbState>().clone();
                 if let SelectEvent::Confirm(Some(schema_name)) = event {
                     let generation = this.next_context_generation(cx);
+                    let window_handle = window.window_handle();
                     let database_or_schema = if this.uses_schema_as_database {
                         Some(schema_name.clone())
                     } else {
@@ -1601,9 +1658,16 @@ impl SqlEditorTab {
                     };
                     if let Some(db) = database_or_schema {
                         let instance = this.clone();
-                        cx.spawn(async move |_handle, cx| {
+                        cx.spawn(async move |handle, cx| {
                             instance
-                                .update_schema_for_db(global_state, &db, generation, cx)
+                                .update_schema_for_db(
+                                    global_state,
+                                    &db,
+                                    generation,
+                                    window_handle,
+                                    handle,
+                                    cx,
+                                )
                                 .await;
                         })
                         .detach();
@@ -2446,8 +2510,8 @@ impl SqlEditorTab {
         self._connection_subscription = Some(cx.subscribe_in(
             &notifier.0,
             window,
-            |this, _notifier, event: &ConnectionDataEvent, _window, cx| {
-                this.handle_connection_data_event(event, cx);
+            |this, _notifier, event: &ConnectionDataEvent, window, cx| {
+                this.handle_connection_data_event(event, window, cx);
             },
         ));
     }
@@ -2455,6 +2519,7 @@ impl SqlEditorTab {
     fn handle_connection_data_event(
         &mut self,
         event: &ConnectionDataEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let ConnectionDataEvent::SchemaChanged {
@@ -2492,10 +2557,18 @@ impl SqlEditorTab {
 
         let global_state = cx.global::<GlobalDbState>().clone();
         let generation = self.next_context_generation(cx);
+        let window_handle = window.window_handle();
         let instance = self.clone();
-        cx.spawn(async move |_handle, cx| {
+        cx.spawn(async move |handle, cx| {
             instance
-                .update_schema_for_db(global_state, &target_database, generation, cx)
+                .update_schema_for_db(
+                    global_state,
+                    &target_database,
+                    generation,
+                    window_handle,
+                    handle,
+                    cx,
+                )
                 .await;
         })
         .detach();
@@ -2600,7 +2673,7 @@ impl SqlEditorTab {
         let context_generation = self.context_generation.clone();
         let uses_schema_as_database = self.uses_schema_as_database;
 
-        cx.spawn(async move |_handle, cx: &mut AsyncApp| {
+        cx.spawn(async move |handle, cx: &mut AsyncApp| {
             if !instance.is_context_generation_current(generation) {
                 return;
             }
@@ -2717,7 +2790,14 @@ impl SqlEditorTab {
                 }
                 if instance.is_context_generation_current(generation) {
                     instance
-                        .update_schema_for_db(global_state, db, generation, cx)
+                        .update_schema_for_db(
+                            global_state,
+                            db,
+                            generation,
+                            window_handle,
+                            handle,
+                            cx,
+                        )
                         .await;
                 }
             }
@@ -2731,10 +2811,11 @@ impl SqlEditorTab {
         global_state: GlobalDbState,
         database: &str,
         generation: u64,
+        window_handle: AnyWindowHandle,
+        entity: WeakEntity<SqlEditorTab>,
         cx: &mut AsyncApp,
     ) {
         let connection_id = self.connection_id.clone();
-        let editor = self.editor.clone();
         let Some(scope) = self.current_metadata_scope(generation, Some(database), cx) else {
             return;
         };
@@ -2906,18 +2987,30 @@ impl SqlEditorTab {
         }
         schema = schema.with_qualifiers(qualifier_items);
 
-        // Update editor with schema and database-specific completion info
-        if !self.is_metadata_scope_current(&scope, cx) {
-            return;
-        }
-        *self.schema_snapshot.write() = schema.clone();
-        *self.db_completion_info.write() = Some(db_completion_info.clone());
-        _ = editor.update(cx, |e, cx| {
-            e.set_db_completion_info(db_completion_info, schema, cx);
+        // Publish metadata and refresh the popup atomically against the current
+        // tab scope so a late database/schema load cannot overwrite a newer one.
+        let _ = cx.update_window(window_handle, move |_view, window, cx| {
+            let handle = window.window_handle();
+            let _ = entity.update(cx, |this, cx| {
+                if this
+                    .current_metadata_scope(generation, Some(&db), cx)
+                    .as_ref()
+                    != Some(&scope)
+                {
+                    return;
+                }
+                *this.schema_snapshot.write() = schema.clone();
+                *this.db_completion_info.write() = Some(db_completion_info.clone());
+                this.editor.update(cx, |editor, cx| {
+                    editor.set_db_completion_info(db_completion_info, schema, cx);
+                    editor
+                        .input()
+                        .update(cx, |state, cx| state.refresh_completion_popup(window, cx));
+                });
+                this.schedule_foreign_schema_prefetch(handle, cx);
+                this.run_diagnostics(cx);
+            });
         });
-        // Metadata changed: re-run diagnostics immediately so squiggles track
-        // the refreshed schema (unknown tables/columns may appear or clear).
-        let _ = cx.update(|cx| self.run_diagnostics(cx));
     }
 
     /// 文本变化时检测外部 qualifier 引用（`q.` 模式）并触发元数据懒加载。
@@ -3001,14 +3094,14 @@ impl SqlEditorTab {
 
     /// 计算外部 qualifier 对应的 list_tables 参数：(database, schema)。
     fn foreign_fetch_scope(&self, qualifier: &str, cx: &App) -> Option<(String, Option<String>)> {
-        if self.uses_schema_as_database {
-            Some((qualifier.to_string(), None))
-        } else if self.supports_schema {
-            let database = self.database_select.read(cx).selected_value().cloned()?;
-            Some((database, Some(qualifier.to_string())))
-        } else {
-            None
-        }
+        let generation = self.context_generation.load(Ordering::SeqCst);
+        let scope = self.current_metadata_scope(generation, None, cx)?;
+        foreign_qualifier_fetch_scope(
+            &scope,
+            qualifier,
+            self.uses_schema_as_database,
+            self.supports_schema,
+        )
     }
 
     /// 将懒加载完成的外部 qualifier 元数据合并进快照并刷新补全。
@@ -4731,14 +4824,15 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManualSqlExecutionAction, ManualTransactionAction, ManualTransactionInvalidationMode,
-        ManualTransactionSession, ManualTransactionStopAction, QueryFileNameError,
-        QueryToolbarAction, RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS,
-        RunCurrentQuery, SCHEMA_COLUMN_FETCH_CONCURRENCY, SQL_EDITOR_CONTEXT,
-        SQL_EDITOR_INPUT_CONTEXT, SqlDiagnosticIdentity, SqlMetadataScope, StatementScanInput,
-        ToggleLineComment, can_start_query_execution, can_switch_query_connection, collect_bounded,
-        current_statement_frame_decorations, initial_database_select_value, insert_target_table,
-        is_current_diagnostic_identity, is_current_manual_transaction_owner,
+        ForeignQualifierKind, ManualSqlExecutionAction, ManualTransactionAction,
+        ManualTransactionInvalidationMode, ManualTransactionSession, ManualTransactionStopAction,
+        QueryFileNameError, QueryToolbarAction, RUN_ALL_QUERY_KEY_BINDINGS,
+        RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SCHEMA_COLUMN_FETCH_CONCURRENCY,
+        SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, SqlDiagnosticIdentity, SqlMetadataScope,
+        StatementScanInput, ToggleLineComment, can_start_query_execution,
+        can_switch_query_connection, collect_bounded, current_statement_frame_decorations,
+        foreign_qualifier_fetch_scope, foreign_qualifier_scope, initial_database_select_value,
+        insert_target_table, is_current_diagnostic_identity, is_current_manual_transaction_owner,
         is_current_manual_transaction_start, is_current_query_context_generation,
         lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
@@ -4762,6 +4856,37 @@ mod tests {
     use std::time::Duration;
 
     const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
+
+    #[test]
+    fn foreign_qualifier_scopes_match_database_capabilities() {
+        let pg_scope = SqlMetadataScope::new("connection", DatabaseType::PostgreSQL, 1)
+            .with_database(Some("app".into()))
+            .with_schema(Some("public".into()));
+        let pg = foreign_qualifier_scope(&pg_scope, false, true);
+        assert_eq!(pg.kind, ForeignQualifierKind::Schemas);
+        assert_eq!(pg.current_name.as_deref(), Some("public"));
+        assert_eq!(
+            foreign_qualifier_fetch_scope(&pg_scope, "analytics", false, true),
+            Some(("app".into(), Some("analytics".into())))
+        );
+
+        let mysql = foreign_qualifier_scope(&pg_scope, false, false);
+        assert_eq!(mysql.kind, ForeignQualifierKind::Databases);
+        assert_eq!(mysql.current_name.as_deref(), Some("app"));
+        assert_eq!(
+            foreign_qualifier_fetch_scope(&pg_scope, "other_db", false, false),
+            Some(("other_db".into(), None))
+        );
+
+        let oracle_scope = SqlMetadataScope::new("connection", DatabaseType::Oracle, 1)
+            .with_schema(Some("APP".into()));
+        let oracle = foreign_qualifier_scope(&oracle_scope, true, false);
+        assert_eq!(oracle.kind, ForeignQualifierKind::Schemas);
+        assert_eq!(
+            foreign_qualifier_fetch_scope(&oracle_scope, "OTHER", true, false),
+            Some((String::new(), Some("OTHER".into())))
+        );
+    }
 
     #[test]
     fn large_documents_capture_only_a_viewport_statement_window() {

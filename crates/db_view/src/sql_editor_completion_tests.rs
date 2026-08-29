@@ -2131,7 +2131,7 @@ mod cross_schema_provider_tests {
             })
             .unwrap()
         });
-        let (qualifiers, tables, columns) = handle
+        let (qualifiers, tables, columns, from_tables, from_prefix, scoped_tables) = handle
             .update(cx, |root, window, cx| {
                 let input = root.0.clone();
                 let mut run = |rope: Rope| {
@@ -2146,6 +2146,9 @@ mod cross_schema_provider_tests {
                 let t1 = run(Rope::from_str("SELECT te"));
                 let t2 = run(Rope::from_str("SELECT * FROM test2."));
                 let t3 = run(Rope::from_str("SELECT test2.t1."));
+                let t4 = run(Rope::from_str("SELECT * FROM "));
+                let t5 = run(Rope::from_str("SELECT * FROM us"));
+                let t6 = run(Rope::from_str("SELECT * FROM app."));
                 cx.spawn(async move |_, _| {
                     let labels = |response: anyhow::Result<CompletionResponse>| -> anyhow::Result<Vec<String>> {
                         let items = match response? {
@@ -2154,7 +2157,14 @@ mod cross_schema_provider_tests {
                         };
                         Ok(items.into_iter().map(|item| item.label).collect())
                     };
-                    anyhow::Ok((labels(t1.await)?, labels(t2.await)?, labels(t3.await)?))
+                    anyhow::Ok((
+                        labels(t1.await)?,
+                        labels(t2.await)?,
+                        labels(t3.await)?,
+                        labels(t4.await)?,
+                        labels(t5.await)?,
+                        labels(t6.await)?,
+                    ))
                 })
             })
             .unwrap()
@@ -2172,6 +2182,18 @@ mod cross_schema_provider_tests {
         assert!(
             columns.iter().any(|label| label == "c1"),
             "`db.tbl.` 应提示该表的列，实际 {columns:?}"
+        );
+        assert!(
+            from_tables.iter().any(|label| label == "users"),
+            "`FROM ` 应提示当前数据库的表，实际 {from_tables:?}"
+        );
+        assert!(
+            from_prefix.iter().any(|label| label == "users"),
+            "`FROM us` 应按前缀提示当前数据库的表，实际 {from_prefix:?}"
+        );
+        assert!(
+            scoped_tables.iter().any(|label| label == "users"),
+            "当前 database 限定名应提示当前表，实际 {scoped_tables:?}"
         );
     }
 }
