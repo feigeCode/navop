@@ -2087,10 +2087,10 @@ mod tests {
 #[cfg(test)]
 mod cross_schema_provider_tests {
     use crate::sql_editor::{DefaultSqlCompletionProvider, ForeignSchema, SqlSchema};
-    use gpui::{div, AppContext, Context, Entity, IntoElement, Render, Window};
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
     use gpui_component::input::{CompletionProvider, InputState};
     use gpui_component::{Rope, Theme};
-    use lsp_types::{CompletionContext, CompletionTriggerKind, CompletionResponse};
+    use lsp_types::{CompletionContext, CompletionResponse, CompletionTriggerKind};
     use std::collections::HashMap;
 
     struct Root(Entity<InputState>);

@@ -2986,9 +2986,8 @@ impl SqlEditorTab {
                     let _ = cx.update_window(window_handle, move |_view, window, cx| {
                         editor.update(cx, |editor, cx| {
                             let input = editor.input();
-                            input.update(cx, |state, cx| {
-                                state.refresh_completion_popup(window, cx)
-                            });
+                            input
+                                .update(cx, |state, cx| state.refresh_completion_popup(window, cx));
                         });
                     });
                 }
@@ -4432,6 +4431,8 @@ impl SqlEditorTab {
         let color = spec.color;
         Button::new(spec.id)
             .with_size(Size::Small)
+            .h(QUERY_TOOLBAR_CONTROL_HEIGHT)
+            .w(QUERY_TOOLBAR_CONTROL_HEIGHT)
             .custom(
                 ButtonCustomVariant::new(cx)
                     .foreground(color)
