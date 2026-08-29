@@ -73,7 +73,7 @@ impl MysqlDbConnection {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty());
 
-        if !require_ssl && verify_ca && verify_identity && root_cert_path.is_none() {
+        if !require_ssl {
             return None;
         }
 
@@ -1206,6 +1206,17 @@ mod tests {
     #[test]
     fn build_ssl_opts_returns_none_when_ssl_not_requested() {
         let config = build_config(&[]);
+
+        assert!(MysqlDbConnection::build_ssl_opts(&config).is_none());
+    }
+
+    #[test]
+    fn build_ssl_opts_returns_none_when_ssl_disabled_even_with_stale_ssl_params() {
+        let config = build_config(&[
+            ("require_ssl", "false"),
+            ("ssl_root_cert_path", "/tmp/wrong-ca.pem"),
+            ("tls_hostname_override", "db.internal"),
+        ]);
 
         assert!(MysqlDbConnection::build_ssl_opts(&config).is_none());
     }
