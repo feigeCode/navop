@@ -14,6 +14,8 @@ pub(crate) enum LeftRemoteConnectionState {
 pub(crate) struct LeftRemoteEndpoint {
     pub connection: StoredConnection,
     pub config: SshConnectConfig,
+    /// 连接成功后进入的 SFTP 初始目录；`None` 时回退到服务器登录目录。
+    pub sftp_initial_directory: Option<String>,
     pub client: Option<Arc<Mutex<RusshSftpClient>>>,
     pub state: LeftRemoteConnectionState,
     pub current_path: String,
@@ -23,10 +25,15 @@ pub(crate) struct LeftRemoteEndpoint {
 }
 
 impl LeftRemoteEndpoint {
-    pub fn connecting(connection: StoredConnection, config: SshConnectConfig) -> Self {
+    pub fn connecting(
+        connection: StoredConnection,
+        config: SshConnectConfig,
+        sftp_initial_directory: Option<String>,
+    ) -> Self {
         Self {
             connection,
             config,
+            sftp_initial_directory,
             client: None,
             state: LeftRemoteConnectionState::Connecting,
             current_path: ".".to_string(),

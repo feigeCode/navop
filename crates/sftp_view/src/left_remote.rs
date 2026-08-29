@@ -63,7 +63,12 @@ impl SftpView {
         };
 
         self.disconnect_left_remote(cx);
-        self.left_remote = Some(LeftRemoteEndpoint::connecting(connection, config));
+        let sftp_initial_directory = crate::ssh_config::sftp_initial_directory_of(&connection);
+        self.left_remote = Some(LeftRemoteEndpoint::connecting(
+            connection,
+            config,
+            sftp_initial_directory,
+        ));
         self.local_panel.update(cx, |panel, cx| {
             panel.set_left_endpoint(true, cx);
             panel.set_current_path(".".to_string(), cx);
@@ -87,14 +92,30 @@ impl SftpView {
         endpoint.state = LeftRemoteConnectionState::Connecting;
         endpoint.loading = false;
         let config = endpoint.config.clone();
+        let initial_directory = endpoint.sftp_initial_directory.clone();
         let connection_id = endpoint.connection.id;
         let window_handle = self.window_handle.clone();
         let task = Tokio::spawn(cx, async move {
             let mut client = RusshSftpClient::connect(config).await?;
-            let path = client
-                .realpath(".")
-                .await
-                .unwrap_or_else(|_| ".".to_string());
+            // 优先使用配置的初始目录，解析失败时回退到服务器登录目录
+            let path = match initial_directory {
+                Some(dir) => match client.realpath(&dir).await.ok() {
+                    Some(resolved) => resolved,
+                    None => {
+                        tracing::warn!(
+                            "Configured SFTP initial directory could not be resolved: {dir}"
+                        );
+                        client
+                            .realpath(".")
+                            .await
+                            .unwrap_or_else(|_| ".".to_string())
+                    }
+                },
+                None => client
+                    .realpath(".")
+                    .await
+                    .unwrap_or_else(|_| ".".to_string()),
+            };
             Ok::<_, anyhow::Error>((client, path))
         });
 

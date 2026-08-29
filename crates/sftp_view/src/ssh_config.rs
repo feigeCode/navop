@@ -21,6 +21,8 @@ impl SshCredentialPromptPolicy {
 pub(crate) struct ResolvedSftpConnection {
     pub(crate) config: SshConnectConfig,
     pub(crate) credential_prompt_policy: SshCredentialPromptPolicy,
+    /// 连接成功后进入的 SFTP 初始目录；`None` 时回退到服务器登录目录。
+    pub(crate) sftp_initial_directory: Option<String>,
 }
 
 pub(crate) fn ssh_config_for(connection: &StoredConnection) -> Result<SshConnectConfig> {
@@ -38,6 +40,7 @@ pub(crate) fn resolve_ssh_connection(
         password: params.prompts_for_password()
             && matches!(&params.auth_method, SshAuthMethod::Password { .. }),
     };
+    let initial_directory = sftp_initial_directory(&params);
     let (username, auth) = match params.sftp_account.as_ref() {
         Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => (
             account.username.clone(),
@@ -77,7 +80,27 @@ pub(crate) fn resolve_ssh_connection(
     Ok(ResolvedSftpConnection {
         config,
         credential_prompt_policy,
+        sftp_initial_directory: initial_directory,
     })
+}
+
+/// 从 SSH 参数中提取 SFTP 初始目录，空白值视为未配置。
+pub(crate) fn sftp_initial_directory(
+    params: &one_core::storage::models::SshParams,
+) -> Option<String> {
+    params
+        .sftp_default_directory
+        .as_ref()
+        .map(|dir| dir.trim().to_string())
+        .filter(|dir| !dir.is_empty())
+}
+
+/// 从存储连接中提取 SFTP 初始目录；非 SSH 连接返回 `None`。
+pub(crate) fn sftp_initial_directory_of(connection: &StoredConnection) -> Option<String> {
+    connection
+        .to_ssh_params()
+        .ok()
+        .and_then(|params| sftp_initial_directory(&params))
 }
 
 pub(crate) fn ssh_config_with_runtime_credentials(
@@ -141,7 +164,10 @@ fn ssh_auth(method: SshAuthMethod) -> SshAuth {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_ssh_connection, ssh_config_for, ssh_config_with_runtime_credentials};
+    use super::{
+        resolve_ssh_connection, sftp_initial_directory, sftp_initial_directory_of,
+        ssh_config_for, ssh_config_with_runtime_credentials,
+    };
     use one_core::storage::{SftpAccount, SshAuthMethod, SshParams, StoredConnection};
     use ssh::SshAuth;
 
@@ -331,5 +357,66 @@ mod tests {
                 .to_string()
                 .contains("only valid for password authentication")
         );
+    }
+
+    #[test]
+    fn resolved_connection_carries_configured_sftp_initial_directory() {
+        let mut connection = connection_with_auth(SshAuthMethod::Password {
+            password: "secret".to_string(),
+        });
+        let mut params = connection.to_ssh_params().expect("valid SSH params");
+        params.sftp_default_directory = Some("/data/upload".to_string());
+        connection.params = serde_json::to_string(&params).expect("serialize SSH params");
+
+        let resolved = resolve_ssh_connection(&connection).expect("valid SSH connection");
+
+        assert_eq!(resolved.sftp_initial_directory, Some("/data/upload".to_string()));
+    }
+
+    #[test]
+    fn sftp_initial_directory_without_configuration_is_none() {
+        let connection = connection_with_auth(SshAuthMethod::Password {
+            password: "secret".to_string(),
+        });
+
+        let resolved = resolve_ssh_connection(&connection).expect("valid SSH connection");
+
+        assert_eq!(resolved.sftp_initial_directory, None);
+    }
+
+    #[test]
+    fn sftp_initial_directory_trims_whitespace_and_ignores_blank_values() {
+        let mut params = connection_with_auth(SshAuthMethod::Agent)
+            .to_ssh_params()
+            .expect("valid SSH params");
+
+        params.sftp_default_directory = Some("  /data/upload  ".to_string());
+        assert_eq!(
+            sftp_initial_directory(&params),
+            Some("/data/upload".to_string())
+        );
+
+        params.sftp_default_directory = Some("   ".to_string());
+        assert_eq!(sftp_initial_directory(&params), None);
+
+        params.sftp_default_directory = None;
+        assert_eq!(sftp_initial_directory(&params), None);
+    }
+
+    #[test]
+    fn sftp_initial_directory_of_invalid_connection_is_none() {
+        let mut connection = connection_with_auth(SshAuthMethod::Password {
+            password: "secret".to_string(),
+        });
+        let mut params = connection.to_ssh_params().expect("valid SSH params");
+        params.sftp_default_directory = Some("/data/upload".to_string());
+        connection.params = serde_json::to_string(&params).expect("serialize SSH params");
+        assert_eq!(
+            sftp_initial_directory_of(&connection),
+            Some("/data/upload".to_string())
+        );
+
+        connection.params = "not-json".to_string();
+        assert_eq!(sftp_initial_directory_of(&connection), None);
     }
 }

@@ -1498,11 +1498,7 @@ impl SftpView {
             .expect("StoredConnection should contain valid SSH params");
         let config = resolved.config;
         let credential_prompt_policy = resolved.credential_prompt_policy;
-        let sftp_initial_directory = conn
-            .to_ssh_params()
-            .ok()
-            .and_then(|params| params.sftp_default_directory)
-            .filter(|dir| !dir.trim().is_empty());
+        let sftp_initial_directory = resolved.sftp_initial_directory;
 
         let focus_handle = cx.focus_handle();
         let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
