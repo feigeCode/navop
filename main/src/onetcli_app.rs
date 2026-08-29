@@ -1318,9 +1318,8 @@ impl OnetCliApp {
         let show_navigation_sidebar_toggle = home_page_style.uses_persistent_sidebar();
         let layout = initial_content_layout(home_page_style, settings.startup_default_page);
         let initial_home_active = layout.main_content == MainContent::Home;
-        // 进入主页默认展开侧边栏，覆盖上次保存的收起状态。
-        let connection_sidebar_expanded = settings.connection_sidebar_expanded
-            || (show_navigation_sidebar_toggle && initial_home_active);
+        // 侧边栏展开状态完全跟随用户上次保存的选择，进入主页不强制展开。
+        let connection_sidebar_expanded = settings.connection_sidebar_expanded;
         let tab_container = cx.new(|cx| {
             let mut container = TabContainer::new(window, cx).with_tab_bar_when_empty(true);
 
@@ -1531,14 +1530,6 @@ impl OnetCliApp {
             return;
         }
         self.main_content = main_content;
-        // 进入主页默认展开侧边栏：主页连接树是主要入口，收起状态只在
-        // 页签视图中保留。
-        if main_content == MainContent::Home
-            && self.home_page_style.uses_persistent_sidebar()
-            && !self.connection_sidebar.read(cx).is_expanded()
-        {
-            self.set_connection_sidebar_expanded(true, cx);
-        }
         self.home_page.update(cx, |home, cx| {
             home.set_home_active(main_content == MainContent::Home, cx)
         });
@@ -2133,7 +2124,7 @@ mod tests {
     }
 
     #[test]
-    fn entering_home_expands_the_persistent_connection_sidebar() {
+    fn entering_home_preserves_the_saved_connection_sidebar_state() {
         let source = include_str!("onetcli_app.rs");
         let set_main_content = source
             .split("fn set_main_content(")
@@ -2141,15 +2132,12 @@ mod tests {
             .and_then(|source| source.split("\n    fn ").next())
             .expect("set_main_content source");
         assert!(
-            set_main_content.contains("MainContent::Home")
-                && set_main_content.contains("set_connection_sidebar_expanded(true, cx)"),
-            "进入主页时应默认展开常驻侧边栏"
+            !set_main_content.contains("set_connection_sidebar_expanded(true, cx)"),
+            "进入主页时不得强制展开常驻侧边栏，应保留用户收起状态"
         );
         assert!(
-            source.contains(
-                "settings.connection_sidebar_expanded\n            || (show_navigation_sidebar_toggle && initial_home_active)"
-            ),
-            "启动直接进入主页时也应默认展开侧边栏"
+            !source.contains("settings.connection_sidebar_expanded\n            || (show_navigation_sidebar_toggle && initial_home_active)"),
+            "启动直接进入主页时也不得覆盖已保存的收起状态"
         );
         assert!(
             source.contains("set_persistent_sidebar_expanded(connection_sidebar_expanded, cx)"),
