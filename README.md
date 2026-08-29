@@ -46,7 +46,7 @@
     <a href="CONTRIBUTING.md">Contributing</a>
   </p>
 
-  <p><img src="app1.png" alt="Navop overview" width="820" /></p>
+  <p><img src="app.png" alt="Navop overview" width="820" /></p>
 </div>
 
 ## Features
@@ -92,6 +92,10 @@ navop skill install --target codex --scope user
 The separate [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package is only the stdio bridge for native MCP clients (`npx -y @navop/mcp@latest`). See the [Navop MCP and CLI repository](https://github.com/feigeCode/navop-mcp) and the [Public MCP guide](https://docs.navop.dev/en-US/guide/public-mcp) for the full command reference and client configuration.
 
 ## Screenshots
+
+| Workspace |
+|:-:|
+| [![Workspace](app1.png)](app1.png) |
 
 | Database | SSH |
 |:-:|:-:|
