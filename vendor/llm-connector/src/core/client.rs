@@ -5,6 +5,7 @@
 use crate::error::LlmConnectorError;
 use reqwest::Client;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -92,13 +93,17 @@ impl HttpClient {
 
     /// Add request headers
     pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
-        self.headers.extend(headers);
+        for (key, value) in headers {
+            self.headers
+                .insert(key, sanitize_header_value(&value).into_owned());
+        }
         self
     }
 
     /// Add single request header
     pub fn with_header(mut self, key: String, value: String) -> Self {
-        self.headers.insert(key, value);
+        self.headers
+            .insert(key, sanitize_header_value(&value).into_owned());
         self
     }
 
@@ -198,7 +203,7 @@ impl HttpClient {
 
         // Add custom headers first
         for (key, value) in custom_headers {
-            request = request.header(key, value);
+            request = request.header(key, sanitize_header_value(value).as_ref());
         }
 
         // Then add configured headers (may override custom headers)
@@ -231,19 +236,15 @@ impl HttpClient {
 
         // 1. Add base headers
         for (key, value) in &self.headers {
-            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value)
-            {
-                final_headers.insert(header_name, header_value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
             }
         }
 
         // 2. Apply overrides (overwrite existing keys)
         for (key, value) in overrides {
-            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value)
-            {
-                final_headers.insert(header_name, header_value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
             }
         }
 
@@ -297,19 +298,15 @@ impl HttpClient {
 
         // 2. Add base headers
         for (key, value) in &self.headers {
-            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value)
-            {
-                final_headers.insert(header_name, header_value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
             }
         }
 
         // 3. Apply overrides (overwrite existing keys)
         for (key, value) in overrides {
-            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value)
-            {
-                final_headers.insert(header_name, header_value);
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                final_headers.insert(header_name, header_value(value));
             }
         }
 
@@ -336,11 +333,100 @@ impl HttpClient {
     }
 }
 
+/// Builds a validated [`reqwest::header::HeaderValue`] from a raw string value.
+///
+/// The value is sanitized to printable ASCII first so the request can never be
+/// rejected by providers that proxy over gRPC-gateway, which refuses request
+/// headers whose values contain non-printable ASCII (for example surfacing as
+/// `header key "grpcgateway-user-agent" contains value with non-printable ASCII
+/// characters`). Sanitizing also prevents reqwest from failing request
+/// construction for the same reason.
+fn header_value(value: &str) -> reqwest::header::HeaderValue {
+    reqwest::header::HeaderValue::from_str(&sanitize_header_value(value))
+        .expect("sanitized header value must be valid")
+}
+
+/// Replaces bytes that are invalid in an HTTP header value with `?`.
+///
+/// Header values must be printable US-ASCII; multi-byte UTF-8 and control
+/// characters (except nothing here) are replaced. Existing printable values are
+/// returned unchanged.
+fn sanitize_header_value(value: &str) -> Cow<'_, str> {
+    if value.bytes().all(is_printable_ascii) {
+        return Cow::Borrowed(value);
+    }
+    let sanitized: String = value
+        .bytes()
+        .map(|b| if is_printable_ascii(b) { char::from(b) } else { '?' })
+        .collect();
+    Cow::Owned(sanitized)
+}
+
+fn is_printable_ascii(byte: u8) -> bool {
+    (0x20..=0x7E).contains(&byte)
+}
+
 impl std::fmt::Debug for HttpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpClient")
             .field("base_url", &self.base_url)
             .field("headers_count", &self.headers.len())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_keeps_printable_ascii_unchanged() {
+        assert_eq!(
+            sanitize_header_value("Bearer sk-abc123 / ok"),
+            Cow::Borrowed("Bearer sk-abc123 / ok")
+        );
+    }
+
+    #[test]
+    fn sanitize_replaces_non_printable_ascii() {
+        assert_eq!(
+            sanitize_header_value("llm-connector/商汤"),
+            "llm-connector/??????"
+        );
+        assert_eq!(sanitize_header_value("line\nbreak"), "line?break");
+        assert_eq!(sanitize_header_value("tab\there"), "tab?here");
+    }
+
+    #[test]
+    fn sanitize_replaces_high_bytes_and_control_bytes() {
+        assert_eq!(sanitize_header_value("\u{7f}"), "?");
+        assert_eq!(sanitize_header_value("\u{00}"), "?");
+        assert_eq!(sanitize_header_value("a\u{80}b"), "a??b");
+    }
+
+    #[test]
+    fn header_value_from_sanitized_input_never_fails() {
+        for raw in [
+            "商汤",
+            "Bearer sk-test",
+            "line\nbreak",
+            "tab\there",
+            "no newline \r\n",
+        ] {
+            let value = header_value(raw);
+            assert!(value.to_str().is_ok(), "raw = {raw:?}");
+            assert!(
+                value.to_str().unwrap().bytes().all(is_printable_ascii),
+                "raw = {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_header_stores_sanitized_value() {
+        let client = HttpClient::new("https://api.example.com").unwrap();
+        let client = client.with_header("X-Test".to_string(), "value\nwith\0bad".to_string());
+        let stored = client.headers.get("X-Test").expect("header present");
+        assert_eq!(stored, "value?with?bad");
     }
 }
