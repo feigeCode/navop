@@ -172,6 +172,16 @@ Navop is maintained independently. Stars, focused pull requests, bug reports, an
 - Optional donations: [DONATE.md](DONATE.md)
 - Legacy OnetCli repository: [feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
+## Star History
+
+<a href="https://star-history.com/#feigeCode/navop&type=date&logscale=&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=feigeCode/navop&type=date&theme=dark&logscale&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+ </picture>
+</a>
+
 ## Credits
 
 ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).

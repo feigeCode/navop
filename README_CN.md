@@ -172,6 +172,16 @@ Navop 由个人长期维护。Star、聚焦的小型 PR、Bug 报告和捐赠都
 - 自愿捐赠：[DONATE_CN.md](DONATE_CN.md)
 - 旧版 OnetCli 仓库：[feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
+## Star History
+
+<a href="https://star-history.com/#feigeCode/navop&type=date&logscale=&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=feigeCode/navop&type=date&theme=dark&logscale&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+ </picture>
+</a>
+
 ## 致谢
 
 ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
