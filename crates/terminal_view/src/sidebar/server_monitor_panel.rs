@@ -15,6 +15,7 @@ use gpui_component::{
     h_flex,
     progress::Progress,
     spinner::Spinner,
+    switch::Switch,
     tooltip::Tooltip,
     v_flex,
 };
@@ -22,7 +23,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::get_config_dir;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
-use ssh::{ChannelEvent, SshChannel, SshSessionManager};
+use ssh::{ChannelEvent, RusshChannel, SshChannel, SshSessionManager};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,8 +35,8 @@ const REFRESH_INTERVAL_SECS: u64 = 3;
 const HISTORY_LIMIT: usize = 30;
 const MAX_HISTORY_X_AXIS_LABELS: usize = 6;
 const SERVER_MONITOR_PREFS_FILE: &str = "server-monitor.json";
-const REMOTE_HELPER_DIR: &str = "$HOME/.onetcli-monitor";
-const REMOTE_HELPER_SCRIPT: &str = "$HOME/.onetcli-monitor/collect.sh";
+/// 旧版本曾把监控脚本写入该远端目录；启动监控时按 best-effort 清理，采集本身不再写入主机。
+const LEGACY_REMOTE_HELPER_DIR: &str = "$HOME/.onetcli-monitor";
 
 const REMOTE_MONITOR_SCRIPT: &str = r#"#!/usr/bin/env bash
 set -u
@@ -541,7 +542,7 @@ impl ServerMonitorPanel {
         let session_manager = self.session_manager.clone();
         let session_id = self.session_id.clone();
         let task = Tokio::spawn(cx, async move {
-            prepare_remote_monitor(session_manager.clone()).await?;
+            cleanup_legacy_remote_monitor(session_manager.clone()).await;
             let payload = collect_remote_stats(session_manager, &session_id).await?;
             let stats = parse_server_stats(&payload)?;
             Ok::<_, anyhow::Error>(stats)
@@ -576,6 +577,24 @@ impl ServerMonitorPanel {
             }
         })
         .detach();
+    }
+
+    pub fn stop_monitoring(&mut self, cx: &mut Context<Self>) {
+        self.auto_show = false;
+        self.monitor_enabled = false;
+        self.persist_monitor_enabled(false);
+        self.refresh_task = None;
+        self.last_error = None;
+        self.preparing = false;
+        self.in_flight = false;
+        self.current_stats = None;
+        self.previous_cpu = None;
+        self.previous_network = None;
+        self.previous_timestamp = None;
+        self.cpu_history.clear();
+        self.rx_history.clear();
+        self.tx_history.clear();
+        cx.notify();
     }
 
     fn ensure_refresh_loop(&mut self, cx: &mut Context<Self>) {
@@ -732,18 +751,39 @@ impl ServerMonitorPanel {
                     .child(status)
             }))
             .child(
-                h_flex().gap_1().child(
-                    IconButton::new(
-                        "server-monitor-refresh",
-                        FunctionalIcon::new(IconName::Refresh),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(self.colors.muted_foreground)
+                            .child(t!("ServerMonitor.monitoring")),
                     )
-                    .role(IconButtonRole::Compact)
-                    .disabled(!self.monitor_enabled || self.preparing)
-                    .tooltip(t!("ServerMonitor.refresh"))
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.refresh_now(cx);
-                    })),
-                ),
+                    .child(
+                        Switch::new("server-monitor-toggle")
+                            .checked(self.monitor_enabled)
+                            .small()
+                            .disabled(self.preparing)
+                            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                if *checked {
+                                    this.start_monitoring(cx);
+                                } else {
+                                    this.stop_monitoring(cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        IconButton::new(
+                            "server-monitor-refresh",
+                            FunctionalIcon::new(IconName::Refresh),
+                        )
+                        .role(IconButtonRole::Compact)
+                        .disabled(!self.monitor_enabled || self.preparing)
+                        .tooltip(t!("ServerMonitor.refresh"))
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.refresh_now(cx);
+                        })),
+                    ),
             )
     }
 
@@ -1719,7 +1759,7 @@ async fn refresh_remote_stats_inner(
     needs_prepare: bool,
 ) -> Result<ServerStats> {
     if needs_prepare {
-        prepare_remote_monitor(session_manager.clone()).await?;
+        cleanup_legacy_remote_monitor(session_manager.clone()).await;
     }
 
     let payload = collect_remote_stats(session_manager, session_id).await?;
@@ -1741,17 +1781,25 @@ async fn refresh_remote_stats(
     }
 }
 
-async fn prepare_remote_monitor(session_manager: Arc<SshSessionManager>) -> Result<()> {
-    exec_capture(session_manager, &build_prepare_command())
-        .await
-        .map(|_| ())
+/// 旧版本会把监控脚本部署到远端 `~/.onetcli-monitor`；这里按 best-effort 清理，
+/// 失败不影响后续采集（采集本身已改为会话推送，不再写入主机）。
+async fn cleanup_legacy_remote_monitor(session_manager: Arc<SshSessionManager>) {
+    let command = build_legacy_cleanup_command();
+    if let Err(error) = exec_capture(&session_manager, &command).await {
+        tracing::debug!("legacy monitor helper cleanup failed: {error}");
+    }
+}
+
+fn build_legacy_cleanup_command() -> String {
+    format!("rm -rf {LEGACY_REMOTE_HELPER_DIR}")
 }
 
 async fn collect_remote_stats(
     session_manager: Arc<SshSessionManager>,
     session_id: &str,
 ) -> Result<String> {
-    let output = exec_capture(session_manager, &build_collect_command(session_id)).await?;
+    let output =
+        exec_push_script(&session_manager, &build_collect_command(session_id)).await?;
     if output.trim().is_empty() {
         Err(anyhow!("empty monitor payload"))
     } else {
@@ -1759,10 +1807,26 @@ async fn collect_remote_stats(
     }
 }
 
-async fn exec_capture(session_manager: Arc<SshSessionManager>, command: &str) -> Result<String> {
+/// 执行简单远端命令（不推送脚本），用于 legacy 清理等 best-effort 场景。
+async fn exec_capture(session_manager: &Arc<SshSessionManager>, command: &str) -> Result<String> {
     let mut channel = session_manager.open_channel().await?;
     channel.exec(command).await?;
+    drain_channel_output(&mut channel).await
+}
 
+/// 在当前 SSH 会话内通过 stdin 推送脚本执行，不在远端主机落盘任何文件。
+async fn exec_push_script(
+    session_manager: &Arc<SshSessionManager>,
+    command: &str,
+) -> Result<String> {
+    let mut channel = session_manager.open_channel().await?;
+    channel.exec(command).await?;
+    channel.send_data(REMOTE_MONITOR_SCRIPT.as_bytes()).await?;
+    channel.eof().await?;
+    drain_channel_output(&mut channel).await
+}
+
+async fn drain_channel_output(channel: &mut RusshChannel) -> Result<String> {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut exit_status = 0u32;
@@ -1795,18 +1859,10 @@ async fn exec_capture(session_manager: Arc<SshSessionManager>, command: &str) ->
     String::from_utf8(stdout).context("monitor payload is not valid utf-8")
 }
 
-fn build_prepare_command() -> String {
-    format!(
-        "mkdir -p {dir} && cat > {script} <<'__ONETCLI_MONITOR__'\n{body}\n__ONETCLI_MONITOR__\nchmod 700 {script}",
-        dir = REMOTE_HELPER_DIR,
-        script = REMOTE_HELPER_SCRIPT,
-        body = REMOTE_MONITOR_SCRIPT
-    )
-}
-
+/// 通过 `sh -s` 从 stdin 读取监控脚本；`--session` 由脚本自行解析。
 fn build_collect_command(session_id: &str) -> String {
     format!(
-        "{REMOTE_HELPER_SCRIPT} --session {}",
+        "sh -s -- --session {}",
         shell_quote(session_id)
     )
 }
@@ -1869,9 +1925,9 @@ fn format_bytes_per_sec(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuSnapshot, HistoryLimit, MemoryStats, NetworkTotals, ProcessEntry, history_points,
-        history_tick_margin, parse_server_stats, push_history_point, sample_cpu_usage,
-        sample_network_rates, split_sections,
+        CpuSnapshot, HistoryLimit, MemoryStats, NetworkTotals, ProcessEntry, build_collect_command,
+        build_legacy_cleanup_command, history_points, history_tick_margin, parse_server_stats,
+        push_history_point, sample_cpu_usage, sample_network_rates, split_sections,
     };
 
     #[test]
@@ -2033,5 +2089,42 @@ cpu:
 
         assert_eq!(process.command, "python worker");
         assert_eq!(memory.used_percent().round() as i32, 50);
+    }
+
+    #[test]
+    fn collect_command_streams_script_via_session_stdin() {
+        let command = build_collect_command("session-12'34");
+
+        assert_eq!(
+            command,
+            "sh -s -- --session 'session-12'\"'\"'34'",
+            "采集必须通过 sh -s 会话推送，不再引用远端脚本路径"
+        );
+        assert!(
+            !command.contains("onetcli-monitor"),
+            "采集命令不得依赖写入主机的 legacy 目录"
+        );
+    }
+
+    #[test]
+    fn legacy_cleanup_command_only_targets_helper_dir() {
+        assert_eq!(
+            build_legacy_cleanup_command(),
+            "rm -rf $HOME/.onetcli-monitor"
+        );
+    }
+
+    #[test]
+    fn session_push_contract_keeps_monitor_script_off_remote_disk() {
+        let source = include_str!("server_monitor_panel.rs");
+        let deploy_marker = ["chmod", "700"].join(" ");
+        assert!(
+            !source.contains(&deploy_marker),
+            "不得保留向远端部署 collect.sh 的写入逻辑"
+        );
+        assert!(
+            source.contains("sh -s"),
+            "采集必须走 sh -s 会话推送"
+        );
     }
 }
