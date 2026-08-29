@@ -268,7 +268,8 @@ where
         self.apply_cloud_updates(plan).await?;
         self.apply_local_updates(plan).await?;
         self.apply_downloads(plan).await?;
-        self.apply_synced_marks(plan, local_items).await?;
+        self.apply_synced_marks(plan, local_items, remote_records)
+            .await?;
         self.apply_conflicts(plan, local_items, remote_records)
             .await
     }
@@ -313,13 +314,16 @@ where
         &self,
         plan: &PersonalSyncPlan,
         items: &[PersonalSyncItemSnapshot],
+        records: &[CloudSyncData],
     ) -> Result<(), SyncStoreError> {
         for key in &plan.to_mark_synced {
-            if let Some(item) = find_local_by_cloud_key(items, key) {
-                self.local
-                    .mark_synced(&item.local_id, &key.cloud_id, item.updated_at)
-                    .await?;
-            }
+            let Some(item) = find_local_by_cloud_key(items, key) else {
+                continue;
+            };
+            let Some(record) = find_remote_by_cloud_key(records, key) else {
+                continue;
+            };
+            self.mark_synced(item, record).await?;
         }
         Ok(())
     }

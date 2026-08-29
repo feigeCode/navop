@@ -30,6 +30,28 @@ async fn worker_coalesces_events_and_runs_single_sync_pass() {
 }
 
 #[tokio::test]
+async fn worker_marks_matching_record_synced_at_remote_timestamp() {
+    let mut remote = test_record("cloud-1", data_type::CONNECTION, 2, "same");
+    remote.updated_at = 300_000;
+    let store = FakePersonalSyncStore::with_records(vec![remote]);
+    let local = FakePersonalSyncLocalSource::with_items(vec![local_record(
+        "local-1",
+        "cloud-1",
+        data_type::CONNECTION,
+        "same",
+    )]);
+    let worker = PersonalSyncWorker::new(store, local.clone(), WorkerConfig::test());
+
+    worker.enqueue(PersonalSyncEvent::FullScan);
+    worker.drain_once().await.expect("drain succeeds");
+
+    assert_eq!(
+        vec![("local-1".to_string(), "cloud-1".to_string(), 300)],
+        local.synced_marks()
+    );
+}
+
+#[tokio::test]
 async fn worker_pauses_conflicting_record() {
     let store = FakePersonalSyncStore::with_records(vec![remote_record_conflicting()]);
     let local = FakePersonalSyncLocalSource::with_items(vec![local_record_conflicting()]);
@@ -265,6 +287,7 @@ struct FakePersonalSyncLocalSource {
     deleted: Arc<Mutex<Vec<String>>>,
     rejected_deletes: Arc<Mutex<Vec<String>>>,
     applied_remote: Arc<Mutex<Vec<(String, String)>>>,
+    synced: Arc<Mutex<Vec<(String, String, i64)>>>,
 }
 
 impl FakePersonalSyncLocalSource {
@@ -274,6 +297,7 @@ impl FakePersonalSyncLocalSource {
             deleted: Arc::new(Mutex::new(Vec::new())),
             rejected_deletes: Arc::new(Mutex::new(Vec::new())),
             applied_remote: Arc::new(Mutex::new(Vec::new())),
+            synced: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -293,6 +317,10 @@ impl FakePersonalSyncLocalSource {
             .lock()
             .expect("applied_remote lock")
             .clone()
+    }
+
+    fn synced_marks(&self) -> Vec<(String, String, i64)> {
+        self.synced.lock().expect("synced lock").clone()
     }
 }
 
@@ -328,10 +356,15 @@ impl PersonalSyncLocalSource for FakePersonalSyncLocalSource {
 
     async fn mark_synced(
         &self,
-        _local_id: &str,
-        _cloud_id: &str,
-        _synced_at: i64,
+        local_id: &str,
+        cloud_id: &str,
+        synced_at: i64,
     ) -> Result<(), SyncStoreError> {
+        self.synced.lock().expect("synced lock").push((
+            local_id.to_string(),
+            cloud_id.to_string(),
+            synced_at,
+        ));
         Ok(())
     }
 
