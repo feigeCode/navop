@@ -4,6 +4,62 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.14.0] - 2026-08-29
+
+### 中文
+
+#### 更新内容
+
+- SQL 编辑器新增跨数据库/跨 Schema 限定名补全（惰性加载），并优化 FROM 子句的数据库提示、选中数据库限定符建议与限定符元数据作用域隔离。
+- SQL 格式化支持保留关键字大小写，新增格式化设置（关键字大小写、缩进）与实时预览，并通过模板掩码避免示例代码/占位符被误格式化。
+- 终端将连接状态与认证提示内联显示，不再以弹窗打断操作。
+- 后台任务对话框重构为带计数过滤页签，文件操作分组展示更清晰。
+- 新增操作系统/网络设备图标并刷新现有图标配色；SSH 连接刷新 Linux penguin 图标并支持 FreeBSD uname 检测。
+- SSH 跳板机配置在禁用后仍保留，便于快速重新启用。
+- SFTP 左侧远端面板遵循配置的 SFTP 初始目录。
+- 无标签页时退出应用跳过确认，加快退出。
+- 扩展市场页支持「有更新」过滤，更新通知跳转只显示可更新扩展，并移除 MCP 助手分类。
+- macOS 标题栏内容内边距改为可选开启，避免干扰自绘标题栏。
+
+#### 修复与优化
+
+- 修复首页「开始中心」最近使用列被 items_center 撑爆的响应式布局，改用主轴居中。
+- 修复 SQL 编辑器输入抖动与弹层交互不稳定问题；查询工具栏按钮统一为 28px 控件高度。
+- 修复会话日志删除确认后未真正删除的问题。
+- 修复同步记录未保留远端时间戳的问题。
+- 修复 SFTP 覆盖远端文件时未保留 owner/group/权限的问题。
+- 修复回到首页时连接侧边栏折叠状态丢失的问题。
+- 内部改进：统一 rustfmt 格式、修复存量测试失败、CI 新增 fast 构建模式（跳过 fat LTO 加快构建）。
+
+---
+
+### English
+
+#### What's New
+
+- SQL editor now supports cross-database/schema qualified completion with lazy loading, plus database hints after FROM, selected-database qualifier suggestions, and isolated qualifier metadata scopes.
+- SQL formatting preserves keyword case; new format settings (keyword case, indentation) with live preview and balanced template masking so sample code/placeholders are not mangled.
+- Terminal shows connection status and auth prompts inline instead of interrupting with popups.
+- Background task dialog reworked with counted filter tabs for clearer grouped file operations.
+- New OS/network device icons with refreshed colors; SSH connections refresh the Linux penguin icon and add FreeBSD uname detection.
+- SSH jump server config is retained when disabled for quick re-enable.
+- The SFTP left remote panel honors the configured SFTP initial directory.
+- Quitting the app skips confirmation when no tabs are open.
+- Extension marketplace supports an "updates available" filter; update notifications jump only to updatable extensions; the MCP Assistant category is removed.
+- macOS titlebar content inset is now opt-in to avoid disturbing custom titlebars.
+
+#### Fixes and Improvements
+
+- Fixed the home "Start Center" recent list being stretched by items_center; centered on the main axis instead.
+- Stabilized SQL editor typing flicker and popover interactions; query toolbar buttons pinned to the shared 28px control height.
+- Fixed session log delete confirmation not actually deleting the log.
+- Fixed synced records not preserving the remote timestamp.
+- Fixed SFTP overwrite not preserving owner/group/permissions on remote files.
+- Fixed the collapsed connection sidebar state being lost when returning home.
+- Internal: unified rustfmt formatting, fixed pre-existing test failures, and added a fast CI build mode (skips fat LTO for quicker builds).
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.13.0...v0.14.0
+
 ## [v0.13.0] - 2026-08-28
 
 ### 中文
