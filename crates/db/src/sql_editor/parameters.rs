@@ -105,11 +105,8 @@ pub fn collect_parameters(sql: &str) -> Vec<SqlParameterOccurrence> {
                 end: token.end,
             }),
             ":" => {
-                let is_doubled = index > 0
-                    && tokens[index - 1].text == ":"
-                    || tokens
-                        .get(index + 1)
-                        .is_some_and(|next| next.text == ":");
+                let is_doubled = index > 0 && tokens[index - 1].text == ":"
+                    || tokens.get(index + 1).is_some_and(|next| next.text == ":");
                 if !is_doubled {
                     if let Some(name) = next_identifier(&tokens, index) {
                         occurrences.push(SqlParameterOccurrence {
@@ -122,11 +119,8 @@ pub fn collect_parameters(sql: &str) -> Vec<SqlParameterOccurrence> {
                 }
             }
             "@" => {
-                let is_doubled = index > 0
-                    && tokens[index - 1].text == "@"
-                    || tokens
-                        .get(index + 1)
-                        .is_some_and(|next| next.text == "@");
+                let is_doubled = index > 0 && tokens[index - 1].text == "@"
+                    || tokens.get(index + 1).is_some_and(|next| next.text == "@");
                 if !is_doubled {
                     if let Some(name) = next_identifier(&tokens, index) {
                         occurrences.push(SqlParameterOccurrence {
@@ -156,7 +150,8 @@ pub fn collect_parameters(sql: &str) -> Vec<SqlParameterOccurrence> {
                                 }
                             }
                         }
-                    } else if matches!(next.kind, SqlTokenKind::Ident) || is_number_text(&next.text) {
+                    } else if matches!(next.kind, SqlTokenKind::Ident) || is_number_text(&next.text)
+                    {
                         occurrences.push(SqlParameterOccurrence {
                             kind: SqlParameterKind::Dollar,
                             name: Some(next.text.clone()),
@@ -311,9 +306,9 @@ fn next_identifier(
     tokens: &[crate::sql_editor::sql_tokenizer::SqlToken],
     index: usize,
 ) -> Option<&crate::sql_editor::sql_tokenizer::SqlToken> {
-    tokens.get(index + 1).filter(|token| {
-        matches!(token.kind, SqlTokenKind::Ident) || is_number_text(&token.text)
-    })
+    tokens
+        .get(index + 1)
+        .filter(|token| matches!(token.kind, SqlTokenKind::Ident) || is_number_text(&token.text))
 }
 
 fn is_number_text(text: &str) -> bool {

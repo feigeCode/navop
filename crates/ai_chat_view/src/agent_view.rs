@@ -7230,7 +7230,10 @@ mod tests {
             ToolExecutionMode::Manual,
             tool_execution_mode_from_id("manual")
         );
-        assert_eq!(ToolExecutionMode::Manual, tool_execution_mode_from_id("nope"));
+        assert_eq!(
+            ToolExecutionMode::Manual,
+            tool_execution_mode_from_id("nope")
+        );
     }
 
     #[test]

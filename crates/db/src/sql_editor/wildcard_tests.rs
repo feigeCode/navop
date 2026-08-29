@@ -61,10 +61,7 @@ fn alias_qualifier_with_always_uses_prefix() {
 
 #[test]
 fn two_table_join_wildcard_is_ambiguous_without_qualifier() {
-    let metadata = FakeMetadata::new(&[
-        ("users", &["id", "name"]),
-        ("orders", &["id", "user_id"]),
-    ]);
+    let metadata = FakeMetadata::new(&[("users", &["id", "name"]), ("orders", &["id", "user_id"])]);
     let sql = "SELECT * FROM users u JOIN orders o ON u.id = o.user_id";
     let result = expand_wildcard(sql, 0, &metadata, SqlWildcardQualifier::None);
     assert_eq!(Err(WildcardExpansionError::AmbiguousSource), result);
@@ -93,14 +90,9 @@ fn multi_table_wildcard_expands_in_source_order() {
         vec!["id".to_string(), "name".to_string()],
         vec!["id".to_string(), "user_id".to_string(), "total".to_string()],
     ];
-    let expansion = expand_multi_table_wildcard(
-        sql,
-        0,
-        &sources,
-        &columns,
-        SqlWildcardQualifier::OnConflict,
-    )
-    .unwrap();
+    let expansion =
+        expand_multi_table_wildcard(sql, 0, &sources, &columns, SqlWildcardQualifier::OnConflict)
+            .unwrap();
     // id 冲突 -> 加前缀；name / user_id / total 不加。
     assert_eq!(
         "users.id, name, orders.id, user_id, total",
@@ -110,10 +102,7 @@ fn multi_table_wildcard_expands_in_source_order() {
 
 #[test]
 fn join_wildcard_with_alias_qualifier_uses_qualifier() {
-    let metadata = FakeMetadata::new(&[
-        ("users", &["id", "name"]),
-        ("orders", &["id", "user_id"]),
-    ]);
+    let metadata = FakeMetadata::new(&[("users", &["id", "name"]), ("orders", &["id", "user_id"])]);
     let sql = "SELECT o.* FROM users u JOIN orders o ON u.id = o.user_id";
     let expansion = expand_wildcard(sql, 0, &metadata, SqlWildcardQualifier::None).unwrap();
     assert_eq!("id, user_id", expansion.replacement);
@@ -233,4 +222,3 @@ fn expansion_struct_carries_range_replacement_and_tables() {
         expansion
     );
 }
-

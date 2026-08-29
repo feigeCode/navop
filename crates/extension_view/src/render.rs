@@ -242,10 +242,8 @@ impl ExtensionManagerView {
     fn render_marketplace(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let updatable_entries;
         let entries: &[MarketplaceEntry] = if self.updates_only {
-            updatable_entries = filter_updatable_marketplace(
-                &self.marketplace_entries,
-                &self.installed,
-            );
+            updatable_entries =
+                filter_updatable_marketplace(&self.marketplace_entries, &self.installed);
             &updatable_entries
         } else {
             &self.marketplace_entries

@@ -1,6 +1,5 @@
 const MAX_SUPPRESSED_OUTPUT_BYTES: usize = 64 * 1024;
-pub const SHELL_INTEGRATION_READY_MARKER: &[u8] =
-    b"\x1b]1337;ShellIntegrationReady=1\x07";
+pub const SHELL_INTEGRATION_READY_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationReady=1\x07";
 
 fn ansi_c_quote(input: &str) -> String {
     let mut quoted = String::from("$'");
@@ -61,8 +60,8 @@ enum RuntimeShellIntegrationPhase {
 /// 供真机集成测试（tests/ 目录）复用的运行时注入状态机入口。
 pub mod test_support {
     pub use super::{
-        FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady,
-        SHELL_INTEGRATION_READY_MARKER,
+        FilteredShellOutput, RuntimeShellIntegration, SHELL_INTEGRATION_READY_MARKER,
+        ShellIntegrationReady,
     };
 }
 
@@ -87,12 +86,7 @@ impl RuntimeShellIntegration {
         &self.command
     }
 
-    pub fn should_inject(
-        &self,
-        data: &[u8],
-        login_complete: bool,
-        expect_responded: bool,
-    ) -> bool {
+    pub fn should_inject(&self, data: &[u8], login_complete: bool, expect_responded: bool) -> bool {
         !data.is_empty()
             && login_complete
             && !expect_responded
@@ -123,10 +117,7 @@ impl RuntimeShellIntegration {
     }
 
     pub fn is_injecting(&self) -> bool {
-        matches!(
-            self.phase,
-            RuntimeShellIntegrationPhase::Injecting { .. }
-        )
+        matches!(self.phase, RuntimeShellIntegrationPhase::Injecting { .. })
     }
 
     /// 是否已确认进入集成态（含远端已有 rc 注入的老 session 场景）。
@@ -155,20 +146,16 @@ impl RuntimeShellIntegration {
                     ready: ShellIntegrationReady::None,
                 }
             }
-            RuntimeShellIntegrationPhase::WaitingForFirstOutput => {
-                FilteredShellOutput::Forward {
-                    data,
-                    ready: ShellIntegrationReady::None,
-                }
-            }
+            RuntimeShellIntegrationPhase::WaitingForFirstOutput => FilteredShellOutput::Forward {
+                data,
+                ready: ShellIntegrationReady::None,
+            },
             RuntimeShellIntegrationPhase::Disabled
             | RuntimeShellIntegrationPhase::AwaitingPrompt
-            | RuntimeShellIntegrationPhase::Integrated => {
-                FilteredShellOutput::Forward {
-                    data,
-                    ready: ShellIntegrationReady::None,
-                }
-            }
+            | RuntimeShellIntegrationPhase::Integrated => FilteredShellOutput::Forward {
+                data,
+                ready: ShellIntegrationReady::None,
+            },
             RuntimeShellIntegrationPhase::PlainAwaitingOutput => {
                 self.phase = RuntimeShellIntegrationPhase::Plain;
                 FilteredShellOutput::Forward {
@@ -194,10 +181,7 @@ impl RuntimeShellIntegration {
     }
 
     pub fn on_timeout(&mut self) -> bool {
-        if matches!(
-            self.phase,
-            RuntimeShellIntegrationPhase::Injecting { .. }
-        ) {
+        if matches!(self.phase, RuntimeShellIntegrationPhase::Injecting { .. }) {
             self.phase = RuntimeShellIntegrationPhase::PlainAwaitingOutput;
             return true;
         }
@@ -362,4 +346,3 @@ mod tests {
         }
     }
 }
-

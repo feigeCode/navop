@@ -34,10 +34,7 @@ fn multi_row_values_advance_row_index() {
 
 #[test]
 fn nested_expressions_do_not_count_as_slots() {
-    let result = hints(
-        "INSERT INTO t (a, b) VALUES (1, COALESCE(2, 3))",
-        &[],
-    );
+    let result = hints("INSERT INTO t (a, b) VALUES (1, COALESCE(2, 3))", &[]);
     assert_eq!(2, result.len());
     assert_eq!("a", result[0].column);
     assert_eq!("b", result[1].column);
@@ -71,7 +68,10 @@ fn offset_points_before_each_value() {
 
 #[test]
 fn quoted_identifiers_are_unquoted_in_columns() {
-    let result = hints("INSERT INTO \"users\" (\"first name\", age) VALUES (1, 2)", &[]);
+    let result = hints(
+        "INSERT INTO \"users\" (\"first name\", age) VALUES (1, 2)",
+        &[],
+    );
     assert_eq!(2, result.len());
     assert_eq!("first name", result[0].column);
 }
@@ -99,19 +99,13 @@ fn non_insert_statement_produces_no_hints() {
 
 #[test]
 fn function_call_within_value_is_not_a_nested_row() {
-    let result = hints(
-        "INSERT INTO t (a) VALUES (f(1, 2), g(3))",
-        &[],
-    );
+    let result = hints("INSERT INTO t (a) VALUES (f(1, 2), g(3))", &[]);
     assert_eq!(2, result.len());
 }
 
 #[test]
 fn string_literal_with_comma_is_not_a_slot_separator() {
-    let result = hints(
-        "INSERT INTO t (a, b) VALUES ('x,y', 'z')",
-        &[],
-    );
+    let result = hints("INSERT INTO t (a, b) VALUES ('x,y', 'z')", &[]);
     assert_eq!(2, result.len());
     assert_eq!("a", result[0].column);
     assert_eq!("b", result[1].column);

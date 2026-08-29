@@ -276,9 +276,11 @@ fn render_filter_tabs(
         .px_2()
         .border_b_1()
         .border_color(cx.theme().border)
-        .children(BackgroundTaskFilter::ALL.map(|target| {
-            render_filter_tab(target, current, counts, update_filter.clone(), cx)
-        }))
+        .children(
+            BackgroundTaskFilter::ALL.map(|target| {
+                render_filter_tab(target, current, counts, update_filter.clone(), cx)
+            }),
+        )
 }
 
 fn render_filter_tab(
@@ -323,9 +325,7 @@ fn render_filter_tab(
             tab.text_color(cx.theme().primary)
                 .font_weight(gpui::FontWeight::MEDIUM)
         })
-        .when(!selected, |tab| {
-            tab.text_color(cx.theme().muted_foreground)
-        })
+        .when(!selected, |tab| tab.text_color(cx.theme().muted_foreground))
         .on_click(move |_, _window, cx| update_filter(target, cx))
         .child(text)
         .into_any_element()
@@ -359,7 +359,11 @@ fn render_footer(
     manager: Entity<BackgroundTaskManager>,
     cx: &App,
 ) -> impl IntoElement {
-    let has_cancellable_tasks = manager.read(cx).tasks().iter().any(BackgroundTask::can_cancel);
+    let has_cancellable_tasks = manager
+        .read(cx)
+        .tasks()
+        .iter()
+        .any(BackgroundTask::can_cancel);
     h_flex()
         .id("background-task-footer")
         .w_full()

@@ -47,7 +47,8 @@ fn collects_at_parameters_but_not_at_at_system_variables() {
 
 #[test]
 fn collects_mybatis_hash_parameters() {
-    let occurrences = collect_parameters("SELECT * FROM users WHERE id = #{userId} AND age = #{age}");
+    let occurrences =
+        collect_parameters("SELECT * FROM users WHERE id = #{userId} AND age = #{age}");
     assert_eq!(2, occurrences.len());
     assert_eq!(SqlParameterKind::MyBatisHash, occurrences[0].kind);
     assert_eq!(Some("userId".to_string()), occurrences[0].name);
@@ -161,11 +162,11 @@ fn build_literal_escapes_strings_and_passes_numbers_through() {
 
 #[test]
 fn escape_string_literal_doubles_single_quotes() {
-    assert_eq!("it''s", escape_string_literal("it's", &DatabaseType::PostgreSQL));
     assert_eq!(
-        "a''b",
-        escape_string_literal("a'b", &DatabaseType::SQLite)
+        "it''s",
+        escape_string_literal("it's", &DatabaseType::PostgreSQL)
     );
+    assert_eq!("a''b", escape_string_literal("a'b", &DatabaseType::SQLite));
 }
 
 #[test]

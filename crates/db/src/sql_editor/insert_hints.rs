@@ -27,16 +27,14 @@ pub struct SqlInsertValueHint {
 /// `statement` 为单个 INSERT 语句文本（已去除分隔符）。
 /// `ordinal_columns`：无显式列清单时按列顺序使用的列名列表；为空时使用
 /// `column_1`、`column_2` … 占位。
-pub fn insert_value_hints(
-    statement: &str,
-    ordinal_columns: &[String],
-) -> Vec<SqlInsertValueHint> {
+pub fn insert_value_hints(statement: &str, ordinal_columns: &[String]) -> Vec<SqlInsertValueHint> {
     let tokens = SqlTokenizer::new(statement).tokenize();
 
     // 找到 INSERT 关键字之后的列清单与 VALUES 关键字。
-    let Some(insert_index) = tokens.iter().position(|token| {
-        matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Insert))
-    }) else {
+    let Some(insert_index) = tokens
+        .iter()
+        .position(|token| matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Insert)))
+    else {
         return Vec::new();
     };
 
@@ -44,9 +42,10 @@ pub fn insert_value_hints(
     let columns = parse_explicit_columns(&tokens, insert_index);
 
     // VALUES 关键字位置。
-    let Some(values_index) = tokens.iter().position(|token| {
-        matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Values))
-    }) else {
+    let Some(values_index) = tokens
+        .iter()
+        .position(|token| matches!(token.kind, SqlTokenKind::Keyword(SqlKeyword::Values)))
+    else {
         return Vec::new();
     };
 
@@ -85,12 +84,9 @@ fn parse_explicit_columns(
     insert_index: usize,
 ) -> Option<Vec<String>> {
     let after_insert = &tokens[insert_index + 1..];
-    let lparen = after_insert.iter().position(|token| {
-        matches!(
-            token.kind,
-            SqlTokenKind::LParen
-        )
-    })?;
+    let lparen = after_insert
+        .iter()
+        .position(|token| matches!(token.kind, SqlTokenKind::LParen))?;
     let open_abs = insert_index + 1 + lparen;
     let mut columns = Vec::new();
     let mut position = open_abs + 1;
@@ -115,7 +111,8 @@ fn parse_explicit_columns(
                     Some(columns)
                 };
             }
-            SqlTokenKind::Keyword(SqlKeyword::Values) | SqlTokenKind::Keyword(SqlKeyword::Select) => {
+            SqlTokenKind::Keyword(SqlKeyword::Values)
+            | SqlTokenKind::Keyword(SqlKeyword::Select) => {
                 // 列清单解析失败（VALUES 前还有别的东西），退回无显式列。
                 return None;
             }

@@ -438,8 +438,6 @@ where
 
         disconnect_result
     }
-
-
 }
 
 enum Phase1<C> {
@@ -554,8 +552,6 @@ impl SshSessionManager {
     pub(crate) fn request_shutdown(&self) {
         self.inner.request_shutdown();
     }
-
-
 }
 
 #[cfg(test)]

@@ -2102,8 +2102,7 @@ impl Element for TextElement {
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let current_statement_frame =
             self.layout_current_statement_frame(&last_layout, &bounds, cx);
-        let preview_decorations =
-            self.layout_preview_decorations(&last_layout, &bounds, cx);
+        let preview_decorations = self.layout_preview_decorations(&last_layout, &bounds, cx);
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
@@ -2488,14 +2487,7 @@ impl Element for TextElement {
 
         // Paint non-editable inline widgets (e.g. INSERT value hints) on top of
         // the text but underneath the caret.
-        self.paint_inline_widgets(
-            prepaint,
-            origin,
-            scroll_offset,
-            text_align,
-            window,
-            cx,
-        );
+        self.paint_inline_widgets(prepaint, origin, scroll_offset, text_align, window, cx);
 
         // Paint blinking cursor
         if focused && show_cursor {
@@ -2680,7 +2672,9 @@ impl TextElement {
                 strikethrough: None,
                 letter_spacing: None,
             }];
-            let shaped = window.text_system().shape_line(text, text_size, &runs, None);
+            let shaped = window
+                .text_system()
+                .shape_line(text, text_size, &runs, None);
             let _ = shaped.paint(widget_origin, line_height, text_align, None, window, cx);
         }
     }

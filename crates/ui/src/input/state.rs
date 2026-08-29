@@ -40,7 +40,9 @@ use crate::input::{
     HoverDefinition, InlineCompletion, Lsp, Position, RopeExt as _, Selection,
     display_map::LineLayout,
     element::RIGHT_MARGIN,
-    popovers::{ContextMenu, DiagnosticPopover, HoverPopover, InputContextMenu, SignatureHelpPopover},
+    popovers::{
+        ContextMenu, DiagnosticPopover, HoverPopover, InputContextMenu, SignatureHelpPopover,
+    },
     search::{self, SearchPanel},
 };
 use crate::menu::PopupMenu;
@@ -3632,7 +3634,11 @@ mod tests {
                 assert_eq!(state.gutter_markers()[0].id, "sql-statement:0:0:9");
 
                 state.set_gutter_markers(
-                    vec![InputGutterMarker::new("sql-statement:1:0:10", 1, IconName::Play)],
+                    vec![InputGutterMarker::new(
+                        "sql-statement:1:0:10",
+                        1,
+                        IconName::Play,
+                    )],
                     cx,
                 );
                 assert_eq!(state.gutter_markers()[0].id, "sql-statement:1:0:10");
@@ -3643,9 +3649,7 @@ mod tests {
     /// 编辑不清空 gutter markers，marker 车道宽度也必须保持不变，
     /// 否则 SQL 编辑器每敲一个键 gutter 忽宽忽窄，文本左右抖动。
     #[gpui::test]
-    fn gutter_marker_lane_width_stays_stable_across_edits(
-        cx: &mut TestAppContext,
-    ) {
+    fn gutter_marker_lane_width_stays_stable_across_edits(cx: &mut TestAppContext) {
         let (input, cx) = new_detached_code_editor(cx);
         let cx: &mut VisualTestContext = cx;
         let width_of = |input: &Entity<InputState>, cx: &mut VisualTestContext| {
@@ -3670,7 +3674,11 @@ mod tests {
         cx.update(|_window, cx| {
             input.update(cx, |state, cx| {
                 state.set_gutter_markers(
-                    vec![InputGutterMarker::new("sql-statement:0:0:9", 0, IconName::Play)],
+                    vec![InputGutterMarker::new(
+                        "sql-statement:0:0:9",
+                        0,
+                        IconName::Play,
+                    )],
                     cx,
                 );
             });

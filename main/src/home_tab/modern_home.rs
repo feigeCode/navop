@@ -5,8 +5,9 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Icon, IconName, IconSize, Sizable, StyledExt,
     button::{Button, ButtonVariants as _, IconButton, IconButtonRole},
+    h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
-    h_flex, v_flex,
+    v_flex,
 };
 use one_core::storage::StoredConnection;
 use rust_i18n::t;
@@ -321,66 +322,66 @@ impl HomePage {
             )
             .child(
                 IconButton::new(
-                    SharedString::from(format!(
-                        "recent-conn-menu-{}",
-                        conn.id.unwrap_or(0)
-                    )),
+                    SharedString::from(format!("recent-conn-menu-{}", conn.id.unwrap_or(0))),
                     IconName::ChevronRight,
                 )
                 .role(IconButtonRole::Compact)
                 .text_color(cx.theme().muted_foreground)
                 .tooltip(t!("Home.recent_actions_tooltip").to_string())
-                .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                    let open_view = view.clone();
-                    let open_conn = menu_open_connection.clone();
-                    let new_tab_view = view.clone();
-                    let new_tab_conn = menu_open_connection.clone();
-                    let edit_view = view.clone();
-                    let edit_conn = edit_connection.clone();
-                    let remove_view = view.clone();
-                    let remove_conn_id = conn.id;
-                    menu.item(
-                        PopupMenuItem::new(t!("Home.open").to_string())
-                            .icon(IconName::ExternalLink)
-                            .on_click(move |_, window, cx| {
-                                open_view.update(cx, |home, cx| {
-                                    home.open_connection_from_quick(&open_conn, window, cx);
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new(t!("Home.open_in_new_tab").to_string())
-                            .icon(IconName::PanelRight)
-                            .on_click(move |_, window, cx| {
-                                new_tab_view.update(cx, |home, cx| {
-                                    home.open_connection_from_quick_with_mode(
-                                        &new_tab_conn,
-                                        one_core::tab_container::TabOpenMode::Background,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new(t!("Common.edit").to_string())
-                            .icon(IconName::Edit)
-                            .on_click(move |_, window, cx| {
-                                edit_view.update(cx, |home, cx| {
-                                    home.edit_connection(edit_conn.clone(), window, cx);
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new(t!("Home.remove_recent").to_string())
-                            .icon(IconName::Remove)
-                            .on_click(move |_, _window, cx| {
-                                remove_view.update(cx, |home, cx| {
-                                    home.remove_recent_connection(remove_conn_id, cx);
-                                });
-                            }),
-                    )
-                }),
+                .dropdown_menu_with_anchor(
+                    Anchor::BottomRight,
+                    move |menu, _, _| {
+                        let open_view = view.clone();
+                        let open_conn = menu_open_connection.clone();
+                        let new_tab_view = view.clone();
+                        let new_tab_conn = menu_open_connection.clone();
+                        let edit_view = view.clone();
+                        let edit_conn = edit_connection.clone();
+                        let remove_view = view.clone();
+                        let remove_conn_id = conn.id;
+                        menu.item(
+                            PopupMenuItem::new(t!("Home.open").to_string())
+                                .icon(IconName::ExternalLink)
+                                .on_click(move |_, window, cx| {
+                                    open_view.update(cx, |home, cx| {
+                                        home.open_connection_from_quick(&open_conn, window, cx);
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new(t!("Home.open_in_new_tab").to_string())
+                                .icon(IconName::PanelRight)
+                                .on_click(move |_, window, cx| {
+                                    new_tab_view.update(cx, |home, cx| {
+                                        home.open_connection_from_quick_with_mode(
+                                            &new_tab_conn,
+                                            one_core::tab_container::TabOpenMode::Background,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new(t!("Common.edit").to_string())
+                                .icon(IconName::Edit)
+                                .on_click(move |_, window, cx| {
+                                    edit_view.update(cx, |home, cx| {
+                                        home.edit_connection(edit_conn.clone(), window, cx);
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new(t!("Home.remove_recent").to_string())
+                                .icon(IconName::Remove)
+                                .on_click(move |_, _window, cx| {
+                                    remove_view.update(cx, |home, cx| {
+                                        home.remove_recent_connection(remove_conn_id, cx);
+                                    });
+                                }),
+                        )
+                    },
+                ),
             )
             .into_any_element()
     }

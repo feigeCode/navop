@@ -12,7 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use ssh::{HostKeyPolicy, HostKeyVerifier, PtyConfig, SshAuth, SshChannel, SshClient, SshConnectConfig, SshSessionManager};
+use ssh::{
+    HostKeyPolicy, HostKeyVerifier, PtyConfig, SshAuth, SshChannel, SshClient, SshConnectConfig,
+    SshSessionManager,
+};
 use terminal::SshBackend;
 
 struct LiveTarget {
@@ -122,7 +125,9 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
     );
 
     // 3. 模拟 actor：读首屏 → 注入 → 抑制回显直到完成标记 → 等首个 133;B。
-    use terminal::test_support::{FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady};
+    use terminal::test_support::{
+        FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady,
+    };
 
     let mut integration = RuntimeShellIntegration::new(shell_integration_requested);
     let mut saw_input_start = false;
@@ -150,11 +155,7 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
         match integration.filter_output(data) {
             FilteredShellOutput::Suppressed => continue,
             FilteredShellOutput::Forward { data, ready } => {
-                assert_ne!(
-                    ready,
-                    ShellIntegrationReady::Plain,
-                    "真机注入不应超时降级"
-                );
+                assert_ne!(ready, ShellIntegrationReady::Plain, "真机注入不应超时降级");
                 let text = String::from_utf8_lossy(&data);
                 assert!(
                     !text.contains("__ONETCLI_RUNTIME_SETUP_1"),
@@ -184,11 +185,16 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
             event = channel.recv() => event,
             _ = tokio::time::sleep_until(deadline) => break,
         };
-        let Some(ssh::ChannelEvent::Data(data)) = event else { continue };
+        let Some(ssh::ChannelEvent::Data(data)) = event else {
+            continue;
+        };
         // 集成完成后 filter_output 直接转发，可安全解析 OSC。
         if let FilteredShellOutput::Forward { data, .. } = integration.filter_output(data) {
             let text = String::from_utf8_lossy(&data).to_string();
-            for payload in text.split("\x1b]").filter(|p| p.starts_with("1337;Command=")) {
+            for payload in text
+                .split("\x1b]")
+                .filter(|p| p.starts_with("1337;Command="))
+            {
                 let encoded = payload
                     .trim_start_matches("1337;Command=")
                     .trim_end_matches('\x07')

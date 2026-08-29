@@ -1575,10 +1575,9 @@ mod tests {
         HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
-        SqlKeywordCase, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -1601,10 +1600,7 @@ mod tests {
             ..SqlFormatSettings::default()
         };
         let json = serde_json::to_string(&settings).expect("serialize sql format settings");
-        assert_eq!(
-            r#"{"keyword_case":"upper","indent":"tabs"}"#,
-            json.as_str()
-        );
+        assert_eq!(r#"{"keyword_case":"upper","indent":"tabs"}"#, json.as_str());
         assert_eq!(settings, serde_json::from_str(&json).expect("roundtrip"));
 
         let partial: SqlFormatSettings =

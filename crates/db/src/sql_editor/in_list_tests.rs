@@ -1,6 +1,4 @@
-use super::in_list::{
-    InListParseError, SqlInListValue, build_in_list_clause, parse_in_list,
-};
+use super::in_list::{InListParseError, SqlInListValue, build_in_list_clause, parse_in_list};
 
 #[test]
 fn parses_comma_separated_values() {
@@ -52,10 +50,7 @@ fn null_and_numbers_are_raw() {
 #[test]
 fn strings_are_escaped() {
     let values = parse_in_list("O'Reilly").unwrap();
-    assert_eq!(
-        SqlInListValue::String("O'Reilly".to_string()),
-        values[0]
-    );
+    assert_eq!(SqlInListValue::String("O'Reilly".to_string()), values[0]);
     assert_eq!("'O''Reilly'", values[0].to_sql_fragment());
 }
 

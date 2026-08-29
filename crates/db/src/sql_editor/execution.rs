@@ -169,7 +169,11 @@ pub struct SqlExecutionStatementSource {
 }
 
 impl SqlExecutionStatementSource {
-    pub fn result_source(&self, request_id: u64, document_revision: u64) -> SqlExecutionResultSource {
+    pub fn result_source(
+        &self,
+        request_id: u64,
+        document_revision: u64,
+    ) -> SqlExecutionResultSource {
         SqlExecutionResultSource {
             request_id,
             document_revision,
@@ -194,7 +198,11 @@ pub struct SqlExecutionSourceMap {
 impl SqlExecutionSourceMap {
     /// 按执行序号解析。优先按 statement_index 精确匹配；仅当序号缺失时才
     /// 退化为 fingerprint 唯一匹配，避免两条相同 SQL 串源。
-    pub fn resolve(&self, statement_index: Option<usize>, fingerprint: u64) -> Option<&SqlExecutionStatementSource> {
+    pub fn resolve(
+        &self,
+        statement_index: Option<usize>,
+        fingerprint: u64,
+    ) -> Option<&SqlExecutionStatementSource> {
         if let Some(index) = statement_index {
             if let Some(source) = self.statements.get(index) {
                 return Some(source);

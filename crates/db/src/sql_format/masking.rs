@@ -28,8 +28,7 @@ pub(super) fn mask_embedded_parameters(sql: &str) -> (String, Vec<(String, Strin
 
 /// 匹配内置模板片段（`${`/`#{` 单括号配平，`{{` 双括号配平），返回消耗的字节数
 fn scan_builtin(remaining: &str) -> Option<usize> {
-    let (initial_depth, opening_len) = if remaining.starts_with("${")
-        || remaining.starts_with("#{")
+    let (initial_depth, opening_len) = if remaining.starts_with("${") || remaining.starts_with("#{")
     {
         (1, 2)
     } else if remaining.starts_with("{{") {

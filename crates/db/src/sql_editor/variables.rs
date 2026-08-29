@@ -56,7 +56,12 @@ pub fn expand_variables(document: &str, target_range: Range<usize>) -> SqlVariab
 
     let variable_values: Vec<(String, String)> = declarations
         .iter()
-        .map(|declaration| (declaration.name.to_ascii_lowercase(), declaration.value.clone()))
+        .map(|declaration| {
+            (
+                declaration.name.to_ascii_lowercase(),
+                declaration.value.clone(),
+            )
+        })
         .collect();
 
     let expanded = replace_variables(target_sql, &variable_values);

@@ -5,7 +5,11 @@ fn format_sql_preserves_keyword_case_by_default() {
     let sql = "selecT id, name frOM users WHERe id = 1";
     let formatted = format_sql(sql);
     assert!(formatted.starts_with("selecT"));
-    assert!(formatted.contains("\nfrom\n") || formatted.contains("frOM\n") || formatted.contains("\nfrOM"));
+    assert!(
+        formatted.contains("\nfrom\n")
+            || formatted.contains("frOM\n")
+            || formatted.contains("\nfrOM")
+    );
     assert!(formatted.contains("WHERe"));
     assert!(!formatted.contains("SELECT"));
 }
@@ -75,7 +79,8 @@ fn format_sql_preserves_embedded_parameters() {
 #[test]
 fn format_sql_preserves_nested_braces_inside_dynamic_script() {
     // issue #127：动态 SQL 片段内含嵌套大括号与引号，掩码必须整段保护
-    let script = "${if(len(actual_controller_nm)==0,\"\",\" AND actual_controller_nm LIKE '%公司%' \")}";
+    let script =
+        "${if(len(actual_controller_nm)==0,\"\",\" AND actual_controller_nm LIKE '%公司%' \")}";
     let sql = format!("SELECT * FROM t WHERE status = 1 {script} ORDER BY id");
     let formatted = format_sql(&sql);
 

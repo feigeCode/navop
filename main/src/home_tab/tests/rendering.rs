@@ -183,7 +183,9 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     assert!(modern_home.contains(
         ".id(\"modern-home-start-center\")\n            .size_full()\n            .overflow_hidden()"
     ));
-    assert!(!modern_home.contains("modern-home-start-center\"\n            .size_full()\n            .overflow_y_scroll()"));
+    assert!(!modern_home.contains(
+        "modern-home-start-center\"\n            .size_full()\n            .overflow_y_scroll()"
+    ));
     assert!(!modern_home.contains(".min_h_full()"));
     assert!(modern_home.contains("self.render_local_terminal_button(window, cx)"));
     assert!(!modern_home.contains("modern-home-local-terminal"));
@@ -249,10 +251,14 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
     assert!(modern_home.contains(".min_h(px(50.0))"));
     assert!(modern_home.contains(".min_h(px(140.0))"));
     assert!(!modern_home.contains(".min_h(px(210.0))"));
-    assert!(modern_home.contains("home.open_connection_from_quick(&row_open_connection, window, cx)"));
+    assert!(
+        modern_home.contains("home.open_connection_from_quick(&row_open_connection, window, cx)")
+    );
     // Quick-open rows open on a single click: the start center is a dashboard,
     // and double-click adds friction to the most frequent recovery action.
-    assert!(modern_home.contains(".on_click(window.listener_for(&view, move |home, _, window, cx|"));
+    assert!(
+        modern_home.contains(".on_click(window.listener_for(&view, move |home, _, window, cx|")
+    );
     assert!(!modern_home.contains(".on_double_click("));
     // Rows carry a context menu on the trailing chevron for secondary actions.
     assert!(modern_home.contains("recent-conn-menu-"));

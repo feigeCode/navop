@@ -3,13 +3,13 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder as _;
+use gpui::prelude::InteractiveElement as _;
+use gpui::prelude::StatefulInteractiveElement as _;
 use gpui::{
     App, AppContext as _, Div, Entity, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Window, div, px,
 };
-use gpui::prelude::FluentBuilder as _;
-use gpui::prelude::InteractiveElement as _;
-use gpui::prelude::StatefulInteractiveElement as _;
 use lsp_types::SignatureHelp;
 
 use crate::{
@@ -124,10 +124,7 @@ fn parameter_label(label: &str, parameter: &lsp_types::ParameterLabel) -> String
 }
 
 /// A small clickable arrow that cycles the highlighted overload.
-fn overload_button(
-    delta: isize,
-    entity: Entity<SignatureHelpPopover>,
-) -> impl IntoElement {
+fn overload_button(delta: isize, entity: Entity<SignatureHelpPopover>) -> impl IntoElement {
     let glyph = if delta < 0 { "‹" } else { "›" };
     div()
         .id(gpui::ElementId::Name(SharedString::from(format!(
@@ -164,11 +161,7 @@ fn render_signature_card(
 ) -> Div {
     let theme = cx.theme();
     let header_text = if content.has_overloads {
-        format!(
-            "signature · {}/{}",
-            content.active_index + 1,
-            content.total
-        )
+        format!("signature · {}/{}", content.active_index + 1, content.total)
     } else {
         "signature".to_string()
     };

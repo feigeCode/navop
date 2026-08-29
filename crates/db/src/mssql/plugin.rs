@@ -8,9 +8,9 @@ use regex::Regex;
 use rust_i18n::t;
 use tracing::info;
 
+use crate::SqlFormatOptions;
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlResult;
-use crate::SqlFormatOptions;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,

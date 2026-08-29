@@ -76,10 +76,7 @@ impl TreeFilterNavigation {
     }
 }
 
-fn build_filter_menu(
-    menu: PopupMenu,
-    context: FilterMenuContext,
-) -> PopupMenu {
+fn build_filter_menu(menu: PopupMenu, context: FilterMenuContext) -> PopupMenu {
     let FilterMenuContext {
         navigation,
         selected_filter,

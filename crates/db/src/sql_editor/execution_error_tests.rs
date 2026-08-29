@@ -89,10 +89,7 @@ fn oracle_line_column_parses() {
 
 #[test]
 fn sqlite_near_has_no_location() {
-    let location = extract_error_location(
-        &DatabaseType::SQLite,
-        "near \"FROM\": syntax error",
-    );
+    let location = extract_error_location(&DatabaseType::SQLite, "near \"FROM\": syntax error");
     assert!(location.is_none());
 }
 

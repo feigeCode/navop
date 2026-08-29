@@ -3,11 +3,7 @@ use super::signature::{SqlRoutineSignature, SqlSignatureHelp, signature_help};
 fn routine(name: &str, params: &[&str]) -> SqlRoutineSignature {
     SqlRoutineSignature {
         identity: name.to_string(),
-        label: format!(
-            "{}({})",
-            name,
-            params.join(", ")
-        ),
+        label: format!("{}({})", name, params.join(", ")),
         parameters: params.iter().map(|s| s.to_string()).collect(),
         return_type: Some("text".to_string()),
         documentation: None,

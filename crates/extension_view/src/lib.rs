@@ -124,7 +124,14 @@ mod tests {
 
         let filtered = filter_updatable_marketplace(&entries, &installed);
 
-        assert_eq!(["fake_pg"], filtered.iter().map(|e| e.id.as_str()).collect::<Vec<_>>().as_slice());
+        assert_eq!(
+            ["fake_pg"],
+            filtered
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
     }
 
     #[test]
@@ -140,7 +147,14 @@ mod tests {
 
         let filtered = filter_updatable_marketplace(&entries, &installed);
 
-        assert_eq!(["codex"], filtered.iter().map(|e| e.id.as_str()).collect::<Vec<_>>().as_slice());
+        assert_eq!(
+            ["codex"],
+            filtered
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
     }
 
     fn summary(kind: ExtensionKind, name: &str, version: &str) -> ExtensionSummary {

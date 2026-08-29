@@ -68,7 +68,10 @@ fn expand_variables_is_case_insensitive_for_names() {
     ";
     let range = document.find("SELECT").unwrap()..document.len();
     let expansion = expand_variables(document, range);
-    assert_eq!("SELECT * FROM t WHERE id IN (4, 5);\n", expansion.target_sql);
+    assert_eq!(
+        "SELECT * FROM t WHERE id IN (4, 5);\n",
+        expansion.target_sql
+    );
 }
 
 #[test]

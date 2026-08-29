@@ -281,12 +281,14 @@ impl BackgroundTaskFilter {
     /// 该过滤桶在给定聚合数量下的任务数，用于过滤 tab 上跟随的数量展示。
     pub fn count(self, counts: BackgroundTaskCounts) -> usize {
         match self {
-            Self::All => counts.queued
-                + counts.running
-                + counts.cancelling
-                + counts.succeeded
-                + counts.failed
-                + counts.cancelled,
+            Self::All => {
+                counts.queued
+                    + counts.running
+                    + counts.cancelling
+                    + counts.succeeded
+                    + counts.failed
+                    + counts.cancelled
+            }
             Self::Queued => counts.queued,
             Self::Running => counts.running + counts.cancelling,
             Self::Succeeded => counts.succeeded,
@@ -1459,9 +1461,8 @@ mod tests {
     #[gpui::test]
     fn filter_buckets_partition_task_statuses(cx: &mut gpui::TestAppContext) {
         let manager = new_manager(cx);
-        let (queued, running, cancelling, succeeded, failed, cancelled) = manager.update(
-            cx,
-            |m, cx| {
+        let (queued, running, cancelling, succeeded, failed, cancelled) =
+            manager.update(cx, |m, cx| {
                 let queued = m.register(BackgroundTaskSpec::new("kind", "queued"), cx);
                 let running = m.register(BackgroundTaskSpec::new("kind", "running"), cx);
                 let cancelling = m.register(BackgroundTaskSpec::new("kind", "cancelling"), cx);
@@ -1482,11 +1483,8 @@ mod tests {
                 m.succeed(succeeded, None, cx);
                 m.fail(failed, "broken", cx);
                 m.cancel_confirmed(cancelled, None, cx);
-                (
-                    queued, running, cancelling, succeeded, failed, cancelled,
-                )
-            },
-        );
+                (queued, running, cancelling, succeeded, failed, cancelled)
+            });
 
         manager.read_with(cx, |m, _| {
             let counts = m.counts();
@@ -1513,10 +1511,7 @@ mod tests {
                 BackgroundTaskFilter::All.count(counts),
                 "all buckets must cover every task"
             );
-            assert_eq!(
-                vec![queued.as_u64()],
-                ids_for(BackgroundTaskFilter::Queued)
-            );
+            assert_eq!(vec![queued.as_u64()], ids_for(BackgroundTaskFilter::Queued));
             assert_eq!(
                 vec![running.as_u64(), cancelling.as_u64()],
                 ids_for(BackgroundTaskFilter::Running)

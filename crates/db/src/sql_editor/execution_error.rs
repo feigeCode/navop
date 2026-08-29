@@ -136,9 +136,7 @@ fn capture_number_after_nocase(haystack: &str, marker: &str) -> Option<u32> {
 }
 
 fn read_unsigned(text: &str) -> Option<u32> {
-    let digit_start = text
-        .chars()
-        .position(|ch| ch.is_ascii_digit())?;
+    let digit_start = text.chars().position(|ch| ch.is_ascii_digit())?;
     let digits = text[digit_start..]
         .chars()
         .take_while(|ch| ch.is_ascii_digit())

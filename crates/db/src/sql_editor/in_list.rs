@@ -57,7 +57,11 @@ pub fn parse_in_list(text: &str) -> Result<Vec<SqlInListValue>, InListParseError
     let raw_parts = split_values(text);
 
     // 过滤空片段。
-    let parts: Vec<&str> = raw_parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = raw_parts
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     if parts.is_empty() {
         return Err(InListParseError::Empty);

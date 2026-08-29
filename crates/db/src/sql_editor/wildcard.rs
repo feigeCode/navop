@@ -219,10 +219,7 @@ fn find_select_from(tokens: &[SqlToken]) -> Result<(usize, Option<usize>), Wildc
 
 /// 解析 WITH 中的 CTE 定义：`cte_name AS (SELECT ...)`。
 /// 返回 (名字小写化, projection 列名)。
-fn parse_cte_definitions(
-    tokens: &[SqlToken],
-    select_index: usize,
-) -> Vec<(String, Vec<String>)> {
+fn parse_cte_definitions(tokens: &[SqlToken], select_index: usize) -> Vec<(String, Vec<String>)> {
     let mut definitions = Vec::new();
     let mut index = 0usize;
     while index < select_index {
@@ -245,16 +242,17 @@ fn parse_cte_definitions(
                 .iter()
                 .position(|token| std::ptr::eq(token, name_token))
                 .unwrap_or(position);
-            if !matches!(name_token.kind, SqlTokenKind::Ident | SqlTokenKind::QuotedIdent) {
+            if !matches!(
+                name_token.kind,
+                SqlTokenKind::Ident | SqlTokenKind::QuotedIdent
+            ) {
                 position = name_index + 1;
                 continue;
             }
             let name = unquote_identifier(&name_token.text);
             // 期望 `AS (`（跳过空白）。
             let mut cursor = name_index + 1;
-            while cursor < select_index
-                && matches!(tokens[cursor].kind, SqlTokenKind::Whitespace)
-            {
+            while cursor < select_index && matches!(tokens[cursor].kind, SqlTokenKind::Whitespace) {
                 cursor += 1;
             }
             let Some(after_name) = tokens.get(cursor) else {
@@ -265,9 +263,7 @@ fn parse_cte_definitions(
                 continue;
             }
             cursor += 1;
-            while cursor < select_index
-                && matches!(tokens[cursor].kind, SqlTokenKind::Whitespace)
-            {
+            while cursor < select_index && matches!(tokens[cursor].kind, SqlTokenKind::Whitespace) {
                 cursor += 1;
             }
             let Some(open) = tokens.get(cursor) else {
@@ -351,8 +347,7 @@ fn parse_from_sources(
                 }
                 position += 1;
             }
-            SqlTokenKind::Keyword(SqlKeyword::On)
-            | SqlTokenKind::Keyword(SqlKeyword::Using) => {
+            SqlTokenKind::Keyword(SqlKeyword::On) | SqlTokenKind::Keyword(SqlKeyword::Using) => {
                 // 跳过 JOIN 条件直到下个 JOIN / WHERE / 结尾。
                 skip_join_condition(tokens, position, &mut position, &mut depth);
             }
@@ -682,7 +677,11 @@ fn build_column_list(
                     format!("{}.{}", prefix, quote_if_needed(column))
                 }
                 (Some(prefix), SqlWildcardQualifier::OnConflict)
-                    if counts.get(&column.to_ascii_lowercase()).copied().unwrap_or(0) > 1 =>
+                    if counts
+                        .get(&column.to_ascii_lowercase())
+                        .copied()
+                        .unwrap_or(0)
+                        > 1 =>
                 {
                     format!("{}.{}", prefix, quote_if_needed(column))
                 }
@@ -753,10 +752,13 @@ pub fn expand_multi_table_wildcard(
     }
 
     // 全局列名出现次数（用于 OnConflict 前缀判定）。
-    let mut global_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut global_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for columns in columns_by_source {
         for column in columns {
-            *global_counts.entry(column.to_ascii_lowercase()).or_insert(0usize) += 1;
+            *global_counts
+                .entry(column.to_ascii_lowercase())
+                .or_insert(0usize) += 1;
         }
     }
 
@@ -767,12 +769,7 @@ pub fn expand_multi_table_wildcard(
             SqlWildcardQualifier::OnConflict => Some(object.name.as_str()),
             SqlWildcardQualifier::None => None,
         };
-        let text = build_multi_table_column_list(
-            columns,
-            prefix,
-            &global_counts,
-            qualifier,
-        );
+        let text = build_multi_table_column_list(columns, prefix, &global_counts, qualifier);
         if !all.is_empty() {
             all.push(", ".to_string());
         }

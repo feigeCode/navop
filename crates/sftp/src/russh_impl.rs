@@ -863,10 +863,7 @@ fn preserved_replace_attributes(attrs: FileAttributes) -> Option<FileAttributes>
 /// yet (first upload) or the server omits these fields, in which case nothing
 /// needs restoring. Uses `metadata` (follows symlinks) because `target` is the
 /// concrete path being replaced.
-async fn preserve_target_attributes(
-    sftp: &SftpSession,
-    target: &str,
-) -> Option<FileAttributes> {
+async fn preserve_target_attributes(sftp: &SftpSession, target: &str) -> Option<FileAttributes> {
     match sftp.metadata(target).await {
         Ok(attrs) => preserved_replace_attributes(attrs),
         Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => None,
@@ -894,9 +891,9 @@ async fn restore_target_attributes(
         return Ok(());
     };
 
-    sftp.set_metadata(target, attributes).await.map_err(|error| {
-        anyhow!("Failed to restore ownership/permissions for {target}: {error}")
-    })
+    sftp.set_metadata(target, attributes)
+        .await
+        .map_err(|error| anyhow!("Failed to restore ownership/permissions for {target}: {error}"))
 }
 
 fn expected_chunk_len(offset: u64, total_size: u64) -> Result<usize> {

@@ -1,8 +1,8 @@
 pub mod diagnostics;
 pub mod execution;
+pub mod execution_error;
 #[cfg(test)]
 mod execution_error_tests;
-pub mod execution_error;
 #[cfg(test)]
 mod execution_tests;
 pub mod in_list;
