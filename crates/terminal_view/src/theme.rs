@@ -14,8 +14,9 @@
 //! - 在 `muted` 上使用 `foreground` 或 `muted_foreground`
 //! - 在 `accent` 上使用 `accent_foreground`
 
-use gpui::{Hsla, Pixels, SharedString, rgb};
+use gpui::{App, Hsla, Pixels, SharedString, rgb};
 use gpui_component::Theme;
+use gpui_component::button::ButtonCustomVariant;
 use one_core::settings::{
     DEFAULT_TERMINAL_THEME, default_grid_font_fallback_families,
     default_grid_monospace_font_family, is_supported_grid_monospace_font,
@@ -67,6 +68,18 @@ pub struct TerminalColors {
 impl TerminalColors {
     pub fn from_application_theme(theme: &Theme) -> Self {
         TerminalTheme::from_application_theme(theme).colors()
+    }
+
+    /// 头部/工具栏图标按钮统一样式。
+    ///
+    /// `Button` 渲染时会用变体的前景色覆盖 `Styled::text_color`，
+    /// ghost 变体读全局应用主题，在自定义终端配色下会变成黑色；
+    /// 必须通过 custom variant 显式提供前景色与悬停背景。
+    pub fn icon_button_variant(&self, foreground: Hsla, cx: &App) -> ButtonCustomVariant {
+        ButtonCustomVariant::new(cx)
+            .foreground(foreground)
+            .hover(self.border)
+            .active(self.border)
     }
 }
 

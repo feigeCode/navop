@@ -87,6 +87,7 @@ impl TerminalView {
             view,
             colors,
             panel_header,
+            cx,
         )
     }
 

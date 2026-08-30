@@ -1530,6 +1530,7 @@ impl TerminalSidebar {
                 IconName::Close,
             )
             .role(IconButtonRole::Compact)
+            .custom(self.colors.icon_button_variant(text, cx))
             .tooltip(t!("Common.close").to_string())
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.close_tool(panel, cx);

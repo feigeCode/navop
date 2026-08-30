@@ -6,7 +6,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme,
-    button::{IconButton, IconButtonRole},
+    button::{IconButton, IconButtonRole, ButtonVariants as _},
     h_flex,
     panel_header::{PanelHeader, PanelHeaderVariant},
     scroll::ScrollableElement,
@@ -69,6 +69,10 @@ impl TerminalCommandBar {
                     gpui_component::IconName::Close,
                 )
                 .role(IconButtonRole::Compact)
+                .custom(
+                    self.colors
+                        .icon_button_variant(self.colors.muted_foreground, cx),
+                )
                 .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_quick_commands(window, cx);

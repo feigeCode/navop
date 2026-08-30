@@ -74,7 +74,13 @@ impl HistoryCommandPanel {
             .label(label.into())
             .xsmall()
             .when(self.sort == sort, |button| button.primary())
-            .when(self.sort != sort, |button| button.ghost())
+            .when(self.sort != sort, |button| {
+                // ghost 变体文字色读全局主题，在终端配色下不可见，改用终端配色 variant
+                button.custom(
+                    self.colors
+                        .icon_button_variant(self.colors.foreground, cx),
+                )
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_sort(sort, cx);
             }))

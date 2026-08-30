@@ -7,8 +7,8 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable,
-    button::{Button, ButtonVariants},
+    ActiveTheme, Disableable, IconName, Selectable, Sizable,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
     h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -73,11 +73,14 @@ impl TerminalCommandBar {
                     .child(div().size_2().rounded_full().bg(status_color))
                     .child(t!("TerminalRecording.control").to_string()),
             )
-            .ghost()
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(self.colors.foreground)
+                    .hover(self.colors.muted)
+                    .active(self.colors.muted),
+            )
+            .selected(self.recording_controls_open)
             .small()
-            .when(self.recording_controls_open, |button| {
-                button.bg(self.colors.muted)
-            })
             .tooltip(state.status.label())
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_recording_controls(window, cx);

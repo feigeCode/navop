@@ -4396,7 +4396,10 @@ impl FileManagerPanel {
                     })
                     .child(
                         Button::new("fm-toggle-favorite")
-                            .ghost()
+                            .custom(
+                                self.colors
+                                    .icon_button_variant(muted_foreground, cx),
+                            )
                             .small()
                             .icon(if is_favorite {
                                 IconName::StarFill
@@ -4421,7 +4424,10 @@ impl FileManagerPanel {
         let panel = cx.entity();
         let placement = self.frame_placement;
         Button::new("fm-frame-options")
-            .ghost()
+            .custom(
+                self.colors
+                    .icon_button_variant(self.colors.muted_foreground, cx),
+            )
             .small()
             .icon(IconName::Ellipsis)
             .tooltip(t!("FileManager.panel_options").to_string())

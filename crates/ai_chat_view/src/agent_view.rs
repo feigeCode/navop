@@ -20,13 +20,13 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, Context, Entity, EventEmitter, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Task, Window, div, px,
+    Anchor, App, AppContext, ColorExt as _, Context, Entity, EventEmitter, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
-    button::{Button, ButtonVariants, IconButton, IconButtonRole},
+    button::{Button, ButtonCustomVariant, ButtonVariants, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputState},
@@ -417,6 +417,17 @@ fn build_sidebar_frame_options_menu(
                     });
                 }),
         )
+}
+
+/// 侧边栏头部图标按钮统一样式：前景色跟随 Agent 主题。
+///
+/// `Button` 渲染时会用变体前景色覆盖 `Styled::text_color`，ghost
+/// 变体读全局应用主题，在自定义 Agent 配色下图标会变成黑色。
+fn agent_header_icon_variant(theme: &AgentChatTheme, cx: &App) -> ButtonCustomVariant {
+    ButtonCustomVariant::new(cx)
+        .foreground(theme.foreground)
+        .hover(theme.foreground.opacity(0.12))
+        .active(theme.foreground.opacity(0.12))
 }
 
 fn agent_history_title(show_archived: bool) -> String {
@@ -3598,6 +3609,7 @@ impl AgentChatView {
                     .child(
                         IconButton::new("agent-sidebar-new", IconName::Plus)
                             .role(IconButtonRole::Compact)
+                            .custom(agent_header_icon_variant(&theme, cx))
                             .tooltip(t!("AgentUi.new_task").to_string())
                             .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                     )
@@ -3616,6 +3628,7 @@ impl AgentChatView {
                             .trigger(
                                 IconButton::new("agent-sidebar-history-btn", IconName::BookOpen)
                                     .role(IconButtonRole::Compact)
+                                    .custom(agent_header_icon_variant(&theme, cx))
                                     .tooltip(t!("AgentUi.history_tasks").to_string()),
                             )
                             .when_some(history_list, |popover, list| popover.child(list)),
@@ -3626,6 +3639,7 @@ impl AgentChatView {
                     .child(
                         IconButton::new("agent-sidebar-close", IconName::Close)
                             .role(IconButtonRole::Compact)
+                            .custom(agent_header_icon_variant(&theme, cx))
                             .tooltip(t!("AgentUi.close_panel").to_string())
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(AgentChatViewEvent::Close);
@@ -3707,6 +3721,7 @@ impl AgentChatView {
                             .child(
                                 IconButton::new("agent-history-archived", IconName::Inbox)
                                     .role(IconButtonRole::Compact)
+                                    .custom(agent_header_icon_variant(&theme, cx))
                                     .selected(show_archived)
                                     .tooltip(t!("AgentUi.archived").to_string())
                                     .on_click(
@@ -3716,6 +3731,7 @@ impl AgentChatView {
                             .child(
                                 IconButton::new("agent-history-new", IconName::Plus)
                                     .role(IconButtonRole::Compact)
+                                    .custom(agent_header_icon_variant(&theme, cx))
                                     .tooltip(t!("AgentUi.new_conversation").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             ),
@@ -3762,6 +3778,10 @@ impl AgentChatView {
         let placement = self.sidebar_frame_placement;
         IconButton::new("agent-sidebar-frame-options", IconName::Ellipsis)
             .role(IconButtonRole::Compact)
+            .custom(agent_header_icon_variant(
+                &resolve_agent_chat_theme(self.theme.as_ref(), cx),
+                cx,
+            ))
             .tooltip(t!("AgentUi.panel_options").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_sidebar_frame_options_menu(menu, view.clone(), placement, window, cx)

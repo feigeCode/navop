@@ -7,8 +7,8 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants},
+    ActiveTheme, FunctionalIcon, Icon, IconName, Selectable, Sizable, Size,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
 };
@@ -147,9 +147,14 @@ impl TerminalCommandBar {
                         .flex_shrink_0(),
                     ),
             )
-            .ghost()
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(self.colors.foreground)
+                    .hover(self.colors.muted)
+                    .active(self.colors.muted),
+            )
+            .selected(!self.collapsed)
             .small()
-            .when(!self.collapsed, |button| button.bg(self.colors.muted))
             .tooltip(if self.collapsed {
                 t!("TerminalCommandBar.expand").to_string()
             } else {
@@ -169,11 +174,14 @@ impl TerminalCommandBar {
                 t!("TerminalCommandBar.quick_commands"),
                 self.quick_commands.len()
             ))
-            .ghost()
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(self.colors.foreground)
+                    .hover(self.colors.muted)
+                    .active(self.colors.muted),
+            )
+            .selected(self.quick_commands_open)
             .small()
-            .when(self.quick_commands_open, |button| {
-                button.bg(self.colors.muted)
-            })
             .tooltip(if self.quick_commands_open {
                 t!("TerminalCommandBar.close_quick_commands").to_string()
             } else {

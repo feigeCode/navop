@@ -113,6 +113,7 @@ impl TerminalWorkspace {
                     content,
                     snapshot.colors.clone(),
                     cx.theme().geometry.layout.panel_header,
+                    cx,
                 ),
             ))
             .into_any_element()

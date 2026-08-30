@@ -1,12 +1,12 @@
 use super::{SidebarPanel, TerminalSidebar};
 use crate::theme::TerminalColors;
 use gpui::{
-    Anchor, AnyElement, Context, Entity, InteractiveElement, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, Window, div, prelude::FluentBuilder, px,
+    Anchor, AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Pixels, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     IconName, IconSize, Sizable,
-    button::IconButton,
+    button::{IconButton, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     panel_header::PanelHeader,
@@ -65,6 +65,7 @@ pub(crate) fn render_internal_tool_panel_frame(
     content: impl IntoElement,
     colors: TerminalColors,
     panel_header: Pixels,
+    cx: &App,
 ) -> AnyElement {
     let needs_header = panel.needs_internal_tool_frame_header();
 
@@ -85,6 +86,7 @@ pub(crate) fn render_internal_tool_panel_frame(
                 placement,
                 colors,
                 panel_header,
+                cx,
             ))
         })
         .child(
@@ -106,6 +108,7 @@ fn render_internal_tool_panel_header(
     placement: SidebarPlacement,
     colors: TerminalColors,
     panel_header: Pixels,
+    cx: &App,
 ) -> AnyElement {
     let title = panel.title();
     PanelHeader::new(SharedString::from(format!(
@@ -136,8 +139,14 @@ fn render_internal_tool_panel_header(
     )
     .trailing(
         h_flex()
-            .child(options_button(sidebar.clone(), panel, placement))
-            .child(close_button(sidebar, panel)),
+            .child(options_button(
+                sidebar.clone(),
+                panel,
+                placement,
+                &colors,
+                cx,
+            ))
+            .child(close_button(sidebar, panel, &colors, cx)),
     )
     .into_any_element()
 }
@@ -183,22 +192,31 @@ fn options_button(
     sidebar: Entity<TerminalSidebar>,
     panel: SidebarPanel,
     placement: SidebarPlacement,
+    colors: &TerminalColors,
+    cx: &App,
 ) -> impl IntoElement {
     IconButton::new(
         SharedString::from(format!("terminal-tool-options-{}", panel.local_id())),
         IconName::Ellipsis,
     )
+    .custom(colors.icon_button_variant(colors.foreground, cx))
     .tooltip(t!("Sidebar.panel_options").to_string())
     .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
         build_options_menu(menu, sidebar.clone(), panel, placement, window, cx)
     })
 }
 
-fn close_button(sidebar: Entity<TerminalSidebar>, panel: SidebarPanel) -> IconButton {
+fn close_button(
+    sidebar: Entity<TerminalSidebar>,
+    panel: SidebarPanel,
+    colors: &TerminalColors,
+    cx: &App,
+) -> IconButton {
     IconButton::new(
         SharedString::from(format!("terminal-tool-close-{}", panel.local_id())),
         IconName::Close,
     )
+    .custom(colors.icon_button_variant(colors.foreground, cx))
     .tooltip(t!("Sidebar.close_panel").to_string())
     .on_click(move |_, _window, cx| {
         sidebar.update(cx, |sidebar, cx| sidebar.close_tool(panel, cx));
