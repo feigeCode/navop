@@ -4,6 +4,40 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.15.0] - 2026-08-30
+
+#### 更新内容
+
+- 终端 SSH 监控改为通过当前 SSH 会话推送执行采集脚本，不再向远端主机写入脚本，并在监控面板顶部新增监控开关（#126）。
+- 终端内联凭据/MFA 输入体验优化：用户名与验证码在终端内明文回显，密码以 `*` 掩码显示。
+- 终端文件管理器新增「自动跟随终端工作目录」开关，与设置页开关复用同一持久化链路；远端路径统一归一化，修复面包屑路径重复显示。
+- 笔记目录布局优化：用户显式选择的目录直接作为笔记根，不再自动创建 `files/` 子目录；新增左编辑右预览分栏模式，预览实时镜像（#109）。
+
+#### 修复与优化
+
+- 修复终端内联 MFA/凭据输入时按键透传平台文本输入系统，导致验证码/密码被双写。
+- 修复 MySQL 连接取消 SSL 后残留参数仍强制启用 TLS。
+- 修复 OpenAI Compatible 连接名含非打印 ASCII（如中文）时，出站 User-Agent 被上游拒绝的问题。
+- 完善终端内联连接反馈：重连失败以红色内联提示报告、提示文案固定英文。
+
+---
+
+#### What's New
+
+- Terminal SSH monitoring now runs collection through the current SSH session instead of writing scripts to the remote host, with a new monitoring toggle in the panel header (#126).
+- Terminal inline credential/MFA input now echoes usernames and verification codes in plain text while masking passwords with asterisks.
+- The terminal file manager gains an "auto-follow terminal working directory" toggle sharing the settings persistence path, and remote paths are normalized to fix duplicated breadcrumb segments.
+- Notes directory layout improvements: an explicitly chosen directory becomes the notes root directly (no automatic `files/` subdirectory), plus a split edit-with-live-preview mode (#109).
+
+#### Fixes and Improvements
+
+- Fixed terminal inline MFA/credential keys passing through to the platform text-input system, double-typing verification codes and passwords.
+- Fixed MySQL still forcing TLS after SSL was disabled.
+- Fixed OpenAI Compatible connections whose names contain non-printable ASCII (e.g. Chinese) being rejected for non-printable User-Agent header values.
+- Completed inline terminal connection feedback: reconnect failures are reported as red inline notices with English-only copy.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.14.0...v0.15.0
+
 ## [v0.14.0] - 2026-08-29
 
 #### 更新内容
