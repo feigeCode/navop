@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
+use gpui::{AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IconSize, Sizable, StyledExt, h_flex,
     input::{Input, LocalInputStyle},
@@ -49,8 +49,6 @@ impl PersistentConnectionSidebar {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .border_r_1()
-                    .border_color(palette.border)
                     .child(
                         uniform_list("persistent-connection-tree", rows.len(), {
                             cx.processor(move |this, range: Range<usize>, _window, cx| {
@@ -161,9 +159,9 @@ impl PersistentConnectionSidebar {
             .items_center()
             .px_2()
             .bg(palette.background)
-            .border_r_1()
             .border_b_1()
-            .border_color(palette.border)
+            // 右侧分隔统一由 resize 手柄的可见线承担，避免多段边框叠加产生拼接感。
+            .border_color(palette.border.opacity(0.6))
             .child(
                 Icon::new(IconName::Search)
                     .with_size(IconSize::Micro)
@@ -222,8 +220,8 @@ impl PersistentConnectionSidebar {
                 palette.background
             })
             .text_color(palette.foreground)
-            .border_r_1()
-            .border_color(palette.border)
+            .border_b_1()
+            .border_color(palette.border.opacity(0.6))
             .child(
                 h_flex()
                     .min_w_0()

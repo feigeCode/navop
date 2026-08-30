@@ -1,6 +1,7 @@
 use gpui::{
-    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div,
+    AnyElement, AppContext, ColorExt as _, Context, Entity, EventEmitter, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle,
+    Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _,
@@ -52,7 +53,8 @@ impl SidebarPalette {
     fn app(cx: &gpui::App) -> Self {
         use gpui_component::ActiveTheme as _;
 
-        let background = cx.theme().sidebar;
+        // 与主窗口背景统一，停靠时侧栏不再像独立拼接的面板。
+        let background = cx.theme().background;
         Self {
             background,
             rail_background: shade(background, cx.theme().is_dark()),
@@ -103,14 +105,18 @@ fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     )
 }
 
+/// 浮动连接树卡片与窗口边缘的间距（像素）。
+const FLOATING_CARD_MARGIN: f32 = 6.0;
+
 pub(crate) struct PersistentConnectionSidebar {
-    pub(super) home_page: Entity<HomePage>,
-    connection_selection: ConnectionSelection,
+    pub(super) home_page: Entity<HomePage>,    connection_selection: ConnectionSelection,
     pub(super) tree_expanded: bool,
     pub(super) hide_empty_workspaces: bool,
     pub(super) auto_hide_tree: bool,
     pub(super) search_input: Entity<InputState>,
     tree_width: Pixels,
+    /// 最近一次落盘的宽度，用于拖拽过程中的增量持久化判断。
+    persisted_tree_width: Pixels,
     terminal_colors: Option<TerminalColors>,
     pub(super) tree_scroll_handle: UniformListScrollHandle,
 }
@@ -122,7 +128,7 @@ pub(crate) enum PersistentConnectionSidebarEvent {
 impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSidebar {}
 
 impl PersistentConnectionSidebar {
-    /// Render the connection tree as a floating panel that overlays the main
+    /// Render the connection tree as a floating card that overlays the main
     /// content instead of occupying flex space, so expanding it no longer
     /// squeezes the terminal. The caller (OnetCliApp) positions it at the
     /// left window edge, below the tab bar, and collapses it when the
@@ -135,17 +141,30 @@ impl PersistentConnectionSidebar {
         let palette = self.palette(cx);
         let layout = cx.theme().geometry.layout;
         let top = layout.tab_bar;
+        let pad = px(FLOATING_CARD_MARGIN);
         div()
             .absolute()
             .top(top)
             .bottom_0()
             .left_0()
-            .w(self.tree_width)
+            .w(self.tree_width + pad)
             // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
             // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。
             .occlude()
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(self.render_connection_tree(palette, window, cx))
+            .pt(pad)
+            .pl(pad)
+            .pb(pad)
+            .child(
+                div()
+                    .size_full()
+                    .overflow_hidden()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(palette.border.opacity(0.6))
+                    .shadow_lg()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(self.render_connection_tree(palette, window, cx)),
+            )
             .into_any_element()
     }
 
@@ -181,6 +200,9 @@ impl PersistentConnectionSidebar {
         })
         .detach();
         let tree_state = one_core::settings::AppSettings::current(cx).connection_sidebar_tree_state;
+        let layout = cx.theme().geometry.layout;
+        let tree_width = px(tree_state.tree_width as f32)
+            .clamp(layout.context_sidebar_min, layout.context_sidebar_max);
         Self {
             home_page,
             connection_selection: ConnectionSelection::default(),
@@ -188,7 +210,8 @@ impl PersistentConnectionSidebar {
             hide_empty_workspaces: tree_state.hide_empty_workspaces,
             auto_hide_tree: tree_state.auto_hide_tree,
             search_input,
-            tree_width: cx.theme().geometry.layout.context_sidebar_default,
+            tree_width,
+            persisted_tree_width: tree_width,
             terminal_colors: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
         }
@@ -232,5 +255,38 @@ impl PersistentConnectionSidebar {
             .as_ref()
             .map(SidebarPalette::from)
             .unwrap_or_else(|| SidebarPalette::app(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn floating_tree_renders_as_card_overlay_and_keeps_auto_collapse_paths() {
+        // mod.rs 顶部声明了 #[cfg(test)] 子模块，不能按该标记截断实现部分
+        let implementation = include_str!("mod.rs");
+        let state = include_str!("state.rs").split("#[cfg(test)]").next().unwrap();
+
+        // 浮动模式保留：overlay 覆盖 + occlude 阻断事件穿透
+        assert!(implementation.contains("fn render_floating_tree"));
+        assert!(implementation.contains(".occlude()"));
+        // 浮层卡片样式：圆角、阴影、与窗口边缘的间距
+        assert!(implementation.contains(".rounded_lg()"));
+        assert!(implementation.contains(".shadow_lg()"));
+        assert!(implementation.contains("FLOATING_CARD_MARGIN"));
+        // 自动收起路径保留：打开连接后、点击非连接区域后
+        assert!(state.contains("fn collapse_after_open"));
+        assert!(state.contains("fn collapse_if_auto_hide"));
+    }
+
+    #[test]
+    fn docked_tree_unifies_with_window_background_and_uses_single_divider() {
+        let implementation = include_str!("mod.rs");
+        let tree = include_str!("tree.rs");
+        let tree_implementation = tree.split("#[cfg(test)]").next().unwrap();
+
+        // 停靠时侧栏背景与主窗口背景统一，减少拼接感
+        assert!(implementation.contains("cx.theme().background"));
+        // 右侧分隔统一由 resize 手柄的可见线承担，各分段不再叠加 border_r
+        assert!(!tree_implementation.contains(".border_r_1()"));
     }
 }

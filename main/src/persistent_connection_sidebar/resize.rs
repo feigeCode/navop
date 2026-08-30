@@ -49,6 +49,10 @@ impl PersistentConnectionSidebar {
             .cursor_col_resize()
             .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // 拖拽结束（手柄跟随宽度重渲染，通常仍命中光标）时落盘最终宽度。
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.persist_tree_width(cx);
+            }))
             .on_drag_move(cx.listener(Self::resize_connection_tree))
             .on_drag(
                 ConnectionTreeResize {
@@ -87,13 +91,15 @@ impl PersistentConnectionSidebar {
             return;
         };
         let layout = cx.theme().geometry.layout;
-        self.tree_width = resized_connection_tree_width(
+        let width = resized_connection_tree_width(
             drag.initial_width,
             initial_x,
             event.event.position.x,
             layout.context_sidebar_min,
             layout.context_sidebar_max,
         );
-        cx.notify();
+        self.set_tree_width(width, cx);
+        // 指针快速移出手柄命中区时 mouse-up 兜底可能丢失，这里按增量阈值落盘。
+        self.persist_tree_width_if_moved_far(cx);
     }
 }

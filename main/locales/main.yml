@@ -1563,9 +1563,9 @@ Connection:
     zh-CN: 批量操作
     zh-HK: 批量操作
   auto_hide_tree:
-    en: Toggle sidebar between floating and fixed
-    zh-CN: 侧边栏切换为浮动或者固定
-    zh-HK: 側邊欄切換為浮動或者固定
+    en: "Floating sidebar: overlays the content and auto-hides after opening a connection. Turn off to keep it docked"
+    zh-CN: "浮动侧边栏：覆盖在主界面上，打开连接或点击主界面后自动收起；关闭则固定停靠在左侧"
+    zh-HK: "浮動側邊欄：覆蓋在主界面上，開啟連線或點擊主介面後自動收起；關閉則固定停靠在左側"
   batch_select_visible:
     en: Select or Deselect Visible Connections
     zh-CN: 选择或取消选择当前可见连接

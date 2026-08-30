@@ -78,3 +78,19 @@ fn connection_tree_resize_clamps_to_supported_bounds() {
         layout.context_sidebar_max
     );
 }
+
+#[test]
+fn connection_tree_width_is_persisted_across_sessions() {
+    let resize = include_str!("resize.rs");
+    let state = include_str!("state.rs");
+    let settings = include_str!("../../../crates/core/src/settings.rs");
+
+    // 拖拽结束时落盘最终宽度，过程中按增量阈值兜底
+    assert!(resize.contains(".on_mouse_up(gpui::MouseButton::Left"));
+    assert!(resize.contains("persist_tree_width"));
+    assert!(resize.contains("persist_tree_width_if_moved_far"));
+    // 宽度进入持久化树状态，旧配置缺省时回落到默认宽度
+    assert!(state.contains("tree_width: f32::from(tree_width)"));
+    assert!(settings.contains("pub tree_width: u32"));
+    assert!(settings.contains("DEFAULT_CONNECTION_SIDEBAR_TREE_WIDTH: u32 = 260"));
+}
