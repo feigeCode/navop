@@ -163,3 +163,77 @@ fn scan_ignores_symbolic_links() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn user_selected_location_stores_content_directly_without_files_dir() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("my-notes");
+    let storage = NotesStorage::open_with_layout(root.clone(), false)?;
+    storage.create_notebook("My Notes", "Local")?;
+    let document = storage.create_document(Path::new(""), "README")?;
+    assert_eq!(Path::new("README.md"), document.relative_path);
+    assert_eq!(
+        document.document_id,
+        storage.descriptor(Path::new("README.md"))?.document_id
+    );
+    assert!(root.join("notebook.json").exists());
+    assert!(root.join("README.md").exists());
+    assert!(!root.join("files").exists());
+    assert!(storage
+        .scan_tree()?
+        .iter()
+        .any(|node| node.display_name == "README"));
+    Ok(())
+}
+
+#[test]
+fn default_location_keeps_files_subdir_layout() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("notes");
+    let storage = NotesStorage::open(root.clone())?;
+    storage.create_notebook("Notes", "")?;
+    storage.create_document(Path::new(""), "README")?;
+    assert!(root.join("files").exists());
+    assert!(root.join("files").join("README.md").exists());
+    assert!(!root.join("files").join("notebook.json").exists());
+    Ok(())
+}
+
+#[test]
+fn legacy_location_config_without_flag_keeps_files_layout() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = temp.path().join("config/notes-location.json");
+    let default = temp.path().join("default-notes");
+    let custom = temp.path().join("custom-notes");
+    std::fs::create_dir_all(config.parent().unwrap())?;
+    std::fs::create_dir_all(&custom)?;
+    std::fs::write(&config, format!(r#"{{"root":"{}"}}"#, custom.display()))?;
+
+    let (root, use_files_subdir) = NotesStorage::configured_location_from(&config, &default)?;
+    assert_eq!(custom, root);
+    assert!(use_files_subdir);
+    Ok(())
+}
+
+#[test]
+fn saving_location_keeps_files_layout_only_for_legacy_data() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = temp.path().join("config/notes-location.json");
+    let default = temp.path().join("default-notes");
+
+    // 目录里已有旧版 files/notebook.json 数据：沿用 files/ 布局
+    let legacy = temp.path().join("legacy-notes");
+    std::fs::create_dir_all(legacy.join("files"))?;
+    std::fs::write(legacy.join("files").join("notebook.json"), "{}")?;
+    NotesStorage::save_configured_root_to(&config, &legacy)?;
+    let (_, use_files_subdir) = NotesStorage::configured_location_from(&config, &default)?;
+    assert!(use_files_subdir);
+
+    // 全新的用户选择目录：直接作为笔记根
+    let fresh = temp.path().join("fresh-notes");
+    std::fs::create_dir_all(&fresh)?;
+    NotesStorage::save_configured_root_to(&config, &fresh)?;
+    let (_, use_files_subdir) = NotesStorage::configured_location_from(&config, &default)?;
+    assert!(!use_files_subdir);
+    Ok(())
+}

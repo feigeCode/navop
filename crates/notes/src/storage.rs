@@ -19,12 +19,24 @@ const FILES_DIR: &str = "files";
 #[derive(Debug, Clone)]
 pub struct NotesStorage {
     root: PathBuf,
+    /// 内容树是否放在 root 下的 `files/` 子目录。
+    ///
+    /// 默认存储位置保持 `files/` 布局；用户显式选择的自定义目录直接作为
+    /// 笔记根，不再额外创建 `files/` 子目录（见 `storage_location`）。
+    use_files_subdir: bool,
 }
 
 impl NotesStorage {
     pub fn open(root: PathBuf) -> Result<Self> {
+        Self::open_with_layout(root, true)
+    }
+
+    pub fn open_with_layout(root: PathBuf, use_files_subdir: bool) -> Result<Self> {
         fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            use_files_subdir,
+        })
     }
 
     pub fn create_notebook(&self, name: &str, description: &str) -> Result<NotebookMetadata> {
@@ -174,7 +186,11 @@ impl NotesStorage {
     }
 
     fn files_root(&self) -> PathBuf {
-        self.root.join(FILES_DIR)
+        if self.use_files_subdir {
+            self.root.join(FILES_DIR)
+        } else {
+            self.root.clone()
+        }
     }
 
     fn index_path(&self) -> PathBuf {

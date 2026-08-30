@@ -45,6 +45,8 @@ pub enum MarkdownViewMode {
     #[default]
     Wysiwyg,
     Source,
+    /// 左侧源码编辑、右侧只读预览分栏；可编辑侧使用 Source 模式。
+    Split,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

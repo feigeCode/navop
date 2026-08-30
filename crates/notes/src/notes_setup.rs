@@ -1,5 +1,6 @@
 use crate::notes_notifications::{notify_error_message, notify_operation_error};
 use crate::notes_view::NotesLoadState;
+use crate::storage_location::uses_files_subdir;
 use crate::{NotebookMetadata, NotesStorage, NotesView, TreeState};
 use anyhow::Result;
 use gpui::{Context, Entity, IntoElement, ParentElement, PathPromptOptions, Styled, Window, px};
@@ -34,8 +35,8 @@ impl NotesView {
         if !NotesStorage::has_configured_root()? {
             return Ok(false);
         }
-        let root = NotesStorage::configured_root()?;
-        let opened = open_or_initialize_notes(root)?;
+        let (root, use_files_subdir) = NotesStorage::configured_location()?;
+        let opened = open_or_initialize_notes(root, use_files_subdir)?;
         self.finish_location_setup(opened, window, cx)?;
         Ok(true)
     }
@@ -71,7 +72,8 @@ impl NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        let opened = open_or_initialize_notes(root.clone())?;
+        let use_files_subdir = uses_files_subdir(&root, &NotesStorage::default_root()?);
+        let opened = open_or_initialize_notes(root.clone(), use_files_subdir)?;
         NotesStorage::save_configured_root(&root)?;
         self.finish_location_setup(opened, window, cx)
     }
@@ -164,8 +166,8 @@ fn prompt_for_location(input: Entity<InputState>, window: &mut Window, cx: &mut 
         .detach();
 }
 
-fn open_or_initialize_notes(root: PathBuf) -> Result<OpenedNotes> {
-    let storage = NotesStorage::open(root)?;
+fn open_or_initialize_notes(root: PathBuf, use_files_subdir: bool) -> Result<OpenedNotes> {
+    let storage = NotesStorage::open_with_layout(root, use_files_subdir)?;
     let metadata = match storage.load_notebook()? {
         Some(metadata) => metadata,
         None => storage.create_notebook(DEFAULT_NOTEBOOK_NAME, "")?,
@@ -182,14 +184,14 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let root = temp.path().join("notes");
 
-        let created = open_or_initialize_notes(root.clone())?;
+        let created = open_or_initialize_notes(root.clone(), true)?;
         assert_eq!(DEFAULT_NOTEBOOK_NAME, created.metadata.name);
         assert_eq!(
             Some(created.metadata.clone()),
             created.storage.load_notebook()?
         );
 
-        let reopened = open_or_initialize_notes(root)?;
+        let reopened = open_or_initialize_notes(root, true)?;
         assert_eq!(created.metadata, reopened.metadata);
         Ok(())
     }

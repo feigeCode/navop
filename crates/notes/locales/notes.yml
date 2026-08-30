@@ -21,6 +21,14 @@ Notes:
     en: Return to live preview editing
     zh-CN: 返回实时预览编辑
     zh-HK: 返回即時預覽編輯
+  markdown_split:
+    en: Split
+    zh-CN: 分栏
+    zh-HK: 分欄
+  markdown_split_tooltip:
+    en: Edit Markdown on the left with a live preview on the right
+    zh-CN: 左侧编辑 Markdown，右侧实时预览
+    zh-HK: 左側編輯 Markdown，右側即時預覽
   markdown_readonly_preview:
     en: Read-only preview · edit in Source
     zh-CN: 只读预览 · 请在源码模式编辑

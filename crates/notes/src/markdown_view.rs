@@ -2,7 +2,7 @@ use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_mode::{
     editor_view_mode, focus_markdown_editor, markdown_view_mode, switch_markdown_mode,
 };
-use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
+use crate::markdown_session::{MarkdownPreview, MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownSaveMode, MarkdownViewMode, NotesView};
@@ -63,6 +63,7 @@ impl NotesView {
                     relative_path: descriptor.relative_path,
                     store,
                     editor,
+                    preview: None,
                     state: MarkdownSessionState::with_mode_and_revision(mode, editor_revision),
                     _subscriptions: vec![editor_subscription],
                     _file_watcher: Some(file_watcher),
@@ -70,6 +71,9 @@ impl NotesView {
             );
             if let Some(storage) = self.storage.as_ref() {
                 storage.save_state(&self.tree.to_ui_state())?;
+            }
+            if mode == MarkdownViewMode::Split {
+                self.ensure_markdown_preview(&document_id, window, cx);
             }
         }
 
@@ -107,6 +111,69 @@ impl NotesView {
         if sync_state_changed {
             cx.notify();
         }
+        self.sync_markdown_preview(document_id, cx);
+    }
+
+    /// Split 模式下把主编辑器内容镜像到只读预览。
+    fn sync_markdown_preview(&mut self, document_id: &str, cx: &mut Context<Self>) {
+        let Some(session) = self.markdown_sessions.get(document_id) else {
+            return;
+        };
+        if session.state.mode != MarkdownViewMode::Split {
+            return;
+        }
+        let Some(preview) = &session.preview else {
+            return;
+        };
+        let source = session.editor.read(cx).markdown(cx);
+        preview.editor.update(cx, |preview_editor, cx| {
+            preview_editor.replace_markdown(source, cx);
+        });
+    }
+
+    /// 创建 Split 模式的预览编辑器（Rendered 模式）。
+    ///
+    /// 预览内容在主编辑器每次变更时被整体替换；用户在预览侧的瞬时编辑会由
+    /// 订阅回调立即回滚为镜像内容，因此预览永远不参与持久化。
+    fn ensure_markdown_preview(
+        &mut self,
+        document_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let theme = crate::markdown_renderer::markdown_editor_theme(self.resolved_editor_theme(cx));
+        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
+            return;
+        };
+        if session.preview.is_some() {
+            return;
+        }
+        let host_services = markdown_editor::markdown_editor_host_services(
+            theme,
+            crate::markdown_renderer::block_render_provider(cx),
+        );
+        let source = session.editor.read(cx).markdown(cx);
+        let preview = cx.new(|cx| {
+            MarkdownEditor::from_markdown_embedded_with_host(cx, source, host_services)
+        });
+        let subscription =
+            subscribe_preview_changes(&preview, document_id.to_owned(), window, cx);
+        session.preview = Some(MarkdownPreview {
+            editor: preview,
+            _subscription: subscription,
+        });
+    }
+
+    /// 预览侧发生编辑：立即用主编辑器内容覆盖，保证预览与文档一致。
+    ///
+    /// 内容一致时 `replace_markdown` 返回 false 且不再发事件，循环自然终止。
+    pub(crate) fn markdown_preview_changed(
+        &mut self,
+        document_id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_markdown_preview(document_id, cx);
     }
 
     pub(crate) fn schedule_markdown_auto_save(
@@ -257,16 +324,29 @@ impl NotesView {
         .detach();
     }
 
-    pub(crate) fn toggle_markdown_mode(
+    /// 直接切换到指定视图模式（工具栏按钮入口），重复选择同一模式为 no-op。
+    pub(crate) fn set_markdown_mode(
         &mut self,
-        document_id: String,
+        document_id: &str,
+        mode: MarkdownViewMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(mode) = self.switch_markdown_session(&document_id, window, cx) else {
+        let current = self
+            .markdown_sessions
+            .get(document_id)
+            .map(|session| session.state.mode);
+        if current == Some(mode) || current.is_none() {
             return;
-        };
-        self.tree.markdown_view_modes.insert(document_id, mode);
+        }
+        let session = self.markdown_sessions.get_mut(document_id).expect("checked above");
+        switch_markdown_mode(session, mode, window, cx);
+        if mode == MarkdownViewMode::Split {
+            self.ensure_markdown_preview(document_id, window, cx);
+        }
+        self.tree
+            .markdown_view_modes
+            .insert(document_id.to_owned(), mode);
         if let Some(storage) = self.storage.as_ref()
             && let Err(error) = storage.save_state(&self.tree.to_ui_state())
         {
@@ -285,35 +365,37 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
-        let mode = markdown_view_mode(mode);
-        if session.state.mode == mode {
+        let mapped = markdown_view_mode(mode);
+        if session.state.mode == MarkdownViewMode::Split {
+            // 分栏模式下编辑器被切回所见即所得（编辑器内部快捷键），退出分栏。
+            if mapped == MarkdownViewMode::Wysiwyg {
+                session.preview = None;
+                session.state.set_mode(MarkdownViewMode::Wysiwyg);
+                self.tree
+                    .markdown_view_modes
+                    .insert(document_id.to_owned(), MarkdownViewMode::Wysiwyg);
+                if let Some(storage) = self.storage.as_ref()
+                    && let Err(error) = storage.save_state(&self.tree.to_ui_state())
+                {
+                    notify_operation_error(window, cx, error);
+                }
+                cx.notify();
+            }
             return;
         }
-        session.state.set_mode(mode);
+        if session.state.mode == mapped {
+            return;
+        }
+        session.state.set_mode(mapped);
         self.tree
             .markdown_view_modes
-            .insert(document_id.to_owned(), mode);
+            .insert(document_id.to_owned(), mapped);
         if let Some(storage) = self.storage.as_ref()
             && let Err(error) = storage.save_state(&self.tree.to_ui_state())
         {
             notify_operation_error(window, cx, error);
         }
         cx.notify();
-    }
-
-    fn switch_markdown_session(
-        &mut self,
-        document_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<MarkdownViewMode> {
-        let session = self.markdown_sessions.get_mut(document_id)?;
-        let mode = match session.state.mode {
-            MarkdownViewMode::Source => MarkdownViewMode::Wysiwyg,
-            MarkdownViewMode::Wysiwyg => MarkdownViewMode::Source,
-        };
-        switch_markdown_mode(session, mode, window, cx);
-        Some(mode)
     }
 
     pub(crate) fn remap_markdown_sessions(
@@ -374,6 +456,24 @@ fn subscribe_markdown_changes(
             MarkdownEditorEvent::ViewModeChanged { mode } => {
                 view.markdown_editor_view_mode_changed(&document_id, *mode, window, cx);
             }
+        },
+    )
+}
+
+fn subscribe_preview_changes(
+    editor: &gpui::Entity<MarkdownEditor>,
+    document_id: String,
+    window: &mut Window,
+    cx: &mut Context<NotesView>,
+) -> gpui::Subscription {
+    cx.subscribe_in(
+        editor,
+        window,
+        move |view, _, event: &MarkdownEditorEvent, window, cx| match event {
+            MarkdownEditorEvent::Changed { .. } => {
+                view.markdown_preview_changed(&document_id, window, cx);
+            }
+            MarkdownEditorEvent::ViewModeChanged { .. } => {}
         },
     )
 }

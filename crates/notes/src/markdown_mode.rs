@@ -6,7 +6,7 @@ use markdown_editor::ViewMode;
 pub(crate) fn editor_view_mode(mode: MarkdownViewMode) -> ViewMode {
     match mode {
         MarkdownViewMode::Wysiwyg => ViewMode::Rendered,
-        MarkdownViewMode::Source => ViewMode::Source,
+        MarkdownViewMode::Source | MarkdownViewMode::Split => ViewMode::Source,
     }
 }
 
@@ -23,10 +23,15 @@ pub(crate) fn switch_markdown_mode(
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) {
+    // 先更新 state 再切换编辑器：编辑器回发的 ViewModeChanged 事件以
+    // session.state.mode 为准判断是否需要退出 Split，避免被中间态覆盖。
+    session.state.set_mode(mode);
+    if mode != MarkdownViewMode::Split {
+        session.preview = None;
+    }
     session.editor.update(cx, |editor, cx| {
         editor.set_view_mode(editor_view_mode(mode), cx);
     });
-    session.state.set_mode(mode);
     focus_markdown_editor(session, window, cx);
 }
 

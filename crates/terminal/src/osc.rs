@@ -127,6 +127,7 @@ pub fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
             .split_once('/')
             .map(|(_, p)| format!("/{p}"))
             .unwrap_or_default();
+        let path = percent_decode_path(&path);
         let path = normalize_osc_file_path(path, cfg!(target_os = "windows"));
         return Some(OscEvent::WorkingDirChanged(path));
     }
@@ -155,6 +156,34 @@ fn normalize_osc_file_path(path: String, windows: bool) -> String {
         path.remove(0);
     }
     path
+}
+
+/// 对 file URL 路径做 percent-decoding；非法序列（如 `%GG`、截断的 `%A`）原样保留。
+fn percent_decode_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    if !bytes.contains(&b'%') {
+        return path.to_string();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && bytes[index + 1].is_ascii_hexdigit()
+            && bytes[index + 2].is_ascii_hexdigit()
+        {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3])
+                .expect("ascii hex digits are valid utf-8");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -195,6 +224,32 @@ mod tests {
             Some(OscEvent::WorkingDirChanged(
                 "/home/user/project".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn parse_osc_7_decodes_percent_encoded_path() {
+        assert_eq!(
+            parse_osc_payload("7;file://hostname/home/user/My%20Projects"),
+            Some(OscEvent::WorkingDirChanged(
+                "/home/user/My Projects".to_string()
+            ))
+        );
+        assert_eq!(
+            parse_osc_payload("7;file://host/%E4%B8%AD%E6%96%87"),
+            Some(OscEvent::WorkingDirChanged("/中文".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_osc_7_keeps_invalid_percent_sequences() {
+        assert_eq!(
+            parse_osc_payload("7;file://host/dir%GGsub"),
+            Some(OscEvent::WorkingDirChanged("/dir%GGsub".to_string()))
+        );
+        assert_eq!(
+            parse_osc_payload("7;file://host/dir%"),
+            Some(OscEvent::WorkingDirChanged("/dir%".to_string()))
         );
     }
 

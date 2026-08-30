@@ -30,9 +30,18 @@ pub(crate) struct MarkdownSession {
     /// The single Velotype editor that owns the Markdown document, history,
     /// selection, block tree, rendered/source modes, and focus.
     pub editor: Entity<markdown_editor::MarkdownEditor>,
+    /// Split 模式下的只读预览编辑器；镜像主编辑器内容，用户在预览侧的
+    /// 瞬时编辑会被主编辑器内容立即覆盖。
+    pub preview: Option<MarkdownPreview>,
     pub state: MarkdownSessionState,
     pub _subscriptions: Vec<Subscription>,
     pub _file_watcher: Option<notify::RecommendedWatcher>,
+}
+
+/// 只读预览视图及其事件订阅；离开 Split 模式时整体丢弃。
+pub(crate) struct MarkdownPreview {
+    pub editor: Entity<markdown_editor::MarkdownEditor>,
+    pub _subscription: Subscription,
 }
 
 impl Default for MarkdownSessionState {
