@@ -229,30 +229,52 @@ impl TerminalView {
     ) {
         let modifiers = event.keystroke.modifiers;
         // Xshell 风格：凭据等待期间 Ctrl+D 关闭当前窗口。
-        if modifiers.control && !modifiers.alt && !modifiers.platform && event.keystroke.key == "d"
+        let handled = if modifiers.control
+            && !modifiers.alt
+            && !modifiers.platform
+            && event.keystroke.key == "d"
         {
             one_core::window_close::request_close_window(window.window_handle(), cx);
-            return;
-        }
-        let plain = !modifiers.control && !modifiers.alt && !modifiers.platform;
-        match event.keystroke.key.as_str() {
-            "enter" if plain => self.handle_credential_capture_submit(window, cx),
-            "backspace" if plain => {
-                if self
-                    .credential_capture
-                    .as_mut()
-                    .is_some_and(|capture| capture.backspace())
-                {
-                    self.inject_terminal_notice("\x08 \x08", cx);
+            true
+        } else {
+            let plain = !modifiers.control && !modifiers.alt && !modifiers.platform;
+            match event.keystroke.key.as_str() {
+                "enter" if plain => {
+                    self.handle_credential_capture_submit(window, cx);
+                    true
                 }
+                "backspace" if plain => {
+                    if self
+                        .credential_capture
+                        .as_mut()
+                        .is_some_and(|capture| capture.backspace())
+                    {
+                        self.inject_terminal_notice("\x08 \x08", cx);
+                    }
+                    true
+                }
+                "escape" => {
+                    self.handle_credential_capture_cancel(cx);
+                    true
+                }
+                // 终端直觉：Ctrl+C 中止验证码/OTP 输入（MFA 可取消）。
+                "c" if modifiers.control && !modifiers.alt && !modifiers.platform => {
+                    self.handle_credential_capture_cancel(cx);
+                    true
+                }
+                key if plain && key.len() == 1 => {
+                    self.capture_append_text(key, cx);
+                    true
+                }
+                _ => false,
             }
-            "escape" => self.handle_credential_capture_cancel(cx),
-            // 终端直觉：Ctrl+C 中止验证码/OTP 输入（MFA 可取消）。
-            "c" if modifiers.control && !modifiers.alt && !modifiers.platform => {
-                self.handle_credential_capture_cancel(cx)
-            }
-            key if plain && key.len() == 1 => self.capture_append_text(key, cx),
-            _ => {}
+        };
+        if handled {
+            // 已消费按键必须拦截透传：否则同一按键还会经平台文本输入系统
+            // (insertText -> replace_text_in_range -> commit_text) 再追加并回显一次，
+            // 造成验证码/密码双写（与 history_prompt 双写同根因）。
+            window.prevent_default();
+            cx.stop_propagation();
         }
     }
 
