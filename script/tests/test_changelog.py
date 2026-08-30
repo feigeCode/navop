@@ -114,6 +114,71 @@ class ChangelogTests(unittest.TestCase):
                 "### 更新内容\n\n- 只有中文\n",
             )
 
+    def test_upsert_requires_cnb_mirror_line(self) -> None:
+        notes_without_cnb = """\
+### 更新内容
+
+- 新功能
+
+### 修复与优化
+
+- 修复问题
+
+---
+
+### What's New
+
+- New feature
+
+### Fixes and Improvements
+
+- Fixed a bug
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v1.1.0...v1.2.0
+"""
+        with self.assertRaisesRegex(
+            changelog.ChangelogError, "CNB mirror download line"
+        ):
+            changelog.upsert_release(HEADER, "v1.2.0", "2026-08-01", notes_without_cnb)
+
+    def test_validate_requires_cnb_mirror_line(self) -> None:
+        notes_without_cnb = """\
+### 更新内容
+
+- 新功能
+
+### What's New
+
+- New feature
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v1.1.0...v1.2.0
+"""
+        with self.assertRaisesRegex(
+            changelog.ChangelogError, "CNB mirror download line"
+        ):
+            changelog.validate_release_notes(notes_without_cnb, require_cnb_line=True)
+
+    def test_extract_stays_lenient_for_legacy_entries_without_cnb_line(self) -> None:
+        legacy = """\
+## [v0.9.9] - 2026-06-01
+
+#### 更新内容
+
+- 旧功能
+
+---
+
+#### What's New
+
+- Legacy feature
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.9.8...v0.9.9
+"""
+        full = HEADER + "\n\n" + legacy
+        notes = changelog.extract_release_notes(full, "v0.9.9")
+        self.assertIn("### 更新内容", notes)
+        self.assertIn("Legacy feature", notes)
+
     def test_missing_target_entry_fails(self) -> None:
         with self.assertRaisesRegex(changelog.ChangelogError, "v9.9.9"):
             changelog.extract_release_notes(HEADER, "v9.9.9")

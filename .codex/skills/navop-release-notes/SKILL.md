@@ -108,7 +108,21 @@ Create the file with normal editing tools, then review it:
 rtk sed -n '1,240p' /private/tmp/navop-<target-tag>-release-notes.md
 ```
 
-The file must contain at least one Chinese content section (`### 更新内容` or `### 修复与优化`) and one English content section (`### What's New` or `### Fixes and Improvements`), the CNB mirror download line, and the final compare link must use three dots:
+The notes file is **incomplete unless every one of these items is present**. Check each one before continuing:
+
+- [ ] At least one Chinese content section (`### 更新内容` or `### 修复与优化`)
+- [ ] At least one English content section (`### What's New` or `### Fixes and Improvements`)
+- [ ] The CNB mirror download line, using the exact target tag (hard requirement, easy to forget):
+  ```markdown
+  国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/<target-tag>) 下载桌面端安装包
+  ```
+- [ ] The final compare link must use three dots:
+
+```markdown
+**Full Changelog**: https://github.com/feigeCode/navop/compare/<previous-tag>...<target-tag>
+```
+
+Run `grep -F "cnb.cool/navop-dev/navop/-/releases/tag/<target-tag>" "$NOTES"` and fail the entry if it returns nothing.
 
 ```markdown
 **Full Changelog**: https://github.com/feigeCode/navop/compare/<previous-tag>...<target-tag>
@@ -213,6 +227,7 @@ Report the changed changelog entry, whether it was committed/tagged/published, a
 | Mistake | Correct Action |
 | --- | --- |
 | Using only Chinese notes | Publish matching Chinese and English sections. |
+| Omitting the CNB mirror download line | Every entry must include the `国内下载` / CNB mirror line pointing at the exact target tag; grep the notes file for it before continuing. |
 | Creating the tag before the changelog | Generate, review, and commit the target `CHANGELOG.md` entry first. |
 | Editing GitHub and changelog separately | Treat `CHANGELOG.md` as authoritative and extract the GitHub body from it. |
 | Omitting R2 notes | Confirm `latest.json.release_notes` is populated from the same extracted entry. |

@@ -14,6 +14,11 @@ import tempfile
 
 INSERTION_MARKER = "<!-- NAVOP_RELEASES -->"
 TAG_PATTERN = r"v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?"
+CNB_MIRROR_LINE_RE = re.compile(
+    r"国内下载：如果 GitHub 下载较慢，可从 \[CNB 镜像\]"
+    r"\(https://cnb\.cool/navop-dev/navop/-/releases/tag/[^)]+\)"
+    r" 下载桌面端安装包"
+)
 VERSION_HEADING_RE = re.compile(
     rf"^## \[(?P<tag>{TAG_PATTERN})\] - (?P<date>[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})[ \t]*$",
     re.MULTILINE,
@@ -45,7 +50,9 @@ def validate_iso_date(value: str) -> str:
     return value
 
 
-def validate_release_notes(notes: str) -> None:
+def validate_release_notes(
+    notes: str, *, require_cnb_line: bool = False
+) -> None:
     if not notes.strip():
         raise ChangelogError("release notes are empty")
     chinese_sections = ("更新内容", "修复与优化")
@@ -60,6 +67,11 @@ def validate_release_notes(notes: str) -> None:
         for section in english_sections
     ):
         raise ChangelogError("release notes are missing an English content section")
+    if require_cnb_line and CNB_MIRROR_LINE_RE.search(notes) is None:
+        raise ChangelogError(
+            "release notes are missing the CNB mirror download line "
+            "(国内下载 / CNB 镜像)"
+        )
 
 
 def transform_headings(markdown: str, delta: int) -> str:
@@ -190,7 +202,7 @@ def upsert_release(
     normalized_tag = normalize_tag(tag)
     validate_iso_date(release_date)
     normalized_notes = release_notes.strip() + "\n"
-    validate_release_notes(normalized_notes)
+    validate_release_notes(normalized_notes, require_cnb_line=True)
 
     if INSERTION_MARKER not in changelog:
         raise ChangelogError(
@@ -250,7 +262,8 @@ def command_upsert(arguments: argparse.Namespace) -> None:
 
 def command_validate(arguments: argparse.Namespace) -> None:
     changelog = read_utf8(arguments.changelog)
-    extract_release_notes(changelog, arguments.tag)
+    notes = extract_release_notes(changelog, arguments.tag)
+    validate_release_notes(notes, require_cnb_line=True)
     print(f"Validated changelog entry: {normalize_tag(arguments.tag)}")
 
 
