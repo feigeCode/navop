@@ -4,6 +4,36 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.15.1] - 2026-08-30
+
+#### 更新内容
+
+- 终端新增「选中文本后高亮相同内容」：选中一段文本后，可见区域内相同文本会以淡色背景高亮，SSH 与本地终端同时生效，可在终端侧边栏设置中开关（默认开启）。
+- 连接列表宽度支持持久化：拖拽调整侧栏连接树宽度后自动保存，重启应用恢复上次宽度；停靠模式侧栏与主窗口背景统一、分隔线由拖拽手柄承担，浮动模式改为浮层卡片样式（圆角 + 阴影）。
+- 「自动检查更新」开关与「检查更新」按钮从通用设置页迁移到关于页面，与版本信息同页展示。
+
+#### 修复与优化
+
+- 修复侧边栏与命令栏图标按钮在终端/Agent 自定义主题下颜色不跟随、误显示为黑色的问题。
+- 修复 SFTP 覆盖远端文件时恢复旧修改时间（mtime），导致 rsync 部署、Web/应用缓存与增量构建等基于 mtime 的变更检测误判文件未更新、继续使用旧内容的问题；现在覆盖写入后 mtime 由服务器按实际写入时间记录。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.15.1) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Terminal gains "highlight identical text on selection": after selecting text, matching text in the visible area is highlighted with a subtle background, working in both SSH and local terminals; toggleable in the terminal sidebar settings (on by default).
+- Connection list width is now persisted: resizing the sidebar connection tree is saved automatically and restored on next launch; the docked sidebar shares the main window background with a resize-handle divider, and the floating mode adopts a card-style look (rounded corners + shadow).
+- The "check for updates automatically" toggle and "Check for Updates" button move from general settings to the About page, alongside the version information.
+
+#### Fixes and Improvements
+
+- Fixed sidebar and command bar icon buttons rendering black instead of following the terminal/Agent custom theme colors.
+- Fixed SFTP restoring the old mtime when overwriting remote files, which made mtime-based change detection (rsync deploys, web/app caches, incremental builds) treat the overwritten file as unchanged and keep serving stale content; the server now records the actual write time.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.15.0...v0.15.1
+
 ## [v0.15.0] - 2026-08-30
 
 #### 更新内容
