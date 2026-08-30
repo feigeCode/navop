@@ -788,6 +788,25 @@ fn credential_capture_consumed_keys_block_text_system_passthrough() {
 }
 
 #[test]
+fn credential_capture_prompt_does_not_lead_with_a_blank_line() {
+    let source = include_str!("../terminal_events.rs");
+    let prompt = function_region(
+        source,
+        "fn inject_capture_prompt",
+        "pub(super) fn handle_credential_capture_key_event",
+    );
+
+    assert!(
+        prompt.contains("let mut text = String::new()"),
+        "capture prompt must start without a leading line break"
+    );
+    assert!(
+        !prompt.contains("String::from(\"\\r\\n\")"),
+        "the prompt must not inject a leading blank line"
+    );
+}
+
+#[test]
 fn workspace_connection_status_delegates_to_the_active_pane() {
     let source = include_str!("../../workspace/tab_content.rs");
     let region = function_region(source, "fn connection_status", "fn lock_session");

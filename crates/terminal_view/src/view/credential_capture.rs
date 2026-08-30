@@ -126,8 +126,8 @@ pub(super) enum CaptureOutcome {
 /// 终端内联凭据/MFA 输入捕获状态机。
 ///
 /// 捕获期间按键不透传 PTY，由 View 将回显注入终端网格；提交仍复用
-/// 模型既有的 `submit_*` 入口。回显遵循终端语义：回显字段原样回显，
-/// 非回显字段（密码/验证码）不回显任何内容。
+/// 模型既有的 `submit_*` 入口。回显遵循终端语义：用户名与 MFA 提示
+/// 明文原样回显，密码以 `*` 掩码回显。
 pub(super) struct CredentialCapture {
     request: CaptureRequest,
     field: CaptureField,
@@ -161,16 +161,9 @@ impl CredentialCapture {
         &self.request
     }
 
-    /// 当前字段是否不应回显（密码、`echo=false` 的 MFA 提示）。
+    /// 当前字段是否应以掩码字符回显（仅密码以 `*` 掩码，用户名与 MFA 明文）。
     pub(super) fn masked(&self) -> bool {
-        match self.field {
-            CaptureField::Username => false,
-            CaptureField::Password => true,
-            CaptureField::MfaPrompt(index) => {
-                let prompts = self.mfa_prompts().unwrap_or_default();
-                prompts.get(index).is_some_and(|prompt| !prompt.echo)
-            }
-        }
+        matches!(self.field, CaptureField::Password)
     }
 
     /// 当前字段的提示行文本；MFA 提示直接使用服务端下发的原文。
@@ -216,14 +209,19 @@ impl CredentialCapture {
         }
     }
 
-    /// 追加输入文本；返回是否需要原样回显（非掩码字段）。
-    pub(super) fn append(&mut self, text: &str) -> bool {
+    /// 追加输入文本；返回需要回显到终端的文本（掩码字段为 `*`，其余为
+    /// 原文），无内容被接受时返回 `None`。
+    pub(super) fn append(&mut self, text: &str) -> Option<String> {
         let accepted: String = text.chars().filter(|ch| !ch.is_control()).collect();
         if accepted.is_empty() {
-            return false;
+            return None;
         }
         self.current.push_str(&accepted);
-        !self.masked()
+        Some(if self.masked() {
+            "*".repeat(accepted.chars().count())
+        } else {
+            accepted
+        })
     }
 
     /// 删除最后一个字符；返回是否有内容被删除（需要注入擦除回显）。
@@ -362,14 +360,18 @@ mod tests {
         let fields = creds(1, false, true, true);
         let mut capture = CredentialCapture::for_request(credentials_request(fields.clone()));
         assert!(!capture.masked());
-        assert!(capture.append("root"));
+        assert_eq!(Some("root".to_string()), capture.append("root"));
         assert_eq!(
             CaptureOutcome::Advanced,
             capture.submit_current(),
             "username step should advance to the password prompt"
         );
         assert!(capture.masked());
-        assert!(!capture.append("secret"), "password input must not echo");
+        assert_eq!(
+            Some("******".to_string()),
+            capture.append("secret"),
+            "password input must echo as masked stars"
+        );
         assert_eq!(
             submitted(fields, Some("root"), Some("secret")),
             capture.submit_current()
@@ -382,7 +384,11 @@ mod tests {
         let mut capture = CredentialCapture::for_request(credentials_request(fields.clone()));
         assert!(capture.masked());
         assert_eq!(CaptureOutcome::Rejected, capture.submit_current());
-        assert!(!capture.append("pw"), "masked input must not echo");
+        assert_eq!(
+            Some("**".to_string()),
+            capture.append("pw"),
+            "masked input echoes as stars"
+        );
         assert_eq!(
             submitted(fields, None, Some("pw")),
             capture.submit_current()
@@ -394,7 +400,7 @@ mod tests {
         let fields = creds(1, true, true, false);
         let mut capture = CredentialCapture::for_request(credentials_request(fields.clone()));
         assert_eq!(CaptureOutcome::Rejected, capture.submit_current());
-        assert!(capture.append("admin"));
+        assert_eq!(Some("admin".to_string()), capture.append("admin"));
         assert_eq!(
             submitted(fields, Some("admin"), None),
             capture.submit_current()
@@ -402,16 +408,19 @@ mod tests {
     }
 
     #[test]
-    fn mfa_capture_walks_prompts_sequentially_with_echo_flags() {
+    fn mfa_capture_walks_prompts_sequentially_and_echoes_plainly() {
         let mut capture = CredentialCapture::for_request(mfa_request(&[false, true]));
         let (name, instructions) = capture.mfa_prelude().expect("mfa prelude");
         assert_eq!("MFA", name);
         assert_eq!("Enter the code", instructions);
-        assert!(capture.masked(), "first prompt is echo=false");
-        assert!(!capture.append("1234"));
+        assert!(
+            !capture.masked(),
+            "MFA prompts must echo plainly regardless of the server echo flag"
+        );
+        assert_eq!(Some("1234".to_string()), capture.append("1234"));
         assert_eq!(CaptureOutcome::Advanced, capture.submit_current());
-        assert!(!capture.masked(), "second prompt echoes");
-        assert!(capture.append("answer"));
+        assert!(!capture.masked());
+        assert_eq!(Some("answer".to_string()), capture.append("answer"));
         assert_eq!(
             CaptureOutcome::Mfa(vec!["1234".to_string(), "answer".to_string()]),
             capture.submit_current()
@@ -423,9 +432,13 @@ mod tests {
         let fields = creds(1, false, false, true);
         let mut capture = CredentialCapture::for_request(credentials_request(fields.clone()));
         assert!(!capture.backspace());
-        assert!(!capture.append("abc"), "masked input must not echo");
+        assert_eq!(
+            Some("***".to_string()),
+            capture.append("abc"),
+            "masked input echoes as stars"
+        );
         assert!(capture.backspace());
-        assert!(!capture.append("d"));
+        assert_eq!(Some("*".to_string()), capture.append("d"));
         assert_eq!(
             submitted(fields, None, Some("abd")),
             capture.submit_current()
@@ -436,7 +449,7 @@ mod tests {
     fn control_characters_are_dropped_from_pasted_input() {
         let fields = creds(1, false, true, false);
         let mut capture = CredentialCapture::for_request(credentials_request(fields.clone()));
-        assert!(capture.append("ro\not\r"));
+        assert_eq!(Some("root".to_string()), capture.append("ro\not\r"));
         assert_eq!(
             submitted(fields, Some("root"), None),
             capture.submit_current()

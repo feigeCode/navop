@@ -205,7 +205,7 @@ impl TerminalView {
     }
 
     fn inject_capture_prompt(&self, capture: &CredentialCapture, cx: &mut Context<Self>) {
-        let mut text = String::from("\r\n");
+        let mut text = String::new();
         if let Some((name, instructions)) = capture.mfa_prelude() {
             if !name.is_empty() {
                 text.push_str(&format!(
@@ -282,9 +282,9 @@ impl TerminalView {
         let echo = self
             .credential_capture
             .as_mut()
-            .is_some_and(|capture| capture.append(text));
-        if echo {
-            self.inject_terminal_notice(text, cx);
+            .and_then(|capture| capture.append(text));
+        if let Some(echo_text) = echo {
+            self.inject_terminal_notice(&echo_text, cx);
         }
     }
 
