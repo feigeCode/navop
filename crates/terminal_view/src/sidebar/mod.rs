@@ -10,6 +10,7 @@ mod broadcast_input_panel;
 pub mod file_manager_panel;
 mod history_command_panel;
 mod quick_command_panel;
+mod remote_path;
 mod server_monitor_panel;
 mod settings_panel;
 pub(crate) mod tool_dock;
@@ -716,6 +717,11 @@ impl TerminalSidebar {
                 .map(|(conn, manager)| {
                     cx.new(|cx| FileManagerPanel::new(conn, manager, colors.clone(), window, cx))
                 });
+        if let Some(fm_panel) = &file_manager_panel {
+            fm_panel.update(cx, |panel, cx| {
+                panel.set_follow_terminal_cwd(sync_path_enabled, cx);
+            });
+        }
         let file_explorer_panel = local_workspace.map(|workspace| {
             let LocalWorkspaceSidebar { root, editor } = workspace;
             let theme = workspace_theme_from_terminal_colors(&colors, cx.theme());
@@ -839,6 +845,11 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
+                    if let Some(fm_panel) = &this.file_manager_panel {
+                        fm_panel.update(cx, |panel, cx| {
+                            panel.set_follow_terminal_cwd(*enabled, cx);
+                        });
+                    }
                     cx.emit(TerminalSidebarEvent::SyncPathChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::CustomHighlightsChanged(rules) => {
@@ -912,6 +923,16 @@ impl TerminalSidebar {
                         }
                         FileManagerPanelEvent::SyncWorkingDir => {
                             cx.emit(TerminalSidebarEvent::SyncWorkingDir);
+                        }
+                        FileManagerPanelEvent::ToggleFollowTerminalCwd => {
+                            let enabled = !this.sync_path_enabled;
+                            this.set_sync_path_enabled(enabled, cx);
+                            if let Some(fm_panel) = &this.file_manager_panel {
+                                fm_panel.update(cx, |panel, cx| {
+                                    panel.set_follow_terminal_cwd(enabled, cx);
+                                });
+                            }
+                            cx.emit(TerminalSidebarEvent::SyncPathChanged(enabled));
                         }
                     },
                 );

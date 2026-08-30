@@ -2147,6 +2147,14 @@ FileManager:
     en: Sync Terminal Directory
     zh-CN: 同步终端目录
     zh-HK: 同步終端目錄
+  follow_terminal_dir_on:
+    en: "Following terminal directory: on. Click to stop auto-following."
+    zh-CN: "已跟随终端目录：开启。点击可停止自动跟随。"
+    zh-HK: "已跟隨終端目錄：開啟。點擊可停止自動跟隨。"
+  follow_terminal_dir_off:
+    en: "Following terminal directory: off. Click to auto-follow the terminal directory."
+    zh-CN: "已跟随终端目录：关闭。点击可自动跟随终端目录。"
+    zh-HK: "已跟隨終端目錄：關閉。點擊可自動跟隨終端目錄。"
   download:
     en: Download
     zh-CN: 下载
