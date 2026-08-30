@@ -122,6 +122,7 @@ impl TerminalView {
         self.apply_confirm_multiline_paste(settings.confirm_multiline_paste, cx);
         self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);
         self.apply_custom_highlight_rules(&settings.custom_highlights, cx);
+        self.apply_selection_highlight(settings.selection_highlight, cx);
         let theme = TerminalTheme::resolve(&settings.theme, cx.theme());
         self.apply_theme(&theme, window, cx);
     }
@@ -139,6 +140,20 @@ impl TerminalView {
         }
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_custom_highlights(rules.to_vec(), cx);
+        });
+        cx.notify();
+    }
+
+    /// 应用“选中文本高亮相同内容”开关
+    pub(super) fn apply_selection_highlight(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if let Some(addon) = self
+            .addon_manager
+            .get_as_mut::<SelectionHighlightAddon>("selection_highlight")
+        {
+            addon.set_enabled(enabled);
+        }
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_selection_highlight(enabled, cx);
         });
         cx.notify();
     }

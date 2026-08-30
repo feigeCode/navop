@@ -908,6 +908,9 @@ pub struct AppSettings {
     pub terminal_confirm_high_risk_command: bool,
     #[serde(default = "default_true")]
     pub terminal_auto_session_logging: bool,
+    /// 选中文本后高亮可见区域内所有相同文本
+    #[serde(default = "default_true")]
+    pub terminal_selection_highlight: bool,
     #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
@@ -1273,6 +1276,7 @@ impl Default for AppSettings {
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
             terminal_auto_session_logging: default_true(),
+            terminal_selection_highlight: default_true(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,

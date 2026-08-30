@@ -56,6 +56,7 @@ use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromp
 use crate::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
 use crate::public_mcp::TerminalPublicMcpRegistration;
 use crate::quick_command_sync::{QuickCommandSyncEvent, QuickCommandSyncNotifier};
+use crate::selection_highlight_addon::SelectionHighlightAddon;
 use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,

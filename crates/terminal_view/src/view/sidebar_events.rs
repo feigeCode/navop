@@ -163,6 +163,12 @@ impl TerminalView {
                     settings.cursor_blink = enabled;
                 });
             }
+            TerminalSidebarEvent::SelectionHighlightChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.selection_highlight = enabled;
+                });
+            }
             TerminalSidebarEvent::ConfirmMultilinePasteChanged(enabled) => {
                 let enabled = *enabled;
                 let _ = update_settings(cx, move |settings| {

@@ -52,6 +52,8 @@ pub struct TerminalSettings {
     pub confirm_multiline_paste: bool,
     pub confirm_high_risk_command: bool,
     pub auto_session_logging: bool,
+    #[serde(default = "default_selection_highlight")]
+    pub selection_highlight: bool,
     /// 在 alt-screen TUI(vim/less/man 等)中把鼠标滚轮事件转为方向键发送给 PTY,
     /// 让 vim 等程序不开启鼠标报告也能滚动,同时保留终端原生选区/复制能力。
     #[serde(default = "default_vim_scroll_to_arrow_keys")]
@@ -64,6 +66,10 @@ pub struct TerminalSettings {
 
 fn default_vim_scroll_to_arrow_keys() -> bool {
     true
+}
+
+fn default_selection_highlight() -> bool {
+    AppSettings::default().terminal_selection_highlight
 }
 
 fn default_terminal_font_family() -> String {
@@ -102,6 +108,7 @@ impl TerminalSettings {
             confirm_multiline_paste: app_settings.terminal_confirm_multiline_paste,
             confirm_high_risk_command: app_settings.terminal_confirm_high_risk_command,
             auto_session_logging: app_settings.terminal_auto_session_logging,
+            selection_highlight: app_settings.terminal_selection_highlight,
             vim_scroll_to_arrow_keys: local_settings.vim_scroll_to_arrow_keys,
             builtin_highlights_initialized: local_settings.builtin_highlights_initialized,
             custom_highlights: local_settings.custom_highlights.clone(),
@@ -308,6 +315,7 @@ fn update_app_settings<T>(
         settings.terminal_confirm_multiline_paste = next.confirm_multiline_paste;
         settings.terminal_confirm_high_risk_command = next.confirm_high_risk_command;
         settings.terminal_auto_session_logging = next.auto_session_logging;
+        settings.terminal_selection_highlight = next.selection_highlight;
     });
 }
 
@@ -327,6 +335,7 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.confirm_multiline_paste == right.confirm_multiline_paste
         && left.confirm_high_risk_command == right.confirm_high_risk_command
         && left.auto_session_logging == right.auto_session_logging
+        && left.selection_highlight == right.selection_highlight
 }
 
 #[cfg(test)]

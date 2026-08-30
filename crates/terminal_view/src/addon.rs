@@ -1340,6 +1340,9 @@ pub fn register_default_addons(manager: &mut AddonManager) {
     manager.load(Box::new(FilePathAddon::new()));
     manager.load(Box::new(SearchAddon::new()));
     manager.load(Box::new(CustomHighlightAddon::new()));
+    manager.load(Box::new(
+        crate::selection_highlight_addon::SelectionHighlightAddon::new(),
+    ));
 }
 
 fn split_path_line_column(candidate: &str) -> (String, Option<u32>, Option<u32>) {

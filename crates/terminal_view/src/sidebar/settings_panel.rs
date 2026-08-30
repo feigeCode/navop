@@ -141,6 +141,8 @@ pub enum SettingsPanelEvent {
     PasteImageUploadChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
+    /// 选中文本高亮相同内容开关
+    SelectionHighlightChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -191,6 +193,8 @@ pub struct SettingsPanel {
     paste_image_upload: bool,
     /// vim/TUI 滚轮转方向键
     vim_scroll_to_arrow_keys: bool,
+    /// 选中文本高亮相同内容
+    selection_highlight: bool,
     /// 路径与终端同步开关
     sync_path: bool,
     /// 全局自定义高亮规则
@@ -232,6 +236,7 @@ impl SettingsPanel {
 
         let scrollback_lines = AppSettings::global(cx).terminal_scrollback_lines;
         let auto_session_logging = AppSettings::global(cx).terminal_auto_session_logging;
+        let selection_highlight = AppSettings::global(cx).terminal_selection_highlight;
         let scrollback_lines_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES.to_string())
@@ -401,6 +406,7 @@ impl SettingsPanel {
             paste_image_upload,
             sync_path,
             vim_scroll_to_arrow_keys,
+            selection_highlight,
             custom_highlights: Vec::new(),
             has_file_manager,
             focus_handle: cx.focus_handle(),
@@ -515,6 +521,11 @@ impl SettingsPanel {
 
     pub fn set_cursor_blink(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.cursor_blink = enabled;
+        cx.notify();
+    }
+
+    pub fn set_selection_highlight(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.selection_highlight = enabled;
         cx.notify();
     }
 
@@ -1086,6 +1097,7 @@ impl SettingsPanel {
         let right_click_paste = self.right_click_paste;
         let paste_image_upload = self.paste_image_upload;
         let vim_scroll_to_arrow_keys = self.vim_scroll_to_arrow_keys;
+        let selection_highlight = self.selection_highlight;
 
         v_flex()
             .gap_3()
@@ -1258,6 +1270,25 @@ impl SettingsPanel {
                                     .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                         this.vim_scroll_to_arrow_keys = *checked;
                                         cx.emit(SettingsPanelEvent::VimScrollToArrowKeysChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div().text_sm().child(t!("Settings.selection_highlight")),
+                            )
+                            .child(
+                                Switch::new("selection-highlight-switch")
+                                    .checked(selection_highlight)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.selection_highlight = *checked;
+                                        cx.emit(SettingsPanelEvent::SelectionHighlightChanged(
                                             *checked,
                                         ));
                                     })),

@@ -579,6 +579,8 @@ pub enum TerminalSidebarEvent {
     PasteImageUploadChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
+    /// 选中文本高亮相同内容开关
+    SelectionHighlightChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -842,6 +844,9 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::VimScrollToArrowKeysChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::VimScrollToArrowKeysChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::SelectionHighlightChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::SelectionHighlightChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
@@ -1315,6 +1320,12 @@ impl TerminalSidebar {
     pub fn set_cursor_blink(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_cursor_blink(enabled, cx);
+        });
+    }
+
+    pub fn set_selection_highlight(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_selection_highlight(enabled, cx);
         });
     }
 

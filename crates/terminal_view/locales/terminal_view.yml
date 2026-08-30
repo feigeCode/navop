@@ -690,6 +690,10 @@ Settings:
     en: Mouse wheel as arrow keys in vim/TUI
     zh-CN: vim/TUI 中鼠标滚轮映射为方向键
     zh-HK: vim/TUI 中滑鼠滾輪映射為方向鍵
+  selection_highlight:
+    en: Highlight matching text on selection
+    zh-CN: 选中文本后高亮相同内容
+    zh-HK: 選取文字後高亮相同內容
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器
