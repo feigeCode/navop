@@ -1150,33 +1150,6 @@ impl SettingsPanel {
                         ),
                     remote_file_editor_setting_group(&default_settings.remote_file_editor, cx),
                     SettingGroup::new()
-                        .title(t!("Settings.General.Update.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Update.auto_update"),
-                                SettingField::switch(
-                                    |cx: &App| AppSettings::global(cx).auto_update,
-                                    |val: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.auto_update = val;
-                                        });
-                                    },
-                                )
-                                .default_value(default_settings.auto_update),
-                            )
-                            .description(
-                                t!("Settings.General.Update.auto_update_desc").to_string(),
-                            ),
-                            SettingItem::render(move |_options, _window, cx| {
-                                render_manual_update_check_item(cx)
-                            })
-                            .search_texts([
-                                t!("Settings.General.Update.group_title").to_string(),
-                                t!("Settings.General.Update.check_now").to_string(),
-                                t!("Settings.General.Update.check_now_desc").to_string(),
-                            ]),
-                        ]),
-                    SettingGroup::new()
                         .title(t!("Settings.General.Proxy.group_title"))
                         .item(
                             SettingItem::render(move |_options, _window, cx| {
@@ -1228,16 +1201,18 @@ impl SettingsPanel {
                     ]),
             )),
             // 关于页面
-            SettingPage::new(t!("Settings.About.title")).group(SettingGroup::new().item(
-                SettingItem::render(move |_options, _window, cx| render_about_section(cx))
-                    .search_texts([
-                        t!("Settings.About.title").to_string(),
-                        t!("Settings.About.version").to_string(),
-                        t!("Settings.About.opensource_label").to_string(),
-                        t!("Settings.About.disclaimer_title").to_string(),
-                        t!("Settings.About.data_safety_title").to_string(),
-                    ]),
-            )),
+            SettingPage::new(t!("Settings.About.title"))
+                .group(SettingGroup::new().item(
+                    SettingItem::render(move |_options, _window, cx| render_about_section(cx))
+                        .search_texts([
+                            t!("Settings.About.title").to_string(),
+                            t!("Settings.About.version").to_string(),
+                            t!("Settings.About.opensource_label").to_string(),
+                            t!("Settings.About.disclaimer_title").to_string(),
+                            t!("Settings.About.data_safety_title").to_string(),
+                        ]),
+                ))
+                .group(about_update_setting_group(default_settings.auto_update)),
         ];
         if !is_feature_enabled(Feature::TeamManagement, cx) {
             pages.remove(TEAM_KEYS_SETTINGS_PAGE_INDEX);
@@ -2312,6 +2287,33 @@ impl Render for SettingsPanel {
     }
 }
 
+/// 关于页的“更新”分组：自动检查更新开关与手动检查入口
+fn about_update_setting_group(auto_update_default: bool) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.About.Update.group_title"))
+        .items(vec![
+            SettingItem::new(
+                t!("Settings.About.Update.auto_update"),
+                SettingField::switch(
+                    |cx: &App| AppSettings::global(cx).auto_update,
+                    |val: bool, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.auto_update = val;
+                        });
+                    },
+                )
+                .default_value(auto_update_default),
+            )
+            .description(t!("Settings.About.Update.auto_update_desc").to_string()),
+            SettingItem::render(move |_options, _window, cx| render_manual_update_check_item(cx))
+                .search_texts([
+                    t!("Settings.About.Update.group_title").to_string(),
+                    t!("Settings.About.Update.check_now").to_string(),
+                    t!("Settings.About.Update.check_now_desc").to_string(),
+                ]),
+        ])
+}
+
 fn render_manual_update_check_item(cx: &mut App) -> gpui::AnyElement {
     h_flex()
         .w_full()
@@ -2325,19 +2327,19 @@ fn render_manual_update_check_item(cx: &mut App) -> gpui::AnyElement {
                 .child(
                     div()
                         .text_sm()
-                        .child(t!("Settings.General.Update.check_now").to_string()),
+                        .child(t!("Settings.About.Update.check_now").to_string()),
                 )
                 .child(
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t!("Settings.General.Update.check_now_desc").to_string()),
+                        .child(t!("Settings.About.Update.check_now_desc").to_string()),
                 ),
         )
         .child(
             Button::new("settings-check-update")
                 .icon(IconName::Refresh)
-                .label(t!("Settings.General.Update.check_now"))
+                .label(t!("Settings.About.Update.check_now"))
                 .on_click(|_, window, cx| {
                     update::check_for_updates_manually(window, cx);
                 }),

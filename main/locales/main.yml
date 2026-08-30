@@ -3050,28 +3050,6 @@ Settings:
         zh-CN: 可填写日志目录（文件名为 onetcli.log）或完整日志文件路径；留空时使用默认配置目录下的 logs 文件夹。修改后重启应用生效。
         zh-HK: 可填寫日誌目錄（文件名為 onetcli.log）或完整日誌文件路徑；留空時使用默認配置目錄下的 logs 文件夾。修改後重啟應用生效。
 
-    Update:
-      group_title:
-        en: Update
-        zh-CN: 更新
-        zh-HK: 更新
-      auto_update:
-        en: Auto Update Check
-        zh-CN: 自动检查更新
-        zh-HK: 自動檢查更新
-      auto_update_desc:
-        en: Automatically check for updates when the application starts
-        zh-CN: 应用启动时自动检查新版本
-        zh-HK: 應用啟動時自動檢查新版本
-      check_now:
-        en: Check for Updates
-        zh-CN: 检查更新
-        zh-HK: 檢查更新
-      check_now_desc:
-        en: Manually check
-        zh-CN: 立即手动检查
-        zh-HK: 立即手動檢查
-
     Proxy:
       group_title:
         en: Proxy
@@ -3868,6 +3846,27 @@ Settings:
       en: "Open Source"
       zh-CN: "开源地址"
       zh-HK: "開源地址"
+    Update:
+      group_title:
+        en: Update
+        zh-CN: 更新
+        zh-HK: 更新
+      auto_update:
+        en: Auto Update Check
+        zh-CN: 自动检查更新
+        zh-HK: 自動檢查更新
+      auto_update_desc:
+        en: Automatically check for updates when the application starts
+        zh-CN: 应用启动时自动检查新版本
+        zh-HK: 應用啟動時自動檢查新版本
+      check_now:
+        en: Check for Updates
+        zh-CN: 检查更新
+        zh-HK: 檢查更新
+      check_now_desc:
+        en: Manually check
+        zh-CN: 立即手动检查
+        zh-HK: 立即手動檢查
 
   # 账户设置
   Account:
