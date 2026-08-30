@@ -832,26 +832,26 @@ where
 }
 
 /// Selects the ownership and permission attributes that must survive a replace.
-/// Only uid/gid/permissions/mtime are kept so a subsequent SETSTAT cannot clobber
-/// size or atime. Returns `None` when none of these fields are present, so the
-/// restore step is skipped entirely (e.g. first upload to a new path).
+/// Only uid/gid/permissions are kept so a subsequent SETSTAT cannot clobber
+/// size, atime or mtime. mtime is intentionally left to the server so the
+/// overwritten file reflects the write time; restoring the original mtime made
+/// mtime-based change detection (rsync/web caches, incremental builds) treat
+/// the replaced file as unchanged and keep serving stale content. Returns `None`
+/// when none of these fields are present, so the restore step is skipped
+/// entirely (e.g. first upload to a new path).
 fn preserved_replace_attributes(attrs: FileAttributes) -> Option<FileAttributes> {
     let preserved = FileAttributes {
         uid: attrs.uid,
         gid: attrs.gid,
         permissions: attrs.permissions,
-        mtime: attrs.mtime,
+        mtime: None,
         size: None,
         user: None,
         group: None,
         atime: None,
     };
 
-    if preserved.uid.is_none()
-        && preserved.gid.is_none()
-        && preserved.permissions.is_none()
-        && preserved.mtime.is_none()
-    {
+    if preserved.uid.is_none() && preserved.gid.is_none() && preserved.permissions.is_none() {
         None
     } else {
         Some(preserved)
@@ -880,8 +880,8 @@ async fn preserve_target_attributes(sftp: &SftpSession, target: &str) -> Option<
 
 /// Restores the preserved ownership and permissions onto the replaced target
 /// via SETSTAT. Only the attributes captured by [`preserve_target_attributes`]
-/// are sent; unset fields are omitted from the request so size/atime are left
-/// untouched.
+/// are sent; unset fields are omitted from the request so size/atime/mtime are
+/// left untouched.
 async fn restore_target_attributes(
     sftp: &SftpSession,
     target: &str,
@@ -3882,10 +3882,11 @@ mod tests {
     }
 
     #[test]
-    fn preserved_replace_attributes_keeps_ownership_permissions_and_mtime_only() {
+    fn preserved_replace_attributes_keeps_ownership_and_permissions_only() {
         // Root overwriting a non-root file: the server reports uid/gid plus
         // permissions and mtime, alongside size/atime/user/group that must not
         // be echoed back by a SETSTAT (size would truncate, atime would drift).
+        // mtime is not preserved so overwritten files get a fresh write time.
         let original = FileAttributes {
             size: Some(4096),
             uid: Some(1000),
@@ -3898,12 +3899,14 @@ mod tests {
         };
 
         let preserved = preserved_replace_attributes(original)
-            .expect("uid/gid/permissions/mtime must be preserved");
+            .expect("uid/gid/permissions must be preserved");
 
         assert_eq!(preserved.uid, Some(1000));
         assert_eq!(preserved.gid, Some(1000));
         assert_eq!(preserved.permissions, Some(0o644));
-        assert_eq!(preserved.mtime, Some(1_700_000_001));
+        // mtime must be dropped so downstream mtime-based change detection sees
+        // the overwrite; keeping the old mtime made files look unchanged.
+        assert_eq!(preserved.mtime, None);
         // Echoing size back via SETSTAT could truncate the freshly written file.
         assert_eq!(preserved.size, None);
         // atime is not preserved, so the access time is left to the server.
