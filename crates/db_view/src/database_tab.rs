@@ -9,6 +9,7 @@ use crate::database_toolbar::{
     toolbar_tone_color,
 };
 use crate::database_users_tab::DatabaseUsersTab;
+use crate::db_filter_popover::DbFilterPopover;
 use crate::db_tree_event::DatabaseEventHandler;
 use crate::db_tree_view::{DbTreeView, DbTreeViewEvent, SqlDumpMode};
 use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
@@ -153,6 +154,7 @@ pub struct DatabaseTabView {
     connections: Vec<StoredConnection>,
     tab_container: Entity<TabContainer>,
     db_tree_view: Entity<DbTreeView>,
+    db_filter_popover: Entity<DbFilterPopover>,
     status_msg: Entity<String>,
     is_connected: Entity<bool>,
     _event_handler: Entity<DatabaseEventHandler>,
@@ -176,6 +178,10 @@ impl DatabaseTabView {
         cx: &mut Context<Self>,
     ) -> Self {
         let db_tree_view = cx.new(|cx| DbTreeView::new(&connections, window, cx));
+        let db_filter_popover = cx.new(|cx| DbFilterPopover::new(db_tree_view.clone(), cx));
+        db_tree_view.update(cx, |tree, _| {
+            tree.bind_db_filter_popover(db_filter_popover.downgrade());
+        });
 
         let tab_container =
             cx.new(|cx| TabContainer::new(window, cx).with_background_task_panel(false));
@@ -283,6 +289,7 @@ impl DatabaseTabView {
             connections: connections.clone(),
             tab_container,
             db_tree_view,
+            db_filter_popover,
             status_msg,
             is_connected,
             _event_handler: event_handler,
@@ -1231,7 +1238,8 @@ impl Render for DatabaseTabView {
                                     .child(self.sidebar.clone()),
                             )
                         })
-                        .child(ResizeEventHandler { view }),
+                        .child(ResizeEventHandler { view })
+                        .child(self.db_filter_popover.clone()),
                 )
             })
     }

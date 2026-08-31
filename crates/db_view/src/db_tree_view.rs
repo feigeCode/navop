@@ -9,18 +9,17 @@ use connection_form::credential::resolve_connection_for_runtime;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
-    RenderOnce, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
+    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    UniformListScrollHandle, WeakEntity, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, Selectable, Sizable, Size as ComponentSize,
+    ActiveTheme, ElementExt as _, Icon, IconName, IconSize, Selectable, Sizable,
+    Size as ComponentSize,
     button::{Button, ButtonVariants as _, IconButton},
-    checkbox::Checkbox,
     clipboard::Clipboard,
     content_state::ContentState,
     h_flex,
     input::{Input, InputEvent, InputState},
-    list::{List, ListDelegate, ListState},
     menu::{ContextMenuExt, PopupMenuItem},
     popover::Popover,
     scroll::Scrollbar,
@@ -33,6 +32,7 @@ use tracing::log::{error, info, trace, warn};
 
 // 3. 当前 crate 导入（按模块分组）
 use crate::database_view_plugin::{build_context_menu_for, supports_database_action_for};
+use crate::db_filter_popover::DbFilterPopover;
 use crate::extension_menu::{
     DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
@@ -241,183 +241,6 @@ struct FlatDbEntry {
 }
 
 // ============================================================================
-// DatabaseListItem - 数据库筛选列表项
-// ============================================================================
-
-#[derive(IntoElement)]
-pub struct DatabaseListItem {
-    db_id: String,
-    db_name: String,
-    db_selected: bool,
-    selected: bool,
-    view: Entity<DbTreeView>,
-    connection_id: String,
-}
-
-impl DatabaseListItem {
-    pub fn new(
-        db_id: String,
-        db_name: String,
-        is_selected: bool,
-        selected: bool,
-        view: Entity<DbTreeView>,
-        connection_id: String,
-    ) -> Self {
-        Self {
-            db_id,
-            db_name,
-            db_selected: is_selected,
-            selected,
-            view,
-            connection_id,
-        }
-    }
-}
-
-impl Selectable for DatabaseListItem {
-    fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
-        self
-    }
-
-    fn is_selected(&self) -> bool {
-        self.selected
-    }
-}
-
-impl RenderOnce for DatabaseListItem {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let view_item = self.view.clone();
-        let conn_item = self.connection_id.clone();
-        let db_name_item = self.db_name.clone();
-        let db_name_display = self.db_name.clone();
-        let is_selected = self.db_selected;
-
-        h_flex()
-            .id(SharedString::from(format!("db-item-{}", self.db_id)))
-            .w_full()
-            .px_3()
-            .py_2()
-            .gap_2()
-            .items_center()
-            .cursor_pointer()
-            .rounded(px(4.0))
-            .when(self.selected, |el| el.bg(cx.theme().list_active))
-            .when(!self.selected, |el| {
-                el.hover(|style| style.bg(cx.theme().list_hover))
-            })
-            .on_click(move |_, _, cx| {
-                view_item.update(cx, |this, cx| {
-                    this.toggle_database_selection(&conn_item, &db_name_item, cx);
-                });
-            })
-            .child(
-                Checkbox::new(SharedString::from(format!("db-check-{}", self.db_id)))
-                    .checked(is_selected),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_sm()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(db_name_display),
-            )
-    }
-}
-
-// ============================================================================
-// DatabaseListDelegate - 数据库筛选列表代理
-// ============================================================================
-
-pub struct DatabaseListDelegate {
-    view: Entity<DbTreeView>,
-    connection_id: String,
-    databases: Vec<(String, String)>,
-    filtered_databases: Vec<(String, String)>,
-    selected_index: Option<IndexPath>,
-}
-
-impl DatabaseListDelegate {
-    pub fn new(
-        view: Entity<DbTreeView>,
-        connection_id: String,
-        databases: Vec<(String, String)>,
-    ) -> Self {
-        let filtered_databases = databases.clone();
-        Self {
-            view,
-            connection_id,
-            databases,
-            filtered_databases,
-            selected_index: None,
-        }
-    }
-}
-
-impl ListDelegate for DatabaseListDelegate {
-    type Item = DatabaseListItem;
-
-    fn perform_search(
-        &mut self,
-        query: &str,
-        _window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Task<()> {
-        if query.is_empty() {
-            self.filtered_databases = self.databases.clone();
-        } else {
-            let query_lower = query.to_lowercase();
-            self.filtered_databases = self
-                .databases
-                .iter()
-                .filter(|(_, name)| name.to_lowercase().contains(&query_lower))
-                .cloned()
-                .collect();
-        }
-        cx.notify();
-        Task::ready(())
-    }
-
-    fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.filtered_databases.len()
-    }
-
-    fn render_item(
-        &mut self,
-        ix: IndexPath,
-        _window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Option<Self::Item> {
-        let (db_id, db_name) = self.filtered_databases.get(ix.row)?.clone();
-        let is_selected = self
-            .view
-            .read(cx)
-            .is_database_selected(&self.connection_id, &db_name);
-        let selected = Some(ix) == self.selected_index;
-
-        Some(DatabaseListItem::new(
-            db_id,
-            db_name,
-            is_selected,
-            selected,
-            self.view.clone(),
-            self.connection_id.clone(),
-        ))
-    }
-
-    fn set_selected_index(
-        &mut self,
-        ix: Option<IndexPath>,
-        _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
-    ) {
-        self.selected_index = ix;
-    }
-}
-
-// ============================================================================
 // DbTreeView Events
 // ============================================================================
 
@@ -557,12 +380,8 @@ pub struct DbTreeView {
     search_debouncer: Arc<Debouncer>,
     // 数据库筛选：连接ID -> 选中的数据库ID集合（None 表示全选）
     selected_databases: HashMap<String, Option<HashSet<String>>>,
-    // 数据库筛选搜索词：连接ID -> 搜索词
-    db_filter_search: HashMap<String, String>,
-    // 数据库筛选列表状态：连接ID -> ListState
-    db_filter_list_states: HashMap<String, Entity<ListState<DatabaseListDelegate>>>,
-    // 数据库筛选 Popover 是否打开：连接ID -> bool（受控模式，避免树重建/虚拟化导致 Popover 关闭）
-    db_filter_popover_open: HashMap<String, bool>,
+    // 数据库筛选面板（独立兄弟视图承载，避免输入时整树重建；见 db_filter_popover 模块文档）
+    db_filter_popover: Option<WeakEntity<DbFilterPopover>>,
     // 当前 Tab 跟踪的连接 ID 列表
     tracked_connection_ids: Vec<i64>,
 
@@ -810,9 +629,7 @@ impl DbTreeView {
             search_seq: 0,
             search_debouncer,
             selected_databases: unselected_databases_map,
-            db_filter_search: HashMap::new(),
-            db_filter_list_states: HashMap::new(),
-            db_filter_popover_open: HashMap::new(),
+            db_filter_popover: None,
             tracked_connection_ids,
             _subscriptions: subscriptions,
         }
@@ -958,8 +775,11 @@ impl DbTreeView {
         self.db_nodes.remove(connection_id);
         self.clear_node_all_state(connection_id);
         self.selected_databases.remove(connection_id);
-        self.db_filter_list_states.remove(connection_id);
-        self.db_filter_popover_open.remove(connection_id);
+        if let Some(popover) = self.db_filter_popover.as_ref().and_then(|p| p.upgrade()) {
+            popover.update(cx, |popover, cx| {
+                popover.remove_connection(connection_id, cx);
+            });
+        }
 
         if let Ok(conn_id) = connection_id.parse::<i64>() {
             self.tracked_connection_ids.retain(|&id| id != conn_id);
@@ -1167,6 +987,7 @@ impl DbTreeView {
         }
 
         self.rebuild_tree(cx);
+        self.notify_db_filter_popover(cx);
         self.save_database_filter(connection_id, cx);
     }
 
@@ -1175,6 +996,7 @@ impl DbTreeView {
         self.selected_databases
             .insert(connection_id.to_string(), None);
         self.rebuild_tree(cx);
+        self.notify_db_filter_popover(cx);
         self.save_database_filter(connection_id, cx);
     }
 
@@ -1183,6 +1005,7 @@ impl DbTreeView {
         self.selected_databases
             .insert(connection_id.to_string(), Some(HashSet::new()));
         self.rebuild_tree(cx);
+        self.notify_db_filter_popover(cx);
         self.save_database_filter(connection_id, cx);
     }
 
@@ -1439,41 +1262,6 @@ impl DbTreeView {
                 let all_names: HashSet<&String> = databases.iter().map(|(_, name)| name).collect();
                 set.len() == all_names.len() && set.iter().all(|name| all_names.contains(name))
             }
-        }
-    }
-
-    /// 设置数据库筛选搜索词
-    pub fn set_db_filter_search(
-        &mut self,
-        connection_id: &str,
-        query: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.db_filter_search
-            .insert(connection_id.to_string(), query);
-        cx.notify();
-    }
-
-    /// 获取数据库筛选搜索词
-    pub fn get_db_filter_search(&self, connection_id: &str) -> String {
-        self.db_filter_search
-            .get(connection_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    /// 获取过滤后的数据库列表
-    pub fn get_filtered_databases(&self, connection_id: &str) -> Vec<(String, String)> {
-        let databases = self.get_databases_for_connection(connection_id);
-        let search_query = self.get_db_filter_search(connection_id).to_lowercase();
-
-        if search_query.is_empty() {
-            databases
-        } else {
-            databases
-                .into_iter()
-                .filter(|(_, name)| name.to_lowercase().contains(&search_query))
-                .collect()
         }
     }
 
@@ -1959,75 +1747,19 @@ impl DbTreeView {
         self.rebuild_flat_entries(cx);
     }
 
-    fn render_database_filter_popover(
-        view: &Entity<Self>,
-        connection_id: &str,
-        list_state: &Entity<ListState<DatabaseListDelegate>>,
-        cx: &mut App,
-    ) -> AnyElement {
-        let view_clone = view.clone();
-        let conn_id = connection_id.to_string();
-        let is_all_selected = view.read(cx).is_all_selected(&conn_id);
+    pub fn bind_db_filter_popover(&mut self, popover: WeakEntity<DbFilterPopover>) {
+        self.db_filter_popover = Some(popover);
+    }
 
-        v_flex()
-            .w(px(280.0))
-            .max_h(px(400.0))
-            .gap_2()
-            .p_2()
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .px_1()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child({
-                                let view_select = view_clone.clone();
-                                let conn_select = conn_id.clone();
-                                Checkbox::new("select-all")
-                                    .checked(is_all_selected)
-                                    .on_click(move |_, _, cx| {
-                                        view_select.update(cx, |this, cx| {
-                                            if this.is_all_selected(&conn_select) {
-                                                this.deselect_all_databases(&conn_select, cx);
-                                            } else {
-                                                this.select_all_databases(&conn_select, cx);
-                                            }
-                                        });
-                                    })
-                            })
-                            .child(div().text_sm().child(t!("Common.select_all").to_string())),
-                    )
-                    .child({
-                        let view_clear = view_clone.clone();
-                        let conn_clear = conn_id.clone();
-                        Button::new("clear-filter")
-                            .ghost()
-                            .small()
-                            .label(t!("Common.clear_filter"))
-                            .on_click(move |_, _, cx| {
-                                view_clear.update(cx, |this, cx| {
-                                    this.deselect_all_databases(&conn_clear, cx);
-                                });
-                            })
-                    }),
-            )
-            .child(div().border_t_1().border_color(cx.theme().border))
-            .child(
-                List::new(list_state)
-                    .w_full()
-                    .max_h(px(320.0))
-                    .p(px(8.))
-                    .flex_1()
-                    .w_full()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .rounded(cx.theme().radius),
-            )
-            .into_any_element()
+    fn notify_db_filter_popover(&self, cx: &mut Context<Self>) {
+        let Some(popover) = self
+            .db_filter_popover
+            .as_ref()
+            .and_then(WeakEntity::upgrade)
+        else {
+            return;
+        };
+        popover.update(cx, |popover, cx| popover.refresh_selection(cx));
     }
 
     pub fn active_connection(&mut self, active_conn_id: String, cx: &mut Context<Self>) {
@@ -2722,14 +2454,13 @@ impl DbTreeView {
             None
         };
 
-        // 获取数据库筛选列表状态
-        let db_filter_list = self.db_filter_list_states.get(&node_id).cloned();
-        // 数据库筛选 Popover 是否打开（在闭包外取值，避免闭包捕获 self）
-        let db_filter_popover_open = self
-            .db_filter_popover_open
-            .get(&node_id)
-            .copied()
-            .unwrap_or(false);
+        let db_filter_popover = self
+            .db_filter_popover
+            .as_ref()
+            .and_then(WeakEntity::upgrade);
+        let db_filter_open = db_filter_popover
+            .as_ref()
+            .is_some_and(|popover| popover.read(cx).is_open_for(&node_id));
 
         // 样式
         let selection_bg = cx.theme().sidebar_accent;
@@ -2787,8 +2518,6 @@ impl DbTreeView {
         let node_id_for_click = node_id.clone();
         let node_id_for_double_click = node_id.clone();
         let node_id_for_context = node_id.clone();
-        let view_for_filter = view.clone();
-        let node_id_for_filter = node_id.clone();
 
         // 构建行
         div()
@@ -2896,83 +2625,44 @@ impl DbTreeView {
                             }),
                     )
                     .when_some(db_count, |this, (selected, total)| {
-                        if total > 0 {
-                            let view_open = view_for_filter.clone();
-                            let node_id_open = node_id_for_filter.clone();
+                        let Some(popover) = db_filter_popover.clone().filter(|_| total > 0) else {
+                            return this;
+                        };
+                        let anchor_popover = popover.clone();
+                        let anchor_connection_id = node_id.clone();
+                        let toggle_connection_id = node_id.clone();
 
-                            this.child(
-                                // 使用 node_id 作为稳定 ID，避免树重建/虚拟化导致行号 ix 变化时
-                                // PopoverState 被销毁（ElementId 变了状态即丢，Popover 会自动关闭）
-                                Popover::new(SharedString::from(format!("db-filter-{}", node_id)))
-                                    // 受控模式：即使 PopoverState 因虚拟化被销毁，重建后仍按记录状态重新打开
-                                    .open(db_filter_popover_open)
-                                    .on_open_change(move |open, window, cx| {
-                                        let new_open = *open;
-                                        view_open.update(cx, |this, cx| {
-                                            // 记录 Popover 开关状态（关闭时也会记录，保证受控模式同步）
-                                            this.db_filter_popover_open
-                                                .insert(node_id_open.clone(), new_open);
-                                            if new_open {
-                                                let databases_data = this
-                                                    .get_databases_for_connection(&node_id_open);
-
-                                                if let Some(list_state) =
-                                                    this.db_filter_list_states.get(&node_id_open)
-                                                {
-                                                    list_state.update(cx, |state, _| {
-                                                        let delegate = state.delegate_mut();
-                                                        delegate.databases = databases_data.clone();
-                                                        delegate.filtered_databases =
-                                                            databases_data;
-                                                    });
-                                                } else {
-                                                    let list_state = cx.new(|cx| {
-                                                        ListState::new(
-                                                            DatabaseListDelegate::new(
-                                                                view_open.clone(),
-                                                                node_id_open.clone(),
-                                                                databases_data.clone(),
-                                                            ),
-                                                            window,
-                                                            cx,
-                                                        )
-                                                        .searchable(true)
-                                                    });
-                                                    this.db_filter_list_states
-                                                        .insert(node_id_open.clone(), list_state);
-                                                }
-                                            }
-                                            cx.notify();
-                                        });
-                                    })
-                                    .when_some(db_filter_list.as_ref(), |popover, list| {
-                                        popover.track_focus(&list.focus_handle(cx))
-                                    })
-                                    .trigger(
-                                        Button::new(SharedString::from(format!(
-                                            "db-filter-trigger-{}",
-                                            node_id
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .label(format!("{} of {}", selected, total)),
-                                    )
-                                    .when_some(db_filter_list, |popover, list| {
-                                        let view_content = view_for_filter.clone();
-                                        let node_id_content = node_id_for_filter.clone();
-                                        popover.content(move |_state, _window, cx| {
-                                            Self::render_database_filter_popover(
-                                                &view_content,
-                                                &node_id_content,
-                                                &list,
-                                                cx,
-                                            )
-                                        })
-                                    }),
-                            )
-                        } else {
-                            this
-                        }
+                        this.child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "db-filter-trigger-host-{}",
+                                    node_id
+                                )))
+                                .on_prepaint(move |bounds, _, cx| {
+                                    anchor_popover.update(cx, |popover, _| {
+                                        popover.set_anchor(
+                                            &anchor_connection_id,
+                                            bounds.bottom_left(),
+                                        );
+                                    });
+                                })
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    popover.update(cx, |popover, cx| {
+                                        popover.toggle(&toggle_connection_id, window, cx);
+                                    });
+                                })
+                                .child(
+                                    Button::new(SharedString::from(format!(
+                                        "db-filter-trigger-{}",
+                                        node_id
+                                    )))
+                                    .ghost()
+                                    .small()
+                                    .selected(db_filter_open)
+                                    .label(format!("{} of {}", selected, total)),
+                                ),
+                        )
                     })
                     .when(is_loading, |this| {
                         this.child(

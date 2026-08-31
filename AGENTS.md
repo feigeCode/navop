@@ -478,6 +478,13 @@
 - **验证方式**：`cargo check -p ssh`、`cargo test -p ssh`（覆盖 gex 参数开/关、固定 group1 排在 group-exchange 前、以及 fake server 只声明 `DH_GEX_SHA1 + DH_G1_SHA1` 且 `lookup_dh_gex_group` 固定返回 `DH_GROUP1` 时 legacy 开启连接成功、关闭时报 `No common Kex algorithm`）、`cargo clippy -p ssh --all-targets` 无新增警告；再用真机 DMG 分别连接 2048 位组与 1024 位组设备确认 `Key exchange init failed` 消失。
 - **适用范围**：`crates/ssh/src/ssh.rs::build_russh_client_config` / `legacy_gex_params` / `build_client_preferred_algorithms_with_legacy`，以及任何直接构造 `russh::client::Config` 的 legacy 兼容链路。
 
+- **标题**：GPUI deferred 输入面板不要挂在会频繁重绘的业务 View 子树中
+- **触发信号**：Windows 上 Popover/List 搜索框输入时闪烁、字符无法持续输入或 IME/焦点丢失；日志或测试显示列表 `cx.notify()` 会让承载 trigger 的整棵业务 View 进入重绘。
+- **根因 / 约束**：GPUI 的脏标记沿 dispatch tree 祖先链传播；若 deferred/anchored overlay 的 `ListState` 与输入框仍是树行或大型业务 View 的后代，按键通知会重建该业务子树及 overlay。仅稳定 element id、受控 open 或对业务 View 使用 `Entity::cached(...)` 不能建立可靠失效边界，缓存还可能冻结动态内容。
+- **正确做法**：把面板状态提取为独立 `Entity`，由更稳定的页面宿主作为业务 View 的 sibling 渲染；业务行只保留 trigger、静默锚点同步和 `WeakEntity` 调用。面板自己管理 deferred 注册、backdrop、Escape、焦点恢复和连接清理；筛选 `ListState::notify()` 不得直接通知业务树。
+- **验证方式**：真实 GPUI 测试必须通过 `Root` 承载输入组件，覆盖搜索后面板保持打开、过滤结果更新、连接切换和 deferred 注册成对；结构 contract 保证行内不存在 `Popover`/`ListState` 状态且宿主 sibling 接线存在。不要把 sibling 的共同父级 render 次数误当成业务 View 自身被标脏；关键边界是输入状态不再处于业务 View 的 dispatch 子树中。
+- **适用范围**：`crates/db_view` 数据库树筛选，以及任何位于虚拟列表、树行或大型动态 View 中的 GPUI deferred 搜索/输入面板。
+
 - **标题**：MySQL 结果 collation 63 不等于字段一定是二进制
 - **触发信号**：数据库名、表名、字符集、排序规则等文本同时显示为 `0x...`；MySQL 列包的 `character_set()` 为 63，或会话 `@@character_set_results` 为 `binary`。
 - **根因 / 约束**：MySQL 列包中的 `character_set` 实际是 collation id。63 既用于 `BINARY` / `VARBINARY` / `BLOB`，也用于 `character_set_results=binary` 下未转换的文本结果；`BINARY_FLAG` 还可能出现在 `VARCHAR/TEXT ... BINARY` 上，因此任意 SQL 结果仅靠 type、flag、id 或“字节看起来像 UTF-8”都不能无歧义恢复源字段语义与编码。
