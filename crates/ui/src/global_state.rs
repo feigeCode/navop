@@ -46,13 +46,13 @@ impl GlobalState {
     }
 
     /// Register a popover that uses deferred rendering as open.
-    pub fn register_deferred_popover(&mut self, focus_handle: &FocusHandle) {
+    pub(crate) fn register_deferred_popover(&mut self, focus_handle: &FocusHandle) {
         self.open_deferred_popovers
             .insert(format!("{focus_handle:?}").into());
     }
 
     /// Unregister a popover when it closes.
-    pub fn unregister_deferred_popover(&mut self, focus_handle: &FocusHandle) {
+    pub(crate) fn unregister_deferred_popover(&mut self, focus_handle: &FocusHandle) {
         let element_id: ElementId = format!("{focus_handle:?}").into();
         self.open_deferred_popovers.remove(&element_id);
     }

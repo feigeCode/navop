@@ -8,15 +8,13 @@
 use std::collections::HashMap;
 
 use gpui::{AppContext, Context, Entity, FocusHandle, Focusable, Pixels, Point, Window, px};
-use gpui_component::{GlobalState, list::ListState};
+use gpui_component::list::ListState;
 
 use crate::{db_filter_list::DatabaseListDelegate, db_tree_view::DbTreeView};
 
 pub(super) const PANEL_WIDTH: Pixels = px(280.0);
 pub(super) const PANEL_MAX_HEIGHT: Pixels = px(400.0);
 pub(super) const LIST_MAX_HEIGHT: Pixels = px(320.0);
-pub(super) const WINDOW_MARGIN: Pixels = px(8.0);
-pub(super) const KEY_CONTEXT: &str = "Popover";
 
 // ============================================================================
 // DbFilterPopover - 独立承载的数据库筛选面板
@@ -26,28 +24,27 @@ pub struct DbFilterPopover {
     pub(super) tree_view: Entity<DbTreeView>,
     /// 当前打开的连接 ID（None 表示面板关闭）
     pub(super) open_connection: Option<String>,
-    registered_deferred: bool,
     /// 每个连接触发按钮的锚点（窗口坐标，由行内 trigger 的 on_prepaint 静默同步）
     anchors: HashMap<String, Point<Pixels>>,
     /// 面板锚点（打开时从 anchors 快照）
     pub(super) anchor: Point<Pixels>,
+    /// sibling 宿主在窗口中的原点，用于把树行锚点转换为本地绝对坐标。
+    pub(super) host_origin: Point<Pixels>,
     /// 每个连接的筛选列表状态
     pub(super) list_states: HashMap<String, Entity<ListState<DatabaseListDelegate>>>,
-    focus_handle: FocusHandle,
-    /// 打开前的焦点，关闭时恢复
+    /// 打开前的焦点，关闭时恢复。
     previous_focus: Option<FocusHandle>,
 }
 
 impl DbFilterPopover {
-    pub fn new(tree_view: Entity<DbTreeView>, cx: &mut Context<Self>) -> Self {
+    pub fn new(tree_view: Entity<DbTreeView>, _cx: &mut Context<Self>) -> Self {
         Self {
             tree_view,
             open_connection: None,
-            registered_deferred: false,
             anchors: HashMap::new(),
             anchor: Point::default(),
+            host_origin: Point::default(),
             list_states: HashMap::new(),
-            focus_handle: cx.focus_handle(),
             previous_focus: None,
         }
     }
@@ -67,6 +64,13 @@ impl DbFilterPopover {
         self.anchors.insert(connection_id.to_string(), anchor);
     }
 
+    pub(super) fn set_host_origin(&mut self, origin: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.host_origin != origin {
+            self.host_origin = origin;
+            cx.notify();
+        }
+    }
+
     /// 行内触发按钮点击：已打开则关闭，否则打开（或切换到其他连接）。
     pub fn toggle(&mut self, connection_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_open_for(connection_id) {
@@ -80,13 +84,11 @@ impl DbFilterPopover {
         let Some(connection_id) = self.open_connection.take() else {
             return;
         };
-        self.unregister_deferred(cx);
         if let Some(previous) = self.previous_focus.take() {
             let panel_focused = self
                 .list_states
                 .get(&connection_id)
-                .map(|list| list.focus_handle(cx).contains_focused(window, cx))
-                .unwrap_or(false);
+                .is_some_and(|list| list.focus_handle(cx).contains_focused(window, cx));
             if panel_focused {
                 previous.focus(window, cx);
             }
@@ -100,35 +102,20 @@ impl DbFilterPopover {
         self.list_states.remove(connection_id);
         if self.is_open_for(connection_id) {
             self.open_connection = None;
-            self.unregister_deferred(cx);
             self.previous_focus = None;
             self.notify_panel_and_tree(cx);
         }
     }
 
     fn open(&mut self, connection_id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.previous_focus = window.focused(cx);
+        if self.open_connection.is_none() {
+            self.previous_focus = window.focused(cx);
+        }
         self.anchor = self.anchors.get(connection_id).copied().unwrap_or_default();
         self.open_connection = Some(connection_id.to_string());
-
         let list_state = self.ensure_list_state(connection_id, window, cx);
-        self.register_deferred(cx);
         list_state.focus_handle(cx).focus(window, cx);
         self.notify_panel_and_tree(cx);
-    }
-
-    fn register_deferred(&mut self, cx: &mut Context<Self>) {
-        if !self.registered_deferred {
-            GlobalState::global_mut(cx).register_deferred_popover(&self.focus_handle);
-            self.registered_deferred = true;
-        }
-    }
-
-    fn unregister_deferred(&mut self, cx: &mut Context<Self>) {
-        if self.registered_deferred {
-            GlobalState::global_mut(cx).unregister_deferred_popover(&self.focus_handle);
-            self.registered_deferred = false;
-        }
     }
 
     /// 获取或创建该连接的筛选列表；重开时用最新数据库列表刷新内容。

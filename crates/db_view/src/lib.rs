@@ -48,6 +48,7 @@ mod table_copy_menu;
 mod table_data;
 pub mod table_data_tab;
 pub mod table_designer_tab;
+mod window_positioned_popover;
 
 pub use ai_chat_view::{AskAiButton, emit_ask_ai_event, init_ask_ai_notifier};
 pub use common::DatabaseFormEvent;

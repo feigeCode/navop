@@ -520,6 +520,70 @@ impl DatabaseTabView {
             .into_any_element()
     }
 
+    fn render_embedded_content(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let border_color = cx.theme().border;
+        let tree_panel_size = self.tree_panel_size;
+        let view = cx.entity();
+        let bounds_view = view.clone();
+
+        h_flex()
+            .size_full()
+            .on_prepaint(move |bounds, _, cx| {
+                bounds_view.update(cx, |view, _| view.bounds = bounds);
+            })
+            .child(
+                div()
+                    .relative()
+                    .h_full()
+                    .w(tree_panel_size)
+                    .flex_shrink_0()
+                    .border_r_1()
+                    .border_color(border_color)
+                    .child(self.db_tree_view.clone())
+                    .child(self.render_tree_resize_handle(window, cx)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .child(self.render_workspace_content(cx)),
+            )
+            .child(self.render_database_tools_sidebar(window, cx))
+            .child(ResizeEventHandler { view })
+            .into_any_element()
+    }
+
+    fn render_database_tools_sidebar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.sidebar.read(cx).is_panel_visible() {
+            return div()
+                .relative()
+                .h_full()
+                .w(self.sidebar_panel_size)
+                .flex_shrink_0()
+                .overflow_hidden()
+                .child(self.render_sidebar_resize_handle(window, cx))
+                .child(self.sidebar.clone())
+                .into_any_element();
+        }
+
+        div()
+            .h_full()
+            .w(TOOLBAR_WIDTH)
+            .flex_shrink_0()
+            .overflow_hidden()
+            .child(self.sidebar.clone())
+            .into_any_element()
+    }
+
     fn render_workspace_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let items = database_toolbar_items()
             .into_iter()
@@ -1154,94 +1218,38 @@ mod tests {
     #[test]
     fn database_tab_captures_rendered_bounds_instead_of_window_bounds() {
         let source = include_str!("database_tab.rs");
-        let render_implementation = source
-            .rsplit_once("impl Render for DatabaseTabView")
-            .expect("database tab render implementation")
-            .1;
+        let embedded_content = source
+            .split_once("fn render_embedded_content")
+            .expect("embedded database layout helper")
+            .1
+            .split_once("fn render_database_tools_sidebar")
+            .expect("database tools sidebar helper")
+            .0;
 
-        assert!(render_implementation.contains(".on_prepaint(move |bounds, _, cx|"));
-        assert!(render_implementation.contains("view.bounds = bounds"));
-        assert!(!render_implementation.contains("window.bounds()"));
+        assert!(embedded_content.contains(".on_prepaint(move |bounds, _, cx|"));
+        assert!(embedded_content.contains("view.bounds = bounds"));
+        assert!(!embedded_content.contains("window.bounds()"));
     }
 }
 
 impl Render for DatabaseTabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_connected_flag = *self.is_connected.read(cx);
-        let view = cx.entity().clone();
-        let sidebar_visible = self.sidebar.read(cx).is_panel_visible();
-        let sidebar_panel_size = self.sidebar_panel_size;
-
-        if is_connected_flag && self.sidebar_render_mode == DatabaseSidebarRenderMode::External {
-            return div()
-                .track_focus(&self.focus_handle)
-                .size_full()
-                .child(self.render_workspace_content(cx));
-        }
+        let uses_external_sidebar = self.sidebar_render_mode == DatabaseSidebarRenderMode::External;
 
         div()
             .track_focus(&self.focus_handle)
             .size_full()
+            .when(is_connected_flag && uses_external_sidebar, |el| {
+                el.child(self.render_workspace_content(cx))
+            })
             .when(!is_connected_flag, |el: gpui::Div| {
                 el.child(self.render_connection_status(cx))
             })
-            .when(is_connected_flag, |el: gpui::Div| {
-                let border_color = cx.theme().border;
-                let tree_panel_size = self.tree_panel_size;
-                let bounds_view = view.clone();
-
-                el.child(
-                    h_flex()
-                        .size_full()
-                        .on_prepaint(move |bounds, _, cx| {
-                            bounds_view.update(cx, |view, _| {
-                                view.bounds = bounds;
-                            });
-                        })
-                        .child(
-                            div()
-                                .relative()
-                                .h_full()
-                                .w(tree_panel_size)
-                                .flex_shrink_0()
-                                .border_r_1()
-                                .border_color(border_color)
-                                .child(self.db_tree_view.clone())
-                                .child(self.render_tree_resize_handle(window, cx)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .h_full()
-                                .min_w_0()
-                                .child(self.render_workspace_content(cx)),
-                        )
-                        .when(sidebar_visible, |this| {
-                            this.child(
-                                div()
-                                    .relative()
-                                    .h_full()
-                                    .w(sidebar_panel_size)
-                                    .flex_shrink_0()
-                                    .overflow_hidden()
-                                    .child(self.render_sidebar_resize_handle(window, cx))
-                                    .child(self.sidebar.clone()),
-                            )
-                        })
-                        .when(!sidebar_visible, |this| {
-                            this.child(
-                                div()
-                                    .h_full()
-                                    .w(TOOLBAR_WIDTH)
-                                    .flex_shrink_0()
-                                    .overflow_hidden()
-                                    .child(self.sidebar.clone()),
-                            )
-                        })
-                        .child(ResizeEventHandler { view })
-                        .child(self.db_filter_popover.clone()),
-                )
+            .when(is_connected_flag && !uses_external_sidebar, |el| {
+                el.child(self.render_embedded_content(window, cx))
             })
+            .child(self.db_filter_popover.clone())
     }
 }
 
