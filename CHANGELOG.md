@@ -4,36 +4,6 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
-## [v0.15.2] - 2026-08-31
-
-#### 更新内容
-
-- 设置入口统一迁移到全局标签栏右上角，位于后台任务入口之后；现代主页与传统主页不再重复显示设置入口。
-- SQL 结果表格编辑体验增强：日期、时间和数值列会根据结果集与表结构元数据使用对应的编辑控件，非 MySQL 数据库无需为识别字段类型额外查询表结构。
-
-#### 修复与优化
-
-- 修复 Windows 上数据库树筛选弹窗输入时闪烁、无法持续输入或丢失 IME/焦点的问题；筛选面板改为独立宿主，并完善外部点击、Escape、焦点恢复与连接切换行为。
-- 修复 MySQL 在 `character_set_results=binary` 等环境下将数据库名、表名及其他文本结果误显示为十六进制的问题；连接后显式协商结果字符集，同时继续无损保留真实二进制数据。
-- 修复 Redis 树视图的搜索、刷新和添加键等图标在暗黑模式下显示为黑色的问题，纯色图标现在正确跟随主题颜色。
-
-国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.15.2) 下载桌面端安装包
-
----
-
-#### What's New
-
-- The Settings entry is now consistently placed at the top-right of the global tab bar, after Background Tasks; it is no longer duplicated in the modern or classic home navigation.
-- SQL result editing is improved: date, time, and numeric columns now use type-appropriate editors based on result-set and schema metadata, without extra schema queries just to identify types for non-MySQL databases.
-
-#### Fixes and Improvements
-
-- Fixed the database-tree filter popover flickering, rejecting continued input, or losing IME/focus on Windows; the filter panel now uses an independent host with consistent outside-click, Escape, focus restoration, and connection-switching behavior.
-- Fixed MySQL database names, table names, and other text results being displayed as hexadecimal under environments such as `character_set_results=binary`; result character sets are now negotiated explicitly while genuine binary data remains lossless.
-- Fixed Redis tree search, refresh, and add-key icons rendering black in dark mode; monochrome icons now correctly follow the active theme color.
-
-**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.15.1...v0.15.2
-
 ## [v0.15.1] - 2026-08-30
 
 #### 更新内容
