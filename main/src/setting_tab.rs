@@ -3040,8 +3040,8 @@ const WINDOW_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
-        keys_macos: &["ctrl-d"],
-        keys_other: &["ctrl-d"],
+        keys_macos: &["cmd-w"],
+        keys_other: &["ctrl-shift-w"],
         label_key: "Settings.Shortcuts.close_panel",
         action_id: Some(action_id::WINDOW_CLOSE_ACTIVE_WINDOW),
         system_hotkey: false,
@@ -3771,8 +3771,8 @@ mod tests {
 
     use super::{
         AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, LocalTerminalProfileKind,
-        ProxyType, build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
-        local_terminal_profile_options, master_key_setting_enabled,
+        ProxyType, WINDOW_SHORTCUTS, build_app_http_client, builtin_monospace_font_options,
+        is_supported_font_file, local_terminal_profile_options, master_key_setting_enabled,
         merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
         personal_sync_status_label, personal_sync_status_view_model, team_key_change_completed,
         team_key_refresh_success_message, team_key_rotation_inputs_valid,
@@ -3780,6 +3780,22 @@ mod tests {
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn close_window_shortcut_does_not_reserve_terminal_ctrl_d() {
+        let shortcut = WINDOW_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id
+                    == Some(one_core::keybindings::action_id::WINDOW_CLOSE_ACTIVE_WINDOW)
+            })
+            .expect("close window shortcut");
+
+        assert_eq!(shortcut.keys_macos, &["cmd-w"]);
+        assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
+        assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
 
     #[test]
     fn master_key_setting_uses_a_safe_portable_default_and_preserves_installed_behavior() {

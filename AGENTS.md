@@ -499,6 +499,13 @@
 - **验证方式**：`go vet ./internal/... && go test ./internal/...`；用 `streamingRows` fake driver（可注入 typeNames）覆盖 VARCHAR/DECIMAL/DATETIME/JSON/VARBINARY/BLOB、非 UTF-8 文本、非法 JSON、NULL、UUID；`bash scripts/install-local-drivers.sh oceanbase` 本地安装后连接 OceanBase MySQL 租户验证文本列显示。
 - **适用范围**：`navop-extensions/internal/dbipc/{query,server}.go` 及所有共享 dbipc 的 Go IPC 驱动（oceanbase/dm/kingbase/oracle-go 等）。
 
+- **标题**：终端标准控制键不得被无上下文的全局快捷键占用
+- **触发信号**：`Ctrl+D`、`Ctrl+W` 等按键的终端编码测试正常，但真实终端没有收到 EOT、删词等控制字符，或按键触发了关闭窗口等应用 action。
+- **根因 / 约束**：GPUI 的无上下文全局 `KeyBinding` 可能在终端 `on_key_down` 前分派 action；即使终端键码转换和 PTY 写入正确，冲突按键仍不会到达终端。`Ctrl+D`、`Ctrl+W`、`Ctrl+C`、`Ctrl+Z` 等是 shell/TTY 标准控制键，不适合作为终端聚焦时仍生效的全局默认快捷键。
+- **正确做法**：窗口、页签和面板 action 优先使用不与终端控制字符冲突的组合，或绑定到排除 `TerminalView` 的明确 key context；运行时默认值、设置页展示和可刷新绑定必须使用同一默认来源。
+- **验证方式**：回归测试同时断言全局默认绑定不包含目标控制键、设置页元数据与运行时一致，并运行 `terminal_view` 键码测试确认目标按键仍编码为预期控制字节。
+- **适用范围**：`main/src/onetcli_app.rs`、`main/src/setting_tab.rs`、`crates/terminal_view/src/view/keybindings.rs` 与所有无 context 的 GPUI 全局快捷键。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

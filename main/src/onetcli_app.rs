@@ -799,7 +799,7 @@ fn default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
 }
 
 fn close_active_window_default_shortcut() -> &'static str {
-    default_shortcut("cmd-w", "ctrl-d")
+    default_shortcut("cmd-w", "ctrl-shift-w")
 }
 
 const LOG_FILE_NAME: &str = "onetcli.log";
@@ -2076,18 +2076,24 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("\n}\n\n").next())
             .expect("close_active_window source");
+        let close_shortcut = source
+            .split("fn close_active_window_default_shortcut()")
+            .nth(1)
+            .and_then(|source| source.split("\n}\n").next())
+            .expect("close shortcut source");
 
         assert!(keybindings.contains("action_id::WINDOW_CLOSE_ACTIVE_WINDOW"));
         assert!(keybindings.contains("CloseActiveWindow"));
         assert!(keybindings.contains("close_active_window_default_shortcut()"));
         assert!(refreshable_keybindings.contains("close_active_window_default_shortcut()"));
-        assert!(source.contains(r#"default_shortcut("cmd-w", "ctrl-d")"#));
+        assert!(close_shortcut.contains(r#"default_shortcut("cmd-w", "ctrl-shift-w")"#));
+        assert!(!close_shortcut.contains("ctrl-d"));
         assert_eq!(
             close_active_window_default_shortcut(),
             if cfg!(target_os = "macos") {
                 "cmd-w"
             } else {
-                "ctrl-d"
+                "ctrl-shift-w"
             }
         );
         assert!(!keybindings.contains("ClosePanel"));
