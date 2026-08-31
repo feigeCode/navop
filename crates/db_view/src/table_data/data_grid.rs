@@ -32,8 +32,8 @@ use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
     BinaryCell, ColumnInfo, DatabasePlugin, DbManager, ExecOptions, GlobalDbState, IndexInfo,
-    QueryResult, SqlFormatOptions, SqlResult, TableCellChange, TableCellValue, TableDataRequest,
-    TableRowChange, TableSaveRequest, binary_value::format_binary_input,
+    QueryColumnMeta, QueryResult, SqlFormatOptions, SqlResult, TableCellChange, TableCellValue,
+    TableDataRequest, TableRowChange, TableSaveRequest, binary_value::format_binary_input,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
@@ -266,6 +266,26 @@ fn query_result_for_export(results: Vec<SqlResult>) -> Result<ExportPayload, Str
         SqlResult::Exec(_) => Err("statement did not return a result set".to_string()),
         SqlResult::Error(error) => Err(error.message),
     }
+}
+
+/// 将结果集自带的列元数据转换为表格列元数据。
+///
+/// 结果集在驱动执行时已携带每列的 `db_type`，列序天然与结果列一致，
+/// 无需额外查询表结构即可完成字段类型（日期、数值等）识别。
+fn column_infos_from_query_meta(query_meta: &[QueryColumnMeta]) -> Vec<ColumnInfo> {
+    query_meta
+        .iter()
+        .map(|meta| ColumnInfo {
+            name: meta.name.clone(),
+            data_type: meta.db_type.clone(),
+            is_nullable: meta.nullable,
+            is_primary_key: false,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+        })
+        .collect()
 }
 
 fn notify_export_failure(
@@ -855,6 +875,19 @@ impl DataGrid {
         });
     }
 
+    /// 快路径：SQL 结果页签直接使用结果集自带的列元数据。
+    ///
+    /// 结果集在驱动执行时已携带每列的 `db_type`，无需额外查询表结构即可完成
+    /// 日期/数值等字段类型识别。仅当列类型需要在结果列上重算时（见
+    /// [`DataGrid::load_column_meta_for_sql_result`]）才需要慢路径的表结构查询。
+    pub fn set_sql_result_column_meta(&self, query_meta: Vec<QueryColumnMeta>, cx: &mut App) {
+        let meta = column_infos_from_query_meta(&query_meta);
+        self.table.update(cx, |state, cx| {
+            state.delegate_mut().set_column_meta(meta);
+            cx.notify();
+        });
+    }
+
     pub fn load_column_meta_for_sql_result(&self, cx: &mut App) {
         if self.config.usage != DataGridUsage::SqlResult
             || self.config.sql.is_empty()
@@ -1086,21 +1119,11 @@ impl DataGrid {
                             (columns, rows, Vec::new(), query_result.binary_cells.clone())
                         };
 
-                    let column_meta: Vec<ColumnInfo> = query_result
-                        .column_meta
-                        .iter()
-                        .filter(|meta| meta.name != "__rowid__")
-                        .map(|meta| ColumnInfo {
-                            name: meta.name.clone(),
-                            data_type: meta.db_type.clone(),
-                            is_nullable: meta.nullable,
-                            is_primary_key: false,
-                            default_value: None,
-                            comment: None,
-                            charset: None,
-                            collation: None,
-                        })
-                        .collect();
+                    let column_meta: Vec<ColumnInfo> =
+                        column_infos_from_query_meta(&query_result.column_meta)
+                            .into_iter()
+                            .filter(|col| col.name != "__rowid__")
+                            .collect();
 
                     cx.update(|cx| {
                         if !data_generation_is_current(&data_generation, expected_generation) {
@@ -1626,6 +1649,9 @@ impl DataGrid {
         let table = self.table.clone();
         let table_name = self.config.table_name.clone();
         let editable = self.config.editable;
+        let need_authoritative_meta = self.config.database_type == DatabaseType::MySQL
+            && self.config.schema_metadata_safe
+            && !self.config.table_name.is_empty();
 
         cx.spawn(async move |cx: &mut AsyncApp| {
             let result: Result<(SqlResult, Option<Vec<ColumnInfo>>), anyhow::Error> = async {
@@ -1638,7 +1664,7 @@ impl DataGrid {
                         None,
                     )
                     .await?;
-                if editable {
+                if editable && need_authoritative_meta {
                     let column_meta = list_columns_direct_on_runtime(
                         cx,
                         global_state.clone(),
@@ -1696,6 +1722,12 @@ impl DataGrid {
                                     binary_cells,
                                     cx,
                                 );
+                                // 快路径：结果集自带的列类型直接可用
+                                state
+                                    .delegate_mut()
+                                    .set_column_meta(column_infos_from_query_meta(
+                                        &query_result.column_meta,
+                                    ));
                                 if let Some(columns) = column_meta
                                     && let Err(error) = state
                                         .delegate_mut()
@@ -3320,14 +3352,14 @@ pub fn notification(cx: &mut App, error: String) {
 mod tests {
     use super::{
         DataGrid, ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
-        build_large_text_editor_title, collect_delete_row_indices, data_generation_is_current,
-        query_result_for_export, resolve_large_text_editor_route, result_set_export_exec_options,
-        table_has_unsaved_changes,
+        build_large_text_editor_title, collect_delete_row_indices, column_infos_from_query_meta,
+        data_generation_is_current, query_result_for_export, resolve_large_text_editor_route,
+        result_set_export_exec_options, table_has_unsaved_changes,
     };
     use crate::table_data::results_delegate::{CellChange, RowChange};
     use db::{
-        BinaryCell, ColumnInfo, DbManager, ExecResult, QueryResult, SqlErrorInfo, SqlResult,
-        TableCellValue, TableRowChange,
+        BinaryCell, ColumnInfo, DbManager, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo,
+        SqlResult, TableCellValue, TableRowChange,
     };
     use gpui::SharedString;
     use one_core::settings::LargeTextCellEditorOpenMode;
@@ -3346,6 +3378,32 @@ mod tests {
         generation.fetch_add(1, Ordering::AcqRel);
         assert!(!data_generation_is_current(&generation, 7));
         assert!(data_generation_is_current(&generation, 8));
+    }
+
+    #[test]
+    fn column_infos_from_query_meta_preserves_result_order_and_types() {
+        // 结果集自带列元数据必须按结果列序映射，并保留 db_type 以识别时间列。
+        let column_infos = column_infos_from_query_meta(&[
+            QueryColumnMeta::new("name", "VARCHAR(100)"),
+            QueryColumnMeta::new("created_at", "DATE"),
+            QueryColumnMeta::new("updated_at", "DATETIME"),
+            QueryColumnMeta::new("started_at", "TIME"),
+            QueryColumnMeta::new("amount", "DECIMAL(10,2)"),
+        ]);
+
+        assert_eq!(
+            column_infos
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["name", "created_at", "updated_at", "started_at", "amount"]
+        );
+        assert_eq!(column_infos[1].data_type, "DATE");
+        assert_eq!(column_infos[2].data_type, "DATETIME");
+        assert_eq!(column_infos[3].data_type, "TIME");
+        assert!(!column_infos[0].is_primary_key);
+        assert_eq!(column_infos[0].is_nullable, true);
+        assert_eq!(column_infos[0].charset, None);
     }
 
     fn sample_export_input() -> (Vec<Vec<Option<String>>>, Vec<SharedString>, TableMetadata) {

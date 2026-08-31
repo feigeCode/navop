@@ -426,17 +426,17 @@ impl EditorTableDelegate {
         &mut self,
         meta: Vec<ColumnInfo>,
     ) -> Result<(), QueryResultNormalizationError> {
-        if self.database_type != DatabaseType::MySQL {
-            self.set_column_meta(meta);
-            return Ok(());
-        }
-
         let result_columns = self
             .columns
             .iter()
             .map(|column| column.key.to_string())
             .collect::<Vec<_>>();
         let projected_meta = project_schema_columns(&result_columns, &meta)?;
+
+        if self.database_type != DatabaseType::MySQL {
+            self.set_column_meta(projected_meta);
+            return Ok(());
+        }
         let mut normalized = QueryResult {
             sql: String::new(),
             columns: result_columns,
@@ -3113,7 +3113,7 @@ mod tests {
         binary_download_file_name, binary_edit_values_equal, normalize_row_search_query,
         normalize_sort_identifier, parse_primary_order_by_clause, row_matches_search_query,
     };
-    use db::{ColumnInfo, TableCellValue, binary_value::parse_binary_input};
+    use db::{ColumnInfo, FieldType, TableCellValue, binary_value::parse_binary_input};
     use gpui::SharedString;
     use one_core::storage::DatabaseType;
     use one_ui::edit_table::{Column, ColumnSort, FilterValueKey};
@@ -3309,6 +3309,68 @@ mod tests {
                 None
             },
         }
+    }
+
+    fn non_mysql_column(name: &str, data_type: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: name != "id",
+            is_primary_key: name == "id",
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+        }
+    }
+
+    #[test]
+    fn non_mysql_reconcile_projects_schema_to_result_column_order() {
+        // SQL 结果列序与表 schema 不同（投影/重排）时，非 MySQL 也必须按结果列对齐，
+        // 否则日期等字段类型会错位，日期选择器无法识别。
+        let mut delegate = EditorTableDelegate {
+            columns: vec![
+                Column::new("created_at", "created_at"),
+                Column::new("name", "name"),
+            ],
+            original_rows: vec![vec![
+                Some("2024-01-01".to_string()),
+                Some("Ada".to_string()),
+            ]],
+            rows: vec![vec![
+                Some("2024-01-01".to_string()),
+                Some("Ada".to_string()),
+            ]],
+            row_index_map: HashMap::from([(0, 0)]),
+            database_type: DatabaseType::SQLite,
+            ..test_delegate(vec![])
+        };
+
+        delegate
+            .reconcile_binary_cells_with_column_meta(vec![
+                non_mysql_column("id", "INTEGER"),
+                non_mysql_column("name", "VARCHAR(100)"),
+                non_mysql_column("created_at", "DATE"),
+            ])
+            .unwrap();
+
+        assert_eq!(delegate.get_field_type(0), FieldType::Date);
+        assert_eq!(delegate.get_field_type(1), FieldType::Text);
+        assert_eq!(delegate.column_meta[0].name, "created_at");
+        assert_eq!(delegate.column_meta[1].name, "name");
+    }
+
+    #[test]
+    fn non_mysql_reconcile_errors_when_result_column_missing_from_schema() {
+        let mut delegate = test_delegate(vec![vec![Some("x".to_string())]]);
+        delegate.database_type = DatabaseType::PostgreSQL;
+        delegate.columns = vec![Column::new("computed", "computed")];
+
+        let result = delegate
+            .reconcile_binary_cells_with_column_meta(vec![non_mysql_column("id", "INTEGER")]);
+
+        assert!(result.is_err());
+        assert!(delegate.column_meta.is_empty());
     }
 
     #[test]

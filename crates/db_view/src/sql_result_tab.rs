@@ -922,6 +922,7 @@ impl SqlResultTabContainer {
                         query_result.binary_cells.clone(),
                         cx,
                     );
+                    this.set_sql_result_column_meta(query_result.column_meta.clone(), cx);
                     this.load_column_meta_for_sql_result(cx);
                 });
 
