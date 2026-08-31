@@ -1,7 +1,11 @@
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, Value, consts::ColumnType, prelude::*};
+use mysql_async::{
+    Conn, Opts, OptsBuilder, SslOpts, Value,
+    consts::{ColumnFlags, ColumnType},
+    prelude::*,
+};
 use mysql_common::collations::{Collation, CollationId};
 use one_core::storage::DbConnectionConfig;
 use std::path::PathBuf;
@@ -39,9 +43,14 @@ struct MysqlResultEncoding {
 }
 
 impl MysqlDbConnection {
+    const DEFAULT_MYSQL_CHARSET: &str = "utf8mb4";
+    const LEGACY_MYSQL_CHARSET: &str = "utf8";
+    const MYSQL_UTF8MB4_MIN_VERSION: (u16, u16, u16) = (5, 5, 3);
+
     /// MySQL's column packet calls this field `character_set`, but it carries
-    /// the collation ID. Collation 63 is the binary pseudo-collation used by
-    /// BINARY, VARBINARY, and binary BLOB values.
+    /// the collation ID. Collation 63 is also used when a server sends text
+    /// through `character_set_results=binary`; `BINARY_FLAG` distinguishes
+    /// semantic byte columns from that result-encoding choice.
     const MYSQL_BINARY_COLLATION_ID: u16 = 63;
 
     pub fn new(config: DbConnectionConfig) -> Self {
@@ -95,25 +104,44 @@ impl MysqlDbConnection {
         Some(ssl_opts)
     }
 
-    fn build_init_commands(config: &DbConnectionConfig) -> Result<Vec<String>, DbError> {
-        let charset = config
+    fn configured_charset(config: &DbConnectionConfig) -> Option<&str> {
+        config
             .get_param("charset")
             .map(|value| value.trim())
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
+    }
+
+    fn session_charset(config: &DbConnectionConfig, server_version: (u16, u16, u16)) -> &str {
+        Self::configured_charset(config).unwrap_or_else(|| {
+            if server_version >= Self::MYSQL_UTF8MB4_MIN_VERSION {
+                Self::DEFAULT_MYSQL_CHARSET
+            } else {
+                Self::LEGACY_MYSQL_CHARSET
+            }
+        })
+    }
+
+    fn build_init_commands(
+        config: &DbConnectionConfig,
+        server_version: (u16, u16, u16),
+    ) -> Result<Vec<String>, DbError> {
+        let configured_charset = Self::configured_charset(config);
         let collation = config
             .get_param("collation")
             .map(|value| value.trim())
             .filter(|value| !value.is_empty());
 
-        if charset.is_none() && collation.is_none() {
-            return Ok(Vec::new());
+        if configured_charset.is_none() && collation.is_some() {
+            return Err(DbError::connection(
+                "collation requires charset for MySQL connection".to_string(),
+            ));
         }
-
-        let charset = charset.ok_or_else(|| {
-            DbError::connection("collation requires charset for MySQL connection".to_string())
-        })?;
+        let charset = Self::session_charset(config, server_version);
 
         Self::validate_mysql_identifier("charset", charset)?;
+        if configured_charset.is_none() {
+            return Ok(vec![format!("SET character_set_results = {charset}")]);
+        }
         let mut command = format!("SET NAMES {}", charset);
 
         if let Some(collation) = collation {
@@ -243,42 +271,52 @@ impl MysqlDbConnection {
             );
         }
 
-        if Self::is_binary_wire_value(column.column_type(), column.character_set()) {
+        if Self::is_binary_wire_value(column.column_type(), column.flags(), column.character_set())
+        {
             let display = Some(Self::format_as_hex(&bytes));
             return (display, Some(bytes));
         }
 
         if column.column_type() == ColumnType::MYSQL_TYPE_JSON {
-            if std::str::from_utf8(&bytes).is_ok() {
-                return (
-                    Some(
-                        String::from_utf8(bytes)
-                            .expect("MySQL JSON bytes were validated before decoding"),
-                    ),
-                    None,
-                );
-            }
-
-            let display = Some(Self::format_as_hex(&bytes));
-            return (display, Some(bytes));
+            return Self::extract_json_query_cell(bytes);
         }
 
         if Self::is_character_wire_type(column.column_type()) {
-            let encoding = Self::result_encoding(column.character_set());
-            if let Some(decoder) = encoding
-                .charset
-                .as_deref()
-                .and_then(crate::query_result_normalization::mysql_text_decoder_for_charset)
-                .filter(|decoder| decoder.is_valid(&bytes))
-            {
-                return (Some(decoder.decode_validated(bytes)), None);
-            }
-
-            let display = Some(Self::format_as_hex(&bytes));
-            return (display, Some(bytes));
+            return Self::extract_character_query_cell(bytes, column);
         }
 
         (Some(Self::format_bytes(&bytes)), None)
+    }
+
+    fn extract_json_query_cell(bytes: Vec<u8>) -> (Option<String>, Option<Vec<u8>>) {
+        match String::from_utf8(bytes) {
+            Ok(text) => (Some(text), None),
+            Err(error) => {
+                let bytes = error.into_bytes();
+                (Some(Self::format_as_hex(&bytes)), Some(bytes))
+            }
+        }
+    }
+
+    fn extract_character_query_cell(
+        bytes: Vec<u8>,
+        column: &mysql_async::Column,
+    ) -> (Option<String>, Option<Vec<u8>>) {
+        let decoder = Self::column_text_decoder(column);
+        if let Some(decoder) = decoder.filter(|decoder| decoder.is_valid(&bytes)) {
+            return (Some(decoder.decode_validated(bytes)), None);
+        }
+        (Some(Self::format_as_hex(&bytes)), Some(bytes))
+    }
+
+    fn column_text_decoder(
+        column: &mysql_async::Column,
+    ) -> Option<crate::query_result_normalization::MySqlTextDecoder> {
+        let encoding = Self::result_encoding(column.character_set());
+        encoding
+            .charset
+            .as_deref()
+            .and_then(crate::query_result_normalization::mysql_text_decoder_for_charset)
     }
 
     fn result_encoding(collation_id: u16) -> MysqlResultEncoding {
@@ -338,8 +376,13 @@ impl MysqlDbConnection {
         }
     }
 
-    fn is_binary_wire_value(column_type: ColumnType, collation_id: u16) -> bool {
-        collation_id == Self::MYSQL_BINARY_COLLATION_ID
+    fn is_binary_wire_value(
+        column_type: ColumnType,
+        flags: ColumnFlags,
+        collation_id: u16,
+    ) -> bool {
+        flags.contains(ColumnFlags::BINARY_FLAG)
+            && collation_id == Self::MYSQL_BINARY_COLLATION_ID
             && matches!(
                 column_type,
                 ColumnType::MYSQL_TYPE_STRING
@@ -425,7 +468,7 @@ impl MysqlDbConnection {
         if columns_arc.is_none()
             || columns_arc
                 .as_ref()
-                .map_or(true, |cols: &Arc<[mysql_async::Column]>| cols.is_empty())
+                .is_none_or(|cols: &Arc<[mysql_async::Column]>| cols.is_empty())
         {
             return Ok(Self::build_exec_result(sql, affected_rows, elapsed_ms));
         }
@@ -557,12 +600,6 @@ impl DbConnection for MysqlDbConnection {
             debug!("[MySQL] SSL/TLS enabled");
         }
 
-        let init_commands = Self::build_init_commands(config)?;
-        if !init_commands.is_empty() {
-            debug!("[MySQL] Applying init commands: {:?}", init_commands);
-            opts_builder = opts_builder.init(init_commands);
-        }
-
         // 获取连接超时，默认 30 秒
         let connect_timeout_secs = config.get_param_as::<u64>("connect_timeout").unwrap_or(30);
 
@@ -571,11 +608,13 @@ impl DbConnection for MysqlDbConnection {
             connect_timeout_secs
         );
         let opts = Opts::from(opts_builder);
+        let connect_timeout = Duration::from_secs(connect_timeout_secs);
+        let connect_started = Instant::now();
 
         // 使用 tokio::timeout 包装连接操作
-        let conn_result = timeout(Duration::from_secs(connect_timeout_secs), Conn::new(opts)).await;
+        let conn_result = timeout(connect_timeout, Conn::new(opts)).await;
 
-        let conn = match conn_result {
+        let mut conn = match conn_result {
             Ok(Ok(conn)) => conn,
             Ok(Err(e)) => {
                 error!("[MySQL] Connection failed: {}", e);
@@ -597,6 +636,29 @@ impl DbConnection for MysqlDbConnection {
             }
         };
 
+        let init_commands = Self::build_init_commands(config, conn.server_version())?;
+        debug!("[MySQL] Applying init commands: {:?}", init_commands);
+        for command in init_commands {
+            let Some(remaining) = connect_timeout.checked_sub(connect_started.elapsed()) else {
+                return Err(DbError::connection(format!(
+                    "MySQL connection initialization timed out after {connect_timeout_secs}s"
+                )));
+            };
+            match timeout(remaining, conn.query_drop(&command)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    return Err(DbError::connection_with_source(
+                        format!("failed to initialize MySQL session with `{command}`"),
+                        error,
+                    ));
+                }
+                Err(_) => {
+                    return Err(DbError::connection(format!(
+                        "MySQL connection initialization timed out after {connect_timeout_secs}s"
+                    )));
+                }
+            }
+        }
         {
             let mut guard = self.conn.lock().await;
             *guard = Some(conn);
@@ -1240,11 +1302,37 @@ mod tests {
     }
 
     #[test]
+    fn build_init_commands_defaults_result_encoding_to_utf8mb4() {
+        let config = build_config(&[]);
+
+        let commands = MysqlDbConnection::build_init_commands(&config, (8, 0, 45))
+            .expect("default charset should be valid");
+
+        assert_eq!(
+            commands,
+            vec!["SET character_set_results = utf8mb4".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_init_commands_uses_utf8_for_legacy_mysql() {
+        let config = build_config(&[]);
+
+        let commands = MysqlDbConnection::build_init_commands(&config, (5, 5, 2))
+            .expect("legacy default charset should be valid");
+
+        assert_eq!(
+            commands,
+            vec!["SET character_set_results = utf8".to_string()]
+        );
+    }
+
+    #[test]
     fn build_init_commands_uses_charset_only_when_collation_absent() {
         let config = build_config(&[("charset", "gbk")]);
 
-        let commands =
-            MysqlDbConnection::build_init_commands(&config).expect("charset should be valid");
+        let commands = MysqlDbConnection::build_init_commands(&config, (8, 0, 45))
+            .expect("charset should be valid");
 
         assert_eq!(commands, vec!["SET NAMES gbk".to_string()]);
     }
@@ -1253,8 +1341,8 @@ mod tests {
     fn build_init_commands_includes_collation_when_provided() {
         let config = build_config(&[("charset", "gbk"), ("collation", "gbk_chinese_ci")]);
 
-        let commands =
-            MysqlDbConnection::build_init_commands(&config).expect("charset should be valid");
+        let commands = MysqlDbConnection::build_init_commands(&config, (8, 0, 45))
+            .expect("charset should be valid");
 
         assert_eq!(
             commands,
@@ -1266,7 +1354,7 @@ mod tests {
     fn build_init_commands_rejects_collation_without_charset() {
         let config = build_config(&[("collation", "gbk_chinese_ci")]);
 
-        let error = MysqlDbConnection::build_init_commands(&config)
+        let error = MysqlDbConnection::build_init_commands(&config, (8, 0, 45))
             .expect_err("collation alone should fail");
 
         assert!(error.to_string().contains("collation requires charset"));
@@ -1276,7 +1364,7 @@ mod tests {
     fn build_init_commands_rejects_invalid_charset_identifier() {
         let config = build_config(&[("charset", "gbk;drop")]);
 
-        let error = MysqlDbConnection::build_init_commands(&config)
+        let error = MysqlDbConnection::build_init_commands(&config, (8, 0, 45))
             .expect_err("invalid charset should fail");
 
         assert!(error.to_string().contains("invalid MySQL charset"));
@@ -1325,7 +1413,7 @@ mod tests {
 
     #[test]
     fn binary_wire_value_detection_accepts_only_binary_string_families() {
-        use mysql_async::consts::ColumnType;
+        use mysql_async::consts::{ColumnFlags, ColumnType};
 
         const UTF8MB4_BIN_COLLATION_ID: u16 = 46;
         let accepted_types = [
@@ -1344,24 +1432,37 @@ mod tests {
             assert!(
                 MysqlDbConnection::is_binary_wire_value(
                     column_type,
+                    ColumnFlags::BINARY_FLAG,
                     MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
                 ),
                 "{column_type:?} should be binary for MySQL's binary pseudo-collation"
             );
             assert!(
-                !MysqlDbConnection::is_binary_wire_value(column_type, UTF8MB4_BIN_COLLATION_ID),
+                !MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::BINARY_FLAG,
+                    UTF8MB4_BIN_COLLATION_ID,
+                ),
                 "{column_type:?} must not treat a character _bin collation as binary bytes"
             );
             assert!(
-                !MysqlDbConnection::is_binary_wire_value(column_type, 0),
+                !MysqlDbConnection::is_binary_wire_value(column_type, ColumnFlags::BINARY_FLAG, 0,),
                 "{column_type:?} must require the binary collation id"
+            );
+            assert!(
+                !MysqlDbConnection::is_binary_wire_value(
+                    column_type,
+                    ColumnFlags::empty(),
+                    MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+                ),
+                "{column_type:?} must require the binary field flag"
             );
         }
     }
 
     #[test]
     fn binary_wire_value_detection_rejects_non_binary_value_types() {
-        use mysql_async::consts::ColumnType;
+        use mysql_async::consts::{ColumnFlags, ColumnType};
 
         for column_type in [
             ColumnType::MYSQL_TYPE_BIT,
@@ -1378,6 +1479,7 @@ mod tests {
             assert!(
                 !MysqlDbConnection::is_binary_wire_value(
                     column_type,
+                    ColumnFlags::BINARY_FLAG,
                     MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
                 ),
                 "{column_type:?} must remain a typed non-binary value"
@@ -1400,6 +1502,24 @@ mod tests {
         let display = display.expect("binary cell should keep a display preview");
         assert!(display.ends_with(&format!("... ({} bytes)", bytes.len())));
         assert!(display.len() < bytes.len());
+        assert_eq!(binary.as_deref(), Some(bytes.as_slice()));
+    }
+
+    #[test]
+    fn ambiguous_binary_result_encoding_remains_lossless() {
+        use mysql_async::consts::ColumnType;
+
+        let column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_VAR_STRING)
+            .with_character_set(MysqlDbConnection::MYSQL_BINARY_COLLATION_ID);
+        let bytes = "utf8mb4_0900_ai_ci 中文".as_bytes().to_vec();
+
+        let (display, binary) =
+            MysqlDbConnection::extract_query_cell(Value::Bytes(bytes.clone()), Some(&column));
+
+        assert_eq!(
+            display.as_deref(),
+            Some("0x757466386D62345F303930305F61695F636920E4B8ADE69687")
+        );
         assert_eq!(binary.as_deref(), Some(bytes.as_slice()));
     }
 
@@ -1514,6 +1634,7 @@ mod tests {
         );
         assert!(!MysqlDbConnection::is_binary_wire_value(
             column.column_type(),
+            column.flags(),
             column.character_set(),
         ));
     }

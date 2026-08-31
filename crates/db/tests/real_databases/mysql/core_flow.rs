@@ -75,6 +75,7 @@ async fn mysql_real_script_query_error_transaction_and_metadata_flow() {
         .await
         .expect("MySQL should connect");
 
+    assert_connection_result_encoding(connection.as_ref()).await;
     reset_database(&plugin, connection.as_ref(), &database).await;
     run_fixture(&plugin, connection.as_ref(), &database).await;
     assert_full_type_query(connection.as_ref(), &database).await;
@@ -85,6 +86,66 @@ async fn mysql_real_script_query_error_transaction_and_metadata_flow() {
         .disconnect()
         .await
         .expect("MySQL should disconnect");
+}
+
+async fn assert_connection_result_encoding(connection: &(dyn DbConnection + Send + Sync)) {
+    let initialized = connection
+        .query("SELECT @@character_set_results")
+        .await
+        .expect("connection result encoding should be readable");
+    let SqlResult::Query(initialized) = initialized else {
+        panic!("connection result encoding should return a row");
+    };
+    assert_ne!(initialized.rows[0][0].as_deref(), Some("binary"));
+
+    connection
+        .query("SET character_set_results=binary")
+        .await
+        .expect("binary result encoding should be accepted");
+    let result = connection
+        .query(
+            "SELECT DEFAULT_CHARACTER_SET_NAME, CAST('text' AS CHAR), CAST('raw' AS BINARY) \
+             FROM INFORMATION_SCHEMA.SCHEMATA LIMIT 1",
+        )
+        .await
+        .expect("binary-encoded text query should execute");
+    let SqlResult::Query(result) = result else {
+        panic!("binary-encoded text query should return rows");
+    };
+
+    assert!(
+        result.rows[0][0]
+            .as_deref()
+            .is_some_and(|text| text.starts_with("0x"))
+    );
+    assert!(
+        result.rows[0][1]
+            .as_deref()
+            .is_some_and(|text| text.starts_with("0x"))
+    );
+    assert!(
+        result
+            .binary_cells
+            .iter()
+            .any(|cell| cell.column_index == 0)
+    );
+    assert!(
+        result
+            .binary_cells
+            .iter()
+            .any(|cell| cell.column_index == 1)
+    );
+    assert!(
+        result
+            .binary_cells
+            .iter()
+            .any(|cell| cell.column_index == 2 && cell.bytes == b"raw")
+    );
+
+    connection
+        .query("SET character_set_results=utf8mb4")
+        .await
+        .expect("test should restore utf8mb4 result encoding");
 }
 
 pub(crate) fn unique_database(slug: &str) -> String {
@@ -191,16 +252,22 @@ async fn assert_full_type_query(connection: &(dyn DbConnection + Send + Sync), d
     assert_cell(&result, 0, 21, "2026");
     assert_cell(&result, 0, 22, "beta");
     assert_cell(&result, 0, 23, "a,b");
-    assert!(
-        result
-            .binary_cells
-            .iter()
-            .any(|cell| cell.column_index == 14)
-    );
+    assert_binary_cell(&result, 0, 14, &[0, 1, 2, 255]);
+    assert_binary_cell(&result, 0, 15, &[255, 0]);
+    assert_binary_cell(&result, 0, 16, &[222, 173, 190, 239]);
     assert_null(&result, 1, 17);
     assert_null(&result, 1, 18);
     assert_cell(&result, 1, 13, "");
     assert_cell(&result, 1, 22, "alpha");
+}
+
+fn assert_binary_cell(result: &db::executor::QueryResult, row: usize, column: usize, bytes: &[u8]) {
+    let cell = result
+        .binary_cells
+        .iter()
+        .find(|cell| cell.row_index == row && cell.column_index == column)
+        .expect("binary query cell should have a lossless sidecar");
+    assert_eq!(cell.bytes, bytes);
 }
 
 async fn assert_error_and_transaction(

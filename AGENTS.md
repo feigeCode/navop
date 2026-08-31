@@ -478,6 +478,20 @@
 - **验证方式**：`cargo check -p ssh`、`cargo test -p ssh`（覆盖 gex 参数开/关、固定 group1 排在 group-exchange 前、以及 fake server 只声明 `DH_GEX_SHA1 + DH_G1_SHA1` 且 `lookup_dh_gex_group` 固定返回 `DH_GROUP1` 时 legacy 开启连接成功、关闭时报 `No common Kex algorithm`）、`cargo clippy -p ssh --all-targets` 无新增警告；再用真机 DMG 分别连接 2048 位组与 1024 位组设备确认 `Key exchange init failed` 消失。
 - **适用范围**：`crates/ssh/src/ssh.rs::build_russh_client_config` / `legacy_gex_params` / `build_client_preferred_algorithms_with_legacy`，以及任何直接构造 `russh::client::Config` 的 legacy 兼容链路。
 
+- **标题**：MySQL 结果 collation 63 不等于字段一定是二进制
+- **触发信号**：数据库名、表名、字符集、排序规则等文本同时显示为 `0x...`；MySQL 列包的 `character_set()` 为 63，或会话 `@@character_set_results` 为 `binary`。
+- **根因 / 约束**：MySQL 列包中的 `character_set` 实际是 collation id。63 既用于 `BINARY` / `VARBINARY` / `BLOB`，也用于 `character_set_results=binary` 下未转换的文本结果；`BINARY_FLAG` 还可能出现在 `VARCHAR/TEXT ... BINARY` 上，因此任意 SQL 结果仅靠 type、flag、id 或“字节看起来像 UTF-8”都不能无歧义恢复源字段语义与编码。
+- **正确做法**：内置 MySQL 连接认证完成后显式设置 `character_set_results`，默认按服务器版本使用 `utf8mb4` 或旧版 `utf8`，但不要无配置时用 `SET NAMES` 改变 `collation_connection`；用户显式配置 charset/collation 时才执行 `SET NAMES ... [COLLATE ...]`。真实二进制按协议元数据保留 exact-byte sidecar；仍为 collation 63 的模糊结果不得猜编码，直接表查询交给 authoritative schema normalization 将 TEXT 与 BLOB 纠偏。
+- **验证方式**：单测覆盖默认/旧版/显式 charset 初始化命令、63 的模糊结果保留字节、普通 UTF-8/GBK 结果解码及 BINARY/VARBINARY/BLOB sidecar；真实 MySQL 测试检查连接后的 `@@character_set_results` 非 binary，并覆盖 `SET character_set_results=binary` 下模糊文本保持无损、三类二进制列精确字节不变。
+- **适用范围**：`crates/db/src/mysql/connection.rs`、`query_result_normalization.rs`、MySQL 元数据查询、SQL 结果表格及导入导出/比较链路。
+
+- **标题**：Go IPC 扩展不得按 Go 运行时类型判定 MySQL 协议文本/二进制
+- **触发信号**：OceanBase MySQL 模式等 IPC 扩展里，`VARCHAR/TEXT/DECIMAL/DATETIME/JSON` 查询结果全部显示为 `0x...` 二进制，而内置 MySQL 正常。
+- **根因 / 约束**：go-sql-driver/mysql / obconnector-go 把 MySQL 协议的所有字符串家族列扫描为 `[]byte`；共享 `toCell` 若只看 Go 类型，会把全部文本编码成 `CellValue::Bytes`。驱动层 `ColumnTypeDatabaseTypeName()` 已按列 charset 区分 `TEXT/CHAR/VARCHAR` 与 `BLOB/BINARY/VARBINARY`，列声明类型才是权威。
+- **正确做法**：`query/start` 保存每列 `typeKind` 到 `cursorState`，`cursor/fetch` 时 `toCellForKind` 按声明 kind 编码 `[]byte`：text 家族（含 uuid/xml/interval 映射）→ text，decimal/date/time/datetime → 对应文本 kind，json → 解析失败回退 text；binary/unknown 及非 UTF-8 字节一律保留无损 base64 `bytes`（JSON wire 会把非法 UTF-8 替换成 U+FFFD，必须回退而不是强转 string）。移除按内容猜测 JSON 的嗅探，避免内容恰为合法 JSON 的真二进制被误标。
+- **验证方式**：`go vet ./internal/... && go test ./internal/...`；用 `streamingRows` fake driver（可注入 typeNames）覆盖 VARCHAR/DECIMAL/DATETIME/JSON/VARBINARY/BLOB、非 UTF-8 文本、非法 JSON、NULL、UUID；`bash scripts/install-local-drivers.sh oceanbase` 本地安装后连接 OceanBase MySQL 租户验证文本列显示。
+- **适用范围**：`navop-extensions/internal/dbipc/{query,server}.go` 及所有共享 dbipc 的 Go IPC 驱动（oceanbase/dm/kingbase/oracle-go 等）。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
