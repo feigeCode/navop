@@ -13,6 +13,10 @@ Common:
     en: "Search..."
     zh-CN: "搜索..."
     zh-HK: "搜尋..."
+  settings:
+    en: "Settings"
+    zh-CN: "设置"
+    zh-HK: "設定"
 
 TabSwitcher:
   title:

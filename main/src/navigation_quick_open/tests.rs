@@ -48,11 +48,9 @@ fn application_navigation_partition_preserves_optional_entries() {
         };
         let leading = leading_navigation_applications(availability);
         let overflow = overflow_navigation_applications();
-        let trailing = trailing_navigation_applications();
         let combined = leading
             .iter()
             .chain(overflow.iter())
-            .chain(trailing.iter())
             .copied()
             .collect::<Vec<_>>();
         let mut expected = Vec::new();
@@ -70,7 +68,6 @@ fn application_navigation_partition_preserves_optional_entries() {
             NavigationApplication::SessionLogs,
             NavigationApplication::CredentialVault,
             NavigationApplication::JsonFormatter,
-            NavigationApplication::Settings,
         ]);
 
         assert_eq!(combined, expected);

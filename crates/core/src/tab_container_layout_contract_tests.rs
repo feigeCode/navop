@@ -45,6 +45,37 @@ fn background_task_entry_stays_before_window_controls() {
 }
 
 #[test]
+fn settings_entry_stays_after_background_tasks_and_before_window_controls() {
+    let source = include_str!("tab_container.rs");
+    let background = source
+        .find(".id(\"background-task-entry\")")
+        .expect("background task entry");
+    let settings = source[background..]
+        .find(".id(\"tab-bar-settings-entry\")")
+        .map(|offset| background + offset)
+        .expect("settings entry");
+    let controls = source[settings..]
+        .find("self.render_window_controls(window, cx)")
+        .map(|offset| settings + offset)
+        .expect("window controls");
+
+    assert!(
+        background < settings,
+        "the settings button must follow the background task entry"
+    );
+    assert!(
+        settings < controls,
+        "the settings button must precede native window controls"
+    );
+
+    let button_boundary = &source[background..controls];
+    assert!(button_boundary.contains("\"tab-bar-settings\""));
+    assert!(button_boundary.contains("IconName::Settings"));
+    assert!(button_boundary.contains(".flex_shrink_0()"));
+    assert!(source.contains("with_settings_button("));
+}
+
+#[test]
 fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
     let source = include_str!("tab_container.rs");
     let render_start = source

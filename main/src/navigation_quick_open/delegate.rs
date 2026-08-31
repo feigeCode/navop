@@ -182,6 +182,5 @@ pub(super) fn application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::SessionLogs => IconName::Terminal,
         NavigationApplication::CredentialVault => IconName::Key,
         NavigationApplication::Extensions => IconName::ExtensionsLine,
-        NavigationApplication::Settings => IconName::Settings,
     }
 }

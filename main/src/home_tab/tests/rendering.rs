@@ -383,6 +383,32 @@ fn legacy_ai_workbench_uses_the_monochrome_line_icon() {
 }
 
 #[test]
+fn settings_entry_moves_from_home_navigation_to_the_global_tab_bar() {
+    let sidebar_navigation = include_str!("../sidebar_navigation.rs");
+    let modern_home = include_str!("../modern_home.rs");
+    let navigation = include_str!("../navigation.rs");
+    let quick_open = include_str!("../../navigation_quick_open.rs");
+    let tab_container = include_str!("../../../../crates/core/src/tab_container.rs");
+
+    // 原入口已从现代主页磁贴与传统侧边栏移除。
+    assert!(!modern_home.contains("home-app-settings"));
+    assert!(!sidebar_navigation.contains("legacy-open-settings"));
+    assert!(!navigation.contains("NavigationApplication::Settings"));
+    assert!(!quick_open.contains("trailing_navigation_applications"));
+    assert!(!quick_open.contains("NavigationApplication::Settings"));
+    // 设置按钮由 tab 容器渲染，位于后台任务入口之后。
+    assert!(tab_container.contains("\"tab-bar-settings\""));
+    assert!(tab_container.contains("with_settings_button("));
+    assert!(tab_container.contains("IconName::Settings"));
+    let settings_offset = tab_container.find("\"tab-bar-settings-entry\"").unwrap();
+    let background_offset = tab_container.find("\"background-task-entry\"").unwrap();
+    assert!(
+        background_offset < settings_offset,
+        "设置按钮必须位于后台任务管理入口之后"
+    );
+}
+
+#[test]
 fn modern_home_cards_are_small_and_fill_each_row() {
     let home = include_str!("../../home_tab.rs");
     let content = include_str!("../content.rs");

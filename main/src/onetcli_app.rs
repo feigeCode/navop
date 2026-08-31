@@ -92,6 +92,23 @@ fn home_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
     })
 }
 
+/// The tab-bar Settings button follows the same pattern: the generic tab
+/// container cannot construct the app-owned settings tab, so clicks are routed
+/// through the global HomePage lookup.
+fn settings_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
+    Arc::new(|window: &mut Window, cx: &mut App| {
+        let Some(home_page) = cx
+            .try_global::<GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        else {
+            return;
+        };
+        home_page.update(cx, |home, cx| {
+            home.add_settings_tab(window, cx);
+        });
+    })
+}
+
 /// The application-owned SSH session lifecycle.
 ///
 /// The `ssh` crate deliberately stays independent of GPUI. This narrow
@@ -1321,7 +1338,9 @@ impl OnetCliApp {
         // 侧边栏展开状态完全跟随用户上次保存的选择，进入主页不强制展开。
         let connection_sidebar_expanded = settings.connection_sidebar_expanded;
         let tab_container = cx.new(|cx| {
-            let mut container = TabContainer::new(window, cx).with_tab_bar_when_empty(true);
+            let mut container = TabContainer::new(window, cx)
+                .with_tab_bar_when_empty(true)
+                .with_settings_button(settings_button_handler());
 
             if show_navigation_sidebar_toggle {
                 container = container

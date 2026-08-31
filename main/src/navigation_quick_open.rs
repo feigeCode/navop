@@ -31,7 +31,6 @@ pub(crate) enum NavigationApplication {
     SessionLogs,
     CredentialVault,
     Extensions,
-    Settings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,19 +112,15 @@ pub(crate) fn overflow_navigation_applications() -> Vec<NavigationApplication> {
     ]
 }
 
-pub(crate) fn trailing_navigation_applications() -> Vec<NavigationApplication> {
-    vec![NavigationApplication::Settings]
-}
-
-/// Every navigation application in display order: the pinned entries, the
-/// secondary entries, and settings last. The modern home lays these out as
-/// tiles instead of collapsing them behind a menu.
+/// Every navigation application in display order: the pinned entries and the
+/// secondary entries. The modern home lays these out as tiles instead of
+/// collapsing them behind a menu. Settings is deliberately absent: its global
+/// entry moved to the tab bar.
 pub(crate) fn all_navigation_applications(
     availability: NavigationAvailability,
 ) -> Vec<NavigationApplication> {
     let mut applications = leading_navigation_applications(availability);
     applications.extend(overflow_navigation_applications());
-    applications.extend(trailing_navigation_applications());
     applications
 }
 
@@ -143,7 +138,6 @@ impl NavigationApplication {
             Self::SessionLogs => t!("Home.session_logs").to_string(),
             Self::CredentialVault => t!("Home.credential_vault").to_string(),
             Self::Extensions => t!("Home.extensions").to_string(),
-            Self::Settings => t!("Common.settings").to_string(),
         }
     }
 

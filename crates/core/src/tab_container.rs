@@ -1057,6 +1057,8 @@ pub struct TabContainer {
     navigation_sidebar_expanded: Option<bool>,
     home_active: Option<bool>,
     on_home: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
+    /// 全局设置按钮回调，由上层注入；为 None 时不渲染右上角设置入口。
+    on_settings: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     tab_bar_scroll_handle: ScrollHandle,
     closing_tabs: HashSet<SharedString>,
     activity_tabs: HashSet<String>,
@@ -1121,6 +1123,7 @@ impl TabContainer {
             navigation_sidebar_expanded: None,
             home_active: None,
             on_home: None,
+            on_settings: None,
             tab_bar_scroll_handle: ScrollHandle::new(),
             closing_tabs: HashSet::new(),
             activity_tabs: HashSet::new(),
@@ -1254,6 +1257,16 @@ impl TabContainer {
     /// 仅顶部的标签容器应开启；内嵌的页签容器（如数据库页签）应传入 `false`。
     pub fn with_background_task_panel(mut self, show: bool) -> Self {
         self.show_background_task_panel = show;
+        self
+    }
+
+    /// 在标签栏右上角（后台任务入口之后）渲染全局设置入口。
+    /// 点击回调由上层注入；未注入时不渲染该按钮。
+    pub fn with_settings_button(
+        mut self,
+        on_settings: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
+    ) -> Self {
+        self.on_settings = Some(on_settings);
         self
     }
 
@@ -4517,6 +4530,22 @@ impl TabContainer {
                         .debug_selector(|| "background-task-entry".to_owned())
                         .flex_shrink_0()
                         .child(self.background_task_panel.clone()),
+                )
+            })
+            .when_some(self.on_settings.clone(), |this, on_settings| {
+                this.child(
+                    div()
+                        .id("tab-bar-settings-entry")
+                        .debug_selector(|| "tab-bar-settings-entry".to_owned())
+                        .flex_shrink_0()
+                        .child(
+                            Button::new("tab-bar-settings")
+                                .icon(IconName::Settings)
+                                .ghost()
+                                .compact()
+                                .tooltip(t!("Common.settings").to_string())
+                                .on_click(move |_, window, cx| (on_settings)(window, cx)),
+                        ),
                 )
             })
             .when(

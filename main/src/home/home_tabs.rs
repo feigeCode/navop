@@ -495,10 +495,13 @@ mod tests {
             "\"home-app-session-logs\"",
             "\"home-app-credential-vault\"",
             "\"home-app-extensions\"",
-            "\"home-app-settings\"",
         ] {
             assert!(modern_home_source.contains(id));
         }
+        assert!(
+            !modern_home_source.contains("home-app-settings"),
+            "设置入口已迁移到全局标签栏，不再作为现代主页应用磁贴"
+        );
         assert!(legacy_source.contains("show_application_navigation_quick_open"));
         assert!(modern_home_source.contains("all_navigation_applications("));
     }

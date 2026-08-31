@@ -1,7 +1,7 @@
 use super::*;
 use crate::navigation_quick_open::{
     NavigationApplication, NavigationAvailability, is_overflow_connection_type,
-    leading_navigation_applications, trailing_navigation_applications, visible_connection_types,
+    leading_navigation_applications, visible_connection_types,
 };
 use gpui_component::Selectable as _;
 
@@ -86,10 +86,6 @@ impl HomePage {
             |home, window, cx| home.show_application_navigation_quick_open(window, cx),
             cx,
         ));
-        for application in trailing_navigation_applications() {
-            footer =
-                footer.child(self.render_legacy_application_button(application, collapsed, cx));
-        }
         footer
             .child(self.render_legacy_user(collapsed, rail_item_size, cx))
             .into_any_element()
@@ -274,7 +270,6 @@ fn legacy_application_id(application: NavigationApplication) -> &'static str {
         NavigationApplication::SessionLogs => "legacy-open-session-logs",
         NavigationApplication::CredentialVault => "legacy-open-credential-vault",
         NavigationApplication::Extensions => "legacy-open-extensions",
-        NavigationApplication::Settings => "legacy-open-settings",
     }
 }
 
@@ -289,6 +284,5 @@ fn legacy_application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::SessionLogs => IconName::Terminal,
         NavigationApplication::CredentialVault => IconName::Key,
         NavigationApplication::Extensions => IconName::ExtensionsLine,
-        NavigationApplication::Settings => IconName::Settings,
     }
 }

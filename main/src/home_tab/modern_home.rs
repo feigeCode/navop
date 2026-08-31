@@ -595,7 +595,6 @@ fn home_application_id(application: NavigationApplication) -> &'static str {
         NavigationApplication::SessionLogs => "home-app-session-logs",
         NavigationApplication::CredentialVault => "home-app-credential-vault",
         NavigationApplication::Extensions => "home-app-extensions",
-        NavigationApplication::Settings => "home-app-settings",
     }
 }
 

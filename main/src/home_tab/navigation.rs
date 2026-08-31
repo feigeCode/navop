@@ -24,7 +24,6 @@ impl HomePage {
                 self.add_credential_vault_tab(window, cx);
             }
             NavigationApplication::Extensions => self.add_extensions_tab(window, cx),
-            NavigationApplication::Settings => self.add_settings_tab(window, cx),
         }
     }
 
