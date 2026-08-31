@@ -1,6 +1,6 @@
 [package]
 name = "ferrum-flow"
-version = "0.3.1"
+version = "0.15.2"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["tu6ge"]

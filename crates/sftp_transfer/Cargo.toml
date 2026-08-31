@@ -1,6 +1,6 @@
 [package]
 name = "sftp_transfer"
-version = "0.1.0"
+version = "0.15.2"
 publish.workspace = true
 edition.workspace = true
 

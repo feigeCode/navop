@@ -54,9 +54,9 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-gpui-component = { path = "crates/ui", version = "0.5.2" }
-gpui-component-macros = { path = "crates/macros", version = "0.5.1" }
-gpui-component-assets = { path = "crates/assets", version = "0.5.1" }
+gpui-component = { path = "crates/ui", version = "0.15.2" }
+gpui-component-macros = { path = "crates/macros", version = "0.15.2" }
+gpui-component-assets = { path = "crates/assets", version = "0.15.2" }
 
 gpui = { package = "gpui", git = "https://github.com/feigeCode/gpui-ce.git", rev = "9086e0b273bddc083fb030a8aadfc27767eda88e", version = "=0.2.2" }
 gpui_tokio = { package = "gpui_tokio", git = "https://github.com/feigeCode/gpui-ce.git", rev = "9086e0b273bddc083fb030a8aadfc27767eda88e" }

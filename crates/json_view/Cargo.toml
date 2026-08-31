@@ -1,6 +1,6 @@
 [package]
 name = "json_view"
-version = "0.1.0"
+version = "0.15.2"
 publish.workspace = true
 edition.workspace = true
 description = "可复用的 JSON 格式化与树形展示组件"

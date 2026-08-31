@@ -1,6 +1,6 @@
 [package]
 name = "api_tools"
-version = "0.1.0"
+version = "0.15.2"
 publish.workspace = true
 edition.workspace = true
 description = "接口测试工具（参考 verve 的实现移植）"
