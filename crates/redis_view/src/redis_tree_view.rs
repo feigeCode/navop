@@ -1784,7 +1784,13 @@ impl RedisTreeView {
             RedisNodeType::Key(_) => IconName::Key,
             RedisNodeType::LoadMore => IconName::Ellipsis,
         };
-        Icon::new(name).color().with_size(IconSize::Default)
+        let icon = Icon::new(name).with_size(IconSize::Default);
+        match node_type {
+            RedisNodeType::Connection | RedisNodeType::Database(_) | RedisNodeType::Namespace => {
+                icon.color()
+            }
+            RedisNodeType::Key(_) | RedisNodeType::LoadMore => icon,
+        }
     }
 
     /// 获取键类型的徽章文字和颜色
@@ -1919,7 +1925,7 @@ impl RedisTreeView {
             .border_color(cx.theme().border)
             .child(div().flex_1().child(Input::new(&self.search_state)))
             .child(
-                IconButton::new("search", Icon::new(IconName::Search).color())
+                IconButton::new("search", Icon::new(IconName::Search))
                     .hit_size(Size::XSmall)
                     .glyph_size(IconSize::Small)
                     .tooltip(t!("RedisTree.search_help").to_string())
@@ -1947,7 +1953,7 @@ impl RedisTreeView {
                     }),
             )
             .child(
-                IconButton::new("refresh", Icon::new(IconName::Refresh).color())
+                IconButton::new("refresh", Icon::new(IconName::Refresh))
                     .hit_size(Size::XSmall)
                     .glyph_size(IconSize::Small)
                     .tooltip(t!("Common.refresh").to_string())
@@ -1965,7 +1971,7 @@ impl RedisTreeView {
                     }),
             )
             .child(
-                IconButton::new("add-key", Icon::new(IconName::Plus).color())
+                IconButton::new("add-key", Icon::new(IconName::Plus))
                     .hit_size(Size::XSmall)
                     .glyph_size(IconSize::Small)
                     .tooltip(t!("RedisTree.menu_create_key").to_string())
@@ -2189,7 +2195,6 @@ impl RedisTreeView {
                                 } else {
                                     IconName::ChevronRight
                                 })
-                                .color()
                                 .with_size(Size::XSmall)
                                 .text_color(cx.theme().muted_foreground),
                             )
@@ -2246,7 +2251,7 @@ impl RedisTreeView {
                         .child(
                             IconButton::new(
                                 SharedString::from(format!("refresh-namespace-{}", ix)),
-                                Icon::new(IconName::Refresh).color(),
+                                Icon::new(IconName::Refresh),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2266,7 +2271,7 @@ impl RedisTreeView {
                         .child(
                             IconButton::new(
                                 SharedString::from(format!("create-in-namespace-{}", ix)),
-                                Icon::new(IconName::Plus).color(),
+                                Icon::new(IconName::Plus),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2283,7 +2288,7 @@ impl RedisTreeView {
                         .child(
                             IconButton::new(
                                 SharedString::from(format!("delete-namespace-{}", ix)),
-                                Icon::new(IconName::Remove).color(),
+                                Icon::new(IconName::Remove),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2337,7 +2342,7 @@ impl RedisTreeView {
                         .trigger(
                             IconButton::new(
                                 SharedString::from(format!("error-btn-{}", ix)),
-                                Icon::new(IconName::TriangleAlert).color(),
+                                Icon::new(IconName::TriangleAlert).text_color(cx.theme().warning),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2360,7 +2365,6 @@ impl RedisTreeView {
                                                 .gap_1()
                                                 .child(
                                                     Icon::new(IconName::TriangleAlert)
-                                                        .color()
                                                         .with_size(Size::Small)
                                                         .text_color(cx.theme().warning),
                                                 )
