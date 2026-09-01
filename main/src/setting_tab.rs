@@ -732,6 +732,28 @@ impl SettingsPanel {
                                 )
                                 .to_string(),
                             ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.FileTransfer.background_tasks_no_auto_popup"),
+                                SettingField::checkbox(
+                                    |cx: &App| {
+                                        !AppSettings::global(cx).background_tasks_auto_popup
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.background_tasks_auto_popup = !value;
+                                        });
+                                    },
+                                )
+                                .default_value(!default_settings.background_tasks_auto_popup),
+                            )
+                            .description(
+                                t!(
+                                    "Settings.General.FileTransfer.background_tasks_no_auto_popup_desc"
+                                )
+                                .to_string(),
+                            ),
                         ),
                     notes_setting_group(),
                     SettingGroup::new()

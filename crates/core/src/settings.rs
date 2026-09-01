@@ -951,6 +951,9 @@ pub struct AppSettings {
     pub remote_file_editor: RemoteFileEditorUserSettings,
     #[serde(default = "default_true")]
     pub direct_server_transfer_enabled: bool,
+    /// 任务开始后是否自动弹出后台任务面板。关闭后改为弹提示通知。
+    #[serde(default = "default_true")]
+    pub background_tasks_auto_popup: bool,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -1301,6 +1304,7 @@ impl Default for AppSettings {
             personal_sync: PersonalSyncSettings::default(),
             remote_file_editor: RemoteFileEditorUserSettings::default(),
             direct_server_transfer_enabled: true,
+            background_tasks_auto_popup: true,
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -1690,6 +1694,29 @@ mod tests {
         .expect("服务器间直接传输设置应能反序列化");
 
         assert!(!settings.direct_server_transfer_enabled);
+    }
+
+    #[test]
+    fn app_settings_auto_popup_background_tasks_by_default() {
+        assert!(AppSettings::default().background_tasks_auto_popup);
+    }
+
+    #[test]
+    fn legacy_app_settings_keep_background_tasks_auto_popup() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert!(settings.background_tasks_auto_popup);
+    }
+
+    #[test]
+    fn app_settings_deserializes_background_tasks_auto_popup_choice() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "background_tasks_auto_popup": false
+        }))
+        .expect("后台任务自动弹出设置应能反序列化");
+
+        assert!(!settings.background_tasks_auto_popup);
     }
 
     #[test]

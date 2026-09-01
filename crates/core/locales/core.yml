@@ -117,6 +117,10 @@ BackgroundTasks:
     en: "In progress"
     zh-CN: "进行中"
     zh-HK: "進行中"
+  auto_popup_hint:
+    en: "Background task started. Click to view it."
+    zh-CN: "后台任务已开始，点击查看。"
+    zh-HK: "後台任務已開始，點擊查看。"
 
 Window:
   always_on_top:

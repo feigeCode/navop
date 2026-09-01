@@ -2130,6 +2130,14 @@ Settings:
         en: When available, offer direct transfer between servers. Turn this off to always relay server-to-server copies through Navop.
         zh-CN: 可用时提供服务器间直接传输；关闭后，服务器间复制将始终通过 Navop 中转。
         zh-HK: 可用時提供伺服器間直接傳輸；關閉後，伺服器間複製將始終透過 Navop 中轉。
+      background_tasks_no_auto_popup:
+        en: Do not auto-open background tasks panel
+        zh-CN: 不自动弹出后台任务面板
+        zh-HK: 不自動彈出後台任務面板
+      background_tasks_no_auto_popup_desc:
+        en: Check to stop the background tasks panel from opening automatically when a task starts. You will get a clickable hint instead, and can still open it from the top-right icon.
+        zh-CN: 勾选后，任务开始不再自动弹出后台任务面板，改为显示可点击的提示；仍可从右上角图标随时打开。
+        zh-HK: 勾選後，任務開始不再自動彈出後台任務面板，改為顯示可點擊的提示；仍可從右上角圖示隨時打開。
 
     # 笔记设置
     Notes:

@@ -44,6 +44,7 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use one_core::background_task_panel::show_background_tasks_or_notify;
 use one_core::background_tasks::{
     BackgroundTaskCancellation, BackgroundTaskHandle, BackgroundTaskProgressUnit,
     BackgroundTaskSpec,
@@ -4137,7 +4138,7 @@ impl SftpView {
         let manager = one_core::background_tasks::global(cx);
         if let Some(window) = cx.active_window() {
             let _ = window.update(cx, |_, window, cx| {
-                one_core::background_task_panel::open_background_task_dialog(manager, window, cx);
+                show_background_tasks_or_notify(manager, window, cx);
             });
         }
     }

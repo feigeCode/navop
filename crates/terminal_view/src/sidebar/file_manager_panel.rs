@@ -31,7 +31,7 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
-use one_core::background_task_panel::open_background_task_dialog;
+use one_core::background_task_panel::show_background_tasks_or_notify;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::SidebarPlacement;
@@ -3100,7 +3100,7 @@ impl FileManagerPanel {
         let manager = one_core::background_tasks::global(cx);
         if let Some(window) = cx.active_window() {
             let _ = window.update(cx, |_, window, cx| {
-                open_background_task_dialog(manager, window, cx);
+                show_background_tasks_or_notify(manager, window, cx);
             });
         }
     }
