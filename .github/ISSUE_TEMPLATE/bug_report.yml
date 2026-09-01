@@ -1,5 +1,5 @@
 name: Bug 报告 / Bug Report
-description: 报告崩溃、异常行为或功能故障 / Report a crash, unexpected behavior, or broken feature
+description: 告诉我们哪里出了问题 / Tell us what went wrong
 title: "[Bug]: "
 labels:
   - bug
@@ -7,151 +7,40 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢你帮助改进 Navop！提交前请搜索已有 Issue，并尽量在最新版本中复现。
+        感谢反馈！直接描述问题即可，信息不全也没关系，我们可以继续追问。
 
-        Thanks for helping improve Navop. Before submitting, please search existing issues and try to reproduce the problem on the latest release.
+        Thanks for reporting. A brief description is enough; we can ask for more details later.
 
-        > **隐私提醒 / Privacy:** 请对连接信息、连接串、用户名、主机/IP、数据库名和文件路径进行脱敏，并删除所有密码、私钥、Token、云账号标识及业务数据。Sanitize connection metadata and remove all credentials, account identifiers, and business data.
-
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: 提交前检查 / Checklist
-      options:
-        - label: 我已搜索已有 Issue，未发现相同问题。/ I searched existing issues and found no duplicate.
-          required: true
-        - label: 我已在最新版本中确认该问题仍然存在。/ I confirmed the problem still occurs on the latest release.
-          required: true
-        - label: 我已对连接信息进行脱敏，并移除凭据与业务数据。/ I sanitized connection details and removed credentials and business data.
-          required: true
-
-  - type: input
-    id: version
-    attributes:
-      label: Navop 版本 / Navop version
-      description: 请填写“设置 → 关于”中显示的完整版本号。Enter the exact version shown in Settings → About.
-      placeholder: "例如 / e.g. 0.10.3"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: platform
-    attributes:
-      label: 操作系统 / Operating system
-      options:
-        - macOS - Apple Silicon
-        - macOS - Intel
-        - Windows - x86_64
-        - Windows - x86 (32-bit)
-        - Linux - x86_64
-        - Linux - ARM64
-        - 其他 / Other
-    validations:
-      required: true
-
-  - type: input
-    id: environment
-    attributes:
-      label: 系统与安装信息 / System and installation details
-      description: 请填写系统版本和安装包类型；Linux 用户请补充桌面环境与 Wayland/X11。Include OS version and package type; on Linux, also include the desktop environment and Wayland/X11.
-      placeholder: "例如 / e.g. Windows 11 24H2, MSI；Ubuntu 24.04, GNOME, Wayland, AppImage"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: module
-    attributes:
-      label: 问题模块 / Affected module
-      description: 请选择最接近的模块。Choose the closest affected area.
-      options:
-        - 安装、更新与启动 / Install, update, and launch
-        - 首页、工作区与连接管理 / Home, workspace, and connection management
-        - 数据库、SQL 编辑器与数据工具 / Database, SQL editor, and data tools
-        - Redis
-        - MongoDB
-        - SSH、本地终端与串口 / SSH, local terminal, and serial
-        - SFTP 与远程文件编辑 / SFTP and remote file editing
-        - 端口转发、代理与隧道 / Port forwarding, proxy, and tunnel
-        - 远程桌面 RDP/VNC / Remote desktop RDP/VNC
-        - 服务器监控 / Server monitoring
-        - 笔记、Markdown 与文档导出 / Notes, Markdown, and document export
-        - AI 对话、终端 AI 与工具调用 / AI chat, terminal AI, and tool calling
-        - Agent Hub、ACP、Public MCP 与 CLI / Agent Hub, ACP, Public MCP, and CLI
-        - 扩展与扩展市场 / Extensions and marketplace
-        - 设置、主题与多语言 / Settings, themes, and i18n
-        - 连接与设置同步 / Connection and settings sync
-        - 性能、卡顿、崩溃或其他 / Performance, freeze, crash, or other
-    validations:
-      required: true
-
-  - type: dropdown
-    id: connection_type
-    attributes:
-      label: 相关连接或数据库类型 / Related connection or database type
-      description: 如果与具体连接无关，请选择“不适用”。Choose “Not applicable” when the issue is not connection-specific.
-      options:
-        - 不适用 / Not applicable
-        - MySQL
-        - PostgreSQL
-        - SQLite
-        - DuckDB
-        - SQL Server
-        - Oracle
-        - ClickHouse
-        - 达梦 DM
-        - 金仓 KingbaseES
-        - GBase 8s
-        - OceanBase
-        - openGauss
-        - Apache IoTDB
-        - Redis
-        - MongoDB
-        - SSH / SFTP
-        - 串口 / Serial
-        - RDP / VNC
-        - 其他扩展驱动或 Provider / Other extension driver or provider
-    validations:
-      required: true
+        > 请勿提交密码、私钥、Token、完整连接串或业务数据。Do not include credentials, full connection strings, or business data.
 
   - type: textarea
     id: description
     attributes:
-      label: 问题描述 / What happened?
-      description: 清楚描述实际行为、出现频率，以及问题从何时开始。Describe the actual behavior, frequency, and when it started.
-      placeholder: 请说明你看到了什么，以及它对你的工作有什么影响。/ Tell us what you observed and how it affects your workflow.
+      label: 发生了什么？/ What happened?
+      description: 请描述实际结果；如果方便，也可以写下你原本期望的结果。Describe what happened and, if convenient, what you expected.
+      placeholder: 我在……时遇到了…… / When I ..., I encountered ...
     validations:
       required: true
 
   - type: textarea
     id: reproduce
     attributes:
-      label: 复现步骤 / Steps to reproduce
-      description: 请提供最短、稳定的复现步骤。Provide the shortest reliable reproduction.
+      label: 如何复现？/ How can we reproduce it?
+      description: 如果能稳定复现，请写下简单步骤；不能复现也可以留空。Add brief steps if the problem is reproducible; otherwise leave this blank.
       placeholder: |
-        1. 打开 / Open ...
-        2. 创建或选择 / Create or select ...
-        3. 点击或执行 / Click or run ...
-        4. 观察到 / Observe ...
-    validations:
-      required: true
+        1. 打开…… / Open ...
+        2. 点击…… / Click ...
+        3. 出现…… / See ...
 
-  - type: textarea
-    id: expected
+  - type: input
+    id: environment
     attributes:
-      label: 预期行为 / Expected behavior
-      description: 你认为正确的结果应该是什么？What did you expect to happen?
-    validations:
-      required: true
+      label: 版本与系统 / Version and system
+      description: 如果方便，请填写 Navop 版本和操作系统。If convenient, include the Navop version and operating system.
+      placeholder: "例如 / e.g. Navop 0.10.3, Windows 11"
 
   - type: textarea
     id: evidence
     attributes:
-      label: 日志、截图与补充信息 / Logs, screenshots, and additional context
-      description: 可拖入日志、截图或录屏；请先移除敏感信息。Attach logs, screenshots, or recordings after removing sensitive information.
-      placeholder: |
-        - 错误信息 / Error message:
-        - 日志片段 / Log excerpt:
-        - 截图或录屏 / Screenshot or recording:
-        - 最近是否升级或修改配置 / Recent upgrade or configuration change:
-    validations:
-      required: false
+      label: 截图、日志或其他信息 / Screenshots, logs, or anything else
+      description: 可直接拖入附件，请先移除敏感信息。Attach anything useful after removing sensitive information.

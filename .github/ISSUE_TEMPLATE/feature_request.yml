@@ -1,5 +1,5 @@
 name: 功能建议 / Feature Request
-description: 提议新的工作流、功能或改进 / Suggest a new workflow, feature, or improvement
+description: 告诉我们你希望 Navop 增加或改进什么 / Suggest an addition or improvement
 title: "[Feature]: "
 labels:
   - enhancement
@@ -7,78 +7,21 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢你的建议！请聚焦一个明确的问题或工作流，并说明它为什么值得解决。
+        简单说说你的想法即可，不需要准备完整方案。
 
-        Thanks for the suggestion. Please focus on one concrete problem or workflow and explain why it is worth solving.
-
-        如果你要请求新的数据库或驱动支持，请使用 **数据库兼容性** 模板。
-
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: 提交前检查 / Checklist
-      options:
-        - label: 我已搜索已有 Issue，未发现相同建议。/ I searched existing issues and found no duplicate.
-          required: true
-        - label: 此 Issue 聚焦一个功能或改进。/ This issue focuses on one feature or improvement.
-          required: true
-        - label: 这不是现有功能异常；如是，我会改用 Bug 报告。/ This is not broken existing behavior; otherwise I will use Bug Report.
-          required: true
-
-  - type: dropdown
-    id: module
-    attributes:
-      label: 功能模块 / Feature area
-      options:
-        - 首页、工作区与连接管理 / Home, workspace, and connection management
-        - 数据库、SQL 编辑器与数据工具 / Database, SQL editor, and data tools
-        - Redis
-        - MongoDB
-        - SSH、本地终端与串口 / SSH, local terminal, and serial
-        - SFTP 与远程文件编辑 / SFTP and remote file editing
-        - 端口转发、代理与隧道 / Port forwarding, proxy, and tunnel
-        - 远程桌面 RDP/VNC / Remote desktop RDP/VNC
-        - 服务器监控 / Server monitoring
-        - 笔记、Markdown 与文档导出 / Notes, Markdown, and document export
-        - AI 对话、终端 AI 与工具调用 / AI chat, terminal AI, and tool calling
-        - Agent Hub、ACP、Public MCP 与 CLI / Agent Hub, ACP, Public MCP, and CLI
-        - 扩展系统、驱动与扩展市场 / Extension system, drivers, and marketplace
-        - 设置、主题与多语言 / Settings, themes, and i18n
-        - 连接与设置同步 / Connection and settings sync
-        - 安装、更新与桌面集成 / Install, update, and desktop integration
-        - 其他 / Other
-    validations:
-      required: true
+        A short description is enough; you do not need a complete design.
 
   - type: textarea
-    id: problem
+    id: suggestion
     attributes:
-      label: 问题与使用场景 / Problem and use case
-      description: 目前的工作流有什么限制？谁会遇到？频率如何？What limitation exists, who encounters it, and how often?
-      placeholder: 当我需要……时，目前只能……，这会导致…… / When I need to ..., I currently have to ..., which causes ...
+      label: 你的建议 / Your suggestion
+      description: 你遇到了什么不便，希望 Navop 如何改进？What is inconvenient today, and how could Navop improve it?
+      placeholder: 希望 Navop 可以……，这样就能…… / I wish Navop could ... so that ...
     validations:
       required: true
-
-  - type: textarea
-    id: solution
-    attributes:
-      label: 建议方案 / Proposed solution
-      description: 描述你希望 Navop 如何工作，不必拘泥于具体 UI。Describe how you would like Navop to behave without over-constraining the UI.
-    validations:
-      required: true
-
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: 替代方案 / Alternatives considered
-      description: 你现在如何绕过这个限制？是否参考过其他工具？How do you work around it today, and are there relevant tools?
-    validations:
-      required: false
 
   - type: textarea
     id: context
     attributes:
       label: 补充信息 / Additional context
-      description: 可添加流程图、草图、截图、示例或相关链接。Add workflow diagrams, mockups, screenshots, examples, or related links.
-    validations:
-      required: false
+      description: 可选：截图、示例、参考产品或临时解决办法。Optional screenshots, examples, references, or workarounds.

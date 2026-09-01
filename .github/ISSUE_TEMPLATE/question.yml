@@ -1,5 +1,5 @@
 name: 使用问题 / Question
-description: 询问配置、用法、能力边界或排障思路 / Ask about configuration, usage, supported capabilities, or troubleshooting
+description: 询问 Navop 的配置、用法或能力 / Ask about configuration, usage, or capabilities
 title: "[Question]: "
 labels:
   - question
@@ -7,67 +7,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        如果你已经确认是可复现的软件故障，请使用 **Bug 报告**。快速交流也可以使用 Issue 选择页中的 QQ 或微信群入口。
+        直接提问即可。请勿提交密码、私钥、Token、完整连接串或业务数据。
 
-        If you have confirmed a reproducible software defect, please use **Bug Report**.
-
-        > **隐私提醒 / Privacy:** 请对连接信息、连接串、用户名、主机/IP、数据库名和文件路径进行脱敏，并删除所有密码、私钥、Token、云账号标识及业务数据。Sanitize connection metadata and remove all credentials, account identifiers, and business data.
-
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: 提交前检查 / Checklist
-      options:
-        - label: 我已搜索 README、已有 Issue 和相关文档。/ I searched the README, existing issues, and relevant documentation.
-          required: true
-        - label: 我已移除所有敏感信息。/ I removed all sensitive information.
-          required: true
-
-  - type: dropdown
-    id: module
-    attributes:
-      label: 相关模块 / Related area
-      options:
-        - 安装、更新与启动 / Install, update, and launch
-        - 连接管理与导入 / Connection management and import
-        - 连接与设置同步 / Connection and settings sync
-        - SQL 数据库与数据工具 / SQL databases and data tools
-        - Redis
-        - MongoDB
-        - SSH、终端、串口与 SFTP / SSH, terminal, serial, and SFTP
-        - 端口转发、代理与隧道 / Port forwarding, proxy, and tunnel
-        - 远程桌面 RDP/VNC / Remote desktop RDP/VNC
-        - 服务器监控 / Server monitoring
-        - 笔记、Markdown 与文档导出 / Notes, Markdown, and document export
-        - AI、Agent Hub、ACP、Public MCP 与 CLI / AI, Agent Hub, ACP, Public MCP, and CLI
-        - 扩展、驱动与扩展市场 / Extensions, drivers, and marketplace
-        - 设置、主题与多语言 / Settings, themes, and i18n
-        - 其他 / Other
-    validations:
-      required: true
-
-  - type: input
-    id: version
-    attributes:
-      label: Navop 版本 / Navop version
-      description: 如果与具体版本无关，可填写“不适用”。Enter “Not applicable” if the question is version-independent.
-      placeholder: "例如 / e.g. 0.10.3"
-    validations:
-      required: true
+        Ask away. Do not include credentials, full connection strings, or business data.
 
   - type: textarea
-    id: goal
+    id: question
     attributes:
-      label: 你想完成什么？/ What are you trying to accomplish?
-      description: 请描述最终目标，而不只是某个按钮或报错。Describe the end goal, not only a button or error message.
-    validations:
-      required: true
-
-  - type: textarea
-    id: attempted
-    attributes:
-      label: 已尝试的方法 / What have you tried?
-      description: 请列出相关配置、操作步骤和已查阅的资料。List relevant settings, steps, and documentation you already checked.
+      label: 你的问题 / Your question
+      description: 请说明你想完成什么，以及目前卡在哪里。Tell us what you are trying to do and where you are stuck.
     validations:
       required: true
 
@@ -75,6 +23,4 @@ body:
     id: context
     attributes:
       label: 补充信息 / Additional context
-      description: 可附脱敏后的截图、日志或配置片段。Attach sanitized screenshots, logs, or configuration snippets if useful.
-    validations:
-      required: false
+      description: 可选：已尝试的方法、Navop 版本、截图或脱敏日志。Optional attempts, Navop version, screenshots, or sanitized logs.

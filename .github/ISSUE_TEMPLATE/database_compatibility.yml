@@ -1,5 +1,5 @@
-name: 数据库兼容性 / Database Compatibility
-description: 请求支持新的数据库、版本、驱动或数据库特性 / Request support for a database, version, driver, or database feature
+name: 数据库支持 / Database Support
+description: 请求支持数据库、驱动、版本或数据库能力 / Request database, driver, version, or capability support
 title: "[Database]: "
 labels:
   - enhancement
@@ -7,115 +7,28 @@ body:
   - type: markdown
     attributes:
       value: |
-        此模板用于数据库兼容性与驱动支持。普通功能故障请使用 **Bug 报告**。
+        告诉我们数据库名称和你需要的能力即可，其他信息都可以后续补充。
 
-        Use this form for database compatibility and driver support. For a regression or broken existing feature, use **Bug Report**.
+        Tell us the database and capability you need; other details can be added later.
 
-        **当前支持 / Currently supported**
-
-        - 内置 SQL 数据库：MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse
-        - 扩展驱动：达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、免 Instant Client 的 Oracle
-        - 专用数据工具：Redis、MongoDB
-
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: 提交前检查 / Checklist
-      options:
-        - label: 我已搜索已有 Issue，未发现相同请求。/ I searched existing issues and found no duplicate.
-          required: true
-        - label: 我已检查现有内置与扩展驱动，确认所需数据库或能力尚未支持。/ I checked the existing built-in and extension drivers and confirmed the requested database or capability is not supported.
-          required: true
-        - label: 我不会提交密码、私钥、Token、连接串或业务数据。/ I will not submit passwords, private keys, tokens, connection strings, or business data.
-          required: true
-
-  - type: dropdown
-    id: request_type
-    attributes:
-      label: 请求类型 / Request type
-      options:
-        - 新数据库或新驱动 / New database or driver
-        - 新数据库版本兼容 / New database version compatibility
-        - 新连接、认证、SSL 或隧道兼容能力 / New connection, authentication, SSL, or tunnel compatibility
-        - 对象树、元数据或 DDL / Object tree, metadata, or DDL
-        - SQL 方言、查询与执行计划 / SQL dialect, query, or execution plan
-        - 数据类型显示与编辑 / Data type display and editing
-        - 数据导入导出 / Data import and export
-        - Schema/Data 比较或 ER 图 / Schema/data comparison or ER diagram
-        - Redis 或 MongoDB 专用能力 / Redis or MongoDB capability
-        - 其他 / Other
-    validations:
-      required: true
-
-  - type: dropdown
+  - type: input
     id: database
     attributes:
       label: 数据库 / Database
-      description: 请选择目标数据库；列表同时展示 Navop 当前覆盖范围。Select the target database; this list also shows Navop's current coverage.
-      options:
-        - 其他或尚未支持的数据库 / Other or not yet supported
-        - MySQL（内置 / built-in）
-        - PostgreSQL（内置 / built-in）
-        - SQLite（内置 / built-in）
-        - DuckDB（内置 / built-in）
-        - SQL Server（内置 / built-in）
-        - Oracle（内置，需要 Instant Client / built-in, requires Instant Client）
-        - ClickHouse（内置 / built-in）
-        - 达梦 DM（扩展 / extension）
-        - 金仓 KingbaseES（扩展 / extension）
-        - GBase 8s（扩展 / extension）
-        - OceanBase（扩展 / extension）
-        - openGauss（扩展 / extension）
-        - Apache IoTDB（扩展 / extension）
-        - Oracle 纯 Go 驱动（扩展，无需 Instant Client / extension, no Instant Client）
-        - Redis（专用界面 / dedicated UI）
-        - MongoDB（专用界面 / dedicated UI）
-    validations:
-      required: true
-
-  - type: input
-    id: database_version
-    attributes:
-      label: 数据库版本与兼容模式 / Database version and compatibility mode
-      description: 填写完整版本、发行版、兼容模式或云厂商。Include the exact version, distribution, compatibility mode, or cloud vendor.
-      placeholder: "例如 / e.g. OceanBase 4.3 (MySQL mode), PostgreSQL 17.2, AWS RDS"
-    validations:
-      required: true
-
-  - type: input
-    id: navop_version
-    attributes:
-      label: Navop 版本 / Navop version
-      placeholder: "例如 / e.g. 0.10.3"
+      placeholder: "例如 / e.g. OceanBase 4.3 (MySQL mode)"
     validations:
       required: true
 
   - type: textarea
-    id: use_case
+    id: request
     attributes:
-      label: 使用场景与当前限制 / Use case and current limitation
-      description: 说明真实工作流、当前无法完成的操作，以及该能力的重要性。Describe the real workflow, what is currently blocked, and why it matters.
+      label: 你需要什么支持？/ What support do you need?
+      description: 简单描述当前无法完成的操作。Briefly describe what you cannot do today.
     validations:
       required: true
 
   - type: textarea
-    id: expected_support
+    id: context
     attributes:
-      label: 期望支持范围 / Expected support
-      description: 请列出最需要优先支持的连接方式、对象类型、SQL 或数据操作。List the connection methods, object types, SQL, or data operations you need most.
-      placeholder: |
-        - 连接与认证 / Connection and authentication:
-        - 对象浏览 / Object browsing:
-        - 查询与编辑 / Query and editing:
-        - 导入导出 / Import and export:
-        - 其他 / Other:
-    validations:
-      required: true
-
-  - type: textarea
-    id: references
-    attributes:
-      label: 官方文档与补充信息 / Official documentation and additional context
-      description: 请提供数据库官方协议、驱动、兼容性或语法文档。Provide official protocol, driver, compatibility, or syntax documentation.
-    validations:
-      required: false
+      label: 补充信息 / Additional context
+      description: 可选：数据库版本、Navop 版本、官方文档、截图或错误信息。Optional versions, official documentation, screenshots, or errors.
