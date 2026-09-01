@@ -1,13 +1,142 @@
 use crate::executor::SqlSource;
 use one_core::storage::DatabaseType;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Cursor, Read};
 use std::path::PathBuf;
+
+/// SQL Server `GO n` 的最大重复次数，防止错误脚本产生近乎无限的执行任务。
+const MAX_MSSQL_GO_REPEAT: usize = 1000;
 
 /// 统一的 SQL 读取器，支持字符串和文件两种来源
 enum SqlReader {
     Memory(Cursor<Vec<u8>>),
     File(BufReader<File>),
+}
+
+/// 返回去掉单个行尾后的“前缀 + 最后一行”，用于识别必须独占一行的客户端指令。
+fn split_last_line(buffer: &str) -> Option<(&str, &str)> {
+    let without_newline = buffer
+        .strip_suffix("\r\n")
+        .or_else(|| buffer.strip_suffix('\n'))
+        .or_else(|| buffer.strip_suffix('\r'))
+        .unwrap_or(buffer);
+    if let Some((prefix, line)) = without_newline.rsplit_once('\n') {
+        return Some((prefix, line.trim_end_matches('\r')));
+    }
+    Some(("", without_newline.trim_end_matches('\r')))
+}
+
+/// 判断文本是否以完整关键字开头，避免把 `BEGINNER` 误识别为 `BEGIN`。
+///
+/// 参数 `text` 应为待检查的 SQL 前缀，`keyword` 为不区分大小写的关键字；
+/// 返回值仅表示前缀匹配，不会跳过 SQL 注释或字符串内容。
+fn starts_with_keyword(text: &str, keyword: &str) -> bool {
+    text.get(..keyword.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(keyword))
+        && text
+            .get(keyword.len()..)
+            .and_then(|rest| rest.chars().next())
+            .map_or(true, char::is_whitespace)
+}
+
+/// 判断指定数据库是否支持标准允许的嵌套块注释语法。
+///
+/// PostgreSQL 和 SQL Server 的块注释可以嵌套；其他数据库仍按单层注释处理，
+/// 这样不会把其方言中普通文本误扩展为额外的注释层级。
+fn supports_nested_block_comments(db_type: &DatabaseType) -> bool {
+    matches!(db_type, DatabaseType::PostgreSQL | DatabaseType::MSSQL)
+}
+
+/// 将 Oracle `q'...'` 引用的起始分隔符映射为对应结束分隔符。
+///
+/// 方括号、圆括号、大括号和尖括号使用成对分隔符，其他字符按 Oracle 规则
+/// 使用自身作为结束分隔符。
+fn matching_oracle_quote_delimiter(opening: char) -> char {
+    match opening {
+        '[' => ']',
+        '(' => ')',
+        '{' => '}',
+        '<' => '>',
+        other => other,
+    }
+}
+
+/// 判断缓冲区末尾是否刚好形成 Oracle 替代引用的 `q`/`Q` 前缀。
+///
+/// 只有前一个字符不是标识符字符时才算前缀，避免把普通标识符中的字母 `q`
+/// 误当作替代引用起始标记。
+fn has_oracle_q_prefix(buffer: &str) -> bool {
+    let mut chars = buffer.chars().rev();
+    let Some(prefix) = chars.next() else {
+        return false;
+    };
+    (prefix == 'q' || prefix == 'Q')
+        && chars.next().map_or(true, |previous| {
+            !(previous == '_' || previous.is_alphanumeric())
+        })
+}
+
+/// 判断字符串起始引号前是否存在 PostgreSQL 的 `E`/`e` 转义字符串前缀。
+///
+/// 该判断只控制反斜杠转义，不改变原始 SQL 文本，也不对其他数据库启用该规则。
+fn has_postgresql_escape_prefix(buffer: &str) -> bool {
+    let mut chars = buffer.chars().rev();
+    let Some(prefix) = chars.next() else {
+        return false;
+    };
+    (prefix == 'e' || prefix == 'E')
+        && chars.next().map_or(true, |previous| {
+            !(previous == '_' || previous.is_alphanumeric())
+        })
+}
+
+/// 去除 Oracle 程序块识别所需的前导空白和注释，保留 SQL 原文不变。
+///
+/// 该函数仅用于判断语句类型；未闭合块注释不会被强行跳过，以免将残缺 SQL
+/// 错误判断为可由独占行 `/` 结束的 PL/SQL 块。
+fn strip_leading_oracle_comments(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if let Some(rest) = sql.strip_prefix("--") {
+            sql = rest.split_once('\n').map(|(_, tail)| tail).unwrap_or("");
+            continue;
+        }
+        if sql.starts_with("/*") {
+            if let Some((_, tail)) = sql.split_once("*/") {
+                sql = tail;
+                continue;
+            }
+        }
+        return sql;
+    }
+}
+
+/// Oracle 程序块只能由独占行 `/` 结束，内部和结尾分号都属于 PL/SQL 文本。
+fn is_oracle_plsql_block(sql: &str) -> bool {
+    let upper = strip_leading_oracle_comments(sql).to_ascii_uppercase();
+    let normalized = upper.trim_start();
+    if starts_with_keyword(normalized, "BEGIN") || starts_with_keyword(normalized, "DECLARE") {
+        return true;
+    }
+    let mut words = normalized.split_whitespace();
+    if words.next() != Some("CREATE") {
+        return false;
+    }
+    let mut word = words.next().unwrap_or_default();
+    if word == "OR" {
+        if !matches!(words.next(), Some("REPLACE" | "ALTER")) {
+            return false;
+        }
+        word = words.next().unwrap_or_default();
+    }
+    while matches!(word, "EDITIONABLE" | "NONEDITIONABLE") {
+        word = words.next().unwrap_or_default();
+    }
+    matches!(
+        word,
+        "PROCEDURE" | "FUNCTION" | "TRIGGER" | "PACKAGE" | "TYPE"
+    )
 }
 
 impl Read for SqlReader {
@@ -46,20 +175,29 @@ pub struct StreamingSqlParser {
 
     in_string: bool,
     string_char: char,
+    string_backslash_escape: bool,
     escape_next: bool,
     prev_was_string_char: bool,
+    oracle_alt_quote_waiting_delimiter: bool,
+    oracle_alt_quote_closing: Option<char>,
+    oracle_alt_quote_seen_closing: bool,
     in_line_comment: bool,
     in_block_comment: bool,
+    block_comment_depth: usize,
     dollar_quote: Option<String>,
 
     paren_depth: i32,
     begin_depth: i32,
+    pending_end_word: bool,
     last_checked_len: usize,
     delimiter: String,
 
-    pending_chars: Vec<char>,
+    /// 上次返回语句时尚未消费的字符，必须逐个弹出，禁止整体 drain 后丢失尾部。
+    pending_chars: VecDeque<char>,
     pending_repeated_statement: Option<(String, usize)>,
     eof: bool,
+    terminated: bool,
+    at_start: bool,
 }
 
 impl StreamingSqlParser {
@@ -85,18 +223,26 @@ impl StreamingSqlParser {
             total_size,
             in_string: false,
             string_char: '\0',
+            string_backslash_escape: false,
             escape_next: false,
             prev_was_string_char: false,
+            oracle_alt_quote_waiting_delimiter: false,
+            oracle_alt_quote_closing: None,
+            oracle_alt_quote_seen_closing: false,
             in_line_comment: false,
             in_block_comment: false,
+            block_comment_depth: 0,
             dollar_quote: None,
             paren_depth: 0,
             begin_depth: 0,
+            pending_end_word: false,
             last_checked_len: 0,
             delimiter: ";".to_string(),
-            pending_chars: Vec::new(),
+            pending_chars: VecDeque::new(),
             pending_repeated_statement: None,
             eof: false,
+            terminated: false,
+            at_start: true,
         })
     }
 
@@ -121,13 +267,16 @@ impl StreamingSqlParser {
     /// 进度百分比
     pub fn progress_percent(&self) -> f32 {
         if self.total_size > 0 {
-            (self.bytes_read as f64 / self.total_size as f64 * 100.0) as f32
+            (self.bytes_read as f64 / self.total_size as f64 * 100.0).clamp(0.0, 100.0) as f32
         } else {
             0.0
         }
     }
 
     fn read_next_statement(&mut self) -> io::Result<Option<String>> {
+        if self.terminated {
+            return Ok(None);
+        }
         if let Some(statement) = self.take_pending_statement() {
             return Ok(Some(statement));
         }
@@ -138,13 +287,10 @@ impl StreamingSqlParser {
         let mut line_buf = String::new();
 
         loop {
-            // First process any pending characters from previous line
-            if !self.pending_chars.is_empty() {
-                let chars: Vec<char> = self.pending_chars.drain(..).collect();
-                for ch in chars {
-                    if let Some(stmt) = self.process_char(ch) {
-                        return Ok(Some(stmt));
-                    }
+            // 逐个消费待处理字符，遇到边界时队列中的剩余字符会保留到下一次调用。
+            while let Some(ch) = self.pending_chars.pop_front() {
+                if let Some(stmt) = self.process_char(ch)? {
+                    return Ok(Some(stmt));
                 }
             }
 
@@ -163,30 +309,36 @@ impl StreamingSqlParser {
             }
 
             if !line_buf.is_empty() {
-                let chars = line_buf.chars().collect::<Vec<char>>();
-                let mut i = 0;
-                while i < chars.len() {
-                    if let Some(stmt) = self.process_char(chars[i]) {
-                        // Save remaining characters for next call
-                        self.pending_chars.extend_from_slice(&chars[i + 1..]);
+                let mut chars = line_buf.chars();
+                while let Some(ch) = chars.next() {
+                    if let Some(stmt) = self.process_char(ch)? {
+                        self.pending_chars.extend(chars);
                         return Ok(Some(stmt));
                     }
-                    i += 1;
                 }
             }
 
             if self.eof {
-                if let Some(statement) = self.take_mssql_go_batch() {
+                if let Some(statement) = self.take_mssql_go_batch()? {
                     return Ok(statement.or_else(|| self.take_pending_statement()));
                 }
+                if let Some(statement) = self.take_oracle_slash_block() {
+                    return Ok(statement);
+                }
+                self.finish_terminal_quote_state();
+                self.validate_eof_state()?;
                 let trimmed = self.buffer.trim();
                 if let Some(stmt) = self.finalize_statement(trimmed) {
                     self.buffer.clear();
                     self.last_checked_len = 0;
+                    self.pending_end_word = false;
+                    self.terminated = true;
                     return Ok(Some(stmt));
                 }
                 self.buffer.clear();
                 self.last_checked_len = 0;
+                self.pending_end_word = false;
+                self.terminated = true;
                 return Ok(None);
             }
         }
@@ -200,12 +352,43 @@ impl StreamingSqlParser {
         Some(statement)
     }
 
-    /// Consume a trailing SQL Server `GO [count]` separator from the current
-    /// buffer. The outer `Option` identifies a recognized separator, while the
-    /// inner `Option` is empty when the separator did not have a preceding
-    /// statement.
-    fn take_mssql_go_batch(&mut self) -> Option<Option<String>> {
+    /// 从当前缓冲区消费末尾独占行 `GO [count]`，并按指定次数生成 SQL Server 批次。
+    ///
+    /// 外层 `Option` 表示是否识别到合法的 GO 行，内层 `Option` 表示 GO 前是否存在
+    /// 可执行批次；非法次数和多余参数返回 `InvalidData`，避免无界任务或静默误解析。
+    fn take_mssql_go_batch(&mut self) -> io::Result<Option<Option<String>>> {
         if self.db_type != DatabaseType::MSSQL
+            || self.in_string
+            || self.in_line_comment
+            || self.in_block_comment
+            || self.dollar_quote.is_some()
+        {
+            return Ok(None);
+        }
+
+        let Some((batch, last_line)) = split_last_line(&self.buffer) else {
+            return Ok(None);
+        };
+        let Some(repeat_count) = parse_go_repeat_count(last_line)? else {
+            return Ok(None);
+        };
+        let statement = batch.trim().to_string();
+
+        self.buffer.clear();
+        self.last_checked_len = 0;
+        self.pending_end_word = false;
+        if statement.is_empty() {
+            return Ok(Some(None));
+        }
+        if repeat_count > 1 {
+            self.pending_repeated_statement = Some((statement.clone(), repeat_count - 1));
+        }
+        Ok(Some(Some(statement)))
+    }
+
+    /// 识别 Oracle 客户端独占行 `/`；该行只终止前面的 PL/SQL 单元，不发送给 JDBC。
+    fn take_oracle_slash_block(&mut self) -> Option<Option<String>> {
+        if self.db_type != DatabaseType::Oracle
             || self.in_string
             || self.in_line_comment
             || self.in_block_comment
@@ -213,49 +396,121 @@ impl StreamingSqlParser {
         {
             return None;
         }
-
-        let lines = self.buffer.lines().collect::<Vec<_>>();
-        let repeat_count = parse_go_repeat_count(lines.last().copied()?)?;
-        let statement = lines[..lines.len() - 1].join("\n").trim().to_string();
-
+        let (block, last_line) = split_last_line(&self.buffer)?;
+        if last_line.trim() != "/" {
+            return None;
+        }
+        let statement = block.trim().to_string();
         self.buffer.clear();
         self.last_checked_len = 0;
-        if statement.is_empty() {
-            return Some(None);
-        }
-        if repeat_count > 1 {
-            self.pending_repeated_statement = Some((statement.clone(), repeat_count - 1));
-        }
-        Some(Some(statement))
+        self.paren_depth = 0;
+        self.begin_depth = 0;
+        self.pending_end_word = false;
+        Some((!statement.is_empty()).then_some(statement))
     }
 
-    fn process_char(&mut self, ch: char) -> Option<String> {
+    /// EOF 可以正常结束行注释以及已经读取到右引号的延迟关闭状态。
+    fn finish_terminal_quote_state(&mut self) {
+        if self.in_string && self.prev_was_string_char {
+            self.in_string = false;
+            self.prev_was_string_char = false;
+            self.string_backslash_escape = false;
+        }
+        self.in_line_comment = false;
+    }
+
+    /// EOF 时拒绝未闭合的词法和结构状态，避免执行残缺 SQL。
+    fn validate_eof_state(&mut self) -> io::Result<()> {
+        let error = if self.in_string {
+            Some("SQL 文件结束时字符串或引用标识符未闭合")
+        } else if self.oracle_alt_quote_waiting_delimiter || self.oracle_alt_quote_closing.is_some()
+        {
+            Some("SQL 文件结束时 Oracle q 引用未闭合")
+        } else if self.in_block_comment {
+            Some("SQL 文件结束时块注释未闭合")
+        } else if self.dollar_quote.is_some() {
+            Some("SQL 文件结束时 PostgreSQL 美元引用未闭合")
+        } else if self.paren_depth != 0 {
+            Some("SQL 文件结束时圆括号未闭合")
+        } else if self.db_type == DatabaseType::Oracle
+            && is_oracle_plsql_block(&self.buffer)
+            && !self.buffer.trim().is_empty()
+        {
+            Some("Oracle/PLSQL 块缺少独占行 / 终止符")
+        } else if self.begin_depth != 0 {
+            Some("SQL 文件结束时 BEGIN/END 块未闭合")
+        } else {
+            None
+        };
+        if let Some(message) = error {
+            self.terminated = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{message}，已读取字节数: {}", self.bytes_read),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 消费单个 Unicode 字符并推进词法与语句边界状态。
+    ///
+    /// 返回 `Some` 表示形成一个完整语句；未闭合或不匹配的结构返回 `InvalidData`。
+    /// 该方法会修改内部缓冲区、注释/引号状态和块深度，但不会执行 SQL。
+    fn process_char(&mut self, ch: char) -> io::Result<Option<String>> {
+        if self.at_start {
+            self.at_start = false;
+            if ch == '\u{feff}' {
+                return Ok(None);
+            }
+        }
+
+        if self.oracle_alt_quote_waiting_delimiter {
+            self.buffer.push(ch);
+            self.oracle_alt_quote_waiting_delimiter = false;
+            self.oracle_alt_quote_closing = Some(matching_oracle_quote_delimiter(ch));
+            return Ok(None);
+        }
+        if let Some(closing) = self.oracle_alt_quote_closing {
+            self.buffer.push(ch);
+            if self.oracle_alt_quote_seen_closing && ch == '\'' {
+                self.oracle_alt_quote_seen_closing = false;
+                self.oracle_alt_quote_closing = None;
+            } else {
+                self.oracle_alt_quote_seen_closing = ch == closing;
+            }
+            return Ok(None);
+        }
+
         if self.in_line_comment {
             self.buffer.push(ch);
             if ch == '\n' {
                 self.in_line_comment = false;
             }
-            return None;
+            return Ok(None);
         }
 
         if self.in_block_comment {
+            let previous = self.buffer.chars().next_back();
             self.buffer.push(ch);
-            if ch == '/' && self.buffer.ends_with("*/") {
-                self.in_block_comment = false;
+            if supports_nested_block_comments(&self.db_type) && previous == Some('/') && ch == '*' {
+                self.block_comment_depth += 1;
+            } else if previous == Some('*') && ch == '/' {
+                self.block_comment_depth = self.block_comment_depth.saturating_sub(1);
+                if self.block_comment_depth == 0 {
+                    self.in_block_comment = false;
+                }
             }
-            return None;
+            return Ok(None);
         }
 
         if let Some(ref tag) = self.dollar_quote.clone() {
             self.buffer.push(ch);
             if ch == '$' {
-                let end_pos = self.buffer.len();
-                let start_pos = end_pos.saturating_sub(tag.len());
-                if self.buffer[start_pos..].ends_with(tag.as_str()) {
+                if self.buffer.ends_with(tag.as_str()) {
                     self.dollar_quote = None;
                 }
             }
-            return None;
+            return Ok(None);
         }
 
         if self.in_string {
@@ -263,14 +518,14 @@ impl StreamingSqlParser {
                 self.buffer.push(ch);
                 self.escape_next = false;
                 self.prev_was_string_char = false;
-                return None;
+                return Ok(None);
             }
 
-            if ch == '\\' && self.db_type == DatabaseType::MySQL {
+            if ch == '\\' && self.string_backslash_escape {
                 self.buffer.push(ch);
                 self.escape_next = true;
                 self.prev_was_string_char = false;
-                return None;
+                return Ok(None);
             }
 
             if ch == self.string_char {
@@ -282,7 +537,7 @@ impl StreamingSqlParser {
                     // Might be end of string or start of '' escape
                     self.prev_was_string_char = true;
                 }
-                return None;
+                return Ok(None);
             }
 
             // Non-quote, non-escape character
@@ -290,34 +545,43 @@ impl StreamingSqlParser {
                 // Previous quote was end of string, process this char normally
                 self.in_string = false;
                 self.prev_was_string_char = false;
+                self.string_backslash_escape = false;
                 // Fall through to normal character processing
             } else {
                 self.buffer.push(ch);
-                return None;
+                return Ok(None);
             }
+        }
+
+        if self.pending_end_word && !ch.is_whitespace() {
+            if ch == ';' || self.delimiter.starts_with(ch) {
+                self.begin_depth = (self.begin_depth - 1).max(0);
+            }
+            self.pending_end_word = false;
         }
 
         if self.should_start_line_comment(ch) {
             self.buffer.push(ch);
             self.in_line_comment = true;
-            return None;
+            return Ok(None);
         }
 
         if ch == '-' {
             self.buffer.push(ch);
-            return None;
+            return Ok(None);
         }
 
         if ch == '#' && self.db_type == DatabaseType::MySQL {
             self.buffer.push(ch);
             self.in_line_comment = true;
-            return None;
+            return Ok(None);
         }
 
         if ch == '*' && self.buffer.ends_with('/') {
             self.buffer.push(ch);
             self.in_block_comment = true;
-            return None;
+            self.block_comment_depth = 1;
+            return Ok(None);
         }
 
         if ch == '$' && self.db_type == DatabaseType::PostgreSQL {
@@ -325,65 +589,99 @@ impl StreamingSqlParser {
             if let Some(tag) = self.try_extract_dollar_quote() {
                 self.dollar_quote = Some(tag);
             }
-            return None;
+            return Ok(None);
         }
 
+        if ch == '\'' && self.db_type == DatabaseType::Oracle && has_oracle_q_prefix(&self.buffer) {
+            self.buffer.push(ch);
+            self.oracle_alt_quote_waiting_delimiter = true;
+            return Ok(None);
+        }
         if ch == '\'' || ch == '"' {
             self.in_string = true;
             self.string_char = ch;
+            self.string_backslash_escape = self.db_type == DatabaseType::MySQL
+                || (self.db_type == DatabaseType::PostgreSQL
+                    && ch == '\''
+                    && has_postgresql_escape_prefix(&self.buffer));
             self.buffer.push(ch);
-            return None;
+            return Ok(None);
         }
 
         if ch == '`' && self.db_type == DatabaseType::MySQL {
             self.in_string = true;
             self.string_char = ch;
+            self.string_backslash_escape = true;
             self.buffer.push(ch);
-            return None;
+            return Ok(None);
+        }
+
+        if ch == '[' && self.db_type == DatabaseType::MSSQL {
+            self.in_string = true;
+            self.string_char = ']';
+            self.string_backslash_escape = false;
+            self.buffer.push(ch);
+            return Ok(None);
         }
 
         if ch == '(' {
             self.paren_depth += 1;
             self.buffer.push(ch);
-            return None;
+            return Ok(None);
         }
 
         if ch == ')' {
-            self.paren_depth = (self.paren_depth - 1).max(0);
+            if self.paren_depth == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SQL 出现未匹配的右圆括号",
+                ));
+            }
+            self.paren_depth -= 1;
             self.buffer.push(ch);
-            return None;
+            return Ok(None);
         }
 
         self.buffer.push(ch);
 
         if ch.is_whitespace() || ch == ';' || ch == '$' {
             self.update_begin_depth();
+            if self.pending_end_word && (ch == ';' || self.delimiter.starts_with(ch)) {
+                self.begin_depth = (self.begin_depth - 1).max(0);
+                self.pending_end_word = false;
+            }
         }
 
         if self.db_type == DatabaseType::MySQL && ch == '\n' {
             if let Some(new_delim) = self.try_parse_delimiter() {
                 self.delimiter = new_delim;
-                let lines: Vec<&str> = self.buffer.lines().collect();
-                if lines.len() > 1 {
-                    self.buffer = lines[..lines.len() - 1].join("\n");
-                    self.last_checked_len = 0;
-                } else {
-                    self.buffer.clear();
-                    self.last_checked_len = 0;
-                }
-                return None;
+                let prefix = split_last_line(&self.buffer)
+                    .map(|(prefix, _)| prefix)
+                    .unwrap_or_default();
+                self.buffer = prefix.to_string();
+                self.last_checked_len = 0;
+                return Ok(None);
             }
         }
 
         if self.db_type == DatabaseType::MSSQL && ch == '\n' {
-            if let Some(statement) = self.take_mssql_go_batch() {
-                return statement;
+            if let Some(statement) = self.take_mssql_go_batch()? {
+                return Ok(statement);
+            }
+        }
+
+        if self.db_type == DatabaseType::Oracle && ch == '\n' {
+            if let Some(statement) = self.take_oracle_slash_block() {
+                return Ok(statement);
             }
         }
 
         if self.paren_depth == 0 && self.begin_depth == 0 {
             let trimmed_current = self.buffer.trim_end();
-            if self.db_type != DatabaseType::MSSQL && trimmed_current.ends_with(&self.delimiter) {
+            if self.db_type != DatabaseType::MSSQL
+                && !(self.db_type == DatabaseType::Oracle && is_oracle_plsql_block(trimmed_current))
+                && trimmed_current.ends_with(&self.delimiter)
+            {
                 let stmt = trimmed_current
                     .strip_suffix(&self.delimiter)
                     .unwrap_or(trimmed_current)
@@ -392,32 +690,16 @@ impl StreamingSqlParser {
                 if let Some(result) = self.finalize_statement(stmt) {
                     self.buffer.clear();
                     self.last_checked_len = 0;
-                    return Some(result);
+                    self.pending_end_word = false;
+                    return Ok(Some(result));
                 }
                 self.buffer.clear();
                 self.last_checked_len = 0;
-            } else if self.db_type == DatabaseType::Oracle
-                && self.buffer.trim().ends_with('\n')
-                && self.buffer.trim_end().ends_with('/')
-            {
-                let stmt = self
-                    .buffer
-                    .trim()
-                    .strip_suffix('/')
-                    .unwrap_or(&self.buffer)
-                    .trim();
-                if !stmt.is_empty() {
-                    let result = stmt.to_string();
-                    self.buffer.clear();
-                    self.last_checked_len = 0;
-                    return Some(result);
-                }
-                self.buffer.clear();
-                self.last_checked_len = 0;
+                self.pending_end_word = false;
             }
         }
 
-        None
+        Ok(None)
     }
 
     fn should_start_line_comment(&self, ch: char) -> bool {
@@ -436,7 +718,7 @@ impl StreamingSqlParser {
             .unwrap_or(normalized)
             .trim();
         if normalized.is_empty()
-            || normalized.to_uppercase().starts_with("DELIMITER")
+            || starts_with_keyword(normalized, "DELIMITER")
             || self.is_pure_comment(normalized)
         {
             return None;
@@ -519,7 +801,16 @@ impl StreamingSqlParser {
 
         let tag = &self.buffer[prev_dollar_pos..=last_dollar_pos];
         let inner = &tag[1..tag.len() - 1];
-        if inner.is_empty() || inner.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        let valid_tag = inner.is_empty()
+            || inner
+                .chars()
+                .next()
+                .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+                && inner
+                    .chars()
+                    .skip(1)
+                    .all(|c| c == '_' || c.is_ascii_alphanumeric());
+        if valid_tag {
             Some(tag.to_string())
         } else {
             None
@@ -527,17 +818,15 @@ impl StreamingSqlParser {
     }
 
     fn try_parse_delimiter(&self) -> Option<String> {
-        let lines: Vec<&str> = self.buffer.lines().collect();
-        if let Some(last_line) = lines.last() {
-            let trimmed = last_line.trim();
-            if trimmed.to_uppercase().starts_with("DELIMITER") {
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    return Some(parts[1].to_string());
-                }
-            }
+        let (_, last_line) = split_last_line(&self.buffer)?;
+        let trimmed = last_line.trim();
+        if !starts_with_keyword(trimmed, "DELIMITER") {
+            return None;
         }
-        None
+        let mut parts = trimmed.split_whitespace();
+        parts.next()?;
+        let delimiter = parts.next()?;
+        (parts.next().is_none() && !delimiter.is_empty()).then(|| delimiter.to_string())
     }
 
     /// 检查字符串是否为纯注释（只包含注释和空白字符）
@@ -578,13 +867,21 @@ impl StreamingSqlParser {
                 '/' => {
                     if chars.peek() == Some(&'*') {
                         chars.next();
+                        if self.db_type == DatabaseType::MySQL && chars.peek() == Some(&'!') {
+                            return false;
+                        }
                         // 跳过直到 */
                         let mut prev = ' ';
+                        let mut closed = false;
                         for c in chars.by_ref() {
                             if prev == '*' && c == '/' {
+                                closed = true;
                                 break;
                             }
                             prev = c;
+                        }
+                        if !closed {
+                            return false;
                         }
                     } else {
                         return false;
@@ -639,7 +936,7 @@ impl StreamingSqlParser {
         if last_word_upper == "BEGIN" && self.should_track_begin_depth() {
             self.begin_depth += 1;
         } else if last_word_upper == "END" {
-            self.begin_depth = (self.begin_depth - 1).max(0);
+            self.pending_end_word = true;
         }
 
         self.last_checked_len = end;
@@ -655,6 +952,7 @@ impl StreamingSqlParser {
                 upper.starts_with("BEGIN") || starts_with_create_routine(&upper)
             }
             DatabaseType::MSSQL => starts_with_create_routine(&upper),
+            DatabaseType::SQLite => starts_with_create_routine(&upper),
             DatabaseType::MySQL => {
                 starts_with_create_routine(&upper)
                     || starts_with_mysql_standalone_begin_block(normalized)
@@ -664,10 +962,9 @@ impl StreamingSqlParser {
     }
 }
 
+/// 判断 MySQL 文本是否是独立复合 `BEGIN ... END` 块，而不是事务控制 `BEGIN;`。
 fn starts_with_mysql_standalone_begin_block(sql: &str) -> bool {
-    // A transaction-control `BEGIN;` must still be emitted immediately. A
-    // standalone compound block, on the other hand, starts with a bare BEGIN
-    // line and must keep its nested semicolons until the matching END.
+    // 事务 BEGIN 必须立即输出；独立复合块以单独 BEGIN 行开头，内部语句需保留至配对 END。
     sql.contains('\n')
         && sql
             .lines()
@@ -675,6 +972,10 @@ fn starts_with_mysql_standalone_begin_block(sql: &str) -> bool {
             .is_some_and(|line| line.trim().eq_ignore_ascii_case("begin"))
 }
 
+/// 判断规范化 SQL 是否以存储过程、函数或触发器定义开头。
+///
+/// 该判断兼容 `CREATE OR REPLACE/ALTER` 和 MySQL DEFINER 等修饰符，仅用于决定
+/// 是否跟踪 `BEGIN/END` 深度，不负责校验完整 DDL 语法。
 fn starts_with_create_routine(sql: &str) -> bool {
     let mut words = sql.split_whitespace();
     if words.next() != Some("CREATE") {
@@ -687,22 +988,55 @@ fn starts_with_create_routine(sql: &str) -> bool {
             object_type = words.next().unwrap_or_default();
         }
     }
+    while matches!(object_type, "DEFINER" | "TEMP" | "TEMPORARY")
+        || object_type.starts_with("DEFINER=")
+    {
+        object_type = words.next().unwrap_or_default();
+    }
     matches!(object_type, "PROCEDURE" | "PROC" | "FUNCTION" | "TRIGGER")
 }
 
-fn parse_go_repeat_count(line: &str) -> Option<usize> {
+/// 解析 SQL Server 独占行 `GO [count]`。
+///
+/// 非 GO 行返回 `Ok(None)`；合法 GO 返回正整数次数；零值、非数字、多余参数和
+/// 超过安全上限的值返回 `InvalidData`，调用方应终止当前解析器。
+fn parse_go_repeat_count(line: &str) -> io::Result<Option<usize>> {
     let mut parts = line.split_whitespace();
     if !parts
         .next()
         .is_some_and(|word| word.eq_ignore_ascii_case("go"))
     {
-        return None;
+        return Ok(None);
     }
     let repeat_count = match parts.next() {
-        Some(count) => count.parse::<usize>().ok().filter(|count| *count > 0)?,
+        Some(count) => count
+            .parse::<usize>()
+            .ok()
+            .filter(|count| *count > 0)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SQL Server GO 重复次数必须为正整数",
+                )
+            })?,
         None => 1,
     };
-    parts.next().is_none().then_some(repeat_count)
+    if parts.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SQL Server GO 指令包含多余参数",
+        ));
+    }
+    if repeat_count > MAX_MSSQL_GO_REPEAT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "SQL Server GO 重复次数 {} 超过安全上限 {}",
+                repeat_count, MAX_MSSQL_GO_REPEAT
+            ),
+        ));
+    }
+    Ok(Some(repeat_count))
 }
 
 impl Iterator for StreamingSqlParser {
@@ -712,7 +1046,10 @@ impl Iterator for StreamingSqlParser {
         match self.read_next_statement() {
             Ok(Some(stmt)) => Some(Ok(stmt)),
             Ok(None) => None,
-            Err(e) => Some(Err(e)),
+            Err(e) => {
+                self.terminated = true;
+                Some(Err(e))
+            }
         }
     }
 }
@@ -723,12 +1060,10 @@ mod test {
     use one_core::storage::DatabaseType;
 
     fn parse_all(source: SqlSource, db_type: DatabaseType) -> Vec<String> {
-        let mut parser = StreamingSqlParser::from_source(source, db_type).unwrap();
-        let mut statements = Vec::new();
-        while let Some(Ok(stmt)) = parser.next() {
-            statements.push(stmt);
-        }
-        statements
+        StreamingSqlParser::from_source(source, db_type)
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .expect("测试脚本必须完整解析成功")
     }
 
     #[test]
@@ -871,16 +1206,12 @@ DELIMITER ;
         assert!(statements[1].contains("SELECT 'value;inside';"));
         assert!(statements[1].contains("BEGIN\n    SELECT 2;\n  END;"));
         assert!(statements[1].ends_with("END"));
-        assert!(
-            !statements
-                .iter()
-                .any(|statement| statement.contains("DELIMITER"))
-        );
-        assert!(
-            !statements
-                .iter()
-                .any(|statement| statement.contains("CALL"))
-        );
+        assert!(!statements
+            .iter()
+            .any(|statement| statement.contains("DELIMITER")));
+        assert!(!statements
+            .iter()
+            .any(|statement| statement.contains("CALL")));
     }
 
     #[test]
@@ -915,16 +1246,12 @@ DELIMITER ;
         assert!(statements[1].contains("RETURNS INT"));
         assert!(statements[1].contains("SET result_value = amount + 1;"));
         assert!(statements[1].ends_with("END"));
-        assert!(
-            !statements
-                .iter()
-                .any(|statement| statement.contains("DELIMITER"))
-        );
-        assert!(
-            !statements
-                .iter()
-                .any(|statement| statement.contains("-- SELECT"))
-        );
+        assert!(!statements
+            .iter()
+            .any(|statement| statement.contains("DELIMITER")));
+        assert!(!statements
+            .iter()
+            .any(|statement| statement.contains("-- SELECT")));
     }
 
     #[test]
@@ -1021,26 +1348,166 @@ DELIMITER ;
 
     #[test]
     fn test_mssql_large_go_repeat_count_is_lazy() {
-        let sql = format!("SELECT 1;\nGO {}", usize::MAX);
+        let sql = format!("SELECT 1;\nGO {}", MAX_MSSQL_GO_REPEAT + 1);
         let mut parser =
             StreamingSqlParser::from_source(SqlSource::Script(sql), DatabaseType::MSSQL).unwrap();
 
-        assert_eq!(parser.next().unwrap().unwrap(), "SELECT 1;");
+        let first = parser.next().expect("超限 GO 必须返回错误");
+        assert!(first.is_err());
+        assert!(parser.next().is_none(), "解析错误后不应重复返回错误");
+    }
+
+    #[test]
+    fn test_same_line_statements_do_not_drop_remaining_characters() {
+        let sql = "SELECT 1;SELECT 2;SELECT 3;SELECT 4;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
         assert_eq!(
-            parser
-                .pending_repeated_statement
-                .as_ref()
-                .map(|(_, remaining)| *remaining),
-            Some(usize::MAX - 1)
+            statements,
+            vec!["SELECT 1", "SELECT 2", "SELECT 3", "SELECT 4"]
         );
-        assert_eq!(parser.next().unwrap().unwrap(), "SELECT 1;");
+    }
+
+    #[test]
+    fn test_oracle_plsql_block_uses_slash_as_terminator() {
+        let sql = "DECLARE\n  v_count NUMBER;\nBEGIN\n  v_count := 1;\n  DBMS_OUTPUT.PUT_LINE(v_count);\nEND;\n/\nSELECT 1;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::Oracle);
+
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("v_count := 1;"));
+        assert!(statements[0].ends_with("END;"));
+        assert_eq!(statements[1], "SELECT 1");
+    }
+
+    #[test]
+    fn test_oracle_slash_after_regular_sql_is_ignored() {
+        let sql = "CREATE TABLE t (id NUMBER);\n/\nSELECT 1;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::Oracle);
+
+        assert_eq!(statements, vec!["CREATE TABLE t (id NUMBER)", "SELECT 1"]);
+    }
+
+    #[test]
+    fn test_unclosed_lexical_state_returns_error() {
+        for (database_type, sql) in [
+            (DatabaseType::MySQL, "SELECT 'unterminated"),
+            (DatabaseType::MySQL, "SELECT /* unterminated"),
+            (DatabaseType::PostgreSQL, "SELECT $$unterminated"),
+            (DatabaseType::MySQL, "SELECT (1"),
+        ] {
+            let mut parser =
+                StreamingSqlParser::from_source(SqlSource::Script(sql.to_string()), database_type)
+                    .unwrap();
+            assert!(parser.next().expect("未闭合结构必须报错").is_err());
+            assert!(parser.next().is_none());
+        }
+    }
+
+    #[test]
+    fn test_oracle_plsql_without_slash_returns_error() {
+        let mut parser = StreamingSqlParser::from_source(
+            SqlSource::Script("BEGIN\n  NULL;\nEND;".to_string()),
+            DatabaseType::Oracle,
+        )
+        .unwrap();
+
+        let error = parser.next().expect("缺少 Oracle / 必须报错").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(parser.next().is_none());
+    }
+
+    #[test]
+    fn test_mysql_conditional_comment_is_preserved() {
+        let sql = "/*!40101 SET @saved_cs_client = @@character_set_client */;\nSELECT 1;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].starts_with("/*!40101 SET"));
+        assert_eq!(statements[1], "SELECT 1");
+    }
+
+    #[test]
+    fn test_mssql_bracket_identifier_can_contain_semicolon() {
+        let sql = "SELECT [column;name] FROM [table;name];";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MSSQL);
+
+        assert_eq!(statements, vec!["SELECT [column;name] FROM [table;name]"]);
+    }
+
+    #[test]
+    fn test_postgresql_escape_string_and_unicode_before_dollar_tag() {
+        // 中文内容用于覆盖 UTF-8 多字节字符；合法 dollar tag 仍遵循 PostgreSQL 标识符规则。
+        let sql = "SELECT E'line\\nvalue;中文';SELECT '中文', $body$body;inside$body$;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::PostgreSQL);
+
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("E'line\\nvalue;中文'"));
+        assert!(statements[1].contains("$body$body;inside$body$"));
+    }
+
+    #[test]
+    fn test_oracle_q_quote_can_contain_semicolon() {
+        let sql = "SELECT q'[value;with;semicolon]' FROM dual;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::Oracle);
+
         assert_eq!(
-            parser
-                .pending_repeated_statement
-                .as_ref()
-                .map(|(_, remaining)| *remaining),
-            Some(usize::MAX - 2)
+            statements,
+            vec!["SELECT q'[value;with;semicolon]' FROM dual"]
         );
+    }
+
+    #[test]
+    fn test_nested_block_comments_are_supported() {
+        let postgresql = "SELECT 1 /* outer /* inner; */ still outer */;SELECT 2;";
+        assert_eq!(
+            parse_all(
+                SqlSource::Script(postgresql.to_string()),
+                DatabaseType::PostgreSQL
+            ),
+            vec!["SELECT 1 /* outer /* inner; */ still outer */", "SELECT 2"]
+        );
+
+        // SQL Server 以 GO 为客户端批次边界，因此使用两个 GO 批次验证嵌套注释状态。
+        let mssql = "SELECT 1 /* outer /* inner; */ still outer */;\nGO\nSELECT 2;\nGO\n";
+        assert_eq!(
+            parse_all(SqlSource::Script(mssql.to_string()), DatabaseType::MSSQL),
+            vec![
+                "SELECT 1 /* outer /* inner; */ still outer */;",
+                "SELECT 2;"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_invalid_mssql_go_arguments_fail_once() {
+        for go_line in ["GO 0", "GO abc", "GO 2 extra"] {
+            let sql = format!("SELECT 1;\n{go_line}\n");
+            let mut parser =
+                StreamingSqlParser::from_source(SqlSource::Script(sql), DatabaseType::MSSQL)
+                    .unwrap();
+            assert!(parser.next().expect("非法 GO 必须报错").is_err());
+            assert!(parser.next().is_none());
+        }
+    }
+
+    #[test]
+    fn test_unmatched_right_parenthesis_returns_error() {
+        let mut parser = StreamingSqlParser::from_source(
+            SqlSource::Script("SELECT 1);".to_string()),
+            DatabaseType::MySQL,
+        )
+        .unwrap();
+
+        let error = parser.next().expect("未匹配右括号必须报错").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn test_utf8_bom_is_ignored() {
+        let sql = "\u{feff}SELECT 1;";
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
+        assert_eq!(statements, vec!["SELECT 1"]);
     }
 
     #[test]
