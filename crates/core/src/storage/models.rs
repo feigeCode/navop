@@ -52,6 +52,7 @@ pub enum ConnectionType {
     SshSftp,
     Redis,
     MongoDB,
+    Mqtt,
     Serial,
     Telnet,
     PortForwarding,
@@ -67,6 +68,7 @@ impl fmt::Display for ConnectionType {
             ConnectionType::SshSftp => "SshSftp",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
+            ConnectionType::Mqtt => "Mqtt",
             ConnectionType::Serial => "Serial",
             ConnectionType::Telnet => "Telnet",
             ConnectionType::PortForwarding => "PortForwarding",
@@ -85,6 +87,7 @@ impl ConnectionType {
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
+            ConnectionType::Mqtt,
             ConnectionType::Serial,
             ConnectionType::Telnet,
             ConnectionType::PortForwarding,
@@ -98,6 +101,7 @@ impl ConnectionType {
             "SshSftp" => ConnectionType::SshSftp,
             "Redis" => ConnectionType::Redis,
             "MongoDB" => ConnectionType::MongoDB,
+            "Mqtt" => ConnectionType::Mqtt,
             "Serial" => ConnectionType::Serial,
             "Telnet" => ConnectionType::Telnet,
             "PortForwarding" => ConnectionType::PortForwarding,
@@ -114,6 +118,7 @@ impl ConnectionType {
             ConnectionType::SshSftp => "SSH/SFTP",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
+            ConnectionType::Mqtt => "MQTT",
             ConnectionType::Serial => "Serial",
             ConnectionType::Telnet => "Telnet",
             ConnectionType::PortForwarding => "Port Forwarding",
@@ -129,6 +134,7 @@ impl ConnectionType {
             ConnectionType::SshSftp => IconName::TerminalColor,
             ConnectionType::Redis => IconName::Redis,
             ConnectionType::MongoDB => IconName::MongoDB,
+            ConnectionType::Mqtt => IconName::Mqtt,
             ConnectionType::Serial => IconName::SerialPort,
             ConnectionType::Telnet => IconName::SquareTerminalColor,
             ConnectionType::PortForwarding => IconName::PortForwardingColor,
@@ -148,7 +154,11 @@ pub enum DatabaseType {
     MSSQL,
     Oracle,
     ClickHouse,
-    External { driver_id: String },
+    /// TDengine 时序数据库(官方 taos ws 驱动,经 taosAdapter 连接)
+    TDengine,
+    External {
+        driver_id: String,
+    },
 }
 
 impl DatabaseType {
@@ -165,6 +175,7 @@ impl DatabaseType {
             DatabaseType::MSSQL,
             DatabaseType::Oracle,
             DatabaseType::ClickHouse,
+            DatabaseType::TDengine,
         ]
     }
 
@@ -194,6 +205,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => "MSSQL",
             DatabaseType::Oracle => "Oracle",
             DatabaseType::ClickHouse => "ClickHouse",
+            DatabaseType::TDengine => "TDengine",
             DatabaseType::External { .. } => "External",
         }
     }
@@ -229,6 +241,7 @@ impl DatabaseType {
             "MSSQL" => Some(DatabaseType::MSSQL),
             "Oracle" => Some(DatabaseType::Oracle),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
+            "TDengine" => Some(DatabaseType::TDengine),
             _ => None,
         }
     }
@@ -242,6 +255,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => IconName::MSSQLColor.color().with_size(Large),
             DatabaseType::Oracle => IconName::OracleColor.color().with_size(Large),
             DatabaseType::ClickHouse => IconName::ClickHouseColor.color().with_size(Large),
+            DatabaseType::TDengine => IconName::TDengineColor.color().with_size(Large),
             DatabaseType::External { .. } => IconName::Database.color().with_size(Large),
         }
     }
@@ -254,6 +268,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => IconName::MSSQLLineColor.color().with_size(Large),
             DatabaseType::Oracle => IconName::OracleLineColor.color().with_size(Large),
             DatabaseType::ClickHouse => IconName::ClickHouseLineColor.color().with_size(Large),
+            DatabaseType::TDengine => IconName::TDengineLineColor.color().with_size(Large),
             DatabaseType::External { .. } => IconName::Database.color().with_size(Large),
         }
     }
@@ -925,6 +940,175 @@ impl MongoDBParams {
         tunnel.timeout = ssh_params.connect_timeout;
         tunnel.target_host.get_or_insert_with(|| self.host.clone());
         tunnel.target_port.get_or_insert(self.port.unwrap_or(27017));
+
+        match ssh_params.auth_method {
+            SshAuthMethod::Password { password } => {
+                tunnel.auth_type = "password".to_string();
+                tunnel.password = Some(password);
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
+                tunnel.auth_type = "private_key".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = Some(key_path);
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = passphrase;
+            }
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => {
+                tunnel.auth_type = "private_key_content".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = Some(private_key);
+                tunnel.private_key_passphrase = passphrase;
+            }
+            SshAuthMethod::Agent => {
+                tunnel.auth_type = "agent".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::Pageant => {
+                tunnel.auth_type = "pageant".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::AutoPublicKey => {
+                tunnel.auth_type = "auto_publickey".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = None;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub type MqttSshTunnelConfig = SshTunnelConfig;
+
+/// MQTT 协议版本
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MqttVersion {
+    /// MQTT 3.1.1
+    #[default]
+    V311,
+    /// MQTT 5(rumqttc 暂不支持,预留)
+    V5,
+}
+
+impl MqttVersion {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::V311 => "3.1.1",
+            Self::V5 => "5.0",
+        }
+    }
+}
+
+/// MQTT 连接参数
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MqttParams {
+    #[serde(default = "default_mqtt_host")]
+    pub host: String,
+    #[serde(default = "default_mqtt_port")]
+    pub port: u16,
+    /// 客户端 ID(空串表示连接时自动生成)
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
+    /// 是否启用 TLS(默认端口切换为 8883)
+    #[serde(default)]
+    pub use_tls: bool,
+    /// 连接超时(秒)
+    #[serde(default)]
+    pub connect_timeout: Option<u64>,
+    /// keep-alive 间隔(秒,默认 30)
+    #[serde(default)]
+    pub keep_alive: Option<u64>,
+    /// MQTT 协议版本
+    #[serde(default)]
+    pub mqtt_version: MqttVersion,
+    /// 清除会话
+    #[serde(default = "default_true")]
+    pub clean_session: bool,
+    /// SSH 隧道配置
+    #[serde(default)]
+    pub ssh_tunnel: Option<MqttSshTunnelConfig>,
+}
+
+fn default_mqtt_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_mqtt_port() -> u16 {
+    1883
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for MqttParams {
+    fn default() -> Self {
+        Self {
+            host: default_mqtt_host(),
+            port: default_mqtt_port(),
+            client_id: String::new(),
+            username: None,
+            password: None,
+            credential_reference: None,
+            use_tls: false,
+            connect_timeout: None,
+            keep_alive: None,
+            mqtt_version: MqttVersion::V311,
+            clean_session: true,
+            ssh_tunnel: None,
+        }
+    }
+}
+
+impl MqttParams {
+    pub fn apply_referenced_ssh_tunnel(
+        &mut self,
+        ssh_connection: &StoredConnection,
+    ) -> Result<(), serde_json::Error> {
+        let Some(tunnel) = self.ssh_tunnel.as_mut() else {
+            return Ok(());
+        };
+        let Some(ssh_connection_id) = tunnel.connection_id else {
+            return Ok(());
+        };
+        if ssh_connection.id != Some(ssh_connection_id) {
+            return Ok(());
+        }
+        if ssh_connection.connection_type != ConnectionType::SshSftp {
+            return Ok(());
+        }
+
+        let ssh_params = ssh_connection.to_ssh_params()?;
+        tunnel.host = ssh_params.host;
+        tunnel.port = ssh_params.port;
+        tunnel.username = ssh_params.username;
+        tunnel.timeout = ssh_params.connect_timeout;
+        tunnel.target_host.get_or_insert_with(|| self.host.clone());
+        tunnel.target_port.get_or_insert(self.port);
 
         match ssh_params.auth_method {
             SshAuthMethod::Password { password } => {
@@ -1755,6 +1939,10 @@ fn default_mongodb_name(name: String, params: &MongoDBParams) -> String {
     trimmed_or_default(name, default_name)
 }
 
+fn default_mqtt_name(name: String, params: &MqttParams) -> String {
+    trimmed_or_default(name, host_port_name(&params.host, params.port))
+}
+
 fn default_serial_name(name: String, params: &SerialParams) -> String {
     trimmed_or_default(name, params.port_name.trim().to_string())
 }
@@ -1909,6 +2097,29 @@ impl StoredConnection {
         }
     }
 
+    pub fn new_mqtt(name: String, params: MqttParams, workspace_id: Option<i64>) -> Self {
+        let name = default_mqtt_name(name, &params);
+        Self {
+            id: None,
+            credential_revision: None,
+            name,
+            connection_type: ConnectionType::Mqtt,
+            params: serde_json::to_string(&params).expect("MqttParams 序列化不应失败"),
+            workspace_id,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        }
+    }
+
     pub fn to_ssh_params(&self) -> Result<SshParams, serde_json::Error> {
         let mut params: SshParams = serde_json::from_str(&self.params)?;
         params.sanitize_for_storage();
@@ -1924,6 +2135,10 @@ impl StoredConnection {
     }
 
     pub fn to_mongodb_params(&self) -> Result<MongoDBParams, serde_json::Error> {
+        serde_json::from_str(&self.params)
+    }
+
+    pub fn to_mqtt_params(&self) -> Result<MqttParams, serde_json::Error> {
         serde_json::from_str(&self.params)
     }
 

@@ -322,6 +322,8 @@ fn default_database_port(database_type: &DatabaseType) -> u16 {
         DatabaseType::MSSQL => 1433,
         DatabaseType::Oracle => 1521,
         DatabaseType::ClickHouse => 8123,
+        // TDengine 经 taosAdapter 的 WebSocket 端口。
+        DatabaseType::TDengine => 6041,
         _ => 3306,
     }
 }

@@ -924,6 +924,8 @@ fn manual_transaction_invalidation_mode(
         DatabaseType::MySQL
         | DatabaseType::Oracle
         | DatabaseType::ClickHouse
+        // TDengine 无事务,与 ClickHouse 同臂立即失效缓存。
+        | DatabaseType::TDengine
         | DatabaseType::External { .. } => ManualTransactionInvalidationMode::Immediate,
     }
 }

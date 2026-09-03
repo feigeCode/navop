@@ -40,6 +40,8 @@ pub fn extract_error_location(
         DatabaseType::SQLite => parse_sqlite_error(message),
         DatabaseType::DuckDB => parse_postgres_error(message).or_else(|| parse_generic(message)),
         DatabaseType::ClickHouse => parse_generic(message),
+        // TDengine 错误消息无标准位置格式,走通用解析。
+        DatabaseType::TDengine => parse_generic(message),
         DatabaseType::External { .. } => parse_generic(message),
     }
     .or_else(|| parse_generic(message))

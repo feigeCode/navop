@@ -227,6 +227,7 @@ fn storage_database_type(database_type: &ImportDatabaseType) -> DatabaseType {
         ImportDatabaseType::SqlServer => DatabaseType::MSSQL,
         ImportDatabaseType::Oracle => DatabaseType::Oracle,
         ImportDatabaseType::ClickHouse => DatabaseType::ClickHouse,
+        ImportDatabaseType::TDengine => DatabaseType::TDengine,
         ImportDatabaseType::External { id } => DatabaseType::External {
             driver_id: id.clone(),
         },
@@ -253,6 +254,7 @@ fn database_type_identity(database_type: &DatabaseType) -> String {
         DatabaseType::MSSQL => "sqlserver".to_string(),
         DatabaseType::Oracle => "oracle".to_string(),
         DatabaseType::ClickHouse => "clickhouse".to_string(),
+        DatabaseType::TDengine => "tdengine".to_string(),
         DatabaseType::External { driver_id } => format!("external:{driver_id}"),
     }
 }
@@ -264,6 +266,8 @@ fn default_database_port(database_type: &DatabaseType) -> Option<u16> {
         DatabaseType::MSSQL => Some(1433),
         DatabaseType::Oracle => Some(1521),
         DatabaseType::ClickHouse => Some(8123),
+        // TDengine 经 taosAdapter 的 WebSocket 端口。
+        DatabaseType::TDengine => Some(6041),
         DatabaseType::SQLite | DatabaseType::DuckDB | DatabaseType::External { .. } => None,
     }
 }

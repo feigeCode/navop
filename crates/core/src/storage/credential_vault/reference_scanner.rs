@@ -137,6 +137,7 @@ fn parse_connection_type(value: &str) -> Result<ConnectionType> {
         "SshSftp" => Ok(ConnectionType::SshSftp),
         "Redis" => Ok(ConnectionType::Redis),
         "MongoDB" => Ok(ConnectionType::MongoDB),
+        "Mqtt" => Ok(ConnectionType::Mqtt),
         "Serial" => Ok(ConnectionType::Serial),
         "Telnet" => Ok(ConnectionType::Telnet),
         "PortForwarding" => Ok(ConnectionType::PortForwarding),

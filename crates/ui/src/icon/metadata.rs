@@ -83,6 +83,9 @@ impl IconName {
             | Self::OracleLineColor
             | Self::ClickHouseColor
             | Self::ClickHouseLineColor
+            | Self::TDengineColor
+            | Self::TDengineLineColor
+            | Self::Mqtt
             | Self::Redis
             | Self::RedisColor
             | Self::DuckDB
@@ -186,6 +189,7 @@ impl IconName {
             | Self::DatabaseLine
             | Self::RedisLine
             | Self::MongoDBLine
+            | Self::MqttLine
             | Self::SerialLine
             | Self::PortForwardingLine
             | Self::RdpLine

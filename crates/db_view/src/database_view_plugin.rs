@@ -866,6 +866,7 @@ fn external_driver_compatible_host_form(driver: &IpcDriverManifest) -> DbFormCon
         Some(DatabaseType::MSSQL) => DbFormConfig::mssql(),
         Some(DatabaseType::Oracle) => DbFormConfig::oracle(),
         Some(DatabaseType::ClickHouse) => DbFormConfig::clickhouse(),
+        Some(DatabaseType::TDengine) => DbFormConfig::tdengine(),
         _ => DbFormConfig::mysql(),
     }
 }

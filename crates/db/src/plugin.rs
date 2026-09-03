@@ -465,7 +465,9 @@ pub trait DatabasePlugin: Send + Sync {
             DatabaseType::MySQL
             | DatabaseType::PostgreSQL
             | DatabaseType::DuckDB
-            | DatabaseType::ClickHouse => {
+            | DatabaseType::ClickHouse
+            // TDengine 同样支持 EXPLAIN 前缀。
+            | DatabaseType::TDengine => {
                 format!("EXPLAIN {sql}")
             }
             DatabaseType::SQLite => format!("EXPLAIN QUERY PLAN {sql}"),
