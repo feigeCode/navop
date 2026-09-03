@@ -51,6 +51,7 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
         ConnectionType::SshSftp => IconName::TerminalColor,
         ConnectionType::Redis => IconName::Redis,
         ConnectionType::MongoDB => IconName::MongoDB,
+        ConnectionType::Mqtt => IconName::Mqtt,
         ConnectionType::Serial => IconName::SerialPort,
         ConnectionType::Telnet => IconName::SquareTerminalColor,
         ConnectionType::PortForwarding => IconName::PortForwardingColor,
@@ -66,6 +67,7 @@ const fn connection_type_navigation_icon_name(kind: ConnectionType) -> IconName 
         ConnectionType::SshSftp => IconName::TerminalLine,
         ConnectionType::Redis => IconName::RedisLine,
         ConnectionType::MongoDB => IconName::MongoDBLine,
+        ConnectionType::Mqtt => IconName::MqttLine,
         ConnectionType::Serial => IconName::SerialLine,
         ConnectionType::Telnet => IconName::SquareTerminal,
         ConnectionType::PortForwarding => IconName::PortForwardingLine,
@@ -105,6 +107,7 @@ pub(crate) fn database_type_icon(kind: &DatabaseType, size: ConnectionVisualSize
         DatabaseType::MSSQL => IconName::MSSQLColor,
         DatabaseType::Oracle => IconName::OracleColor,
         DatabaseType::ClickHouse => IconName::ClickHouseColor,
+        DatabaseType::TDengine => IconName::TDengineColor,
         DatabaseType::External { .. } => return generic_database_icon(size),
     };
     name.color().with_size(size.icon_size())

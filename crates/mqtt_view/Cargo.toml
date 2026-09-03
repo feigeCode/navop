@@ -1,0 +1,28 @@
+[package]
+name = "mqtt_view"
+version = "0.15.2"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dashmap.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+ai_chat_view = { workspace = true, default-features = false }
+mqtt-runtime.workspace = true
+one-core.workspace = true
+one-ui.workspace = true
+connection-form.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rust-i18n.workspace = true
+uuid.workspace = true
+
+[features]
+default = []
+builtin-mqtt = ["mqtt-runtime/builtin-mqtt"]
+
+[lints]
+workspace = true

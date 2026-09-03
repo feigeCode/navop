@@ -308,6 +308,7 @@ fn connection_type_to_resource_kind(conn_type: &ConnectionType, params: &str) ->
         }
         ConnectionType::Redis => ResourceKind::Redis,
         ConnectionType::MongoDB => ResourceKind::Mongo,
+        ConnectionType::Mqtt => ResourceKind::Other("mqtt".into()),
         ConnectionType::SshSftp => ResourceKind::Ssh,
         ConnectionType::Serial => ResourceKind::Terminal,
         ConnectionType::Telnet => ResourceKind::Terminal,
