@@ -12,12 +12,13 @@ use std::hash::{Hash, Hasher};
 use gpui::{
     AnyElement, App, Entity, IntoElement, ParentElement, SharedString, Styled, Window, div,
 };
+use gpui_base::TextView;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
     Sizable,
     clipboard::Clipboard,
     h_flex,
-    text::{MarkdownNode, MarkdownParseContext, TextView, markdown_ast},
+    text::{MarkdownNode, MarkdownParseContext, markdown_ast},
     v_flex,
 };
 use html_preview::HtmlPreviewDocument;
