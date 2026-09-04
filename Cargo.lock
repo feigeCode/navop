@@ -322,6 +322,7 @@ dependencies = [
  "futures",
  "gpui_ce",
  "gpui_ce_components",
+ "gpui_ce_components_base",
  "gpui_ce_components_webview",
  "html-preview",
  "image",

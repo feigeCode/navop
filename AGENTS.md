@@ -534,6 +534,13 @@
 - **验证方式**：运行 `cargo test -p one-ui --test dialog_footer_contract`，保证所有实际 Dialog builder 的 `.button_props(...)` 前都存在 `.confirm()` 或 `.alert()`；再运行受影响 crate 测试与 `cargo check -p main`。
 - **适用范围**：全仓所有使用 `gpui_component::dialog::Dialog` / `AlertDialog` 的页面、编辑器和确认操作。
 
+- **标题**：嵌入自定义配色容器的 Markdown 不要依赖兼容层 `TextViewStyle` 覆盖语义色
+- **触发信号**：外层容器已经设置正确的前景色和背景色，但 `TextView::markdown` 的正文、引用或链接仍接近背景，尤其发生在终端主题与应用主题不一致时。
+- **根因 / 约束**：`gpui_component::text::TextView` 兼容层会把局部样式叠加到全局组件主题，并且其 `TextViewStyle` 主要暴露代码块和表格 refinement；底层 TextView 会主动设置全局主题前景色，所以外层 `.text_color(...)` 无法覆盖正文、链接、选区等完整语义调色板。
+- **正确做法**：需要独立调色板的富文本使用 `gpui_base::TextView` 和完整的 `gpui_base::TextViewStyle`，显式设置 foreground、muted foreground、link、selection、code background、border 与 light/dark 模式；同时保留代码块/表格圆角和全局 syntax highlighter fallback。
+- **验证方式**：样式 contract 断言完整语义色映射；终端主题测试覆盖所有内置调色板与背景的基础明度差；运行 `cargo test -p ai_chat_view`、终端主题测试和 `cargo check -p main`。
+- **适用范围**：`crates/ai_chat_view`，以及终端、远程桌面、编辑器等在应用全局主题之外渲染 Markdown/HTML 的嵌入式面板。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
