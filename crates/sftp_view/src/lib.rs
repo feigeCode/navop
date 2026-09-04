@@ -56,6 +56,10 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
+use one_ui::file_conflict_prompt::{
+    FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
+};
+use one_ui::marquee_text::marquee_text;
 use one_ui::{IconButton, IconButtonRole};
 use remote_file_editor::{
     ExternalEditorOpenRequest, RemoteMutationCallback, open_remote_file_editor,
@@ -71,11 +75,14 @@ use sftp_transfer::{
     SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpDownloadRequest, SftpRemoteDeleteEntry,
     SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
     SftpTransferReservation, SftpTransferSnapshot, SftpTransferState, SftpUploadConnection,
-    SftpUploadRequest, delete_remote_task_key, download_task_key, upload_task_key,
+    SftpUploadRequest, UploadConflictResolver, delete_remote_task_key, download_task_key,
+    upload_task_key,
 };
 use ssh::{ChannelEvent, SshChannel, SshConnectConfig, SshSessionManager};
-use std::collections::VecDeque;
+use std::cell::RefCell;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
@@ -342,6 +349,19 @@ struct PendingTransfer {
     remote_path: String,
     is_dir: bool,
     has_conflict: bool,
+}
+
+#[derive(Clone)]
+struct PendingUploadDecision {
+    transfer: PendingTransfer,
+    directory_conflict_policy: DirectoryConflictPolicy,
+}
+
+#[derive(Clone)]
+struct UploadConflictSession {
+    connection_generation: u64,
+    resolver: Rc<RefCell<UploadConflictResolver<PendingUploadDecision>>>,
+    existing_names: Rc<RefCell<HashSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -1408,6 +1428,70 @@ fn rename_conflicting_transfers(
         }
     }
     transfers
+}
+
+fn upload_conflict_prompt_labels(position: (usize, usize)) -> FileConflictPromptLabels {
+    FileConflictPromptLabels {
+        exists: t!("Conflict.item_exists").to_string().into(),
+        progress: t!(
+            "Conflict.progress",
+            current = position.0,
+            total = position.1
+        )
+        .to_string()
+        .into(),
+        choose_action: t!("Conflict.choose_action").to_string().into(),
+        apply_all: t!("Conflict.apply_all").to_string().into(),
+        skip: t!("Conflict.skip").to_string().into(),
+        keep_both: t!("Conflict.keep_both").to_string().into(),
+        merge: t!("Conflict.merge").to_string().into(),
+        overwrite: t!("Conflict.overwrite").to_string().into(),
+    }
+}
+
+fn resolve_upload_conflicts(
+    session: &UploadConflictSession,
+    decision: (FileConflictChoice, bool),
+) -> Vec<PendingUploadDecision> {
+    let (choice, apply_all) = decision;
+    let mut existing_names = session.existing_names.borrow_mut();
+    let mut resolver = session.resolver.borrow_mut();
+    resolver.resolve_current(
+        apply_all,
+        |current, candidate| current.transfer.is_dir == candidate.transfer.is_dir,
+        |transfer| resolve_upload_conflict(transfer, choice, &mut existing_names),
+    );
+    resolver.take_ready().unwrap_or_default()
+}
+
+fn resolve_upload_conflict(
+    mut decision: PendingUploadDecision,
+    choice: FileConflictChoice,
+    existing_names: &mut HashSet<String>,
+) -> Option<PendingUploadDecision> {
+    match choice {
+        FileConflictChoice::Skip => None,
+        FileConflictChoice::KeepBoth => {
+            let transfer = &mut decision.transfer;
+            let new_name = generate_unique_name(&transfer.name, existing_names);
+            existing_names.insert(new_name.clone());
+            transfer.remote_path =
+                join_remote_path(&remote_path_parent(&transfer.remote_path), &new_name);
+            transfer.name = new_name;
+            transfer.has_conflict = false;
+            Some(decision)
+        }
+        FileConflictChoice::Merge => {
+            decision.directory_conflict_policy = DirectoryConflictPolicy::Merge;
+            Some(decision)
+        }
+        FileConflictChoice::Overwrite => {
+            if decision.transfer.is_dir {
+                decision.directory_conflict_policy = DirectoryConflictPolicy::Replace;
+            }
+            Some(decision)
+        }
+    }
 }
 
 pub struct SftpView {
@@ -3144,16 +3228,8 @@ impl SftpView {
                     }
 
                     if has_conflict {
-                        let conflict_names: Vec<String> = pending_transfers
-                            .iter()
-                            .filter(|t| t.has_conflict)
-                            .map(|t| t.name.clone())
-                            .collect();
-
-                        this.show_conflict_dialog(
-                            conflict_names,
+                        this.show_upload_conflict_dialog(
                             pending_transfers,
-                            true,
                             remote_names,
                             window,
                             cx,
@@ -3253,16 +3329,8 @@ impl SftpView {
                     }
 
                     if has_conflict {
-                        let conflict_names: Vec<String> = pending_transfers
-                            .iter()
-                            .filter(|t| t.has_conflict)
-                            .map(|t| t.name.clone())
-                            .collect();
-
-                        this.show_conflict_dialog(
-                            conflict_names,
+                        this.show_upload_conflict_dialog(
                             pending_transfers,
-                            true,
                             remote_names,
                             window,
                             cx,
@@ -3326,11 +3394,10 @@ impl SftpView {
         );
     }
 
-    fn show_conflict_dialog(
+    fn show_download_conflict_dialog(
         &mut self,
         conflict_names: Vec<String>,
         pending_transfers: Vec<PendingTransfer>,
-        is_upload: bool,
         existing_names: std::collections::HashSet<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -3351,19 +3418,14 @@ impl SftpView {
             .to_string()
         };
 
-        // 检查是否有文件夹冲突（合并选项只对文件夹有意义）
-        let has_dir_conflict = pending_transfers.iter().any(|t| t.has_conflict && t.is_dir);
-
         window.open_dialog(cx, move |dialog, _window, cx| {
             let view_overwrite = view.clone();
             let view_keep = view.clone();
             let view_skip = view.clone();
-            let view_merge = view.clone();
 
             let transfers_overwrite = pending_transfers.clone();
             let transfers_keep = pending_transfers.clone();
             let transfers_skip = pending_transfers.clone();
-            let transfers_merge = pending_transfers.clone();
 
             let existing_names_keep = existing_names.clone();
 
@@ -3404,11 +3466,7 @@ impl SftpView {
                                             if this.close_state.is_closing() {
                                                 return;
                                             }
-                                            if is_upload {
-                                                this.execute_uploads(transfers, cx);
-                                            } else {
-                                                this.execute_downloads(transfers, cx);
-                                            }
+                                            this.execute_downloads(transfers, cx);
                                         });
                                     }
                                 }
@@ -3425,57 +3483,19 @@ impl SftpView {
                                     window.close_dialog(cx);
                                     let transfers = rename_conflicting_transfers(
                                         transfers.clone(),
-                                        is_upload,
+                                        false,
                                         existing.clone(),
                                     );
                                     view.update(cx, |this, cx| {
                                         if this.close_state.is_closing() {
                                             return;
                                         }
-                                        if is_upload {
-                                            this.execute_uploads(transfers, cx);
-                                        } else {
-                                            this.execute_downloads(transfers, cx);
-                                        }
+                                        this.execute_downloads(transfers, cx);
                                     });
                                 }
                             })
                             .into_any_element(),
                     ];
-
-                    // 如果有文件夹冲突且是上传操作，添加"合并"按钮
-                    if has_dir_conflict && is_upload {
-                        buttons.push(
-                            Button::new("merge")
-                                .label(t!("Conflict.merge").to_string())
-                                .ghost()
-                                .on_click({
-                                    let view = view_merge.clone();
-                                    let transfers = transfers_merge.clone();
-                                    move |_, window, cx| {
-                                        window.close_dialog(cx);
-                                        // 合并逻辑：
-                                        // - 冲突的文件夹：直接上传（会自动合并内容）
-                                        // - 冲突的文件：跳过（不覆盖）
-                                        // - 非冲突项：正常上传
-                                        let transfers: Vec<_> = transfers
-                                            .iter()
-                                            .filter(|t| !t.has_conflict || t.is_dir)
-                                            .cloned()
-                                            .collect();
-                                        if !transfers.is_empty() {
-                                            view.update(cx, |this, cx| {
-                                                if this.close_state.is_closing() {
-                                                    return;
-                                                }
-                                                this.execute_uploads(transfers, cx);
-                                            });
-                                        }
-                                    }
-                                })
-                                .into_any_element(),
-                        );
-                    }
 
                     buttons.push(
                         Button::new("overwrite")
@@ -3490,15 +3510,7 @@ impl SftpView {
                                         if this.close_state.is_closing() {
                                             return;
                                         }
-                                        if is_upload {
-                                            this.execute_uploads_with_directory_policy(
-                                                transfers.clone(),
-                                                DirectoryConflictPolicy::Replace,
-                                                cx,
-                                            );
-                                        } else {
-                                            this.execute_downloads(transfers.clone(), cx);
-                                        }
+                                        this.execute_downloads(transfers.clone(), cx);
                                     });
                                 }
                             })
@@ -3507,6 +3519,89 @@ impl SftpView {
 
                     DialogFooter::new().children(buttons)
                 })
+                .overlay_closable(false)
+                .close_button(true)
+        });
+    }
+
+    fn show_upload_conflict_dialog(
+        &mut self,
+        pending_transfers: Vec<PendingTransfer>,
+        existing_names: HashSet<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut existing_names = existing_names;
+        existing_names.extend(pending_transfers.iter().map(|item| item.name.clone()));
+        let decisions = pending_transfers
+            .into_iter()
+            .map(|transfer| PendingUploadDecision {
+                transfer,
+                directory_conflict_policy: DirectoryConflictPolicy::Merge,
+            })
+            .collect();
+        let resolver = UploadConflictResolver::new(decisions, |item| item.transfer.has_conflict);
+        if resolver.current().is_none() {
+            return;
+        }
+        self.show_next_upload_conflict(
+            UploadConflictSession {
+                connection_generation: self.connection_generation.current(),
+                resolver: Rc::new(RefCell::new(resolver)),
+                existing_names: Rc::new(RefCell::new(existing_names)),
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn show_next_upload_conflict(
+        &mut self,
+        session: UploadConflictSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (current, position) = {
+            let resolver = session.resolver.borrow();
+            let Some(current) = resolver.current().cloned() else {
+                return;
+            };
+            let position = resolver.current_position().unwrap_or((1, 1));
+            (current, position)
+        };
+        let view = cx.entity().clone();
+        let apply_all = Arc::new(AtomicBool::new(false));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let session = session.clone();
+            let view = view.clone();
+            dialog
+                .title(t!("Dialog.file_conflict").to_string())
+                .w(px(480.))
+                .child(FileConflictPrompt::new(
+                    FileConflictPromptSpec {
+                        name: current.transfer.name.clone().into(),
+                        is_directory: current.transfer.is_dir,
+                        apply_all: apply_all.clone(),
+                        labels: upload_conflict_prompt_labels(position),
+                    },
+                    move |choice, apply_all, window, cx| {
+                        window.close_dialog(cx);
+                        let uploads = resolve_upload_conflicts(&session, (choice, apply_all));
+                        let has_next = session.resolver.borrow().current().is_some();
+                        let _ = view.update(cx, |this, cx| {
+                            if this.close_state.is_closing()
+                                || !this
+                                    .is_current_connection_generation(session.connection_generation)
+                            {
+                                return;
+                            }
+                            this.execute_upload_decisions(uploads, cx);
+                            if has_next {
+                                this.show_next_upload_conflict(session.clone(), window, cx);
+                            }
+                        });
+                    },
+                ))
                 .overlay_closable(false)
                 .close_button(true)
         });
@@ -4092,6 +4187,20 @@ impl SftpView {
         self.execute_uploads_with_directory_policy(transfers, DirectoryConflictPolicy::Merge, cx);
     }
 
+    fn execute_upload_decisions(
+        &mut self,
+        decisions: Vec<PendingUploadDecision>,
+        cx: &mut Context<Self>,
+    ) {
+        for decision in decisions {
+            self.execute_uploads_with_directory_policy(
+                vec![decision.transfer],
+                decision.directory_conflict_policy,
+                cx,
+            );
+        }
+    }
+
     fn execute_uploads_with_directory_policy(
         &mut self,
         transfers: Vec<PendingTransfer>,
@@ -4391,10 +4500,9 @@ impl SftpView {
                 .map(|t| t.name.clone())
                 .collect();
 
-            self.show_conflict_dialog(
+            self.show_download_conflict_dialog(
                 conflict_names,
                 pending_transfers,
-                false,
                 local_names,
                 window,
                 cx,
@@ -5082,16 +5190,8 @@ impl SftpView {
                     }
 
                     if has_conflict {
-                        let conflict_names: Vec<String> = pending_transfers
-                            .iter()
-                            .filter(|t| t.has_conflict)
-                            .map(|t| t.name.clone())
-                            .collect();
-
-                        this.show_conflict_dialog(
-                            conflict_names,
+                        this.show_upload_conflict_dialog(
                             pending_transfers,
-                            true,
                             remote_names,
                             window,
                             cx,
@@ -5584,10 +5684,9 @@ impl SftpView {
                 .map(|t| t.name.clone())
                 .collect();
 
-            self.show_conflict_dialog(
+            self.show_download_conflict_dialog(
                 conflict_names,
                 pending_transfers,
-                false,
                 local_names,
                 window,
                 cx,
@@ -5698,16 +5797,8 @@ impl SftpView {
                     }
 
                     if has_conflict {
-                        let conflict_names: Vec<String> = pending_transfers
-                            .iter()
-                            .filter(|t| t.has_conflict)
-                            .map(|t| t.name.clone())
-                            .collect();
-
-                        this.show_conflict_dialog(
-                            conflict_names,
+                        this.show_upload_conflict_dialog(
                             pending_transfers,
-                            true,
                             remote_names,
                             window,
                             cx,
@@ -6009,8 +6100,13 @@ impl SftpView {
                             .min_w(px(120.))
                             .max_w(px(250.))
                             .overflow_hidden()
-                            .text_ellipsis()
-                            .child(display_name)
+                            .child(marquee_text(
+                                SharedString::from(format!(
+                                    "transfer-marquee-{task_id}-{display_name}"
+                                )),
+                                display_name,
+                                is_running && has_current_file && !is_delete_op,
+                            ))
                             .tooltip(move |window, cx| {
                                 Tooltip::new(tooltip_name.clone()).build(window, cx)
                             }),
@@ -7328,17 +7424,19 @@ impl Render for SftpView {
 mod tests {
     use super::{
         BoundedDisconnectOutcome, CloseState, ConnectionGeneration, ConnectionState,
-        DirectorySizeState, FileItem, GlobalStorageState, PendingTransfer,
-        SftpFavoritePathRepository, SftpUploadContext, SftpView, SharedProgress, StoredConnection,
-        TransferAdmission, TransferClientPool, TransferClientPoolState, TransferOperation,
-        TransferQueue, TransferRefreshTarget, TransferTask, TransferTaskState,
+        DirectorySizeState, FileConflictChoice, FileItem, GlobalStorageState, PendingTransfer,
+        PendingUploadDecision, SftpFavoritePathRepository, SftpUploadContext, SftpView,
+        SharedProgress, StoredConnection, TransferAdmission, TransferClientPool,
+        TransferClientPoolState, TransferOperation, TransferQueue, TransferRefreshTarget,
+        TransferTask, TransferTaskState, UploadConflictResolver, UploadConflictSession,
         acquire_transfer_client, active_external_transfer_ids, apply_global_transfer_snapshot,
         bounded_disconnect, breadcrumb_item_min_width, is_valid_entry_name, join_remote_path,
         mark_server_copy_directory_replacements, prepare_global_download,
         prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
-        remote_path_parent, server_copy_conflict_flags, should_apply_local_listing,
-        should_apply_remote_listing, should_refresh_transfer_target, tab_connection_status,
-        transfer_error_summary, transfer_task_state_from_global, upload_directory_conflict_policy,
+        remote_path_parent, resolve_upload_conflict, resolve_upload_conflicts,
+        server_copy_conflict_flags, should_apply_local_listing, should_apply_remote_listing,
+        should_refresh_transfer_target, tab_connection_status, transfer_error_summary,
+        transfer_task_state_from_global, upload_directory_conflict_policy,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -7357,8 +7455,10 @@ mod tests {
         SftpUploadConnection, SftpUploadExecution, download_task_key,
     };
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
-    use std::collections::HashMap;
+    use std::cell::RefCell;
+    use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -8675,6 +8775,67 @@ mod tests {
                 &transfer(false, true),
                 DirectoryConflictPolicy::Replace
             )
+        );
+    }
+
+    #[test]
+    fn upload_keep_both_renames_only_the_current_conflict() {
+        let transfer = PendingTransfer {
+            name: "report.txt".to_string(),
+            local_path: PathBuf::from("/local/report.txt"),
+            remote_path: "/remote/report.txt".to_string(),
+            is_dir: false,
+            has_conflict: true,
+        };
+        let resolved = resolve_upload_conflict(
+            PendingUploadDecision {
+                transfer,
+                directory_conflict_policy: DirectoryConflictPolicy::Merge,
+            },
+            FileConflictChoice::KeepBoth,
+            &mut HashSet::from(["report.txt".to_string()]),
+        )
+        .expect("keep both retains the upload");
+
+        assert_eq!(resolved.transfer.name, "report (copy).txt");
+        assert_eq!(resolved.transfer.remote_path, "/remote/report (copy).txt");
+        assert!(!resolved.transfer.has_conflict);
+    }
+
+    #[test]
+    fn sequential_directory_choices_keep_per_item_policies() {
+        let directory = |name: &str| PendingUploadDecision {
+            transfer: PendingTransfer {
+                name: name.to_string(),
+                local_path: PathBuf::from(format!("/local/{name}")),
+                remote_path: format!("/remote/{name}"),
+                is_dir: true,
+                has_conflict: true,
+            },
+            directory_conflict_policy: DirectoryConflictPolicy::Merge,
+        };
+        let session = UploadConflictSession {
+            connection_generation: 1,
+            resolver: Rc::new(RefCell::new(UploadConflictResolver::new(
+                vec![directory("replace-me"), directory("merge-me")],
+                |_| true,
+            ))),
+            existing_names: Rc::new(RefCell::new(HashSet::new())),
+        };
+
+        assert!(
+            resolve_upload_conflicts(&session, (FileConflictChoice::Overwrite, false)).is_empty()
+        );
+        let resolved = resolve_upload_conflicts(&session, (FileConflictChoice::Merge, false));
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(
+            resolved[0].directory_conflict_policy,
+            DirectoryConflictPolicy::Replace
+        );
+        assert_eq!(
+            resolved[1].directory_conflict_policy,
+            DirectoryConflictPolicy::Merge
         );
     }
 

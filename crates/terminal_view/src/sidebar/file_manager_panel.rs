@@ -18,7 +18,7 @@ use gpui_component::{
     WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
-    dialog::{DialogButtonProps, DialogFooter},
+    dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
@@ -38,6 +38,10 @@ use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
     sftp_favorite_connection_key,
 };
+use one_ui::file_conflict_prompt::{
+    FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
+};
+use one_ui::marquee_text::marquee_text;
 use remote_file_editor::{
     ExternalEditorOpenRequest, RemoteMutationCallback, external_editor_menu_label,
     external_editors_for_file, open_remote_file_editor, open_remote_file_external_editor,
@@ -55,12 +59,14 @@ use sftp_transfer::{
     self, SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpRemoteDeleteEntry,
     SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
     SftpTransferSnapshot, SftpTransferState, SftpUploadConnection, SftpUploadRequest,
-    delete_remote_task_key, download_task_key, upload_task_key,
+    UploadConflictResolver, delete_remote_task_key, download_task_key, upload_task_key,
 };
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
@@ -73,7 +79,6 @@ pub const FILE_MANAGER_CONTEXT: &str = "TerminalFileManager";
 const FILE_ROW_HEIGHT: gpui::Pixels = px(36.);
 const SIZE_COLUMN_WIDTH: gpui::Pixels = px(72.);
 const MODIFIED_COLUMN_WIDTH: gpui::Pixels = px(70.);
-const CONFLICT_NAME_PREVIEW_LIMIT: usize = 3;
 
 pub fn init_keybindings() -> Vec<KeyBinding> {
     vec![
@@ -201,6 +206,7 @@ struct TransferProgressView {
     transferred: u64,
     total: u64,
     speed: f64,
+    current_file: Option<String>,
     state: TransferProgressState,
     pending_count: usize,
     cancel_target: TransferCancelTarget,
@@ -214,6 +220,13 @@ struct PendingUpload {
     is_dir: bool,
     has_conflict: bool,
     directory_conflict_policy: DirectoryConflictPolicy,
+}
+
+#[derive(Clone)]
+struct UploadConflictSession {
+    connection_generation: u64,
+    resolver: Rc<RefCell<UploadConflictResolver<PendingUpload>>>,
+    existing_names: Rc<RefCell<HashSet<String>>>,
 }
 
 struct UploadPreparation {
@@ -235,78 +248,8 @@ struct UploadPreparationTask {
 
 struct UploadConflictDialog {
     connection_generation: u64,
-    conflict_names: Vec<String>,
     pending_uploads: Vec<PendingUpload>,
     existing_names: HashSet<String>,
-}
-
-#[derive(Clone)]
-struct UploadConflictActions {
-    view: Entity<FileManagerPanel>,
-    connection_generation: u64,
-    pending_uploads: Vec<PendingUpload>,
-    existing_names: HashSet<String>,
-}
-
-#[derive(Clone)]
-struct UploadEnqueueRequest {
-    view: Entity<FileManagerPanel>,
-    connection_generation: u64,
-    uploads: Vec<PendingUpload>,
-}
-
-struct UploadConflictButton {
-    id: &'static str,
-    label: String,
-    primary: bool,
-    request: UploadEnqueueRequest,
-}
-
-impl UploadConflictActions {
-    fn request(&self, uploads: Vec<PendingUpload>) -> UploadEnqueueRequest {
-        UploadEnqueueRequest {
-            view: self.view.clone(),
-            connection_generation: self.connection_generation,
-            uploads,
-        }
-    }
-
-    fn skip_request(&self) -> UploadEnqueueRequest {
-        let uploads = self
-            .pending_uploads
-            .iter()
-            .filter(|upload| !upload.has_conflict)
-            .cloned()
-            .collect();
-        self.request(uploads)
-    }
-
-    fn keep_both_request(&self) -> UploadEnqueueRequest {
-        self.request(rename_conflicting_uploads(
-            self.pending_uploads.clone(),
-            self.existing_names.clone(),
-        ))
-    }
-
-    fn merge_request(&self) -> UploadEnqueueRequest {
-        let uploads = self
-            .pending_uploads
-            .iter()
-            .filter(|upload| !upload.has_conflict || upload.is_dir)
-            .cloned()
-            .collect();
-        self.request(with_directory_policy(
-            uploads,
-            DirectoryConflictPolicy::Merge,
-        ))
-    }
-
-    fn overwrite_request(&self) -> UploadEnqueueRequest {
-        self.request(with_directory_policy(
-            self.pending_uploads.clone(),
-            DirectoryConflictPolicy::Replace,
-        ))
-    }
 }
 
 fn build_pending_uploads(
@@ -933,80 +876,10 @@ fn should_refresh_after_upload(current_path: &str, remote_path: &str) -> bool {
     current_path == remote_path_parent(remote_path)
 }
 
-fn enqueue_uploads_if_current(request: UploadEnqueueRequest, cx: &mut App) {
-    if request.uploads.is_empty() {
-        return;
-    }
-
-    let _ = request.view.update(cx, |this, cx| {
-        if !is_current_generation(this.connection_generation, request.connection_generation) {
-            return;
-        }
-        this.enqueue_pending_uploads(request.uploads, cx);
-    });
-}
-
-fn upload_conflict_list(conflict_names: &[String]) -> String {
-    if conflict_names.len() <= CONFLICT_NAME_PREVIEW_LIMIT {
-        return conflict_names.join(", ");
-    }
-
-    t!(
-        "Conflict.n_files",
-        name = conflict_names[..CONFLICT_NAME_PREVIEW_LIMIT].join(", "),
-        count = conflict_names.len()
-    )
-    .to_string()
-}
-
-fn upload_conflict_button(conflict_button: UploadConflictButton) -> gpui::AnyElement {
-    let button = Button::new(conflict_button.id).label(conflict_button.label);
-    let button = if conflict_button.primary {
-        button.primary()
-    } else {
-        button.ghost()
-    };
-    button
-        .on_click(move |_, window, cx| {
-            window.close_dialog(cx);
-            enqueue_uploads_if_current(conflict_button.request.clone(), cx);
-        })
-        .into_any_element()
-}
-
-fn upload_conflict_buttons(
-    actions: UploadConflictActions,
-    has_dir_conflict: bool,
-) -> Vec<gpui::AnyElement> {
-    let mut buttons = vec![
-        upload_conflict_button(UploadConflictButton {
-            id: "skip",
-            label: t!("Conflict.skip").to_string(),
-            primary: false,
-            request: actions.skip_request(),
-        }),
-        upload_conflict_button(UploadConflictButton {
-            id: "keep_both",
-            label: t!("Conflict.keep_both").to_string(),
-            primary: false,
-            request: actions.keep_both_request(),
-        }),
-    ];
-    if has_dir_conflict {
-        buttons.push(upload_conflict_button(UploadConflictButton {
-            id: "merge",
-            label: t!("Conflict.merge").to_string(),
-            primary: false,
-            request: actions.merge_request(),
-        }));
-    }
-    buttons.push(upload_conflict_button(UploadConflictButton {
-        id: "overwrite",
-        label: t!("Conflict.overwrite").to_string(),
-        primary: true,
-        request: actions.overwrite_request(),
-    }));
-    buttons
+fn transfer_progress_display_label(label: String, current_file: Option<String>) -> String {
+    current_file
+        .map(|current_file| format!("{label} - {current_file}"))
+        .unwrap_or(label)
 }
 
 async fn load_upload_remote_names(
@@ -1124,45 +997,67 @@ fn generate_unique_name(original_name: &str, existing_names: &HashSet<String>) -
     }
 }
 
-fn rename_conflicting_uploads(
-    mut uploads: Vec<PendingUpload>,
-    existing_names: HashSet<String>,
-) -> Vec<PendingUpload> {
-    let mut used_names = existing_names;
-
-    for upload in &mut uploads {
-        if upload.has_conflict {
-            let new_name = generate_unique_name(&upload.name, &used_names);
-            used_names.insert(new_name.clone());
-
-            let dir_part = if let Some(slash_pos) = upload.remote_path.rfind('/') {
-                Some(upload.remote_path[..=slash_pos].to_string())
-            } else {
-                None
-            };
-
-            upload.remote_path = if let Some(dir) = dir_part {
-                format!("{}{}", dir, new_name)
-            } else {
-                new_name.clone()
-            };
-            upload.name = new_name;
-        }
+fn upload_conflict_prompt_labels(position: (usize, usize)) -> FileConflictPromptLabels {
+    FileConflictPromptLabels {
+        exists: t!("Conflict.item_exists").to_string().into(),
+        progress: t!(
+            "Conflict.progress",
+            current = position.0,
+            total = position.1
+        )
+        .to_string()
+        .into(),
+        choose_action: t!("Conflict.choose_action").to_string().into(),
+        apply_all: t!("Conflict.apply_all").to_string().into(),
+        skip: t!("Conflict.skip").to_string().into(),
+        keep_both: t!("Conflict.keep_both").to_string().into(),
+        merge: t!("Conflict.merge").to_string().into(),
+        overwrite: t!("Conflict.overwrite").to_string().into(),
     }
-
-    uploads
 }
 
-fn with_directory_policy(
-    mut uploads: Vec<PendingUpload>,
-    policy: DirectoryConflictPolicy,
+fn resolve_upload_conflicts(
+    session: &UploadConflictSession,
+    decision: (FileConflictChoice, bool),
 ) -> Vec<PendingUpload> {
-    for upload in &mut uploads {
-        if upload.is_dir && upload.has_conflict {
-            upload.directory_conflict_policy = policy;
+    let (choice, apply_all) = decision;
+    let mut existing_names = session.existing_names.borrow_mut();
+    let mut resolver = session.resolver.borrow_mut();
+    resolver.resolve_current(
+        apply_all,
+        |current, candidate| current.is_dir == candidate.is_dir,
+        |upload| resolve_upload_conflict(upload, choice, &mut existing_names),
+    );
+    resolver.take_ready().unwrap_or_default()
+}
+
+fn resolve_upload_conflict(
+    mut upload: PendingUpload,
+    choice: FileConflictChoice,
+    existing_names: &mut HashSet<String>,
+) -> Option<PendingUpload> {
+    match choice {
+        FileConflictChoice::Skip => None,
+        FileConflictChoice::KeepBoth => {
+            let new_name = generate_unique_name(&upload.name, existing_names);
+            existing_names.insert(new_name.clone());
+            upload.remote_path =
+                join_remote_path(&remote_path_parent(&upload.remote_path), &new_name);
+            upload.name = new_name;
+            upload.has_conflict = false;
+            Some(upload)
+        }
+        FileConflictChoice::Merge => {
+            upload.directory_conflict_policy = DirectoryConflictPolicy::Merge;
+            Some(upload)
+        }
+        FileConflictChoice::Overwrite => {
+            if upload.is_dir {
+                upload.directory_conflict_policy = DirectoryConflictPolicy::Replace;
+            }
+            Some(upload)
         }
     }
-    uploads
 }
 
 fn delete_targets_for_selection(
@@ -2986,19 +2881,13 @@ impl FileManagerPanel {
         };
         let pending_uploads =
             build_pending_uploads(request.paths, &request.remote_dir, Some(&remote_names));
-        let conflict_names = pending_uploads
-            .iter()
-            .filter(|upload| upload.has_conflict)
-            .map(|upload| upload.name.clone())
-            .collect::<Vec<_>>();
-        if conflict_names.is_empty() {
+        if pending_uploads.iter().all(|upload| !upload.has_conflict) {
             self.enqueue_pending_uploads(pending_uploads, cx);
             return;
         }
         self.show_upload_conflict_dialog(
             UploadConflictDialog {
                 connection_generation: request.connection_generation,
-                conflict_names,
                 pending_uploads,
                 existing_names: remote_names,
             },
@@ -3013,40 +2902,76 @@ impl FileManagerPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let conflict_list = upload_conflict_list(&conflict.conflict_names);
-        let has_dir_conflict = conflict
-            .pending_uploads
-            .iter()
-            .any(|upload| upload.has_conflict && upload.is_dir);
-        let actions = UploadConflictActions {
-            view: cx.entity().clone(),
-            connection_generation: conflict.connection_generation,
-            pending_uploads: conflict.pending_uploads,
-            existing_names: conflict.existing_names,
+        let mut existing_names = conflict.existing_names;
+        existing_names.extend(
+            conflict
+                .pending_uploads
+                .iter()
+                .map(|upload| upload.name.clone()),
+        );
+        let resolver =
+            UploadConflictResolver::new(conflict.pending_uploads, |upload| upload.has_conflict);
+        if resolver.current().is_none() {
+            return;
+        }
+        self.show_next_upload_conflict(
+            UploadConflictSession {
+                connection_generation: conflict.connection_generation,
+                resolver: Rc::new(RefCell::new(resolver)),
+                existing_names: Rc::new(RefCell::new(existing_names)),
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn show_next_upload_conflict(
+        &mut self,
+        session: UploadConflictSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (current, position) = {
+            let resolver = session.resolver.borrow();
+            let Some(current) = resolver.current().cloned() else {
+                return;
+            };
+            let position = resolver.current_position().unwrap_or((1, 1));
+            (current, position)
         };
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            let footer_actions = actions.clone();
+        let view = cx.entity().clone();
+        let apply_all = Arc::new(AtomicBool::new(false));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let session = session.clone();
+            let view = view.clone();
             dialog
                 .title(t!("Dialog.file_conflict").to_string())
-                .w(px(450.))
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(t!("Conflict.files_exist").to_string())
-                        .child(
-                            div()
-                                .p_2()
-                                .bg(cx.theme().secondary)
-                                .rounded_md()
-                                .text_sm()
-                                .child(conflict_list.clone()),
-                        )
-                        .child(t!("Conflict.choose_action").to_string()),
-                )
-                .footer(
-                    DialogFooter::new()
-                        .children(upload_conflict_buttons(footer_actions, has_dir_conflict)),
-                )
+                .w(px(480.))
+                .child(FileConflictPrompt::new(
+                    FileConflictPromptSpec {
+                        name: current.name.clone().into(),
+                        is_directory: current.is_dir,
+                        apply_all: apply_all.clone(),
+                        labels: upload_conflict_prompt_labels(position),
+                    },
+                    move |choice, apply_all, window, cx| {
+                        window.close_dialog(cx);
+                        let uploads = resolve_upload_conflicts(&session, (choice, apply_all));
+                        let has_next = session.resolver.borrow().current().is_some();
+                        view.update(cx, |this, cx| {
+                            if !is_current_generation(
+                                this.connection_generation,
+                                session.connection_generation,
+                            ) {
+                                return;
+                            }
+                            this.enqueue_pending_uploads(uploads, cx);
+                            if has_next {
+                                this.show_next_upload_conflict(session.clone(), window, cx);
+                            }
+                        });
+                    },
+                ))
                 .overlay_closable(false)
                 .close_button(true)
         });
@@ -5160,6 +5085,7 @@ impl FileManagerPanel {
                 transferred: snapshot.transferred,
                 total: snapshot.total.unwrap_or(0),
                 speed: snapshot.speed,
+                current_file: snapshot.current_file,
                 state: upload_progress_state(&snapshot.state),
                 pending_count: executor.pending_count(&self.upload_connection_identity),
                 cancel_target: TransferCancelTarget::Global(snapshot.id),
@@ -5181,6 +5107,12 @@ impl FileManagerPanel {
             transferred: task.shared_progress.transferred.load(Ordering::Relaxed),
             total: task.shared_progress.total.load(Ordering::Relaxed),
             speed: f64::from_bits(task.shared_progress.speed.load(Ordering::Relaxed)),
+            current_file: task
+                .shared_progress
+                .current_file
+                .read()
+                .ok()
+                .and_then(|current| current.clone()),
             state: local_progress_state(&task.state),
             pending_count: self.transfer_queue.pending_count(),
             cancel_target: TransferCancelTarget::Local(task.id),
@@ -5202,6 +5134,7 @@ impl FileManagerPanel {
             transferred,
             total,
             speed,
+            current_file,
             state,
             pending_count,
             cancel_target,
@@ -5222,7 +5155,9 @@ impl FileManagerPanel {
             }
             TransferProgressState::Cancelling => t!("FileManager.transfer_cancelled").to_string(),
         };
-        let tooltip_label = label.clone();
+        let has_current_file = current_file.is_some();
+        let display_label = transfer_progress_display_label(label, current_file);
+        let tooltip_label = display_label.clone();
         let can_cancel = !matches!(state, TransferProgressState::Cancelling);
 
         v_flex()
@@ -5242,11 +5177,14 @@ impl FileManagerPanel {
                         div()
                             .id("fm-transfer-name")
                             .flex_1()
+                            .min_w_0()
                             .text_xs()
                             .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(label)
+                            .child(marquee_text(
+                                "fm-transfer-name-marquee",
+                                display_label,
+                                matches!(state, TransferProgressState::Running) && has_current_file,
+                            ))
                             .tooltip(move |window, cx| {
                                 Tooltip::new(tooltip_label.clone()).build(window, cx)
                             }),
@@ -5688,12 +5626,13 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionState, NavigationRecoveryPlan, PendingUpload, RemoteClipboardEntry,
-        RemoteClipboardKind, RemoteFileClipboard, SharedProgress, TransferCancelTarget,
-        TransferOperation, TransferQueue, TransferTask, TransferTaskState,
+        ConnectionState, FileConflictChoice, NavigationRecoveryPlan, PendingUpload,
+        RemoteClipboardEntry, RemoteClipboardKind, RemoteFileClipboard, SharedProgress,
+        TransferCancelTarget, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
         build_navigation_recovery_plan, build_retry_reset_plan, can_paste_remote_file_clipboard,
-        clear_remote_listing_state, frame_move_options, should_apply_directory_result,
-        should_refresh_after_delete, should_refresh_after_upload, with_directory_policy,
+        clear_remote_listing_state, frame_move_options, resolve_upload_conflict,
+        should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
+        transfer_progress_display_label,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -6310,41 +6249,48 @@ mod tests {
 
     #[test]
     fn overwrite_sets_conflicting_directories_to_replace() {
-        let uploads = with_directory_policy(
-            vec![pending_directory(true)],
-            DirectoryConflictPolicy::Replace,
-        );
+        let upload = resolve_upload_conflict(
+            pending_directory(true),
+            FileConflictChoice::Overwrite,
+            &mut HashSet::new(),
+        )
+        .expect("overwrite keeps the upload");
 
         assert_eq!(
-            uploads[0].directory_conflict_policy,
+            upload.directory_conflict_policy,
             DirectoryConflictPolicy::Replace
         );
     }
 
     #[test]
     fn merge_keeps_directory_policy_merge() {
-        let uploads = with_directory_policy(
-            vec![pending_directory(true)],
-            DirectoryConflictPolicy::Merge,
-        );
+        let upload = resolve_upload_conflict(
+            pending_directory(true),
+            FileConflictChoice::Merge,
+            &mut HashSet::new(),
+        )
+        .expect("merge keeps the upload");
 
         assert_eq!(
-            uploads[0].directory_conflict_policy,
+            upload.directory_conflict_policy,
             DirectoryConflictPolicy::Merge
         );
     }
 
     #[test]
     fn keep_both_keeps_directory_policy_merge() {
-        let uploads = super::rename_conflicting_uploads(
-            vec![pending_directory(true)],
-            HashSet::from(["folder".to_string()]),
-        );
+        let upload = resolve_upload_conflict(
+            pending_directory(true),
+            FileConflictChoice::KeepBoth,
+            &mut HashSet::from(["folder".to_string()]),
+        )
+        .expect("keep both keeps the renamed upload");
 
         assert_eq!(
-            uploads[0].directory_conflict_policy,
+            upload.directory_conflict_policy,
             DirectoryConflictPolicy::Merge
         );
+        assert_eq!(upload.name, "folder (copy)");
     }
 
     #[test]
@@ -6366,6 +6312,21 @@ mod tests {
         assert_eq!(uploads[1].name, "readme.txt");
         assert_eq!(uploads[1].remote_path, "/remote/readme.txt");
         assert!(!uploads[1].has_conflict);
+    }
+
+    #[test]
+    fn folder_upload_progress_includes_the_current_file() {
+        assert_eq!(
+            transfer_progress_display_label(
+                "assets".to_string(),
+                Some("images/banner-long-name.png".to_string())
+            ),
+            "assets - images/banner-long-name.png"
+        );
+        assert_eq!(
+            transfer_progress_display_label("archive.tar".to_string(), None),
+            "archive.tar"
+        );
     }
 
     #[test]

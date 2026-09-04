@@ -170,6 +170,7 @@ fn download_progress_updates_snapshot_and_background_task(cx: &mut TestAppContex
     assert_eq!(task.status, BackgroundTaskStatus::Running);
     assert_eq!(task.group.as_deref(), Some("Test SFTP"));
     assert_eq!(task.detail.as_deref(), Some("nested/file.txt"));
+    assert_eq!(task.open_folder, Some(PathBuf::from("/tmp")));
     let progress = task.progress.expect("background progress should exist");
     assert_eq!(progress.current, 64);
     assert_eq!(progress.total, Some(128));
