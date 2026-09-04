@@ -1996,6 +1996,7 @@ impl DataGrid {
                 .close_button(true)
                 .overlay(false)
                 .content_center()
+                .confirm()
                 .button_props(DialogButtonProps::default().show_cancel(true));
 
             if request.editable {
@@ -2751,6 +2752,7 @@ impl DataGrid {
                 .close_button(true)
                 .overlay(false)
                 .content_center()
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("TableDataGrid.execute_sql").to_string())

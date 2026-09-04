@@ -1333,6 +1333,7 @@ impl CollectionView {
                         .size_full()
                         .child(Editor::new(&editor).size_full().disabled(true)),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.copy").to_string())

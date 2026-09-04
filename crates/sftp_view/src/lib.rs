@@ -4609,6 +4609,7 @@ impl SftpView {
                             .child(file_list.clone()),
                     ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -4768,6 +4769,7 @@ impl SftpView {
                             .child(file_list.clone()),
                     ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -4854,6 +4856,7 @@ impl SftpView {
                 .title(t!("File.new_folder").to_string())
                 .w(px(360.))
                 .child(Input::new(&input))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)

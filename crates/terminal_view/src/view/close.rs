@@ -59,6 +59,7 @@ impl TerminalView {
                         .child(message.clone())
                         .child(warning.clone()),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.close").to_string())

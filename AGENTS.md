@@ -527,6 +527,13 @@
 - **验证方式**：覆盖逐项顺序、Apply all 仅处理同类、两个目录依次选择 Overwrite/ Merge 后仍分别为 Replace/Merge、Keep Both 唯一命名；运行 `sftp_transfer`、`sftp_view`、`terminal_view` 相关测试和 `cargo check -p main`。
 - **适用范围**：`crates/sftp_transfer/src/conflict.rs`、`crates/sftp_view`、`crates/terminal_view/src/sidebar/file_manager_panel.rs`。
 
+- **标题**：迁移后的 GPUI Dialog 配置按钮属性前必须显式启用默认 footer
+- **触发信号**：Dialog 标题和内容正常显示，但确认、取消按钮全部消失；代码仍有 `.button_props(...)` 与 `.on_ok(...)`。
+- **根因 / 约束**：新版 `gpui-component` 的 `Dialog::new()` 默认 `default_footer = false`；`.button_props(...)` 只配置按钮文案和样式，不再创建 footer。自定义 `.footer(...)` 不受此规则影响。
+- **正确做法**：需要确认和取消按钮的 builder 在 `.button_props(...)` 前调用 `.confirm()`；只有一个确认按钮的提示调用 `.alert()`；多动作弹窗继续使用自定义 `.footer(...)`。
+- **验证方式**：运行 `cargo test -p one-ui --test dialog_footer_contract`，保证所有实际 Dialog builder 的 `.button_props(...)` 前都存在 `.confirm()` 或 `.alert()`；再运行受影响 crate 测试与 `cargo check -p main`。
+- **适用范围**：全仓所有使用 `gpui_component::dialog::Dialog` / `AlertDialog` 的页面、编辑器和确认操作。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

@@ -534,6 +534,7 @@ impl ContextMenuHandler for SftpView {
                 .title(t!("File.new_file").to_string())
                 .w(gpui::px(360.))
                 .child(Input::new(&input))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -663,6 +664,7 @@ impl ContextMenuHandler for SftpView {
                 .title(t!("Common.rename").to_string())
                 .w(gpui::px(360.))
                 .child(Input::new(&input))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -807,6 +809,7 @@ impl ContextMenuHandler for SftpView {
                         .child(t!("Notification.permission_hint").to_string())
                         .child(Input::new(&input)),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)

@@ -3179,6 +3179,7 @@ impl FileManagerPanel {
                 .title(t!("FileManager.new_folder").to_string())
                 .w(px(360.))
                 .child(Input::new(&input))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -3269,6 +3270,7 @@ impl FileManagerPanel {
                 .title(t!("FileManager.new_file").to_string())
                 .w(px(360.))
                 .child(Input::new(&input))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -3360,6 +3362,7 @@ impl FileManagerPanel {
                 .title(t!("FileManager.rename").to_string())
                 .w(px(360.))
                 .child(Input::new(&input))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -3716,6 +3719,7 @@ impl FileManagerPanel {
                             .child(target_list.clone()),
                     ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
