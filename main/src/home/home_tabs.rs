@@ -1368,6 +1368,74 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn open_mqtt_tab_with_mode(
+        &mut self,
+        conn: StoredConnection,
+        workspace: Option<Workspace>,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let open_mode = if cx.has_global::<AppSettings>() {
+            AppSettings::global(cx).database_open_mode
+        } else {
+            DatabaseOpenMode::default()
+        };
+        let connection_sort_order = if cx.has_global::<AppSettings>() {
+            AppSettings::global(cx).connection_sort_order
+        } else {
+            ConnectionSortOrder::default()
+        };
+
+        let workspace_id = workspace.as_ref().and_then(|ws| ws.id);
+        let active_conn_id = conn.id;
+
+        let (tab_id, connections, workspace_for_tab) = match open_mode {
+            DatabaseOpenMode::Workspace if workspace_id.is_some() => {
+                let mut connections: Vec<StoredConnection> = self
+                    .connections
+                    .iter()
+                    .filter(|connection| connection.workspace_id == workspace_id)
+                    .filter(|connection| connection.connection_type == ConnectionType::Mqtt)
+                    .cloned()
+                    .collect();
+                crate::connection_sort::sort_connections(&mut connections, connection_sort_order);
+                let tab_id = format!("workspace-mqtt-tab-{}", workspace_id.unwrap_or(0));
+                (tab_id, connections, workspace)
+            }
+            _ => {
+                let conn_id = conn.id.unwrap_or(0);
+                let tab_id = format!("mqtt-{conn_id}");
+                (tab_id, vec![conn.clone()], None)
+            }
+        };
+
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            let tab_id_for_tab = tab_id.clone();
+            tab_container.update(cx, |tc, cx| {
+                tc.activate_or_add_tab_lazy_with_mode(
+                    tab_id,
+                    mode,
+                    move |window, cx| {
+                        let mqtt_view = cx.new(|cx| {
+                            mqtt_view::MqttTabView::new_with_active_conn(
+                                workspace_for_tab,
+                                connections,
+                                active_conn_id,
+                                window,
+                                cx,
+                            )
+                        });
+                        TabItem::new(tab_id_for_tab, "mqtt", mqtt_view)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     pub(crate) fn add_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {

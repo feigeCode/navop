@@ -13,12 +13,12 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::popover::Popover;
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
-use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarShow};
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
@@ -432,13 +432,13 @@ pub struct ApiTestView {
     protocol_select: Entity<SelectState<Vec<ProtocolOption>>>,
     method_select: Entity<SelectState<Vec<MethodOption>>>,
     url_input: Entity<InputState>,
-    request_description_input: Entity<InputState>,
-    websocket_message_input: Entity<InputState>,
-    socket_io_message_input: Entity<InputState>,
-    tcp_message_input: Entity<InputState>,
-    body_input: Entity<InputState>,
-    pre_script_input: Entity<InputState>,
-    tests_input: Entity<InputState>,
+    request_description_input: Entity<TextareaState>,
+    websocket_message_input: Entity<TextareaState>,
+    socket_io_message_input: Entity<TextareaState>,
+    tcp_message_input: Entity<TextareaState>,
+    body_input: Entity<TextareaState>,
+    pre_script_input: Entity<TextareaState>,
+    tests_input: Entity<TextareaState>,
     body_type_select: Entity<SelectState<Vec<BodyTypeOption>>>,
     raw_lang_select: Entity<SelectState<Vec<RawLanguageOption>>>,
     auth_type_select: Entity<SelectState<Vec<AuthTypeOption>>>,
@@ -449,7 +449,7 @@ pub struct ApiTestView {
     auth_key_input: Entity<InputState>,
     auth_value_input: Entity<InputState>,
     folder_base_url_input: Entity<InputState>,
-    folder_description_input: Entity<InputState>,
+    folder_description_input: Entity<TextareaState>,
     environment_base_url_input: Entity<InputState>,
     variables_environment_select: Entity<SelectState<Vec<EnvironmentOption>>>,
     folders: Vec<StoredFolder>,
@@ -474,6 +474,20 @@ pub struct ApiTestView {
     kv_scroll_handles: BTreeMap<KvSection, ScrollHandle>,
     response_headers_scroll_handle: ScrollHandle,
     response_cookies_scroll_handle: ScrollHandle,
+    // 各常显滚动区的独立句柄(新 gpui-component 需显式 Scrollbar 挂接)
+    environment_switcher_scroll_handle: ScrollHandle,
+    environment_list_scroll_handle: ScrollHandle,
+    environment_settings_scroll_handle: ScrollHandle,
+    history_scroll_handle: ScrollHandle,
+    folder_editor_scroll_handle: ScrollHandle,
+    globals_scroll_handle: ScrollHandle,
+    response_body_scroll_handle: ScrollHandle,
+    response_examples_scroll_handle: ScrollHandle,
+    response_example_card_scroll_handle: ScrollHandle,
+    response_console_scroll_handle: ScrollHandle,
+    websocket_timeline_scroll_handle: ScrollHandle,
+    socket_io_timeline_scroll_handle: ScrollHandle,
+    tcp_timeline_scroll_handle: ScrollHandle,
     globals: Vec<KeyValue>,
     global_params: Vec<KeyValue>,
     global_headers: Vec<KeyValue>,
@@ -643,43 +657,34 @@ impl ApiTestView {
             InputState::new(window, cx).placeholder(t!("ApiTest.url_placeholder").to_string())
         });
         let request_description_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(2, 4)
                 .placeholder(t!("ApiTest.request_description_placeholder").to_string())
         });
         let websocket_message_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(2, 6)
                 .placeholder(t!("ApiTest.websocket_message_placeholder").to_string())
         });
         let socket_io_message_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(2, 6)
                 .placeholder(t!("ApiTest.socketio_message_placeholder").to_string())
         });
         let tcp_message_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(2, 6)
                 .placeholder(t!("ApiTest.tcp_message_placeholder").to_string())
         });
         let body_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .placeholder(t!("ApiTest.body_placeholder").to_string())
+            TextareaState::new(window, cx).placeholder(t!("ApiTest.body_placeholder").to_string())
         });
         let pre_script_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .placeholder(t!("ApiTest.pre_request_placeholder").to_string())
         });
         let tests_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .placeholder(t!("ApiTest.tests_placeholder").to_string())
+            TextareaState::new(window, cx).placeholder(t!("ApiTest.tests_placeholder").to_string())
         });
         let auth_token_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("ApiTest.auth_token").to_string())
@@ -700,8 +705,7 @@ impl ApiTestView {
                 .placeholder(t!("ApiTest.folder_base_url_placeholder").to_string())
         });
         let folder_description_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(2, 4)
                 .placeholder(t!("ApiTest.folder_description_placeholder").to_string())
         });
@@ -717,20 +721,16 @@ impl ApiTestView {
 
         // 基础输入失焦时回写当前请求。
         let mut subs = Vec::new();
+        // 单行 InputState 输入失焦回写
         for input in [
             name_input.clone(),
             url_input.clone(),
-            request_description_input.clone(),
-            body_input.clone(),
-            pre_script_input.clone(),
-            tests_input.clone(),
             auth_token_input.clone(),
             auth_username_input.clone(),
             auth_password_input.clone(),
             auth_key_input.clone(),
             auth_value_input.clone(),
             folder_base_url_input.clone(),
-            folder_description_input.clone(),
             environment_base_url_input.clone(),
         ] {
             let sub = cx.subscribe(&input, move |this: &mut Self, _src, ev: &InputEvent, cx| {
@@ -738,6 +738,24 @@ impl ApiTestView {
                     this.commit_current_to_store(cx);
                 }
             });
+            subs.push(sub);
+        }
+        // 多行 TextareaState 输入失焦回写
+        for textarea in [
+            request_description_input.clone(),
+            body_input.clone(),
+            pre_script_input.clone(),
+            tests_input.clone(),
+            folder_description_input.clone(),
+        ] {
+            let sub = cx.subscribe(
+                &textarea,
+                move |this: &mut Self, _src, ev: &InputEvent, cx| {
+                    if matches!(ev, InputEvent::Change | InputEvent::Blur) {
+                        this.commit_current_to_store(cx);
+                    }
+                },
+            );
             subs.push(sub);
         }
         let search_sub = cx.subscribe(
@@ -754,7 +772,13 @@ impl ApiTestView {
             &websocket_message_input,
             window,
             |this, _src, ev: &InputEvent, window, cx| {
-                if matches!(ev, InputEvent::PressEnter { secondary: false }) {
+                if matches!(
+                    ev,
+                    InputEvent::PressEnter {
+                        secondary: false,
+                        shift: _
+                    }
+                ) {
                     this.send_websocket_message(window, cx);
                 }
             },
@@ -764,7 +788,13 @@ impl ApiTestView {
             &socket_io_message_input,
             window,
             |this, _src, ev: &InputEvent, window, cx| {
-                if matches!(ev, InputEvent::PressEnter { secondary: false }) {
+                if matches!(
+                    ev,
+                    InputEvent::PressEnter {
+                        secondary: false,
+                        shift: _
+                    }
+                ) {
                     this.send_socket_io_message(window, cx);
                 }
             },
@@ -774,7 +804,13 @@ impl ApiTestView {
             &tcp_message_input,
             window,
             |this, _src, ev: &InputEvent, window, cx| {
-                if matches!(ev, InputEvent::PressEnter { secondary: false }) {
+                if matches!(
+                    ev,
+                    InputEvent::PressEnter {
+                        secondary: false,
+                        shift: _
+                    }
+                ) {
                     this.send_tcp_message(window, cx);
                 }
             },
@@ -924,6 +960,19 @@ impl ApiTestView {
             kv_scroll_handles,
             response_headers_scroll_handle: ScrollHandle::new(),
             response_cookies_scroll_handle: ScrollHandle::new(),
+            environment_switcher_scroll_handle: ScrollHandle::new(),
+            environment_list_scroll_handle: ScrollHandle::new(),
+            environment_settings_scroll_handle: ScrollHandle::new(),
+            history_scroll_handle: ScrollHandle::new(),
+            folder_editor_scroll_handle: ScrollHandle::new(),
+            globals_scroll_handle: ScrollHandle::new(),
+            response_body_scroll_handle: ScrollHandle::new(),
+            response_examples_scroll_handle: ScrollHandle::new(),
+            response_example_card_scroll_handle: ScrollHandle::new(),
+            response_console_scroll_handle: ScrollHandle::new(),
+            websocket_timeline_scroll_handle: ScrollHandle::new(),
+            socket_io_timeline_scroll_handle: ScrollHandle::new(),
+            tcp_timeline_scroll_handle: ScrollHandle::new(),
             globals: store.globals,
             global_params: store.global_params,
             global_headers: store.global_headers,
@@ -2569,6 +2618,8 @@ impl ApiTestView {
         let switcher_environments = self.environments.clone();
         let switcher_active_id = active_id.clone();
         let switcher_view = cx.entity();
+        // Popover 内容闭包要求 'static,提前克隆滚动句柄
+        let switcher_scroll_handle = self.environment_switcher_scroll_handle.clone();
         let switcher_trigger = Button::new("api-environment-switcher-trigger")
             .outline()
             .small()
@@ -2688,12 +2739,33 @@ impl ApiTestView {
                     )
                     .child(
                         div()
+                            .relative()
                             .w_full()
                             .max_h(px(280.))
-                            .overflow_y_scrollbar()
-                            .scrollbar_show(ScrollbarShow::Always)
-                            .p_1()
-                            .child(v_flex().w_full().gap_0p5().children(environment_options)),
+                            .child(
+                                div()
+                                    .id("api-environment-switcher-scroll")
+                                    .w_full()
+                                    .max_h(px(280.))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&switcher_scroll_handle)
+                                    .p_1()
+                                    .child(
+                                        v_flex().w_full().gap_0p5().children(environment_options),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .w(px(12.))
+                                    .child(
+                                        Scrollbar::vertical(&switcher_scroll_handle)
+                                            .scrollbar_show(ScrollbarShow::Always),
+                                    ),
+                            ),
                     )
                     .child(
                         div()
@@ -2976,17 +3048,35 @@ impl ApiTestView {
                     )
                     .child(
                         div()
-                            .id("api-environment-list-scroll")
+                            .relative()
+                            .w_full()
                             .flex_1()
                             .min_h_0()
-                            .overflow_y_scrollbar()
-                            .scrollbar_show(ScrollbarShow::Always)
-                            .p_2()
                             .child(
-                                v_flex()
-                                    .w_full()
-                                    .gap_1()
-                                    .children(manager_environment_options),
+                                div()
+                                    .id("api-environment-list-scroll")
+                                    .size_full()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.environment_list_scroll_handle)
+                                    .p_2()
+                                    .child(
+                                        v_flex()
+                                            .w_full()
+                                            .gap_1()
+                                            .children(manager_environment_options),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .w(px(12.))
+                                    .child(
+                                        Scrollbar::vertical(&self.environment_list_scroll_handle)
+                                            .scrollbar_show(ScrollbarShow::Always),
+                                    ),
                             ),
                     )
                     .child(
@@ -3050,12 +3140,16 @@ impl ApiTestView {
                     )
                     .child(
                         div()
-                            .id("api-environment-settings-scroll")
+                            .relative()
                             .flex_1()
                             .min_h_0()
-                            .overflow_y_scrollbar()
-                            .scrollbar_show(ScrollbarShow::Always)
                             .child(
+                                div()
+                                    .id("api-environment-settings-scroll")
+                                    .size_full()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.environment_settings_scroll_handle)
+                                    .child(
                                 v_flex()
                                     .w_full()
                                     .min_w_0()
@@ -3204,6 +3298,21 @@ impl ApiTestView {
                                     .child(environment_headers_section)
                                     .child(environment_params_section)
                                     .child(environment_cookies_section),
+                            ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .w(px(12.))
+                                    .child(
+                                        Scrollbar::vertical(
+                                            &self.environment_settings_scroll_handle,
+                                        )
+                                        .scrollbar_show(ScrollbarShow::Always),
+                                    ),
                             ),
                     ),
             )
@@ -3766,11 +3875,29 @@ impl ApiTestView {
                     .into_any_element()
             } else {
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .scrollbar_show(ScrollbarShow::Always)
-                    .child(v_flex().w_full().p_2().gap_1().children(rows))
+                    .child(
+                        div()
+                            .id("api-history-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.history_scroll_handle)
+                            .child(v_flex().w_full().p_2().gap_1().children(rows)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&self.history_scroll_handle)
+                                    .scrollbar_show(ScrollbarShow::Always),
+                            ),
+                    )
                     .into_any_element()
             })
     }
@@ -3976,7 +4103,7 @@ impl ApiTestView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&self.request_description_input).small().w_full()),
+                            .child(Textarea::new(&self.request_description_input).w_full()),
                     ),
             )
             .child(
@@ -3996,248 +4123,267 @@ impl ApiTestView {
     fn render_folder_editor(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let folder_name = self.name_input.clone();
-        v_flex()
-            .id("api-folder-editor")
+        // 外层定位容器 + 显式常显滚动条(新 gpui-component 的 Scrollable 无 per-instance 模式)
+        div()
+            .relative()
             .size_full()
             .min_h_0()
             .min_w_0()
-            .overflow_y_scrollbar()
-            .scrollbar_show(ScrollbarShow::Always)
-            .gap_3()
-            .p_4()
-            .bg(theme.muted.opacity(0.06))
             .child(
-                h_flex()
-                    .w_full()
-                    .items_start()
+                v_flex()
+                    .id("api-folder-editor")
+                    .size_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.folder_editor_scroll_handle)
                     .gap_3()
+                    .p_4()
+                    .bg(theme.muted.opacity(0.06))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(40.))
-                            .rounded(px(10.))
-                            .bg(theme.primary.opacity(0.12))
-                            .text_color(theme.primary)
-                            .child(Icon::new(IconName::FolderOpen).size_5()),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
+                        h_flex()
+                            .w_full()
+                            .items_start()
+                            .gap_3()
                             .child(
                                 div()
-                                    .text_xl()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.folder_settings").to_string()),
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(40.))
+                                    .rounded(px(10.))
+                                    .bg(theme.primary.opacity(0.12))
+                                    .text_color(theme.primary)
+                                    .child(Icon::new(IconName::FolderOpen).size_5()),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xl()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t!("ApiTest.folder_settings").to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.muted_foreground)
+                                            .child(t!("ApiTest.folder_settings_hint").to_string()),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child(t!("ApiTest.folder_settings_hint").to_string()),
+                                    .w(px(260.))
+                                    .flex_shrink_0()
+                                    .child(Input::new(&folder_name).small().w_full()),
                             ),
                     )
                     .child(
-                        div()
-                            .w(px(260.))
-                            .flex_shrink_0()
-                            .child(Input::new(&folder_name).small().w_full()),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .w_full()
-                    .gap_3()
-                    .p_3()
-                    .id("api-folder-settings-card")
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(8.))
-                    .bg(theme.background)
-                    .child(
                         v_flex()
                             .w_full()
+                            .gap_3()
+                            .p_3()
+                            .id("api-folder-settings-card")
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(8.))
+                            .bg(theme.background)
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t!("ApiTest.folder_description").to_string()),
+                                    )
+                                    .child(Textarea::new(&self.folder_description_input).w_full())
+                                    .child(
+                                        div().text_xs().text_color(theme.muted_foreground).child(
+                                            t!("ApiTest.folder_description_hint").to_string(),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .pt_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t!("ApiTest.folder_base_url").to_string()),
+                                    )
+                                    .child(
+                                        div().id("api-folder-base-url").child(
+                                            Input::new(&self.folder_base_url_input)
+                                                .small()
+                                                .w_full()
+                                                .prefix(IconName::Globe),
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(t!("ApiTest.folder_base_url_hint").to_string()),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("api-folder-params")
+                            .w_full()
+                            .h(px(220.))
                             .gap_2()
+                            .p_3()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(8.))
+                            .bg(theme.background)
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t!("ApiTest.folder_params").to_string()),
+                                    )
+                                    .child(
+                                        Tag::secondary()
+                                            .small()
+                                            .flex_shrink_0()
+                                            .child(t!("ApiTest.inherited").to_string()),
+                                    ),
+                            )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.folder_description").to_string()),
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(self.render_kv_editor(KvSection::FolderParams, cx)),
                             )
-                            .child(Input::new(&self.folder_description_input).w_full())
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(t!("ApiTest.folder_description_hint").to_string()),
+                                    .child(t!("ApiTest.folder_params_hint").to_string()),
                             ),
                     )
                     .child(
                         v_flex()
+                            .id("api-folder-headers")
                             .w_full()
+                            .h(px(220.))
                             .gap_2()
-                            .pt_1()
+                            .p_3()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(8.))
+                            .bg(theme.background)
                             .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.folder_base_url").to_string()),
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t!("ApiTest.folder_headers").to_string()),
+                                    )
+                                    .child(
+                                        Tag::secondary()
+                                            .small()
+                                            .flex_shrink_0()
+                                            .child(t!("ApiTest.inherited").to_string()),
+                                    ),
                             )
                             .child(
-                                div().id("api-folder-base-url").child(
-                                    Input::new(&self.folder_base_url_input)
-                                        .small()
-                                        .w_full()
-                                        .prefix(IconName::Globe),
-                                ),
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(self.render_kv_editor(KvSection::FolderHeaders, cx)),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(t!("ApiTest.folder_base_url_hint").to_string()),
+                                    .child(t!("ApiTest.folder_headers_hint").to_string()),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("api-folder-variables")
+                            .w_full()
+                            .h(px(230.))
+                            .gap_2()
+                            .p_3()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(8.))
+                            .bg(theme.background)
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(t!("ApiTest.folder_variables").to_string()),
+                                    )
+                                    .child(
+                                        Tag::secondary()
+                                            .small()
+                                            .flex_shrink_0()
+                                            .child(t!("ApiTest.inherited").to_string()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(self.render_kv_editor(KvSection::FolderVariables, cx)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(t!("ApiTest.folder_variables_hint").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(t!("ApiTest.folder_variable_precedence").to_string()),
                             ),
                     ),
             )
             .child(
-                v_flex()
-                    .id("api-folder-params")
-                    .w_full()
-                    .h(px(220.))
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(8.))
-                    .bg(theme.background)
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(12.))
                     .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.folder_params").to_string()),
-                            )
-                            .child(
-                                Tag::secondary()
-                                    .small()
-                                    .flex_shrink_0()
-                                    .child(t!("ApiTest.inherited").to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(self.render_kv_editor(KvSection::FolderParams, cx)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("ApiTest.folder_params_hint").to_string()),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .id("api-folder-headers")
-                    .w_full()
-                    .h(px(220.))
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(8.))
-                    .bg(theme.background)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.folder_headers").to_string()),
-                            )
-                            .child(
-                                Tag::secondary()
-                                    .small()
-                                    .flex_shrink_0()
-                                    .child(t!("ApiTest.inherited").to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(self.render_kv_editor(KvSection::FolderHeaders, cx)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("ApiTest.folder_headers_hint").to_string()),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .id("api-folder-variables")
-                    .w_full()
-                    .h(px(230.))
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(8.))
-                    .bg(theme.background)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t!("ApiTest.folder_variables").to_string()),
-                            )
-                            .child(
-                                Tag::secondary()
-                                    .small()
-                                    .flex_shrink_0()
-                                    .child(t!("ApiTest.inherited").to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(self.render_kv_editor(KvSection::FolderVariables, cx)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("ApiTest.folder_variables_hint").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("ApiTest.folder_variable_precedence").to_string()),
+                        Scrollbar::vertical(&self.folder_editor_scroll_handle)
+                            .scrollbar_show(ScrollbarShow::Always),
                     ),
             )
             .into_any_element()
@@ -4278,39 +4424,57 @@ impl ApiTestView {
         };
 
         div()
+            .relative()
             .size_full()
             .min_h_0()
-            .overflow_y_scrollbar()
-            .scrollbar_show(ScrollbarShow::Always)
             .child(
-                v_flex()
-                    .w_full()
-                    .gap_4()
-                    .child(section(
-                        title(t!("ApiTest.global_variables").to_string()),
-                        None,
-                        self.render_kv_editor(KvSection::Globals, cx),
-                    ))
-                    .child(section(
-                        title(t!("ApiTest.global_params").to_string()),
-                        Some(t!("ApiTest.global_params_hint").to_string()),
-                        self.render_kv_editor(KvSection::GlobalParams, cx),
-                    ))
-                    .child(section(
-                        title(t!("ApiTest.global_headers").to_string()),
-                        Some(t!("ApiTest.global_headers_hint").to_string()),
-                        self.render_kv_editor(KvSection::GlobalHeaders, cx),
-                    ))
-                    .child(section(
-                        title(t!("ApiTest.global_cookies").to_string()),
-                        Some(t!("ApiTest.global_cookies_hint").to_string()),
-                        self.render_kv_editor(KvSection::GlobalCookies, cx),
-                    ))
-                    .child(section(
-                        title(t!("ApiTest.request_variables").to_string()),
-                        None,
-                        self.render_kv_editor(KvSection::RequestVariables, cx),
-                    )),
+                div()
+                    .id("api-globals-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.globals_scroll_handle)
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_4()
+                            .child(section(
+                                title(t!("ApiTest.global_variables").to_string()),
+                                None,
+                                self.render_kv_editor(KvSection::Globals, cx),
+                            ))
+                            .child(section(
+                                title(t!("ApiTest.global_params").to_string()),
+                                Some(t!("ApiTest.global_params_hint").to_string()),
+                                self.render_kv_editor(KvSection::GlobalParams, cx),
+                            ))
+                            .child(section(
+                                title(t!("ApiTest.global_headers").to_string()),
+                                Some(t!("ApiTest.global_headers_hint").to_string()),
+                                self.render_kv_editor(KvSection::GlobalHeaders, cx),
+                            ))
+                            .child(section(
+                                title(t!("ApiTest.global_cookies").to_string()),
+                                Some(t!("ApiTest.global_cookies_hint").to_string()),
+                                self.render_kv_editor(KvSection::GlobalCookies, cx),
+                            ))
+                            .child(section(
+                                title(t!("ApiTest.request_variables").to_string()),
+                                None,
+                                self.render_kv_editor(KvSection::RequestVariables, cx),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(12.))
+                    .child(
+                        Scrollbar::vertical(&self.globals_scroll_handle)
+                            .scrollbar_show(ScrollbarShow::Always),
+                    ),
             )
     }
 
@@ -4430,7 +4594,7 @@ impl ApiTestView {
                             .px_2()
                             .border_l_1()
                             .border_color(theme.border.opacity(0.55))
-                            .child(Input::new(&key).small().w_full().appearance(false).bare()),
+                            .child(Input::new(&key).small().w_full().appearance(false)),
                     )
                     .child(
                         if is_form_data && field_type == crate::http::FieldType::File {
@@ -4477,7 +4641,7 @@ impl ApiTestView {
                                 .px_2()
                                 .border_l_1()
                                 .border_color(theme.border.opacity(0.55))
-                                .child(Input::new(&value).small().w_full().appearance(false).bare())
+                                .child(Input::new(&value).small().w_full().appearance(false))
                                 .into_any_element()
                         },
                     )
@@ -4741,9 +4905,8 @@ impl ApiTestView {
                     .rounded(px(6.))
                     .overflow_hidden()
                     .child(
-                        Input::new(&self.body_input)
+                        Textarea::new(&self.body_input)
                             .h_full()
-                            .editor_scrollbar_show(ScrollbarShow::Always)
                             .font_family(theme.mono_font_family.clone()),
                     )
                     .into_any_element(),
@@ -4854,7 +5017,7 @@ impl ApiTestView {
 
     fn render_script_editor(
         &self,
-        input: &Entity<InputState>,
+        input: &Entity<TextareaState>,
         hint: String,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -4878,9 +5041,8 @@ impl ApiTestView {
                     .rounded(px(6.))
                     .overflow_hidden()
                     .child(
-                        Input::new(input)
+                        Textarea::new(input)
                             .h_full()
-                            .editor_scrollbar_show(ScrollbarShow::Always)
                             .font_family(theme.mono_font_family.clone()),
                     ),
             )
@@ -5016,18 +5178,36 @@ impl ApiTestView {
                         )
                         .child(
                             div()
+                                .relative()
                                 .flex_1()
                                 .min_h_0()
                                 .min_w_0()
-                                .overflow_scrollbar()
-                                .scrollbar_show(ScrollbarShow::Always)
                                 .rounded(px(6.))
                                 .bg(theme.muted.opacity(0.14))
-                                .p_3()
-                                .font_family(theme.mono_font_family.clone())
-                                .text_sm()
-                                .text_color(theme.foreground)
-                                .child(body_text),
+                                .child(
+                                    div()
+                                        .id("api-response-body-scroll")
+                                        .size_full()
+                                        .overflow_scroll()
+                                        .track_scroll(&self.response_body_scroll_handle)
+                                        .p_3()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_sm()
+                                        .text_color(theme.foreground)
+                                        .child(body_text),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .right_0()
+                                        .bottom_0()
+                                        .w(px(12.))
+                                        .child(
+                                            Scrollbar::vertical(&self.response_body_scroll_handle)
+                                                .scrollbar_show(ScrollbarShow::Always),
+                                        ),
+                                ),
                         )
                         .into_any_element()
                 }
@@ -5051,21 +5231,21 @@ impl ApiTestView {
                     theme.foreground,
                     theme.mono_font_family.clone(),
                 ),
-                ResponseTab::ActualRequest => Self::render_text_response(
+                ResponseTab::ActualRequest => self.render_text_response(
                     "api-actual-request",
                     "api-copy-actual-request",
                     actual_request,
                     t!("ApiTest.no_response").to_string(),
                     &theme,
                 ),
-                ResponseTab::Curl => Self::render_text_response(
+                ResponseTab::Curl => self.render_text_response(
                     "api-curl-command",
                     "api-copy-curl",
                     curl,
                     t!("ApiTest.no_response").to_string(),
                     &theme,
                 ),
-                ResponseTab::Console => Self::render_text_response(
+                ResponseTab::Console => self.render_text_response(
                     "api-script-console",
                     "api-copy-console",
                     console,
@@ -5144,7 +5324,7 @@ impl ApiTestView {
                                     .child(t!("ApiTest.response_example_success").to_string()),
                             ),
                     )
-                    .child(Self::render_response_example_card(
+                    .child(self.render_response_example_card(
                         example,
                         true,
                         "api-copy-success-example".to_string(),
@@ -5173,7 +5353,7 @@ impl ApiTestView {
                             ),
                     )
                     .children(fail_examples.iter().enumerate().map(|(index, example)| {
-                        Self::render_response_example_card(
+                        self.render_response_example_card(
                             example,
                             false,
                             format!("api-copy-failure-example-{index}"),
@@ -5185,16 +5365,34 @@ impl ApiTestView {
         }
 
         div()
-            .id("api-response-examples")
+            .relative()
             .size_full()
             .min_h_0()
-            .overflow_y_scrollbar()
-            .scrollbar_show(ScrollbarShow::Always)
-            .child(v_flex().w_full().gap_4().p_3().children(sections))
+            .child(
+                div()
+                    .id("api-response-examples")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.response_examples_scroll_handle)
+                    .child(v_flex().w_full().gap_4().p_3().children(sections)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(12.))
+                    .child(
+                        Scrollbar::vertical(&self.response_examples_scroll_handle)
+                            .scrollbar_show(ScrollbarShow::Always),
+                    ),
+            )
             .into_any_element()
     }
 
     fn render_response_example_card(
+        &self,
         example: &ResponseExample,
         success: bool,
         copy_id: String,
@@ -5268,17 +5466,36 @@ impl ApiTestView {
             )
             .child(
                 div()
+                    .relative()
                     .w_full()
                     .min_h(px(52.))
                     .max_h(px(260.))
-                    .overflow_scrollbar()
-                    .scrollbar_show(ScrollbarShow::Always)
                     .rounded(px(6.))
                     .bg(theme.muted.opacity(0.28))
-                    .p_3()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_sm()
-                    .child(body),
+                    .child(
+                        div()
+                            .id("api-response-example-card-scroll")
+                            .size_full()
+                            .max_h(px(260.))
+                            .overflow_scroll()
+                            .track_scroll(&self.response_example_card_scroll_handle)
+                            .p_3()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_sm()
+                            .child(body),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&self.response_example_card_scroll_handle)
+                                    .scrollbar_show(ScrollbarShow::Always),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -5457,6 +5674,7 @@ impl ApiTestView {
     }
 
     fn render_text_response(
+        &self,
         panel_id: &'static str,
         copy_id: &'static str,
         text: String,
@@ -5494,24 +5712,42 @@ impl ApiTestView {
             )
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .overflow_scrollbar()
-                    .scrollbar_show(ScrollbarShow::Always)
                     .rounded(px(6.))
                     .bg(theme.muted.opacity(0.14))
-                    .p_3()
-                    .text_sm()
-                    .text_color(if is_empty {
-                        theme.muted_foreground
-                    } else {
-                        theme.foreground
-                    })
-                    .when(!is_empty, |content| {
-                        content.font_family(theme.mono_font_family.clone())
-                    })
-                    .child(display_text),
+                    .child(
+                        div()
+                            .id("api-response-console-scroll")
+                            .size_full()
+                            .overflow_scroll()
+                            .track_scroll(&self.response_console_scroll_handle)
+                            .p_3()
+                            .text_sm()
+                            .text_color(if is_empty {
+                                theme.muted_foreground
+                            } else {
+                                theme.foreground
+                            })
+                            .when(!is_empty, |content| {
+                                content.font_family(theme.mono_font_family.clone())
+                            })
+                            .child(display_text),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(12.))
+                            .child(
+                                Scrollbar::vertical(&self.response_console_scroll_handle)
+                                    .scrollbar_show(ScrollbarShow::Always),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -5903,7 +6139,7 @@ mod render_contract_tests {
         );
         assert!(
             response_renderer.contains("api-response-body")
-                && response_renderer.contains(".overflow_scrollbar()")
+                && response_renderer.contains("Scrollbar::vertical(")
                 && response_renderer.contains(".scrollbar_show(ScrollbarShow::Always)")
                 && response_renderer.contains(".text_color(theme.foreground)")
                 && response_renderer.contains(".child(body_text)"),
@@ -5931,12 +6167,12 @@ mod render_contract_tests {
             "request and response key-value surfaces must keep stable independent scroll handles"
         );
         assert_always_visible_scrollbars(production_source, "the API request and response panes");
-        assert_eq!(
-            production_source
-                .matches(".editor_scrollbar_show(ScrollbarShow::Always)")
-                .count(),
-            2,
-            "raw request bodies and request scripts must keep visible editor scrollbars"
+        // 新 gpui-component 中多行编辑器迁移到 Textarea(内建滚动),raw body 与脚本编辑器保持多行输入
+        assert!(
+            production_source.contains("Textarea::new(&self.body_input)")
+                && production_source.contains("fn render_script_editor")
+                && production_source.contains("Textarea::new(input)"),
+            "raw request bodies and request scripts must stay multi-line editors with scrolling"
         );
         for (scope_name, protocol_render) in [
             ("WebSocket", websocket_render),
@@ -5944,12 +6180,11 @@ mod render_contract_tests {
             ("TCP", tcp_render),
         ] {
             assert_always_visible_scrollbars(protocol_render, scope_name);
-            assert_eq!(
-                protocol_render
-                    .matches(".editor_scrollbar_show(ScrollbarShow::Always)")
-                    .count(),
-                1,
-                "{scope_name} message editors must keep visible scrollbars"
+            assert!(
+                protocol_render.contains("Textarea::new(&self.websocket_message_input)")
+                    || protocol_render.contains("Textarea::new(&self.socket_io_message_input)")
+                    || protocol_render.contains("Textarea::new(&self.tcp_message_input)"),
+                "{scope_name} message editors must stay multi-line editors with scrolling"
             );
         }
         assert!(
@@ -6020,10 +6255,7 @@ mod render_contract_tests {
                 && environment_manager.contains("theme.popover_foreground")
                 && environment_manager.contains("api-environment-list-scroll")
                 && environment_manager.contains("api-environment-settings-scroll")
-                && environment_manager
-                    .matches(".overflow_y_scrollbar()")
-                    .count()
-                    >= 3
+                && environment_manager.matches("Scrollbar::vertical(").count() >= 3
                 && !environment_manager.contains("Popover::new(\"api-environment-manager\")")
                 && environment_manager.contains("this.select_environment")
                 && behavior.contains("prompt_new_environment")
@@ -6073,7 +6305,6 @@ mod render_contract_tests {
             render.contains("api-kv-empty-")
                 && render.contains("api-kv-add-footer-")
                 && render.contains(".appearance(false)")
-                && render.contains(".bare()")
                 && render.contains("this.add_kv_row(section_for_closure, window, cx)"),
             "the key-value table must use integrated cells and expose real add-row actions"
         );

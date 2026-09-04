@@ -1498,6 +1498,10 @@ Connection:
     en: Copy MongoDB Address
     zh-CN: 复制 MongoDB 地址
     zh-HK: 複製 MongoDB 位址
+  copy_mqtt_target:
+    en: Copy MQTT Address
+    zh-CN: 复制 MQTT 地址
+    zh-HK: 複製 MQTT 位址
   copy_serial_port:
     en: Copy Serial Port
     zh-CN: 复制串口名称
@@ -1800,6 +1804,10 @@ Connection:
       en: MongoDB
       zh-CN: MongoDB
       zh-HK: MongoDB
+    type_mqtt:
+      en: MQTT
+      zh-CN: MQTT
+      zh-HK: MQTT
     type_serial:
       en: Serial
       zh-CN: 串口
@@ -1911,6 +1919,14 @@ NewConnection:
     en: Domestic Database
     zh-CN: 国产数据库
     zh-HK: 國產資料庫
+  category_time_series:
+    en: Time Series
+    zh-CN: 时序数据库
+    zh-HK: 時序資料庫
+  category_middleware:
+    en: Middleware
+    zh-CN: 中间件
+    zh-HK: 中介軟體
   category_terminal:
     en: Terminal
     zh-CN: 终端
@@ -1947,6 +1963,10 @@ NewConnection:
     en: MongoDB database connection
     zh-CN: MongoDB 数据库连接
     zh-HK: MongoDB 資料庫連線
+  description_mqtt:
+    en: MQTT message broker connection
+    zh-CN: MQTT 消息中间件连接
+    zh-HK: MQTT 訊息中介軟體連線
   description_serial:
     en: Serial device connection
     zh-CN: 串口设备连接

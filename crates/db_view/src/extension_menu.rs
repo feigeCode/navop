@@ -179,6 +179,7 @@ fn database_type_when_value(database_type: &DatabaseType) -> &'static str {
         DatabaseType::MSSQL => "mssql",
         DatabaseType::Oracle => "oracle",
         DatabaseType::ClickHouse => "clickhouse",
+        DatabaseType::TDengine => "tdengine",
         DatabaseType::External { .. } => "external",
     }
 }

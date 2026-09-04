@@ -4,6 +4,29 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+<!-- Unreleased 草稿（feat/tdengine-mqtt-middleware）：发布时将本节内容并入目标版本条目
+     （按仓库惯例本批均为功能新增，预计为下一个 minor 版本），补齐 CNB 镜像下载行与
+     Full Changelog 对比链接后删除本节与本注释。changelog.py 仅识别带日期的版本标题，
+     本节不影响既有条目的 extract/validate/upsert。 -->
+
+## [Unreleased]
+
+#### 更新内容
+
+- 新增 TDengine 时序数据库连接：基于官方 taos WebSocket 驱动（经 taosAdapter :6041 连接，纯 Rust、无需本地 C 依赖），支持数据库/超级表/子表浏览、DESCRIBE 与 TAG 识别、分页查询等完整数据库能力；连接表单、连接导入协议与 TDengine CLI 命令（`taos` / `jdbc:TAOS-RS://`）同步支持。
+- 新增 MQTT 中间件连接：基于 rumqttc 运行时（MQTT 3.1.1，rustls 加密），提供订阅、消息、发布三个视图（消息环形缓冲、文本/Hex 切换），连接页签对齐 MongoDB 多开模式，支持 SSH 隧道与断线自动重订阅。
+- 新增通用中间件声明式连接表单引擎：中间件连接复用数据库表单的页面模式，标签页由声明式配置驱动，工作区/团队/云同步/钥匙串/备注由引擎统一处理，为 RocketMQ、Kafka 等后续中间件接入铺路。
+- 新建连接弹框新增「时序数据库」「中间件」分类，分别承载 TDengine 与 MQTT 入口卡片。
+
+---
+
+#### What's New
+
+- Added TDengine time-series database connections on the official taos WebSocket driver (via taosAdapter :6041, pure Rust with no local C dependency), with full database capabilities including database/super-table/child-table browsing, DESCRIBE with TAG awareness, and paged queries; the connection form, connection import protocol, and TDengine CLI commands (`taos` / `jdbc:TAOS-RS://`) are supported as well.
+- Added MQTT middleware connections on a rumqttc runtime (MQTT 3.1.1 over rustls) with dedicated subscribe, messages, and publish views (ring-buffered messages, text/Hex toggle); connection tabs follow the MongoDB multi-tab pattern, with SSH tunneling and automatic resubscription after reconnects.
+- Added a declarative connection-form engine for middleware: middleware connections reuse the database form's page model with declaratively configured tabs, while workspace/team/cloud-sync/keychain/notes are handled uniformly by the engine, paving the way for future middleware such as RocketMQ and Kafka.
+- The new-connection dialog adds "Time-series Database" and "Middleware" categories, hosting the TDengine and MQTT entry cards respectively.
+
 ## [v0.16.0] - 2026-09-03
 
 #### 更新内容

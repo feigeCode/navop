@@ -599,6 +599,14 @@ ConnectionForm:
     en: HTTPS
     zh-CN: HTTPS
     zh-HK: HTTPS
+  schema_ws:
+    en: WebSocket
+    zh-CN: WebSocket
+    zh-HK: WebSocket
+  schema_wss:
+    en: WebSocket (TLS)
+    zh-CN: WebSocket (TLS)
+    zh-HK: WebSocket (TLS)
 
 ObjectView:
   titles:

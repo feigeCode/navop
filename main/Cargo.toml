@@ -58,6 +58,8 @@ redis_view = { workspace = true }
 redis-runtime.workspace = true
 mongodb_view = { workspace = true }
 mongodb-runtime.workspace = true
+mqtt_view = { workspace = true }
+mqtt-runtime.workspace = true
 remote_desktop = { workspace = true }
 remote_desktop_view = { workspace = true }
 remote_file_editor = { workspace = true }
@@ -91,12 +93,13 @@ extension-protocol = { workspace = true }
 tempfile = "3"
 
 [features]
-default = ["wasm-components", "embedded-webview", "windows-native-rdp"]
+default = ["wasm-components", "embedded-webview", "windows-native-rdp", "builtin-mqtt"]
 api-testing = ["dep:api_tools"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
-builtin-data-drivers = ["builtin-redis", "builtin-mongodb"]
+builtin-mqtt = ["mqtt_view/builtin-mqtt"]
+builtin-data-drivers = ["builtin-redis", "builtin-mongodb", "builtin-mqtt"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]

@@ -64,6 +64,29 @@ struct AppAssets {
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
 
+/// Navop 自带品牌图标(TDengine/MQTT)。
+///
+/// 外部 gpui-component 的 `IconName` 无法在本仓库扩展变体,这些 SVG
+/// 以 include_bytes 内嵌并按路径对外提供(路径常量定义在 one-core)。
+fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
+    let bytes: &'static [u8] = match path {
+        one_core::storage::NAVOP_TDENGINE_COLOR_ICON => {
+            include_bytes!("../../resources/icons/tdengine-color.svg")
+        }
+        one_core::storage::NAVOP_TDENGINE_LINE_COLOR_ICON => {
+            include_bytes!("../../resources/icons/tdengine-line-color.svg")
+        }
+        one_core::storage::NAVOP_MQTT_COLOR_ICON => {
+            include_bytes!("../../resources/icons/mqtt-color.svg")
+        }
+        one_core::storage::NAVOP_MQTT_LINE_ICON => {
+            include_bytes!("../../resources/icons/mqtt-line.svg")
+        }
+        _ => return None,
+    };
+    Some(std::borrow::Cow::Borrowed(bytes))
+}
+
 const NAVOP_APP_ID: &str = "navop";
 const NAVOP_WINDOW_TITLE: &str = "Navop";
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
@@ -220,6 +243,10 @@ impl AssetSource for AppAssets {
             return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
                 "../../resources/navop-icon.png"
             ))));
+        }
+
+        if let Some(asset) = navop_brand_icon(path) {
+            return Ok(Some(asset));
         }
 
         match self.driver.load(path) {
