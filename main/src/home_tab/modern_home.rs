@@ -590,8 +590,6 @@ fn home_application_id(application: NavigationApplication) -> &'static str {
         NavigationApplication::AiWorkbench => "home-app-ai-workbench",
         NavigationApplication::Team => "home-app-team",
         NavigationApplication::Notes => "home-app-notes",
-        #[cfg(feature = "api-testing")]
-        NavigationApplication::ApiTesting => "home-app-api-testing",
         NavigationApplication::JsonFormatter => "home-app-json-formatter",
         NavigationApplication::SessionLogs => "home-app-session-logs",
         NavigationApplication::CredentialVault => "home-app-credential-vault",

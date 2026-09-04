@@ -6,7 +6,7 @@ use db::plugin::DatabasePlugin;
 use crate::real_databases::common::assertions::{
     assert_cell, assert_columns, assert_no_sql_errors, assert_null,
 };
-use crate::real_databases::common::env::mysql_config;
+use crate::real_databases::common::env::{mysql_config, skip_database};
 
 const FIXTURE_SQL: &str = r#"
 DROP TABLE IF EXISTS all_types;
@@ -65,9 +65,10 @@ INSERT INTO all_types (
 
 #[tokio::test]
 async fn mysql_real_script_query_error_transaction_and_metadata_flow() {
-    let config = mysql_config().expect(
-        "set ONETCLI_TEST_MYSQL_PASSWORD (and optionally host/port/user) to run MySQL tests",
-    );
+    let Some(config) = mysql_config() else {
+        skip_database("MySQL", "ONETCLI_TEST_MYSQL_PASSWORD (and optionally host/port/user)");
+        return;
+    };
     let database = unique_database("core");
     let plugin = MySqlPlugin::new();
     let mut connection = plugin

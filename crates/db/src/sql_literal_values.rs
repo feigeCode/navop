@@ -15,6 +15,8 @@ pub(crate) fn format_special_table_value(
 ) -> Option<String> {
     match database_type {
         DatabaseType::MySQL => format_mysql_value(value, data_type),
+        // TDengine 与 MySQL 同臂处理(数值/布尔/二进制字面量规则一致)。
+        DatabaseType::TDengine => format_mysql_value(value, data_type),
         DatabaseType::PostgreSQL => format_postgres_value(value, data_type),
         DatabaseType::SQLite => format_sqlite_value(value, data_type),
         DatabaseType::DuckDB => format_duckdb_value(value, data_type),

@@ -165,3 +165,96 @@ Credential:
     en: Unable to load the keychain. Try again later.
     zh-CN: 无法加载钥匙串列表，请稍后重试。
     zh-HK: 無法載入鑰匙圈清單，請稍後再試。
+
+# 通用中间件声明式连接表单
+MiddlewareForm:
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
+  workspace:
+    en: Workspace
+    zh-CN: 工作区
+    zh-HK: 工作區
+  cloud_sync:
+    en: Cloud Sync
+    zh-CN: 云同步
+    zh-HK: 雲端同步
+  cloud_sync_desc:
+    en: Include this connection in end-to-end encrypted sync
+    zh-CN: 参与端到端加密同步
+    zh-HK: 參與端對端加密同步
+  tab_notes:
+    en: Notes
+    zh-CN: 备注
+    zh-HK: 備註
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Optional remarks for this connection
+    zh-CN: 连接备注(可选)
+    zh-HK: 連線備註(可選)
+  test:
+    en: Test
+    zh-CN: 测试
+    zh-HK: 測試
+  testing:
+    en: Testing...
+    zh-CN: 测试中...
+    zh-HK: 測試中...
+  test_success:
+    en: Connection test succeeded
+    zh-CN: 连接测试成功
+    zh-HK: 連線測試成功
+  test_failed:
+    en: Connection test failed
+    zh-CN: 连接测试失败
+    zh-HK: 連線測試失敗
+  save_failed:
+    en: Failed to save connection
+    zh-CN: 保存连接失败
+    zh-HK: 儲存連線失敗
+  save_and_continue:
+    en: Save and Continue
+    zh-CN: 保存并继续
+    zh-HK: 儲存並繼續
+  field_required:
+    en: "%{label} is required"
+    zh-CN: "%{label}不能为空"
+    zh-HK: "%{label}不能為空"
+  ssh_tunnel_invalid:
+    en: Invalid SSH tunnel settings
+    zh-CN: SSH 隧道配置不完整
+    zh-HK: SSH 通道設定不完整
+  ssh_missing_required:
+    en: "%{field} is required"
+    zh-CN: "%{field} 不能为空"
+    zh-HK: "%{field} 不能為空"
+  no_settings:
+    en: No settings available
+    zh-CN: 暂无可配置项
+    zh-HK: 暫無可設定項
+  select_file:
+    en: Select file
+    zh-CN: 选择文件
+    zh-HK: 選擇檔案
+  repository_missing:
+    en: Connection repository is unavailable
+    zh-CN: 连接存储不可用
+    zh-HK: 連線儲存不可用
+
+Common:
+  ok:
+    en: OK
+    zh-CN: 确定
+    zh-HK: 確定
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  none:
+    en: None
+    zh-CN: 无
+    zh-HK: 無

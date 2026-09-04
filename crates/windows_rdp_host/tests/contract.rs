@@ -2736,8 +2736,8 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     );
     assert_tokens_in_scope(
         ".github/workflows/ci.yml",
-        "  windows-rdp-probe:",
         "  test:",
+        "  ci-gate:",
         &[
             "- uses: actions/checkout@v7",
             "- name: Install NASM",
@@ -2746,20 +2746,11 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
             "nasm -v",
             "- name: Setup Rust toolchain",
-            "- name: Build ATL/MSVC probe",
+            "- name: Build ATL/MSVC probe (x64 + x86)",
         ],
     );
     assert_contains_all(
         ".github/workflows/release.yml",
-        &[
-            "choco install nasm --no-progress --yes",
-            "$nasmDir = Join-Path $env:ProgramFiles \"NASM\"",
-            "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
-            "nasm -v",
-        ],
-    );
-    assert_contains_all(
-        ".github/workflows/build-windows-msi.yml",
         &[
             "choco install nasm --no-progress --yes",
             "$nasmDir = Join-Path $env:ProgramFiles \"NASM\"",

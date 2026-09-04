@@ -255,7 +255,7 @@ test("portable Linux disables WebView while standard builds keep it", () => {
   assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
   assert.match(
     mainCargo,
-    /default = \["wasm-components", "embedded-webview", "windows-native-rdp"\]/,
+    /default = \["wasm-components", "embedded-webview", "windows-native-rdp", "builtin-mqtt"\]/,
   );
   assert.match(
     mainCargo,
@@ -468,16 +468,11 @@ test("Windows release builds an installable per-user MSI", () => {
 
 test("Windows application builds include the native RDP backend", () => {
   const release = read(".github/workflows/release.yml");
-  const manual = read(".github/workflows/build-windows-msi.yml");
   const releaseWindowsBuild = release.match(
     /- name: Build release binary \(Windows\)[\s\S]*?(?=\n      - name:)/,
   )?.[0];
-  const manualBuild = manual.match(
-    /- name: Build release binary[\s\S]*?(?=\n      - name:)/,
-  )?.[0];
 
   assert.ok(releaseWindowsBuild, "missing Windows release binary build step");
-  assert.ok(manualBuild, "missing manual Windows release binary build step");
   for (const target of [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -515,24 +510,14 @@ test("Windows application builds include the native RDP backend", () => {
     /--target \$target/,
   );
   assert.match(
-    manual,
-    /cargo build --release -p main --features windows-native-rdp --target \$env:WINDOWS_TARGET/,
-  );
-  assert.match(
     release,
     /- name: Configure MSVC environment[\s\S]*?if: runner\.os == 'Windows'[\s\S]*?uses: ilammy\/msvc-dev-cmd@v1[\s\S]*?arch: \$\{\{ matrix\.windows_arch \}\}/,
   );
-  assert.match(
-    manual,
-    /- name: Configure MSVC environment[\s\S]*?uses: ilammy\/msvc-dev-cmd@v1[\s\S]*?arch: \$\{\{ env\.WINDOWS_WIX_ARCH \}\}/,
-  );
   assert.match(releaseWindowsBuild, /VCToolsInstallDir/);
-  assert.match(manualBuild, /VCToolsInstallDir/);
 });
 
 test("Windows release publishes versioned Win32 artifacts while preserving updater metadata", () => {
   const release = read(".github/workflows/release.yml");
-  const manual = read(".github/workflows/build-windows-msi.yml");
   const upload = read(".github/workflows/upload-r2.yml");
   const cargoConfig = read(".cargo/config.toml");
 
@@ -554,14 +539,6 @@ test("Windows release publishes versioned Win32 artifacts while preserving updat
   assert.match(release, /\$\{env:PUBLIC_BASENAME\}\.exe/);
   assert.match(release, /PUBLIC_BASENAME=navop-\$\{VERSION#v\}-\$\{\{ matrix\.public_label \}\}/);
 
-  assert.match(manual, /architecture:/);
-  assert.match(manual, /- x86/);
-  assert.match(manual, /i686-pc-windows-msvc/);
-  assert.match(manual, /inputs\.architecture == 'x86' && 'win32'/);
-  assert.match(manual, /WINDOWS_TARGET/);
-  assert.match(manual, /WINDOWS_WIX_ARCH/);
-  assert.match(manual, /WINDOWS_BASENAME/);
-
   assert.match(upload, /navop-i686-pc-windows-msvc\.zip/);
   assert.match(
     upload,
@@ -579,7 +556,6 @@ test("Windows release builds an EXE installer bundle from the MSI", () => {
 
   const bundle = read(bundlePath);
   const release = read(".github/workflows/release.yml");
-  const manual = read(".github/workflows/build-windows-msi.yml");
 
   assert.match(
     bundle,
@@ -594,60 +570,49 @@ test("Windows release builds an EXE installer bundle from the MSI", () => {
   );
   assert.doesNotMatch(bundle, /bal:PrimaryPackageType="x64"/);
 
-  for (const workflow of [release, manual]) {
-    assert.match(
-      workflow,
-      /WixToolset\.BootstrapperApplications\.wixext\/6\.0\.2/,
-    );
-  }
+  assert.match(
+    release,
+    /WixToolset\.BootstrapperApplications\.wixext\/6\.0\.2/,
+  );
   assert.match(
     release,
     /wix build installer\/windows\/navop-bundle\.wxs[^]*-ext WixToolset\.BootstrapperApplications\.wixext[^]*-d Version=[^\n]+[^]*-d MsiPath=[^\n]*\$\{env:PUBLIC_BASENAME\}\.msi[^]*-out "\$\{env:PUBLIC_BASENAME\}\.exe"/,
   );
-  assert.match(
-    manual,
-    /wix build installer\/windows\/navop-bundle\.wxs[^]*-ext WixToolset\.BootstrapperApplications\.wixext[^]*-d Version=[^\n]+[^]*-d MsiPath=[^\n]*\$\{env:WINDOWS_BASENAME\}\.msi[^]*-out "\$\{env:WINDOWS_BASENAME\}\.exe"/,
+  assert.doesNotMatch(
+    release,
+    /Copy-Item[^\n]+"navop-x86_64-pc-windows-msvc\.exe"/,
   );
-  for (const workflow of [release, manual]) {
-    assert.doesNotMatch(
-      workflow,
-      /Copy-Item[^\n]+"navop-x86_64-pc-windows-msvc\.exe"/,
-    );
 
-    const msiBuild = workflow.indexOf(
-      "wix build installer/windows/navop.wxs",
-    );
-    const bundleBuild = workflow.indexOf(
-      "wix build installer/windows/navop-bundle.wxs",
-    );
-    assert.ok(msiBuild >= 0, "missing MSI build");
-    assert.ok(bundleBuild > msiBuild, "EXE installer must be built after MSI");
-  }
+  const msiBuild = release.indexOf(
+    "wix build installer/windows/navop.wxs",
+  );
+  const bundleBuild = release.indexOf(
+    "wix build installer/windows/navop-bundle.wxs",
+  );
+  assert.ok(msiBuild >= 0, "missing MSI build");
+  assert.ok(bundleBuild > msiBuild, "EXE installer must be built after MSI");
 });
 
 test("Windows release keeps the legacy ZIP standard and publishes portable separately", () => {
   const release = read(".github/workflows/release.yml");
-  const manual = read(".github/workflows/build-windows-msi.yml");
   const installGuides = [
     read("docs-site/docs/guide/install-update.md"),
     read("docs-site/docs/en-US/guide/install-update.md"),
     read("docs-site/docs/zh-TW/guide/install-update.md"),
   ];
 
-  for (const workflow of [release, manual]) {
-    assert.match(workflow, /portable-package/);
-    assert.match(workflow, /navop\.portable/);
-    assert.match(
-      workflow,
-      /Set-Content -Path "portable-package\/navop\.portable"/,
-    );
-    assert.doesNotMatch(
-      workflow,
-      /"package\/navop\.portable"/,
-    );
-    assert.match(workflow, /-d SourceDir=.*\\package/);
-    assert.doesNotMatch(workflow, /-d SourceDir=.*portable-package/);
-  }
+  assert.match(release, /portable-package/);
+  assert.match(release, /navop\.portable/);
+  assert.match(
+    release,
+    /Set-Content -Path "portable-package\/navop\.portable"/,
+  );
+  assert.doesNotMatch(
+    release,
+    /"package\/navop\.portable"/,
+  );
+  assert.match(release, /-d SourceDir=.*\\package/);
+  assert.doesNotMatch(release, /-d SourceDir=.*portable-package/);
   assert.match(
     release,
     /Compress-Archive -Path "package\/\*" -DestinationPath "\$\{\{ matrix\.archive \}\}"/,
@@ -656,17 +621,7 @@ test("Windows release keeps the legacy ZIP standard and publishes portable separ
     release,
     /Compress-Archive -Path "portable-package\/\*" -DestinationPath "\$\{env:PUBLIC_BASENAME\}-portable\.zip"/,
   );
-  assert.match(
-    manual,
-    /Compress-Archive -Path "package\/\*" -DestinationPath "\$\{env:WINDOWS_BASENAME\}\.zip"/,
-  );
-  assert.match(
-    manual,
-    /Compress-Archive -Path "portable-package\/\*" -DestinationPath "\$\{env:WINDOWS_BASENAME\}-portable\.zip"/,
-  );
   assert.match(release, /navop-x86_64-pc-windows-msvc\.zip/);
-  assert.match(manual, /\$\{env:WINDOWS_BASENAME\}\.zip/);
-  assert.match(manual, /\$\{env:WINDOWS_BASENAME\}-portable\.zip/);
   assert.match(
     release,
     /windows_x64='\{"target":"x86_64-pc-windows-msvc"[^']*"archive":"navop-x86_64-pc-windows-msvc\.zip"/,
@@ -731,7 +686,6 @@ test("Windows MSI appends Navop to the directory chosen by users", () => {
 
 test("Windows MSI builds one bilingual localized installer", () => {
   const release = read(".github/workflows/release.yml");
-  const manual = read(".github/workflows/build-windows-msi.yml");
   const wix = read("installer/windows/navop.wxs");
   const localizationPath = "installer/windows/navop.wxl";
   const licensePath = "installer/windows/navop-license.rtf";
@@ -739,17 +693,15 @@ test("Windows MSI builds one bilingual localized installer", () => {
   assert.match(wix, /Language="1033"/);
   assert.match(wix, /Codepage="936"/);
   assert.match(wix, /WixUILicenseRtf[^]*navop-license\.rtf/);
-  for (const workflow of [release, manual]) {
-    assert.match(workflow, /node script\/generate-windows-license\.mjs/);
-    assert.match(workflow, /-culture en-US/);
-    assert.match(workflow, /-loc installer\/windows\/navop\.wxl/);
-    assert.equal(
-      (workflow.match(/wix build installer\/windows\/navop\.wxs/g) ?? [])
-        .length,
-      1,
-    );
-    assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
-  }
+  assert.match(release, /node script\/generate-windows-license\.mjs/);
+  assert.match(release, /-culture en-US/);
+  assert.match(release, /-loc installer\/windows\/navop\.wxl/);
+  assert.equal(
+    (release.match(/wix build installer\/windows\/navop\.wxs/g) ?? [])
+      .length,
+    1,
+  );
+  assert.doesNotMatch(release, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
 
   assert.ok(fs.existsSync(localizationPath), `${localizationPath} must exist`);
   const localization = read(localizationPath);
@@ -901,49 +853,13 @@ test("CI runs release packaging regression checks", () => {
   assert.match(ci, /fromJSON\(needs\.prepare\.outputs\.matrix\)/);
 });
 
-test("manual Windows workflow builds a release MSI with its checksum", () => {
-  const workflowPath = ".github/workflows/build-windows-msi.yml";
+test("Windows release validates the MSI installer with the shared validator", () => {
+  const release = read(".github/workflows/release.yml");
   const validatorPath = "script/validate-windows-msi.ps1";
-  assert.ok(fs.existsSync(workflowPath), `${workflowPath} must exist`);
   assert.ok(fs.existsSync(validatorPath), `${validatorPath} must exist`);
+  assert.match(release, /validate-windows-msi\.ps1/);
 
-  const workflow = read(workflowPath);
   const validator = read(validatorPath);
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /architecture:/);
-  assert.match(workflow, /- x64/);
-  assert.match(workflow, /- x86/);
-  assert.match(workflow, /x86_64-pc-windows-msvc/);
-  assert.match(workflow, /i686-pc-windows-msvc/);
-  assert.match(workflow, /WINDOWS_TARGET/);
-  assert.match(workflow, /WINDOWS_WIX_ARCH/);
-  assert.match(workflow, /WINDOWS_BASENAME/);
-  assert.match(
-    workflow,
-    /cargo build --release -p main --features windows-native-rdp --target \$env:WINDOWS_TARGET/,
-  );
-  assert.match(workflow, /wix --version 6\.0\.2/);
-  assert.match(workflow, /WixToolset\.UI\.wixext\/6\.0\.2/);
-  assert.match(workflow, /-ext WixToolset\.UI\.wixext/);
-  assert.match(
-    workflow,
-    /WixToolset\.BootstrapperApplications\.wixext\/6\.0\.2/,
-  );
-  assert.match(
-    workflow,
-    /-ext WixToolset\.BootstrapperApplications\.wixext/,
-  );
-  assert.match(workflow, /Get-FileHash[^]*SHA256/);
-  assert.match(workflow, /actions\/upload-artifact@v4/);
-  assert.match(workflow, /Compress-Archive[^]*\$\{env:WINDOWS_BASENAME\}\.zip/);
-  assert.match(workflow, /"\$\{env:WINDOWS_BASENAME\}\.zip"/);
-  assert.match(workflow, /"\$\{env:WINDOWS_BASENAME\}\.exe"/);
-  assert.match(workflow, /"\$\{env:WINDOWS_BASENAME\}-portable\.zip"/);
-  assert.match(workflow, /Get-FileHash \$file -Algorithm SHA256/);
-  assert.match(workflow, /\$\{env:WINDOWS_BASENAME\}\.msi/);
-  assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
-  assert.match(workflow, /sha256sums-windows\.txt/);
-  assert.match(workflow, /validate-windows-msi\.ps1/);
   assert.match(validator, /ProductLanguage/);
   assert.match(validator, /WIXUI_INSTALLDIR/);
   assert.match(validator, /DesktopShortcut/);
@@ -971,10 +887,6 @@ test("release builds keep size-optimized Cargo profile defaults", () => {
   const cargo = read("Cargo.toml");
   assert.match(cargo, /\[profile\.release\][\s\S]*?lto = "fat"/);
   assert.match(cargo, /\[profile\.release\][\s\S]*?codegen-units = 1/);
-
-  const manualWindows = read(".github/workflows/build-windows-msi.yml");
-  assert.match(manualWindows, /CARGO_PROFILE_RELEASE_LTO: thin/);
-  assert.match(manualWindows, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
 });
 
 test("release builds are cacheable and individually repairable", () => {
@@ -1016,7 +928,6 @@ test("Rust workflows share one cache strategy without archiving target", () => {
   const workflows = [
     read(".github/workflows/ci.yml"),
     read(".github/workflows/release.yml"),
-    read(".github/workflows/build-windows-msi.yml"),
   ];
 
   for (const workflow of workflows) {
@@ -1046,10 +957,6 @@ test("Rust workflows share one cache strategy without archiving target", () => {
   assert.match(release, /actions\/cache\/save@v4/);
   assert.match(release, /cache-primary-key/);
   assert.match(release, /needs\.prepare\.outputs\.platform != 'all'/);
-
-  const windowsMsi = workflows[2];
-  assert.doesNotMatch(windowsMsi, /key: windows-msi-/);
-  assert.doesNotMatch(windowsMsi, /github\.run_id/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

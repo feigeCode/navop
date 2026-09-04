@@ -18,6 +18,7 @@ fn connection_navigation_partition_is_complete_and_stable() {
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
+            ConnectionType::Mqtt,
             ConnectionType::Serial,
             ConnectionType::Telnet,
         ]
@@ -62,8 +63,6 @@ fn application_navigation_partition_preserves_optional_entries() {
             expected.push(NavigationApplication::Team);
         }
         expected.push(NavigationApplication::Notes);
-        #[cfg(feature = "api-testing")]
-        expected.push(NavigationApplication::ApiTesting);
         expected.extend([
             NavigationApplication::Extensions,
             NavigationApplication::SessionLogs,
@@ -86,8 +85,6 @@ fn extensions_stays_visible_while_json_formatter_moves_to_more_applications() {
         leading_navigation_applications(availability),
         vec![
             NavigationApplication::Notes,
-            #[cfg(feature = "api-testing")]
-            NavigationApplication::ApiTesting,
             NavigationApplication::Extensions,
         ]
     );

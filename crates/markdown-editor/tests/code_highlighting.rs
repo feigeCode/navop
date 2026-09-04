@@ -1,21 +1,42 @@
-use gpui_component::highlighter::{
-    HighlightTheme, InstalledExtension, LanguageKind, LanguageRegistry, SyntaxHighlighter,
-};
+//! 语法高亮契约测试。
+//!
+//! 外部 gpui-component 已移除 highlighter 的 wasm 扩展 API
+//! (`InstalledExtension`/`LanguageKind`/`register_wasm_manifest` 等),
+//! 语言扩展加载统一由本仓库 `extension-runtime` 提供:它把 parser.wasm
+//! 经 tree-sitter WasmStore 编译成原生 `tree_sitter::Language` 后注册进
+//! `LanguageRegistry`。本测试按新链路验证 fenced Rust 代码块的着色。
+
+use extension_runtime::language_extensions::InstalledExtension;
+use gpui_component::highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter};
 use ropey::Rope;
 use std::path::PathBuf;
 
 #[test]
 fn markdown_editor_does_not_bundle_a_native_rust_grammar() {
-    let registry = LanguageRegistry::singleton();
-    assert!(
-        registry.language("rust").is_none(),
-        "fenced languages must be supplied by wasm extensions, not native Cargo features"
-    );
-    assert_eq!(
-        "text",
-        SyntaxHighlighter::new("rust").language().as_ref(),
-        "an unavailable fenced language must safely fall back to text"
-    );
+    // 源码契约:markdown-editor 自身不得启用任何原生 tree-sitter 语法 feature,
+    // fenced 语言一律由 extension-runtime 的 wasm 扩展提供。运行时注册表断言
+    // 不可靠——`cargo test --all` 的 feature unification 会把 main 经
+    // gpui-component-shell 启用的 tree-sitter-rust 一并链接进测试二进制。
+    let manifest = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/Cargo.toml"
+    ))
+    .expect("Cargo.toml must be readable");
+    for line in manifest.lines() {
+        let line = line.trim();
+        assert!(
+            !line.contains("tree-sitter-rust") && !line.contains("tree-sitter-languages"),
+            "markdown-editor must not enable native rust grammars: {line}"
+        );
+    }
+    // wasm 扩展未注册时,fenced 语言必须安全回退为纯文本。
+    if LanguageRegistry::singleton().language("rust").is_none() {
+        assert_eq!(
+            "text",
+            SyntaxHighlighter::new("rust").language().as_ref(),
+            "an unavailable fenced language must safely fall back to text"
+        );
+    }
 }
 
 #[test]
@@ -29,29 +50,23 @@ fn fenced_rust_code_loads_parser_and_queries_from_wasm_extension() {
         .expect("real language extension must contain manifest, parser.wasm, and valid queries");
     assert_eq!("rust", extension.manifest.name);
 
+    // 注册:wasm 语法经 tree-sitter WasmStore 编译,连同文件扩展名别名一起写入注册表
     let registry = LanguageRegistry::singleton();
-    registry.register_wasm_manifest(extension.manifest.clone(), extension_dir);
-    assert_eq!(
-        Some("rust".to_string()),
-        registry.resolve_language_name("rs"),
+    extension
+        .register(registry)
+        .expect("registering the rust wasm grammar must compile parser.wasm");
+    assert!(
+        registry.language("rs").is_some(),
         "the manifest file extension must canonicalize the fenced alias"
     );
 
     let rust = registry
         .language("rust")
-        .expect("registered Rust wasm grammar must lazy-load");
-    let LanguageKind::Wasm { wasm_bytes } = &rust.kind else {
-        panic!("the registered Rust grammar must be backed by parser.wasm");
-    };
-    assert_eq!(extension.wasm_bytes.as_slice(), wasm_bytes.as_ref());
-    assert_eq!(extension.highlights, rust.highlights.as_ref());
-    assert_eq!(extension.injections, rust.injections.as_ref());
-    assert_eq!(extension.locals, rust.locals.as_ref());
+        .expect("registered Rust wasm grammar must resolve");
     assert!(
         !rust.highlights.is_empty(),
         "the wasm extension must supply highlights.scm"
     );
-    assert_eq!(Some(true), registry.is_wasm("rust"));
 
     let source = "fn main() {\n    let answer = 42;\n}\n";
     let text = Rope::from_str(source);
@@ -59,10 +74,12 @@ fn fenced_rust_code_loads_parser_and_queries_from_wasm_extension() {
     assert_eq!("rust", highlighter.language().as_ref());
     assert!(highlighter.update(None, &text, None));
 
-    let styles = highlighter.styles(&(0..source.len()), &HighlightTheme::default_dark());
+    let theme = HighlightTheme::default_dark();
+    let styles = highlighter.styles(&(0..source.len()), &*theme);
     assert!(
         styles.iter().any(|(_, style)| style.color.is_some()),
         "the wasm grammar and highlights.scm must produce colored Rust spans"
     );
-    assert!(registry.unregister("rust"));
+    // 注意:新 LanguageRegistry 没有 unregister,该 #[ignore] 测试会向进程级
+    // 单例注册 rust 语法,与其他测试隔离运行即可。
 }

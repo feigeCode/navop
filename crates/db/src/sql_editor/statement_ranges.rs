@@ -18,6 +18,8 @@ impl From<&DatabaseType> for SqlDialect {
     fn from(value: &DatabaseType) -> Self {
         match value {
             DatabaseType::MySQL => Self::MySql,
+            // TDengine 语句划分规则与 MySQL 方言一致。
+            DatabaseType::TDengine => Self::MySql,
             DatabaseType::PostgreSQL => Self::PostgreSql,
             DatabaseType::MSSQL => Self::SqlServer,
             DatabaseType::Oracle => Self::Oracle,

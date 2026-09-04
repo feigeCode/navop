@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn grid_line_text_keeps_char_index_aligned_with_column() {
-        let mut term = test_term_with_content("中文\n".as_bytes());
+        let term = test_term_with_content("中文\n".as_bytes());
         let text = grid_line_text(&term, Line(0));
 
         // 每个网格列对应一个字符：wide char 本体占其首列，spacer 以空格占位

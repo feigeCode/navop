@@ -35,6 +35,7 @@ tiberius.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 oracle.workspace = true
 clickhouse.workspace = true
+taos.workspace = true
 one-core.workspace = true
 ssh.workspace = true
 sqlformat.workspace = true

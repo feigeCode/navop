@@ -739,6 +739,7 @@ impl SettingsPanel {
                         )
                         .into_any_element(),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.save").to_string())

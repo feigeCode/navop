@@ -4,12 +4,15 @@ use db::mysql::MySqlPlugin;
 use db::plugin::DatabasePlugin;
 use db::types::{ColumnInfo, TableCellValue, TableRowChange, TableSaveRequest};
 
-use crate::real_databases::common::env::mysql_config;
+use crate::real_databases::common::env::{mysql_config, skip_database};
 use crate::real_databases::mysql::core_flow::{drop_database, execute, unique_database};
 
 #[tokio::test]
 async fn mysql_real_table_data_pagination_filter_sort_and_crud() {
-    let config = mysql_config().expect("set ONETCLI_TEST_MYSQL_PASSWORD to run MySQL tests");
+    let Some(config) = mysql_config() else {
+        skip_database("MySQL", "ONETCLI_TEST_MYSQL_PASSWORD");
+        return;
+    };
     let database = unique_database("data");
     let plugin = MySqlPlugin::new();
     let mut connection = plugin

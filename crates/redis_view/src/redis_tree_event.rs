@@ -472,6 +472,7 @@ impl RedisEventHandler {
             dialog
                 .overlay(false)
                 .title(t!("RedisTree.confirm_delete_title").to_string())
+                .confirm()
                 .button_props(DialogButtonProps::default().show_cancel(true))
                 .child(
                     v_flex()
@@ -565,6 +566,7 @@ impl RedisEventHandler {
             dialog
                 .overlay(false)
                 .title(t!("RedisTree.confirm_batch_delete_title").to_string())
+                .confirm()
                 .button_props(DialogButtonProps::default().show_cancel(true))
                 .child(
                     v_flex()
@@ -700,6 +702,7 @@ impl RedisEventHandler {
                 .w(px(800.))
                 .h(px(720.))
                 .child(create_key_dialog.clone())
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -925,6 +928,7 @@ impl RedisEventHandler {
             dialog
                 .overlay(false)
                 .title(t!("RedisTree.confirm_disconnect_title").to_string())
+                .confirm()
                 .button_props(DialogButtonProps::default().show_cancel(true))
                 .child(
                     v_flex()

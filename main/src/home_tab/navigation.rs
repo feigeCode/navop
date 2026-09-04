@@ -16,8 +16,6 @@ impl HomePage {
             NavigationApplication::AiWorkbench => self.add_ai_workbench_tab(window, cx),
             NavigationApplication::Team => self.open_team_management(window, cx),
             NavigationApplication::Notes => self.add_notes_tab(window, cx),
-            #[cfg(feature = "api-testing")]
-            NavigationApplication::ApiTesting => self.add_api_test_tab(window, cx),
             NavigationApplication::JsonFormatter => self.add_json_formatter_tab(window, cx),
             NavigationApplication::SessionLogs => self.add_session_logs_tab(window, cx),
             NavigationApplication::CredentialVault => {

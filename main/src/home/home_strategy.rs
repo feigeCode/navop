@@ -1,8 +1,10 @@
 use crate::home_tab::HomePage;
 use gpui::{Context, Window};
-use gpui_component::WindowExt;
+use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
-use one_core::tab_container::{TabItem, TabOpenMode};
+#[cfg(feature = "shell-plugins")]
+use one_core::tab_container::TabItem;
+use one_core::tab_container::TabOpenMode;
 use remote_desktop::RemoteDesktopProtocol;
 
 pub(crate) trait ConnectionOpenStrategy {
@@ -33,6 +35,10 @@ pub(crate) fn build_connection_open_strategy(
             connection,
             workspace,
         }),
+        ConnectionType::Mqtt => Box::new(MqttOpenStrategy {
+            connection,
+            workspace,
+        }),
         ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
         ConnectionType::Telnet => Box::new(TelnetOpenStrategy { connection }),
         ConnectionType::PortForwarding => Box::new(PortForwardingOpenStrategy { connection }),
@@ -44,15 +50,47 @@ pub(crate) fn build_connection_open_strategy(
             connection,
             protocol: RemoteDesktopProtocol::Vnc,
         }),
-        ConnectionType::Extension => Box::new(ExtensionOpenStrategy { connection }),
+        ConnectionType::Extension => {
+            #[cfg(feature = "shell-plugins")]
+            {
+                Box::new(ExtensionOpenStrategy { connection })
+            }
+            #[cfg(not(feature = "shell-plugins"))]
+            {
+                let _ = &connection;
+                Box::new(ExtensionOpenStrategy {
+                    _connection: connection,
+                })
+            }
+        }
         _ => Box::new(NoopOpenStrategy),
     }
 }
 
 struct ExtensionOpenStrategy {
+    #[cfg(feature = "shell-plugins")]
     connection: StoredConnection,
+    #[cfg(not(feature = "shell-plugins"))]
+    _connection: StoredConnection,
 }
 
+#[cfg(not(feature = "shell-plugins"))]
+impl ConnectionOpenStrategy for ExtensionOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        _home: &mut HomePage,
+        _mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        window.push_notification(
+            "Extension connections require the shell-plugins build",
+            cx,
+        );
+    }
+}
+
+#[cfg(feature = "shell-plugins")]
 impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -284,6 +322,38 @@ impl ConnectionOpenStrategy for MongoOpenStrategy {
                 home.open_mongodb_tab_with_mode(connection, workspace, mode, window, cx);
             },
         );
+    }
+}
+
+struct MqttOpenStrategy {
+    connection: StoredConnection,
+    workspace: Option<Workspace>,
+}
+
+impl ConnectionOpenStrategy for MqttOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        home: &mut HomePage,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        let MqttOpenStrategy {
+            connection,
+            workspace,
+        } = *self;
+        match mqtt_runtime::default_backend_kind() {
+            mqtt_runtime::MqttBackendKind::Builtin => {
+                home.open_mqtt_tab_with_mode(connection, workspace, mode, window, cx);
+            }
+            mqtt_runtime::MqttBackendKind::Ipc | mqtt_runtime::MqttBackendKind::Unavailable => {
+                // 一期仅提供 builtin 后端;无后端时提示不可用
+                window.push_notification(
+                    Notification::warning(format!("MQTT backend unavailable: {}", connection.name)),
+                    cx,
+                );
+            }
+        }
     }
 }
 

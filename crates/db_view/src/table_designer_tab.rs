@@ -3568,6 +3568,7 @@ mod tests {
     use db::{
         clickhouse::ClickHousePlugin, mssql::MsSqlPlugin, mysql::MySqlPlugin, oracle::OraclePlugin,
         plugin::DatabasePlugin, postgresql::PostgresPlugin, sqlite::SqlitePlugin,
+        tdengine::TdenginePlugin,
     };
 
     #[test]
@@ -3647,6 +3648,7 @@ mod tests {
             DatabaseType::MSSQL => Box::new(MsSqlPlugin::new()),
             DatabaseType::Oracle => Box::new(OraclePlugin::new()),
             DatabaseType::ClickHouse => Box::new(ClickHousePlugin::new()),
+            DatabaseType::TDengine => Box::new(TdenginePlugin::new()),
             DatabaseType::External { .. } => Box::new(MySqlPlugin::new()),
         }
     }
@@ -4390,6 +4392,10 @@ mod tests {
         let current = build_design(vec![build_col("a"), build_col("b")], vec!["a"]);
 
         for database_type in DatabaseType::all().iter().cloned() {
+            if matches!(database_type, DatabaseType::TDengine) {
+                // TDengine 无二级索引概念(supports_indexes = false),不参与索引 DDL 断言
+                continue;
+            }
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // 应包含 INDEX 相关关键字
@@ -4408,6 +4414,10 @@ mod tests {
         let current = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
         for database_type in DatabaseType::all().iter().cloned() {
+            if matches!(database_type, DatabaseType::TDengine) {
+                // TDengine 无二级索引概念,不参与索引 DDL 断言
+                continue;
+            }
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
@@ -4714,6 +4724,10 @@ mod tests {
         current.indexes[0].name = "idx_new".to_string();
 
         for database_type in DatabaseType::all().iter().cloned() {
+            if matches!(database_type, DatabaseType::TDengine) {
+                // TDengine 无二级索引概念,不参与索引 DDL 断言
+                continue;
+            }
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let upper = sql.to_uppercase();
