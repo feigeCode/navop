@@ -262,6 +262,18 @@ test("portable Linux disables WebView while standard builds keep it", () => {
     /embedded-webview = \["ai_chat_view\/embedded-webview"\]/,
   );
   assert.match(
+    mainCargo,
+    /gpui-shell = \{ workspace = true, optional = true \}/,
+  );
+  assert.match(
+    mainCargo,
+    /gpui-component-shell = \{ workspace = true, optional = true \}/,
+  );
+  assert.match(
+    mainCargo,
+    /shell-plugins = \["dep:gpui-shell", "dep:gpui-component-shell"\]/,
+  );
+  assert.match(
     workspaceCargo,
     /ai_chat_view = \{ path = "crates\/ai_chat_view", default-features = false \}/,
   );
