@@ -54,48 +54,6 @@ jobs:
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
-  windows-rdp-probe:
-    name: Windows RDP probe (${{ matrix.target }})
-    if: >-
-      ${{
-        inputs.platform == '' ||
-        inputs.platform == 'all' ||
-        inputs.platform == 'windows'
-      }}
-    runs-on: windows-2022
-    env:
-      RUSTC_WRAPPER: ""
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-pc-windows-msvc
-          - i686-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install NASM
-        shell: pwsh
-        run: |
-          choco install nasm --no-progress --yes
-          $nasmDir = Join-Path $env:ProgramFiles "NASM"
-          $nasmExe = Join-Path $nasmDir "nasm.exe"
-          if (-not (Test-Path -LiteralPath $nasmExe -PathType Leaf)) {
-            throw "NASM executable was not found at '$nasmExe'"
-          }
-          $env:Path = "$nasmDir;$env:Path"
-          $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          nasm -v
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          target: ${{ matrix.target }}
-          cache: false
-      - name: Build ATL/MSVC probe
-        shell: pwsh
-        run: >-
-          ./script/build-windows-rdp-probe.ps1
-          -Target "${{ matrix.target }}"
-
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
     needs: prepare
@@ -166,6 +124,14 @@ jobs:
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
         run: ./script/test-windows.ps1
+      - name: Build ATL/MSVC probe (x64 + x86)
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        env:
+          RUSTC_WRAPPER: ""
+        run: |
+          rustup target add i686-pc-windows-msvc
+          ./script/build-windows-rdp-probe.ps1
       - name: Test MacOS
         if: ${{ matrix.platform == 'macos' }}
         run: |
@@ -178,7 +144,7 @@ jobs:
 
   ci-gate:
     name: CI gate
-    needs: [prepare, windows-rdp-probe, test]
+    needs: [prepare, test]
     if: always()
     runs-on: ubuntu-latest
     steps:

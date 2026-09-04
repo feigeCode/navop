@@ -255,7 +255,7 @@ test("portable Linux disables WebView while standard builds keep it", () => {
   assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
   assert.match(
     mainCargo,
-    /default = \["wasm-components", "embedded-webview", "windows-native-rdp"\]/,
+    /default = \["wasm-components", "embedded-webview", "windows-native-rdp", "builtin-mqtt"\]/,
   );
   assert.match(
     mainCargo,
