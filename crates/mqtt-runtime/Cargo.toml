@@ -1,0 +1,26 @@
+[package]
+name = "mqtt-runtime"
+version = "0.15.2"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+connection_tunnel.workspace = true
+one-core.workspace = true
+rust-i18n.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+rumqttc = { workspace = true, optional = true }
+ssh = { workspace = true, optional = true }
+
+[features]
+default = []
+builtin-mqtt = ["dep:rumqttc", "dep:ssh"]
+
+[lints]
+workspace = true

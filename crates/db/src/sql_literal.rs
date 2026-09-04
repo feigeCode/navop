@@ -76,7 +76,11 @@ pub(crate) fn format_binary_literal_for_database(
         DatabaseType::Oracle => format!("HEXTORAW('{hex}')"),
         DatabaseType::DuckDB => format!("from_hex('{hex}')"),
         DatabaseType::ClickHouse => format!("unhex('{hex}')"),
-        DatabaseType::MySQL | DatabaseType::SQLite | DatabaseType::External { .. } => {
+        // TDengine 与 MySQL 同臂处理(X'..' 十六进制字面量)。
+        DatabaseType::MySQL
+        | DatabaseType::SQLite
+        | DatabaseType::TDengine
+        | DatabaseType::External { .. } => {
             format!("X'{hex}'")
         }
     }

@@ -93,6 +93,7 @@ pub fn prompt_session_lock(window: &mut Window, cx: &mut App) -> Task<Option<Loc
         dialog
             .title(t!("SessionLock.title").to_string())
             .w(px(460.))
+            .confirm()
             .button_props(
                 DialogButtonProps::default()
                     .ok_text(t!("SessionLock.lock").to_string())
@@ -212,6 +213,7 @@ pub fn prompt_session_unlock(
         dialog
             .title(t!("SessionLock.unlock_title").to_string())
             .w(px(460.))
+            .confirm()
             .button_props(
                 DialogButtonProps::default()
                     .ok_text(t!("SessionLock.unlock").to_string())

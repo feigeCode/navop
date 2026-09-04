@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod cancellation_watcher;
+mod conflict;
 mod executor;
 mod global;
 mod history;
@@ -10,6 +11,7 @@ mod provider;
 mod record;
 mod scheduler;
 
+pub use conflict::UploadConflictResolver;
 pub use executor::{SftpTransferExecutor, SftpTransferReservation};
 pub use global::{global, init, init_with_provider};
 pub use model::{

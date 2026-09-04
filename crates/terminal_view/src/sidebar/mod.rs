@@ -132,7 +132,10 @@ fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> St
     )
 }
 
-fn agent_theme_from_terminal_theme(theme: &TerminalTheme) -> AgentChatTheme {
+fn agent_theme_from_terminal_theme(
+    theme: &TerminalTheme,
+    surface_radius: Pixels,
+) -> AgentChatTheme {
     let colors = theme.colors();
     AgentChatTheme {
         is_dark: theme.is_dark(),
@@ -152,6 +155,8 @@ fn agent_theme_from_terminal_theme(theme: &TerminalTheme) -> AgentChatTheme {
         table_row_alt: colors.muted.opacity(0.35),
         quote_border: colors.border,
         link: colors.accent,
+        text_selection: theme.selection,
+        surface_radius,
     }
 }
 
@@ -756,7 +761,7 @@ impl TerminalSidebar {
 
         // 注册 bash/sh 代码块操作，并注入终端专属提示词
         let sidebar_entity = cx.entity();
-        let ai_theme = agent_theme_from_terminal_theme(initial_theme);
+        let ai_theme = agent_theme_from_terminal_theme(initial_theme, cx.theme().radius);
         ai_chat_panel.update(cx, |panel, cx| {
             panel.set_theme(Some(ai_theme), cx);
             panel.set_sidebar_header_visible(true, cx);
@@ -1214,7 +1219,10 @@ impl TerminalSidebar {
             });
         }
         self.ai_chat_panel.update(cx, |panel, cx| {
-            panel.set_theme(Some(agent_theme_from_terminal_theme(theme)), cx);
+            panel.set_theme(
+                Some(agent_theme_from_terminal_theme(theme, cx.theme().radius)),
+                cx,
+            );
         });
         if let Some(ref broadcast_panel) = self.broadcast_input_panel {
             broadcast_panel.update(cx, |panel, cx| {
@@ -1842,14 +1850,20 @@ mod tests {
     fn agent_theme_preserves_terminal_dark_mode_for_markdown() {
         let application_theme = Theme::from(ThemeColor::dark().as_ref());
         let terminal_theme = TerminalTheme::from_application_theme(&application_theme);
-        let agent_theme = agent_theme_from_terminal_theme(&terminal_theme);
+        let agent_theme = agent_theme_from_terminal_theme(&terminal_theme, application_theme.radius);
         let markdown_style = agent_theme.markdown_style();
 
         assert!(terminal_theme.is_dark());
         assert!(agent_theme.is_dark);
-        assert!(markdown_style.is_dark);
-        assert!(markdown_style.code_block.background.is_some());
-        assert!(markdown_style.table_head.background.is_some());
+        assert!(markdown_style.is_dark());
+        assert_eq!(markdown_style.foreground(), agent_theme.foreground);
+        assert_eq!(
+            markdown_style.muted_foreground(),
+            agent_theme.muted_foreground
+        );
+        assert_eq!(markdown_style.link(), agent_theme.link);
+        assert!(markdown_style.code_block().background.is_some());
+        assert!(markdown_style.table_head().background.is_some());
     }
 
     #[test]

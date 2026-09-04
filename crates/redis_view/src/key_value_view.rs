@@ -1058,6 +1058,7 @@ impl KeyValueView {
                                 .child(div().h(px(460.)).w_full().child(value_editor.clone())),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1117,6 +1118,7 @@ impl KeyValueView {
                                 .child(value_editor.clone()),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1266,6 +1268,7 @@ impl KeyValueView {
                                 .child(member_editor.clone()),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1326,6 +1329,7 @@ impl KeyValueView {
                                 .child(member_editor.clone()),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1449,6 +1453,7 @@ impl KeyValueView {
                                 ),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1540,6 +1545,7 @@ impl KeyValueView {
                                 ),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1717,6 +1723,7 @@ impl KeyValueView {
                                 ),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1802,6 +1809,7 @@ impl KeyValueView {
                                 ),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1946,6 +1954,7 @@ impl KeyValueView {
             dialog
                 .overlay(false)
                 .title(t!("RedisTree.confirm_delete_title").to_string())
+                .confirm()
                 .button_props(DialogButtonProps::default().show_cancel(true))
                 .child(
                     v_flex()
@@ -2087,6 +2096,7 @@ impl KeyValueView {
                                 .child(t!("KeyValueView.ttl_hint").to_string()),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -2196,6 +2206,7 @@ impl KeyValueView {
                         )
                         .child(Input::new(&name_input).w_full()),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)

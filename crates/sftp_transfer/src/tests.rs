@@ -7,6 +7,7 @@ mod delete_remote_tests;
 mod download_tests;
 mod lifecycle_tests;
 mod support;
+mod upload_retry_tests;
 
 use support::*;
 

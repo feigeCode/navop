@@ -112,6 +112,34 @@ fn all_terminal_theme_names_are_stable_and_resolvable() {
 }
 
 #[test]
+fn every_terminal_palette_keeps_primary_and_secondary_text_separated_from_backgrounds() {
+    let app_theme = Theme::from(ThemeColor::dark().as_ref());
+
+    for theme in TerminalTheme::all(&app_theme) {
+        let colors = theme.colors();
+        assert!(
+            lightness_distance(colors.foreground, colors.background) >= 0.3,
+            "{} foreground is too close to the background",
+            theme.name
+        );
+        assert!(
+            lightness_distance(colors.muted_foreground, colors.background) >= 0.25,
+            "{} muted foreground is too close to the background",
+            theme.name
+        );
+        assert!(
+            lightness_distance(colors.foreground, colors.muted) >= 0.25,
+            "{} foreground is too close to the muted surface",
+            theme.name
+        );
+    }
+}
+
+fn lightness_distance(left: gpui::Hsla, right: gpui::Hsla) -> f32 {
+    (left.lightness - right.lightness).abs()
+}
+
+#[test]
 fn terminal_default_fallbacks_put_cjk_before_emoji_and_symbols() {
     let fallbacks = default_font_fallbacks()
         .into_iter()

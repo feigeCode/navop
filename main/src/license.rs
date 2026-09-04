@@ -94,6 +94,7 @@ pub fn show_upgrade_dialog<V: 'static>(window: &mut Window, cx: &mut Context<V>)
                         cx,
                     ))),
             )
+            .alert()
             .button_props(DialogButtonProps::default().ok_text(t!("License.upgrade_button")))
             .on_ok(|_, _, cx: &mut App| {
                 // 打开购买页面

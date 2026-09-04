@@ -704,6 +704,7 @@ impl MongoTreeView {
                         .child(div().text_sm().child(t!("MongoTree.collection_name_label")))
                         .child(Input::new(&collection_input).w_full()),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.create").to_string())
@@ -780,6 +781,7 @@ impl MongoTreeView {
                         )
                         .child(Input::new(&collection_input).w_full()),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.create").to_string())
@@ -849,6 +851,7 @@ impl MongoTreeView {
                         )
                         .child(t!("Common.irreversible").to_string()),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.delete").to_string())
@@ -956,6 +959,7 @@ impl MongoTreeView {
                                 .child(Editor::new(&params_input).w_full().disabled(true)),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("MongoTree.copy_connection_string").to_string())

@@ -3,16 +3,17 @@ use db::plugin::DatabasePlugin;
 use db::postgresql::PostgresPlugin;
 use db::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
 
-use crate::real_databases::common::env::{optional_database, postgres_config};
+use crate::real_databases::common::env::{optional_database, postgres_config, skip_database};
 use crate::real_databases::postgres::core_flow::{
     drop_schema, execute, reset_schema, unique_schema,
 };
 
 #[tokio::test]
 async fn postgres_real_table_designer_create_alter_rename_and_export() {
-    let config = postgres_config().expect(
-        "set ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid) to run PostgreSQL tests",
-    );
+    let Some(config) = postgres_config() else {
+        skip_database("PostgreSQL", "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)");
+        return;
+    };
     let config = optional_database(
         &config,
         &std::env::var("ONETCLI_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "postgres".to_string()),

@@ -819,10 +819,10 @@ jobs:
           # itself is dispatched by release-trigger.yml.
           gh workflow run upload-r2.yml \
             --repo "$GITHUB_REPOSITORY" \
-            --ref dev \
+            --ref main \
             -f tag="$RELEASE_TAG"
 
           gh workflow run sync-cnb-release-assets.yml \
             --repo "$GITHUB_REPOSITORY" \
-            --ref dev \
+            --ref main \
             -f tag="$RELEASE_TAG"

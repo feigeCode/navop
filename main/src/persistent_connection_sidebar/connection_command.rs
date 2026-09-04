@@ -40,6 +40,14 @@ pub(super) fn database_command(params: &DbConnectionConfig) -> Option<String> {
                 .map(|value| format!(" --database {value}"))
                 .unwrap_or_default()
         )),
+        // TDengine 官方 CLI:taos(-h 主机 -P 端口 -u 用户 -d 库)。
+        DatabaseType::TDengine => Some(format!(
+            "taos -h {host} -P {} -u {user}{}",
+            params.port,
+            database
+                .map(|value| format!(" -d {value}"))
+                .unwrap_or_default()
+        )),
         DatabaseType::Oracle | DatabaseType::External { .. } => None,
     }
 }
@@ -80,6 +88,8 @@ pub(super) fn database_jdbc_url(params: &DbConnectionConfig) -> Option<String> {
                 })
         }
         DatabaseType::ClickHouse => Some(network_jdbc_url("clickhouse", params, database)),
+        // TDengine 官方 JDBC 驱动的 REST/WebSocket 连接形式。
+        DatabaseType::TDengine => Some(network_jdbc_url("TAOS-RS", params, database)),
         DatabaseType::External { .. } => None,
     }
 }

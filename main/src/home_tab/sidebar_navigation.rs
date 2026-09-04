@@ -264,8 +264,6 @@ fn legacy_application_id(application: NavigationApplication) -> &'static str {
         NavigationApplication::AiWorkbench => "legacy-open-ai-workbench",
         NavigationApplication::Team => "legacy-open-team",
         NavigationApplication::Notes => "legacy-open-notes",
-        #[cfg(feature = "api-testing")]
-        NavigationApplication::ApiTesting => "legacy-open-api-testing",
         NavigationApplication::JsonFormatter => "legacy-open-json-formatter",
         NavigationApplication::SessionLogs => "legacy-open-session-logs",
         NavigationApplication::CredentialVault => "legacy-open-credential-vault",
@@ -278,8 +276,6 @@ fn legacy_application_icon(application: NavigationApplication) -> IconName {
         NavigationApplication::AiWorkbench => IconName::AILine,
         NavigationApplication::Team => IconName::TeamLine,
         NavigationApplication::Notes => IconName::NotesLine,
-        #[cfg(feature = "api-testing")]
-        NavigationApplication::ApiTesting => IconName::Network,
         NavigationApplication::JsonFormatter => IconName::Json,
         NavigationApplication::SessionLogs => IconName::Terminal,
         NavigationApplication::CredentialVault => IconName::Key,

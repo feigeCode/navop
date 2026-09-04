@@ -5,7 +5,7 @@ use crate::message_tool_group::{
     MessageRenderItem, message_render_items, render_tool_target_group,
 };
 use crate::theme::{
-    AgentChatTheme, resolve_agent_chat_theme, themed_markdown, with_agent_chat_theme,
+    AgentChatTheme, resolve_agent_chat_theme, themed_html, themed_markdown, with_agent_chat_theme,
 };
 use crate::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant,
@@ -18,7 +18,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
-    text::TextView, v_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -276,9 +276,10 @@ fn render_user_message_themed<E: MessageExtension>(
                         .min_w_0()
                         .whitespace_normal()
                         .child(
-                            TextView::html(
+                            themed_html(
                                 SharedString::from(format!("user-msg-{}", msg.id)),
                                 plain_text_html,
+                                theme,
                             )
                             .selectable(true)
                             .w_full(),

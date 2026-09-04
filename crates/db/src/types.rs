@@ -1356,6 +1356,23 @@ mod tests {
     }
 
     #[test]
+    fn field_type_maps_tdengine_describe_types() {
+        // TDengine DESCRIBE 输出的类型走 MySQL 方言同臂:
+        // TIMESTAMP → DateTime,NCHAR(n) → Text,BINARY(n) → Binary。
+        assert_eq!(FieldType::from_db_type("TIMESTAMP"), FieldType::DateTime);
+        assert_eq!(FieldType::from_db_type("NCHAR(8)"), FieldType::Text);
+        assert_eq!(FieldType::from_db_type("BINARY(16)"), FieldType::Binary);
+        assert_eq!(FieldType::from_db_type("VARCHAR(64)"), FieldType::Text);
+        assert_eq!(FieldType::from_db_type("INT UNSIGNED"), FieldType::Integer);
+        assert_eq!(
+            FieldType::from_db_type("BIGINT UNSIGNED"),
+            FieldType::Integer
+        );
+        assert_eq!(FieldType::from_db_type("BOOL"), FieldType::Boolean);
+        assert_eq!(FieldType::from_db_type("JSON"), FieldType::Json);
+    }
+
+    #[test]
     fn table_data_request_explicit_offset_overrides_page_derived_offset() {
         let request = TableDataRequest::new("app", "users")
             .with_page(2, 5_000)

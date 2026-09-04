@@ -64,6 +64,7 @@ impl ExtensionManagerView {
                 .title(t!("Extension.confirm_install", name = entry_name.clone()).to_string())
                 .width(gpui::px(520.0))
                 .child(permission_review_body(&downloaded.review, cx))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Extension.allow_and_install").to_string())

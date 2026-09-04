@@ -13,6 +13,7 @@ use gpui::{
     WeakEntity,
 };
 use std::{
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -143,6 +144,7 @@ pub struct BackgroundTaskSpec {
     pub title: SharedString,
     pub detail: Option<SharedString>,
     pub key: Option<SharedString>,
+    pub open_folder: Option<PathBuf>,
     pub cancellable: bool,
     pub progress_unit: BackgroundTaskProgressUnit,
 }
@@ -155,6 +157,7 @@ impl BackgroundTaskSpec {
             title: title.into(),
             detail: None,
             key: None,
+            open_folder: None,
             cancellable: true,
             progress_unit: BackgroundTaskProgressUnit::Steps,
         }
@@ -172,6 +175,11 @@ impl BackgroundTaskSpec {
 
     pub fn key(mut self, key: impl Into<SharedString>) -> Self {
         self.key = Some(key.into());
+        self
+    }
+
+    pub fn open_folder(mut self, path: impl Into<PathBuf>) -> Self {
+        self.open_folder = Some(path.into());
         self
     }
 
@@ -203,6 +211,7 @@ pub struct BackgroundTask {
     pub kind: SharedString,
     pub title: SharedString,
     pub detail: Option<SharedString>,
+    pub open_folder: Option<PathBuf>,
     pub cancellable: bool,
     pub progress_unit: BackgroundTaskProgressUnit,
     pub status: BackgroundTaskStatus,
@@ -402,6 +411,7 @@ impl BackgroundTaskManager {
             kind: spec.kind,
             title: spec.title,
             detail: spec.detail,
+            open_folder: spec.open_folder,
             cancellable: spec.cancellable,
             progress_unit: spec.progress_unit,
             status: BackgroundTaskStatus::Queued,
@@ -1372,6 +1382,20 @@ mod tests {
         assert_eq!(50, progress.percent());
         assert_eq!(BackgroundTaskProgressUnit::Bytes, progress.unit);
         assert!(progress.display().contains("1.0 KB"));
+    }
+
+    #[gpui::test]
+    fn task_preserves_optional_open_folder(cx: &mut gpui::TestAppContext) {
+        let manager = new_manager(cx);
+        let open_folder = std::path::PathBuf::from("/tmp");
+        let id = manager.update(cx, |m, cx| {
+            m.register(
+                BackgroundTaskSpec::new("download", "archive").open_folder(open_folder.clone()),
+                cx,
+            )
+        });
+
+        assert_eq!(task(&manager, id, cx).open_folder, Some(open_folder));
     }
 
     #[gpui::test]

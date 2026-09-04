@@ -28,6 +28,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# 仅测试使用:语言扩展(wasm 语法)加载走 extension-runtime,不再依赖 gpui-component 的已删除 API
+extension-runtime.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 
 [lints]

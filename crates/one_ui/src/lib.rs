@@ -2,10 +2,12 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod content_state;
 pub mod edit_table;
+pub mod file_conflict_prompt;
 mod geometry;
 pub mod icon_button;
 mod icon_size;
 pub mod large_text_editor;
+pub mod marquee_text;
 pub mod panel_header;
 pub mod resize_handle;
 mod settings;

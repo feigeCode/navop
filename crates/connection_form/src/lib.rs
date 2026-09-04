@@ -3,6 +3,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod credential;
 pub mod declarative;
+pub mod middleware_form;
 pub mod ssh_auth;
 pub mod ssh_tunnel;
 pub mod team;

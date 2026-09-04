@@ -535,10 +535,7 @@ mod tests {
 
     #[gpui::test]
     fn credential_vault_list_renders_non_empty_bounds_with_data(cx: &mut gpui::TestAppContext) {
-        use gpui::{
-            AppContext as _, IntoElement as _, ParentElement as _, Render as _, Styled as _,
-            VisualTestContext,
-        };
+        use gpui::VisualTestContext;
         use gpui_component::Theme;
         use one_core::storage::connection::SqliteConnection;
         use one_core::storage::migration::run_migrations;
@@ -566,7 +563,7 @@ mod tests {
 
         let (_vault, cx) =
             cx.add_window_view(|window, cx| super::super::CredentialVaultView::new(window, cx));
-        let mut cx: &mut VisualTestContext = cx;
+        let cx: &mut VisualTestContext = cx;
 
         let content = cx
             .debug_bounds("credential-vault-content")

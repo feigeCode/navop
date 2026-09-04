@@ -258,7 +258,9 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
             );
         }
 
+        #[cfg(feature = "shell-plugins")]
         let plugin_shutdown_task = cx.update(|cx| crate::universal_plugins::spawn_shutdown(cx));
+        #[cfg(feature = "shell-plugins")]
         if let Some(shutdown_task) = plugin_shutdown_task {
             if let Err(error) = shutdown_task.await {
                 tracing::warn!(
@@ -942,6 +944,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     redis_view::init(cx);
     crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
+    mqtt_view::init(cx);
     #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
     init_native_data_driver_factories(cx);
     crate::public_mcp_runtime::init(cx);

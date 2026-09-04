@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::storage::traits::Repository;
 use crate::storage::{
-    ConnectionRepository, ConnectionType, MongoDBParams, RedisParams, StoredConnection,
+    ConnectionRepository, ConnectionType, MongoDBParams, MqttParams, RedisParams, StoredConnection,
 };
 
 impl ConnectionRepository {
@@ -21,6 +21,7 @@ impl ConnectionRepository {
             ConnectionType::Database => self.resolve_database_tunnel(resolved),
             ConnectionType::Redis => self.resolve_redis_tunnel(resolved),
             ConnectionType::MongoDB => self.resolve_mongodb_tunnel(resolved),
+            ConnectionType::Mqtt => self.resolve_mqtt_tunnel(resolved),
             _ => Ok(resolved),
         }
     }
@@ -70,6 +71,19 @@ impl ConnectionRepository {
         Ok(connection)
     }
 
+    fn resolve_mqtt_tunnel(&self, mut connection: StoredConnection) -> Result<StoredConnection> {
+        let mut params = connection.to_mqtt_params()?;
+        let Some(id) = enabled_mqtt_tunnel_id(&params) else {
+            return Ok(connection);
+        };
+        let ssh = self.resolve_referenced_ssh(id)?;
+        params
+            .apply_referenced_ssh_tunnel(&ssh)
+            .context("failed to apply referenced MQTT SSH tunnel")?;
+        connection.params = serde_json::to_string(&params)?;
+        Ok(connection)
+    }
+
     fn resolve_referenced_ssh(&self, id: i64) -> Result<StoredConnection> {
         let connection = self
             .get(id)?
@@ -104,6 +118,14 @@ fn enabled_tunnel_id(params: &RedisParams) -> Option<i64> {
 }
 
 fn enabled_mongodb_tunnel_id(params: &MongoDBParams) -> Option<i64> {
+    params
+        .ssh_tunnel
+        .as_ref()
+        .filter(|tunnel| tunnel.enabled)
+        .and_then(|tunnel| tunnel.connection_id)
+}
+
+fn enabled_mqtt_tunnel_id(params: &MqttParams) -> Option<i64> {
     params
         .ssh_tunnel
         .as_ref()

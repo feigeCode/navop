@@ -188,6 +188,8 @@ fn database_supports_compare_keyset(database_type: &DatabaseType) -> bool {
             | DatabaseType::SQLite
             | DatabaseType::MSSQL
             | DatabaseType::ClickHouse
+            // TDengine 支持 LIMIT n OFFSET m,可参与游标分页比较。
+            | DatabaseType::TDengine
     )
 }
 

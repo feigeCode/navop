@@ -99,6 +99,7 @@ fn copy_action_presentation(action: ConnectionCopyAction) -> (String, IconName) 
         ConnectionCopyAction::SshTarget => label("copy_ssh_target", IconName::Network),
         ConnectionCopyAction::RedisAddress => label("copy_redis_target", IconName::Network),
         ConnectionCopyAction::MongoDbAddress => label("copy_mongodb_target", IconName::Network),
+        ConnectionCopyAction::MqttAddress => label("copy_mqtt_target", IconName::Network),
         ConnectionCopyAction::RemoteDesktopAddress => {
             label("copy_remote_desktop_target", IconName::Network)
         }

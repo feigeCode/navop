@@ -15,18 +15,22 @@ pub(super) enum NewConnectionCategory {
     All,
     Database,
     DomesticDatabase,
+    TimeSeries,
     NoSql,
+    Middleware,
     Terminal,
     Extensions,
 }
 
 impl NewConnectionCategory {
-    pub(super) fn all() -> [Self; 6] {
+    pub(super) fn all() -> [Self; 8] {
         [
             Self::All,
             Self::Database,
             Self::DomesticDatabase,
+            Self::TimeSeries,
             Self::NoSql,
+            Self::Middleware,
             Self::Terminal,
             Self::Extensions,
         ]
@@ -37,7 +41,9 @@ impl NewConnectionCategory {
             Self::All => t!("NewConnection.category_all").to_string(),
             Self::Database => t!("NewConnection.category_database").to_string(),
             Self::DomesticDatabase => t!("NewConnection.category_domestic_database").to_string(),
+            Self::TimeSeries => t!("NewConnection.category_time_series").to_string(),
             Self::NoSql => "NoSQL".to_string(),
+            Self::Middleware => t!("NewConnection.category_middleware").to_string(),
             Self::Terminal => t!("NewConnection.category_terminal").to_string(),
             Self::Extensions => "Extensions".to_string(),
         }
@@ -47,7 +53,9 @@ impl NewConnectionCategory {
         match self {
             Self::All => IconName::LayoutDashboard,
             Self::Database | Self::DomesticDatabase => IconName::DatabaseLine,
+            Self::TimeSeries => IconName::ChartPie,
             Self::NoSql => IconName::Server,
+            Self::Middleware => IconName::Network,
             Self::Terminal => IconName::Terminal,
             Self::Extensions => IconName::ExtensionsLine,
         }
@@ -61,6 +69,7 @@ pub(super) enum NewConnectionKind {
     Vnc,
     Redis,
     MongoDB,
+    Mqtt,
     Serial,
     Telnet,
     PortForwarding,
@@ -85,6 +94,7 @@ impl NewConnectionKind {
             Self::Vnc,
             Self::Redis,
             Self::MongoDB,
+            Self::Mqtt,
             Self::Serial,
             Self::Telnet,
             Self::PortForwarding,
@@ -107,6 +117,7 @@ impl NewConnectionKind {
             Self::Vnc => "VNC".to_string(),
             Self::Redis => "Redis".to_string(),
             Self::MongoDB => "MongoDB".to_string(),
+            Self::Mqtt => "MQTT".to_string(),
             Self::Serial => "Serial".to_string(),
             Self::Telnet => "Telnet".to_string(),
             Self::PortForwarding => t!("PortForwarding.new").to_string(),
@@ -124,6 +135,7 @@ impl NewConnectionKind {
             Self::Vnc => t!("NewConnection.description_vnc").to_string(),
             Self::Redis => t!("NewConnection.description_redis").to_string(),
             Self::MongoDB => t!("NewConnection.description_mongodb").to_string(),
+            Self::Mqtt => t!("NewConnection.description_mqtt").to_string(),
             Self::Serial => t!("NewConnection.description_serial").to_string(),
             Self::Telnet => t!("NewConnection.description_telnet").to_string(),
             Self::PortForwarding => t!("NewConnection.description_port_forwarding").to_string(),
@@ -144,6 +156,8 @@ impl NewConnectionKind {
             | Self::PortForwarding => NewConnectionCategory::Terminal,
             Self::MoreConnections => NewConnectionCategory::All,
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
+            Self::Mqtt => NewConnectionCategory::Middleware,
+            Self::Database(DatabaseType::TDengine) => NewConnectionCategory::TimeSeries,
             Self::Database(_) => NewConnectionCategory::Database,
             Self::ExternalDatabase { category, .. } => {
                 if is_domestic_database_category(category.as_deref()) {
@@ -165,6 +179,7 @@ impl NewConnectionKind {
             Self::MongoDB => {
                 connection_type_icon(ConnectionType::MongoDB, ConnectionVisualSize::Hero)
             }
+            Self::Mqtt => connection_type_icon(ConnectionType::Mqtt, ConnectionVisualSize::Hero),
             Self::Serial => {
                 connection_type_icon(ConnectionType::Serial, ConnectionVisualSize::Hero)
             }
@@ -288,7 +303,9 @@ mod tests {
                 NewConnectionCategory::All,
                 NewConnectionCategory::Database,
                 NewConnectionCategory::DomesticDatabase,
+                NewConnectionCategory::TimeSeries,
                 NewConnectionCategory::NoSql,
+                NewConnectionCategory::Middleware,
                 NewConnectionCategory::Terminal,
                 NewConnectionCategory::Extensions,
             ]
@@ -296,6 +313,35 @@ mod tests {
         assert_eq!(
             t!("NewConnection.category_domestic_database").to_string(),
             NewConnectionCategory::DomesticDatabase.label()
+        );
+    }
+
+    #[test]
+    fn tdengine_and_mqtt_kinds_map_to_their_categories() {
+        let registry = IpcDriverRegistry::empty();
+        let kinds = NewConnectionKind::all_with_registry(&registry);
+
+        assert_eq!(
+            NewConnectionKind::Database(DatabaseType::TDengine).category(),
+            NewConnectionCategory::TimeSeries
+        );
+        assert_eq!(
+            NewConnectionKind::Database(DatabaseType::MySQL).category(),
+            NewConnectionCategory::Database
+        );
+        assert_eq!(
+            NewConnectionKind::Mqtt.category(),
+            NewConnectionCategory::Middleware
+        );
+        assert!(kinds.contains(&NewConnectionKind::Mqtt));
+        assert!(kinds.contains(&NewConnectionKind::Database(DatabaseType::TDengine)));
+        assert_eq!(
+            t!("NewConnection.category_time_series").to_string(),
+            NewConnectionCategory::TimeSeries.label()
+        );
+        assert_eq!(
+            t!("NewConnection.category_middleware").to_string(),
+            NewConnectionCategory::Middleware.label()
         );
     }
 

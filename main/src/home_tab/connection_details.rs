@@ -53,6 +53,10 @@ impl HomePage {
                     }
                 })
                 .unwrap_or_default(),
+            ConnectionType::Mqtt => conn
+                .to_mqtt_params()
+                .map(|params| format!("{}:{}", params.host, params.port))
+                .unwrap_or_default(),
             ConnectionType::Serial => conn
                 .to_serial_params()
                 .map(|params| {

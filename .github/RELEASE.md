@@ -25,13 +25,19 @@ The normal release sequence is:
 
 1. Generate, review, and commit the target version entry in `CHANGELOG.md`.
 2. Make sure CI passes on the release commit.
-3. Create and push the matching `v*` tag. Both `script/release-tag.sh` and `script/bump-version.sh` reject a tag without a valid bilingual changelog entry.
-4. `Release Trigger` dispatches the shared `Release` workflow on the `dev` branch.
+3. Create and push the matching `v*` tag on the `main` branch. Both `script/release-tag.sh` and `script/bump-version.sh` reject a tag without a valid bilingual changelog entry.
+4. `Release Trigger` dispatches the shared `Release` workflow on the `main` branch.
 5. The workflow checks the application version and tagged changelog entry before starting expensive builds.
 6. macOS ARM64, macOS x86_64, Linux x86_64, Linux ARM64, and Windows x86_64 build in parallel in one matrix.
 7. After all requested platforms finish, the workflow extracts the tagged entry, uses it as the GitHub Release body, and writes the same Markdown to the R2 `latest.json` `release_notes` field.
 
-The build workflow checks out the requested tag, while the workflow itself runs from `dev`. This keeps Cargo input caches and sccache data reusable across tags and repair runs.
+The build workflow checks out the requested tag, while the workflow itself runs from `main`. This keeps Cargo input caches and sccache data reusable across tags and repair runs.
+
+## Branch model
+
+- `dev` is the beta development branch. Changes are pushed and validated here before a release.
+- `main` is the stable release branch and is protected: changes land via pull request, and CI must pass before merging.
+- Cut a release by merging the validated work from `dev` into `main`, then creating the `v*` tag on `main`.
 
 ## Changelog format
 
@@ -85,11 +91,11 @@ For a failed matrix job in the same workflow run, prefer **Re-run failed jobs**.
 
 ## Cache model
 
-- CI, Release, ARM Linux, and the standalone Windows MSI build use the same Cargo registry and Git dependency cache namespace, keyed only by runner OS and `Cargo.lock`. Linux x86_64 can therefore seed Linux ARM64 inputs, and macOS ARM64 can seed macOS x86_64 inputs.
-- Rust compilation uses sccache with the GitHub Actions backend in every Rust build workflow. All five release platforms run from the same default `dev` workflow scope and reuse compiler objects from earlier runs for the same target and profile.
+- CI, Release, and ARM Linux use the same Cargo registry and Git dependency cache namespace, keyed only by runner OS and `Cargo.lock`. Linux x86_64 can therefore seed Linux ARM64 inputs, and macOS ARM64 can seed macOS x86_64 inputs.
+- Rust compilation uses sccache with the GitHub Actions backend in every Rust build workflow. All five release platforms run from the same default `main` workflow scope and reuse compiler objects from earlier runs for the same target and profile.
 - The implicit `Swatinem/rust-cache` inside `actions-rust-lang/setup-rust-toolchain` is disabled, and `target/` is not stored by `actions/cache`. This avoids duplicating multi-gigabyte target archives that would evict useful sccache objects from GitHub's repository cache quota.
 - Release jobs explicitly start sccache and keep it alive through long linking and LTO phases so the final statistics cover the complete build.
-- Build caches are shared through workflow runs on the default `dev` branch instead of being isolated under each release tag.
+- Build caches are shared through workflow runs on the default `main` branch instead of being isolated under each release tag.
 - ARM Linux uses two Cargo build jobs, thin LTO, and 16 codegen units to reduce peak memory while retaining release optimization.
 
 ## Safety properties

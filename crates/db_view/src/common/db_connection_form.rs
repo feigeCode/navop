@@ -1019,6 +1019,93 @@ impl DbFormConfig {
         }
     }
 
+    /// TDengine 连接表单配置(WebSocket 经 taosAdapter,默认端口 6041,默认用户 root)
+    pub fn tdengine() -> Self {
+        Self {
+            db_type: DatabaseType::TDengine,
+            title: format!("{} (TDengine)", t!("Common.new")),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![
+                TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
+                    FormField::new(
+                        "name",
+                        t!("ConnectionForm.connection_name"),
+                        FormFieldType::Text,
+                    )
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "TDengine"
+                        )
+                        .to_string(),
+                    )
+                    .default("Local TDengine"),
+                    FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
+                        .placeholder("localhost")
+                        .default("localhost"),
+                    FormField::new("port", t!("ConnectionForm.port"), FormFieldType::Number)
+                        .placeholder("6041 (taosAdapter port)")
+                        .default("6041"),
+                    FormField::new(
+                        "username",
+                        t!("ConnectionForm.username"),
+                        FormFieldType::Text,
+                    )
+                    .placeholder("root")
+                    .default("root"),
+                    FormField::new(
+                        "password",
+                        t!("ConnectionForm.password"),
+                        FormFieldType::Password,
+                    )
+                    .placeholder("taosdata"),
+                    FormField::new(
+                        "database",
+                        t!("ConnectionForm.database"),
+                        FormFieldType::Text,
+                    )
+                    .optional()
+                    .placeholder(t!("ConnectionForm.database_optional").to_string()),
+                ]),
+                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
+                    FormField::new(
+                        "connect_timeout",
+                        t!("ConnectionForm.connect_timeout"),
+                        FormFieldType::Number,
+                    )
+                    .optional()
+                    .placeholder("30")
+                    .default("30"),
+                ]),
+                TabGroup::new("ssl", t!("ConnectionForm.ssl")).fields(vec![
+                    FormField::new(
+                        "schema",
+                        t!("ConnectionForm.schema"),
+                        FormFieldType::Select,
+                    )
+                    .optional()
+                    .default("ws")
+                    .options(vec![
+                        ("ws".to_string(), t!("ConnectionForm.schema_ws").to_string()),
+                        ("wss".to_string(), t!("ConnectionForm.schema_wss").to_string()),
+                    ]),
+                ]),
+                Self::ssh_tab_group(),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
+            ],
+        }
+    }
+
     /// SQLite form configuration
     pub fn sqlite() -> Self {
         let default_db_path = get_config_dir()

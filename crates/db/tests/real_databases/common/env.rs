@@ -32,6 +32,10 @@ pub fn optional_database(config: &DbConnectionConfig, fallback: &str) -> DbConne
     config
 }
 
+pub fn skip_database(label: &str, env_var: &str) {
+    eprintln!("skipping real {label} tests: set {env_var} to run them");
+}
+
 fn base_config(
     id: &str,
     database_type: DatabaseType,

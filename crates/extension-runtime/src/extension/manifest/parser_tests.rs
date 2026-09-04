@@ -481,6 +481,7 @@ fn manifest_rejects_shell_entry_symlink_escape() {
     assert!(error.to_string().contains("符号链接"), "{error}");
 }
 
+#[cfg(unix)]
 #[test]
 fn manifest_rejects_auto_restart_without_restart_budget() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -503,6 +504,7 @@ fn manifest_rejects_auto_restart_without_restart_budget() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn manifest_rejects_unsupported_ipc_transport() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -524,6 +526,7 @@ fn manifest_rejects_unsupported_ipc_transport() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn manifest_rejects_ipc_working_directory_escape() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -547,6 +550,7 @@ fn manifest_rejects_ipc_working_directory_escape() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn manifest_rejects_absolute_ipc_working_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -604,6 +608,7 @@ fn manifest_requires_spawn_permission_for_resolved_ipc_command() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn manifest_rejects_ipc_command_that_relies_on_path_lookup() {
     let tmp = tempfile::TempDir::new().unwrap();

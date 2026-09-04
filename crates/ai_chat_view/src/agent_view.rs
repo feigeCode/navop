@@ -3123,6 +3123,7 @@ impl AgentChatView {
             dialog
                 .title(t!("AgentUi.rename_session").to_string())
                 .w(px(360.0))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("AgentUi.save").to_string())
@@ -3183,6 +3184,7 @@ impl AgentChatView {
             dialog
                 .title(t!("AgentUi.delete_session").to_string())
                 .w(px(360.0))
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("AgentUi.delete").to_string())

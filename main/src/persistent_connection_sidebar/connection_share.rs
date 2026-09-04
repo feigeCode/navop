@@ -20,6 +20,7 @@ pub(super) fn connection_share_text_for_locale(
         ConnectionType::SshSftp => ssh_fields(locale, connection.to_ssh_params().ok()?),
         ConnectionType::Redis => redis_fields(locale, connection.to_redis_params().ok()?),
         ConnectionType::MongoDB => mongodb_fields(locale, connection.to_mongodb_params().ok()?),
+        ConnectionType::Mqtt => mqtt_fields(locale, connection.to_mqtt_params().ok()?),
         ConnectionType::Serial => serial_fields(locale, connection.to_serial_params().ok()?),
         ConnectionType::Telnet => telnet_fields(locale, connection.to_telnet_params().ok()?),
         ConnectionType::PortForwarding => {
@@ -162,6 +163,23 @@ fn mongodb_fields(locale: &str, params: MongoDBParams) -> Vec<(&'static str, Str
         ("auth_database", params.auth_source.unwrap_or_default()),
         ("replica_set", params.replica_set.unwrap_or_default()),
         ("tls", tr(locale, yes_no_key(params.use_tls))),
+    ]
+}
+
+fn mqtt_fields(locale: &str, params: one_core::storage::MqttParams) -> Vec<(&'static str, String)> {
+    vec![
+        ("host", params.host),
+        ("port", params.port.to_string()),
+        ("client_id", params.client_id),
+        ("username", params.username.unwrap_or_default()),
+        ("tls", tr(locale, yes_no_key(params.use_tls))),
+        (
+            "keep_alive",
+            params
+                .keep_alive
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ),
     ]
 }
 
@@ -353,6 +371,7 @@ fn connection_type_key(connection_type: ConnectionType) -> &'static str {
         ConnectionType::SshSftp => "Connection.Share.type_ssh_sftp",
         ConnectionType::Redis => "Connection.Share.type_redis",
         ConnectionType::MongoDB => "Connection.Share.type_mongodb",
+        ConnectionType::Mqtt => "Connection.Share.type_mqtt",
         ConnectionType::Serial => "Connection.Share.type_serial",
         ConnectionType::Telnet => "Connection.Share.type_telnet",
         ConnectionType::PortForwarding => "Connection.Share.type_port_forwarding",

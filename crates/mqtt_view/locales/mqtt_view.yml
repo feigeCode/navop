@@ -1,0 +1,294 @@
+_version: 2
+
+# 通用文本
+Common:
+  ok:
+    en: "OK"
+    zh-CN: "确定"
+    zh-HK: "確定"
+  cancel:
+    en: "Cancel"
+    zh-CN: "取消"
+    zh-HK: "取消"
+  confirm:
+    en: "Confirm"
+    zh-CN: "确认"
+    zh-HK: "確認"
+  refresh:
+    en: "Refresh"
+    zh-CN: "刷新"
+    zh-HK: "刷新"
+  none:
+    en: "None"
+    zh-CN: "无"
+    zh-HK: "無"
+  yes:
+    en: "Yes"
+    zh-CN: "是"
+    zh-HK: "是"
+  no:
+    en: "No"
+    zh-CN: "否"
+    zh-HK: "否"
+
+# 连接测试
+Connection:
+  test:
+    en: "Test"
+    zh-CN: "测试"
+    zh-HK: "測試"
+  testing:
+    en: "Testing..."
+    zh-CN: "测试中..."
+    zh-HK: "測試中..."
+
+# MQTT 视图通用
+MqttView:
+  tab_title:
+    en: "MQTT"
+    zh-CN: "MQTT"
+    zh-HK: "MQTT"
+  connections:
+    en: "Connections"
+    zh-CN: "连接"
+    zh-HK: "連線"
+  subscriptions:
+    en: "Subscriptions"
+    zh-CN: "订阅"
+    zh-HK: "訂閱"
+  messages:
+    en: "Messages"
+    zh-CN: "消息"
+    zh-HK: "訊息"
+  publish:
+    en: "Publish"
+    zh-CN: "发布"
+    zh-HK: "發佈"
+
+# 连接树
+MqttTree:
+  no_connections:
+    en: "No MQTT connections"
+    zh-CN: "暂无 MQTT 连接"
+    zh-HK: "暫無 MQTT 連線"
+  retry:
+    en: "Retry"
+    zh-CN: "重试"
+    zh-HK: "重試"
+  disconnect:
+    en: "Disconnect"
+    zh-CN: "断开连接"
+    zh-HK: "斷開連線"
+  refresh_subscriptions:
+    en: "Refresh subscriptions"
+    zh-CN: "刷新订阅"
+    zh-HK: "刷新訂閱"
+  confirm_disconnect_title:
+    en: "Disconnect MQTT Connection"
+    zh-CN: "断开 MQTT 连接"
+    zh-HK: "斷開 MQTT 連線"
+  confirm_disconnect:
+    en: "Disconnect connection \"%{name}\"?"
+    zh-CN: "确定断开连接「%{name}」吗?"
+    zh-HK: "確定斷開連線「%{name}」嗎?"
+  disconnect_warning:
+    en: "Subscriptions and message stream will be closed."
+    zh-CN: "订阅与消息流将被关闭。"
+    zh-HK: "訂閱與訊息流將被關閉。"
+  disconnect_failed:
+    en: "Failed to disconnect: %{error}"
+    zh-CN: "断开连接失败:%{error}"
+    zh-HK: "斷開連線失敗:%{error}"
+  connection_missing:
+    en: "MQTT connection not found, please connect first"
+    zh-CN: "MQTT 连接不存在,请先连接"
+    zh-HK: "MQTT 連線不存在,請先連線"
+
+# 订阅/消息/发布操作页
+MqttSub:
+  topic_filter_placeholder:
+    en: "Topic filter, e.g. sensor/#"
+    zh-CN: "主题过滤器,如 sensor/#"
+    zh-HK: "主題過濾器,如 sensor/#"
+  qos:
+    en: "QoS"
+    zh-CN: "QoS"
+    zh-HK: "QoS"
+  add_subscription:
+    en: "Subscribe"
+    zh-CN: "添加订阅"
+    zh-HK: "新增訂閱"
+  remove_subscription:
+    en: "Unsubscribe"
+    zh-CN: "取消订阅"
+    zh-HK: "取消訂閱"
+  no_subscriptions:
+    en: "No subscriptions yet"
+    zh-CN: "暂无订阅"
+    zh-HK: "暫無訂閱"
+  no_messages:
+    en: "No messages"
+    zh-CN: "暂无消息"
+    zh-HK: "暫無訊息"
+  clear_messages:
+    en: "Clear"
+    zh-CN: "清空"
+    zh-HK: "清空"
+  payload_text:
+    en: "Text"
+    zh-CN: "文本"
+    zh-HK: "文字"
+  payload_hex:
+    en: "Hex"
+    zh-CN: "Hex"
+    zh-HK: "Hex"
+  toggle_payload_mode:
+    en: "Toggle payload display mode"
+    zh-CN: "切换 payload 显示模式"
+    zh-HK: "切換 payload 顯示模式"
+  publish_topic_placeholder:
+    en: "Publish topic, e.g. cmd/device1"
+    zh-CN: "发布主题,如 cmd/device1"
+    zh-HK: "發佈主題,如 cmd/device1"
+  publish_payload_placeholder:
+    en: "Payload"
+    zh-CN: "消息内容"
+    zh-HK: "訊息內容"
+  retain:
+    en: "Retain"
+    zh-CN: "保留消息"
+    zh-HK: "保留訊息"
+  topic_required:
+    en: "Topic is required"
+    zh-CN: "主题不能为空"
+    zh-HK: "主題不能為空"
+  subscribe_failed:
+    en: "Subscribe failed: %{error}"
+    zh-CN: "订阅失败:%{error}"
+    zh-HK: "訂閱失敗:%{error}"
+  unsubscribe_failed:
+    en: "Unsubscribe failed: %{error}"
+    zh-CN: "取消订阅失败:%{error}"
+    zh-HK: "取消訂閱失敗:%{error}"
+  publish_success:
+    en: "Published to %{topic}"
+    zh-CN: "已发布到 %{topic}"
+    zh-HK: "已發佈到 %{topic}"
+  publish_failed:
+    en: "Publish failed: %{error}"
+    zh-CN: "发布失败:%{error}"
+    zh-HK: "發佈失敗:%{error}"
+
+# 连接表单
+MqttForm:
+  tab_general:
+    en: "General"
+    zh-CN: "常规"
+    zh-HK: "常規"
+  tab_mqtt:
+    en: "MQTT"
+    zh-CN: "MQTT"
+    zh-HK: "MQTT"
+  tab_advanced:
+    en: "Advanced"
+    zh-CN: "高级"
+    zh-HK: "進階"
+  tab_ssl:
+    en: "SSL"
+    zh-CN: "SSL"
+    zh-HK: "SSL"
+  connect_timeout:
+    en: "Connect Timeout (s)"
+    zh-CN: "连接超时(秒)"
+    zh-HK: "連線逾時(秒)"
+  state_missing:
+    en: "MQTT runtime is not initialized"
+    zh-CN: "MQTT 运行时未初始化"
+    zh-HK: "MQTT 執行時未初始化"
+  name:
+    en: "Name"
+    zh-CN: "名称"
+    zh-HK: "名稱"
+  name_placeholder:
+    en: "Connection name"
+    zh-CN: "连接名称"
+    zh-HK: "連線名稱"
+  host:
+    en: "Host"
+    zh-CN: "主机"
+    zh-HK: "主機"
+  host_placeholder:
+    en: "Hostname or IP"
+    zh-CN: "主机名或 IP 地址"
+    zh-HK: "主機名或 IP 位址"
+  port:
+    en: "Port"
+    zh-CN: "端口"
+    zh-HK: "連接埠"
+  client_id:
+    en: "Client ID"
+    zh-CN: "客户端 ID"
+    zh-HK: "用戶端 ID"
+  client_id_placeholder:
+    en: "Leave empty to auto-generate"
+    zh-CN: "留空自动生成"
+    zh-HK: "留空自動生成"
+  username:
+    en: "Username"
+    zh-CN: "用户名"
+    zh-HK: "使用者名稱"
+  username_placeholder:
+    en: "Username (optional)"
+    zh-CN: "用户名(可选)"
+    zh-HK: "使用者名稱(可選)"
+  password:
+    en: "Password"
+    zh-CN: "密码"
+    zh-HK: "密碼"
+  password_placeholder:
+    en: "Password (optional)"
+    zh-CN: "密码(可选)"
+    zh-HK: "密碼(可選)"
+  use_tls:
+    en: "TLS"
+    zh-CN: "启用 TLS"
+    zh-HK: "啟用 TLS"
+  keep_alive:
+    en: "Keep Alive (s)"
+    zh-CN: "Keep Alive(秒)"
+    zh-HK: "Keep Alive(秒)"
+  clean_session:
+    en: "Clean Session"
+    zh-CN: "清除会话"
+    zh-HK: "清除工作階段"
+  workspace:
+    en: "Workspace"
+    zh-CN: "工作区"
+    zh-HK: "工作區"
+  ssh_timeout:
+    en: "SSH Timeout"
+    zh-CN: "SSH 超时"
+    zh-HK: "SSH 逾時"
+  host_required:
+    en: "Host is required"
+    zh-CN: "主机不能为空"
+    zh-HK: "主機不能為空"
+  test_success:
+    en: "MQTT connection test succeeded"
+    zh-CN: "MQTT 连接测试成功"
+    zh-HK: "MQTT 連線測試成功"
+  test_failed:
+    en: "MQTT connection test failed: %{error}"
+    zh-CN: "MQTT 连接测试失败:%{error}"
+    zh-HK: "MQTT 連線測試失敗:%{error}"
+  save_failed:
+    en: "Failed to save connection: %{error}"
+    zh-CN: "保存连接失败:%{error}"
+    zh-HK: "儲存連線失敗:%{error}"
+
+# 侧边栏
+MqttSidebar:
+  ai_chat:
+    en: "AI Chat"
+    zh-CN: "AI 对话"
+    zh-HK: "AI 對話"
