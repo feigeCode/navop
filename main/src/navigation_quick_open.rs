@@ -66,6 +66,7 @@ pub(crate) fn visible_connection_types() -> Vec<ConnectionType> {
         ConnectionType::Database,
         ConnectionType::Redis,
         ConnectionType::MongoDB,
+        ConnectionType::Mqtt,
         ConnectionType::Serial,
         ConnectionType::Telnet,
     ]

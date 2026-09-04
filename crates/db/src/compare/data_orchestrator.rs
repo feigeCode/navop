@@ -691,6 +691,9 @@ fn data_compare_snapshot_strategy(database_type: &DatabaseType) -> DataCompareSn
         DatabaseType::ClickHouse => DataCompareSnapshotStrategy::BestEffort(
             "ClickHouse does not provide a transaction snapshot spanning the separate COUNT and page queries used by this workflow",
         ),
+        DatabaseType::TDengine => DataCompareSnapshotStrategy::BestEffort(
+            "TDengine does not provide a transaction snapshot spanning the separate COUNT and page queries used by this workflow",
+        ),
         DatabaseType::DuckDB => DataCompareSnapshotStrategy::BestEffort(
             "DuckDB snapshot semantics have not been enabled for the compare workflow",
         ),

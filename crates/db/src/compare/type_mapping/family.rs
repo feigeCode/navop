@@ -15,6 +15,8 @@ pub(crate) enum DatabaseFamily {
 pub(crate) fn database_family(database_type: &DatabaseType) -> DatabaseFamily {
     match database_type {
         DatabaseType::MySQL => DatabaseFamily::MySql,
+        // TDengine 类型系统按 MySQL 方言同臂处理。
+        DatabaseType::TDengine => DatabaseFamily::MySql,
         DatabaseType::PostgreSQL => DatabaseFamily::PostgreSql,
         DatabaseType::MSSQL => DatabaseFamily::SqlServer,
         DatabaseType::Oracle => DatabaseFamily::Oracle,

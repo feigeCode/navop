@@ -304,6 +304,45 @@ pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Conte
         );
     }
 
+    pub(crate) fn show_mqtt_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
+            return;
+        }
+
+        let editing_conn = self.editing_connection_id.and_then(|id| {
+            self.connections
+                .iter()
+                .find(|c| c.id == Some(id) && c.connection_type == ConnectionType::Mqtt)
+                .cloned()
+        });
+
+        let config = MqttFormConfig {
+            editing_connection: editing_conn,
+            initial_connection: None,
+            workspaces: self.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+            ssh_connections: self.connections.clone(),
+            on_saved: None,
+        };
+
+        self.editing_connection_id = None;
+
+        let title = Self::typed_connection_title_for_locale(
+            rust_i18n::locale().as_ref(),
+            config.is_editing(),
+            "MQTT",
+            config.editing_connection.as_ref(),
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 650.0),
+            move |window, cx| {
+                cx.new(|cx| MqttFormWindow::new(config.into_window_config(), window, cx))
+            },
+            Some(_window),
+            cx,
+        );
+    }
+
     pub(crate) fn show_serial_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
             return;

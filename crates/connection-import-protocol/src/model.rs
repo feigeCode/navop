@@ -172,6 +172,8 @@ pub enum ImportDatabaseType {
     SqlServer,
     Oracle,
     ClickHouse,
+    /// TDengine 时序数据库
+    TDengine,
     External { id: String },
 }
 

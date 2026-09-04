@@ -944,6 +944,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     redis_view::init(cx);
     crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
+    mqtt_view::init(cx);
     #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
     init_native_data_driver_factories(cx);
     crate::public_mcp_runtime::init(cx);

@@ -18,6 +18,7 @@ use crate::plugin_manifest::DatabaseCapabilities;
 use crate::postgresql::PostgresPlugin;
 use crate::runtime_contract::require_tokio_runtime;
 use crate::sqlite::SqlitePlugin;
+use crate::tdengine::TdenginePlugin;
 use crate::{
     DbNode, DbNodeType, ExecOptions, SqlErrorInfo, SqlResult, SqlSource, TableDesign,
     TableSaveResponse,
@@ -164,6 +165,7 @@ pub struct DbManager {
     sqlite: Arc<dyn DatabasePlugin>,
     duckdb: Arc<dyn DatabasePlugin>,
     clickhouse: Arc<dyn DatabasePlugin>,
+    tdengine: Arc<dyn DatabasePlugin>,
     mssql: Arc<dyn DatabasePlugin>,
     oracle: Arc<dyn DatabasePlugin>,
     external_drivers: HashMap<String, Arc<dyn DatabasePlugin>>,
@@ -201,6 +203,7 @@ impl DbManager {
             sqlite: Arc::new(SqlitePlugin::new()),
             duckdb: default_duckdb_plugin(&registry),
             clickhouse: Arc::new(ClickHousePlugin::new()),
+            tdengine: Arc::new(TdenginePlugin::new()),
             mssql: Arc::new(MsSqlPlugin::new()),
             oracle: Arc::new(OraclePlugin::new()),
             external_drivers,
@@ -215,6 +218,7 @@ impl DbManager {
             DatabaseType::SQLite => Ok(Arc::clone(&self.sqlite)),
             DatabaseType::DuckDB => Ok(Arc::clone(&self.duckdb)),
             DatabaseType::ClickHouse => Ok(Arc::clone(&self.clickhouse)),
+            DatabaseType::TDengine => Ok(Arc::clone(&self.tdengine)),
             DatabaseType::MSSQL => Ok(Arc::clone(&self.mssql)),
             DatabaseType::Oracle => Ok(Arc::clone(&self.oracle)),
             DatabaseType::External { driver_id } => {
@@ -261,6 +265,7 @@ impl Clone for DbManager {
             sqlite: Arc::clone(&self.sqlite),
             duckdb: Arc::clone(&self.duckdb),
             clickhouse: Arc::clone(&self.clickhouse),
+            tdengine: Arc::clone(&self.tdengine),
             mssql: Arc::clone(&self.mssql),
             oracle: Arc::clone(&self.oracle),
             external_drivers: self.external_drivers.clone(),

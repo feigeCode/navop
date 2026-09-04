@@ -115,6 +115,7 @@ fn built_in_database_ui_manifest(
         DatabaseType::MSSQL => db::mssql::MsSqlPlugin::new().ui_manifest(),
         DatabaseType::Oracle => db::oracle::OraclePlugin::new().ui_manifest(),
         DatabaseType::ClickHouse => db::clickhouse::ClickHousePlugin::new().ui_manifest(),
+        DatabaseType::TDengine => db::tdengine::TdenginePlugin::new().ui_manifest(),
         DatabaseType::DuckDB | DatabaseType::External { .. } => {
             return Err(ToolError::Failed {
                 message: format!(

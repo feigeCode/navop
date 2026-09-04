@@ -40,7 +40,7 @@ members = [
     "crates/json_view",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
-    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
+    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview", "crates/mqtt-runtime", "crates/mqtt_view"]
 resolver = "2"
 
 [workspace.package]
@@ -116,6 +116,8 @@ db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
 redis-runtime = { path = "crates/redis-runtime" }
 mongodb-runtime = { path = "crates/mongodb-runtime" }
+mqtt_view = { path = "crates/mqtt_view" }
+mqtt-runtime = { path = "crates/mqtt-runtime" }
 one-ui = { path = "crates/one_ui" }
 ssh = { path = "crates/ssh" }
 x11_forwarding = { path = "crates/x11_forwarding" }
@@ -197,6 +199,10 @@ moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
 llm-connector = { version = "1.4.0", features = ["streaming"] }
 redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
+# TDengine 官方连接器:仅启用 ws-rustls(纯 Rust WebSocket/REST,经 taosAdapter :6041),排除 taos-optin 的 C 依赖
+taos = { version = "0.12.3", default-features = false, features = ["ws-rustls"] }
+# MQTT 客户端:Rust 生态标准,默认 rustls(MQTT 3.1.1/v4)
+rumqttc = "0.25.1"
 
 # SSH and SFTP
 # dsa feature enables verifying/offering the legacy ssh-dss host-key algorithm.

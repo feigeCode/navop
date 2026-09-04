@@ -1,6 +1,6 @@
 use crate::home_tab::HomePage;
 use gpui::{Context, Window};
-use gpui_component::WindowExt;
+use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
 #[cfg(feature = "shell-plugins")]
 use one_core::tab_container::TabItem;
@@ -32,6 +32,10 @@ pub(crate) fn build_connection_open_strategy(
             workspace,
         }),
         ConnectionType::MongoDB => Box::new(MongoOpenStrategy {
+            connection,
+            workspace,
+        }),
+        ConnectionType::Mqtt => Box::new(MqttOpenStrategy {
             connection,
             workspace,
         }),
@@ -318,6 +322,38 @@ impl ConnectionOpenStrategy for MongoOpenStrategy {
                 home.open_mongodb_tab_with_mode(connection, workspace, mode, window, cx);
             },
         );
+    }
+}
+
+struct MqttOpenStrategy {
+    connection: StoredConnection,
+    workspace: Option<Workspace>,
+}
+
+impl ConnectionOpenStrategy for MqttOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        home: &mut HomePage,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        let MqttOpenStrategy {
+            connection,
+            workspace,
+        } = *self;
+        match mqtt_runtime::default_backend_kind() {
+            mqtt_runtime::MqttBackendKind::Builtin => {
+                home.open_mqtt_tab_with_mode(connection, workspace, mode, window, cx);
+            }
+            mqtt_runtime::MqttBackendKind::Ipc | mqtt_runtime::MqttBackendKind::Unavailable => {
+                // 一期仅提供 builtin 后端;无后端时提示不可用
+                window.push_notification(
+                    Notification::warning(format!("MQTT backend unavailable: {}", connection.name)),
+                    cx,
+                );
+            }
+        }
     }
 }
 
