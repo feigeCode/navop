@@ -2034,7 +2034,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.2",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -5024,7 +5024,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-shell"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "gpui_ce_components",
  "gpui_ce_components_shell",
@@ -5140,7 +5140,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5190,7 +5190,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_assets"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "anyhow",
  "gpui_ce",
@@ -5204,7 +5204,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_base"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5240,7 +5240,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_fps"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "gpui_ce",
  "libc",
@@ -5254,7 +5254,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_macros"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5264,7 +5264,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_shell"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5300,7 +5300,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_webview"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=e6459613910143b817eecbacc8767976e86cac84#e6459613910143b817eecbacc8767976e86cac84"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
 dependencies = [
  "anyhow",
  "gpui_ce",
@@ -6184,7 +6184,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -10712,7 +10712,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls 0.23.41",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -10749,7 +10749,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -12673,7 +12673,7 @@ checksum = "7bd22781911de0ca6debda95f073c8f18bec65d1a94f1fa9573f3102e514cea4"
 dependencies = [
  "ahash 0.8.12",
  "annotate-snippets",
- "base64 0.22.1",
+ "base64 0.21.7",
  "encoding_rs_io",
  "getrandom 0.3.4",
  "granit-parser",

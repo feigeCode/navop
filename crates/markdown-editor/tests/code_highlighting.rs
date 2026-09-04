@@ -13,16 +13,30 @@ use std::path::PathBuf;
 
 #[test]
 fn markdown_editor_does_not_bundle_a_native_rust_grammar() {
-    let registry = LanguageRegistry::singleton();
-    assert!(
-        registry.language("rust").is_none(),
-        "fenced languages must be supplied by wasm extensions, not native Cargo features"
-    );
-    assert_eq!(
-        "text",
-        SyntaxHighlighter::new("rust").language().as_ref(),
-        "an unavailable fenced language must safely fall back to text"
-    );
+    // 源码契约:markdown-editor 自身不得启用任何原生 tree-sitter 语法 feature,
+    // fenced 语言一律由 extension-runtime 的 wasm 扩展提供。运行时注册表断言
+    // 不可靠——`cargo test --all` 的 feature unification 会把 main 经
+    // gpui-component-shell 启用的 tree-sitter-rust 一并链接进测试二进制。
+    let manifest = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/Cargo.toml"
+    ))
+    .expect("Cargo.toml must be readable");
+    for line in manifest.lines() {
+        let line = line.trim();
+        assert!(
+            !line.contains("tree-sitter-rust") && !line.contains("tree-sitter-languages"),
+            "markdown-editor must not enable native rust grammars: {line}"
+        );
+    }
+    // wasm 扩展未注册时,fenced 语言必须安全回退为纯文本。
+    if LanguageRegistry::singleton().language("rust").is_none() {
+        assert_eq!(
+            "text",
+            SyntaxHighlighter::new("rust").language().as_ref(),
+            "an unavailable fenced language must safely fall back to text"
+        );
+    }
 }
 
 #[test]
