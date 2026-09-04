@@ -4,30 +4,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
-<!-- Unreleased 草稿（feat/tdengine-mqtt-middleware）：发布时将本节内容并入目标版本条目
-     （按仓库惯例本批均为功能新增，预计为下一个 minor 版本），补齐 CNB 镜像下载行与
-     Full Changelog 对比链接后删除本节与本注释。changelog.py 仅识别带日期的版本标题，
-     本节不影响既有条目的 extract/validate/upsert。 -->
-
-## [Unreleased]
-
-#### 更新内容
-
-- 新增 TDengine 时序数据库连接：基于官方 taos WebSocket 驱动（经 taosAdapter :6041 连接，纯 Rust、无需本地 C 依赖），支持数据库/超级表/子表浏览、DESCRIBE 与 TAG 识别、分页查询等完整数据库能力；连接表单、连接导入协议与 TDengine CLI 命令（`taos` / `jdbc:TAOS-RS://`）同步支持。
-- 新增 MQTT 中间件连接：基于 rumqttc 运行时（MQTT 3.1.1，rustls 加密），提供订阅、消息、发布三个视图（消息环形缓冲、文本/Hex 切换），连接页签对齐 MongoDB 多开模式，支持 SSH 隧道与断线自动重订阅。
-- 新增通用中间件声明式连接表单引擎：中间件连接复用数据库表单的页面模式，标签页由声明式配置驱动，工作区/团队/云同步/钥匙串/备注由引擎统一处理，为 RocketMQ、Kafka 等后续中间件接入铺路。
-- 新建连接弹框新增「时序数据库」「中间件」分类，分别承载 TDengine 与 MQTT 入口卡片。
-
----
-
-#### What's New
-
-- Added TDengine time-series database connections on the official taos WebSocket driver (via taosAdapter :6041, pure Rust with no local C dependency), with full database capabilities including database/super-table/child-table browsing, DESCRIBE with TAG awareness, and paged queries; the connection form, connection import protocol, and TDengine CLI commands (`taos` / `jdbc:TAOS-RS://`) are supported as well.
-- Added MQTT middleware connections on a rumqttc runtime (MQTT 3.1.1 over rustls) with dedicated subscribe, messages, and publish views (ring-buffered messages, text/Hex toggle); connection tabs follow the MongoDB multi-tab pattern, with SSH tunneling and automatic resubscription after reconnects.
-- Added a declarative connection-form engine for middleware: middleware connections reuse the database form's page model with declaratively configured tabs, while workspace/team/cloud-sync/keychain/notes are handled uniformly by the engine, paving the way for future middleware such as RocketMQ and Kafka.
-- The new-connection dialog adds "Time-series Database" and "Middleware" categories, hosting the TDengine and MQTT entry cards respectively.
-
-## [v0.16.0] - 2026-09-03
+## [v0.16.0] - 2026-09-04
 
 #### 更新内容
 
@@ -35,6 +12,9 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 「通用资源插件」基础框架落地：扩展可基于标准连接声明新的资源类型，并复用连接表单、工作区、首页与侧边栏生命周期；宿主统一负责扩展进程的启动、权限、健康检查与重启管理，为第三方资源类型铺路。
 - SQL 补全与编辑增强：新增 UPDATE 语句表别名诊断与补全；表数据页签支持右键复制表名，列头支持右键复制字段名与注释；文件管理器支持 Backspace 返回上一级目录（输入框聚焦时不触发）。
 - Oracle 支持：连接表单新增连接角色（默认 / SYSDBA / SYSOPER）；普通权限账户可正常获取 schema 补全；元数据改为表名优先发布，大 schema 下列扫描期间表名即可完成补全。
+- 新增 TDengine 时序数据库连接：基于官方 taos WebSocket 驱动（经 taosAdapter :6041 连接，纯 Rust、无需本地 C 依赖），支持数据库/超级表/子表浏览、DESCRIBE 与 TAG 识别、分页查询等完整数据库能力；连接表单、连接导入协议与 TDengine CLI 命令（`taos` / `jdbc:TAOS-RS://`）同步支持。
+- 新增 MQTT 中间件连接：基于 rumqttc 运行时（MQTT 3.1.1，rustls 加密），提供订阅、消息、发布三个视图（消息环形缓冲、文本/Hex 切换），连接页签对齐 MongoDB 多开模式，支持 SSH 隧道与断线自动重订阅。
+- 新增通用中间件声明式连接表单引擎：中间件连接复用数据库表单的页面模式，标签页由声明式配置驱动，工作区/团队/云同步/钥匙串/备注由引擎统一处理；新建连接弹框同步新增「时序数据库」「中间件」分类。
 
 #### 修复与优化
 
@@ -45,6 +25,9 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - 修复 Windows 上 Personal Sync(Git) 自动同步每次弹出黑色控制台窗口的问题。
 - 修复 SQLite 启用 WAL 失败（杀软 / 同步盘 / 受限文件系统）时应用启动卡死或崩溃的问题，现会回退到 DELETE 日志模式并正常启动。
 - 修复钥匙串列表滚动容器塌陷导致白屏的问题。
+- 优化 SFTP 上传性能与稳定性：大文件采用更大的并发写窗口与请求超时，瞬态断连可自动重试一次；批量上传支持逐项处理文件/目录冲突，并可将决定应用到后续同类冲突。
+- 修复组件库升级后部分确认弹窗不显示操作按钮的问题。
+- AI 对话中的 Markdown 现跟随终端主题渲染，改善终端配色下正文、链接、引用和代码块的可读性。
 - 笔记：因组件库升级迁移，移除左编辑右预览的分栏（Split）模式，该模式旧配置会自动回退到源码（Source）模式。
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.16.0) 下载桌面端安装包
@@ -57,6 +40,9 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - A "Universal Resource Plugin" foundation lands: extensions can declare new resource types backed by a standard stored connection and reuse the connection form, workspace, home, and sidebar lifecycles; the host owns process startup, permissions, health checks, and restarts, paving the way for third-party resource types.
 - SQL completion and editing: added UPDATE table-alias diagnostics and completion; table-data tabs can copy the table name from the context menu and column headers can copy field names/comments; the file manager navigates up with Backspace (ignored while an input is focused).
 - Oracle: the connection form adds a connection role (Default / SYSDBA / SYSOPER); schema completion now works for limited-privilege accounts, and metadata publishes table names first so completion is available early during large-schema column scans.
+- Added TDengine time-series database connections on the official taos WebSocket driver (via taosAdapter :6041, pure Rust with no local C dependency), with full database capabilities including database/super-table/child-table browsing, DESCRIBE with TAG awareness, and paged queries; the connection form, connection import protocol, and TDengine CLI commands (`taos` / `jdbc:TAOS-RS://`) are supported as well.
+- Added MQTT middleware connections on a rumqttc runtime (MQTT 3.1.1 over rustls) with dedicated subscribe, messages, and publish views (ring-buffered messages, text/Hex toggle); connection tabs follow the MongoDB multi-tab pattern, with SSH tunneling and automatic resubscription after reconnects.
+- Added a declarative connection-form engine for middleware: middleware connections reuse the database form's page model with declaratively configured tabs, while workspace/team/cloud-sync/keychain/notes are handled uniformly; the new-connection dialog now includes dedicated Time-series Database and Middleware categories.
 
 #### Fixes and Improvements
 
@@ -67,6 +53,9 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - Fixed Personal Sync (Git) flashing a black console window on Windows during auto-sync.
 - Fixed app startup hanging or crashing when SQLite fails to enable WAL (antivirus, sync folders, restricted filesystems); it now falls back to DELETE journal mode and starts normally.
 - Fixed the keychain list scrolling container collapsing and causing a blank screen.
+- Improved SFTP upload performance and reliability: large files use a larger concurrent-write window and request timeout, transient disconnects retry once, and batch uploads resolve file/directory conflicts individually with an apply-to-similar option.
+- Fixed action buttons disappearing from some confirmation dialogs after the component-library upgrade.
+- AI chat Markdown now follows the terminal theme, improving the readability of body text, links, quotes, and code blocks across terminal color schemes.
 - Notes: the split (left-edit / right-preview) mode is removed as part of the component-library migration; existing split configurations automatically fall back to Source mode.
 
 **Full Changelog**: https://github.com/feigeCode/navop/compare/v0.15.2...v0.16.0
