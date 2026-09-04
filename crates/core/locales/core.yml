@@ -77,6 +77,10 @@ BackgroundTasks:
     en: "Cancel all"
     zh-CN: "全部取消"
     zh-HK: "全部取消"
+  open_folder:
+    en: "Open folder"
+    zh-CN: "打开目录"
+    zh-HK: "開啟目錄"
   filter_all:
     en: "All"
     zh-CN: "全部"

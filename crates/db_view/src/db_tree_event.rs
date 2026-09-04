@@ -1991,6 +1991,7 @@ impl DatabaseEventHandler {
                 .overlay(false)
                 .child(editor_view.clone())
                 .width(px(700.0))
+                .confirm()
                 .button_props(DialogButtonProps::default().ok_text(t!("Common.create").to_string()))
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_view_ok.read(cx).get_sql(cx);
@@ -2121,6 +2122,7 @@ impl DatabaseEventHandler {
                 .child(editor_view.clone())
                 .overlay(false)
                 .width(px(700.0))
+                .confirm()
                 .button_props(DialogButtonProps::default().ok_text(t!("Common.save").to_string()))
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_view_ok.read(cx).get_sql(cx);
@@ -2399,6 +2401,7 @@ impl DatabaseEventHandler {
                 .title(t!("DbTreeEvent.create_schema_title", name = database_name).to_string())
                 .child(editor_view.clone())
                 .width(px(600.0))
+                .confirm()
                 .button_props(DialogButtonProps::default().ok_text(t!("Common.create").to_string()))
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_view_ok.read(cx).get_sql(cx);

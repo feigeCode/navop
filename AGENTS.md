@@ -513,6 +513,27 @@
 - **验证方式**：`cargo test -p terminal_view credential_capture`（覆盖 shift 字母/数字符号/无 key_char 回退、敲击与粘贴结果一致）；结构 contract 断言捕获分支使用 `keystroke_capture_text(&event.keystroke)` 且被消费按键仍 prevent_default。
 - **适用范围**：`crates/terminal_view/src/view/{terminal_events,credential_capture}.rs`，以及任何把 `KeyDownEvent` 直接转成文本缓冲的 GPUI 组件（搜索框、内联输入、自绘表单）。
 
+- **标题**：SFTP 大文件上传要同时配置写窗口、请求超时与单次远端同步
+- **触发信号**：500 MB 级上传在临时文件写完后报 `Timeout`，错误集中于 remote flush/fsync；小文件稳定，或上传吞吐受 RTT 明显限制。
+- **根因 / 约束**：`russh-sftp` 高层 `File` 已通过 `max_concurrent_writes` 流水线发送 WRITE；默认只有 8 个并发写与 10 秒请求超时。`AsyncWrite::flush` 会等待全部 WRITE 确认，并在服务器支持时执行 `fsync@openssh.com`，其后再次调用 `sync_all` 会重复 fsync。
+- **正确做法**：上传会话保留 256 KiB 包上限，将并发写窗口设为 64（最多约 16 MiB 在途），请求超时与 SSH inactivity timeout 对齐为 300 秒；完成阶段只调用一次 `flush`，随后校验远端大小并关闭句柄。瞬态 Timeout/断连只自动重试一次，权限、认证、空间不足等永久错误不重试。
+- **验证方式**：配置 contract 断言 64 × 256 KiB 与 300 秒；重试测试覆盖成功重试、永久错误、最多一次和退避期间取消；运行 `cargo test -p sftp -p sftp_transfer`，并在真实 SFTP 上批量上传 500 MB 级文件观察吞吐与 finalize 阶段。
+- **适用范围**：`crates/sftp/src/russh_impl.rs`、`crates/sftp_transfer/src/operation.rs` 及所有后台 SFTP 上传入口。
+
+- **标题**：批量上传冲突要逐项决策，Apply all 只作用于同类且策略必须绑定到单项
+- **触发信号**：同一批文件/目录存在多个重名项，需要逐个选择跳过、保留两者、合并或覆盖，并允许把当前决定应用到后续同类冲突。
+- **根因 / 约束**：文件与目录支持的策略不同；若只保存最后一次选择并在末尾批量应用，前面目录的 Merge/Replace 决策会被覆盖，可能误删远端独有内容。重连期间旧弹窗的目录快照也不能继续提交到新连接。
+- **正确做法**：使用有序冲突解析器保留原始顺序；Apply all 按 `is_dir` 区分同类；每个目录在决策时记录自己的 `DirectoryConflictPolicy`，全部冲突完成后再统一入队；Keep Both 以“远端现有名称 + 本批全部名称 + 已生成名称”分配唯一名；提交前校验连接 generation。
+- **验证方式**：覆盖逐项顺序、Apply all 仅处理同类、两个目录依次选择 Overwrite/ Merge 后仍分别为 Replace/Merge、Keep Both 唯一命名；运行 `sftp_transfer`、`sftp_view`、`terminal_view` 相关测试和 `cargo check -p main`。
+- **适用范围**：`crates/sftp_transfer/src/conflict.rs`、`crates/sftp_view`、`crates/terminal_view/src/sidebar/file_manager_panel.rs`。
+
+- **标题**：迁移后的 GPUI Dialog 配置按钮属性前必须显式启用默认 footer
+- **触发信号**：Dialog 标题和内容正常显示，但确认、取消按钮全部消失；代码仍有 `.button_props(...)` 与 `.on_ok(...)`。
+- **根因 / 约束**：新版 `gpui-component` 的 `Dialog::new()` 默认 `default_footer = false`；`.button_props(...)` 只配置按钮文案和样式，不再创建 footer。自定义 `.footer(...)` 不受此规则影响。
+- **正确做法**：需要确认和取消按钮的 builder 在 `.button_props(...)` 前调用 `.confirm()`；只有一个确认按钮的提示调用 `.alert()`；多动作弹窗继续使用自定义 `.footer(...)`。
+- **验证方式**：运行 `cargo test -p one-ui --test dialog_footer_contract`，保证所有实际 Dialog builder 的 `.button_props(...)` 前都存在 `.confirm()` 或 `.alert()`；再运行受影响 crate 测试与 `cargo check -p main`。
+- **适用范围**：全仓所有使用 `gpui_component::dialog::Dialog` / `AlertDialog` 的页面、编辑器和确认操作。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

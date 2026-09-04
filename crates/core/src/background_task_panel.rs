@@ -22,6 +22,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
+use one_ui::marquee_text::marquee_text;
 use rust_i18n::t;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -458,6 +459,23 @@ fn render_task_item(
                         .text_color(status_color)
                         .child(status_text),
                 )
+                .when(can_open_task_folder(task), |this| {
+                    let open_folder = task
+                        .open_folder
+                        .clone()
+                        .expect("task with an open-folder action must have a path");
+                    this.child(
+                        Button::new(SharedString::from(format!(
+                            "background-task-reveal-{}",
+                            task.id
+                        )))
+                        .icon(IconName::FolderOpen)
+                        .label(t!("BackgroundTasks.open_folder").to_string())
+                        .ghost()
+                        .small()
+                        .on_click(move |_, _window, cx| cx.open_with_system(&open_folder)),
+                    )
+                })
                 .when(task.status == BackgroundTaskStatus::Cancelling, |this| {
                     this.child(
                         gpui::div()
@@ -490,15 +508,19 @@ fn render_task_item(
                 }),
         )
         .when_some(task.detail.clone(), |this, detail| {
+            let animate =
+                task.kind.as_ref() == "sftp-upload" && task.status == BackgroundTaskStatus::Running;
             this.child(
                 gpui::div()
                     .id("background-task-item-detail")
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .child(detail),
+                    .child(marquee_text(
+                        SharedString::from(format!("background-task-detail-{}", task.id)),
+                        detail,
+                        animate,
+                    )),
             )
         })
         .when_some(task.progress.clone(), |this, progress| {
@@ -561,6 +583,10 @@ fn render_task_item(
         })
 }
 
+fn can_open_task_folder(task: &BackgroundTask) -> bool {
+    task.status == BackgroundTaskStatus::Succeeded && task.open_folder.is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +625,34 @@ mod tests {
                 ..Default::default()
             }
         ));
+    }
+
+    #[gpui::test]
+    fn open_folder_action_is_available_only_after_success(cx: &mut gpui::TestAppContext) {
+        let manager = cx.update(|cx| BackgroundTaskManager::new(cx));
+        let id = manager.update(cx, |manager, cx| {
+            manager.register(
+                BackgroundTaskSpec::new("download", "archive").open_folder("/tmp"),
+                cx,
+            )
+        });
+        let queued = manager
+            .read_with(cx, |manager, _| {
+                manager.tasks().into_iter().find(|task| task.id == id)
+            })
+            .expect("queued task");
+        assert!(!can_open_task_folder(&queued));
+
+        manager.update(cx, |manager, cx| {
+            manager.mark_running(id, cx);
+            manager.succeed(id, None, cx);
+        });
+        let succeeded = manager
+            .read_with(cx, |manager, _| {
+                manager.tasks().into_iter().find(|task| task.id == id)
+            })
+            .expect("succeeded task");
+        assert!(can_open_task_folder(&succeeded));
     }
 
     #[gpui::test]

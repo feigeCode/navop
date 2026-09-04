@@ -171,6 +171,7 @@ impl DatabaseUsersTab {
                 .overlay(false)
                 .width(px(700.0))
                 .child(editor.clone())
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("DatabaseUsers.execute").to_string())
