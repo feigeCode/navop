@@ -3397,8 +3397,10 @@ mod tests {
             )
             .await
             .expect("table data query should succeed");
+        // ownerdb 未设置 PreferSchema/uses_schema_as_database，属 true-schema 驱动：
+        // 无 schema 时表引用为裸表名（1669afc7f 语义）。
         assert_eq!(
-            "SELECT ROWID AS \"dbx_rowid\", t.* FROM \"ownerdb\".\"EVENTS\" t LIMIT 25 OFFSET 0",
+            "SELECT ROWID AS \"dbx_rowid\", t.* FROM \"EVENTS\" t LIMIT 25 OFFSET 0",
             connection.queries()[1]
         );
     }
@@ -3425,9 +3427,11 @@ mod tests {
 
         assert_eq!(50, response.total_count);
         let queries = connection.queries();
+        // duckdb 是 true-schema 驱动（supports_schema=true 且非 schema-as-database），
+        // 无 schema 时表引用不加数据库限定（1669afc7f 语义）。
         assert_eq!(1, queries.len());
         assert_eq!(
-            "SELECT * FROM \"main\".\"EVENTS\" LIMIT 25 OFFSET 25",
+            "SELECT * FROM \"EVENTS\" LIMIT 25 OFFSET 25",
             queries[0]
         );
     }
@@ -3466,9 +3470,11 @@ mod tests {
 
         assert_eq!(1, response.total_count);
         let queries = connection.queries();
-        assert_eq!("SELECT COUNT(*) FROM \"main\".\"EVENTS\"", queries[0]);
+        // legacy manifest 也是 true-schema（supports_schema=true 且未设 schema-as-database），
+        // 无 schema 时使用裸表名（1669afc7f 语义）。
+        assert_eq!("SELECT COUNT(*) FROM \"EVENTS\"", queries[0]);
         assert_eq!(
-            "SELECT ROWID AS \"__rowid__\", t.* FROM \"main\".\"EVENTS\" t LIMIT 25 OFFSET 0",
+            "SELECT ROWID AS \"__rowid__\", t.* FROM \"EVENTS\" t LIMIT 25 OFFSET 0",
             queries[1]
         );
     }
