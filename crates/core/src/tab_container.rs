@@ -25,7 +25,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme, Colorize as _, Disableable, ElementExt as _, Icon, IconName, IconSize,
+    ActiveTheme, Colorize as _, Disableable, Icon, IconName, IconSize,
     InteractiveElementExt as _, LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _,
     h_flex, notification::Notification, v_flex,
 };
@@ -3764,21 +3764,23 @@ impl TabContainer {
                 .into_any_element()
         };
 
-        let mut root = div()
-            .id("tab-sidebar-root")
-            .relative()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .on_prepaint({
+        let mut root = gpui_component::ElementExt::on_prepaint(
+            div()
+                .id("tab-sidebar-root")
+                .relative()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden(),
+            {
                 let container = cx.entity();
                 move |bounds, _, cx| {
                     container.update(cx, |container, _| {
                         container.sidebar_bounds = bounds;
                     });
                 }
-            });
+            },
+        );
         root = root.child(center);
         if !left.is_empty() {
             let left_width = self.sidebar_side_width(&left, layout);

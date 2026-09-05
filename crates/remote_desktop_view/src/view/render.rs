@@ -1,6 +1,6 @@
 use gpui::prelude::FluentBuilder;
 use gpui_component::{
-    ElementExt as _, Sizable as _, button::Button, scroll::ScrollableElement as _,
+    Sizable as _, button::Button, scroll::ScrollableElement as _,
 };
 
 use super::*;
@@ -402,7 +402,8 @@ impl Render for RemoteDesktopView {
             && (fallback_reason.is_some() || canvas_retry_available);
         let view = cx.entity();
 
-        let content = div()
+        let content = gpui_component::ElementExt::on_prepaint(
+            div()
             .id("remote-desktop-content")
             .w_full()
             .flex_grow(1.0)
@@ -548,7 +549,7 @@ impl Render for RemoteDesktopView {
                     )
                 },
             )
-            .on_prepaint(move |bounds, window, cx| {
+            , move |bounds, window, cx| {
                 view.update(cx, |view, view_cx| {
                     view.update_content_bounds(bounds, window.scale_factor(), view_cx);
                 });

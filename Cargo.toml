@@ -49,18 +49,18 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local development checkout. Canonical fork: https://github.com/feigeCode/gpui-component
-gpui-component = { package = "gpui_ce_components", git = "https://github.com/feigeCode/gpui-component.git", rev = "f214272a4b0b8098e08d010ac102f63f1f034798", version = "0.2.0" }
-gpui-component-assets = { package = "gpui_ce_components_assets", git = "https://github.com/feigeCode/gpui-component.git", rev = "f214272a4b0b8098e08d010ac102f63f1f034798", version = "0.2.0" }
-gpui-base = { package = "gpui_ce_components_base", git = "https://github.com/feigeCode/gpui-component.git", rev = "f214272a4b0b8098e08d010ac102f63f1f034798", version = "0.2.0" }
-gpui-shell = { package = "gpui_ce_components_shell", git = "https://github.com/feigeCode/gpui-component.git", rev = "f214272a4b0b8098e08d010ac102f63f1f034798", version = "0.2.0" }
-gpui-component-shell = { package = "gpui-component-shell", git = "https://github.com/feigeCode/gpui-component.git", rev = "f214272a4b0b8098e08d010ac102f63f1f034798", version = "0.1.0" }
-gpui-wry = { package = "gpui_ce_components_webview", git = "https://github.com/feigeCode/gpui-component.git", rev = "f214272a4b0b8098e08d010ac102f63f1f034798", version = "0.2.0" }
+gpui-component = { package = "gpui_ce_components", git = "https://github.com/feigeCode/gpui-component.git", rev = "19b2bc43", version = "0.2.0" }
+gpui-component-assets = { package = "gpui_ce_components_assets", git = "https://github.com/feigeCode/gpui-component.git", rev = "19b2bc43", version = "0.2.0" }
+gpui-base = { package = "gpui_ce_components_base", git = "https://github.com/feigeCode/gpui-component.git", rev = "19b2bc43", version = "0.2.0" }
+gpui-shell = { package = "gpui_ce_components_shell", git = "https://github.com/feigeCode/gpui-component.git", rev = "19b2bc43", version = "0.2.0" }
+gpui-component-shell = { package = "gpui-component-shell", git = "https://github.com/feigeCode/gpui-component.git", rev = "19b2bc43", version = "0.1.0" }
+gpui-wry = { package = "gpui_ce_components_webview", git = "https://github.com/feigeCode/gpui-component.git", rev = "19b2bc43", version = "0.2.0" }
 
-gpui = { package = "gpui_ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456", version = "=0.2.2" }
-gpui_tokio = { package = "gpui_ce_tokio", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
-util = { package = "gpui_ce_zed_util", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
+gpui = { package = "gpui-ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf", version = "=0.2.2" }
+gpui_tokio = { package = "gpui_ce_tokio", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf" }
+util = { package = "gpui_ce_zed_util", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf" }
 palette = { version = "0.7.7", features = ["serializing"] }
 
 
@@ -239,11 +239,6 @@ global-hotkey = "0.7.0"
 ferrum-flow = { path = "vendor/ferrum-flow" }
 errno = { version = "0.3.14", default-features = false }
 
-[patch.crates-io]
-gpui-ce = { package = "gpui_ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456", version = "=0.2.2" }
-gpui_ce_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
-gpui_ce_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
-gpui_ce_web = { package = "gpui_ce_web", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 
@@ -253,9 +248,9 @@ async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd
 psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 
 [patch."https://github.com/zed-industries/zed"]
-gpui = { package = "gpui_ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456", version = "=0.2.2" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
-gpui_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
+gpui = { package = "gpui-ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf", version = "=0.2.2" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf" }
+gpui_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf" }
 
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
@@ -310,7 +305,7 @@ rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
-gpui_ce = { opt-level = 3 }
+gpui-ce = { opt-level = 3 }
 gpui_ce_macros = { opt-level = 3 }
 tree-sitter = { opt-level = 3 }
 zed-sum-tree = { opt-level = 3 }
