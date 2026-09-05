@@ -231,6 +231,10 @@ fn window_controls_follow_the_active_theme_for_contrast() {
     assert!(controls.contains("cx.theme().secondary_hover"));
     assert!(controls.contains("cx.theme().secondary_active"));
     assert!(controls.contains("cx.theme().danger"));
+    assert!(
+        controls.contains("Icon::new(icon).mono().with_size(Size::Small)"),
+        "caption SVGs contain fixed black fills and must use theme-tinted monochrome rendering"
+    );
     assert!(!controls.contains(".text_color(gpui::white())"));
 
     let always_on_top = &source[controls_end..];

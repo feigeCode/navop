@@ -4714,7 +4714,8 @@ impl TabContainer {
                     }
                 })
             })
-            .child(Icon::new(icon).with_size(Size::Small))
+            // Caption assets contain fixed black fills; tint them with the button's theme color.
+            .child(Icon::new(icon).mono().with_size(Size::Small))
     }
 
     /// 渲染窗口置顶按钮，位于最小化按钮左侧。
