@@ -5124,7 +5124,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-shell"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "gpui_ce_components",
  "gpui_ce_components_shell",
@@ -5177,7 +5177,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5227,7 +5227,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_assets"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
  "gpui-ce",
@@ -5241,7 +5241,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_base"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5277,7 +5277,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_fps"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "gpui-ce",
  "libc",
@@ -5291,7 +5291,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_macros"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5301,7 +5301,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_shell"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5337,7 +5337,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_webview"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=19b2bc43#19b2bc43624429bbf3ade39c371d6b85eadd6fb7"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
  "gpui-ce",
