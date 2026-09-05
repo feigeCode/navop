@@ -301,8 +301,8 @@ panic = "unwind"
 
 [profile.release]
 opt-level = 3
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = true
 
 [profile.dev.package]
