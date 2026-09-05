@@ -4,6 +4,24 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.16.1] - 2026-09-05
+
+#### 修复与优化
+
+- 修复 Windows 深色主题下最小化、最大化、还原和关闭按钮图标显示为黑色、难以辨认的问题（#164），图标现跟随主题配色。
+- 优化发布构建，使用并行 Thin LTO；将 LLM 连接器迁入工作区 crate，统一依赖管理。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.16.1) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Fixed minimize, maximize, restore, and close icons appearing black and hard to see under dark themes on Windows (#164). Window control icons now follow the theme colors.
+- Improved release builds with parallel Thin LTO and moved the LLM connector into a workspace crate for unified dependency management.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.16.0...v0.16.1
+
 ## [v0.16.0] - 2026-09-04
 
 #### 更新内容
