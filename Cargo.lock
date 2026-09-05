@@ -320,7 +320,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "gpui_ce_components_base",
  "gpui_ce_components_webview",
@@ -852,7 +852,8 @@ dependencies = [
 [[package]]
 name = "async-process"
 version = "2.5.0"
-source = "git+https://github.com/zed-industries/async-process.git?rev=0b6d6713570af61806e1e5cb40e0f757cb93fd9d#0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc50921ec0055cdd8a16de48773bfeec5c972598674347252c0399676be7da75"
 dependencies = [
  "async-channel",
  "async-io",
@@ -898,7 +899,8 @@ dependencies = [
 [[package]]
 name = "async-task"
 version = "4.7.1"
-source = "git+https://github.com/smol-rs/async-task.git?rev=b4486cd71e4e94fbda54ce6302444de14f4d190e#b4486cd71e4e94fbda54ce6302444de14f4d190e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
@@ -1188,14 +1190,14 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
+version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
 dependencies = [
  "bitflags 2.13.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.11.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2118,7 +2120,7 @@ dependencies = [
 name = "connection-form"
 version = "0.15.2"
 dependencies = [
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "rust-i18n",
@@ -3046,7 +3048,7 @@ dependencies = [
  "encoding_rs",
  "extension-host",
  "extension-protocol",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "hex",
  "moka",
@@ -3097,7 +3099,7 @@ dependencies = [
  "extension-component",
  "ferrum-flow",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "gpui_ce_components_base",
  "image",
@@ -3845,7 +3847,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "ferrum-flow",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "palette",
  "serde",
@@ -4025,7 +4027,7 @@ dependencies = [
  "extension_view",
  "flate2",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "html-preview",
  "one-core",
@@ -4067,7 +4069,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "one-ui",
@@ -4167,7 +4169,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "image",
  "log",
  "serde",
@@ -5044,28 +5046,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-component-shell"
-version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
-dependencies = [
- "gpui_ce_components",
- "gpui_ce_components_shell",
-]
-
-[[package]]
-name = "gpui-rdp-smoke"
-version = "0.15.2"
-dependencies = [
- "gpui_ce",
- "gpui_ce_platform",
- "raw-window-handle",
- "windows_rdp_host",
-]
-
-[[package]]
-name = "gpui_ce"
+name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -5074,15 +5057,8 @@ dependencies = [
  "backtrace",
  "bindgen",
  "bitflags 2.13.1",
- "block",
  "bytes",
- "cbindgen",
  "chrono",
- "cocoa 0.26.0",
- "cocoa-foundation 0.2.0",
- "core-foundation 0.10.0",
- "core-foundation-sys",
- "core-graphics 0.24.0",
  "core-text",
  "core-video",
  "ctor",
@@ -5095,12 +5071,12 @@ dependencies = [
  "getrandom 0.3.4",
  "gpui_ce_collections",
  "gpui_ce_macros",
- "gpui_ce_media",
  "gpui_ce_refineable",
  "gpui_ce_scheduler",
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "gpui_ce_util",
+ "hdrhistogram",
  "heapless",
  "http",
  "http-body",
@@ -5109,14 +5085,10 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "lyon",
- "mach2 0.5.0",
- "metal",
  "num_cpus",
- "objc",
  "palette",
  "parking",
  "parking_lot",
- "pathfinder_geometry",
  "pin-project",
  "pollster 0.4.0",
  "postage",
@@ -5134,10 +5106,10 @@ dependencies = [
  "slotmap",
  "smallvec",
  "spin 0.10.0",
- "stacksafe",
  "strum 0.27.2",
  "taffy",
  "thiserror 2.0.20",
+ "tracing",
  "unicode-segmentation",
  "url",
  "usvg 0.48.1",
@@ -5150,9 +5122,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-component-shell"
+version = "0.1.0"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
+dependencies = [
+ "gpui_ce_components",
+ "gpui_ce_components_shell",
+]
+
+[[package]]
+name = "gpui-rdp-smoke"
+version = "0.15.2"
+dependencies = [
+ "gpui-ce",
+ "gpui_ce_platform",
+ "raw-window-handle",
+ "windows_rdp_host",
+]
+
+[[package]]
+name = "gpui_ce_apple"
+version = "0.1.0"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
+dependencies = [
+ "anyhow",
+ "block",
+ "cbindgen",
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "core-video",
+ "derive_more 2.1.1",
+ "etagere",
+ "foreign-types",
+ "gpui-ce",
+ "gpui_ce_collections",
+ "image",
+ "log",
+ "metal",
+ "objc",
+ "objc2-quartz-core 0.3.2",
+ "parking_lot",
+]
+
+[[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "gpui_ce_util",
  "indexmap 2.14.0",
@@ -5162,13 +5177,13 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
  "chrono",
  "core-text",
  "enum-iterator",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components_assets",
  "gpui_ce_components_base",
  "gpui_ce_components_macros",
@@ -5212,10 +5227,10 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_assets"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
- "gpui_ce",
+ "gpui-ce",
  "log",
  "rust-embed",
  "wasm-bindgen",
@@ -5226,14 +5241,14 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_base"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "aho-corasick",
  "anyhow",
  "async-channel",
  "chrono",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_macros",
  "gpui_ce_platform",
  "html5ever 0.27.0",
@@ -5262,9 +5277,9 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_fps"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
- "gpui_ce",
+ "gpui-ce",
  "libc",
  "objc2-core-foundation",
  "objc2-io-kit",
@@ -5276,7 +5291,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_macros"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5286,14 +5301,14 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_shell"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
  "async-channel",
  "cap-std 4.0.3",
  "chrono",
  "fs2",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components_base",
  "gpui_ce_components_fps",
  "gpui_ce_platform",
@@ -5322,17 +5337,17 @@ dependencies = [
 [[package]]
 name = "gpui_ce_components_webview"
 version = "0.2.0"
-source = "git+https://github.com/feigeCode/gpui-component.git?rev=f214272a4b0b8098e08d010ac102f63f1f034798#f214272a4b0b8098e08d010ac102f63f1f034798"
+source = "git+https://github.com/feigeCode/gpui-component.git?rev=65bc4ab5#65bc4ab5c3a24a383181056d51d93257127dd609"
 dependencies = [
  "anyhow",
- "gpui_ce",
+ "gpui-ce",
  "lb-wry",
 ]
 
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5342,7 +5357,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5355,7 +5370,7 @@ dependencies = [
  "calloop-wayland-source",
  "filedescriptor",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_util",
  "gpui_ce_wgpu",
@@ -5363,18 +5378,15 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "log",
+ "memfd",
  "notify-rust",
  "oo7",
  "open",
  "parking_lot",
- "pathfinder_geometry",
- "pollster 0.4.0",
- "profiling",
  "raw-window-handle",
  "smallvec",
  "smol",
  "strum 0.27.2",
- "swash",
  "url",
  "uuid",
  "wayland-backend",
@@ -5393,7 +5405,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5401,20 +5413,17 @@ dependencies = [
  "async-task",
  "block",
  "block2 0.6.2",
- "cbindgen",
- "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-foundation-sys",
  "core-graphics 0.24.0",
  "core-text",
- "core-video",
  "ctor",
- "derive_more 2.1.1",
  "dispatch2",
  "etagere",
  "foreign-types",
  "futures",
- "gpui_ce",
+ "gpui-ce",
+ "gpui_ce_apple",
  "gpui_ce_collections",
  "gpui_ce_media",
  "gpui_ce_util",
@@ -5443,7 +5452,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5454,13 +5463,12 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "anyhow",
  "bindgen",
  "core-foundation 0.10.0",
  "core-video",
- "ctor",
  "foreign-types",
  "metal",
  "objc",
@@ -5469,7 +5477,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_path"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "anyhow",
  "dunce",
@@ -5479,10 +5487,10 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "console_error_panic_hook",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_linux",
  "gpui_ce_macos",
  "gpui_ce_web",
@@ -5492,7 +5500,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -5500,7 +5508,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "async-task",
  "backtrace",
@@ -5509,13 +5517,14 @@ dependencies = [
  "futures",
  "parking_lot",
  "rand 0.9.4",
+ "wasm_thread 0.3.3 (git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937)",
  "web-time",
 ]
 
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -5525,7 +5534,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "heapless",
  "log",
@@ -5536,7 +5545,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "anyhow",
  "log",
@@ -5546,12 +5555,13 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
  "futures",
- "gpui_ce",
+ "gpui-ce",
+ "gpui_ce_scheduler",
  "gpui_ce_wgpu",
  "http",
  "js-sys",
@@ -5561,6 +5571,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm_thread 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "web-sys",
  "web-time",
 ]
@@ -5568,28 +5579,24 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "anyhow",
  "bytemuck",
  "cosmic-text",
  "etagere",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_util",
  "itertools 0.14.0",
- "js-sys",
  "log",
  "parking_lot",
- "pollster 0.4.0",
  "profiling",
  "raw-window-handle",
  "smallvec",
  "swash",
  "unicode-bidi",
  "unicode-segmentation",
- "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
  "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
@@ -5598,7 +5605,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5606,7 +5613,7 @@ dependencies = [
  "dunce",
  "etagere",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_collections",
  "gpui_ce_util",
  "image",
@@ -5626,7 +5633,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_zed_util"
 version = "0.2.2"
-source = "git+https://github.com/feigeCode/gpui-ce.git?rev=c13e489375c7cd93838bdabef0213771bc2fe456#c13e489375c7cd93838bdabef0213771bc2fe456"
+source = "git+https://github.com/feigeCode/gpui-ce.git?rev=88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf#88bc1b53e49c5f95aa6c7b13e9460ed9f85502cf"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -5656,7 +5663,7 @@ dependencies = [
  "smol",
  "take-until",
  "tempfile",
- "tendril",
+ "tendril 0.5.1",
  "unicase",
  "url",
  "walkdir",
@@ -5673,12 +5680,6 @@ dependencies = [
  "arraydeque",
  "smallvec",
 ]
-
-[[package]]
-name = "grid"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "group"
@@ -5880,6 +5881,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
 dependencies = [
  "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "hdrhistogram"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
+dependencies = [
+ "base64 0.22.1",
+ "byteorder",
+ "crossbeam-channel",
+ "flate2",
+ "nom 8.0.0",
+ "num-traits",
 ]
 
 [[package]]
@@ -6836,7 +6851,7 @@ dependencies = [
 name = "json_view"
 version = "0.15.2"
 dependencies = [
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "rust-i18n",
@@ -7766,8 +7781,8 @@ dependencies = [
  "flate2",
  "futures",
  "global-hotkey",
+ "gpui-ce",
  "gpui-component-shell",
- "gpui_ce",
  "gpui_ce_components",
  "gpui_ce_components_assets",
  "gpui_ce_components_shell",
@@ -7877,7 +7892,7 @@ dependencies = [
  "directories",
  "extension-runtime",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-ui",
  "palette",
@@ -7913,7 +7928,7 @@ dependencies = [
  "phf_codegen 0.11.3",
  "string_cache",
  "string_cache_codegen",
- "tendril",
+ "tendril 0.4.3",
 ]
 
 [[package]]
@@ -7927,7 +7942,7 @@ dependencies = [
  "phf_codegen 0.11.3",
  "string_cache",
  "string_cache_codegen",
- "tendril",
+ "tendril 0.4.3",
 ]
 
 [[package]]
@@ -7938,7 +7953,7 @@ checksum = "edaa21ab3701bfee5099ade5f7e1f84553fd19228cf332f13cd6e964bf59be18"
 dependencies = [
  "html5ever 0.27.0",
  "markup5ever 0.12.1",
- "tendril",
+ "tendril 0.4.3",
  "xml5ever",
 ]
 
@@ -8296,7 +8311,7 @@ dependencies = [
  "dashmap 5.5.3",
  "extension-runtime",
  "futures-util",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "mongodb-runtime",
  "one-core",
@@ -8347,7 +8362,7 @@ dependencies = [
  "chrono",
  "connection-form",
  "dashmap 5.5.3",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "mqtt-runtime",
  "one-core",
@@ -8634,7 +8649,7 @@ dependencies = [
  "extension-wasm",
  "extension_view",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "image",
  "markdown-editor",
@@ -9326,7 +9341,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "futures",
  "futures-util",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "gpui_ce_zed_util",
  "image",
@@ -9362,7 +9377,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "chrono",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "json5",
  "lsp-types",
@@ -10254,7 +10269,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "connection-form",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "port_forwarding",
@@ -10588,8 +10603,9 @@ dependencies = [
 
 [[package]]
 name = "psm"
-version = "0.1.31"
-source = "git+https://github.com/rust-lang/stacker?branch=master#1d45da4653e1d6e5d273cf20e215b372d84ade5e"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
 dependencies = [
  "ar_archive_writer",
  "cc",
@@ -11307,7 +11323,7 @@ dependencies = [
  "connection-form",
  "dashmap 5.5.3",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "one-ui",
@@ -11465,7 +11481,7 @@ dependencies = [
  "connection_tunnel",
  "dunce",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "image",
  "one-core",
@@ -11488,7 +11504,7 @@ dependencies = [
  "anyhow",
  "extension-runtime",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "notify",
  "one-core",
@@ -11505,7 +11521,7 @@ name = "remote_image_preview"
 version = "0.15.2"
 dependencies = [
  "anyhow",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "rust-i18n",
@@ -11581,7 +11597,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "log",
  "regex",
  "rustls 0.23.41",
@@ -12946,7 +12962,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-trait",
- "gpui_ce",
+ "gpui-ce",
  "one-core",
  "sftp",
  "ssh",
@@ -12963,7 +12979,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs 6.0.0",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "one-ui",
@@ -13521,27 +13537,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "stacksafe"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95f9c34983ac74195c710c473db6fdf1085f64a47dbaa0090d1bea03be70da66"
-dependencies = [
- "stacker",
- "stacksafe-macro",
-]
-
-[[package]]
-name = "stacksafe-macro"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6feeae42a2d6b0dcb8aeb2f08d9e48cdac600239cf8a20fc59f9e252e86bdfe1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13957,14 +13952,14 @@ dependencies = [
 
 [[package]]
 name = "taffy"
-version = "0.12.2"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "340a09581f29809fc0df82a3955501dc7f2a21f887e5d1c13dbe288fe1c0bef4"
+checksum = "c034e05f6ee85a12daa63863c2245797715075c70649947aa0da54f3f2ab1d0f"
 dependencies = [
  "arrayvec",
- "grid",
  "serde",
  "slotmap",
+ "smallvec",
 ]
 
 [[package]]
@@ -14173,6 +14168,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tendril"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
+dependencies = [
+ "new_debug_unreachable",
+]
+
+[[package]]
 name = "term"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14204,7 +14208,7 @@ dependencies = [
  "dirs 6.0.0",
  "encoding_rs",
  "futures",
- "gpui_ce",
+ "gpui-ce",
  "libc",
  "modem-transfer",
  "one-core",
@@ -14235,7 +14239,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "connection-form",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "one-core",
  "one-ui",
@@ -15635,6 +15639,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm_thread"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7516db7f32decdadb1c3b8deb1b7d78b9df7606c5cc2f6241737c2ab3a0258e"
+dependencies = [
+ "futures",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm_thread"
+version = "0.3.3"
+source = "git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937#0cf96c7708dfb97ccf3da50347e25edcf75d6937"
+dependencies = [
+ "futures",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "wasmparser"
 version = "0.236.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16054,6 +16081,7 @@ checksum = "2857dd20b54e916ec7253b3d6b4d5c4d7d4ca2c33c2e11c6c76a99bd8744755d"
 dependencies = [
  "cc",
  "downcast-rs",
+ "log",
  "rustix 1.1.4",
  "scoped-tls",
  "smallvec",
@@ -16362,6 +16390,7 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
@@ -16382,6 +16411,15 @@ name = "wgpu-core-deps-emscripten"
 version = "29.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "29.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af1fb1798be2a912497d4c224f72d39bb0cb34af50e8bcc29865bc339c943059"
 dependencies = [
  "wgpu-hal",
 ]
@@ -17462,7 +17500,7 @@ name = "workspace_explorer"
 version = "0.15.2"
 dependencies = [
  "anyhow",
- "gpui_ce",
+ "gpui-ce",
  "gpui_ce_components",
  "ignore",
  "notes",
