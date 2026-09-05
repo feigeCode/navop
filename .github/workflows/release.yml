@@ -22,7 +22,7 @@ on:
           - windows-x64
           - windows-x86
       build_mode:
-        description: "fast 关闭 fat LTO（构建快、体积略大）；release 使用完整 fat LTO"
+        description: "fast 关闭 LTO（构建更快、体积略大）；release 使用 thin LTO"
         required: true
         type: choice
         default: release
@@ -162,7 +162,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.arm_linux && 180 || 120 }}
+    timeout-minutes: ${{ matrix.target == 'aarch64-apple-darwin' && 180 || matrix.arm_linux && 180 || 120 }}
 
     steps:
       - uses: actions/checkout@v7
