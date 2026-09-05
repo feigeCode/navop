@@ -1,8 +1,8 @@
 [workspace]
-default-members = [ "main"]
-exclude = ["vendor/llm-connector"]
+default-members = ["main"]
 members = [
     "crates/ai_chat_view",
+    "crates/llm-connector",
     "crates/html-preview",
     "crates/reqwest_client",
     "crates/db",
@@ -197,7 +197,7 @@ rust_xlsxwriter = "0.94.0"
 dashmap = "5.5.3"
 moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
-llm-connector = { version = "1.4.0", features = ["streaming"] }
+llm-connector = { path = "crates/llm-connector", features = ["streaming"] }
 redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
 # TDengine 官方连接器:仅启用 ws-rustls(纯 Rust WebSocket/REST,经 taosAdapter :6041),排除 taos-optin 的 C 依赖
 taos = { version = "0.12.3", default-features = false, features = ["ws-rustls"] }
@@ -246,7 +246,6 @@ gpui_ce_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCo
 gpui_ce_web = { package = "gpui_ce_web", git = "https://github.com/feigeCode/gpui-ce.git", rev = "c13e489375c7cd93838bdabef0213771bc2fe456" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
-llm-connector = { path = "vendor/llm-connector" }
 
 
 

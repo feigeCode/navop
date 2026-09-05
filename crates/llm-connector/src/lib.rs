@@ -116,7 +116,6 @@
 // Core modules (V2 Architecture - Default)
 pub mod builder;
 pub mod client;
-pub mod config;
 pub mod core;
 pub mod error;
 pub mod protocols;
@@ -128,7 +127,6 @@ pub mod sse;
 
 // Re-exports for convenience (V2 Architecture)
 pub use client::LlmClient;
-pub use config::ProviderConfig;
 pub use error::LlmConnectorError;
 pub use types::{
     AnthropicToolChoice, AnthropicToolDefinition, ChatRequest, ChatResponse, Choice,
