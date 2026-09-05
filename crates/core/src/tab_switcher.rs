@@ -9,6 +9,10 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable, Size, WindowExt as _, h_flex,
 };
 use rust_i18n::t;
+use std::sync::Arc;
+
+pub type QuickOpenAction = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
+pub type QuickOpenResolver = Arc<dyn Fn(&str) -> Option<(SharedString, QuickOpenAction)> + Send + Sync>;
 
 const SWITCHER_WIDTH: f32 = 640.0;
 const SWITCHER_MAX_HEIGHT: f32 = 420.0;
@@ -40,9 +44,15 @@ pub fn filter_tab_switcher_entries(
 pub fn open_tab_switcher_dialog(
     container: Entity<TabContainer>,
     entries: Vec<TabSwitcherEntry>,
+    supports_quick_open: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
+    let search_placeholder = if supports_quick_open {
+        t!("TabSwitcher.search_or_connect").to_string()
+    } else {
+        t!("TabSwitcher.search").to_string()
+    };
     let active_row = entries
         .iter()
         .position(|entry| entry.active)
@@ -62,11 +72,12 @@ pub fn open_tab_switcher_dialog(
             .title(t!("TabSwitcher.title").to_string())
             .content({
                 let list = dialog_list.clone();
+                let search_placeholder = search_placeholder.clone();
                 move |content, _window, _cx| {
                     content.p_0().child(
                         div().id("tab-switcher-dialog").child(
                             List::new(&list)
-                                .search_placeholder(t!("TabSwitcher.search").to_string())
+                                .search_placeholder(search_placeholder.clone())
                                 .with_size(Size::Large)
                                 .max_h(px(SWITCHER_MAX_HEIGHT)),
                         ),
@@ -82,6 +93,7 @@ pub struct TabSwitcherDelegate {
     entries: Vec<TabSwitcherEntry>,
     filtered_entries: Vec<TabSwitcherEntry>,
     selected_index: Option<IndexPath>,
+    quick_open: Option<(SharedString, QuickOpenAction)>,
 }
 
 impl TabSwitcherDelegate {
@@ -91,6 +103,7 @@ impl TabSwitcherDelegate {
             filtered_entries: entries.clone(),
             entries,
             selected_index: None,
+            quick_open: None,
         }
     }
 }
@@ -105,12 +118,17 @@ impl ListDelegate for TabSwitcherDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
         self.filtered_entries = filter_tab_switcher_entries(&self.entries, query);
+        self.quick_open = self.container.read(cx).tab_quick_open(query);
+        if self.quick_open.is_some() {
+            self.filtered_entries.clear();
+            self.selected_index = Some(IndexPath::new(0));
+        }
         cx.notify();
         Task::ready(())
     }
 
     fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.filtered_entries.len()
+        self.filtered_entries.len() + usize::from(self.quick_open.is_some())
     }
 
     fn render_item(
@@ -119,6 +137,15 @@ impl ListDelegate for TabSwitcherDelegate {
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
+        if let Some((title, action)) = &self.quick_open {
+            return (ix.row == 0).then(|| {
+                let mut item = TabSwitcherItem::new(TabSwitcherEntry {
+                    index: 0, pinned: false, title: title.clone(), icon: None, active: false,
+                }, self.container.clone(), self.selected_index == Some(ix));
+                item.quick_open = Some(action.clone());
+                item
+            });
+        }
         let entry = self.filtered_entries.get(ix.row)?.clone();
         Some(TabSwitcherItem::new(
             entry,
@@ -142,6 +169,11 @@ impl ListDelegate for TabSwitcherDelegate {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
+        if let Some((_, action)) = &self.quick_open {
+            window.close_dialog(cx);
+            action(window, cx);
+            return;
+        }
         let Some(ix) = self.selected_index else {
             return;
         };
@@ -161,6 +193,7 @@ pub struct TabSwitcherItem {
     entry: TabSwitcherEntry,
     container: Entity<TabContainer>,
     selected: bool,
+    quick_open: Option<QuickOpenAction>,
 }
 
 impl TabSwitcherItem {
@@ -169,6 +202,7 @@ impl TabSwitcherItem {
             entry,
             container,
             selected,
+            quick_open: None,
         }
     }
 }
@@ -208,7 +242,12 @@ impl RenderOnce for TabSwitcherItem {
                     .hover(|style| style.bg(cx.theme().list_hover))
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                activate_entry(&container, &entry, window, cx);
+                if let Some(action) = &self.quick_open {
+                    window.close_dialog(cx);
+                    action(window, cx);
+                } else {
+                    activate_entry(&container, &entry, window, cx);
+                }
             })
             .child(render_entry_icon(self.entry.icon, selected, cx))
             .child(

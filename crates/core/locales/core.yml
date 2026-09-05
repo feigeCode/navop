@@ -31,6 +31,10 @@ TabSwitcher:
     en: Search tabs
     zh-CN: 搜索标签页
     zh-HK: 搜尋標籤頁
+  search_or_connect:
+    en: Search tabs by title, or enter ssh -p 2222 user@host to quickly connect to a server
+    zh-CN: 输入标题搜索标签页，或输入ssh -p 2222 user@host快速连接服务器
+    zh-HK: 輸入標題搜尋標籤頁，或輸入ssh -p 2222 user@host快速連線至伺服器
 
 BackgroundTasks:
   title:

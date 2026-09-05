@@ -1068,6 +1068,8 @@ pub struct TabContainer {
     navigation_sidebar_expanded: Option<bool>,
     home_active: Option<bool>,
     on_home: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
+    on_add_tab: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
+    tab_quick_open: Option<crate::tab_switcher::QuickOpenResolver>,
     /// 全局设置按钮回调，由上层注入；为 None 时不渲染右上角设置入口。
     on_settings: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     tab_bar_scroll_handle: ScrollHandle,
@@ -1134,6 +1136,8 @@ impl TabContainer {
             navigation_sidebar_expanded: None,
             home_active: None,
             on_home: None,
+            on_add_tab: None,
+            tab_quick_open: None,
             on_settings: None,
             tab_bar_scroll_handle: ScrollHandle::new(),
             closing_tabs: HashSet::new(),
@@ -1259,9 +1263,26 @@ impl TabContainer {
         }
     }
 
+    pub fn with_add_tab_button(
+        mut self,
+        on_add_tab: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
+    ) -> Self {
+        self.on_add_tab = Some(on_add_tab);
+        self
+    }
+
     pub fn with_tab_bar_when_empty(mut self, show: bool) -> Self {
         self.show_tab_bar_when_empty = show;
         self
+    }
+
+    pub fn with_tab_quick_open(mut self, resolver: crate::tab_switcher::QuickOpenResolver) -> Self {
+        self.tab_quick_open = Some(resolver);
+        self
+    }
+
+    pub(crate) fn tab_quick_open(&self, query: &str) -> Option<(SharedString, crate::tab_switcher::QuickOpenAction)> {
+        self.tab_quick_open.as_ref()?(query)
     }
 
     /// 控制是否在标签栏最右侧显示后台任务管理入口。
@@ -3857,7 +3878,7 @@ impl TabContainer {
         if entries.is_empty() {
             return;
         }
-        open_tab_switcher_dialog(cx.entity(), entries, window, cx);
+        open_tab_switcher_dialog(cx.entity(), entries, self.tab_quick_open.is_some(), window, cx);
     }
 
     pub fn render_tab_bar(
@@ -4536,7 +4557,16 @@ impl TabContainer {
                             .min_w_0()
                             .overflow_hidden()
                             .child(tabs)
-                            .child(right_window_drag_region)
+                            .child(right_window_drag_region.overflow_hidden().when_some(self.on_add_tab.clone(), |this, on_add_tab| {
+                                this.child(div().w(px(32.0)).h_full().flex().items_center().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(
+                                    Button::new("tab-bar-add-trailing")
+                                        .icon(IconName::Plus)
+                                        .ghost()
+                                        .small()
+                                        .tooltip(t!("Home.open_connection").to_string())
+                                        .on_click(move |_, window, cx| on_add_tab(window, cx)),
+                                ))
+                            }))
                     }),
             )
             .child(

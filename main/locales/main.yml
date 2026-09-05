@@ -735,6 +735,10 @@ Home:
     en: Open Connection
     zh-CN: 打开连接
     zh-HK: 開啟連線
+  quick_open_placeholder:
+    en: Search connections by name or IP, or enter ssh -p 2222 user@host to quickly connect to a server
+    zh-CN: 输入名称或者IP搜索连接，或输入ssh -p 2222 user@host快速连接服务器
+    zh-HK: 輸入名稱或IP搜尋連線，或輸入ssh -p 2222 user@host快速連線至伺服器
   extensions:
     en: Extensions
     zh-CN: 扩展

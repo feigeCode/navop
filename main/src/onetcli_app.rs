@@ -92,6 +92,44 @@ fn home_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
     })
 }
 
+fn add_tab_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
+    Arc::new(|window: &mut Window, cx: &mut App| {
+        let Some(home_page) = cx
+            .try_global::<GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        else {
+            return;
+        };
+        home_page.update(cx, |home, cx| home.show_connection_quick_open(window, cx));
+    })
+}
+
+fn tab_quick_open_resolver() -> one_core::tab_switcher::QuickOpenResolver {
+    Arc::new(|query| {
+        let connection = crate::home::home_connection_quick_open::temporary_ssh_connection(query)?;
+        let title = connection.name.clone().into();
+        let action: one_core::tab_switcher::QuickOpenAction = Arc::new(move |window, cx| {
+            let Some(home) = cx.try_global::<GlobalHomePage>().map(|global| global.home_page.clone()) else {
+                return;
+            };
+            home.update(cx, |home, cx| home.open_connection_from_quick(&connection, window, cx));
+        });
+        Some((title, action))
+    })
+}
+
+#[test]
+fn tab_quick_open_resolves_only_supported_ssh_commands() {
+    let resolver = tab_quick_open_resolver();
+    for query in ["ssh host", "ssh -p 2222 user@host", "ssh user@host -p2222"] {
+        let (title, _) = resolver(query).expect("SSH command should produce an actionable result");
+        assert!(title.contains("host"));
+    }
+    for query in ["", "Settings", "ssh -p 0 host", "ssh -i key host"] {
+        assert!(resolver(query).is_none(), "{query}");
+    }
+}
+
 /// The tab-bar Settings button follows the same pattern: the generic tab
 /// container cannot construct the app-owned settings tab, so clicks are routed
 /// through the global HomePage lookup.
@@ -1397,6 +1435,8 @@ impl OnetCliApp {
         let tab_container = cx.new(|cx| {
             let mut container = TabContainer::new(window, cx)
                 .with_tab_bar_when_empty(true)
+                .with_add_tab_button(add_tab_button_handler())
+                .with_tab_quick_open(tab_quick_open_resolver())
                 .with_settings_button(settings_button_handler());
 
             if show_navigation_sidebar_toggle {
