@@ -889,16 +889,20 @@ test("Windows release validates the MSI installer with the shared validator", ()
   assert.match(validator, /\$value = \[string\]\$record\.StringData\(1\)/);
 });
 
-test("release builds keep size-optimized Cargo profile defaults", () => {
+test("release builds use parallel thin LTO with a longer macOS ARM timeout", () => {
   const release = read(".github/workflows/release.yml");
   assert.doesNotMatch(release, /^\s+CARGO_PROFILE_RELEASE_LTO:\s/m);
   assert.doesNotMatch(release, /^\s+CARGO_PROFILE_RELEASE_CODEGEN_UNITS:\s/m);
   assert.match(release, /export CARGO_PROFILE_RELEASE_LTO=thin/);
   assert.match(release, /export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16/);
+  assert.match(
+    release,
+    /timeout-minutes: \$\{\{ matrix\.target == 'aarch64-apple-darwin' && 180 \|\| matrix\.arm_linux && 180 \|\| 120 \}\}/,
+  );
 
   const cargo = read("Cargo.toml");
-  assert.match(cargo, /\[profile\.release\][\s\S]*?lto = "fat"/);
-  assert.match(cargo, /\[profile\.release\][\s\S]*?codegen-units = 1/);
+  assert.match(cargo, /\[profile\.release\][\s\S]*?lto = "thin"/);
+  assert.match(cargo, /\[profile\.release\][\s\S]*?codegen-units = 16/);
 });
 
 test("release builds are cacheable and individually repairable", () => {
