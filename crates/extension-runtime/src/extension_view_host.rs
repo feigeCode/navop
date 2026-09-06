@@ -187,6 +187,9 @@ fn reload_extension_runtime(kind: extension_view::ExtensionKind, cx: &mut App) {
     if should_reload_languages(kind) {
         refresh_language_extension_manifests();
     }
+    if kind == extension_view::ExtensionKind::DatabaseDriver {
+        db::ipc::IpcDriverRegistry::refresh_global_registry();
+    }
     crate::refresh_global_runtime_catalog(cx);
     crate::extension::refresh_runtime_contributions(cx);
 }
@@ -487,6 +490,22 @@ mod tests {
         assert!(
             !refresh.contains("load_language_extensions_from_root"),
             "metadata refresh must not eagerly compile language WASM"
+        );
+    }
+
+    #[test]
+    fn database_driver_reload_refreshes_driver_registry() {
+        let source = include_str!("extension_view_host.rs");
+        let reload = source
+            .split("fn reload_extension_runtime")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .expect("extension runtime reload should exist");
+
+        assert!(reload.contains("ExtensionKind::DatabaseDriver"));
+        assert!(
+            reload.contains("refresh_global_registry"),
+            "database driver reload must invalidate the single driver registry instance"
         );
     }
 

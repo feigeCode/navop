@@ -362,13 +362,15 @@ async fn install_database_driver_from_marketplace(
     let entry =
         find_database_driver_entry_for_requirement(&entries, &driver_id, minimum_version.as_deref())?
             .clone();
-    install_marketplace_entry_with_progress(
+    let summary = install_marketplace_entry_with_progress(
         http_client,
         &entry,
         ExtensionKind::DatabaseDriver,
         on_progress,
     )
-    .await
+    .await?;
+    db::ipc::IpcDriverRegistry::refresh_global_registry();
+    Ok(summary)
 }
 
 pub(crate) fn find_database_driver_entry_for_requirement<'a>(
