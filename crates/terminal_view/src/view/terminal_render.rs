@@ -43,6 +43,13 @@ impl TerminalView {
         let updated = with_terminal_if_ready(&term, |term| {
             let cursor = term.grid().cursor.point;
             let display_offset = term.grid().display_offset();
+            let previous_display_offset = self.terminal_frame_snapshot.display_offset;
+            if let Some(selection) = &mut self.block_selection {
+                let delta = previous_display_offset as i64 - display_offset as i64;
+                if let Ok(delta) = i32::try_from(delta) {
+                    selection.shift_lines(delta);
+                }
+            }
             self.terminal_frame_snapshot = TerminalFrameSnapshot {
                 mode: *term.mode(),
                 display_offset,

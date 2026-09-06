@@ -151,6 +151,17 @@ fn alt_left_mouse_starts_block_selection() {
 }
 
 #[test]
+fn block_selection_shifts_with_scrollback_without_changing_selected_content() {
+    let mut selection = BlockSelection::new(AlacPoint::new(Line(3), Column(2)));
+    selection.update(AlacPoint::new(Line(7), Column(5)));
+
+    selection.shift_lines(-4);
+
+    assert_eq!(selection.anchor, AlacPoint::new(Line(-1), Column(2)));
+    assert_eq!(selection.active, AlacPoint::new(Line(3), Column(5)));
+}
+
+#[test]
 fn block_selection_text_extracts_same_columns_from_each_line() {
     let rows = vec!["alpha beta".to_string(), "bravo charlie".to_string()];
     let start = AlacPoint::new(Line(0), Column(2));

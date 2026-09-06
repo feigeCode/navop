@@ -27,6 +27,11 @@ impl BlockSelection {
         self.active = active;
     }
 
+    pub(super) fn shift_lines(&mut self, delta: i32) {
+        self.anchor.line.0 += delta;
+        self.active.line.0 += delta;
+    }
+
     pub(super) fn bounds(&self) -> BlockSelectionBounds {
         block_selection_bounds(self.anchor, self.active)
     }
