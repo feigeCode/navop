@@ -801,6 +801,10 @@ mod embedded_cli_removal_tests {
                 .as_ref()
                 .and_then(|titlebar| titlebar.title.as_deref())
         );
+        assert_eq!(
+            gpui::WindowBackgroundAppearance::Transparent,
+            options.window_background
+        );
     }
 }
 

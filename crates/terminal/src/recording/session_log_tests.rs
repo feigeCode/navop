@@ -81,6 +81,22 @@ fn session_log_path_uses_utc_year_month_and_backend() {
 }
 
 #[test]
+fn ssh_session_log_path_contains_date_and_ssh_backend() {
+    let path = session_log_path(
+        "/logs",
+        RecordingBackend::Ssh,
+        1_723_651_441_123,
+        "recording-id",
+    )
+    .unwrap();
+
+    assert_eq!(
+        Path::new("/logs/2024/08/20240814-160401-123-ssh-recording-id.cast"),
+        path
+    );
+}
+
+#[test]
 fn session_log_path_rejects_unsafe_recording_ids() {
     let root = Path::new("/logs");
     for recording_id in [
