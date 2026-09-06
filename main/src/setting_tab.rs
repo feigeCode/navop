@@ -9,7 +9,7 @@ use crate::local_terminal_profiles::{
     effective_kind as effective_local_terminal_profile_kind,
     setting_options as local_terminal_profile_options,
 };
-use crate::onetcli_app::{GlobalHomePage, GlobalOnetCliApp};
+use crate::onetcli_app::GlobalHomePage;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::llm_providers_view::LlmProvidersView;
@@ -69,8 +69,8 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, ConnectionSortOrder, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
-    GlobalProxySettings, HomeConnectionLayout, HomePageStyle, LOCALE_EN, LOCALE_SYSTEM,
-    LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+    GlobalProxySettings, HomeConnectionLayout, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN,
+    LOCALE_ZH_HK, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
     LocalTerminalProfileSettings, PersonalSyncBackendKind, PersonalSyncSettings, ProxyType,
     StartupDefaultPage, SyncProvider, effective_locale_for_setting, is_installed_font_family,
     is_supported_grid_monospace_font,
@@ -578,52 +578,6 @@ impl SettingsPanel {
                         .title(t!("Settings.General.ConnectionDisplay.group_title"))
                         .items(vec![
                             SettingItem::new(
-                                t!("Settings.General.ConnectionDisplay.home_style"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            HomePageStyle::Legacy.as_str().into(),
-                                            t!("Settings.General.ConnectionDisplay.home_style_legacy")
-                                                .into(),
-                                        ),
-                                        (
-                                            HomePageStyle::Modern.as_str().into(),
-                                            t!("Settings.General.ConnectionDisplay.home_style_modern")
-                                                .into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).home_page_style.as_str(),
-                                        )
-                                    },
-                                    |value: SharedString, cx: &mut App| {
-                                        let style = HomePageStyle::from_value(&value);
-                                        let app = cx
-                                            .try_global::<GlobalOnetCliApp>()
-                                            .map(|global| global.app.clone());
-                                        if let Some(app) = app {
-                                            cx.defer(move |cx| {
-                                                app.update(cx, |app, cx| {
-                                                    app.set_home_page_style(style, cx);
-                                                });
-                                            });
-                                        } else {
-                                            AppSettings::update_and_save(cx, |settings| {
-                                                settings.home_page_style = style;
-                                            });
-                                        }
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.home_page_style.as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.ConnectionDisplay.home_style_desc")
-                                    .to_string(),
-                            ),
-                            SettingItem::new(
                                 t!("Settings.General.ConnectionDisplay.home_layout"),
                                 SettingField::dropdown(
                                     vec![
@@ -634,6 +588,10 @@ impl SettingsPanel {
                                         (
                                             HomeConnectionLayout::List.as_str().into(),
                                             t!("Home.list_view").into(),
+                                        ),
+                                        (
+                                            HomeConnectionLayout::Tree.as_str().into(),
+                                            t!("Home.tree_view").into(),
                                         ),
                                     ],
                                     |cx: &App| {

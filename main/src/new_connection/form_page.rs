@@ -12,14 +12,14 @@ use terminal_view::{
     TelnetFormWindowConfig,
 };
 
-#[cfg(feature = "shell-plugins")]
-use universal_plugins::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
 use crate::home_tab::HomePage;
 use crate::new_connection::NewConnectionWindow;
 use crate::new_connection::connection_kind::NewConnectionKind;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
+#[cfg(feature = "shell-plugins")]
+use universal_plugins::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
 
 pub(crate) enum NewConnectionFormResult {
     Form(AnyView),

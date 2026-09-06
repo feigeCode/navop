@@ -25,9 +25,9 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme, Colorize as _, Disableable, Icon, IconName, IconSize,
-    InteractiveElementExt as _, LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _,
-    h_flex, notification::Notification, v_flex,
+    ActiveTheme, Colorize as _, Disableable, Icon, IconName, IconSize, InteractiveElementExt as _,
+    LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _, h_flex,
+    notification::Notification, v_flex,
 };
 use one_ui::{PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
@@ -1295,7 +1295,10 @@ impl TabContainer {
         self
     }
 
-    pub(crate) fn tab_quick_open(&self, query: &str) -> Option<(SharedString, crate::tab_switcher::QuickOpenAction)> {
+    pub(crate) fn tab_quick_open(
+        &self,
+        query: &str,
+    ) -> Option<(SharedString, crate::tab_switcher::QuickOpenAction)> {
         self.tab_quick_open.as_ref()?(query)
     }
 
@@ -3894,7 +3897,13 @@ impl TabContainer {
         if entries.is_empty() {
             return;
         }
-        open_tab_switcher_dialog(cx.entity(), entries, self.tab_quick_open.is_some(), window, cx);
+        open_tab_switcher_dialog(
+            cx.entity(),
+            entries,
+            self.tab_quick_open.is_some(),
+            window,
+            cx,
+        );
     }
 
     pub fn render_tab_bar(

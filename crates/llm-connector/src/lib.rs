@@ -129,8 +129,8 @@ pub mod sse;
 pub use client::LlmClient;
 pub use error::LlmConnectorError;
 pub use types::{
-    AnthropicToolChoice, AnthropicToolDefinition, ChatRequest, ChatResponse, Choice,
-    FunctionCall, JsonSchemaSpec, Message, ResponseFormat, ResponsesRequest, ResponsesResponse,
+    AnthropicToolChoice, AnthropicToolDefinition, ChatRequest, ChatResponse, Choice, FunctionCall,
+    JsonSchemaSpec, Message, ResponseFormat, ResponsesRequest, ResponsesResponse,
     ResponsesStreamEvent, ResponsesUsage, Role, Tool, ToolCall, ToolChoice, Usage,
 };
 

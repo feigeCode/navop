@@ -32,3 +32,38 @@ pub(crate) fn connection_team_badge(
         }
     })
 }
+
+/// 中性团队标签（redesign §5.4）：统一 muted 底色，不再用 primary 蓝底白字；
+/// 固定在名称行右端与名称对齐，超宽时标签先截断。
+pub(super) fn render_team_badge(
+    id_prefix: &str,
+    conn: &StoredConnection,
+    badge: ConnectionTeamBadge,
+    cx: &App,
+) -> AnyElement {
+    let tooltip_text: SharedString = badge.tooltip.into();
+    let foreground = if badge.active {
+        cx.theme().foreground
+    } else {
+        cx.theme().muted_foreground
+    };
+    div()
+        .id(SharedString::from(format!(
+            "{id_prefix}-team-{}",
+            conn.id.unwrap_or(0)
+        )))
+        .flex_shrink_0()
+        .max_w(px(112.0))
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(4.0))
+        .bg(cx.theme().muted)
+        .text_color(foreground)
+        .text_xs()
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
+        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .child(badge.name)
+        .into_any_element()
+}

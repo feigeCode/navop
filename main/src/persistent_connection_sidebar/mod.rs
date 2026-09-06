@@ -32,6 +32,7 @@ mod tree;
 mod tree_model;
 mod workspace_context_menu;
 
+pub(crate) use connection_context_menu::build_connection_context_menu;
 pub(crate) use connection_share::connection_full_info_text;
 
 #[derive(Clone, Copy)]
@@ -105,12 +106,13 @@ fn shade(color: Hsla, dark_mode: bool) -> Hsla {
 }
 
 /// 浮动连接树卡片与窗口边缘的间距（像素）。
-const FLOATING_CARD_MARGIN: f32 = 6.0;
+const FLOATING_CARD_MARGIN: f32 = 8.0;
 
 pub(crate) struct PersistentConnectionSidebar {
     pub(super) home_page: Entity<HomePage>,
     connection_selection: ConnectionSelection,
     pub(super) tree_expanded: bool,
+    pub(super) selected_filter: one_core::storage::ConnectionType,
     pub(super) hide_empty_workspaces: bool,
     pub(super) auto_hide_tree: bool,
     pub(super) search_input: Entity<InputState>,
@@ -119,6 +121,9 @@ pub(crate) struct PersistentConnectionSidebar {
     persisted_tree_width: Pixels,
     terminal_colors: Option<TerminalColors>,
     pub(super) tree_scroll_handle: UniformListScrollHandle,
+    /// Tree 布局把侧栏作为主页内容渲染时为 true；渲染主体仍由 Render 承担，
+    /// 避免在 HomePage 自身 render 租约内 read(home_page) 造成重入。
+    home_embedded: bool,
 }
 
 pub(crate) enum PersistentConnectionSidebarEvent {
@@ -126,6 +131,17 @@ pub(crate) enum PersistentConnectionSidebarEvent {
 }
 
 impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSidebar {}
+
+impl gpui::Render for PersistentConnectionSidebar {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.home_embedded {
+            self.render_home_tree(cx)
+        } else {
+            // 侧栏由 App 外壳以停靠/浮动形式渲染；空占位避免误作窗口根。
+            div().into_any_element()
+        }
+    }
+}
 
 impl PersistentConnectionSidebar {
     /// Render the connection tree as a floating card that overlays the main
@@ -207,6 +223,7 @@ impl PersistentConnectionSidebar {
             home_page,
             connection_selection: ConnectionSelection::default(),
             tree_expanded,
+            selected_filter: one_core::storage::ConnectionType::All,
             hide_empty_workspaces: tree_state.hide_empty_workspaces,
             auto_hide_tree: tree_state.auto_hide_tree,
             search_input,
@@ -214,6 +231,14 @@ impl PersistentConnectionSidebar {
             persisted_tree_width: tree_width,
             terminal_colors: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
+            home_embedded: false,
+        }
+    }
+
+    pub(crate) fn set_home_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.home_embedded != embedded {
+            self.home_embedded = embedded;
+            cx.notify();
         }
     }
 
@@ -276,9 +301,8 @@ mod tests {
         assert!(implementation.contains(".rounded_lg()"));
         assert!(implementation.contains(".shadow_lg()"));
         assert!(implementation.contains("FLOATING_CARD_MARGIN"));
-        // 自动收起路径保留：打开连接后、点击非连接区域后
+        // 自动收起路径保留：打开连接后
         assert!(state.contains("fn collapse_after_open"));
-        assert!(state.contains("fn collapse_if_auto_hide"));
     }
 
     #[test]
@@ -291,5 +315,19 @@ mod tests {
         assert!(implementation.contains("cx.theme().background"));
         // 右侧分隔统一由 resize 手柄的可见线承担，各分段不再叠加 border_r
         assert!(!tree_implementation.contains(".border_r_1()"));
+    }
+
+    #[test]
+    fn home_tree_renders_via_own_render_lease_not_inline_home_render() {
+        // 回归：HomePage::render 内联调用 render_home_tree 会在 HomePage 租约内
+        // 再 read(home_page)，触发 "cannot read while being updated" panic。
+        // 正确路径：侧栏作为子实体渲染，Render 内按 home_embedded 输出主页树。
+        let content = include_str!("../home_tab/content.rs");
+        let implementation = include_str!("mod.rs");
+
+        assert!(!content.contains("render_home_tree(cx)"));
+        assert!(content.contains("set_home_embedded(true, cx)"));
+        assert!(implementation.contains("impl gpui::Render for PersistentConnectionSidebar"));
+        assert!(implementation.contains("self.home_embedded"));
     }
 }

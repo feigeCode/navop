@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
+    AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px,
     uniform_list,
 };
 use gpui_component::{
@@ -21,24 +21,41 @@ use super::tree_model::{
 use super::{PersistentConnectionSidebar, SidebarPalette};
 
 impl PersistentConnectionSidebar {
+    /// 主页 Tree 布局嵌入的树视图：满宽、无 resize 手柄，交互与常驻侧栏一致。
+    pub(crate) fn render_home_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        self.render_tree_impl(None, cx)
+    }
+
     pub(super) fn render_connection_tree(
         &mut self,
-        palette: SidebarPalette,
+        _palette: SidebarPalette,
         _window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        self.render_tree_impl(Some(self.tree_width), cx)
+    }
+
+    /// width 为 Some 时按固定宽度停靠渲染（含 resize 手柄），None 时满宽嵌入主页。
+    fn render_tree_impl(
+        &mut self,
+        width: Option<gpui::Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette(cx);
         let rows = self.tree_rows(cx);
         v_flex()
             .relative()
-            .w(self.tree_width)
-            .min_w(self.tree_width)
-            .max_w(self.tree_width)
+            .when_some(width, |tree, width| tree.w(width).min_w(width).max_w(width))
+            .w_full()
             .h_full()
             .min_h_0()
             .flex_shrink_0()
             .bg(palette.background)
             .text_color(palette.foreground)
-            .child(self.render_tree_header(palette, cx))
+            // 嵌入主页时隐藏树头部：页面标题行已提供计数与分组菜单，避免重复。
+            .when(!self.home_embedded, |tree| {
+                tree.child(self.render_tree_header(palette, cx))
+            })
             .child(self.render_tree_search(palette, cx))
             .when(self.connection_selection.is_active(), |tree| {
                 tree.child(self.render_batch_toolbar(&rows, palette, cx))
@@ -50,22 +67,40 @@ impl PersistentConnectionSidebar {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(
-                        uniform_list("persistent-connection-tree", rows.len(), {
-                            cx.processor(move |this, range: Range<usize>, _window, cx| {
-                                range
-                                    .filter_map(|idx| rows.get(idx).cloned())
-                                    .map(|row| this.render_tree_row(row, palette, cx))
-                                    .collect()
+                    .when(rows.is_empty(), |body| {
+                        // 过滤空态：树内就地改筛选，不提供清除按钮（DESIGN §10）。
+                        body.child(
+                            div()
+                                .w_full()
+                                .px_3()
+                                .py_7()
+                                .flex()
+                                .justify_center()
+                                .text_xs()
+                                .text_color(palette.muted_foreground)
+                                .child(t!("Home.no_filter_results")),
+                        )
+                    })
+                    .when(!rows.is_empty(), |body| {
+                        body.child(
+                            uniform_list("persistent-connection-tree", rows.len(), {
+                                cx.processor(move |this, range: Range<usize>, _window, cx| {
+                                    range
+                                        .filter_map(|idx| rows.get(idx).cloned())
+                                        .map(|row| this.render_tree_row(row, palette, cx))
+                                        .collect()
+                                })
                             })
-                        })
-                        .size_full()
-                        .py_1()
-                        .track_scroll(&self.tree_scroll_handle)
-                        .with_sizing_behavior(ListSizingBehavior::Auto),
-                    ),
+                            .size_full()
+                            .py_1()
+                            .track_scroll(&self.tree_scroll_handle)
+                            .with_sizing_behavior(ListSizingBehavior::Auto),
+                        )
+                    }),
             )
-            .child(self.render_tree_resize_handle(cx))
+            .when(width.is_some(), |tree| {
+                tree.child(self.render_tree_resize_handle(cx))
+            })
             .into_any_element()
     }
 
@@ -93,7 +128,12 @@ impl PersistentConnectionSidebar {
         let mut connections = home
             .connections
             .iter()
-            .filter(|connection| home.match_connection_type(connection))
+            .filter(|connection| {
+                crate::home_tab::connection_filter::match_connection_type(
+                    self.selected_filter,
+                    connection,
+                )
+            })
             .filter_map(|connection| {
                 let id = connection.id?;
                 if home.match_connection(connection, &query) {
@@ -186,7 +226,12 @@ impl PersistentConnectionSidebar {
             let home = self.home_page.read(cx);
             home.connections
                 .iter()
-                .filter(|connection| home.match_connection_type(connection))
+                .filter(|connection| {
+                    crate::home_tab::connection_filter::match_connection_type(
+                        self.selected_filter,
+                        connection,
+                    )
+                })
                 .count()
         };
         let view_for_batch = cx.entity();
@@ -197,12 +242,7 @@ impl PersistentConnectionSidebar {
             .h(layout.embedded_panel_header)
             .flex_shrink_0()
             .pr_2()
-            // The navigation rail is gone, so on macOS the header starts at
-            // the window edge and must clear the full traffic-light strip.
-            .when(cfg!(target_os = "macos"), |this| {
-                this.pl(layout.macos_title_bar_content_padding)
-            })
-            .when(!cfg!(target_os = "macos"), |this| this.pl_2())
+            .pl_2()
             .items_center()
             .justify_between()
             // On macOS the header continues the traffic-light strip. On
@@ -235,6 +275,17 @@ impl PersistentConnectionSidebar {
                             .text_xs()
                             .text_color(palette.muted_foreground)
                             .child(connection_count.to_string()),
+                    )
+                    .child(
+                        // 树筛选/搜索独立于主页（DESIGN §4.1）：用 accent 胶囊明确提示。
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded(px(5.0))
+                            .bg(palette.accent.opacity(0.12))
+                            .text_xs()
+                            .text_color(palette.accent)
+                            .child(t!("Home.tree_filter_independent")),
                     ),
             )
             .child(

@@ -282,7 +282,10 @@ impl PersistentConnectionSidebar {
                 });
             })
             .context_menu(move |menu, window, cx| {
-                Self::build_connection_context_menu(menu, &view_for_menu, id, window, cx)
+                let home = view_for_menu.read(cx).home_page.clone();
+                super::connection_context_menu::build_connection_context_menu(
+                    menu, &home, id, window, cx,
+                )
             })
             .when(batch_mode && can_drag, |row| {
                 row.child(connection_selection_checkbox(

@@ -5,6 +5,7 @@ use gpui_component::{Icon, IconName, IconSize, Sizable};
 use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
 };
+use rust_i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalDriverIconSource<'a> {
@@ -25,7 +26,6 @@ enum SshIconSource<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionVisualSize {
     Tree,
-    Inline,
     List,
     Card,
     Hero,
@@ -36,7 +36,7 @@ impl ConnectionVisualSize {
     pub(crate) const fn icon_size(self) -> IconSize {
         match self {
             Self::Tree => IconSize::Default,
-            Self::Inline | Self::Rail => IconSize::Medium,
+            Self::Rail => IconSize::Medium,
             Self::List => IconSize::Large,
             Self::Card => IconSize::Display,
             Self::Hero => IconSize::Hero,
@@ -64,7 +64,7 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
 
 const fn connection_type_navigation_icon_name(kind: ConnectionType) -> IconName {
     match kind {
-        ConnectionType::All => IconName::ServerLine,
+        ConnectionType::All => IconName::Asterisk,
         ConnectionType::Database => IconName::DatabaseLine,
         ConnectionType::SshSftp => IconName::TerminalLine,
         ConnectionType::Redis => IconName::RedisLine,
@@ -100,6 +100,25 @@ pub(crate) fn connection_type_navigation_icon(
 /// Monochrome navigation-rail icon with the shared rail glyph size.
 pub(crate) fn connection_type_rail_icon(kind: ConnectionType) -> Icon {
     connection_type_navigation_icon(kind, ConnectionVisualSize::Rail)
+}
+
+/// Localized connection-type label (筛选器/菜单共用；core 的 `label()` 只有英文)。
+pub(crate) fn connection_type_label(kind: ConnectionType) -> String {
+    match kind {
+        ConnectionType::All => t!("ConnectionType.all"),
+        ConnectionType::Database => t!("ConnectionType.database"),
+        ConnectionType::SshSftp => t!("ConnectionType.ssh_sftp"),
+        ConnectionType::Redis => t!("ConnectionType.redis"),
+        ConnectionType::MongoDB => t!("ConnectionType.mongodb"),
+        ConnectionType::Mqtt => t!("ConnectionType.mqtt"),
+        ConnectionType::Serial => t!("ConnectionType.serial"),
+        ConnectionType::Telnet => t!("ConnectionType.telnet"),
+        ConnectionType::PortForwarding => t!("ConnectionType.port_forwarding"),
+        ConnectionType::Rdp => t!("ConnectionType.rdp"),
+        ConnectionType::Vnc => t!("ConnectionType.vnc"),
+        ConnectionType::Extension => t!("ConnectionType.extension"),
+    }
+    .to_string()
 }
 
 /// Original-color protocol identity icon used by cards, lists, and connection pickers.
@@ -243,7 +262,6 @@ mod tests {
     #[test]
     fn semantic_connection_sizes_map_to_the_shared_icon_scale() {
         assert_eq!(ConnectionVisualSize::Tree.icon_size(), IconSize::Default);
-        assert_eq!(ConnectionVisualSize::Inline.icon_size(), IconSize::Medium);
         assert_eq!(ConnectionVisualSize::List.icon_size(), IconSize::Large);
         assert_eq!(ConnectionVisualSize::Card.icon_size(), IconSize::Display);
         assert_eq!(ConnectionVisualSize::Hero.icon_size(), IconSize::Hero);
@@ -276,7 +294,7 @@ mod tests {
     #[test]
     fn connection_navigation_icons_map_to_monochrome_line_assets() {
         let expected = [
-            (ConnectionType::All, IconName::ServerLine),
+            (ConnectionType::All, IconName::Asterisk),
             (ConnectionType::Database, IconName::DatabaseLine),
             (ConnectionType::SshSftp, IconName::TerminalLine),
             (ConnectionType::Redis, IconName::RedisLine),

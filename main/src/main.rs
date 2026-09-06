@@ -11,6 +11,7 @@ mod auth;
 mod ai_chat_acp;
 mod app_init;
 mod connection_sort;
+mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
 mod env_file;
@@ -21,7 +22,7 @@ mod home;
 mod home_tab;
 mod license;
 mod local_terminal_profiles;
-mod navigation_quick_open;
+mod navigation_applications;
 pub mod new_connection;
 mod onetcli_app;
 mod persistent_connection_sidebar;
@@ -37,14 +38,14 @@ mod setting_tab;
 mod settings;
 mod sync_conflict_dialog;
 mod team_management;
+mod toolbox_tab;
 mod update;
-mod user_avatar;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
 
 use crate::onetcli_app::OnetCliApp;
-use one_core::tab_container::GlobalTabContainer;
 use gpui::*;
+use one_core::tab_container::GlobalTabContainer;
 
 use gpui_component::{DialogStateChanged, Root};
 use gpui_component_assets::Assets;
@@ -77,6 +78,9 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
         }
         one_core::storage::NAVOP_MQTT_LINE_ICON => {
             include_bytes!("../../resources/icons/mqtt-line.svg")
+        }
+        crate::home_tab::NAVOP_HISTORY_ICON => {
+            include_bytes!("../../resources/icons/history.svg")
         }
         _ => return None,
     };

@@ -6,50 +6,6 @@ pub(super) enum HomeSyncRoute {
     Personal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HomeSyncButtonState {
-    Ready,
-    NeedsSettings,
-    Disabled,
-}
-
-impl HomeSyncButtonState {
-    pub(super) fn is_disabled(self) -> bool {
-        self == Self::Disabled
-    }
-}
-
-pub(super) struct HomeSyncButtonContext {
-    pub route: HomeSyncRoute,
-    pub sync_enabled: bool,
-    pub is_logged_in: bool,
-    pub has_sync_license: bool,
-    pub onet_syncing: bool,
-    pub personal_sync_ready: bool,
-    pub personal_syncing: bool,
-}
-
-pub(super) fn home_sync_button_state(context: HomeSyncButtonContext) -> HomeSyncButtonState {
-    let syncing = match context.route {
-        HomeSyncRoute::OnetCloud => context.onet_syncing,
-        HomeSyncRoute::Personal => context.personal_syncing,
-    };
-    if syncing {
-        return HomeSyncButtonState::Disabled;
-    }
-    if !context.sync_enabled {
-        return HomeSyncButtonState::NeedsSettings;
-    }
-
-    match context.route {
-        HomeSyncRoute::OnetCloud if !context.is_logged_in && context.has_sync_license => {
-            HomeSyncButtonState::Disabled
-        }
-        HomeSyncRoute::Personal if !context.personal_sync_ready => HomeSyncButtonState::Disabled,
-        _ => HomeSyncButtonState::Ready,
-    }
-}
-
 pub(super) fn refreshed_pending_conflicts(
     previous: Vec<SyncConflict>,
     current: Vec<SyncConflict>,
@@ -97,10 +53,6 @@ pub(super) fn should_show_team_key_menu_item(
     cached_team_count: usize,
 ) -> bool {
     route == HomeSyncRoute::OnetCloud && cached_team_count > 0
-}
-
-pub(crate) fn should_show_team_management_entry(team_management_enabled: bool) -> bool {
-    team_management_enabled
 }
 
 #[cfg(test)]

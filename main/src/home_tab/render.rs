@@ -57,10 +57,7 @@ impl Render for HomePage {
             });
         }
 
-        let content = match self.home_page_style {
-            HomePageStyle::Legacy => self.render_legacy_home(window, cx),
-            HomePageStyle::Modern => self.render_modern_home(window, cx),
-        };
+        let content = self.render_home_layout(window, cx);
 
         div()
             .size_full()

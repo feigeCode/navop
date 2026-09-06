@@ -99,14 +99,102 @@ McpApproval:
 
 # 首页
 Home:
+  connections_entry:
+    en: "Connections"
+    zh-CN: "连接"
+    zh-HK: "連線"
+  toggle_sidebar:
+    en: "Collapse or expand application sidebar"
+    zh-CN: "折叠或展开应用侧栏"
+    zh-HK: "摺疊或展開應用側欄"
+  toolbox:
+    en: "Toolbox"
+    zh-CN: "工具箱"
+    zh-HK: "工具箱"
+  toolbox_json_description:
+    en: "Format, validate, and explore JSON."
+    zh-CN: "格式化、校验与浏览 JSON。"
+    zh-HK: "格式化、驗證與瀏覽 JSON。"
+  expand_all:
+    en: "Expand All"
+    zh-CN: "全部展开"
+    zh-HK: "全部展開"
+  group_menu:
+    en: "Group"
+    zh-CN: "分组"
+    zh-HK: "分組"
+  recent_connections:
+    en: "Recent Connections"
+    zh-CN: "最近连接"
+    zh-HK: "最近連線"
+  recent_hint:
+    en: "Sorted by last used · not affected by group filter"
+    zh-CN: "按最近使用排序 · 不受分组筛选影响"
+    zh-HK: "按最近使用排序 · 不受分組篩選影響"
+  tree_filter_independent:
+    en: "Filters are independent from Home"
+    zh-CN: "筛选独立于主页"
+    zh-HK: "篩選獨立於主頁"
+  toolbox_description:
+    en: "Built-in tools in one place; more tools can be contributed by gpui-shell extensions."
+    zh-CN: "内置小工具统一入口；后续可通过 gpui-shell 扩展注册更多工具"
+    zh-HK: "內建小工具統一入口；後續可透過 gpui-shell 擴充功能註冊更多工具"
+  toolbox_more_tools:
+    en: "More tools"
+    zh-CN: "更多工具"
+    zh-HK: "更多工具"
+  toolbox_more_hint:
+    en: "Contributed by gpui-shell extensions"
+    zh-CN: "由 gpui-shell 扩展贡献"
+    zh-HK: "由 gpui-shell 擴充功能貢獻"
+  sync_just_now:
+    en: "Just now"
+    zh-CN: "刚刚"
+    zh-HK: "啱啱"
+  sync_minutes_ago:
+    en: "%{count} min ago"
+    zh-CN: "%{count} 分钟前"
+    zh-HK: "%{count} 分鐘前"
+  sync_hours_ago:
+    en: "%{count} hr ago"
+    zh-CN: "%{count} 小时前"
+    zh-HK: "%{count} 小時前"
+  sync_days_ago:
+    en: "%{count} d ago"
+    zh-CN: "%{count} 天前"
+    zh-HK: "%{count} 日前"
+  sync_not_yet:
+    en: "Not synced yet"
+    zh-CN: "尚未同步"
+    zh-HK: "尚未同步"
+  unlock_state_unlocked:
+    en: "Unlocked"
+    zh-CN: "已解锁"
+    zh-HK: "已解鎖"
+  unlock_state_locked:
+    en: "Locked"
+    zh-CN: "未解锁"
+    zh-HK: "未解鎖"
+  no_filter_results:
+    en: "No connections match your filters."
+    zh-CN: "没有符合当前筛选条件的连接。"
+    zh-HK: "沒有符合目前篩選條件的連線。"
+  clear_filters:
+    en: "Clear Filters"
+    zh-CN: "清除筛选"
+    zh-HK: "清除篩選"
+  export_connections:
+    en: "Export connection list (no credentials)…"
+    zh-CN: "导出连接列表（不含凭据）…"
+    zh-HK: "匯出連線清單（不含憑證）…"
   title:
     en: Home
     zh-CN: 首页
     zh-HK: 首頁
   search_placeholder:
-    en: "Search connections..."
-    zh-CN: 搜索连接...
-    zh-HK: 搜尋連線...
+    en: "Search connections or type ssh user@hostname…"
+    zh-CN: "搜索连接或输入 ssh user@hostname…"
+    zh-HK: "搜尋連線或輸入 ssh user@hostname…"
   new_connection:
     en: New Connection
     zh-CN: 新建连接
@@ -160,13 +248,13 @@ Home:
     zh-CN: 找不到引用的 SSH 服务器。
     zh-HK: 找不到引用的 SSH 伺服器。
   connection_count:
-    en: "%{count} connections"
-    zh-CN: "%{count} 个连接"
-    zh-HK: "%{count} 個連線"
+    en: "%{count}"
+    zh-CN: "%{count}"
+    zh-HK: "%{count}"
   unassigned_workspace:
-    en: Unassigned Workspace
-    zh-CN: 未分配工作区
-    zh-HK: 未分配工作區
+    en: Unassigned Group
+    zh-CN: 未分配分组
+    zh-HK: 未分配分組
   switch_theme:
     en: Switch Theme
     zh-CN: 切换主题
@@ -336,29 +424,29 @@ Home:
       zh-CN: "可保存 %{savable} / %{total} 条"
       zh-HK: "可儲存 %{savable} / %{total} 筆"
     workspace_group_count:
-      en: "Found %{groups} SSH connection groups; they will be imported as Navop workspaces"
-      zh-CN: "发现 %{groups} 个 SSH 连接分组，保存后将转换为 Navop 工作区"
-      zh-HK: "發現 %{groups} 個 SSH 連線分組，儲存後將轉換為 Navop 工作區"
+      en: "Found %{groups} SSH connection groups; they will be imported as Navop groups"
+      zh-CN: "发现 %{groups} 个 SSH 连接分组，保存后将转换为 Navop 分组"
+      zh-HK: "發現 %{groups} 個 SSH 連線分組，儲存後將轉換為 Navop 分組"
     discovered_workspace_groups:
       en: "Connection groups (%{groups}): %{paths}"
       zh-CN: "扫描到连接分组（%{groups}）：%{paths}"
       zh-HK: "掃描到連線分組（%{groups}）：%{paths}"
     workspace:
-      en: "Workspace: %{path}"
-      zh-CN: "工作区：%{path}"
-      zh-HK: "工作區：%{path}"
+      en: "Group: %{path}"
+      zh-CN: "分组：%{path}"
+      zh-HK: "分組：%{path}"
     kind_workspace:
-      en: Workspace
-      zh-CN: 工作区
-      zh-HK: 工作區
+      en: Group
+      zh-CN: 分组
+      zh-HK: 分組
     workspace_path_required:
-      en: Workspace path is required
-      zh-CN: 工作区路径不能为空
-      zh-HK: 工作區路徑不能為空
+      en: Group path is required
+      zh-CN: 分组路径不能为空
+      zh-HK: 分組路徑不能為空
     workspace_save_unsupported:
-      en: Workspace imports cannot be converted to connections
-      zh-CN: 工作区导入不能转换为连接
-      zh-HK: 工作區匯入不能轉換為連線
+      en: Group imports cannot be converted to connections
+      zh-CN: 分组导入不能转换为连接
+      zh-HK: 分組匯入不能轉換為連線
     sources:
       en: Application Sources
       zh-CN: 应用来源
@@ -559,6 +647,10 @@ Home:
     en: List View
     zh-CN: 列表视图
     zh-HK: 列表視圖
+  tree_view:
+    en: Tree View
+    zh-CN: 树形视图
+    zh-HK: 樹形視圖
   refresh:
     en: Refresh
     zh-CN: 刷新
@@ -1197,6 +1289,10 @@ Auth:
 
 # 主密钥
 Encryption:
+  personal_key:
+    en: Personal Key
+    zh-CN: 个人密钥
+    zh-HK: 個人密鑰
   keys:
     en: Keys
     zh-CN: 密钥
@@ -1332,25 +1428,25 @@ ViewMode:
 # 工作区
 Workspace:
   label:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   name_placeholder:
-    en: Workspace name
-    zh-CN: 工作区名称
-    zh-HK: 工作區名稱
+    en: Group name
+    zh-CN: 分组名称
+    zh-HK: 分組名稱
   sort_order:
     en: Sort order
     zh-CN: 排序值
     zh-HK: 排序值
   new:
-    en: New Workspace
-    zh-CN: 新建工作区
-    zh-HK: 新建工作區
+    en: New Group
+    zh-CN: 新建分组
+    zh-HK: 新建分組
   edit:
-    en: Edit Workspace
-    zh-CN: 编辑工作区
-    zh-HK: 編輯工作區
+    en: Edit Group
+    zh-CN: 编辑分组
+    zh-HK: 編輯分組
   rename:
     en: Rename Group
     zh-CN: 修改分组名称
@@ -1368,17 +1464,17 @@ Workspace:
     zh-CN: 折叠分组
     zh-HK: 摺疊分組
   delete:
-    en: Delete Workspace
-    zh-CN: 删除工作区
-    zh-HK: 刪除工作區
+    en: Delete Group
+    zh-CN: 删除分组
+    zh-HK: 刪除分組
   delete_confirm:
-    en: "Are you sure you want to delete workspace \"%{workspace_name}\"?"
-    zh-CN: "确定要删除工作区 \"%{workspace_name}\" 吗？"
-    zh-HK: "確定要刪除工作區 \"%{workspace_name}\" 嗎？"
+    en: "Are you sure you want to delete group \"%{workspace_name}\"?"
+    zh-CN: "确定要删除分组 \"%{workspace_name}\" 吗？"
+    zh-HK: "確定要刪除分組 \"%{workspace_name}\" 嗎？"
   filter:
-    en: Workspace Filter
-    zh-CN: 工作区过滤
-    zh-HK: 工作區過濾
+    en: Group Filter
+    zh-CN: 分组过滤
+    zh-HK: 分組過濾
   select_all:
     en: Select All
     zh-CN: 全选
@@ -1388,8 +1484,63 @@ Workspace:
     zh-CN: 清除筛选
     zh-HK: 清除篩選
 
+# 连接类型（筛选器/菜单共用）
+ConnectionType:
+  all:
+    en: "All Types"
+    zh-CN: "全部类型"
+    zh-HK: "全部類型"
+  database:
+    en: "Database"
+    zh-CN: "数据库"
+    zh-HK: "資料庫"
+  ssh_sftp:
+    en: "SSH/SFTP"
+    zh-CN: "SSH/SFTP"
+    zh-HK: "SSH/SFTP"
+  redis:
+    en: "Redis"
+    zh-CN: "Redis"
+    zh-HK: "Redis"
+  mongodb:
+    en: "MongoDB"
+    zh-CN: "MongoDB"
+    zh-HK: "MongoDB"
+  mqtt:
+    en: "MQTT"
+    zh-CN: "MQTT"
+    zh-HK: "MQTT"
+  serial:
+    en: "Serial"
+    zh-CN: "串口"
+    zh-HK: "串口"
+  telnet:
+    en: "Telnet"
+    zh-CN: "Telnet"
+    zh-HK: "Telnet"
+  port_forwarding:
+    en: "Port Forwarding"
+    zh-CN: "端口转发"
+    zh-HK: "端口轉發"
+  rdp:
+    en: "RDP"
+    zh-CN: "RDP"
+    zh-HK: "RDP"
+  vnc:
+    en: "VNC"
+    zh-CN: "VNC"
+    zh-HK: "VNC"
+  extension:
+    en: "Extension"
+    zh-CN: "扩展"
+    zh-HK: "擴展"
+
 # 连接
 Connection:
+  title:
+    en: "Connections"
+    zh-CN: "连接"
+    zh-HK: "連線"
   new:
     en: "New %{db_type} Connection"
     zh-CN: "新建 %{db_type} 连接"
@@ -1897,13 +2048,13 @@ Connection:
     zh-CN: 全部折叠
     zh-HK: 全部摺疊
   hide_empty_workspaces:
-    en: Hide Empty Workspaces
-    zh-CN: 隐藏空工作区
-    zh-HK: 隱藏空工作區
+    en: Hide Empty Groups
+    zh-CN: 隐藏空分组
+    zh-HK: 隱藏空分組
   search_placeholder:
-    en: Search connections or workspaces
-    zh-CN: 搜索连接或工作区
-    zh-HK: 搜尋連線或工作區
+    en: Search connections or groups
+    zh-CN: 搜索连接或分组
+    zh-HK: 搜尋連線或分組
 
 # 新建连接
 NewConnection:
@@ -2099,22 +2250,6 @@ Settings:
         en: Connections
         zh-CN: 连接显示
         zh-HK: 連線顯示
-      home_style:
-        en: Home Layout
-        zh-CN: 首页布局
-        zh-HK: 首頁佈局
-      home_style_desc:
-        en: Choose category cards for a focused overview, or global navigation to keep the connection tree available across workspaces
-        zh-CN: 选择分类卡片集中浏览连接，或使用全局导航在各工作区持续访问连接树
-        zh-HK: 選擇分類卡片集中瀏覽連線，或使用全域導覽在各工作區持續存取連線樹
-      home_style_legacy:
-        en: Category Cards
-        zh-CN: 分类卡片
-        zh-HK: 分類卡片
-      home_style_modern:
-        en: Global Navigation
-        zh-CN: 全局导航
-        zh-HK: 全域導覽
       home_layout:
         en: Home Connection Layout
         zh-CN: 主页连接布局

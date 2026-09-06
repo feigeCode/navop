@@ -25,7 +25,7 @@ impl TabContent for HomePage {
 }
 
 impl HomePage {
-    pub(super) fn render_legacy_home(
+    pub(super) fn render_home_layout(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -50,7 +50,7 @@ impl HomePage {
                             .min_w_0()
                             .overflow_hidden()
                             .bg(cx.theme().muted)
-                            .child(self.render_content_area(cx)),
+                            .child(self.render_content_area(window, cx)),
                     ),
             )
             .into_any_element()

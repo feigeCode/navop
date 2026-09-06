@@ -1,374 +1,425 @@
 use super::*;
 
+/// 非卡片布局下最近区固定容量（历史行为：最多 4 条）。
+const RECENT_ROW_FALLBACK: usize = 4;
+
 impl HomePage {
-    pub(crate) fn set_home_page_style(&mut self, style: HomePageStyle, cx: &mut Context<Self>) {
-        self.home_page_style = style;
-        cx.notify();
-    }
-
-    pub(crate) fn set_persistent_sidebar_expanded(
-        &mut self,
-        expanded: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.persistent_sidebar_expanded = expanded;
-        cx.notify();
-    }
-
     pub(crate) fn set_connection_layout(
         &mut self,
         layout: HomeConnectionLayout,
         cx: &mut Context<Self>,
     ) {
         self.connection_layout = layout.into();
+        self.sync_sidebar_home_embedded(cx);
         cx.notify();
     }
 
-    pub(super) fn render_content_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let search_query = self.search_query.read(cx).to_lowercase();
-        let selected_id = self.selected_connection_id;
-        let layout = self.connection_layout;
-        self.render_workspace_view(&search_query, selected_id, layout, cx)
-            .into_any_element()
+    /// 让常驻侧栏知道是否作为主页 Tree 布局嵌入渲染。
+    fn sync_sidebar_home_embedded(&self, cx: &mut Context<Self>) {
+        let embedded = self.connection_layout == ConnectionLayout::Tree;
+        if let Some(sidebar) = &self.connection_sidebar {
+            sidebar.update(cx, |sidebar, cx| sidebar.set_home_embedded(embedded, cx));
+        }
+    }
+
+    pub(super) fn render_content_area(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.connection_layout == ConnectionLayout::Tree {
+            if let Some(sidebar) = self.connection_sidebar.clone() {
+                // 作为子视图渲染侧栏实体：树在 Render 阶段自己 read(HomePage)，
+                // 不在本页租约内重入读自身（修复布局切换瞬间 panic）。
+                sidebar.update(cx, |sidebar, cx| sidebar.set_home_embedded(true, cx));
+                return sidebar.into_any_element();
+            }
+        }
+        let query = self.search_query.read(cx).to_lowercase();
+        self.render_workspace_view(
+            &query,
+            self.selected_connection_id,
+            self.connection_layout,
+            window,
+            cx,
+        )
+    }
+
+    fn home_groups(
+        &self,
+        query: &str,
+        cx: &App,
+    ) -> Vec<(Option<i64>, String, Vec<StoredConnection>)> {
+        let mut groups: Vec<_> = self
+            .workspaces
+            .iter()
+            .filter(|ws| {
+                self.filtered_workspace_ids.is_empty()
+                    || ws
+                        .id
+                        .is_some_and(|id| self.filtered_workspace_ids.contains(&id))
+            })
+            .map(|ws| (ws.id, ws.name.clone(), Vec::new()))
+            .collect();
+        if self.filtered_workspace_ids.is_empty() {
+            groups.push((
+                None,
+                t!("Home.unassigned_workspace").to_string(),
+                Vec::new(),
+            ));
+        }
+        for (id, _, connections) in &mut groups {
+            *connections = self
+                .connections
+                .iter()
+                .filter(|conn| conn.workspace_id == *id)
+                .filter(|conn| {
+                    self.match_connection_type(conn) && self.match_connection(conn, query)
+                })
+                .cloned()
+                .collect();
+            crate::connection_sort::sort_connections(
+                connections,
+                AppSettings::global(cx).connection_sort_order,
+            );
+        }
+        groups.retain(|(_, _, connections)| !connections.is_empty());
+        groups
     }
 
     pub(super) fn render_workspace_view(
         &self,
-        search_query: &str,
-        selected_id: Option<i64>,
+        query: &str,
+        selected: Option<i64>,
         layout: ConnectionLayout,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let legacy = self.home_page_style == HomePageStyle::Legacy;
-        let center_modern_content = !legacy && self.persistent_sidebar_expanded;
-        let connection_sort_order = AppSettings::global(cx).connection_sort_order;
-        let workspaces_with_connections: Vec<_> = self
-            .workspaces
+        // 共享网格几何由内容区统一计算，所有分组使用同一组列边界（redesign §4.1）。
+        let (columns, card_width) = match layout {
+            ConnectionLayout::Card => grid::card_grid_metrics(
+                window.bounds().size.width - self.home_sidebar_width(),
+                window.rem_size(),
+            ),
+            _ => (RECENT_ROW_FALLBACK, px(0.0)),
+        };
+        let groups = self.home_groups(query, cx);
+        let recent =
+            recent::recent_connections(&self.connections, self.selected_filter, query, columns);
+        let visible_count = groups
             .iter()
-            .filter(|ws| {
-                if self.filtered_workspace_ids.is_empty() {
-                    return true;
-                }
-                match ws.id {
-                    Some(id) => self.filtered_workspace_ids.contains(&id),
-                    None => true,
-                }
-            })
-            .map(|ws| {
-                let mut conn_list: Vec<_> = self
-                    .connections
-                    .iter()
-                    .filter(|conn| conn.workspace_id == ws.id)
-                    .filter(|conn| self.match_connection(conn, search_query))
-                    .filter(|conn| self.match_connection_type(conn))
-                    .cloned()
-                    .collect();
-                crate::connection_sort::sort_connections(&mut conn_list, connection_sort_order);
-                (ws.clone(), conn_list)
-            })
-            .collect();
-
-        let mut unassigned_connections: Vec<_> = self
-            .connections
-            .iter()
-            .filter(|conn| conn.workspace_id.is_none())
-            .filter(|conn| self.match_connection(conn, search_query))
-            .filter(|conn| self.match_connection_type(conn))
-            .cloned()
-            .collect();
-        crate::connection_sort::sort_connections(
-            &mut unassigned_connections,
-            connection_sort_order,
-        );
-        let has_workspaces = self.workspaces.iter().any(|ws| ws.id.is_some());
-
-        if layout == ConnectionLayout::List && !has_workspaces {
-            return div()
-                .id("home-content")
-                .size_full()
-                .min_w_0()
-                .overflow_y_scroll()
-                .when(legacy, |content| content.p_6())
-                .when(!legacy, |content| content.px_4().py_3())
-                .child(
-                    div()
-                        .w_full()
-                        .when(center_modern_content, |content| {
-                            content.max_w(px(1160.0)).mx_auto()
-                        })
-                        .child(self.render_connection_uniform_list(
-                            unassigned_connections,
-                            selected_id,
-                            cx,
-                        )),
-                )
-                .into_any_element();
+            .flat_map(|(_, _, connections)| connections.iter())
+            .chain(recent.iter())
+            .filter_map(|conn| conn.id)
+            .collect::<HashSet<_>>()
+            .len();
+        // 分组间距 lg：小于页面边距、大于组头到内容的距离（redesign §9.1）。
+        let mut body = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_4()
+            .child(self.render_content_heading(visible_count, cx));
+        if visible_count == 0 {
+            body = body.child(self.render_empty_home(cx));
         }
-
+        if !recent.is_empty() {
+            body = body.child(self.render_recent_group(recent, selected, layout, card_width, cx));
+        }
+        for (id, title, connections) in groups {
+            body = body.child(self.render_home_group(
+                id,
+                title,
+                connections,
+                selected,
+                layout,
+                card_width,
+                cx,
+            ));
+        }
         div()
             .id("home-content")
             .size_full()
             .min_w_0()
             .overflow_y_scroll()
-            .when(legacy, |content| content.p_6())
-            .when(!legacy, |content| content.px_4().py_3())
+            .p_5()
+            .child(body)
+            .into_any_element()
+    }
+
+    fn render_content_heading(&self, count: usize, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .w_full()
+            .gap_2()
             .child(
                 div()
-                    .w_full()
-                    .when(center_modern_content, |content| {
-                        content.max_w(px(1160.0)).mx_auto()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("Connection.title").to_string()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Home.connection_count", count = count).to_string()),
+            )
+            .child(div().flex_1())
+            // 展开/折叠命令归类进「分组」菜单，不再各占一个工具栏按钮（redesign §2.3/§4.3）。
+            .child(self.render_group_menu(cx))
+            .into_any_element()
+    }
+
+    fn render_group_menu(&self, cx: &Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        Button::new("home-group-menu")
+            .ghost()
+            .small()
+            .label(t!("Home.group_menu"))
+            .dropdown_caret(true)
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let expand_view = view.clone();
+                menu.item(
+                    PopupMenuItem::new(t!("Home.expand_all").to_string())
+                        .icon(IconName::ChevronDown)
+                        .on_click(move |_, _, cx| {
+                            expand_view.update(cx, |home, cx| {
+                                home.collapsed_groups.clear();
+                                home.recent_collapsed = false;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new(t!("Connection.collapse_all").to_string())
+                        .icon(IconName::ChevronRight)
+                        .on_click({
+                            let view = view.clone();
+                            move |_, _, cx| {
+                                view.update(cx, |home, cx| {
+                                    home.collapsed_groups = home
+                                        .workspaces
+                                        .iter()
+                                        .map(|ws| ws.id)
+                                        .chain([None])
+                                        .collect();
+                                    home.recent_collapsed = true;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_empty_home(&self, cx: &mut Context<Self>) -> AnyElement {
+        let initial = self.connections.is_empty();
+        v_flex()
+            .w_full()
+            .py_8()
+            .gap_3()
+            .items_center()
+            .child(Icon::new(IconName::Search).text_color(cx.theme().muted_foreground))
+            .child(
+                if initial {
+                    t!("Home.empty_connections")
+                } else {
+                    t!("Home.no_filter_results")
+                }
+                .to_string(),
+            )
+            .child(
+                Button::new("home-empty-action")
+                    .primary()
+                    .label(if initial {
+                        t!("Home.new_connection")
+                    } else {
+                        t!("Home.clear_filters")
                     })
-                    .child({
-                        let mut container = v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .when(legacy, |content| content.gap_8())
-                            .when(!legacy, |content| content.gap_5());
-
-                        // 过滤掉空的工作区
-                        for (workspace, connections) in workspaces_with_connections {
-                            if connections.is_empty() {
-                                continue;
-                            }
-                            container = container.child(self.render_workspace_section(
-                                workspace,
-                                connections,
-                                selected_id,
-                                layout,
-                                cx,
-                            ));
+                    .on_click(cx.listener(move |home, _, window, cx| {
+                        if initial {
+                            home.show_new_connection_dialog(window, cx);
+                        } else {
+                            home.selected_filter = ConnectionType::All;
+                            home.clear_workspace_filter(cx);
+                            home.search_input
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            home.search_query.update(cx, |query, cx| {
+                                query.clear();
+                                cx.notify();
+                            });
+                            cx.notify();
                         }
-
-                        // 如果用户没有设置工作区，直接显示连接列表；否则显示未分配工作区
-                        if !unassigned_connections.is_empty() {
-                            if has_workspaces {
-                                container = container.child(self.render_unassigned_section(
-                                    unassigned_connections,
-                                    selected_id,
-                                    layout,
-                                    cx,
-                                ));
-                            } else {
-                                // 没有工作区时，直接显示连接卡片
-                                container = container.child(self.render_connections_grid(
-                                    unassigned_connections,
-                                    selected_id,
-                                    layout,
-                                    cx,
-                                ));
-                            }
-                        }
-
-                        container
-                    }),
+                    })),
             )
             .into_any_element()
     }
 
-    pub(super) fn render_workspace_section(
+    fn render_recent_group(
         &self,
-        workspace: Workspace,
         connections: Vec<StoredConnection>,
-        selected_id: Option<i64>,
+        selected: Option<i64>,
         layout: ConnectionLayout,
+        card_width: Pixels,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let workspace_id = workspace.id;
-        let legacy = self.home_page_style == HomePageStyle::Legacy;
+    ) -> AnyElement {
+        let count = connections.len();
         v_flex()
+            .id("home-recent-group")
             .w_full()
-            .min_w_0()
-            .when(legacy, |content| content.gap_3())
-            .when(!legacy, |content| content.gap_2())
+            .gap_2()
             .child(
                 h_flex()
-                    .items_center()
                     .gap_2()
-                    .when(legacy, |header| header.px_2().py_1())
-                    .when(!legacy, |header| header.px_1().py_0p5())
+                    .items_center()
                     .child(
-                        Icon::new(IconName::AppsColor)
-                            .color()
-                            .with_size(Size::Medium),
-                    )
-                    .child(
-                        div()
-                            .id(ElementId::Name(SharedString::from(format!(
-                                "workspace-name-{}",
-                                workspace_id.unwrap_or(0)
-                            ))))
-                            .when(legacy, |label| label.text_base())
-                            .when(!legacy, |label| label.text_sm())
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .child(workspace.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .when(!legacy, |badge| {
-                                badge.px_1p5().py_0p5().rounded_full().bg(cx.theme().muted)
+                        Button::new("home-recent-toggle")
+                            .ghost()
+                            .small()
+                            .icon(if self.recent_collapsed {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
                             })
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                t!("Home.connection_count", count = connections.len()).to_string(),
-                            ),
+                            .on_click(cx.listener(|home, _, _, cx| {
+                                home.recent_collapsed = !home.recent_collapsed;
+                                cx.notify();
+                            })),
                     )
-                    .child(div().flex_1()),
-            )
-            .when(!connections.is_empty(), |this| {
-                let mut container = match layout {
-                    ConnectionLayout::List => v_flex().w_full().min_w_0().gap_1(),
-                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().min_w_0().gap_3(),
-                };
-
-                for (idx, conn) in connections.iter().enumerate() {
-                    container = match layout {
-                        ConnectionLayout::List => container.child(
-                            self.render_connection_list_item(conn.clone(), selected_id, idx, cx),
-                        ),
-                        ConnectionLayout::Card => container.child(
+                    .child(
+                        // 历史语义图标（redesign §6.1：避免与收藏星标混淆），
+                        // 资源经应用 AssetSource 内嵌。
+                        Icon::default()
+                            .path(NAVOP_HISTORY_ICON)
+                            .with_size(IconSize::Small)
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .child(t!("Home.recent_connections").to_string()),
+                    )
+                    .child(render_group_count_badge(count, cx))
+                    // 分组筛选不作用于最近区；仅在筛选生效时就近提示（redesign §6.2）。
+                    .when(!self.filtered_workspace_ids.is_empty(), |header| {
+                        header.child(
                             div()
-                                .when(legacy, |slot| slot.w(px(320.0)).flex_shrink_0())
-                                .when(!legacy, |slot| {
-                                    slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
-                                        .max_w(MODERN_HOME_CARD_MAX_WIDTH)
-                                        .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
-                                        .flex_grow_1()
-                                })
-                                .child(self.render_connection_card(
-                                    conn.clone(),
-                                    selected_id,
-                                    idx,
-                                    cx,
-                                )),
-                        ),
-                    };
-                }
-
-                this.child(container)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("Home.recent_hint").to_string()),
+                        )
+                    }),
+            )
+            .when(!self.recent_collapsed, |group| {
+                group.child(self.render_connections_grid(
+                    connections,
+                    selected,
+                    layout,
+                    true,
+                    card_width,
+                    cx,
+                ))
             })
+            .into_any_element()
+    }
+
+    fn render_home_group(
+        &self,
+        id: Option<i64>,
+        title: String,
+        connections: Vec<StoredConnection>,
+        selected: Option<i64>,
+        layout: ConnectionLayout,
+        card_width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let collapsed = self.collapsed_groups.contains(&id);
+        v_flex()
+            .id(SharedString::from(format!("home-group-{id:?}")))
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new(SharedString::from(format!("group-toggle-{id:?}")))
+                            .ghost()
+                            .small()
+                            .icon(if collapsed {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .label(title)
+                            .on_click(cx.listener(move |home, _, _, cx| {
+                                if !home.collapsed_groups.remove(&id) {
+                                    home.collapsed_groups.insert(id);
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(render_group_count_badge(connections.len(), cx)),
+            )
+            .when(!collapsed, |group| {
+                group.child(self.render_connections_grid(
+                    connections,
+                    selected,
+                    layout,
+                    false,
+                    card_width,
+                    cx,
+                ))
+            })
+            .into_any_element()
     }
 
     pub(super) fn render_connections_grid(
         &self,
         connections: Vec<StoredConnection>,
-        selected_id: Option<i64>,
+        selected: Option<i64>,
         layout: ConnectionLayout,
+        recent: bool,
+        card_width: Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if layout == ConnectionLayout::List {
-            return self.render_connection_uniform_list(connections, selected_id, cx);
-        }
-
-        let mut container = div().flex().flex_wrap().w_full().min_w_0().gap_3();
-        let legacy = self.home_page_style == HomePageStyle::Legacy;
-        for (idx, conn) in connections.into_iter().enumerate() {
-            container = container.child(
-                div()
-                    .when(legacy, |slot| slot.w(px(320.0)).flex_shrink_0())
-                    .when(!legacy, |slot| {
-                        slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
-                            .max_w(MODERN_HOME_CARD_MAX_WIDTH)
-                            .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
-                            .flex_grow_1()
-                    })
-                    .child(self.render_connection_card(conn, selected_id, idx, cx)),
-            );
-        }
-        container.into_any_element()
-    }
-
-    pub(super) fn render_connection_uniform_list(
-        &self,
-        connections: Vec<StoredConnection>,
-        selected_id: Option<i64>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let item_count = connections.len();
-        uniform_list("home-connection-list", item_count, {
-            cx.processor(move |this: &mut Self, range: Range<usize>, _window, cx| {
-                range
-                    .filter_map(|idx| {
-                        let conn = connections.get(idx).cloned()?;
-                        Some(this.render_connection_list_item(conn, selected_id, idx, cx))
-                    })
-                    .collect()
-            })
-        })
-        .size_full()
-        .track_scroll(&self.connection_scroll_handle)
-        .with_sizing_behavior(ListSizingBehavior::Auto)
-        .into_any_element()
-    }
-
-    pub(super) fn render_unassigned_section(
-        &self,
-        connections: Vec<StoredConnection>,
-        selected_id: Option<i64>,
-        layout: ConnectionLayout,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let legacy = self.home_page_style == HomePageStyle::Legacy;
-        v_flex()
+        let mut grid = div()
+            .flex()
             .w_full()
             .min_w_0()
-            .when(legacy, |content| content.gap_3())
-            .when(!legacy, |content| content.gap_2())
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .when(legacy, |header| header.px_2().py_1())
-                    .when(!legacy, |header| header.px_1().py_0p5())
-                    .child(
-                        div()
-                            .when(legacy, |label| label.text_base())
-                            .when(!legacy, |label| label.text_sm())
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .child(
-                                t!("Home.unassigned_workspace")
-                                    .to_string()
-                                    .into_any_element(),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .when(!legacy, |badge| {
-                                badge.px_1p5().py_0p5().rounded_full().bg(cx.theme().muted)
-                            })
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                t!("Home.connection_count", count = connections.len()).to_string(),
-                            ),
-                    ),
-            )
-            .child({
-                let mut container = match layout {
-                    ConnectionLayout::List => v_flex().w_full().min_w_0().gap_1(),
-                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().min_w_0().gap_3(),
-                };
-
-                for (idx, conn) in connections.into_iter().enumerate() {
-                    container = match layout {
-                        ConnectionLayout::List => container
-                            .child(self.render_connection_list_item(conn, selected_id, idx, cx)),
-                        ConnectionLayout::Card => container.child(
-                            div()
-                                .when(legacy, |slot| slot.w(px(320.0)).flex_shrink_0())
-                                .when(!legacy, |slot| {
-                                    slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
-                                        .max_w(MODERN_HOME_CARD_MAX_WIDTH)
-                                        .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
-                                        .flex_grow_1()
-                                })
-                                .child(self.render_connection_card(conn, selected_id, idx, cx)),
-                        ),
-                    };
+            .gap_3()
+            .when(layout != ConnectionLayout::Card, |grid| grid.flex_col());
+        if layout == ConnectionLayout::Card {
+            grid = grid.flex_wrap();
+        }
+        for (index, conn) in connections.into_iter().enumerate() {
+            grid = grid.child(match layout {
+                // Tree 布局在 render_content_area 拦截；这里兜底按列表渲染。
+                ConnectionLayout::List | ConnectionLayout::Tree => {
+                    self.render_connection_list_item(conn, selected, index, recent, cx)
                 }
-                container
-            })
+                // 固定共享列宽：单项组与末行不拉宽（redesign §4.1）。
+                ConnectionLayout::Card => div()
+                    .w(card_width)
+                    .flex_shrink_0()
+                    .child(self.render_connection_card(conn, selected, index, recent, cx))
+                    .into_any_element(),
+            });
+        }
+        grid.into_any_element()
     }
+}
+
+/// 分组头数量徽标（demo：11px、muted、--hover 底、圆角 8px、tabular-nums）。
+fn render_group_count_badge(count: usize, cx: &App) -> AnyElement {
+    div()
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(8.0))
+        .bg(cx.theme().muted)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(count.to_string())
+        .into_any_element()
 }

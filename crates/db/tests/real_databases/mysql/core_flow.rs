@@ -66,7 +66,10 @@ INSERT INTO all_types (
 #[tokio::test]
 async fn mysql_real_script_query_error_transaction_and_metadata_flow() {
     let Some(config) = mysql_config() else {
-        skip_database("MySQL", "ONETCLI_TEST_MYSQL_PASSWORD (and optionally host/port/user)");
+        skip_database(
+            "MySQL",
+            "ONETCLI_TEST_MYSQL_PASSWORD (and optionally host/port/user)",
+        );
         return;
     };
     let database = unique_database("core");

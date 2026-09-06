@@ -263,10 +263,7 @@ mod tests {
             "delta": { "type": "thinking_delta", "thinking": "a" }
         });
         let r = interpret_anthropic_event(&think, mid).unwrap().unwrap();
-        assert_eq!(
-            r.choices[0].delta.thinking.as_deref(),
-            Some("a")
-        );
+        assert_eq!(r.choices[0].delta.thinking.as_deref(), Some("a"));
         let sig = json!({
             "type": "content_block_delta",
             "index": 0,

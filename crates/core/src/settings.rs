@@ -97,14 +97,7 @@ pub enum HomeConnectionLayout {
     #[default]
     Card,
     List,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HomePageStyle {
-    Legacy,
-    #[default]
-    Modern,
+    Tree,
 }
 
 /// SQL 格式化时的关键字大小写策略；Preserve 保持用户原文不改变大小写
@@ -171,26 +164,6 @@ impl SqlIndentStyle {
     }
 }
 
-impl HomePageStyle {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Legacy => "legacy",
-            Self::Modern => "modern",
-        }
-    }
-
-    pub fn from_value(value: &str) -> Self {
-        match value {
-            "legacy" => Self::Legacy,
-            _ => Self::Modern,
-        }
-    }
-
-    pub fn uses_persistent_sidebar(self) -> bool {
-        self == Self::Modern
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionSortOrder {
@@ -222,12 +195,14 @@ impl HomeConnectionLayout {
         match self {
             Self::Card => "card",
             Self::List => "list",
+            Self::Tree => "tree",
         }
     }
 
     pub fn from_value(value: &str) -> Self {
         match value {
             "list" => Self::List,
+            "tree" => Self::Tree,
             _ => Self::Card,
         }
     }
@@ -967,8 +942,6 @@ pub struct AppSettings {
     pub portable_remember_master_key: bool,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
-    #[serde(default)]
-    pub home_page_style: HomePageStyle,
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
@@ -1310,7 +1283,6 @@ impl Default for AppSettings {
             require_master_key_on_startup: false,
             portable_remember_master_key: false,
             home_connection_layout: HomeConnectionLayout::default(),
-            home_page_style: HomePageStyle::default(),
             connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
@@ -1596,7 +1568,7 @@ mod tests {
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
-        HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
         SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
@@ -2008,7 +1980,6 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
-        assert_eq!(HomePageStyle::Modern, settings.home_page_style);
         assert_eq!(ConnectionSortOrder::Natural, settings.connection_sort_order);
         assert!(settings.connection_sidebar_expanded);
     }
@@ -2051,9 +2022,31 @@ mod tests {
         .expect("connection display preferences should deserialize");
 
         assert_eq!(HomeConnectionLayout::List, settings.home_connection_layout);
-        assert_eq!(HomePageStyle::Legacy, settings.home_page_style);
         assert!(!settings.connection_sidebar_expanded);
         assert!(!settings.connection_sidebar_tree_state.hide_empty_workspaces);
+    }
+
+    #[test]
+    fn retired_home_styles_preserve_sidebar_preferences() {
+        for style in [None, Some("legacy"), Some("modern")] {
+            let mut json = serde_json::json!({
+                "connection_sidebar_expanded": false,
+                "connection_sidebar_tree_state": {
+                    "tree_width": 348, "auto_hide_tree": false,
+                    "hide_empty_workspaces": true
+                }
+            });
+            if let Some(style) = style {
+                json["home_page_style"] = style.into();
+            }
+            let settings: AppSettings = serde_json::from_value(json).unwrap();
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert!(saved.get("home_page_style").is_none());
+            assert!(!settings.connection_sidebar_expanded);
+            assert_eq!(348, settings.connection_sidebar_tree_state.tree_width);
+            assert!(!settings.connection_sidebar_tree_state.auto_hide_tree);
+            assert!(settings.connection_sidebar_tree_state.hide_empty_workspaces);
+        }
     }
 
     #[test]
