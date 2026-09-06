@@ -9,6 +9,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 connection-form.workspace = true
+dirs.workspace = true
 extension-host.workspace = true
 extension-plugin-adapter.workspace = true
 extension-protocol.workspace = true

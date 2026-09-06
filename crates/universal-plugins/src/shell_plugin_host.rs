@@ -3,6 +3,7 @@ mod components;
 pub(crate) mod connection;
 mod context;
 mod event;
+mod grant;
 mod job;
 mod log;
 mod monitor;

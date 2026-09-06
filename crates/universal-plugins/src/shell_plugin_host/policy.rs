@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use gpui::{App, Window};
-use gpui_shell::{Capabilities, LoadedScriptView, ViewLoadOptions, policy::Policy};
+use gpui_shell::{LoadedScriptView, ViewLoadOptions, policy::Policy};
 
 use super::{
     PreparedShellView, ShellPluginHost, blob::blob_module, context::context_module,
@@ -99,9 +99,21 @@ fn load_with_session(
 fn base_policy(
     contribution: &extension_runtime::RegisteredShellViewContribution,
 ) -> Result<Policy> {
+    let (granted, skipped) = super::grant::capabilities_from_permissions(
+        &contribution.permissions,
+        &contribution.extension_root,
+    );
+    if !skipped.is_empty() {
+        tracing::warn!(
+            extension_id = %contribution.extension_id,
+            view_id = %contribution.id,
+            skipped = skipped.join(", "),
+            "shell view permissions could not be expanded and were not granted"
+        );
+    }
     let mut policy = Policy::new()
         .with_application(&contribution.view_key)
-        .with_capabilities(Capabilities::new().storage(contribution.singleton));
+        .with_capabilities(granted.storage(contribution.singleton));
     if contribution.singleton {
         policy = policy.with_storage_path(shell_storage_path(contribution)?);
     }
