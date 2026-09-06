@@ -99,6 +99,38 @@ fn group_expand_commands_live_in_a_menu() {
 }
 
 #[test]
+fn home_sidebar_refinement_contracts() {
+    let nav = include_str!("../sidebar_navigation.rs");
+    let sidebar = include_str!("../sidebar.rs");
+    let card = include_str!("../connection_card.rs");
+    let account = include_str!("../account_menu.rs");
+    let applications = include_str!("../../navigation_applications.rs");
+
+    // 导航行本地 helper：hover 与选中分离，selected+hover 不被普通 hover 覆盖
+    assert!(nav.contains("fn home_nav_row"));
+    assert!(nav.contains("hover_bg"));
+    assert!(nav.contains("active_bg"));
+    assert!(nav.contains(".focus_visible("));
+    assert!(nav.contains(".on_key_down("));
+    assert!(!nav.contains("SidebarMenuItem::new"));
+    // 功能图标统一线性单色；Home 用自有线稿资源；会话日志用 SquareTerminal 线性资源
+    assert!(nav.contains("NAVOP_HOME_LINE_ICON"));
+    assert!(nav.contains(".mono()"));
+    assert!(applications.contains("IconName::SquareTerminal"));
+    assert!(!applications.contains("IconName::Terminal,"));
+    // 侧栏右边线读 sidebar_border，非通用 border
+    assert!(sidebar.contains("sidebar_border"));
+    assert!(!sidebar.contains("cx.theme().border"));
+    // 卡片：非选中 hover 才生效，selected+hover 保留选中组合
+    assert!(card.contains(".when(!is_selected, |this|"));
+    assert!(!card.contains("hover_border"));
+    // 账户 fallback 中性化：不用 Avatar hash 自动色
+    assert!(account.contains("neutral_avatar_for_url"));
+    assert!(account.contains("IconName::CircleUser"));
+    assert!(!account.contains("Avatar::new()\n                .name("));
+}
+
+#[test]
 fn home_blocking_work_is_dispatched_off_the_gpui_foreground() {
     let data = include_str!("../data.rs");
     let cloud_sync = include_str!("../cloud_sync.rs");

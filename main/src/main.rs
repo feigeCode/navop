@@ -82,6 +82,9 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
         crate::home_tab::NAVOP_HISTORY_ICON => {
             include_bytes!("../../resources/icons/history.svg")
         }
+        crate::home_tab::NAVOP_HOME_LINE_ICON => {
+            include_bytes!("../../resources/icons/home-line.svg")
+        }
         _ => return None,
     };
     Some(std::borrow::Cow::Borrowed(bytes))

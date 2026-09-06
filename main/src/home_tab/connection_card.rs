@@ -30,8 +30,7 @@ impl HomePage {
             "conn-card"
         };
         let card_id = SharedString::from(format!("{card_id}-{}", conn_id.unwrap_or(0)));
-        let hover_border = cx.theme().list_active_border;
-        let hover_bg = cx.theme().muted.opacity(0.5);
+        let hover_bg = cx.theme().list_hover;
         let home_for_menu = cx.entity();
 
         let card = v_flex()
@@ -54,10 +53,12 @@ impl HomePage {
                 this.border_color(cx.theme().list_active_border)
                     .bg(cx.theme().list_active)
             })
-            .when(!is_selected, |this| this.border_color(cx.theme().border))
+            // 非选中 hover 只给轻中性背景，不给完整品牌蓝边；选中后 hover 不覆盖选中组合。
+            .when(!is_selected, |this| {
+                this.border_color(cx.theme().border)
+                    .hover(move |style| style.bg(hover_bg))
+            })
             .cursor_pointer()
-            // 悬停只给轻背景与边框变化，不使用阴影抬升（redesign §5.5）。
-            .hover(move |style| style.bg(hover_bg).border_color(hover_border))
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.open_connection_from_quick(&open_connection, window, cx);
                 cx.notify()

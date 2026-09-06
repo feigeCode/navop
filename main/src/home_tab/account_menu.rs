@@ -26,17 +26,7 @@ impl IntoElement for AccountTrigger {
     type Element = AnyElement;
 
     fn into_element(self) -> Self::Element {
-        let avatar = match &self.avatar {
-            Some((_name, Some(url))) => Avatar::new()
-                .src(url.clone())
-                .with_size(gpui_component::Size::Size(USER_ROW_AVATAR)),
-            Some((name, None)) => Avatar::new()
-                .name(name.clone())
-                .with_size(gpui_component::Size::Size(USER_ROW_AVATAR)),
-            None => Avatar::new()
-                .name(self.name.clone())
-                .with_size(gpui_component::Size::Size(USER_ROW_AVATAR)),
-        };
+        let avatar = neutral_avatar(self.avatar.as_ref(), &self.name, USER_ROW_AVATAR);
         let row = h_flex()
             .id("home-account-user-row")
             .w_full()
@@ -45,7 +35,10 @@ impl IntoElement for AccountTrigger {
             .p_1p5()
             .rounded(px(9.0))
             .cursor_pointer()
-            .hover(|style| style.bg(self.hover_bg))
+            .when(self.selected, |row| row.bg(self.hover_bg))
+            .when(!self.selected, |row| {
+                row.hover(|style| style.bg(self.hover_bg))
+            })
             .child(avatar);
         if self.collapsed {
             row.justify_center().into_any_element()
@@ -57,7 +50,7 @@ impl IntoElement for AccountTrigger {
                     .min_w_0()
                     .overflow_hidden()
                     .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
                     .text_ellipsis()
                     .whitespace_nowrap()
                     .child(self.name),
@@ -76,6 +69,35 @@ impl IntoElement for AccountTrigger {
 const ACCOUNT_MENU_WIDTH: gpui::Pixels = px(240.0);
 /// 用户行头像尺寸（demo：27px 圆形头像）。
 const USER_ROW_AVATAR: gpui::Pixels = px(27.0);
+
+/// 中性头像 fallback：无真实头像时用单色用户图标 + secondary 底，
+/// 替代 Avatar 的 hash 自动色（随机黄色字母与品牌色无关）。
+/// 有真实头像 URL 时保留原图。
+fn neutral_avatar_for_url(url: Option<String>, size: gpui::Pixels) -> AnyElement {
+    match url {
+        Some(url) => Avatar::new()
+            .src(url)
+            .with_size(gpui_component::Size::Size(size))
+            .into_any_element(),
+        // 单色用户图标直接承担头像槽位，继承行文字颜色（中性）。
+        None => Icon::new(IconName::CircleUser)
+            .size(size)
+            .mono()
+            .flex_shrink_0()
+            .into_any_element(),
+    }
+}
+
+/// AccountTrigger 使用的头像（`avatar` 为 (fallback 名, URL)）。
+fn neutral_avatar(
+    avatar: Option<&(SharedString, Option<String>)>,
+    name: &SharedString,
+    size: gpui::Pixels,
+) -> AnyElement {
+    let url = avatar.and_then(|(_, url)| url.clone());
+    let _ = name; // fallback 用统一单色图标，不取首字母
+    neutral_avatar_for_url(url, size)
+}
 
 impl HomePage {
     pub(super) fn render_account_entry(
@@ -122,28 +144,18 @@ impl HomePage {
             .into_any_element()
     }
 
-    fn account_avatar(&self, size: gpui::Pixels) -> Avatar {
-        match self.current_user.as_ref() {
-            Some(user) => {
-                let name = user.resolved_display_name();
-                match user
-                    .avatar_url
+    fn account_avatar(&self, size: gpui::Pixels) -> AnyElement {
+        let url = self
+            .current_user
+            .as_ref()
+            .and_then(|user| {
+                user.avatar_url
                     .as_deref()
                     .map(str::trim)
                     .filter(|url| !url.is_empty())
-                {
-                    Some(url) => Avatar::new()
-                        .src(url.to_string())
-                        .with_size(gpui_component::Size::Size(size)),
-                    None => Avatar::new()
-                        .name(name)
-                        .with_size(gpui_component::Size::Size(size)),
-                }
-            }
-            None => Avatar::new()
-                .name(t!("Auth.login").to_string())
-                .with_size(gpui_component::Size::Size(size)),
-        }
+            })
+            .map(str::to_string);
+        neutral_avatar_for_url(url, size)
     }
 
     /// 账户菜单内容（demo：用户信息头 + 同步状态 + 密钥 + 退出登录）。

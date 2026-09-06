@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px,
+    AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
     uniform_list,
 };
 use gpui_component::{
@@ -23,7 +23,12 @@ use super::{PersistentConnectionSidebar, SidebarPalette};
 impl PersistentConnectionSidebar {
     /// 主页 Tree 布局嵌入的树视图：满宽、无 resize 手柄，交互与常驻侧栏一致。
     pub(crate) fn render_home_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        self.render_tree_impl(None, cx)
+        self.render_tree_impl(None, false, cx)
+    }
+
+    /// 停靠渲染（docked=true 时树从窗口顶部开始，macOS 头部需避让红绿灯）。
+    pub(crate) fn render_docked_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        self.render_tree_impl(Some(self.tree_width), true, cx)
     }
 
     pub(super) fn render_connection_tree(
@@ -32,13 +37,14 @@ impl PersistentConnectionSidebar {
         _window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        self.render_tree_impl(Some(self.tree_width), cx)
+        self.render_tree_impl(Some(self.tree_width), false, cx)
     }
 
     /// width 为 Some 时按固定宽度停靠渲染（含 resize 手柄），None 时满宽嵌入主页。
     fn render_tree_impl(
         &mut self,
         width: Option<gpui::Pixels>,
+        macos_titlebar_inset: bool,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let palette = self.palette(cx);
@@ -54,7 +60,7 @@ impl PersistentConnectionSidebar {
             .text_color(palette.foreground)
             // 嵌入主页时隐藏树头部：页面标题行已提供计数与分组菜单，避免重复。
             .when(!self.home_embedded, |tree| {
-                tree.child(self.render_tree_header(palette, cx))
+                tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))
             })
             .child(self.render_tree_search(palette, cx))
             .when(self.connection_selection.is_active(), |tree| {
@@ -221,7 +227,12 @@ impl PersistentConnectionSidebar {
             .into_any_element()
     }
 
-    fn render_tree_header(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
+    fn render_tree_header(
+        &self,
+        palette: SidebarPalette,
+        macos_titlebar_inset: bool,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
         let connection_count = {
             let home = self.home_page.read(cx);
             home.connections
@@ -237,12 +248,17 @@ impl PersistentConnectionSidebar {
         let view_for_batch = cx.entity();
         let view_for_actions = cx.entity();
         let layout = cx.theme().geometry.layout;
+        // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
+        let titlebar_inset = cfg!(target_os = "macos") && macos_titlebar_inset;
         h_flex()
             .w_full()
             .h(layout.embedded_panel_header)
             .flex_shrink_0()
             .pr_2()
-            .pl_2()
+            .when(titlebar_inset, |header| {
+                header.pl(layout.macos_title_bar_content_padding)
+            })
+            .when(!titlebar_inset, |header| header.pl_2())
             .items_center()
             .justify_between()
             // On macOS the header continues the traffic-light strip. On
@@ -275,17 +291,6 @@ impl PersistentConnectionSidebar {
                             .text_xs()
                             .text_color(palette.muted_foreground)
                             .child(connection_count.to_string()),
-                    )
-                    .child(
-                        // 树筛选/搜索独立于主页（DESIGN §4.1）：用 accent 胶囊明确提示。
-                        div()
-                            .px_1p5()
-                            .py_0p5()
-                            .rounded(px(5.0))
-                            .bg(palette.accent.opacity(0.12))
-                            .text_xs()
-                            .text_color(palette.accent)
-                            .child(t!("Home.tree_filter_independent")),
                     ),
             )
             .child(

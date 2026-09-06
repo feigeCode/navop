@@ -26,6 +26,7 @@ impl HomePage {
         let actions = self.render_connection_list_actions(&conn, can_edit, cx);
         let display_name = connection_display_name(&conn);
         let home_for_menu = cx.entity();
+        let hover_bg = cx.theme().list_hover;
 
         // 同一连接会同时出现在最近区与普通分组，元素 ID 按展示区命名空间区分（redesign §6.2）。
         let row_id = if recent {
@@ -46,10 +47,10 @@ impl HomePage {
             .gap_3()
             .relative()
             .group("")
-            // 选中态与卡片一致：主题选中背景；hairline 底部分隔保持低对比。
+            // 选中态与卡片一致：主题选中背景；hover 不覆盖选中（refinement §7.2）。
             .when(is_selected, |this| this.bg(cx.theme().list_active))
+            .when(!is_selected, |this| this.hover(|style| style.bg(hover_bg)))
             .cursor_pointer()
-            .hover(|style| style.bg(cx.theme().muted))
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.open_connection_from_quick(&open_connection, window, cx);
                 cx.notify()

@@ -22,7 +22,7 @@ impl HomePage {
             .w(width)
             .bg(cx.theme().sidebar)
             .border_r_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().sidebar_border)
             .child(
                 v_flex()
                     .flex_1()
@@ -35,12 +35,14 @@ impl HomePage {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .p_1()
+                            .px_2()
+                            .py_1()
                             .child(self.render_application_navigation(window, cx)),
                     )
                     .child(
                         v_flex()
-                            .p_1()
+                            .px_2()
+                            .py_1()
                             .gap_1()
                             .child(self.render_account_entry(window, cx))
                             .child(self.render_settings_entry(window, cx)),

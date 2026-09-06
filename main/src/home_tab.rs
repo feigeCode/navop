@@ -96,6 +96,8 @@ const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(184.0);
 const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(58.0);
 /// 最近连接区的历史语义图标（gpui-component IconName 无 history 变体，内嵌提供）。
 pub(crate) const NAVOP_HISTORY_ICON: &str = "navop/history.svg";
+/// 首页导航/Tab 的线性 Home 图标（依赖库 home.svg 为固定填充色，改用自有线稿）。
+pub(crate) const NAVOP_HOME_LINE_ICON: &str = "navop/home-line.svg";
 // HomePage Entity - 管理 home 页面的所有状态
 
 /// 连接列表布局模式

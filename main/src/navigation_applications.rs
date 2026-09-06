@@ -46,7 +46,8 @@ impl NavigationApplication {
             Self::Notes => gpui_component::IconName::NotesLine,
             Self::Toolbox => gpui_component::IconName::LayoutDashboard,
             Self::JsonFormatter => gpui_component::IconName::Json,
-            Self::SessionLogs => gpui_component::IconName::Terminal,
+            // 会话日志用线性图标；IconName::Terminal 的默认资源是固定填充彩色 SVG。
+            Self::SessionLogs => gpui_component::IconName::SquareTerminal,
             Self::CredentialVault => gpui_component::IconName::Key,
             Self::Extensions => gpui_component::IconName::ExtensionsLine,
         }

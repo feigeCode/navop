@@ -59,8 +59,10 @@ impl SidebarPalette {
             background,
             rail_background: shade(background, cx.theme().is_dark()),
             foreground: cx.theme().sidebar_foreground,
-            muted: cx.theme().sidebar_accent,
-            hover: cx.theme().sidebar_accent,
+            // sidebar_accent 已变为主页导航选中浅蓝；连接树行的 hover/徽标底保持中性，
+            // 不随主页侧栏主题补丁变色（refinement §5.3）。
+            muted: cx.theme().muted,
+            hover: cx.theme().list_hover,
             selected: cx.theme().list_active,
             selected_border: cx.theme().list_active_border,
             muted_foreground: cx.theme().muted_foreground,
@@ -260,10 +262,10 @@ impl PersistentConnectionSidebar {
     /// 非自动隐藏模式下，连接树作为与终端并排的分割面板渲染，而不是浮层。
     pub(crate) fn render_docked_connection_tree(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.render_connection_tree(self.palette(cx), window, cx)
+        self.render_docked_tree(cx)
     }
 
     pub(crate) fn set_terminal_colors(

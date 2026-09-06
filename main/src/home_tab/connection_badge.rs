@@ -35,23 +35,20 @@ pub(crate) fn connection_team_badge(
 
 /// 中性团队标签（redesign §5.4）：统一 muted 底色，不再用 primary 蓝底白字；
 /// 固定在名称行右端与名称对齐，超宽时标签先截断。
+/// 注意：不带 id/tooltip——独立 hitbox 会截获 hover，导致卡片 hover 按钮
+/// （依赖卡片 group_hover）无法显示；完整团队名可在卡片名称 tooltip / 详情中查看。
 pub(super) fn render_team_badge(
-    id_prefix: &str,
-    conn: &StoredConnection,
+    _id_prefix: &str,
+    _conn: &StoredConnection,
     badge: ConnectionTeamBadge,
     cx: &App,
 ) -> AnyElement {
-    let tooltip_text: SharedString = badge.tooltip.into();
     let foreground = if badge.active {
         cx.theme().foreground
     } else {
         cx.theme().muted_foreground
     };
     div()
-        .id(SharedString::from(format!(
-            "{id_prefix}-team-{}",
-            conn.id.unwrap_or(0)
-        )))
         .flex_shrink_0()
         .max_w(px(112.0))
         .px_1p5()
@@ -63,7 +60,6 @@ pub(super) fn render_team_badge(
         .overflow_hidden()
         .text_ellipsis()
         .whitespace_nowrap()
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
         .child(badge.name)
         .into_any_element()
 }

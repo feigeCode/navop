@@ -1702,10 +1702,10 @@ mod tests {
     }
 
     #[test]
-    fn home_is_a_noncloseable_tab_with_the_color_home_icon() {
+    fn home_is_a_noncloseable_tab_with_the_line_home_icon() {
         let source = include_str!("home_tab/home_layout.rs");
         assert!(source.contains("impl TabContent for HomePage"));
-        assert!(source.contains("Some(IconName::Home.color())"));
+        assert!(source.contains("NAVOP_HOME_LINE_ICON"));
         assert!(source.contains("fn closeable"));
         assert!(source.contains("false"));
     }
@@ -2301,11 +2301,11 @@ impl Render for OnetCliApp {
         let notification_layer = Root::render_notification_layer(window, cx);
         let main_content = self.tab_container.clone();
         // 主页自带连接管理视图，常驻侧栏与收起/展开按钮只在非主页显示。
+        // home 是 pinned tab，active_tab() 只查普通 tabs，必须用 pinned 通道判断。
         let home_active = self
             .tab_container
             .read(cx)
-            .active_tab()
-            .is_some_and(|tab| tab.id() == "home");
+            .is_pinned_tab_active_by_id("home");
         let sidebar_expanded = !home_active && self.connection_sidebar.read(cx).is_expanded();
         let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
         self.tab_container.update(cx, |tabs, cx| {
