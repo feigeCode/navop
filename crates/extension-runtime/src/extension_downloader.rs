@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -37,6 +37,57 @@ pub fn install_from_staging_generic(
     requested_kind: Option<ExtensionKind>,
 ) -> Result<ExtensionSummary> {
     install_from_staging_with_policy(staging_dir, registry, requested_kind, false)
+}
+
+/// 从已解析的市场条目下载并安装到给定 `registry`，完成后清理 staging。
+///
+/// 数据库驱动、远程桌面插件与 MCP helper 安装共用同一条下载→装填→清理链路。
+pub async fn install_marketplace_entry_with_registry(
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
+    entry: &MarketplaceEntry,
+    registry: &ExtensionRegistry,
+    requested_kind: ExtensionKind,
+    on_progress: DownloadProgressCallback,
+) -> Result<ExtensionSummary> {
+    let staging = download_marketplace_entry_to_staging_with_progress(
+        http_client,
+        entry,
+        on_progress,
+    )
+    .await?;
+    install_staged_entry(&staging, registry, requested_kind)
+}
+
+/// 使用全局扩展系统 registry 安装市场条目，供非注入式安装器使用。
+///
+/// 注意：registry 读锁只在本函数内同步段持有，不能跨 `.await`（std 锁守卫非 Send）。
+pub async fn install_marketplace_entry_with_progress(
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
+    entry: &MarketplaceEntry,
+    requested_kind: ExtensionKind,
+    on_progress: DownloadProgressCallback,
+) -> Result<ExtensionSummary> {
+    let staging = download_marketplace_entry_to_staging_with_progress(
+        http_client,
+        entry,
+        on_progress,
+    )
+    .await?;
+    let registry = ExtensionRegistry::global().ok_or_else(|| anyhow!("扩展系统未初始化"))?;
+    let registry = registry
+        .read()
+        .map_err(|error| anyhow!("registry lock poisoned: {error}"))?;
+    install_staged_entry(&staging, &registry, requested_kind)
+}
+
+fn install_staged_entry(
+    staging: &Path,
+    registry: &ExtensionRegistry,
+    requested_kind: ExtensionKind,
+) -> Result<ExtensionSummary> {
+    let result = install_from_staging_generic(staging, registry, Some(requested_kind));
+    let _ = std::fs::remove_dir_all(staging);
+    result
 }
 
 pub fn install_from_staging_with_high_risk_permissions(
@@ -351,9 +402,9 @@ fn package_install_name(staging_dir: &Path, kind: ExtensionKind) -> Result<Strin
         ExtensionKind::LanguageBundle => "manifest.json",
         ExtensionKind::DatabaseDriver => "driver.json",
         ExtensionKind::RemoteDesktopProvider => "remote_desktop_provider.json",
-        ExtensionKind::McpHelper => "mcp_helper.json",
         ExtensionKind::AcpAgent => "acp_agent.json",
         ExtensionKind::Composite => "extension.json",
+        ExtensionKind::Unsupported => unreachable!("unsupported kind cannot be installed"),
     };
     let manifest_path = staging_dir.join(manifest_file);
     let bytes = std::fs::read(&manifest_path)

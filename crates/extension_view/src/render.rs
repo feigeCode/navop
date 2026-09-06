@@ -473,7 +473,6 @@ fn kind_label(kind: ExtensionKind) -> String {
         ExtensionKind::RemoteDesktopProvider => {
             t!("Extension.kind_remote_desktop_provider").to_string()
         }
-        ExtensionKind::McpHelper => t!("Extension.kind_mcp_helper").to_string(),
         ExtensionKind::AcpAgent => t!("Extension.kind_acp_agent").to_string(),
         ExtensionKind::Composite => t!("Extension.kind_composite").to_string(),
     }
@@ -485,7 +484,6 @@ fn extension_kind_id(kind: ExtensionKind) -> &'static str {
         ExtensionKind::LanguageBundle => "language-bundle",
         ExtensionKind::DatabaseDriver => "database-driver",
         ExtensionKind::RemoteDesktopProvider => "remote-desktop-provider",
-        ExtensionKind::McpHelper => "mcp-helper",
         ExtensionKind::AcpAgent => "acp-agent",
         ExtensionKind::Composite => "composite",
     }

@@ -7,7 +7,6 @@ mod kind;
 mod language_bundle_provider;
 mod language_provider;
 pub mod manifest;
-mod mcp_helper_provider;
 mod provider;
 mod remote_desktop_provider;
 mod summary;
@@ -21,7 +20,6 @@ pub use database_driver_provider::DatabaseDriverExtensionProvider;
 pub use kind::ExtensionKind;
 pub use language_bundle_provider::LanguageBundleExtensionProvider;
 pub use language_provider::LanguageExtensionProvider;
-pub use mcp_helper_provider::McpHelperExtensionProvider;
 pub use provider::{ExtensionProvider, ExtensionRegistry, init_global};
 pub use remote_desktop_provider::RemoteDesktopProviderExtensionProvider;
 pub use summary::ExtensionSummary;
@@ -55,7 +53,6 @@ pub fn builtin_registry(extensions_root: PathBuf) -> ExtensionRegistry {
     registry.register_provider(Arc::new(LanguageBundleExtensionProvider));
     registry.register_provider(Arc::new(DatabaseDriverExtensionProvider));
     registry.register_provider(Arc::new(RemoteDesktopProviderExtensionProvider));
-    registry.register_provider(Arc::new(McpHelperExtensionProvider));
     registry.register_provider(Arc::new(AcpAgentExtensionProvider));
     registry.register_provider(Arc::new(CompositeExtensionProvider));
     registry
@@ -139,7 +136,5 @@ fn load_db_tree_extension_menu_registry(
 
 #[cfg(test)]
 mod composite_provider_tests;
-#[cfg(test)]
-mod mcp_helper_provider_tests;
 #[cfg(test)]
 mod provider_tests;

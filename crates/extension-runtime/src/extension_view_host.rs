@@ -35,6 +35,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             Ok(manifest
                 .into_entries()
                 .into_iter()
+                .filter(|entry| entry.kind != host_extension::ExtensionKind::Unsupported)
                 .map(to_view_entry)
                 .collect())
         }
@@ -51,6 +52,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             Ok(manifest
                 .into_entries()
                 .into_iter()
+                .filter(|entry| entry.kind != host_extension::ExtensionKind::Unsupported)
                 .map(to_view_entry)
                 .collect())
         }
@@ -401,9 +403,11 @@ fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::Extensio
         host_extension::ExtensionKind::RemoteDesktopProvider => {
             extension_view::ExtensionKind::RemoteDesktopProvider
         }
-        host_extension::ExtensionKind::McpHelper => extension_view::ExtensionKind::McpHelper,
         host_extension::ExtensionKind::AcpAgent => extension_view::ExtensionKind::AcpAgent,
         host_extension::ExtensionKind::Composite => extension_view::ExtensionKind::Composite,
+        host_extension::ExtensionKind::Unsupported => {
+            unreachable!("unsupported kind is filtered before view conversion")
+        }
     }
 }
 
@@ -419,7 +423,6 @@ fn to_host_kind(kind: extension_view::ExtensionKind) -> host_extension::Extensio
         extension_view::ExtensionKind::RemoteDesktopProvider => {
             host_extension::ExtensionKind::RemoteDesktopProvider
         }
-        extension_view::ExtensionKind::McpHelper => host_extension::ExtensionKind::McpHelper,
         extension_view::ExtensionKind::AcpAgent => host_extension::ExtensionKind::AcpAgent,
         extension_view::ExtensionKind::Composite => host_extension::ExtensionKind::Composite,
     }
@@ -442,7 +445,6 @@ mod tests {
         for kind in [
             extension_view::ExtensionKind::DatabaseDriver,
             extension_view::ExtensionKind::RemoteDesktopProvider,
-            extension_view::ExtensionKind::McpHelper,
             extension_view::ExtensionKind::AcpAgent,
             extension_view::ExtensionKind::Composite,
         ] {

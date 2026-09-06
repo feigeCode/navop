@@ -317,6 +317,13 @@
 
 #### 已沉淀经验
 
+- **标题**：扩展机制收敛时先做全仓 + 外部仓库死代码审计，`extension-api` 不是孤儿而是 WIT 契约宿主
+- **触发信号**：试图删除某个 extension-* crate 或“统一扩展机制”时，凭 `rg` 在 workspace 内没找到 `use extension_api` 就判定它是死 crate；或看到 `extension-host/src/runtime.rs` 的 `IpcExtensionRuntime`/`ComponentExtensionRuntime`/`ExtensionRuntimeFactory` 而以为它是统一运行时核心。
+- **根因 / 约束**：`extension-api` 的 Rust 代码确实无任何 crate 编译依赖，但它的 `wit/` 目录是 `extension-wasm` 全部 component bindings 的 WIT 源（9 处 `path: "../extension-api/wit"`），删除即破 wasm 组件路径；用户明确保留 wasm 时不能删。`extension-host/src/runtime.rs` 才是真死机制：零消费（workspace + 外部 `navop-extensions` 都不引），且是被 `extension-plugin-adapter::ActivationManager` 取代的废弃“统一 IPC/Component 运行时抽象”，其中 `ComponentExtensionRuntime` 是 TODO 占位。`crates/elasticsearch-provider` 非 workspace member、无人引用，是悬挂目录，但不在构建里。
+- **正确做法**：收敛前同时 grep workspace 与 `../navop-extensions`（该仓库的 Cargo.toml 依赖面决定外部 ABI）；区分“无 crate 编译依赖”和“被 fixture/bindings 以路径/WIT 引用”。对外部驱动在用符号（`extension-host` 的 client/process/transport/host_api/universal_plugin、`extension-driver` 的 `serve`/`Driver`）绝不轻动。DB SQL 驱动的 `IpcDriverRegistry`(driver.json) 与 `ExtensionRuntimeCatalog`(extension.json) 是刻意分层：`db` crate 依赖 `extension-runtime` 会成环，且设计 Non-Goals 明确不发明统一 SQL 协议。
+- **验证方式**：删除前后跑 `cargo check -p extension-host -p extension-plugin-adapter -p db -p extension-runtime -p universal-plugins -p main`、`cargo test -p extension-host -p extension-plugin-adapter -p extension-runtime`、`cargo clippy -p extension-host --all-targets`；并确认 `navop-extensions` 无 `extension_host::runtime`/`runtime.rs` 符号引用。
+- **适用范围**：`crates/extension-*`、`crates/universal-plugins`、`crates/db/src/ipc/registry.rs`、`crates/extension-runtime/src/extension_db_gateway.rs`、`crates/elasticsearch-provider`，以及任何“统一/删除扩展机制”类改造。
+
 - **标题**：GPUI UI 测试不要直接依赖真实 Tokio worker 的完成时序
 - **触发信号**：`#[gpui::test]` 覆盖 UI 加载时，代码路径内部调用 `one_core::gpui_tokio::Tokio::spawn`，测试出现非确定性 background thread / scheduler 活动，或需要等待真实多线程 Tokio worker 才能断言 UI 状态。
 - **根因 / 约束**：`Tokio::spawn` 使用全局 Tokio runtime，再通过 GPUI `background_spawn` 回到测试调度器；这会让本应确定性的 UI 测试混入真实多线程调度。
