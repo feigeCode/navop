@@ -1,12 +1,11 @@
 use gpui::{Context, Window};
-use remote_desktop::RemoteDesktopProtocol;
+use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderRegistry};
 use std::sync::Arc;
 
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 use crate::extension_downloader::{
-    DownloadProgressCallback, MarketplaceEntry,
-    download_marketplace_entry_to_staging_with_progress, fetch_default_manifest_url,
-    fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
+    DownloadProgressCallback, MarketplaceEntry, fetch_default_manifest_url, fetch_manifest_url,
+    install_marketplace_entry_generic, install_marketplace_entry_with_progress,
 };
 use crate::install_flow::{notify_error, run_install_with_progress_prompt};
 use one_core::storage::RemoteDesktopBackendPreference;
@@ -179,27 +178,15 @@ async fn install_remote_desktop_provider_from_marketplace(
     let entry = find_remote_desktop_provider_entry(&entries, &provider_id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("扩展市场未找到远程桌面插件 {provider_id}"))?;
-    let staging =
-        download_marketplace_entry_to_staging_with_progress(http_client, &entry, on_progress)
-            .await?;
-    let result = install_staged_remote_desktop_provider(&staging);
-    let _ = std::fs::remove_dir_all(&staging);
-    result
-}
-
-fn install_staged_remote_desktop_provider(
-    staging: &std::path::Path,
-) -> anyhow::Result<ExtensionSummary> {
-    let registry =
-        ExtensionRegistry::global().ok_or_else(|| anyhow::anyhow!("扩展系统未初始化"))?;
-    let registry = registry
-        .read()
-        .map_err(|error| anyhow::anyhow!("registry lock poisoned: {error}"))?;
-    install_from_staging_generic(
-        staging,
-        &registry,
-        Some(ExtensionKind::RemoteDesktopProvider),
+    let summary = install_marketplace_entry_with_progress(
+        http_client,
+        &entry,
+        ExtensionKind::RemoteDesktopProvider,
+        on_progress,
     )
+    .await?;
+    RemoteDesktopProviderRegistry::refresh_global_registry();
+    Ok(summary)
 }
 
 #[cfg(test)]

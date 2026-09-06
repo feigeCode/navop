@@ -187,8 +187,14 @@ fn reload_extension_runtime(kind: extension_view::ExtensionKind, cx: &mut App) {
     if should_reload_languages(kind) {
         refresh_language_extension_manifests();
     }
-    if kind == extension_view::ExtensionKind::DatabaseDriver {
-        db::ipc::IpcDriverRegistry::refresh_global_registry();
+    match kind {
+        extension_view::ExtensionKind::DatabaseDriver => {
+            db::ipc::IpcDriverRegistry::refresh_global_registry();
+        }
+        extension_view::ExtensionKind::RemoteDesktopProvider => {
+            remote_desktop::RemoteDesktopProviderRegistry::refresh_global_registry();
+        }
+        _ => {}
     }
     crate::refresh_global_runtime_catalog(cx);
     crate::extension::refresh_runtime_contributions(cx);
@@ -503,9 +509,10 @@ mod tests {
             .expect("extension runtime reload should exist");
 
         assert!(reload.contains("ExtensionKind::DatabaseDriver"));
+        assert!(reload.contains("refresh_global_registry"));
         assert!(
-            reload.contains("refresh_global_registry"),
-            "database driver reload must invalidate the single driver registry instance"
+            reload.contains("ExtensionKind::RemoteDesktopProvider"),
+            "provider reload must invalidate the single remote-desktop registry too"
         );
     }
 

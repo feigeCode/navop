@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 
 use crate::RemoteDesktopProtocol;
 use crate::provider::{PROVIDER_MANIFEST_FILE, RemoteDesktopProviderManifest};
@@ -7,6 +8,16 @@ use crate::provider::{PROVIDER_MANIFEST_FILE, RemoteDesktopProviderManifest};
 const EXTENSIONS_DIR_NAME: &str = "extensions";
 const PROVIDERS_DIR_NAME: &str = "remote_desktop_providers";
 const PROVIDER_DIR_ENV: &str = "ONETCLI_REMOTE_DESKTOP_PROVIDER_DIR";
+
+/// 应用级单一远程桌面插件注册表实例。首次 `load_default` 建立，扩展管理面在
+/// 插件安装/卸载/重载后通过 [`RemoteDesktopProviderRegistry::refresh_global_registry`]
+/// 失效重建，避免每调用点重复扫描 `extensions/remote_desktop_providers/`。
+static GLOBAL_PROVIDER_REGISTRY: OnceLock<RwLock<Option<RemoteDesktopProviderRegistry>>> =
+    OnceLock::new();
+
+fn global_registry_slot() -> &'static RwLock<Option<RemoteDesktopProviderRegistry>> {
+    GLOBAL_PROVIDER_REGISTRY.get_or_init(|| RwLock::new(None))
+}
 
 #[derive(Clone, Debug)]
 pub struct RemoteDesktopProviderRegistry {
@@ -37,7 +48,31 @@ pub struct RemoteDesktopProviderSkippedEntry {
 
 impl RemoteDesktopProviderRegistry {
     pub fn load_default() -> Self {
-        Self::load_from_dirs(&default_provider_dirs()).unwrap_or_else(|_| Self::empty())
+        if let Some(cached) = global_registry_slot()
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
+        {
+            return cached;
+        }
+        let built =
+            Self::load_from_dirs(&default_provider_dirs()).unwrap_or_else(|_| Self::empty());
+        if let Ok(mut slot) = global_registry_slot().write() {
+            if slot.is_none() {
+                *slot = Some(built.clone());
+            }
+        }
+        built
+    }
+
+    /// 失效并重建全局注册表。扩展管理面在远程桌面插件安装/卸载/重载后调用，
+    /// 使后续 `load_default` 读到最新插件而不依赖进程重启。
+    pub fn refresh_global_registry() {
+        let rebuilt =
+            Self::load_from_dirs(&default_provider_dirs()).unwrap_or_else(|_| Self::empty());
+        if let Ok(mut slot) = global_registry_slot().write() {
+            *slot = Some(rebuilt);
+        }
     }
 
     pub fn load_from_dirs(dirs: &[PathBuf]) -> anyhow::Result<Self> {
