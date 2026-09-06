@@ -165,10 +165,7 @@ impl HomePage {
     }
 
     pub(crate) fn match_connection_type(&self, conn: &StoredConnection) -> bool {
-        match self.selected_filter {
-            ConnectionType::All => true,
-            filter_type => conn.connection_type == filter_type,
-        }
+        match_connection_type(self.selected_filter, conn)
     }
 
     pub(crate) fn match_connection(&self, conn: &StoredConnection, query: &str) -> bool {
@@ -210,4 +207,9 @@ mod tests {
         ));
         assert!(!connection_matches_query(&connection, "router.example.com"));
     }
+}
+
+/// Stateless predicate: home and tree must each supply their own selection.
+pub(crate) fn match_connection_type(filter: ConnectionType, conn: &StoredConnection) -> bool {
+    filter == ConnectionType::All || filter == conn.connection_type
 }

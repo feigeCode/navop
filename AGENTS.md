@@ -555,6 +555,13 @@
 - **验证方式**：双态验证 `cargo check -p main`（feature off）与 `cargo check -p main --features shell-plugins` 及 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。
 - **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,onetcli_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
 
+- **标题**：View 内联渲染自己的引用方会造成 GPUI 实体租约重入 panic
+- **触发信号**：运行时在 `entity_map.rs` 报 `cannot read X while it is already being updated`，场景为 A::render 中直接 `b.update(cx, |b, cx| b.render_something(cx))`，且该路径内部再 `this.a.read(cx)` / `this.a.update(cx)`。
+- **根因 / 约束**：GPUI 渲染 View 时持有其实体租约；同一帧渲染路径中任何代码再 read/update 该实体即 panic。把整段子视图手动塞回某个方法，等于把对方的 render 搬进了自己的租约。
+- **正确做法**：需要渲染“会反向读取当前实体”的子视图时，把子视图作为实体子节点渲染（`view.clone()` 作 child / AnyView），子视图在自己的 `Render::render` 租约里读取父实体；模式切换用显式字段（如 `home_embedded`）控制子视图输出。事件回调里的 read/update 不受此约束。
+- **验证方式**：结构 contract 断言宿主 render 只引用实体不内联调用其 render 方法（含 `set_*` 模式同步），真实窗口切换布局确认不再 panic。
+- **适用范围**：`main/src/home_tab/content.rs`（HomePage 嵌入 persistent_connection_sidebar Tree）、任何 View 互相持有 Entity 并嵌入渲染的场景。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

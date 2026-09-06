@@ -10,60 +10,59 @@ use one_core::{
 use rust_i18n::t;
 
 use super::{
-    PersistentConnectionSidebar,
     connection_copy_menu::append_copy_connection_submenu,
     context_menu::{ConnectionMenuAction, connection_menu_actions},
 };
+use crate::home_tab::HomePage;
 
-impl PersistentConnectionSidebar {
-    pub(super) fn build_connection_context_menu(
-        mut menu: PopupMenu,
-        view: &Entity<Self>,
-        connection_id: i64,
-        window: &mut Window,
-        cx: &mut gpui::Context<PopupMenu>,
-    ) -> PopupMenu {
-        let home = view.read(cx).home_page.clone();
-        let Some(connection) = home
-            .read(cx)
-            .connections
-            .iter()
-            .find(|connection| connection.id == Some(connection_id))
-            .cloned()
-        else {
-            return menu;
-        };
-        let can_edit = home.read(cx).can_move_connection(connection_id);
-        let can_export_credentials = home
-            .read(cx)
-            .can_export_connection_credentials(connection_id);
-        let resolved_ssh = {
-            let home = home.read(cx);
-            connection
-                .to_port_forwarding_params()
-                .ok()
-                .and_then(|params| {
-                    home.connections
-                        .iter()
-                        .find(|candidate| {
-                            candidate.id == Some(params.ssh_connection_id)
-                                && candidate.connection_type == ConnectionType::SshSftp
-                        })
-                        .cloned()
-                })
-        };
+/// 连接右键菜单，常驻侧栏树与主页卡片/列表/树共用，保证入口一致。
+pub(crate) fn build_connection_context_menu(
+    mut menu: PopupMenu,
+    home: &Entity<HomePage>,
+    connection_id: i64,
+    window: &mut Window,
+    cx: &mut gpui::Context<PopupMenu>,
+) -> PopupMenu {
+    let home = home.clone();
+    let Some(connection) = home
+        .read(cx)
+        .connections
+        .iter()
+        .find(|connection| connection.id == Some(connection_id))
+        .cloned()
+    else {
+        return menu;
+    };
+    let can_edit = home.read(cx).can_move_connection(connection_id);
+    let can_export_credentials = home
+        .read(cx)
+        .can_export_connection_credentials(connection_id);
+    let resolved_ssh = {
+        let home = home.read(cx);
+        connection
+            .to_port_forwarding_params()
+            .ok()
+            .and_then(|params| {
+                home.connections
+                    .iter()
+                    .find(|candidate| {
+                        candidate.id == Some(params.ssh_connection_id)
+                            && candidate.connection_type == ConnectionType::SshSftp
+                    })
+                    .cloned()
+            })
+    };
 
-        let action_context = ConnectionActionContext {
-            connection: &connection,
-            can_export_credentials,
-            resolved_ssh: resolved_ssh.as_ref(),
-            home: &home,
-        };
-        for action in connection_menu_actions(connection.connection_type, can_edit) {
-            menu = add_connection_action(menu, action, &action_context, window, cx);
-        }
-        menu
+    let action_context = ConnectionActionContext {
+        connection: &connection,
+        can_export_credentials,
+        resolved_ssh: resolved_ssh.as_ref(),
+        home: &home,
+    };
+    for action in connection_menu_actions(connection.connection_type, can_edit) {
+        menu = add_connection_action(menu, action, &action_context, window, cx);
     }
+    menu
 }
 
 fn starts_menu_section(action: ConnectionMenuAction) -> bool {

@@ -768,7 +768,10 @@ fn credential_capture_consumed_keys_block_text_system_passthrough() {
             "capture submit",
         ),
         ("capture.backspace()", "capture backspace"),
-        ("self.handle_credential_capture_cancel(cx)", "capture cancel"),
+        (
+            "self.handle_credential_capture_cancel(cx)",
+            "capture cancel",
+        ),
     ] {
         assert!(
             handler.contains(action),

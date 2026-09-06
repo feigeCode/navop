@@ -174,7 +174,9 @@ pub enum ImportDatabaseType {
     ClickHouse,
     /// TDengine 时序数据库
     TDengine,
-    External { id: String },
+    External {
+        id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

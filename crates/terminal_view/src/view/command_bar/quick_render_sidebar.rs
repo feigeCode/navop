@@ -5,11 +5,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
-    ActiveTheme,
-    button::ButtonVariants as _,
-    h_flex,
-    scroll::ScrollableElement,
-    v_flex,
+    ActiveTheme, button::ButtonVariants as _, h_flex, scroll::ScrollableElement, v_flex,
 };
 use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;

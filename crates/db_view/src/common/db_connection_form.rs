@@ -1078,17 +1078,16 @@ impl DbFormConfig {
                     .default("30"),
                 ]),
                 TabGroup::new("ssl", t!("ConnectionForm.ssl")).fields(vec![
-                    FormField::new(
-                        "schema",
-                        t!("ConnectionForm.schema"),
-                        FormFieldType::Select,
-                    )
-                    .optional()
-                    .default("ws")
-                    .options(vec![
-                        ("ws".to_string(), t!("ConnectionForm.schema_ws").to_string()),
-                        ("wss".to_string(), t!("ConnectionForm.schema_wss").to_string()),
-                    ]),
+                    FormField::new("schema", t!("ConnectionForm.schema"), FormFieldType::Select)
+                        .optional()
+                        .default("ws")
+                        .options(vec![
+                            ("ws".to_string(), t!("ConnectionForm.schema_ws").to_string()),
+                            (
+                                "wss".to_string(),
+                                t!("ConnectionForm.schema_wss").to_string(),
+                            ),
+                        ]),
                 ]),
                 Self::ssh_tab_group(),
                 TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![

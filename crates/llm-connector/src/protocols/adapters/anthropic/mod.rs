@@ -6,8 +6,8 @@ use crate::core::Protocol;
 use crate::error::LlmConnectorError;
 use crate::protocols::common::capabilities::ProviderCapabilities;
 use crate::types::{
-    AnthropicToolChoice, AnthropicToolDefinition, ChatRequest, ChatResponse, Choice,
-    FunctionCall, Message, Role, ToolCall, ToolChoice, Usage,
+    AnthropicToolChoice, AnthropicToolDefinition, ChatRequest, ChatResponse, Choice, FunctionCall,
+    Message, Role, ToolCall, ToolChoice, Usage,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -165,17 +165,17 @@ impl Protocol for AnthropicProtocol {
             stream: request.stream,
             thinking,
             tools: request.anthropic_tools.clone().or_else(|| {
-                request.tools.as_ref().map(|tools| {
-                    tools
-                        .iter()
-                        .map(map_generic_tool_to_anthropic)
-                        .collect()
-                })
+                request
+                    .tools
+                    .as_ref()
+                    .map(|tools| tools.iter().map(map_generic_tool_to_anthropic).collect())
             }),
-            tool_choice: request
-                .anthropic_tool_choice
-                .clone()
-                .or_else(|| request.tool_choice.as_ref().and_then(map_tool_choice_to_anthropic)),
+            tool_choice: request.anthropic_tool_choice.clone().or_else(|| {
+                request
+                    .tool_choice
+                    .as_ref()
+                    .and_then(map_tool_choice_to_anthropic)
+            }),
         })
     }
 
@@ -478,9 +478,9 @@ fn map_tool_choice_to_anthropic(tool_choice: &ToolChoice) -> Option<AnthropicToo
             "auto" => Some(AnthropicToolChoice::auto()),
             _ => Some(AnthropicToolChoice::auto()),
         },
-        ToolChoice::Function { function, .. } => Some(AnthropicToolChoice::tool(
-            function.name.clone(),
-        )),
+        ToolChoice::Function { function, .. } => {
+            Some(AnthropicToolChoice::tool(function.name.clone()))
+        }
     }
 }
 
@@ -532,7 +532,10 @@ mod tests {
         assert_eq!(result.content, "Hello there, nice to meet.");
         assert_eq!(result.choices[0].message.content.len(), 2);
         match &result.choices[0].message.content[0] {
-            MessageBlock::Thinking { thinking, signature } => {
+            MessageBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking, "This is a thinking block");
                 assert_eq!(signature.as_deref(), Some("sig_123"));
             }
@@ -618,7 +621,10 @@ mod tests {
         assert_eq!(result.content, "");
         assert_eq!(result.choices[0].message.content.len(), 1);
         match &result.choices[0].message.content[0] {
-            MessageBlock::Thinking { thinking, signature } => {
+            MessageBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking, "Just thinking...");
                 assert_eq!(signature.as_deref(), Some("sig_124"));
             }
@@ -799,7 +805,10 @@ mod tests {
 
         assert_eq!(tool["type"], "custom");
         assert_eq!(tool["name"], "write_file");
-        assert_eq!(tool["custom_input_schema"]["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        assert_eq!(
+            tool["custom_input_schema"]["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
         assert_eq!(tool["strict"], true);
         assert_eq!(tool["allowed_callers"][0], "claude_code");
         assert_eq!(tool["defer_loading"], true);

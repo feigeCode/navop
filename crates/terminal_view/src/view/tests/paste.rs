@@ -51,10 +51,16 @@ fn detect_unbracketed_paste_hazard_ignores_plain_text() {
 
 #[test]
 fn is_large_paste_triggers_on_line_count_or_bytes() {
-    let two_hundred_lines = (0..200).map(|i| i.to_string()).collect::<Vec<_>>().join("\n");
+    let two_hundred_lines = (0..200)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(!is_large_paste(&two_hundred_lines));
 
-    let over_lines = (0..201).map(|i| i.to_string()).collect::<Vec<_>>().join("\n");
+    let over_lines = (0..201)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(is_large_paste(&over_lines));
 
     let over_bytes = "a".repeat(32 * 1024 + 1);

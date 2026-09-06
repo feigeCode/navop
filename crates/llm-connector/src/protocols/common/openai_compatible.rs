@@ -55,10 +55,12 @@ pub fn map_openai_compatible_messages(
                 capabilities.empty_assistant_tool_content_strategy,
             ),
         ),
-        ContentBlockMode::TextOnly => crate::protocols::common::request::openai_message_converter_downgrade_with_strategy(
-            &request.messages,
-            capabilities.empty_assistant_tool_content_strategy,
-        ),
+        ContentBlockMode::TextOnly => {
+            crate::protocols::common::request::openai_message_converter_downgrade_with_strategy(
+                &request.messages,
+                capabilities.empty_assistant_tool_content_strategy,
+            )
+        }
         ContentBlockMode::NativeMessage => Ok(
             crate::protocols::common::request::openai_message_converter_with_strategy(
                 &request.messages,

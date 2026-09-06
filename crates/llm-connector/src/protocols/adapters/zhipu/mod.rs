@@ -62,7 +62,8 @@ impl ZhipuProtocol {
     }
 
     fn capabilities(&self) -> OpenAICompatibleCapabilities {
-        let provider_capabilities = crate::protocols::common::capabilities::ProviderCapabilities::zhipu_openai_compatible();
+        let provider_capabilities =
+            crate::protocols::common::capabilities::ProviderCapabilities::zhipu_openai_compatible();
 
         match self.mode {
             ZhipuApiMode::Native | ZhipuApiMode::OpenAICompatible => OpenAICompatibleCapabilities {

@@ -11,7 +11,10 @@ use crate::real_databases::postgres::core_flow::{
 #[tokio::test]
 async fn postgres_real_table_designer_create_alter_rename_and_export() {
     let Some(config) = postgres_config() else {
-        skip_database("PostgreSQL", "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)");
+        skip_database(
+            "PostgreSQL",
+            "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)",
+        );
         return;
     };
     let config = optional_database(

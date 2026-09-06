@@ -3430,10 +3430,7 @@ mod tests {
         // duckdb 是 true-schema 驱动（supports_schema=true 且非 schema-as-database），
         // 无 schema 时表引用不加数据库限定（1669afc7f 语义）。
         assert_eq!(1, queries.len());
-        assert_eq!(
-            "SELECT * FROM \"EVENTS\" LIMIT 25 OFFSET 25",
-            queries[0]
-        );
+        assert_eq!("SELECT * FROM \"EVENTS\" LIMIT 25 OFFSET 25", queries[0]);
     }
 
     #[tokio::test]

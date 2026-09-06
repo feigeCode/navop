@@ -6,6 +6,7 @@ impl HomePage {
         conn: StoredConnection,
         selected_id: Option<i64>,
         _index: usize,
+        recent: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conn_id = conn.id;
@@ -24,29 +25,32 @@ impl HomePage {
         };
         let actions = self.render_connection_list_actions(&conn, can_edit, cx);
         let display_name = connection_display_name(&conn);
+        let home_for_menu = cx.entity();
+        let hover_bg = cx.theme().list_hover;
 
-        h_flex()
-            .id(SharedString::from(format!(
-                "conn-list-item-{}",
-                conn.id.unwrap_or(0)
-            )))
+        // 同一连接会同时出现在最近区与普通分组，元素 ID 按展示区命名空间区分（redesign §6.2）。
+        let row_id = if recent {
+            "conn-list-item-recent"
+        } else {
+            "conn-list-item"
+        };
+        let row_id = SharedString::from(format!("{row_id}-{}", conn_id.unwrap_or(0)));
+
+        let row = h_flex()
+            .id(row_id.clone())
             .w_full()
-            .h(px(64.0))
-            .rounded(px(6.0))
-            .bg(cx.theme().background)
-            .px_3()
-            .border_1()
+            .px_3p5()
+            .py_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
             .items_center()
             .gap_3()
             .relative()
             .group("")
-            .when(is_selected, |this| {
-                this.border_color(cx.theme().list_active_border)
-                    .border_l_3()
-            })
-            .when(!is_selected, |this| this.border_color(cx.theme().border))
+            // 选中态与卡片一致：主题选中背景；hover 不覆盖选中（refinement §7.2）。
+            .when(is_selected, |this| this.bg(cx.theme().list_active))
+            .when(!is_selected, |this| this.hover(|style| style.bg(hover_bg)))
             .cursor_pointer()
-            .hover(|style| style.bg(cx.theme().muted))
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.open_connection_from_quick(&open_connection, window, cx);
                 cx.notify()
@@ -93,7 +97,7 @@ impl HomePage {
                                     .child(display_name),
                             )
                             .when_some(team_badge, |this, badge| {
-                                this.child(render_list_team_badge(&conn, badge, cx))
+                                this.child(render_team_badge(&row_id, &conn, badge, cx))
                             })
                             .child(actions),
                     )
@@ -108,43 +112,20 @@ impl HomePage {
                             .min_w_0()
                             .child(self.connection_info_text(&conn)),
                     ),
-            )
-            .into_any_element()
+            );
+        match conn_id {
+            Some(id) => row
+                .context_menu(move |menu, window, cx| {
+                    crate::persistent_connection_sidebar::build_connection_context_menu(
+                        menu,
+                        &home_for_menu,
+                        id,
+                        window,
+                        cx,
+                    )
+                })
+                .into_any_element(),
+            None => row.into_any_element(),
+        }
     }
-}
-
-fn render_list_team_badge(
-    conn: &StoredConnection,
-    badge: ConnectionTeamBadge,
-    cx: &App,
-) -> AnyElement {
-    let tooltip_text: SharedString = badge.tooltip.into();
-    let background = if badge.active {
-        cx.theme().primary
-    } else {
-        cx.theme().muted
-    };
-    let foreground = if badge.active {
-        cx.theme().primary_foreground
-    } else {
-        cx.theme().muted_foreground
-    };
-    div()
-        .id(SharedString::from(format!(
-            "conn-list-team-{}",
-            conn.id.unwrap_or(0)
-        )))
-        .max_w(px(112.0))
-        .px_1p5()
-        .py_0p5()
-        .rounded(px(4.0))
-        .bg(background)
-        .text_color(foreground)
-        .text_xs()
-        .overflow_hidden()
-        .text_ellipsis()
-        .whitespace_nowrap()
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
-        .child(badge.name)
-        .into_any_element()
 }

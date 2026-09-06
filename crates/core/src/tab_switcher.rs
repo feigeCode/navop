@@ -12,7 +12,8 @@ use rust_i18n::t;
 use std::sync::Arc;
 
 pub type QuickOpenAction = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
-pub type QuickOpenResolver = Arc<dyn Fn(&str) -> Option<(SharedString, QuickOpenAction)> + Send + Sync>;
+pub type QuickOpenResolver =
+    Arc<dyn Fn(&str) -> Option<(SharedString, QuickOpenAction)> + Send + Sync>;
 
 const SWITCHER_WIDTH: f32 = 640.0;
 const SWITCHER_MAX_HEIGHT: f32 = 420.0;
@@ -139,9 +140,17 @@ impl ListDelegate for TabSwitcherDelegate {
     ) -> Option<Self::Item> {
         if let Some((title, action)) = &self.quick_open {
             return (ix.row == 0).then(|| {
-                let mut item = TabSwitcherItem::new(TabSwitcherEntry {
-                    index: 0, pinned: false, title: title.clone(), icon: None, active: false,
-                }, self.container.clone(), self.selected_index == Some(ix));
+                let mut item = TabSwitcherItem::new(
+                    TabSwitcherEntry {
+                        index: 0,
+                        pinned: false,
+                        title: title.clone(),
+                        icon: None,
+                        active: false,
+                    },
+                    self.container.clone(),
+                    self.selected_index == Some(ix),
+                );
                 item.quick_open = Some(action.clone());
                 item
             });

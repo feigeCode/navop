@@ -32,3 +32,34 @@ pub(crate) fn connection_team_badge(
         }
     })
 }
+
+/// 中性团队标签（redesign §5.4）：统一 muted 底色，不再用 primary 蓝底白字；
+/// 固定在名称行右端与名称对齐，超宽时标签先截断。
+/// 注意：不带 id/tooltip——独立 hitbox 会截获 hover，导致卡片 hover 按钮
+/// （依赖卡片 group_hover）无法显示；完整团队名可在卡片名称 tooltip / 详情中查看。
+pub(super) fn render_team_badge(
+    _id_prefix: &str,
+    _conn: &StoredConnection,
+    badge: ConnectionTeamBadge,
+    cx: &App,
+) -> AnyElement {
+    let foreground = if badge.active {
+        cx.theme().foreground
+    } else {
+        cx.theme().muted_foreground
+    };
+    div()
+        .flex_shrink_0()
+        .max_w(px(112.0))
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(4.0))
+        .bg(cx.theme().muted)
+        .text_color(foreground)
+        .text_xs()
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
+        .child(badge.name)
+        .into_any_element()
+}

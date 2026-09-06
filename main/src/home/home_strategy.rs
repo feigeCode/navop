@@ -83,10 +83,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
         window: &mut Window,
         cx: &mut Context<HomePage>,
     ) {
-        window.push_notification(
-            "Extension connections require the shell-plugins build",
-            cx,
-        );
+        window.push_notification("Extension connections require the shell-plugins build", cx);
     }
 }
 

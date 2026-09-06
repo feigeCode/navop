@@ -1,276 +1,201 @@
 use super::*;
+use gpui_component::Selectable as _;
+use one_core::settings::ConnectionSortOrder;
 
 impl HomePage {
     pub(super) fn render_toolbar(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let view = cx.entity();
-
-        let workspace_filter_open = self.workspace_filter_open;
-        let workspace_filter =
-            self.render_workspace_filter_popover(workspace_filter_open, window, cx);
-
-        let is_syncing = self.syncing;
-        let is_logged_in = self.current_user.is_some();
-        let has_sync_license = is_feature_enabled(Feature::CloudSync, cx);
-        let route = sync_route(cx);
-        let sync_enabled = AppSettings::global(cx).sync_enabled;
-        let personal_syncing = matches!(
-            crate::personal_sync_runtime::runtime_status(cx),
-            crate::personal_sync_status::PersonalSyncRuntimeStatus::Syncing
-        );
-        let personal_sync_ready = crate::personal_sync_runtime::actions_enabled(cx);
-        let sync_button_state = home_sync_button_state(HomeSyncButtonContext {
-            route,
-            sync_enabled,
-            is_logged_in,
-            has_sync_license,
-            onet_syncing: is_syncing,
-            personal_sync_ready,
-            personal_syncing,
-        });
-        let has_master_key = crypto::has_master_key();
-        let show_team_key_menu_item = is_feature_enabled(Feature::TeamManagement, cx)
-            && should_show_team_key_menu_item(route, self.team_permissions.teams().len());
-        let personal_conflict_count = if route == HomeSyncRoute::Personal {
-            crate::personal_sync_conflicts::current_personal_conflict_count(cx)
-        } else {
-            0
-        };
-        let conflict_count = match route {
-            HomeSyncRoute::OnetCloud => self.pending_conflicts.len(),
-            HomeSyncRoute::Personal => personal_conflict_count,
-        };
-        let has_conflicts = conflict_count > 0;
-
-        let legacy = self.home_page_style == HomePageStyle::Legacy;
-        let geometry = cx.theme().geometry.clone();
-
+    ) -> AnyElement {
+        let group_filter =
+            self.render_workspace_filter_popover(self.workspace_filter_open, window, cx);
         h_flex()
             .w_full()
             .min_w_0()
-            .min_h(geometry.layout.command_bar)
-            .flex_wrap()
-            .gap(geometry.spacing.space_2)
-            .px(geometry.spacing.space_3)
-            .py(geometry.spacing.space_1)
+            .flex_shrink_0()
+            .gap_1()
+            // 与内容区 p_5 同一左边线（redesign：统一左右内缩）。
+            .px_5()
+            .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
-            .items_center()
-            .justify_between()
-            // ===== 左侧功能区 =====
             .child(
-                h_flex()
-                    .min_w_0()
-                    .flex_wrap()
-                    .gap_2()
-                    .items_center()
-                    // 新建连接按钮（主要操作）
-                    .child(
-                        Button::new("new-connect-button")
-                            .icon(IconName::Plus)
-                            .primary()
-                            .label(t!("Home.new_connection"))
-                            .tooltip(t!("Home.new_connection"))
-                            .on_click(window.listener_for(&view, move |this, _, window, cx| {
-                                this.show_new_connection_dialog(window, cx);
-                            })),
-                    )
-                    .child(self.render_local_terminal_button(window, cx))
-                    .child(
-                        Button::new("import-connection-button")
-                            .icon(IconName::Upload)
-                            .label(t!("Home.other_app_import"))
-                            .tooltip(t!("Home.other_app_import"))
-                            .on_click({
-                                let view = view.clone();
-                                move |_, window, cx| {
-                                    show_connection_import_window(
-                                        view.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }),
-                    )
-                    // 分隔线
-                    .child(
-                        div()
-                            .h(geometry.spacing.space_5)
-                            .w(geometry.border.hairline)
-                            .bg(cx.theme().border)
-                            .mx(geometry.spacing.space_1),
-                    )
-                    // 同步按钮
-                    .child(
-                        Button::new("sync-button")
-                            .icon(if has_sync_license {
-                                IconName::Refresh
-                            } else {
-                                IconName::Key
-                            })
-                            .label(if is_syncing || personal_syncing {
-                                t!("Home.syncing").to_string()
-                            } else if route == HomeSyncRoute::OnetCloud && !has_sync_license {
-                                t!("License.upgrade_to_pro").to_string()
-                            } else {
-                                t!("Home.sync").to_string()
-                            })
-                            .ghost()
-                            .disabled(sync_button_state.is_disabled())
-                            .tooltip(
-                                if !sync_enabled {
-                                    t!("Home.sync_disabled_tooltip")
-                                } else if route == HomeSyncRoute::Personal && !personal_sync_ready {
-                                    t!("Settings.Sync.Status.not_configured")
-                                } else if route == HomeSyncRoute::OnetCloud
-                                    && !is_logged_in
-                                    && has_sync_license
-                                {
-                                    t!("Home.cloud_need_login")
-                                } else if route == HomeSyncRoute::OnetCloud && !has_sync_license {
-                                    t!("License.pro_required")
-                                } else {
-                                    t!("Home.sync_tooltip")
-                                },
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.handle_sync_click(window, cx);
-                            })),
-                    )
-                    // 冲突指示器
-                    .when(has_conflicts, |this| {
-                        this.child(
-                            Button::new("conflict-button")
-                                .icon(IconName::TriangleAlert)
-                                .label(format!("{}", conflict_count))
-                                .ghost()
-                                .text_color(cx.theme().warning)
-                                .tooltip(if route == HomeSyncRoute::Personal {
-                                    t!(
-                                        "Home.personal_sync_conflict_tooltip",
-                                        count = conflict_count
-                                    )
-                                    .to_string()
-                                } else {
-                                    t!("Home.conflict_tooltip", count = conflict_count).to_string()
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if sync_route(cx) == HomeSyncRoute::Personal {
-                                        crate::personal_sync_conflicts::show_personal_conflict_dialog(
-                                            window,
-                                            cx,
-                                        );
-                                    } else {
-                                        this.show_conflict_dialog(window, cx);
-                                    }
-                                })),
-                        )
-                    })
-                    // 密钥菜单
-                    .child(
-                        Button::new("key-menu-button")
-                            .icon(IconName::Key)
-                            .label(t!("Encryption.keys").to_string())
-                            .dropdown_caret(true)
-                            .ghost()
-                            .tooltip(t!("Encryption.keys_tooltip").to_string())
-                            .dropdown_menu_with_anchor(Anchor::TopRight, {
-                                let personal_view = view.clone();
-                                let team_view = view.clone();
-                                move |menu, _, _| {
-                                    let personal_label = if has_master_key {
-                                        t!("Encryption.personal_key_unlocked").to_string()
-                                    } else {
-                                        t!("Encryption.personal_key_locked").to_string()
-                                    };
-                                    let menu = menu.item(
-                                        PopupMenuItem::new(personal_label)
-                                            .icon(IconName::User)
-                                            .on_click({
-                                                let personal_view = personal_view.clone();
-                                                move |_, window, cx| {
-                                                    personal_view.update(cx, |home, cx| {
-                                                        home.show_encryption_key_dialog(window, cx);
-                                                    });
-                                                }
-                                            }),
-                                    );
+                div().flex_1().min_w(gpui::rems(8.0)).child(
+                    Input::new(&self.search_input)
+                        .cleanable(true)
+                        .w_full()
+                        .bg(cx.theme().muted),
+                ),
+            )
+            .child(self.render_home_type_filter(window, cx))
+            .child(group_filter)
+            .child(self.render_sort_button(cx))
+            .child(self.render_layout_button(cx))
+            .child(
+                IconButton::new("refresh-button", IconName::Refresh)
+                    .tooltip(t!("Home.refresh"))
+                    .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
+            )
+            .child(
+                // 主操作区分隔线（demo：1×18px --border）
+                div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border),
+            )
+            .child(self.render_new_connection_button(window, cx))
+            .child(self.render_local_terminal_button(window, cx))
+            .into_any_element()
+    }
 
-                                    if show_team_key_menu_item {
-                                        menu.item(
-                                            PopupMenuItem::new(
-                                                t!("Encryption.team_key").to_string(),
-                                            )
-                                            .icon(IconName::Building2)
-                                            .on_click({
-                                                let team_view = team_view.clone();
-                                                move |_, window, cx| {
-                                                    team_view.update(cx, |home, cx| {
-                                                        home.add_team_key_settings_tab(window, cx);
-                                                    });
-                                                }
-                                            }),
-                                        )
-                                    } else {
-                                        menu
-                                    }
-                                }
-                            }),
+    fn render_home_type_filter(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let selected = self.selected_filter;
+        let view = cx.entity();
+        Button::new("home-type-filter")
+            .ghost()
+            .icon(connection_type_rail_icon(selected))
+            .when(window.bounds().size.width > px(1100.0), |button| {
+                button.label(connection_type_label(selected))
+            })
+            .selected(selected != ConnectionType::All)
+            .dropdown_caret(true)
+            .tooltip(t!("Home.connection_filter"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let view = view.clone();
+                crate::connection_type_menu::build_filter_menu(
+                    menu,
+                    selected,
+                    std::rc::Rc::new(move |filter, _, cx| {
+                        view.update(cx, |home, cx| home.set_selected_filter(filter, cx));
+                    }),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_sort_button(&self, cx: &Context<Self>) -> AnyElement {
+        let selected = AppSettings::global(cx).connection_sort_order;
+        Button::new("home-sort")
+            .ghost()
+            .icon(match selected {
+                ConnectionSortOrder::Natural => IconName::SortAscending,
+                ConnectionSortOrder::Lru => IconName::SortDescending,
+            })
+            .tooltip(t!("Settings.ConnectionDisplay.connection_sort"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                [
+                    (
+                        ConnectionSortOrder::Natural,
+                        t!("Settings.ConnectionDisplay.connection_sort_natural"),
                     ),
-            )
-            // ===== 右侧操作区 =====
-            .child(
-                h_flex()
-                    .min_w_0()
-                    .flex_wrap()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        Input::new(&self.search_input)
-                            .cleanable(true)
-                            .w(if legacy { px(240.0) } else { px(220.0) })
-                            .bg(cx.theme().muted),
-                    )
-                    // 布局切换按钮
-                    .child({
-                        let is_card = self.connection_layout == ConnectionLayout::Card;
-                        let tooltip = if is_card {
-                            t!("Home.list_view").to_string()
-                        } else {
-                            t!("Home.card_view").to_string()
-                        };
-                        IconButton::new(
-                            "layout-toggle",
-                            if is_card {
-                                IconName::LayoutDashboard
-                            } else {
-                                IconName::Menu
-                            },
-                        )
-                            .tooltip(tooltip)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.connection_layout = this.connection_layout.toggle();
-                                let layout = this.connection_layout.into();
+                    (
+                        ConnectionSortOrder::Lru,
+                        t!("Settings.ConnectionDisplay.connection_sort_lru"),
+                    ),
+                ]
+                .into_iter()
+                .fold(menu, |menu, (order, label)| {
+                    menu.item(
+                        PopupMenuItem::new(label.to_string())
+                            .checked(selected == order)
+                            .on_click(move |_, _, cx| {
                                 AppSettings::update_and_save(cx, |settings| {
-                                    settings.home_connection_layout = layout;
+                                    settings.connection_sort_order = order
                                 });
-                                cx.notify();
-                            }))
-                    })
-                    // 刷新按钮
-                    .child(
-                        IconButton::new("refresh-button", IconName::Refresh)
-                            .tooltip(t!("Home.refresh"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh_local_home_data(cx);
-                            })),
+                            }),
                     )
-                    // 工作区筛选
-                    .child(workspace_filter),
+                })
+            })
+            .into_any_element()
+    }
+
+    /// 视图切换：图标反映当前布局，菜单内三项带勾选态（redesign §7.2：当前视图可发现）。
+    fn render_layout_button(&self, cx: &Context<Self>) -> AnyElement {
+        let current = self.connection_layout;
+        let view = cx.entity();
+        let icon = match current {
+            ConnectionLayout::Card => IconName::LayoutDashboard,
+            ConnectionLayout::List => IconName::Menu,
+            ConnectionLayout::Tree => IconName::Network,
+        };
+        Button::new("layout-toggle")
+            .ghost()
+            .icon(icon)
+            .dropdown_caret(true)
+            .tooltip(t!("Settings.ConnectionDisplay.connection_layout"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                [
+                    (ConnectionLayout::Card, t!("Home.card_view")),
+                    (ConnectionLayout::List, t!("Home.list_view")),
+                    (ConnectionLayout::Tree, t!("Home.tree_view")),
+                ]
+                .into_iter()
+                .fold(menu, |menu, (layout, label)| {
+                    let view = view.clone();
+                    menu.item(
+                        PopupMenuItem::new(label.to_string())
+                            .checked(layout == current)
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |home, cx| {
+                                    home.set_connection_layout(layout.into(), cx);
+                                    AppSettings::update_and_save(cx, |settings| {
+                                        settings.home_connection_layout = layout.into()
+                                    });
+                                });
+                            }),
+                    )
+                })
+            })
+            .into_any_element()
+    }
+
+    fn render_new_connection_button(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let home = cx.entity();
+        DropdownButton::new("home-new-dropdown")
+            .button(
+                // 新建连接是普通命令，不因位置使用 primary（redesign §7.3）。
+                Button::new("new-connect-button")
+                    .outline()
+                    .icon(IconName::Plus)
+                    .when(window.bounds().size.width > px(1000.0), |button| {
+                        button.label(t!("Home.new_connection"))
+                    })
+                    .tooltip(home_shortcuts::new_connection_tooltip(cx))
+                    .on_click(cx.listener(|home, _, window, cx| {
+                        home.show_new_connection_dialog(window, cx)
+                    })),
             )
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let group_home = home.clone();
+                let import_home = home.clone();
+                menu.item(
+                    PopupMenuItem::new(t!("Workspace.new").to_string())
+                        .icon(IconName::FolderOpen)
+                        .on_click(move |_, window, cx| {
+                            let sort_order = group_home.read(cx).workspaces.len() as i32;
+                            show_workspace_dialog(
+                                group_home.clone(),
+                                WorkspaceDialogConfig {
+                                    initial_sort_order: Some(sort_order),
+                                    ..Default::default()
+                                },
+                                window,
+                                cx,
+                            );
+                        }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new(t!("Home.other_app_import").to_string())
+                        .icon(IconName::Upload)
+                        .on_click(move |_, window, cx| {
+                            show_connection_import_window(import_home.clone(), window, cx)
+                        }),
+                )
+            })
+            .into_any_element()
     }
 }

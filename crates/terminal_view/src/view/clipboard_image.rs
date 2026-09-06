@@ -136,7 +136,11 @@ impl TerminalView {
     }
 
     pub(super) fn paste_preview_text(text: &str) -> String {
-        let preview = text.lines().take(PASTE_PREVIEW_MAX_LINES).collect::<Vec<_>>().join("\n");
+        let preview = text
+            .lines()
+            .take(PASTE_PREVIEW_MAX_LINES)
+            .collect::<Vec<_>>()
+            .join("\n");
         if text.lines().count() > PASTE_PREVIEW_MAX_LINES {
             format!("{preview}\n...")
         } else {

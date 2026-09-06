@@ -6,9 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, ColorExt as _, Context, Entity, ExternalPaths,
-    Focusable, InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
-    Styled, Task, Window, actions, div,
+    App, AppContext, AsyncApp, ColorExt as _, Context, Entity, ExternalPaths, InteractiveElement,
+    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -65,20 +64,6 @@ pub struct GlobalOnetCliApp {
 
 impl gpui::Global for GlobalOnetCliApp {}
 
-/// The tab-bar Home button lives in the generic tab container, which cannot
-/// reach the app-level HomePage; route clicks through the global lookup.
-fn home_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
-    Arc::new(|window: &mut Window, cx: &mut App| {
-        let Some(home_page) = cx
-            .try_global::<GlobalHomePage>()
-            .map(|global| global.home_page.clone())
-        else {
-            return;
-        };
-        HomePage::show_home(&home_page, window, cx);
-    })
-}
-
 fn add_tab_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
     Arc::new(|window: &mut Window, cx: &mut App| {
         let Some(home_page) = cx
@@ -96,10 +81,15 @@ fn tab_quick_open_resolver() -> one_core::tab_switcher::QuickOpenResolver {
         let connection = crate::home::home_connection_quick_open::temporary_ssh_connection(query)?;
         let title = connection.name.clone().into();
         let action: one_core::tab_switcher::QuickOpenAction = Arc::new(move |window, cx| {
-            let Some(home) = cx.try_global::<GlobalHomePage>().map(|global| global.home_page.clone()) else {
+            let Some(home) = cx
+                .try_global::<GlobalHomePage>()
+                .map(|global| global.home_page.clone())
+            else {
                 return;
             };
-            home.update(cx, |home, cx| home.open_connection_from_quick(&connection, window, cx));
+            home.update(cx, |home, cx| {
+                home.open_connection_from_quick(&connection, window, cx)
+            });
         });
         Some((title, action))
     })
@@ -313,7 +303,6 @@ struct InitialContentLayout {
     pin_home: bool,
     pin_workbench: bool,
     active_pinned_index: Option<usize>,
-    main_content: MainContent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -357,28 +346,15 @@ impl QuitRequestState {
     }
 }
 
-fn initial_content_layout(
-    home_page_style: HomePageStyle,
-    startup_default_page: StartupDefaultPage,
-) -> InitialContentLayout {
-    let pin_home = home_page_style == HomePageStyle::Legacy;
+fn initial_content_layout(startup_default_page: StartupDefaultPage) -> InitialContentLayout {
+    let pin_home = true;
     let pin_workbench = startup_default_page == StartupDefaultPage::AiWorkbench;
     InitialContentLayout {
         home_tab_id: "home",
         workbench_tab_id: "ai-workbench",
         pin_home,
         pin_workbench,
-        active_pinned_index: match (pin_home, pin_workbench, startup_default_page) {
-            (true, true, _) => Some(1),
-            (true, false, _) => Some(0),
-            (false, true, _) => Some(0),
-            (false, false, _) => None,
-        },
-        main_content: if pin_home || pin_workbench {
-            MainContent::Tabs
-        } else {
-            MainContent::Home
-        },
+        active_pinned_index: Some(if pin_workbench { 1 } else { 0 }),
     }
 }
 
@@ -390,9 +366,7 @@ use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::llm::notifier::emit_provider_config_changed;
 use one_core::llm::storage::{ProviderRepository, refresh_onetcli_models};
-use one_core::settings::{
-    AppSettings, GlobalCurrentUser, HomePageStyle, MainWindowState, StartupDefaultPage,
-};
+use one_core::settings::{AppSettings, GlobalCurrentUser, MainWindowState, StartupDefaultPage};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{
     GlobalTabContainer, TabContainer, TabContainerEvent, TabContentRegistry, TabItem,
@@ -1357,31 +1331,9 @@ fn close_active_window(cx: &mut App) {
     one_core::window_close::request_close_window(active_window, cx);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MainContent {
-    Home,
-    Tabs,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MainContentPresentation {
-    HomeWithTabBar,
-    Tabs,
-}
-
-fn main_content_presentation(main_content: MainContent) -> MainContentPresentation {
-    match main_content {
-        MainContent::Home => MainContentPresentation::HomeWithTabBar,
-        MainContent::Tabs => MainContentPresentation::Tabs,
-    }
-}
-
 pub struct OnetCliApp {
     tab_container: Entity<TabContainer>,
-    home_page: Entity<HomePage>,
     connection_sidebar: Entity<PersistentConnectionSidebar>,
-    main_content: MainContent,
-    home_page_style: HomePageStyle,
     quit_state: QuitRequestState,
     main_window_size_save_task: Option<Task<()>>,
     _appearance_subscription: gpui::Subscription,
@@ -1415,10 +1367,7 @@ impl OnetCliApp {
         .detach();
 
         let settings = AppSettings::current(cx);
-        let home_page_style = settings.home_page_style;
-        let show_navigation_sidebar_toggle = home_page_style.uses_persistent_sidebar();
-        let layout = initial_content_layout(home_page_style, settings.startup_default_page);
-        let initial_home_active = layout.main_content == MainContent::Home;
+        let layout = initial_content_layout(settings.startup_default_page);
         // 侧边栏展开状态完全跟随用户上次保存的选择，进入主页不强制展开。
         let connection_sidebar_expanded = settings.connection_sidebar_expanded;
         let tab_container = cx.new(|cx| {
@@ -1428,21 +1377,13 @@ impl OnetCliApp {
                 .with_tab_quick_open(tab_quick_open_resolver())
                 .with_settings_button(settings_button_handler());
 
-            if show_navigation_sidebar_toggle {
-                container = container
-                    .with_navigation_sidebar_toggle(connection_sidebar_expanded)
-                    .with_home_button(initial_home_active, home_button_handler());
-            }
+            container = container.with_navigation_sidebar_toggle(connection_sidebar_expanded);
 
             #[cfg(target_os = "macos")]
             {
                 container = container
                     .with_macos_titlebar_inset(true)
-                    .with_left_padding(if home_page_style.uses_persistent_sidebar() {
-                        px(0.0)
-                    } else {
-                        px(80.0)
-                    })
+                    .with_left_padding(cx.theme().geometry.layout.macos_title_bar_content_padding)
                     .with_top_padding(px(4.0));
             }
 
@@ -1494,6 +1435,9 @@ impl OnetCliApp {
                 cx,
             )
         });
+        home_page.update(cx, |home, _| {
+            home.set_connection_sidebar(connection_sidebar.clone())
+        });
         cx.subscribe(
             &connection_sidebar,
             |this, _, event: &PersistentConnectionSidebarEvent, cx| match event {
@@ -1504,19 +1448,7 @@ impl OnetCliApp {
         )
         .detach();
 
-        let main_content = layout.main_content;
-        home_page.update(cx, |home, cx| {
-            home.set_home_active(main_content == MainContent::Home, cx);
-            if show_navigation_sidebar_toggle {
-                home.set_persistent_sidebar_expanded(connection_sidebar_expanded, cx);
-            }
-        });
         tab_container.update(cx, |tc, cx| {
-            tc.set_tab_content_visible(main_content == MainContent::Tabs, cx);
-            tc.set_active_presentation_obscured_by_main_content(
-                main_content != MainContent::Tabs,
-                cx,
-            );
             if layout.pin_home {
                 let home_tab = TabItem::new(layout.home_tab_id, "app", home_page.clone());
                 tc.insert_pinned_tab_at(0, home_tab, cx);
@@ -1540,13 +1472,10 @@ impl OnetCliApp {
             }
         });
 
-        cx.subscribe(&tab_container, |this, _, event: &TabContainerEvent, cx| {
+        cx.subscribe(&tab_container, |_this, _, event: &TabContainerEvent, cx| {
             let app = cx.entity();
             match event {
                 TabContainerEvent::NavigationSidebarToggled { expanded } => {
-                    if !this.home_page_style.uses_persistent_sidebar() {
-                        return;
-                    }
                     let expanded = *expanded;
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
@@ -1557,16 +1486,15 @@ impl OnetCliApp {
                 TabContainerEvent::TabActivated { .. } => {
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
-                            app.set_main_content(MainContent::Tabs, cx);
-                            app.show_home_if_tab_container_is_empty(cx);
                             app.sync_connection_sidebar_theme(cx);
+                            // 切页影响主页判定（常驻侧栏显隐），需要重渲染。
+                            cx.notify();
                         });
                     });
                 }
                 TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed { .. } => {
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
-                            app.show_home_if_tab_container_is_empty(cx);
                             app.sync_connection_sidebar_theme(cx);
                             cx.notify();
                         });
@@ -1592,202 +1520,10 @@ impl OnetCliApp {
 
         Self {
             tab_container,
-            home_page: home_page.clone(),
             connection_sidebar,
-            main_content,
-            home_page_style,
             quit_state: QuitRequestState::default(),
             main_window_size_save_task: None,
             _appearance_subscription: appearance_subscription,
-        }
-    }
-
-    pub(crate) fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.home_page_style == HomePageStyle::Legacy {
-            let tabs = self.tab_container.clone();
-            window.defer(cx, move |window, cx| {
-                tabs.update(cx, |tabs, cx| {
-                    tabs.activate_pinned_tab_by_id("home", window, cx);
-                });
-            });
-        } else {
-            self.set_main_content(MainContent::Home, cx);
-            self.home_page.read(cx).focus_handle(cx).focus(window, cx);
-            self.sync_connection_sidebar_theme(cx);
-        }
-    }
-
-    fn set_main_content(&mut self, main_content: MainContent, cx: &mut Context<Self>) {
-        self.tab_container.update(cx, |tabs, cx| {
-            tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);
-            // The tab-bar Home button replaces the old rail Home entry, so
-            // its selected state must track which main content is active.
-            tabs.set_home_button_active(main_content == MainContent::Home, cx);
-            // The modern Home page is not a pinned tab, so the active tab stays
-            // present in the TabContainer while Home renders. Mark the active
-            // tab content as obscured so Windows-native RDP overlays are
-            // deactivated and stop intercepting mouse/keyboard input on Home.
-            tabs.set_active_presentation_obscured_by_main_content(
-                main_content != MainContent::Tabs,
-                cx,
-            );
-        });
-        if self.main_content == main_content {
-            return;
-        }
-        self.main_content = main_content;
-        self.home_page.update(cx, |home, cx| {
-            home.set_home_active(main_content == MainContent::Home, cx)
-        });
-        cx.notify();
-    }
-
-    fn show_home_if_tab_container_is_empty(&mut self, cx: &mut Context<Self>) {
-        if self.home_page_style != HomePageStyle::Modern {
-            return;
-        }
-        if self.main_content != MainContent::Tabs {
-            return;
-        }
-        let tab_container_is_empty = {
-            let tabs = self.tab_container.read(cx);
-            tabs.tabs().is_empty() && !tabs.is_pinned_tab_active()
-        };
-        if tab_container_is_empty {
-            self.set_main_content(MainContent::Home, cx);
-        }
-    }
-
-    fn render_main_content(&self, cx: &App) -> AnyElement {
-        match main_content_presentation(self.main_content) {
-            MainContentPresentation::HomeWithTabBar => div()
-                .flex()
-                .flex_col()
-                .size_full()
-                .min_w_0()
-                .min_h_0()
-                .overflow_hidden()
-                .child(
-                    div()
-                        .id("home-tab-bar-slot")
-                        .relative()
-                        .w_full()
-                        .h(cx.theme().geometry.layout.tab_bar)
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .child(self.tab_container.clone()),
-                )
-                .child(
-                    div()
-                        .id("home-page-content")
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .child(self.home_page.clone()),
-                )
-                .into_any_element(),
-            MainContentPresentation::Tabs => self.tab_container.clone().into_any_element(),
-        }
-    }
-
-    pub(crate) fn set_home_page_style(&mut self, style: HomePageStyle, cx: &mut Context<Self>) {
-        let previous_style = self.home_page_style;
-        self.home_page_style = style;
-        AppSettings::update_and_save(cx, |settings| settings.home_page_style = style);
-
-        if let Some(home) = cx
-            .try_global::<GlobalHomePage>()
-            .map(|global| global.home_page.clone())
-        {
-            home.update(cx, |home, cx| {
-                home.set_home_page_style(style, cx);
-                home.set_persistent_sidebar_expanded(
-                    style.uses_persistent_sidebar()
-                        && AppSettings::current(cx).connection_sidebar_expanded,
-                    cx,
-                );
-            });
-        }
-
-        let expanded = self.connection_sidebar.read(cx).is_expanded();
-        let home_active = self.main_content == MainContent::Home;
-        self.tab_container.update(cx, |tabs, cx| {
-            tabs.set_navigation_sidebar_toggle(
-                style.uses_persistent_sidebar().then_some(expanded),
-                cx,
-            );
-            tabs.set_home_button(
-                style
-                    .uses_persistent_sidebar()
-                    .then(|| (home_active, home_button_handler())),
-                cx,
-            );
-            #[cfg(target_os = "macos")]
-            tabs.set_left_padding(
-                if style.uses_persistent_sidebar() {
-                    px(0.0)
-                } else {
-                    px(80.0)
-                },
-                cx,
-            );
-        });
-
-        if previous_style != style {
-            let app = cx.entity();
-            if let Some(active_window) = cx.active_window() {
-                cx.defer(move |cx| {
-                    let _ = active_window.update(cx, |_, window, cx| {
-                        app.update(cx, |app, cx| {
-                            app.sync_home_tab_layout(previous_style, style, window, cx);
-                        })
-                    });
-                });
-            }
-        }
-        cx.notify();
-    }
-
-    fn sync_home_tab_layout(
-        &mut self,
-        previous_style: HomePageStyle,
-        style: HomePageStyle,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match (previous_style, style) {
-            (HomePageStyle::Modern, HomePageStyle::Legacy) => {
-                let home_tab_id = "home";
-                self.tab_container.update(cx, |tabs, cx| {
-                    if !tabs.has_pinned_tab_by_id(home_tab_id) {
-                        let home_tab = TabItem::new(home_tab_id, "app", self.home_page.clone());
-                        tabs.insert_pinned_tab_at(0, home_tab, cx);
-                    }
-                    tabs.activate_pinned_tab_by_id(home_tab_id, window, cx);
-                });
-                self.set_main_content(MainContent::Tabs, cx);
-            }
-            (HomePageStyle::Legacy, HomePageStyle::Modern) => {
-                let home_removed = self.tab_container.update(cx, |tabs, cx| {
-                    tabs.remove_pinned_tab_by_id("home", window, cx)
-                });
-                if home_removed {
-                    let has_active_tab = {
-                        let tabs = self.tab_container.read(cx);
-                        tabs.is_pinned_tab_active() || !tabs.tabs().is_empty()
-                    };
-                    self.set_main_content(
-                        if has_active_tab {
-                            MainContent::Tabs
-                        } else {
-                            MainContent::Home
-                        },
-                        cx,
-                    );
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1805,34 +1541,16 @@ impl OnetCliApp {
         AppSettings::update_and_save(cx, |settings| {
             settings.connection_sidebar_expanded = expanded;
         });
-        if let Some(home) = cx
-            .try_global::<GlobalHomePage>()
-            .map(|global| global.home_page.clone())
-        {
-            home.update(cx, |home, cx| {
-                home.set_persistent_sidebar_expanded(expanded, cx)
-            });
-        }
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_navigation_sidebar_expanded(expanded, cx)
         });
         cx.notify();
     }
 
-    /// Home start-center tiles live on the HomePage entity, which cannot reach
-    /// the sidebar directly, so auto-hide collapsing is routed through here.
-    pub(crate) fn collapse_connection_sidebar_if_auto_hide(&mut self, cx: &mut Context<Self>) {
-        if !self.home_page_style.uses_persistent_sidebar() {
-            return;
-        }
-        self.connection_sidebar
-            .update(cx, |sidebar, cx| sidebar.collapse_if_auto_hide(cx));
-    }
-
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
         let terminal_active = {
             let tabs = self.tab_container.read(cx);
-            if self.main_content == MainContent::Home || tabs.is_pinned_tab_active() {
+            if tabs.is_pinned_tab_active() {
                 false
             } else {
                 tabs.active_tab()
@@ -1946,169 +1664,50 @@ impl OnetCliApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, LOG_FILE_NAME, MainContent, MainContentPresentation,
-        close_active_window_default_shortcut, configured_log_file_path, default_log_file_path,
-        init_ssh_session_service, initial_content_layout, log_file_appender,
-        main_content_presentation,
+        GlobalSshSessionService, LOG_FILE_NAME, close_active_window_default_shortcut,
+        configured_log_file_path, default_log_file_path, init_ssh_session_service,
+        initial_content_layout, log_file_appender,
     };
     use one_core::gpui_tokio::Tokio;
-    use one_core::settings::{HomePageStyle, StartupDefaultPage};
+    use one_core::settings::StartupDefaultPage;
     use ssh::SshSessionServiceState;
     use std::io::Write;
 
     #[test]
-    fn initial_layout_keeps_legacy_home_pinned_before_the_ai_workbench() {
-        let layout = initial_content_layout(HomePageStyle::Legacy, StartupDefaultPage::AiWorkbench);
+    fn initial_layout_keeps_home_pinned_before_the_ai_workbench() {
+        let layout = initial_content_layout(StartupDefaultPage::AiWorkbench);
 
         assert!(layout.pin_home);
         assert_eq!("home", layout.home_tab_id);
         assert_eq!("ai-workbench", layout.workbench_tab_id);
         assert!(layout.pin_workbench);
         assert_eq!(Some(1), layout.active_pinned_index);
-        assert_eq!(MainContent::Tabs, layout.main_content);
     }
 
     #[test]
-    fn initial_layout_keeps_modern_home_outside_the_tab_container() {
-        let home_layout = initial_content_layout(HomePageStyle::Modern, StartupDefaultPage::Home);
-        let ai_layout =
-            initial_content_layout(HomePageStyle::Modern, StartupDefaultPage::AiWorkbench);
-
-        assert!(!home_layout.pin_home);
-        assert!(!home_layout.pin_workbench);
-        assert_eq!(None, home_layout.active_pinned_index);
-        assert_eq!(MainContent::Home, home_layout.main_content);
-        assert!(!ai_layout.pin_home);
-        assert!(ai_layout.pin_workbench);
-        assert_eq!(Some(0), ai_layout.active_pinned_index);
-        assert_eq!(MainContent::Tabs, ai_layout.main_content);
-    }
-
-    #[test]
-    fn legacy_home_is_a_pinned_tab_while_modern_home_remains_standalone() {
-        let source = include_str!("onetcli_app.rs");
-        let constructor = source
-            .split("pub fn new(window:")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("\n    pub(crate) fn set_home_page_style")
-                    .next()
-            })
-            .expect("OnetCliApp::new source");
-
-        assert!(constructor.contains("home_page: home_page.clone()"));
-        assert!(constructor.contains("main_content"));
-        assert!(
-            constructor
-                .contains("tc.set_tab_content_visible(main_content == MainContent::Tabs, cx)")
-        );
-        assert!(
-            constructor.contains(
-                "tc.set_active_presentation_obscured_by_main_content(\n                main_content != MainContent::Tabs,"
-            )
-        );
-        assert!(!constructor.contains("set_base_content"));
-        assert!(constructor.contains("let home_tab ="));
-        assert!(
-            constructor.contains("TabItem::new(layout.home_tab_id, \"app\", home_page.clone())")
-        );
-        assert!(constructor.contains("tc.insert_pinned_tab_at(0, home_tab, cx)"));
+    fn initial_layout_always_pins_home_and_respects_startup_selection() {
+        let home = initial_content_layout(StartupDefaultPage::Home);
+        let ai = initial_content_layout(StartupDefaultPage::AiWorkbench);
+        assert!(home.pin_home && ai.pin_home);
+        assert!(!home.pin_workbench);
+        assert!(ai.pin_workbench);
+        assert_eq!(home.active_pinned_index, Some(0));
+        assert_eq!(ai.active_pinned_index, Some(1));
     }
 
     #[test]
     fn home_content_cannot_inherit_a_background_terminal_sidebar_theme() {
-        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
-
-        assert!(source.contains(
-            "if self.main_content == MainContent::Home || tabs.is_pinned_tab_active() {\n                false"
-        ));
+        let source = include_str!("onetcli_app.rs");
+        assert!(source.contains("if tabs.is_pinned_tab_active()"));
     }
 
     #[test]
-    fn legacy_home_implements_tab_content_with_the_bright_home_icon() {
-        let app_source = include_str!("onetcli_app.rs");
-        let legacy_home_source = include_str!("home_tab/legacy_home.rs");
-
-        assert!(app_source.contains("MainContentPresentation::HomeWithTabBar => div()"));
-        assert!(app_source.contains(".id(\"home-tab-bar-slot\")"));
-        assert!(app_source.contains(".h(cx.theme().geometry.layout.tab_bar)"));
-        assert!(app_source.contains(".id(\"home-page-content\")"));
-        assert!(app_source.contains("with_tab_bar_when_empty(true)"));
-        assert!(!app_source.contains(".id(\"home-content-overlay\")"));
-        assert!(app_source.contains(
-            "MainContentPresentation::Tabs => self.tab_container.clone().into_any_element()"
-        ));
-        assert!(legacy_home_source.contains("impl TabContent for HomePage"));
-        assert!(legacy_home_source.contains("impl EventEmitter<TabContentEvent> for HomePage"));
-        assert!(legacy_home_source.contains("Some(IconName::Home.color())"));
-        assert!(legacy_home_source.contains("fn closeable"));
-        assert!(legacy_home_source.contains("false"));
-    }
-
-    #[test]
-    fn home_always_keeps_the_tab_bar_visible() {
-        assert_eq!(
-            MainContentPresentation::HomeWithTabBar,
-            main_content_presentation(MainContent::Home)
-        );
-        assert_eq!(
-            MainContentPresentation::Tabs,
-            main_content_presentation(MainContent::Tabs)
-        );
-    }
-
-    #[test]
-    fn modern_home_does_not_layout_the_active_tab_content() {
-        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
-        let setter = source
-            .split("fn set_main_content(")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("\n    fn show_home_if_tab_container_is_empty")
-                    .next()
-            })
-            .expect("set_main_content source");
-
-        assert!(
-            setter.contains("tabs.set_tab_content_visible(main_content == MainContent::Tabs, cx);")
-        );
-        assert!(setter.contains("tabs.set_active_presentation_obscured_by_main_content("));
-    }
-
-    #[test]
-    fn stale_tab_activation_cannot_replace_modern_home_with_an_empty_container() {
-        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
-        let activated_arm = source
-            .split("TabContainerEvent::TabActivated { .. } =>")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed")
-                    .next()
-            })
-            .expect("TabActivated event arm");
-        let set_tabs = activated_arm
-            .find("app.set_main_content(MainContent::Tabs, cx);")
-            .expect("TabActivated switches to tabs");
-        let empty_guard = activated_arm
-            .find("app.show_home_if_tab_container_is_empty(cx);")
-            .expect("TabActivated rechecks the empty-container fallback");
-        let sync_theme = activated_arm
-            .find("app.sync_connection_sidebar_theme(cx);")
-            .expect("TabActivated syncs the sidebar theme");
-        assert!(set_tabs < empty_guard);
-        assert!(empty_guard < sync_theme);
-
-        let fallback = source
-            .split("fn show_home_if_tab_container_is_empty")
-            .nth(1)
-            .and_then(|source| source.split("\n    fn render_main_content").next())
-            .expect("empty-container fallback");
-        assert!(fallback.contains("HomePageStyle::Modern"));
-        assert!(fallback.contains("tabs.tabs().is_empty() && !tabs.is_pinned_tab_active()"));
-        assert!(fallback.contains("self.set_main_content(MainContent::Home, cx);"));
+    fn home_is_a_noncloseable_tab_with_the_line_home_icon() {
+        let source = include_str!("home_tab/home_layout.rs");
+        assert!(source.contains("impl TabContent for HomePage"));
+        assert!(source.contains("NAVOP_HOME_LINE_ICON"));
+        assert!(source.contains("fn closeable"));
+        assert!(source.contains("false"));
     }
 
     #[test]
@@ -2190,93 +1789,39 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_connection_sidebar_keeps_top_bar_home_and_tree_controls() {
+    fn tree_auto_hide_selects_floating_overlay_otherwise_docked_panel() {
         let source = include_str!("onetcli_app.rs");
-        let tab_bar = include_str!("../../crates/core/src/tab_container.rs");
-        let sidebar_source = include_str!("persistent_connection_sidebar/mod.rs");
-        let render = source
-            .rsplit("impl Render for OnetCliApp")
-            .next()
-            .expect("OnetCliApp render source");
-
-        // The old always-visible navigation rail is gone: Home and the tree
-        // collapse control both live in the top tab bar now.
-        assert!(tab_bar.contains("\"tab-bar-home\""));
-        assert!(tab_bar.contains("\"navigation-sidebar-toggle\""));
-        assert!(source.contains("HomePage::show_home(&home_page, window, cx)"));
-        assert!(source.contains("set_home_button_active("));
+        let render = source.rsplit("impl Render for OnetCliApp").next().unwrap();
+        assert!(render.contains("render_floating_tree"));
+        assert!(render.contains("render_docked_connection_tree"));
+        assert!(render.contains("is_auto_hide_tree()"));
         assert!(
-            !render.contains("layout.child(self.connection_sidebar.clone())"),
-            "连接树之外不再渲染常驻 rail 栏"
-        );
-        assert!(sidebar_source.contains("fn is_expanded"));
-        assert!(sidebar_source.contains("fn render_floating_tree"));
-    }
-
-    #[test]
-    fn auto_hide_off_renders_a_docked_split_panel_instead_of_a_floating_overlay() {
-        let source = include_str!("onetcli_app.rs");
-        let render = source
-            .rsplit("impl Render for OnetCliApp")
-            .next()
-            .expect("OnetCliApp render source");
-
-        assert!(
-            render.contains("is_auto_hide_tree()"),
-            "主渲染需读取连接树的自动隐藏开关"
-        );
-        assert!(
-            render.contains("render_docked_connection_tree"),
-            "非自动隐藏时应渲染并排的分割面板"
-        );
-        assert!(
-            render.contains("show_persistent_sidebar && sidebar_expanded && auto_hide_tree"),
+            render.contains("sidebar_expanded && auto_hide_tree"),
             "浮层连接树仅应在自动隐藏开启时渲染，避免遮挡终端"
         );
+        assert!(
+            render.contains("sidebar_expanded && !auto_hide_tree"),
+            "非自动隐藏时应渲染并排的分割面板"
+        );
     }
 
     #[test]
-    fn entering_home_preserves_the_saved_connection_sidebar_state() {
+    fn startup_preserves_the_saved_connection_sidebar_state() {
         let source = include_str!("onetcli_app.rs");
-        let set_main_content = source
-            .split("fn set_main_content(")
+        let constructor = source
+            .split("pub fn new(window:")
             .nth(1)
-            .and_then(|source| source.split("\n    fn ").next())
-            .expect("set_main_content source");
-        assert!(
-            !set_main_content.contains("set_connection_sidebar_expanded(true, cx)"),
-            "进入主页时不得强制展开常驻侧边栏，应保留用户收起状态"
-        );
-        assert!(
-            !source.contains("settings.connection_sidebar_expanded\n            || (show_navigation_sidebar_toggle && initial_home_active)"),
-            "启动直接进入主页时也不得覆盖已保存的收起状态"
-        );
-        assert!(
-            source.contains("set_persistent_sidebar_expanded(connection_sidebar_expanded, cx)"),
-            "主页内容布局需与侧边栏展开状态保持同步"
-        );
-    }
-
-    #[test]
-    fn expanded_docked_sidebar_does_not_indent_the_macos_tab_bar() {
-        let source = include_str!("onetcli_app.rs");
-        let render = source
-            .rsplit("impl Render for OnetCliApp")
+            .unwrap()
+            .split("pub(crate) fn set_connection_sidebar_expanded")
             .next()
-            .expect("OnetCliApp render source");
-        let tab_bar = include_str!("../../crates/core/src/tab_container.rs");
-        let tab_bar_impl = tab_bar.split("mod tests").next().unwrap();
-
-        // 停靠展开时左侧由侧边栏负责，tab 栏不得再叠加红绿灯缩进。
+            .unwrap();
         assert!(
-            tab_bar_impl.contains("navigation_sidebar_expanded != Some(true)"),
-            "仅收起或无侧边栏开关时才保留 macOS 红绿灯留白"
+            constructor.contains(
+                "let connection_sidebar_expanded = settings.connection_sidebar_expanded;"
+            )
         );
-        // 自动隐藏的浮动树不覆盖 tab 栏，此时 tab 栏仍需自己保留留白。
         assert!(
-            render.contains("macos_title_bar_content_padding")
-                && render.contains("set_left_padding("),
-            "浮动树展开时 tab 栏需在渲染时同步 macOS 红绿灯留白"
+            constructor.contains("with_navigation_sidebar_toggle(connection_sidebar_expanded)")
         );
     }
 
@@ -2297,40 +1842,6 @@ mod tests {
             floating.contains("stop_propagation"),
             "浮动侧边栏仍需拦截鼠标按下，避免点击穿透触发内容区行为"
         );
-    }
-
-    #[test]
-    fn home_style_switches_between_legacy_home_and_modern_persistent_sidebar() {
-        let app = include_str!("onetcli_app.rs");
-        let home = include_str!("home_tab/render.rs");
-        let legacy_home = include_str!("home_tab/legacy_home.rs");
-        let sidebar = include_str!("home_tab/sidebar.rs");
-        let sidebar_navigation = include_str!("home_tab/sidebar_navigation.rs");
-        let persistent_sidebar = include_str!("persistent_connection_sidebar/mod.rs");
-        let persistent_filter = include_str!("persistent_connection_sidebar/filter_bar.rs");
-        let modern_home = include_str!("home_tab/modern_home.rs");
-        let settings = include_str!("setting_tab.rs");
-
-        assert!(app.contains("home_page_style.uses_persistent_sidebar()"));
-        assert!(app.contains("set_navigation_sidebar_toggle("));
-        // 常驻 rail 移除后，Home 与连接树开关由标签栏承载。
-        assert!(app.contains("with_home_button("));
-        assert!(app.contains("set_home_button("));
-        assert!(home.contains("self.render_legacy_home(window, cx)"));
-        assert!(home.contains("self.render_modern_home(window, cx)"));
-        assert!(legacy_home.contains("self.render_sidebar(window, cx)"));
-        assert!(sidebar_navigation.contains("for filter in visible_connection_types()"));
-        assert!(!sidebar.contains("\"legacy-open-home\""));
-        assert!(sidebar_navigation.contains("\"legacy-more-connection-types\""));
-        assert!(sidebar_navigation.contains("\"legacy-more-applications\""));
-        assert!(persistent_filter.contains("\"persistent-filter-button\""));
-        assert!(persistent_filter.contains("ConnectionType::all()"));
-        assert!(modern_home.contains("all_navigation_applications("));
-        assert!(!persistent_sidebar.contains("HomePageStyle"));
-        assert!(!persistent_sidebar.contains("render_legacy_sidebar"));
-        assert!(settings.contains("HomePageStyle::Legacy"));
-        assert!(settings.contains("HomePageStyle::Modern"));
-        assert!(!settings.contains("ConnectionDisplay.connection_tree"));
     }
 
     #[test]
@@ -2788,31 +2299,34 @@ impl Render for OnetCliApp {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
-        let main_content = self.render_main_content(cx);
-        let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
-        let sidebar_expanded = self.connection_sidebar.read(cx).is_expanded();
+        let main_content = self.tab_container.clone();
+        // 主页自带连接管理视图，常驻侧栏与收起/展开按钮只在非主页显示。
+        // home 是 pinned tab，active_tab() 只查普通 tabs，必须用 pinned 通道判断。
+        let home_active = self
+            .tab_container
+            .read(cx)
+            .is_pinned_tab_active_by_id("home");
+        let sidebar_expanded = !home_active && self.connection_sidebar.read(cx).is_expanded();
         let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
-        let docked_tree = show_persistent_sidebar && sidebar_expanded && !auto_hide_tree;
-        let floating_tree = if show_persistent_sidebar && sidebar_expanded && auto_hide_tree {
-            Some(
-                self.connection_sidebar
-                    .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx)),
-            )
-        } else {
-            None
-        };
-        let docked_tree_element = if docked_tree {
-            Some(self.connection_sidebar.update(cx, |sidebar, cx| {
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.set_navigation_sidebar_toggle(
+                (!home_active).then(|| self.connection_sidebar.read(cx).is_expanded()),
+                cx,
+            );
+        });
+        let docked_tree = sidebar_expanded && !auto_hide_tree;
+        let docked_tree_element = docked_tree.then(|| {
+            self.connection_sidebar.update(cx, |sidebar, cx| {
                 sidebar.render_docked_connection_tree(window, cx)
-            }))
-        } else {
-            None
-        };
-        // 展开且停靠时，左侧由侧边栏自己负责（含 macOS 红绿灯区域），tab 栏
-        // 不再缩进；自动隐藏的浮动树只覆盖 tab 栏以下区域，此时 tab 栏仍铺满
-        // 窗口宽度，需要自己保留红绿灯留白。
+            })
+        });
+        let floating_tree = (sidebar_expanded && auto_hide_tree).then(|| {
+            self.connection_sidebar
+                .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
+        });
+        // macOS：浮动树覆盖 tab 栏左侧，需要给红绿灯占位；停靠模式并排渲染则不需要。
         #[cfg(target_os = "macos")]
-        if show_persistent_sidebar && sidebar_expanded {
+        if sidebar_expanded {
             let tab_bar_left_padding = if auto_hide_tree {
                 cx.theme().geometry.layout.macos_title_bar_content_padding
             } else {
@@ -2839,9 +2353,6 @@ impl Render for OnetCliApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleConnectionSidebar, _, cx| {
-                if !this.home_page_style.uses_persistent_sidebar() {
-                    return;
-                }
                 let expanded = !this.connection_sidebar.read(cx).is_expanded();
                 this.set_connection_sidebar_expanded(expanded, cx);
             }))
@@ -2857,37 +2368,33 @@ impl Render for OnetCliApp {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .when(
-                                show_persistent_sidebar && sidebar_expanded && auto_hide_tree,
-                                |this| {
-                                    this.on_mouse_down(
-                                        gpui::MouseButton::Left,
-                                        cx.listener(
-                                            |this, event: &gpui::MouseDownEvent, _window, cx| {
-                                                if !this.connection_sidebar.read(cx).is_expanded() {
-                                                    return;
-                                                }
-                                                let layout = cx.theme().geometry.layout;
-                                                // The navigation rail is gone; everything below
-                                                // the tab bar on the left now belongs to the
-                                                // tree overlay itself, so any content click
-                                                // below the tab bar dismisses the auto-hide tree.
-                                                let in_terminal = event.position.y > layout.tab_bar;
-                                                if in_terminal {
-                                                    this.set_connection_sidebar_expanded(false, cx);
-                                                }
-                                            },
-                                        ),
-                                    )
-                                },
-                            )
+                            .when(sidebar_expanded && auto_hide_tree, |this| {
+                                this.on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(
+                                        |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                            if !this.connection_sidebar.read(cx).is_expanded() {
+                                                return;
+                                            }
+                                            let layout = cx.theme().geometry.layout;
+                                            // The navigation rail is gone; everything below
+                                            // the tab bar on the left now belongs to the
+                                            // tree overlay itself, so any content click
+                                            // below the tab bar dismisses the auto-hide tree.
+                                            let in_terminal = event.position.y > layout.tab_bar;
+                                            if in_terminal {
+                                                this.set_connection_sidebar_expanded(false, cx);
+                                            }
+                                        },
+                                    ),
+                                )
+                            })
                             .child(main_content),
                     )
             })
-            .when(
-                show_persistent_sidebar && sidebar_expanded && auto_hide_tree,
-                |this| this.child(floating_tree.unwrap()),
-            )
+            .when(sidebar_expanded && auto_hide_tree, |this| {
+                this.child(floating_tree.unwrap())
+            })
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

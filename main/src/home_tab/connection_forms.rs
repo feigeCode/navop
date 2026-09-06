@@ -4,7 +4,7 @@ const ORACLE_GO_DRIVER_ID: &str = "oracle-go";
 
 impl HomePage {
     #[cfg(feature = "shell-plugins")]
-pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editing = self.editing_connection_id.and_then(|id| {
             self.connections
                 .iter()
@@ -49,11 +49,7 @@ pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Conte
         open_popup_window(
             PopupWindowOptions::new(format!("Edit {}", connection.name)).size(700.0, 650.0),
             move |window, cx| {
-                cx.new(|cx| {
-                    universal_plugins::ExtensionConnectionForm::new(
-                        config, window, cx,
-                    )
-                })
+                cx.new(|cx| universal_plugins::ExtensionConnectionForm::new(config, window, cx))
             },
             Some(window),
             cx,

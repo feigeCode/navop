@@ -12,7 +12,8 @@ impl TabContent for HomePage {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::Home.color())
+        // 与侧栏「连接」入口使用同一枚线性 Home（避免固定填充色资源与 Tab 混线稿）。
+        Some(Icon::default().path(NAVOP_HOME_LINE_ICON).mono())
     }
 
     fn closeable(&self, _cx: &App) -> bool {
@@ -25,7 +26,7 @@ impl TabContent for HomePage {
 }
 
 impl HomePage {
-    pub(super) fn render_legacy_home(
+    pub(super) fn render_home_layout(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -50,7 +51,7 @@ impl HomePage {
                             .min_w_0()
                             .overflow_hidden()
                             .bg(cx.theme().muted)
-                            .child(self.render_content_area(cx)),
+                            .child(self.render_content_area(window, cx)),
                     ),
             )
             .into_any_element()

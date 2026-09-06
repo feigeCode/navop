@@ -2,9 +2,7 @@
 
 use crate::error::LlmConnectorError;
 use crate::protocols::common::capabilities::EmptyAssistantToolContentStrategy;
-use crate::types::{
-    DocumentSource, ImageSource, Message, MessageBlock, Role,
-};
+use crate::types::{DocumentSource, ImageSource, Message, MessageBlock, Role};
 
 fn serialize_empty_assistant_tool_content(
     strategy: EmptyAssistantToolContentStrategy,
@@ -62,11 +60,7 @@ fn openai_export_reasoning_content(msg: &Message, thinking_from_blocks: &str) ->
         }
         out.push_str(thinking_from_blocks);
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Convert a single [`MessageBlock`] to an OpenAI-compatible JSON value.
@@ -82,8 +76,7 @@ fn openai_export_reasoning_content(msg: &Message, thinking_from_blocks: &str) ->
 fn block_to_openai_value(block: &MessageBlock) -> serde_json::Value {
     match block {
         MessageBlock::Text { .. } | MessageBlock::ImageUrl { .. } => {
-            serde_json::to_value(block)
-                .expect("MessageBlock serialization is infallible")
+            serde_json::to_value(block).expect("MessageBlock serialization is infallible")
         }
         MessageBlock::Image { source } => match source {
             ImageSource::Base64 { media_type, data } => serde_json::json!({
@@ -122,10 +115,7 @@ fn blocks_to_openai_content(blocks: &[MessageBlock]) -> Vec<serde_json::Value> {
 
 /// Generic message converter for OpenAI-compatible protocols
 pub fn openai_message_converter(messages: &[Message]) -> Vec<serde_json::Value> {
-    openai_message_converter_with_strategy(
-        messages,
-        EmptyAssistantToolContentStrategy::EmptyArray,
-    )
+    openai_message_converter_with_strategy(messages, EmptyAssistantToolContentStrategy::EmptyArray)
 }
 
 pub fn openai_message_converter_with_strategy(

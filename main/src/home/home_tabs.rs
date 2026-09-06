@@ -1,12 +1,10 @@
 use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
-use crate::onetcli_app::GlobalOnetCliApp;
-use one_core::tab_container::GlobalTabContainer;
 use crate::session_logs::SessionLogsPage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
-use gpui::{App, AppContext, Context, Entity, Focusable, Window};
+use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
 use mongodb_view::MongoTabView;
@@ -17,6 +15,7 @@ use one_core::settings::{
 };
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
 use one_core::tab_actions::next_duplicate_tab_index;
+use one_core::tab_container::GlobalTabContainer;
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
@@ -399,152 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn session_logs_open_from_both_home_sidebars_as_a_stable_tab() {
-        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let legacy_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let modern_home_source = include_str!("../home_tab/modern_home.rs");
-        let navigation_source = include_str!("../home_tab/navigation.rs");
-
-        assert!(tabs_source.contains("fn add_session_logs_tab"));
-        assert!(
-            tabs_source.contains("activate_or_add_tab_lazy(\n                    \"session-logs\"")
-        );
-        assert!(tabs_source.contains("TabItem::new(\"session-logs\", \"home\", page)"));
-        assert!(tabs_source.contains("window.defer(cx, move |window, cx|"));
-        assert!(legacy_source.contains("\"legacy-open-session-logs\""));
-        assert!(
-            legacy_source.contains("home.activate_navigation_application(application, window, cx)")
-        );
-        assert!(modern_home_source.contains("\"home-app-session-logs\""));
-        assert!(
-            modern_home_source
-                .contains("home.activate_navigation_application(application, window, cx)")
-        );
-        assert!(navigation_source.contains(
-            "NavigationApplication::SessionLogs => self.add_session_logs_tab(window, cx)"
-        ));
-    }
-
-    #[test]
-    fn credential_vault_opens_from_both_home_sidebars_as_a_stable_tab() {
-        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let toolbar_source = include_str!("../home_tab/toolbar.rs");
-        let legacy_sidebar_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let modern_home_source = include_str!("../home_tab/modern_home.rs");
-        let navigation_source = include_str!("../home_tab/navigation.rs");
-        let settings_source = include_str!("../setting_tab.rs");
-        let actions_source = include_str!("../credential_vault/actions.rs");
-
-        assert!(tabs_source.contains("fn add_credential_vault_tab"));
-        assert!(
-            tabs_source
-                .contains("activate_or_add_tab_lazy(\n                    \"credential-vault\"")
-        );
-        assert!(tabs_source.contains("TabItem::new(\"credential-vault\", \"home\", vault)"));
-        assert!(legacy_sidebar_source.contains("\"legacy-open-credential-vault\""));
-        assert!(
-            legacy_sidebar_source
-                .contains("home.activate_navigation_application(application, window, cx)")
-        );
-        assert!(modern_home_source.contains("\"home-app-credential-vault\""));
-        assert!(
-            modern_home_source
-                .contains("home.activate_navigation_application(application, window, cx)")
-        );
-        assert!(navigation_source.contains("NavigationApplication::CredentialVault =>"));
-        assert!(navigation_source.contains("self.add_credential_vault_tab(window, cx)"));
-        assert!(!toolbar_source.contains("\"credential-vault-button\""));
-        assert!(!toolbar_source.contains("add_credential_vault_tab"));
-        assert!(!settings_source.contains("SettingPage::new(\"钥匙串\")"));
-        assert!(actions_source.contains("open_popup_window("));
-        assert!(!actions_source.contains("open_dialog("));
-    }
-
-    #[test]
-    fn more_applications_places_json_formatter_after_credential_vault() {
-        use crate::navigation_quick_open::{
-            NavigationApplication, overflow_navigation_applications,
-        };
-
-        assert_eq!(
-            overflow_navigation_applications(),
-            vec![
-                NavigationApplication::SessionLogs,
-                NavigationApplication::CredentialVault,
-                NavigationApplication::JsonFormatter,
-            ]
-        );
-    }
-
-    #[test]
-    fn both_home_layouts_place_credential_vault_with_their_application_entries() {
-        let legacy_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let modern_home_source = include_str!("../home_tab/modern_home.rs");
-
-        for id in [
-            "\"legacy-open-notes\"",
-            "\"legacy-open-session-logs\"",
-            "\"legacy-open-credential-vault\"",
-            "\"legacy-open-extensions\"",
-        ] {
-            assert!(legacy_source.contains(id));
-        }
-        for id in [
-            "\"home-app-notes\"",
-            "\"home-app-session-logs\"",
-            "\"home-app-credential-vault\"",
-            "\"home-app-extensions\"",
-        ] {
-            assert!(modern_home_source.contains(id));
-        }
-        assert!(
-            !modern_home_source.contains("home-app-settings"),
-            "设置入口已迁移到全局标签栏，不再作为现代主页应用磁贴"
-        );
-        assert!(legacy_source.contains("show_application_navigation_quick_open"));
-        assert!(modern_home_source.contains("all_navigation_applications("));
-    }
-
-    #[test]
-    fn persistent_sidebar_tree_toggle_leads_and_home_follows_in_the_tab_bar() {
-        // 常驻 rail 已移除：Home 与连接树折叠按钮都收进顶部标签栏。
-        // 折叠按钮贴着窗口边缘（与 macOS 红绿灯对齐的导航位），Home 紧随其后。
-        let source = include_str!("../../../crates/core/src/tab_container.rs");
-        let home = source.find("\"tab-bar-home\"").unwrap();
-        let tree_toggle = source.find("\"navigation-sidebar-toggle\"").unwrap();
-
-        assert!(tree_toggle < home);
-        assert!(source.contains("IconName::Home"));
-        assert!(source.contains("set_home_button_active("));
-    }
-
-    #[test]
-    fn persistent_sidebar_home_entry_avoids_reentrant_home_page_updates() {
-        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let tabs_impl = tabs_source.split_once("\nimpl HomePage {\n").unwrap().1;
-        let app_source = include_str!("../onetcli_app.rs").replace("\r\n", "\n");
-        let show_home_start = tabs_impl
-            .find(
-                "pub(crate) fn show_home(home_page: &Entity<Self>, window: &mut Window, cx: &mut App)",
-            )
-            .unwrap();
-        let show_home_end = tabs_impl[show_home_start..]
-            .find("\n    fn terminal_sync_path_enabled")
-            .map(|offset| show_home_start + offset)
-            .unwrap();
-        let show_home_source = &tabs_impl[show_home_start..show_home_end];
-
-        assert!(show_home_source.contains("window.defer(cx, move |window, cx|"));
-        assert!(show_home_source.contains("try_global::<GlobalOnetCliApp>()"));
-        assert!(show_home_source.contains("app.show_home(window, cx)"));
-        assert!(!show_home_source.contains("activate_base_content"));
-        assert!(
-            app_source.contains("HomePage::show_home(&home_page, window, cx);"),
-            "顶部 Home 按钮应走与旧 rail 相同的 show_home 入口"
-        );
-    }
-
-    #[test]
     fn home_page_connection_openers_defer_active_tab_changes() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let tabs_impl = tabs_source.split_once("\nimpl HomePage {\n").unwrap().1;
@@ -597,84 +450,33 @@ mod tests {
     }
 
     #[test]
-    fn persistent_filter_button_uses_the_shared_rail_icon_geometry() {
-        let filter_bar =
-            include_str!("../persistent_connection_sidebar/filter_bar.rs").replace("\r\n", "\n");
-        let visuals = include_str!("../connection_visuals.rs");
-
-        assert!(filter_bar.contains("persistent-filter-button"));
-        assert!(filter_bar.contains("IconName::Filter"));
-        assert!(filter_bar.contains("IconButtonRole::Compact"));
-        assert!(filter_bar.contains("connection_type_rail_icon(filter)"));
-        assert!(visuals.contains("Self::Inline | Self::Rail => IconSize::Medium"));
-        assert!(filter_bar.contains("ConnectionType::all()"));
-        assert!(filter_bar.contains(".checked(selected_filter == filter)"));
+    fn both_type_dropdowns_share_the_stateless_menu() {
+        let menu = include_str!("../connection_type_menu.rs");
+        assert!(menu.contains("ConnectionType::all()"));
+        assert!(menu.contains("connection_type_rail_icon(filter)"));
+        assert!(
+            include_str!("../persistent_connection_sidebar/filter_bar.rs")
+                .contains("build_filter_menu")
+        );
+        assert!(include_str!("../home_tab/toolbar.rs").contains("build_filter_menu"));
     }
 
     #[test]
-    fn persistent_sidebar_uses_line_style_rail_icons() {
-        let filter_bar = include_str!("../persistent_connection_sidebar/filter_bar.rs");
-        let modern_home = include_str!("../home_tab/modern_home.rs");
-        let user_avatar = include_str!("../user_avatar.rs");
-        let visuals = include_str!("../connection_visuals.rs");
-        let remote_render = include_str!("../../../crates/remote_desktop_view/src/view/render.rs");
-
-        assert!(filter_bar.contains("connection_type_rail_icon"));
-        assert!(modern_home.contains("Icon::new(application.icon())"));
-        assert!(modern_home.contains("render_user_avatar("));
-        assert!(user_avatar.contains("IconName::User"));
-        assert!(visuals.contains("ConnectionType::All => IconName::ServerLine"));
-        assert!(visuals.contains("ConnectionType::SshSftp => IconName::TerminalLine"));
-        assert!(visuals.contains("ConnectionType::Rdp => IconName::RdpLine"));
-        assert!(visuals.contains("ConnectionType::Vnc => IconName::VncLine"));
-        assert!(visuals.contains(".mono()"));
-        assert!(visuals.contains("ConnectionType::Rdp => IconName::Rdp"));
-        assert!(visuals.contains("ConnectionType::Vnc => IconName::Vnc"));
-        assert!(visuals.contains(".color()"));
-        assert_eq!(
-            gpui_component::IconNamed::path(gpui_component::IconName::User),
-            "icons/user.svg"
-        );
-        assert_eq!(
-            gpui_component::IconNamed::path(gpui_component::IconName::ServerLine),
-            "icons/server_line.svg"
-        );
-        assert_eq!(
-            gpui_component::IconNamed::path(gpui_component::IconName::RdpLine),
-            "icons/rdp_line.svg"
-        );
-        assert!(remote_render.contains("RemoteDesktopProtocol::Rdp => IconName::Rdp.color()"));
-        assert!(remote_render.contains("RemoteDesktopProtocol::Vnc => IconName::Vnc.color()"));
-    }
-
-    #[test]
-    fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
-        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
-        let modern_home_source = include_str!("../home_tab/modern_home.rs");
-        let legacy_sidebar_source = include_str!("../home_tab/sidebar_navigation.rs");
-        let legacy_sidebar_layout_source = include_str!("../home_tab/sidebar.rs");
-        let navigation_source = include_str!("../home_tab/navigation.rs");
-
-        assert!(modern_home_source.contains("home-app-ai-workbench"));
-        assert!(modern_home_source.contains("StartupDefaultPage::Home"));
-        assert!(legacy_sidebar_source.contains("legacy-open-ai-workbench"));
-        assert!(legacy_sidebar_layout_source.contains("StartupDefaultPage::Home"));
-        assert!(
-            legacy_sidebar_source
-                .contains("home.activate_navigation_application(application, window, cx)")
-        );
-        assert!(
-            modern_home_source
-                .contains("home.activate_navigation_application(application, window, cx)")
-        );
-        assert!(navigation_source.contains(
-            "NavigationApplication::AiWorkbench => self.add_ai_workbench_tab(window, cx)"
-        ));
-        assert!(tabs_source.contains("fn add_ai_workbench_tab"));
-        assert!(tabs_source.contains("with_tab_closeable(true)"));
-        assert!(
-            tabs_source.contains("activate_or_add_tab_lazy(\n                    \"ai-workbench\"")
-        );
+    fn ai_workbench_opener_reuses_startup_pin_before_creating_regular_tab() {
+        let source = include_str!("home_tabs.rs");
+        let opener = source
+            .rsplit("pub(crate) fn add_ai_workbench_tab")
+            .next()
+            .unwrap()
+            .split("pub(crate) fn ")
+            .next()
+            .unwrap();
+        assert!(opener.contains("activate_pinned_tab_by_id"));
+        assert!(opener.contains("activate_or_add_tab_lazy"));
+        let pinned = opener.find("activate_pinned_tab_by_id").unwrap();
+        let regular = opener.find("activate_or_add_tab_lazy").unwrap();
+        assert!(pinned < regular);
+        assert!(opener.contains("with_tab_closeable(true)"));
     }
 
     #[test]
@@ -859,31 +661,6 @@ impl HomePage {
         cx.try_global::<GlobalTabContainer>()
             .map(|global| global.primary_pane())
             .unwrap_or_else(|| self.tab_container.clone())
-    }
-
-    pub(crate) fn set_home_active(&mut self, active: bool, cx: &mut Context<Self>) {
-        if self.home_active == active {
-            return;
-        }
-        self.home_active = active;
-        cx.notify();
-    }
-
-    pub(crate) fn show_home(home_page: &Entity<Self>, window: &mut Window, cx: &mut App) {
-        let app = cx
-            .try_global::<GlobalOnetCliApp>()
-            .map(|global| global.app.clone());
-        let home_page = home_page.clone();
-        window.defer(cx, move |window, cx| {
-            if let Some(app) = app {
-                app.update(cx, |app, cx| app.show_home(window, cx));
-            } else {
-                home_page.update(cx, |home, cx| {
-                    home.focus_handle(cx).focus(window, cx);
-                    cx.notify();
-                });
-            }
-        });
     }
 
     /// 计算同基础名称的下一个可用标签序号；没有任何同名标签时返回 None（首标签不加序号）。
@@ -1530,6 +1307,24 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn add_toolbox_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tabs = self.active_tab_container(cx);
+        let home = cx.entity();
+        window.defer(cx, move |window, cx| {
+            tabs.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "toolbox",
+                    |_, cx| {
+                        let view = cx.new(|cx| crate::toolbox_tab::ToolboxTab::new(home, cx));
+                        TabItem::new("toolbox", "home", view)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     pub(crate) fn add_json_formatter_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
@@ -1587,6 +1382,7 @@ impl HomePage {
             ai_chat_view::build_workbench_resource_state(&self.connections);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tabs, cx| {
+                if tabs.activate_pinned_tab_by_id("ai-workbench", window, cx) { return; }
                 tabs.activate_or_add_tab_lazy(
                     "ai-workbench",
                     |window, cx| {

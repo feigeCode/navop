@@ -1,6 +1,6 @@
-use one_core::tab_container::GlobalTabContainer;
 use anyhow::{Context as _, Result, bail};
 use gpui::{App, AppContext as _, AsyncApp, Window};
+use one_core::tab_container::GlobalTabContainer;
 use one_core::tab_container::TabItem;
 use std::path::{Path, PathBuf};
 use terminal::recording::{

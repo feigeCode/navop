@@ -357,7 +357,13 @@ fn sanitize_header_value(value: &str) -> Cow<'_, str> {
     }
     let sanitized: String = value
         .bytes()
-        .map(|b| if is_printable_ascii(b) { char::from(b) } else { '?' })
+        .map(|b| {
+            if is_printable_ascii(b) {
+                char::from(b)
+            } else {
+                '?'
+            }
+        })
         .collect();
     Cow::Owned(sanitized)
 }

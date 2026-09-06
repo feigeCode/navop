@@ -3,6 +3,7 @@ use super::*;
 impl HomePage {
     pub(super) fn render_connection_card_actions(
         &self,
+        card_id: &str,
         conn: &StoredConnection,
         can_edit: bool,
         cx: &mut Context<Self>,
@@ -14,10 +15,7 @@ impl HomePage {
         let delete_connection_name = conn.name.clone();
 
         h_flex()
-            .id(SharedString::from(format!(
-                "conn-card-actions-{}",
-                conn.id.unwrap_or(0)
-            )))
+            .id(SharedString::from(format!("{card_id}-actions")))
             .absolute()
             .top_2()
             .right_2()
@@ -27,7 +25,7 @@ impl HomePage {
             .when(conn.connection_type == ConnectionType::SshSftp, |this| {
                 this.child(
                     IconButton::new(
-                        SharedString::from(format!("sftp-conn-{}", conn.id.unwrap_or(0))),
+                        SharedString::from(format!("{card_id}-sftp")),
                         Icon::new(IconName::FolderOpen),
                     )
                     .role(IconButtonRole::Compact)
@@ -41,7 +39,7 @@ impl HomePage {
             .when(can_edit, |this| {
                 this.child(
                     IconButton::new(
-                        SharedString::from(format!("duplicate-conn-{}", conn.id.unwrap_or(0))),
+                        SharedString::from(format!("{card_id}-duplicate")),
                         Icon::new(IconName::Copy),
                     )
                     .role(IconButtonRole::Compact)
@@ -53,7 +51,7 @@ impl HomePage {
                 )
                 .child(
                     IconButton::new(
-                        SharedString::from(format!("edit-conn-{}", conn.id.unwrap_or(0))),
+                        SharedString::from(format!("{card_id}-edit")),
                         Icon::new(IconName::Edit),
                     )
                     .role(IconButtonRole::Compact)
@@ -65,7 +63,7 @@ impl HomePage {
                 )
                 .child(
                     IconButton::new(
-                        SharedString::from(format!("delete-conn-{}", conn.id.unwrap_or(0))),
+                        SharedString::from(format!("{card_id}-delete")),
                         Icon::new(IconName::Remove),
                     )
                     .role(IconButtonRole::Compact)

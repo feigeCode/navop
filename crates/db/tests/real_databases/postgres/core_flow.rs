@@ -66,7 +66,10 @@ INSERT INTO all_types (
 #[tokio::test]
 async fn postgres_real_script_query_error_transaction_and_metadata_flow() {
     let Some(config) = postgres_config() else {
-        skip_database("PostgreSQL", "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)");
+        skip_database(
+            "PostgreSQL",
+            "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)",
+        );
         return;
     };
     let config = optional_database(

@@ -481,12 +481,7 @@ mod external_markdown_tests {
         });
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.set_markdown_mode(
-                    &document_id,
-                    crate::MarkdownViewMode::Source,
-                    window,
-                    cx,
-                );
+                view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Source, window, cx);
             });
         });
         cx.run_until_parked();
@@ -857,7 +852,6 @@ mod external_markdown_tests {
         assert_eq!("source edit", std::fs::read_to_string(&path).unwrap());
     }
 
-
     #[gpui::test]
     fn standalone_markdown_uses_one_editable_velotype_editor_across_modes(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -918,12 +912,7 @@ mod external_markdown_tests {
         cx.run_until_parked();
         assert_eq!("# Title\n\nBodyX", std::fs::read_to_string(&path).unwrap());
         view.update_in(&mut cx, |view, window, cx| {
-            view.set_markdown_mode(
-                &document_id,
-                crate::MarkdownViewMode::Source,
-                window,
-                cx,
-            );
+            view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Source, window, cx);
         });
         cx.run_until_parked();
         view.read_with(&cx, |view, cx| {
