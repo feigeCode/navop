@@ -1,6 +1,6 @@
 use connection_form::declarative::{
-    DeclarativeFieldType, DeclarativeFormConfig, DeclarativeFormField, DeclarativeFormTab,
-    DeclarativeSelectOption, DeclarativeVisibilityRule,
+    DECLARATIVE_TEXTAREA_DEFAULT_ROWS, DeclarativeFieldType, DeclarativeFormConfig,
+    DeclarativeFormField, DeclarativeFormTab, DeclarativeSelectOption, DeclarativeVisibilityRule,
 };
 use extension_runtime::extension::manifest::{ResourceConnectionFieldType, ResourceConnectionForm};
 
@@ -31,7 +31,9 @@ fn field_config(
             ResourceConnectionFieldType::TextArea => DeclarativeFieldType::TextArea,
             ResourceConnectionFieldType::Select => DeclarativeFieldType::Select,
             ResourceConnectionFieldType::Checkbox => DeclarativeFieldType::Checkbox,
+            ResourceConnectionFieldType::Auth => DeclarativeFieldType::Auth,
         },
+        rows: DECLARATIVE_TEXTAREA_DEFAULT_ROWS,
         required: field.required,
         default_value: field.default_value.clone(),
         placeholder: field.placeholder.clone(),
@@ -52,5 +54,40 @@ fn field_config(
                 equals: rule.equals.clone(),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use extension_runtime::extension::manifest::ResourceConnectionFormField;
+
+    fn field(field_type: ResourceConnectionFieldType) -> ResourceConnectionFormField {
+        ResourceConnectionFormField {
+            id: "auth".into(),
+            label: "Authentication".into(),
+            field_type,
+            required: false,
+            default_value: None,
+            placeholder: None,
+            secret: false,
+            options: Vec::new(),
+            visible_when: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn auth_field_type_maps_to_declarative_auth() {
+        assert_eq!(
+            DeclarativeFieldType::Auth,
+            field_config(&field(ResourceConnectionFieldType::Auth)).field_type
+        );
+    }
+
+    #[test]
+    fn auth_maps_without_secret_flag() {
+        let mapped = field_config(&field(ResourceConnectionFieldType::Auth));
+        assert!(!mapped.secret, "Auth 组件由引擎内部管理密码 secret");
+        assert!(mapped.options.is_empty());
     }
 }

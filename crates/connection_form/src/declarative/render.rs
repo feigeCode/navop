@@ -1,8 +1,10 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, px,
+    App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div,
+    px,
 };
 use gpui_component::{
+    IconName,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     form::{field, v_form},
@@ -13,7 +15,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::{DeclarativeFieldType, DeclarativeForm, DeclarativeFormField};
+use super::{DeclarativeFieldType, DeclarativeForm, DeclarativeFormField, auth_subkey};
 
 impl DeclarativeForm {
     fn render_field(
@@ -21,6 +23,9 @@ impl DeclarativeForm {
         field_info: &DeclarativeFormField,
         cx: &mut Context<Self>,
     ) -> gpui_component::form::Field {
+        if field_info.field_type == DeclarativeFieldType::Auth {
+            return self.render_auth_field(field_info, cx);
+        }
         let id = field_info.id.clone();
         let checkbox_id = id.clone();
         field()
@@ -91,6 +96,20 @@ impl DeclarativeForm {
                             }
                         },
                     )
+                    .when(
+                        field_info.field_type == DeclarativeFieldType::FilePath,
+                        |el| {
+                            let file_field = field_info.id.clone();
+                            el.child(
+                                Button::new(format!("{file_field}-browse-file"))
+                                    .icon(IconName::FolderOpen)
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _window, cx| {
+                                        this.browse_file_path(&file_field, cx);
+                                    })),
+                            )
+                        },
+                    )
                     .when(field_info.secret, |el| {
                         let field_id = id.clone();
                         el.child(
@@ -104,6 +123,54 @@ impl DeclarativeForm {
                     }),
             )
     }
+
+    fn render_auth_field(
+        &self,
+        field_info: &DeclarativeFormField,
+        cx: &mut Context<Self>,
+    ) -> gpui_component::form::Field {
+        let username_id = auth_subkey(&field_info.id, "username");
+        let password_id = auth_subkey(&field_info.id, "password");
+        let reference_selected = self.auth_has_reference(&field_info.id, cx);
+        field()
+            .label(field_info.label.clone())
+            .items_start()
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(
+                        self.auth_pickers
+                            .get(&field_info.id)
+                            .map(|picker| div().w_full().child(picker.clone()))
+                            .unwrap_or_else(|| div().w_full()),
+                    )
+                    .when(!reference_selected, |flex| {
+                        flex.child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(self.render_auth_input(&username_id, false, cx))
+                                .child(self.render_auth_input(&password_id, true, cx)),
+                        )
+                    }),
+            )
+    }
+
+    fn render_auth_input(
+        &self,
+        id: &str,
+        masked: bool,
+        _cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if let Some(state) = self.inputs.get(id) {
+            let input = Input::new(state).w_full();
+            let input = if masked { input.mask_toggle() } else { input };
+            input.into_any_element()
+        } else {
+            div().w_full().into_any_element()
+        }
+    }
 }
 
 impl Focusable for DeclarativeForm {
@@ -113,7 +180,8 @@ impl Focusable for DeclarativeForm {
 }
 
 impl Render for DeclarativeForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_pending_file_path(window, cx);
         let tabs = self.config.tabs.clone();
         let active = self.active_tab.min(tabs.len().saturating_sub(1));
         let fields = tabs

@@ -64,6 +64,11 @@ pub enum ResourceConnectionFieldType {
     TextArea,
     Select,
     Checkbox,
+    /// 认证复合组件:用户名 + 密码 + 钥匙串引用。
+    /// 选中钥匙串引用后隐藏手动用户名/密码。
+    /// 收集产物:`config[id] = {"credential_reference": {...}}` 或 `{"username": "..."}`,
+    /// 手动密码进入 secrets,键为 `{id}.password`。无需 `secret: true`。
+    Auth,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

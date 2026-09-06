@@ -24,7 +24,12 @@ pub struct DeclarativeFormField {
     pub secret: bool,
     pub options: Vec<DeclarativeSelectOption>,
     pub visible_when: Vec<DeclarativeVisibilityRule>,
+    /// TextArea 行数;其他字段类型忽略。
+    pub rows: usize,
 }
+
+/// TextArea 缺省行数,与 `middleware_form::FormField` 对齐。
+pub const DECLARATIVE_TEXTAREA_DEFAULT_ROWS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeclarativeFieldType {
@@ -34,6 +39,13 @@ pub enum DeclarativeFieldType {
     TextArea,
     Select,
     Checkbox,
+    /// 文件路径选择(当前渲染为文本输入,后续接浏览按钮)
+    FilePath,
+    /// 认证复合组件:钥匙串引用下拉 + 手动用户名/密码;
+    /// 选中钥匙串引用后隐藏手动 username/password。
+    /// 收集产物:`config[id] = {"credential_reference": {...}}` 或 `{"username": "..."}`,
+    /// 手动密码进入 secrets,键为 `{id}.password`。
+    Auth,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
