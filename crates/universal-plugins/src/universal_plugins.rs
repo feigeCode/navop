@@ -23,7 +23,7 @@ use one_core::storage::{ConnectionRepository, GlobalStorageState};
 
 /// A global wrapper that gives the service exactly one application owner.
 #[derive(Clone)]
-pub(crate) struct GlobalUniversalPluginService {
+pub struct GlobalUniversalPluginService {
     service: UniversalPluginService,
 }
 
@@ -34,14 +34,14 @@ impl GlobalUniversalPluginService {
         Self { service }
     }
 
-    pub(crate) fn service(&self) -> UniversalPluginService {
+    pub fn service(&self) -> UniversalPluginService {
         self.service.clone()
     }
 }
 
 /// The host-owned activation and supervision facade used by GPUI features.
 #[derive(Clone)]
-pub(crate) struct UniversalPluginService {
+pub struct UniversalPluginService {
     manager: Arc<ActivationManager>,
     monitor: Arc<RuntimeMonitor>,
     catalog_source: GlobalExtensionRuntimeCatalog,
@@ -491,7 +491,7 @@ impl Drop for TransientSecretGuard {
     }
 }
 
-pub(crate) fn init(cx: &mut gpui::App) {
+pub fn init(cx: &mut gpui::App) {
     assert!(
         cx.try_global::<GlobalUniversalPluginService>().is_none(),
         "universal plugin service must have exactly one application owner"
@@ -543,7 +543,7 @@ pub(crate) fn init(cx: &mut gpui::App) {
     .detach();
 }
 
-pub(crate) fn spawn_shutdown(
+pub fn spawn_shutdown(
     cx: &gpui::App,
 ) -> Option<gpui::Task<Result<(), one_core::gpui_tokio::JoinError>>> {
     let service = cx.try_global::<GlobalUniversalPluginService>()?.service();

@@ -7782,10 +7782,8 @@ dependencies = [
  "futures",
  "global-hotkey",
  "gpui-ce",
- "gpui-component-shell",
  "gpui_ce_components",
  "gpui_ce_components_assets",
- "gpui_ce_components_shell",
  "gpui_ce_platform",
  "interprocess",
  "json_view",
@@ -7826,6 +7824,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "universal-plugins",
  "url",
  "uuid",
  "windows 0.62.2",
@@ -15235,6 +15234,32 @@ checksum = "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
 dependencies = [
  "crypto-common 0.2.2",
  "ctutils",
+]
+
+[[package]]
+name = "universal-plugins"
+version = "0.16.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "connection-form",
+ "extension-host",
+ "extension-plugin-adapter",
+ "extension-protocol",
+ "extension-runtime",
+ "extension_view",
+ "gpui-ce",
+ "gpui-component-shell",
+ "gpui_ce_components",
+ "gpui_ce_components_shell",
+ "one-core",
+ "serde_json",
+ "smol",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

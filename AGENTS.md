@@ -541,6 +541,13 @@
 - **验证方式**：样式 contract 断言完整语义色映射；终端主题测试覆盖所有内置调色板与背景的基础明度差；运行 `cargo test -p ai_chat_view`、终端主题测试和 `cargo check -p main`。
 - **适用范围**：`crates/ai_chat_view`，以及终端、远程桌面、编辑器等在应用全局主题之外渲染 Markdown/HTML 的嵌入式面板。
 
+- **标题**：把 main 里互相依赖的插件 UI 模块迁入 crate 必须整簇搬移并下沉 app 级 Global
+- **触发信号**：想把 `main/src/shell_plugin_host` + `shell_plugin_tab` 之类“插件机制”抽出到新 crate，却发现 host 依赖 `UniversalPluginService`、`GlobalTabContainer`、headless `ExtensionConnectionTab` 等仍在 main 里的符号，而 Rust 库 crate 无法 `use main`（bin）。
+- **根因 / 约束**：迁移对象只要引用了任何仍留在 main 的类型，就必须把它们一起搬出或先下沉到 crate，否则必然双向依赖。`shell_plugc`…具体到 Navop：`shell_plugin_host/shell_plugin_tab/universal_plugins/extension_connection_tab/extension_connection_form` 是一整簇互相 `crate::` 引用的单元，`cx.global::<GlobalTabContainer>()` 这类 app 级 tab 打开入口是所有 UI 共同的硬依赖，只能把 `GlobalTabContainer`（仅 `Entity<TabContainer>` 包装）下沉到 `one_core::tab_container`，不能反向注入。
+- **正确做法**：整簇 5 个模块一次搬入新 crate（`crates/universal-plugins`），功能开关用 crate 自带 `shell-plugins` optional dep feature 表达（main 的 `shell-plugins` 改为 `["universal-plugins/shell-plugins"]`），默认 off 时 crate 为空。搬移时把 `pub(crate)`→`pub` 只改 main 真实消费的边界（global 类型、load/service/open_connection/resource_connection/register_headless_tab 与 `ConnectionShellOpen` 字段），簇内引用 `crate::` 路径在新 crate 里解析位置不变，多数文件零改动。main 侧只改 import 路径。
+- **验证方式**：双态验证 `cargo check -p main`（feature off）与 `cargo check -p main --features shell-plugins` 及 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。
+- **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,onetcli_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

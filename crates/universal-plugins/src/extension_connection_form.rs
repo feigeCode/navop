@@ -24,7 +24,7 @@ use self::{
 };
 use crate::universal_plugins::GlobalUniversalPluginService;
 
-pub(crate) struct ExtensionConnectionFormConfig {
+pub struct ExtensionConnectionFormConfig {
     pub contribution: extension_runtime::RegisteredResourceConnectionContribution,
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
@@ -49,7 +49,7 @@ impl SelectItem for WorkspaceItem {
     }
 }
 
-pub(crate) struct ExtensionConnectionForm {
+pub struct ExtensionConnectionForm {
     pub(super) contribution: extension_runtime::RegisteredResourceConnectionContribution,
     pub(super) editing_connection: Option<StoredConnection>,
     pub(super) name: Entity<InputState>,
@@ -64,7 +64,7 @@ pub(crate) struct ExtensionConnectionForm {
 }
 
 impl ExtensionConnectionForm {
-    pub(crate) fn new(
+    pub fn new(
         config: ExtensionConnectionFormConfig,
         window: &mut Window,
         cx: &mut Context<Self>,

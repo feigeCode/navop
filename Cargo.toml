@@ -19,6 +19,7 @@ members = [
     "crates/extension-component",
     "crates/extension-wasm",
     "crates/tool_runtime",
+    "crates/universal-plugins",
     "crates/onetcli_runtime",
     "crates/er_flow",
     "crates/public_mcp",
@@ -110,6 +111,7 @@ html-preview = { path = "crates/html-preview" }
 agent-client-protocol = "0.14.0"
 public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }
+universal-plugins = { path = "crates/universal-plugins" }
 db = { path = "crates/db" }
 connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }

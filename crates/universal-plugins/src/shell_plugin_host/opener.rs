@@ -1,13 +1,10 @@
 use std::{rc::Rc, sync::atomic::Ordering};
 
 use gpui::{App, Window};
-use one_core::tab_container::TabItem;
+use one_core::tab_container::{GlobalTabContainer, TabItem};
 
 use super::{NEXT_SHELL_TAB_ID, ShellPluginHost, TrackedPluginTab};
-use crate::{
-    onetcli_app::GlobalTabContainer,
-    shell_plugin_tab::{ShellPluginLoad, ShellPluginTab},
-};
+use crate::shell_plugin_tab::{ShellPluginLoad, ShellPluginTab};
 
 impl extension_view::ShellViewOpener for ShellPluginHost {
     fn open(&self, extension_id: &str, view_id: &str, window: &mut Window, cx: &mut App) {

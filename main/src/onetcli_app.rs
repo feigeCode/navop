@@ -52,19 +52,6 @@ actions!(
 );
 
 #[derive(Clone)]
-pub struct GlobalTabContainer {
-    pub tab_container: Entity<TabContainer>,
-}
-
-impl gpui::Global for GlobalTabContainer {}
-
-impl GlobalTabContainer {
-    pub fn primary_pane(&self) -> Entity<TabContainer> {
-        self.tab_container.clone()
-    }
-}
-
-#[derive(Clone)]
 pub struct GlobalHomePage {
     pub home_page: Entity<HomePage>,
 }
@@ -297,7 +284,7 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
         }
 
         #[cfg(feature = "shell-plugins")]
-        let plugin_shutdown_task = cx.update(|cx| crate::universal_plugins::spawn_shutdown(cx));
+        let plugin_shutdown_task = cx.update(|cx| universal_plugins::spawn_shutdown(cx));
         #[cfg(feature = "shell-plugins")]
         if let Some(shutdown_task) = plugin_shutdown_task {
             if let Err(error) = shutdown_task.await {
@@ -407,7 +394,9 @@ use one_core::settings::{
     AppSettings, GlobalCurrentUser, HomePageStyle, MainWindowState, StartupDefaultPage,
 };
 use one_core::storage::manager::get_config_dir;
-use one_core::tab_container::{TabContainer, TabContainerEvent, TabContentRegistry, TabItem};
+use one_core::tab_container::{
+    GlobalTabContainer, TabContainer, TabContainerEvent, TabContentRegistry, TabItem,
+};
 use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };

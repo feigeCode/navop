@@ -39,7 +39,7 @@ pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Conte
             );
             return;
         };
-        let config = crate::extension_connection_form::ExtensionConnectionFormConfig {
+        let config = universal_plugins::ExtensionConnectionFormConfig {
             contribution,
             editing_connection: Some(connection.clone()),
             workspaces: self.workspaces.clone(),
@@ -50,7 +50,7 @@ pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Conte
             PopupWindowOptions::new(format!("Edit {}", connection.name)).size(700.0, 650.0),
             move |window, cx| {
                 cx.new(|cx| {
-                    crate::extension_connection_form::ExtensionConnectionForm::new(
+                    universal_plugins::ExtensionConnectionForm::new(
                         config, window, cx,
                     )
                 })

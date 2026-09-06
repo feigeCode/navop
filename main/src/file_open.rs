@@ -1,4 +1,5 @@
-use crate::onetcli_app::{GlobalHomePage, GlobalTabContainer};
+use crate::onetcli_app::GlobalHomePage;
+use one_core::tab_container::GlobalTabContainer;
 use anyhow::{Context as _, Result, bail};
 use gpui::{App, AppContext, Window};
 use gpui_component::{WindowExt, notification::Notification};

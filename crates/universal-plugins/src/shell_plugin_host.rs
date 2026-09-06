@@ -28,7 +28,7 @@ use extension_host::CancellationToken;
 use extension_plugin_adapter::ActivationHandle;
 use gpui::{App, WeakEntity, Window};
 use gpui_shell::ShellRuntime;
-use one_core::tab_container::TabItem;
+use one_core::tab_container::{GlobalTabContainer, TabItem};
 
 use self::{
     components::component_registry,
@@ -36,14 +36,14 @@ use self::{
     session::ShellMountSession,
 };
 use crate::{
-    extension_connection_tab::ExtensionConnectionTab, onetcli_app::GlobalTabContainer,
-    shell_plugin_tab::ShellPluginTab, universal_plugins::UniversalPluginService,
+    extension_connection_tab::ExtensionConnectionTab, shell_plugin_tab::ShellPluginTab,
+    universal_plugins::UniversalPluginService,
 };
 
 static NEXT_SHELL_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
-pub(crate) struct ShellPluginHost {
+pub struct ShellPluginHost {
     service: UniversalPluginService,
     runtime: Rc<ShellRuntime>,
     tokio: tokio::runtime::Handle,
@@ -72,10 +72,10 @@ pub(crate) struct PreparedShellView {
     pub(crate) connection: Option<PreparedShellConnection>,
 }
 
-pub(crate) struct ConnectionShellOpen {
-    pub(crate) connection: one_core::storage::StoredConnection,
-    pub(crate) contribution: extension_runtime::RegisteredResourceConnectionContribution,
-    pub(crate) mode: one_core::tab_container::TabOpenMode,
+pub struct ConnectionShellOpen {
+    pub connection: one_core::storage::StoredConnection,
+    pub contribution: extension_runtime::RegisteredResourceConnectionContribution,
+    pub mode: one_core::tab_container::TabOpenMode,
 }
 
 impl ShellPluginHost {
@@ -99,7 +99,7 @@ impl ShellPluginHost {
         self.service.shell_view(extension_id, view_id)
     }
 
-    pub(crate) fn resource_connection(
+    pub fn resource_connection(
         &self,
         extension_id: &str,
         contribution_id: &str,
@@ -108,7 +108,7 @@ impl ShellPluginHost {
             .resource_connection(extension_id, contribution_id)
     }
 
-    pub(crate) fn open_connection(
+    pub fn open_connection(
         &self,
         request: ConnectionShellOpen,
         window: &mut Window,
@@ -277,7 +277,7 @@ impl ShellPluginHost {
             .push(TrackedPluginTab::Shell { view_key, tab });
     }
 
-    pub(crate) fn register_headless_tab(
+    pub fn register_headless_tab(
         &self,
         extension_id: String,
         runtime_id: String,

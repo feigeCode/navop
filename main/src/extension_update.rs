@@ -13,7 +13,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContainer, TabItem};
 use rust_i18n::t;
 
-use crate::onetcli_app::GlobalTabContainer;
+use one_core::tab_container::GlobalTabContainer;
 use crate::setting_tab::AppSettings;
 
 /// 插件更新提示通知的唯一标识，避免被其它通知覆盖。

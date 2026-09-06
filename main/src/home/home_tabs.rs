@@ -1,7 +1,8 @@
 use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
-use crate::onetcli_app::{GlobalOnetCliApp, GlobalTabContainer};
+use crate::onetcli_app::GlobalOnetCliApp;
+use one_core::tab_container::GlobalTabContainer;
 use crate::session_logs::SessionLogsPage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;

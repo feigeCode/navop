@@ -13,7 +13,7 @@ use terminal_view::{
 };
 
 #[cfg(feature = "shell-plugins")]
-use crate::extension_connection_form::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
+use universal_plugins::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
 use crate::home_tab::HomePage;
 use crate::new_connection::NewConnectionWindow;
 use crate::new_connection::connection_kind::NewConnectionKind;

@@ -307,6 +307,20 @@ pub enum TabOpenMode {
     Background,
 }
 
+/// Application-owned handle to the primary [`TabContainer`].
+#[derive(Clone)]
+pub struct GlobalTabContainer {
+    pub tab_container: Entity<TabContainer>,
+}
+
+impl gpui::Global for GlobalTabContainer {}
+
+impl GlobalTabContainer {
+    pub fn primary_pane(&self) -> Entity<TabContainer> {
+        self.tab_container.clone()
+    }
+}
+
 /// Connection status of a tab's underlying session, surfaced as a badge on the
 /// tab bar (SecureCRT-style: green check when connected, red no-entry when
 /// disconnected).

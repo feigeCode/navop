@@ -21,7 +21,7 @@ enum State {
     Failed(String),
 }
 
-pub(crate) struct ExtensionConnectionTab {
+pub struct ExtensionConnectionTab {
     connection_lease: Option<ActiveConnectionLease>,
     title: SharedString,
     focus_handle: FocusHandle,
@@ -34,7 +34,7 @@ pub(crate) struct ExtensionConnectionTab {
 }
 
 impl ExtensionConnectionTab {
-    pub(crate) fn load(
+    pub fn load(
         service: UniversalPluginService,
         connection: StoredConnection,
         contribution: extension_runtime::RegisteredResourceConnectionContribution,

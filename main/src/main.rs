@@ -14,10 +14,6 @@ mod connection_sort;
 mod connection_visuals;
 mod credential_vault;
 mod env_file;
-#[cfg(feature = "shell-plugins")]
-mod extension_connection_form;
-#[cfg(feature = "shell-plugins")]
-mod extension_connection_tab;
 mod extension_update;
 mod file_association;
 mod file_open;
@@ -39,20 +35,15 @@ mod public_mcp_runtime;
 mod session_logs;
 mod setting_tab;
 mod settings;
-#[cfg(feature = "shell-plugins")]
-mod shell_plugin_host;
-#[cfg(feature = "shell-plugins")]
-mod shell_plugin_tab;
 mod sync_conflict_dialog;
 mod team_management;
-#[cfg(feature = "shell-plugins")]
-mod universal_plugins;
 mod update;
 mod user_avatar;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
 
-use crate::onetcli_app::{GlobalTabContainer, OnetCliApp};
+use crate::onetcli_app::OnetCliApp;
+use one_core::tab_container::GlobalTabContainer;
 use gpui::*;
 
 use gpui_component::{DialogStateChanged, Root};
