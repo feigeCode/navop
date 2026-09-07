@@ -276,12 +276,45 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         Ok(HostValue::Array(Vec::new()))
     }
 
+    fn reload_project(root: &str) -> Result<HostValue, HostError> {
+        let root = std::path::PathBuf::from(root);
+        if !root.join("extension.json").is_file() {
+            return Err(host_error(format!(
+                "extension.json not found in {}",
+                root.display()
+            )));
+        }
+        gpui_shell_scope::with_current_app(|cx| {
+            let dev_id = cx
+                .update_default_global::<DevExtensionRegistry, _>(|registry, cx| {
+                    registry.load(root.clone(), cx);
+                    registry
+                        .projects()
+                        .iter()
+                        .find(|project| project.root == root)
+                        .and_then(|project| project.manifest.as_ref())
+                        .map(|manifest| manifest.id.clone())
+                });
+            // 关闭该 dev 扩展已打开的视图(dev 前缀 id),让下次 open 用新 manifest。
+            if let Some(dev_id) = dev_id {
+                for window in cx.windows().to_vec() {
+                    let _ = window.update(cx, |_, window, cx| {
+                        let _ = extension_view::close_shell_extension(&dev_id, window, cx);
+                    });
+                }
+            }
+        })
+        .ok_or_else(|| host_error("no active app context"))?;
+        Ok(HostValue::Null)
+    }
+
     let ops = Rc::new(universal_plugins::DevHostOps {
         list: Rc::new(projects_value),
         open: Rc::new(open_project),
         remove: Rc::new(remove_project),
         open_view: Rc::new(open_view),
         logs: Rc::new(project_logs),
+        reload: Rc::new(reload_project),
     });
     universal_plugins::set_dev_host_ops(ops, cx);
 }
@@ -386,6 +419,42 @@ mod tests {
             assert_eq!(registry.projects().len(), 1);
             assert!(registry.projects()[0].error.is_some());
             assert!(registry.projects()[0].manifest.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn reload_replaces_manifest_in_place(cx: &mut gpui::TestAppContext) {
+        use extension_runtime::extension::manifest::ShellSurface;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("tool");
+        std::fs::create_dir_all(&root).unwrap();
+        write_manifest(&root, "com.example.tool", "tab");
+
+        cx.update(|cx| {
+            let mut registry = DevExtensionRegistry::default();
+            registry.load(root.clone(), cx);
+            let first_surface = registry.projects()[0]
+                .manifest
+                .as_ref()
+                .unwrap()
+                .contributes
+                .shell_views[0]
+                .surface;
+            assert_eq!(first_surface, ShellSurface::Tab);
+
+            // 改写 extension.json 后 reload:同目录替换而非追加。
+            write_manifest(&root, "com.example.tool", "toolbox");
+            registry.load(root.clone(), cx);
+            assert_eq!(registry.projects().len(), 1);
+            let after = registry.projects()[0]
+                .manifest
+                .as_ref()
+                .unwrap()
+                .contributes
+                .shell_views[0]
+                .surface;
+            assert_eq!(after, ShellSurface::Toolbox);
         });
     }
 }

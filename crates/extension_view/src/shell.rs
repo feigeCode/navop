@@ -14,7 +14,7 @@ pub(crate) fn finish_shell_extension(extension_id: &str, cx: &App) {
     }
 }
 
-pub(crate) fn close_shell_extension(
+pub fn close_shell_extension(
     extension_id: &str,
     window: &mut Window,
     cx: &mut App,

@@ -21,6 +21,8 @@ pub struct DevHostOps {
     pub open_view: Rc<dyn Fn(&str, &str) -> Result<HostValue, HostError>>,
     /// 读取 dev 工程日志尾部,返回 string[]。
     pub logs: Rc<dyn Fn(&str, f64) -> Result<HostValue, HostError>>,
+    /// 重载工程:关闭已开视图 + 重读 manifest + 重建 catalog。返回 { error? }。
+    pub reload: Rc<dyn Fn(&str) -> Result<HostValue, HostError>>,
 }
 
 impl gpui::Global for GlobalDevHostOps {}
@@ -50,6 +52,7 @@ pub(super) fn dev_module() -> HostModule {
     let remove = Rc::clone(&ops.remove);
     let open_view = Rc::clone(&ops.open_view);
     let logs = Rc::clone(&ops.logs);
+    let reload = Rc::clone(&ops.reload);
     HostModule::new("navop.dev")
         .declarations(
             r#"
@@ -64,6 +67,7 @@ pub(super) fn dev_module() -> HostModule {
             }
             export function list(): DevProjectInfo[];
             export function open(rootDir: string): { id: string; error?: string };
+            export function reload(rootDir: string): { error?: string };
             export function remove(rootDir: string): void;
             export function openView(extensionId: string, viewId: string): void;
             export function logs(rootDir: string, tail?: number): string[];
@@ -73,6 +77,10 @@ pub(super) fn dev_module() -> HostModule {
         .function("open", move |arguments| {
             let root = arguments.string(0)?;
             open(&root)
+        })
+        .function("reload", move |arguments| {
+            let root = arguments.string(0)?;
+            reload(&root)
         })
         .function("remove", move |arguments| {
             let root = arguments.string(0)?;
