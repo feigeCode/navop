@@ -2765,13 +2765,15 @@ impl Render for SqlEditor {
         // The right-click menu must be attached through the editor element
         // builder: gpui-component reinstalls its own context menu on the
         // EditorState on every frame, so a handler set once at construction
-        // is silently replaced and never shown.
-        let input = self.editor.clone();
+        // is silently replaced and never shown. The builder is invoked while
+        // the editor entity is still being updated, so reading it back from
+        // inside the callback panics — snapshot the capabilities here, where
+        // the editor is quiescent, and reuse the copy at click time.
+        let capabilities = self.editor.read(cx).context_menu_capabilities();
         div().size_full().child(
             ExtendedEditor::new(&self.extended_editor)
                 .gutter_marker_renderer(Rc::new(render_sql_gutter_marker))
                 .context_menu(move |_, _, cx| {
-                    let capabilities = input.read(cx).context_menu_capabilities();
                     sql_editor_native_menu(capabilities, cx.read_from_clipboard().is_some())
                 })
                 .font(font)
@@ -3149,13 +3151,16 @@ mod tests {
 
         // gpui-component reinstalls the editor context menu on every frame, so
         // the SQL run items must be attached via the element builder in render
-        // instead of a one-time state-level handler on the EditorState.
+        // instead of a one-time state-level handler. The builder runs while the
+        // editor is being updated, so capabilities are snapshotted in render
+        // and must not be re-read from the entity at click time.
         let render = source
             .split("impl Render for SqlEditor")
             .nth(1)
             .expect("SqlEditor render impl exists");
         assert!(render.contains(".context_menu("));
         assert!(render.contains("context_menu_capabilities()"));
+        assert!(!render.contains("input.read(cx)"));
     }
 
     #[test]
