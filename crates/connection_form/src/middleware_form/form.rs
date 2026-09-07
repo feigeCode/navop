@@ -5,22 +5,21 @@
 //! 流程),去掉数据库特有逻辑(插件测试、Oracle 双驱动、代理、URL 拼接)。
 //! 中间件差异由 `MiddlewareFormAdapter` 承担。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Subscription,
-    Window, div, px,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, IndexPath, Sizable, Size,
+    ActiveTheme, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     form::{Field, field, v_form},
     h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    input::{Input, InputState, Textarea},
     radio::Radio,
     scroll::ScrollableElement,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
@@ -35,12 +34,15 @@ use one_core::storage::{
 use rust_i18n::t;
 
 use super::adapter::{FormSnapshot, MiddlewareFormAdapter};
-use super::declarative::{FormField, FormFieldType, TabGroup, normalized_ssh_auth_type_or_default};
+use super::declarative::{
+    FormField, FormFieldType, TabGroup, normalized_ssh_auth_type_or_default, to_declarative_config,
+};
 use crate::SshConnectionSelectItem;
 use crate::credential::{
     CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
     CredentialReferencePicker, create_credential_picker,
 };
+use crate::declarative::DeclarativeForm;
 use crate::ssh_auth::SshAuthOption;
 use crate::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -207,10 +209,8 @@ pub struct MiddlewareConnectionForm {
     config: MiddlewareFormConfig,
     focus_handle: FocusHandle,
     active_tab: usize,
-    field_values: Vec<(String, Entity<String>)>,
-    field_inputs: Vec<Option<Entity<InputState>>>,
-    field_selects: HashMap<String, Entity<SelectState<Vec<FormSelectItem>>>>,
-    field_textareas: HashMap<String, Entity<TextareaState>>,
+    /// 统一声明式字段引擎:字段控件状态与收集均由此承担。
+    declarative: Entity<DeclarativeForm>,
     credential_picker: Entity<CredentialReferencePicker>,
     is_testing: Entity<bool>,
     test_result: Entity<Option<Result<bool, String>>>,
@@ -219,7 +219,6 @@ pub struct MiddlewareConnectionForm {
     ssh_connection_select: Entity<SelectState<SearchableVec<SshConnectionSelectItem>>>,
     selected_ssh_connection_id: Option<i64>,
     ssh_connections: Vec<StoredConnection>,
-    pending_file_path: Entity<Option<(String, String)>>,
     editing_connection: Option<StoredConnection>,
     /// 编辑/预填时保留的透传字段(如 MQTT 协议版本)
     editing_extras: HashMap<String, String>,
@@ -237,111 +236,14 @@ impl MiddlewareConnectionForm {
     ) -> Self {
         let focus_handle = cx.focus_handle();
 
-        let mut field_values = Vec::new();
-        let mut field_inputs = Vec::new();
-        let mut field_selects = HashMap::new();
-        let mut field_textareas = HashMap::new();
-
-        for tab_group in &config.tab_groups {
-            for field in &tab_group.fields {
-                let value = cx.new(|_| field.default_value.clone());
-                field_values.push((field.name.clone(), value.clone()));
-
-                if field.field_type == FormFieldType::Select {
-                    let items: Vec<FormSelectItem> = field
-                        .options
-                        .iter()
-                        .map(|(v, l)| FormSelectItem::new(v.clone(), l.clone()))
-                        .collect();
-                    let selected_index = if field.default_value.is_empty() {
-                        Some(IndexPath::new(0))
-                    } else {
-                        items
-                            .iter()
-                            .position(|i| i.value == field.default_value)
-                            .map(IndexPath::new)
-                    };
-                    let field_name = field.name.clone();
-                    let value_clone = value.clone();
-                    let select = cx.new(|cx| SelectState::new(items, selected_index, window, cx));
-                    cx.subscribe_in(
-                        &select,
-                        window,
-                        move |_form,
-                              _select,
-                              event: &SelectEvent<Vec<FormSelectItem>>,
-                              _window,
-                              cx| {
-                            if let SelectEvent::Confirm(Some(val)) = event {
-                                value_clone.update(cx, |v, cx| {
-                                    *v = val.clone();
-                                    cx.notify();
-                                });
-                            }
-                        },
-                    )
-                    .detach();
-                    field_selects.insert(field_name, select);
-                    field_inputs.push(None);
-                } else if field.field_type == FormFieldType::Checkbox {
-                    field_inputs.push(None);
-                } else if field.field_type == FormFieldType::TextArea {
-                    // 新版输入栈将多行文本拆分为独立的 TextareaState
-                    let placeholder = field.placeholder.clone();
-                    let default_value = field.default_value.clone();
-                    let textarea = cx.new(|cx| {
-                        let mut state = TextareaState::new(window, cx)
-                            .placeholder(placeholder)
-                            .auto_grow(3, 12);
-                        state.set_value(default_value, window, cx);
-                        state
-                    });
-
-                    let value_clone = value.clone();
-                    cx.subscribe_in(
-                        &textarea,
-                        window,
-                        move |_form, input, event, _window, cx| {
-                            if let InputEvent::Change = event {
-                                value_clone.update(cx, |v, cx| {
-                                    *v = input.read(cx).text().to_string();
-                                    cx.notify();
-                                });
-                            }
-                        },
-                    )
-                    .detach();
-
-                    field_textareas.insert(field.name.clone(), textarea);
-                    field_inputs.push(None);
-                } else {
-                    let input = cx.new(|cx| {
-                        let mut input_state =
-                            InputState::new(window, cx).placeholder(&field.placeholder);
-
-                        if field.field_type == FormFieldType::Password {
-                            input_state = input_state.masked(true);
-                        }
-
-                        input_state.set_value(field.default_value.clone(), window, cx);
-                        input_state
-                    });
-
-                    let value_clone = value.clone();
-                    cx.subscribe_in(&input, window, move |_form, input, event, _window, cx| {
-                        if let InputEvent::Change = event {
-                            value_clone.update(cx, |v, cx| {
-                                *v = input.read(cx).text().to_string();
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .detach();
-
-                    field_inputs.push(Some(input));
-                }
-            }
-        }
+        let declarative = cx.new(|cx| {
+            DeclarativeForm::new(
+                to_declarative_config(&config.tab_groups),
+                &serde_json::Map::new(),
+                window,
+                cx,
+            )
+        });
 
         let is_testing = cx.new(|_| false);
         let test_result = cx.new(|_| None);
@@ -374,8 +276,6 @@ impl MiddlewareConnectionForm {
         )
         .detach();
 
-        let pending_file_path = cx.new(|_| None);
-
         // 默认启用云同步,与数据库表单保持一致
         let sync_enabled = cx.new(|_| true);
         let credential_picker = create_credential_picker(
@@ -397,10 +297,7 @@ impl MiddlewareConnectionForm {
             config,
             focus_handle,
             active_tab: 0,
-            field_values,
-            field_inputs,
-            field_selects,
-            field_textareas,
+            declarative,
             credential_picker,
             is_testing,
             test_result,
@@ -409,7 +306,6 @@ impl MiddlewareConnectionForm {
             ssh_connection_select,
             selected_ssh_connection_id: None,
             ssh_connections: Vec::new(),
-            pending_file_path,
             editing_connection: None,
             editing_extras: HashMap::new(),
             sync_enabled,
@@ -567,54 +463,32 @@ impl MiddlewareConnectionForm {
         });
     }
 
-    fn set_field_value(
+    fn set_field_value<C: AppContext>(
         &mut self,
         field_name: &str,
         value: &str,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut C,
     ) {
-        if let Some((idx, _)) = self
-            .field_values
-            .iter()
-            .enumerate()
-            .find(|(_, (name, _))| name == field_name)
-        {
-            self.field_values[idx].1.update(cx, |v, cx| {
-                *v = value.to_string();
-                cx.notify();
-            });
-            if let Some(Some(input)) = self.field_inputs.get(idx) {
-                input.update(cx, |input, cx| {
-                    input.set_value(value.to_string(), window, cx);
-                });
-            } else if let Some(textarea) = self.field_textareas.get(field_name) {
-                textarea.update(cx, |textarea, cx| {
-                    textarea.set_value(value.to_string(), window, cx);
-                });
-            } else if let Some(select) = self.field_selects.get(field_name) {
-                select.update(cx, |select, cx| {
-                    select.set_selected_value(&value.to_string(), window, cx);
-                });
-            }
-        }
+        let declarative = self.declarative.clone();
+        declarative.update(cx, |form, cx| {
+            form.set_field_value(field_name, value, window, cx)
+        });
     }
 
-    fn set_bool_field_value(
+    fn set_bool_field_value<C: AppContext>(
         &mut self,
         field_name: &str,
         value: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut C,
     ) {
         self.set_field_value(field_name, if value { "true" } else { "false" }, window, cx);
     }
 
     fn get_field_value(&self, field_name: &str, cx: &App) -> Option<String> {
-        self.field_values
-            .iter()
-            .find(|(name, _)| name == field_name)
-            .map(|(_, value)| value.read(cx).clone())
+        self.find_field(field_name)
+            .map(|_| self.declarative.read(cx).value(field_name, cx))
     }
 
     fn field_bool_value(&self, field_name: &str, cx: &App) -> bool {
@@ -637,17 +511,12 @@ impl MiddlewareConnectionForm {
             .find(|field| field.name == field_name)
     }
 
-    fn get_input_by_name(&self, field_name: &str) -> Option<Entity<InputState>> {
-        let mut idx = 0;
-        for tab_group in &self.config.tab_groups {
-            for field in &tab_group.fields {
-                if field.name == field_name {
-                    return self.field_inputs.get(idx).and_then(|opt| opt.clone());
-                }
-                idx += 1;
-            }
-        }
-        None
+    fn get_input_by_name(&self, field_name: &str, cx: &App) -> Option<Entity<InputState>> {
+        self.declarative.read(cx).input_state(field_name)
+    }
+
+    fn get_textarea_by_name(&self, field_name: &str, cx: &App) -> Option<Entity<gpui_component::input::TextareaState>> {
+        self.declarative.read(cx).textarea_state(field_name)
     }
 
     fn field_visible_from_values(&self, field: &FormField, cx: &App) -> bool {
@@ -670,10 +539,8 @@ impl MiddlewareConnectionForm {
         let credential_reference = self.credential_picker.read(cx).selected_reference();
         let mut fields = HashMap::new();
 
-        for (field_name, value_entity) in &self.field_values {
-            let Some(field) = self.find_field(field_name) else {
-                continue;
-            };
+        for field in self.config.tab_groups.iter().flat_map(|group| &group.fields) {
+            let field_name = &field.name;
             if !self.field_visible_from_values(field, cx) {
                 continue;
             }
@@ -683,7 +550,10 @@ impl MiddlewareConnectionForm {
             {
                 continue;
             }
-            fields.insert(field_name.clone(), value_entity.read(cx).clone());
+            fields.insert(
+                field_name.clone(),
+                self.declarative.read(cx).value(field_name, cx),
+            );
         }
 
         FormSnapshot {
@@ -936,33 +806,6 @@ impl MiddlewareConnectionForm {
         });
     }
 
-    fn browse_file_path_for_field(&mut self, field_name: impl Into<String>, cx: &mut App) {
-        let pending = self.pending_file_path.clone();
-        let field_name = field_name.into();
-
-        let future = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            multiple: false,
-            directories: false,
-            prompt: Some(t!("MiddlewareForm.select_file").into()),
-        });
-
-        cx.spawn(async move |cx| {
-            if let Ok(Ok(Some(paths))) = future.await {
-                if let Some(path) = paths.first() {
-                    let path_str = path.to_string_lossy().to_string();
-                    let _ = cx.update(|cx| {
-                        pending.update(cx, |p, cx| {
-                            *p = Some((field_name, path_str));
-                            cx.notify();
-                        });
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
     fn render_credential_picker_field(&self) -> Field {
         field()
             .label(t!("MiddlewareForm.keychain").to_string())
@@ -970,13 +813,36 @@ impl MiddlewareConnectionForm {
             .child(div().w_full().child(self.credential_picker.clone()))
     }
 
+    /// 渲染单个声明字段(SSH 自定义页用),控件复用统一引擎的底层输入态。
     fn render_field_by_name(&self, field_name: &str, cx: &mut Context<Self>) -> Field {
-        match self.find_field(field_name) {
-            Some(field_info) if self.field_visible_from_values(field_info, cx) => {
-                self.render_declared_field(field_info, cx)
-            }
-            _ => field(),
+        let Some(info) = self.find_field(field_name) else {
+            return field();
+        };
+        if !self.field_visible_from_values(info, cx) {
+            return field();
         }
+        let is_password = info.field_type == FormFieldType::Password;
+        field()
+            .label(info.label.clone())
+            .required(info.required)
+            .items_center()
+            .child(h_flex().w_full().gap_2().child(match info.field_type {
+                FormFieldType::TextArea => self
+                    .get_textarea_by_name(&info.name, cx)
+                    .map(|state| Textarea::new(&state).w_full().into_any_element())
+                    .unwrap_or_else(|| div().w_full().into_any_element()),
+                _ => self
+                    .get_input_by_name(&info.name, cx)
+                    .map(|state| {
+                        let input = Input::new(&state).w_full();
+                        if is_password {
+                            input.mask_toggle().into_any_element()
+                        } else {
+                            input.into_any_element()
+                        }
+                    })
+                    .unwrap_or_else(|| div().w_full().into_any_element()),
+            }))
     }
 
     /// SSH 标签页:启用开关 + 引用已有连接 + 手动字段
@@ -1078,188 +944,118 @@ impl MiddlewareConnectionForm {
             .into_any_element()
     }
 
-    /// 常规/普通标签页:声明字段 + (首个标签页)工作区/团队/云同步
-    fn render_standard_tab_content(
-        &self,
-        current_tab_fields: &[FormField],
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    /// 常规/普通标签页:统一引擎渲染声明字段,宿主负责钥匙串区块(含账号密码的
+    /// 标签页)与 工作区/团队/云同步 区块(首个标签页)。
+    fn host_current_tab(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let tab_index = self.active_tab;
+        let has_main_credentials = self
+            .config
+            .tab_groups
+            .get(tab_index)
+            .map(|group| {
+                group
+                    .fields
+                    .iter()
+                    .any(|field| matches!(field.name.as_str(), "username" | "password"))
+            })
+            .unwrap_or(false);
         let credential_selected = self
             .credential_picker
             .read(cx)
             .selected_reference()
             .is_some();
-        let visible_fields = current_tab_fields
-            .iter()
-            .filter(|field| {
-                self.field_visible_from_values(field, cx)
-                    && !(credential_selected
-                        && matches!(field.name.as_str(), "username" | "password"))
-            })
-            .collect::<Vec<_>>();
-
-        if visible_fields.is_empty() {
-            return div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .h_full()
-                .text_color(cx.theme().muted_foreground)
-                .child(t!("MiddlewareForm.no_settings").to_string())
-                .into_any_element();
+        let mut hidden = HashSet::new();
+        if credential_selected {
+            hidden.insert("username".to_string());
+            hidden.insert("password".to_string());
         }
+        self.declarative.update(cx, |declarative, _| {
+            declarative.host_content(tab_index, hidden);
+        });
 
-        let is_general_tab = self.active_tab == 0;
-        let has_main_credentials = current_tab_fields
-            .iter()
-            .any(|field| matches!(field.name.as_str(), "username" | "password"));
-
-        v_form()
-            .layout(Axis::Horizontal)
-            .with_size(Size::Medium)
-            .columns(1)
-            .label_width(px(100.))
-            .when(has_main_credentials, |form| {
-                form.child(self.render_credential_picker_field())
-            })
-            .children(
-                visible_fields
-                    .into_iter()
-                    .map(|field_info| self.render_declared_field(field_info, cx)),
-            )
-            .when(is_general_tab, |form| {
-                let sync_enabled = self.sync_enabled.clone();
-                let is_sync_checked = *self.sync_enabled.read(cx);
-
-                form.child(
-                    field()
-                        .label(t!("MiddlewareForm.workspace").to_string())
-                        .items_center()
-                        .child(Select::new(&self.workspace_select).w_full()),
-                )
-                .when(
-                    connection_sync_controls_visible_in(cx) && team_management_enabled(cx),
-                    |form| {
-                        form.child(
-                            field().label(team_label()).items_center().child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(Select::new(&self.team_select).w_full())
-                                    .child(
-                                        Button::new("sync-middleware-teams")
-                                            .icon(IconName::Refresh)
-                                            .ghost()
-                                            .tooltip(refresh_teams_tooltip())
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                refresh_team_options(&this.team_select, window, cx);
-                                            })),
-                                    ),
-                            ),
-                        )
-                    },
-                )
-                .when(connection_sync_controls_visible_in(cx), |form| {
-                    form.child(
-                        field()
-                            .label(t!("MiddlewareForm.cloud_sync").to_string())
-                            .items_center()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Checkbox::new("middleware-sync-enabled")
-                                            .checked(is_sync_checked)
-                                            .on_click(move |_, _, cx| {
-                                                sync_enabled.update(cx, |sync, cx| {
-                                                    *sync = !*sync;
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                t!("MiddlewareForm.cloud_sync_desc").to_string(),
-                                            ),
-                                    ),
-                            ),
-                    )
-                })
-            })
-            .into_any_element()
+        let mut content = v_flex().w_full().gap_4();
+        let is_general_tab = tab_index == 0;
+        if is_general_tab && has_main_credentials {
+            content = content.child(
+                v_form()
+                    .columns(1)
+                    .label_width(px(100.))
+                    .child(self.render_credential_picker_field()),
+            );
+        }
+        content = content.child(self.declarative.clone());
+        if is_general_tab {
+            let chrome = self.render_general_chrome(cx);
+            if let Some(chrome) = chrome {
+                content = content.child(chrome);
+            }
+        }
+        content.into_any_element()
     }
 
-    fn render_declared_field(&self, field_info: &FormField, cx: &mut Context<Self>) -> Field {
-        let is_textarea = field_info.field_type == FormFieldType::TextArea;
-        let is_select = field_info.field_type == FormFieldType::Select;
-        let is_checkbox = field_info.field_type == FormFieldType::Checkbox;
-        let is_file_path = field_info.field_type == FormFieldType::FilePath;
-        let is_password = field_info.field_type == FormFieldType::Password;
-        let field_name = field_info.name.clone();
-
-        field()
-            .label(field_info.label.clone())
-            .required(field_info.required)
-            .when(!is_textarea, |f| f.items_center())
-            .when(is_textarea, |f| f.items_start())
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .when(is_textarea, |el| el.items_start())
-                    .when(is_select, |el| {
-                        if let Some(select_state) = self.field_selects.get(&field_name) {
-                            el.child(Select::new(select_state).w_full())
-                        } else {
-                            el
-                        }
-                    })
-                    .when(is_checkbox, |el| {
-                        let checkbox_field = field_name.clone();
-                        el.child(
-                            Checkbox::new(format!("{checkbox_field}-checkbox"))
-                                .checked(self.field_bool_value(&field_name, cx))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let next = !this.field_bool_value(&checkbox_field, cx);
-                                    this.set_bool_field_value(&checkbox_field, next, window, cx);
-                                })),
-                        )
-                    })
-                    .when(!is_select && !is_checkbox && !is_textarea, |el| {
-                        if let Some(input_state) = self.get_input_by_name(&field_name) {
-                            let input = Input::new(&input_state).w_full();
-                            let input = if is_password {
-                                input.mask_toggle()
-                            } else {
-                                input
-                            };
-                            el.child(input)
-                        } else {
-                            el
-                        }
-                    })
-                    .when(is_textarea, |el| {
-                        if let Some(textarea_state) = self.field_textareas.get(&field_name) {
-                            el.child(Textarea::new(textarea_state).w_full())
-                        } else {
-                            el
-                        }
-                    })
-                    .when(is_file_path, |el| {
-                        let file_field = field_name.clone();
-                        el.child(
-                            Button::new(format!("{file_field}-browse-file"))
-                                .icon(IconName::FolderOpen)
+    /// 首个标签页底部的 工作区 / 团队 / 云同步 区块。
+    fn render_general_chrome(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let mut children: Vec<Field> = Vec::new();
+        children.push(
+            field()
+                .label(t!("MiddlewareForm.workspace").to_string())
+                .items_center()
+                .child(Select::new(&self.workspace_select).w_full()),
+        );
+        if connection_sync_controls_visible_in(cx) && team_management_enabled(cx) {
+            children.push(
+                field().label(team_label()).items_center().child(
+                    h_flex()
+                        .gap_2()
+                        .child(Select::new(&self.team_select).w_full())
+                        .child(
+                            Button::new("sync-middleware-teams")
+                                .icon(IconName::Refresh)
                                 .ghost()
-                                .on_click(cx.listener(move |this, _, _window, cx| {
-                                    this.browse_file_path_for_field(file_field.clone(), cx);
+                                .tooltip(refresh_teams_tooltip())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    refresh_team_options(&this.team_select, window, cx);
                                 })),
-                        )
-                    }),
-            )
+                        ),
+                ),
+            );
+        }
+        if connection_sync_controls_visible_in(cx) {
+            let sync_enabled = self.sync_enabled.clone();
+            let is_sync_checked = *self.sync_enabled.read(cx);
+            children.push(
+                field()
+                    .label(t!("MiddlewareForm.cloud_sync").to_string())
+                    .items_center()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Checkbox::new("middleware-sync-enabled")
+                                    .checked(is_sync_checked)
+                                    .on_click(move |_, _, cx| {
+                                        sync_enabled.update(cx, |sync, cx| {
+                                            *sync = !*sync;
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("MiddlewareForm.cloud_sync_desc").to_string()),
+                            ),
+                    ),
+            );
+        }
+        Some(
+            v_form()
+                .columns(1)
+                .label_width(px(100.))
+                .children(children)
+                .into_any_element(),
+        )
     }
 }
 
@@ -1273,21 +1069,15 @@ impl Focusable for MiddlewareConnectionForm {
 
 impl Render for MiddlewareConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 应用待处理的文件路径选择
-        if let Some((field_name, path)) = self.pending_file_path.read(cx).clone() {
-            self.set_field_value(&field_name, &path, window, cx);
-            self.pending_file_path.update(cx, |p, _| *p = None);
-        }
-
         let current_tab_group = &self.config.tab_groups[self.active_tab];
         let current_tab_fields = &current_tab_group.fields;
         let current_tab_name = current_tab_group.name.as_str();
-        let tab_content =
-            if current_tab_name == "ssh" && should_use_custom_ssh_tab(current_tab_fields) {
-                self.render_ssh_tab_content(window, cx)
-            } else {
-                self.render_standard_tab_content(current_tab_fields, window, cx)
-            };
+        let tab_content = if current_tab_name == "ssh" && should_use_custom_ssh_tab(current_tab_fields)
+        {
+            self.render_ssh_tab_content(window, cx)
+        } else {
+            self.host_current_tab(cx)
+        };
 
         v_flex()
             .gap_4()

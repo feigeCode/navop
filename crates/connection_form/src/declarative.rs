@@ -37,6 +37,10 @@ pub struct DeclarativeForm {
     pub(super) auth_pickers: HashMap<String, Entity<CredentialReferencePicker>>,
     /// FilePath 浏览结果,渲染时应用(需 Window 写回输入态)
     pending_file_path: Entity<Option<(String, String)>>,
+    /// 宿主托管模式:TabBar 由宿主(如中间件表单)提供,引擎只渲染当前 tab 字段。
+    host_supplies_tab_bar: bool,
+    /// 宿主在托管模式下要隐藏的字段 id(如选中钥匙串引用后的账号/密码)。
+    host_hidden: HashSet<String>,
 }
 
 impl DeclarativeForm {
@@ -155,7 +159,27 @@ impl DeclarativeForm {
             cleared_secrets: HashSet::new(),
             auth_pickers,
             pending_file_path: cx.new(|_| None),
+            host_supplies_tab_bar: false,
+            host_hidden: HashSet::new(),
         }
+    }
+
+    /// 切换为宿主托管模式:引擎不再绘制 TabBar,只渲染 `active_tab` 的字段,
+    /// 并用 `hidden` 过滤宿主希望隐藏的字段(如选中钥匙串引用后的账号/密码)。
+    pub fn host_content(&mut self, active_tab: usize, hidden: HashSet<String>) {
+        self.host_supplies_tab_bar = true;
+        self.active_tab = active_tab;
+        self.host_hidden = hidden;
+    }
+
+    /// 暴露声明字段的底层输入态,供宿主在自定义页(如 SSH 隧道 tab)复用同一控件。
+    pub fn input_state(&self, id: &str) -> Option<Entity<InputState>> {
+        self.inputs.get(id).cloned()
+    }
+
+    /// 暴露声明字段的底层多行输入态,供宿主在自定义页复用同一控件。
+    pub fn textarea_state(&self, id: &str) -> Option<Entity<TextareaState>> {
+        self.textareas.get(id).cloned()
     }
 
     fn init_auth_field(
@@ -355,8 +379,8 @@ impl DeclarativeForm {
         cx: &mut Context<Self>,
     ) {
         if let Some(value_entity) = self.values.get(id) {
-            value_entity.update(cx, |value, cx| {
-                *value = value.to_string();
+            value_entity.update(cx, |current, cx| {
+                *current = value.to_string();
                 cx.notify();
             });
         }
@@ -373,7 +397,6 @@ impl DeclarativeForm {
                 select.set_selected_value(&value.to_string(), window, cx);
             });
         }
-        cx.notify();
     }
 
     /// 渲染前应用 FilePath 浏览结果(需 Window 写回输入态)。
