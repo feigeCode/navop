@@ -304,4 +304,22 @@ impl ExtensionConnectionForm {
             cx.notify();
         });
     }
+
+    pub(super) fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        window.remove_window();
+    }
+
+    pub(super) fn on_clear_test_result(&mut self, cx: &mut Context<Self>) {
+        self.test_result.update(cx, |result, cx| {
+            *result = None;
+            cx.notify();
+        });
+    }
+
+    fn test_result_msg(&self, cx: &App) -> Option<String> {
+        self.test_result.read(cx).as_ref().map(|result| match result {
+            Ok(()) => "✓ Connection successful".to_string(),
+            Err(error) => format!("✗ {error}"),
+        })
+    }
 }

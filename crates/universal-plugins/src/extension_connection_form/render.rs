@@ -1,15 +1,16 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
-    div, px,
+    App, Axis, ColorExt, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
+    Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable,
+    ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     form::{field, v_form},
     h_flex,
     input::Input,
+    scroll::ScrollableElement,
     select::Select,
     v_flex,
 };
@@ -25,11 +26,25 @@ impl Focusable for ExtensionConnectionForm {
 impl Render for ExtensionConnectionForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let testing = *self.is_testing.read(cx);
-        let status = self.test_result.read(cx).clone();
+        let result_msg = self.test_result_msg(cx);
         v_flex()
             .size_full()
+            .child(
+                div()
+                    .flex_1()
+                    .p_4()
+                    .overflow_y_scrollbar()
+                    .child(self.render_fields(cx)),
+            )
+            .when_some(result_msg, |this, msg| this.child(result_bar(msg, cx)))
+            .child(action_buttons(testing, cx))
+    }
+}
+
+impl ExtensionConnectionForm {
+    fn render_fields(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
             .gap_4()
-            .p_4()
             .child(
                 v_form()
                     .layout(Axis::Horizontal)
@@ -105,40 +120,74 @@ impl Render for ExtensionConnectionForm {
                         ),
                     ),
             )
-            .when_some(status, |el, status| el.child(status_message(status, cx)))
-            .child(action_buttons(testing, cx))
     }
 }
 
-fn status_message(status: Result<(), String>, cx: &App) -> impl IntoElement {
-    div()
-        .text_sm()
-        .text_color(if status.is_ok() {
+fn result_bar(msg: String, cx: &mut Context<ExtensionConnectionForm>) -> impl IntoElement {
+    let is_success = msg.starts_with('✓');
+    h_flex()
+        .items_start()
+        .gap_2()
+        .mx_4()
+        .mb_2()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .bg(if is_success {
+            cx.theme().success.opacity(0.12)
+        } else {
+            cx.theme().danger.opacity(0.12)
+        })
+        .text_color(if is_success {
             cx.theme().success
         } else {
             cx.theme().danger
         })
-        .child(match status {
-            Ok(()) => "Connection successful".into(),
-            Err(error) => error,
-        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .max_h(px(96.0))
+                .overflow_y_scrollbar()
+                .text_sm()
+                .child(msg),
+        )
+        .child(
+            Button::new("extension-connection-clear-test-result")
+                .xsmall()
+                .ghost()
+                .icon(IconName::Close)
+                .on_click(cx.listener(|this, _, _, cx| this.on_clear_test_result(cx))),
+        )
 }
 
 fn action_buttons(testing: bool, cx: &mut Context<ExtensionConnectionForm>) -> impl IntoElement {
     h_flex()
+        .flex_shrink_0()
         .justify_end()
         .gap_2()
+        .p_4()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(
+            Button::new("extension-connection-cancel")
+                .small()
+                .label("Cancel")
+                .on_click(cx.listener(|this, _, window, cx| this.on_cancel(window, cx))),
+        )
         .child(
             Button::new("extension-connection-test")
-                .label("Test")
-                .loading(testing)
+                .small()
+                .outline()
+                .label(if testing { "Testing…" } else { "Test" })
                 .disabled(testing)
                 .on_click(cx.listener(|this, _, _, cx| this.on_test(cx))),
         )
         .child(
             Button::new("extension-connection-save")
+                .small()
                 .primary()
-                .label("Save")
+                .label("OK")
                 .disabled(testing)
                 .on_click(cx.listener(|this, _, window, cx| this.on_save(window, cx))),
         )
