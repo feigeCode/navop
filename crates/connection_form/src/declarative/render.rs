@@ -188,6 +188,14 @@ impl Render for DeclarativeForm {
             .get(active)
             .map(|tab| tab.fields.clone())
             .unwrap_or_default();
+        let hosted = self.host_supplies_tab_bar;
+        if hosted {
+            let hidden = self.host_hidden.clone();
+            return v_flex()
+                .size_full()
+                .child(self.render_fields(&fields, &hidden, window, cx))
+                .into_any_element();
+        }
         v_flex()
             .size_full()
             .gap_4()
@@ -203,6 +211,7 @@ impl Render for DeclarativeForm {
                 )
             })
             .child(self.render_fields(&fields, &HashSet::new(), window, cx))
+            .into_any_element()
     }
 }
 
