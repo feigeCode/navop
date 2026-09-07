@@ -11,6 +11,7 @@ use gpui::{
 };
 use gpui_component::StyledExt as _;
 use gpui_component::input::{Editor, EditorState, Escape, GutterMarkerRenderer, InputEvent, Rope};
+use gpui_component::native_menu::NativeMenu;
 use lsp_types::SignatureHelp;
 
 use lifecycle::{SignatureHelpLifecycle, cycle_overload, inserted_text, should_refresh_for_edit};
@@ -220,6 +221,7 @@ pub struct ExtendedEditor {
     tab_index: isize,
     aria_label: Option<SharedString>,
     gutter_marker_renderer: Option<GutterMarkerRenderer>,
+    context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
 }
 
 impl ExtendedEditor {
@@ -235,6 +237,7 @@ impl ExtendedEditor {
             tab_index: 0,
             aria_label: None,
             gutter_marker_renderer: None,
+            context_menu_builder: None,
         }
     }
 
@@ -277,6 +280,21 @@ impl ExtendedEditor {
         self.gutter_marker_renderer = Some(renderer);
         self
     }
+
+    /// Replace the built-in context menu shown on right-click.
+    ///
+    /// The closure receives an empty menu and returns the one to show, so it
+    /// decides entirely what appears — the default editing items are not added.
+    /// It is forwarded to the inner editor element on every render, which is
+    /// the only hook that survives gpui-component's per-frame context menu
+    /// installation.
+    pub fn context_menu(
+        mut self,
+        f: impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static,
+    ) -> Self {
+        self.context_menu_builder = Some(Rc::new(f));
+        self
+    }
 }
 
 impl Styled for ExtendedEditor {
@@ -303,6 +321,9 @@ impl RenderOnce for ExtendedEditor {
                     .tab_index(self.tab_index)
                     .when_some(self.gutter_marker_renderer, |editor, renderer| {
                         editor.gutter_marker_renderer(move |marker| renderer(marker))
+                    })
+                    .when_some(self.context_menu_builder, |editor, build| {
+                        editor.context_menu(move |menu, window, cx| build(menu, window, cx))
                     })
                     .when_some(self.height, |editor, height| editor.h(height))
                     .when_some(self.aria_label, |editor, label| editor.aria_label(label)),

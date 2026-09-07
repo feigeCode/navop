@@ -14,7 +14,7 @@ impl HomePage {
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .gap_1()
+            .gap_2()
             // 与内容区 p_5 同一左边线（redesign：统一左右内缩）。
             .px_5()
             .py_2()
@@ -34,15 +34,29 @@ impl HomePage {
                             .bg(cx.theme().muted),
                     ),
             )
-            .child(self.render_home_type_filter(window, cx))
-            .child(group_filter)
-            .child(self.render_sort_button(cx))
-            .child(self.render_layout_button(cx))
             .child(
-                IconButton::new("refresh-button", IconName::Refresh)
+                // 筛选/排序/布局/刷新/批量统一收纳进分组容器：
+                // 与搜索框同款 muted 底与圆角，幽灵按钮在容器内不再各自为战。
+                h_flex()
                     .flex_shrink_0()
-                    .tooltip(t!("Home.refresh"))
-                    .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
+                    .items_center()
+                    .gap_1()
+                    .p_1()
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().muted)
+                    .child(self.render_home_type_filter(window, cx))
+                    .child(group_filter)
+                    .child(self.render_sort_button(cx))
+                    .child(self.render_layout_button(cx))
+                    .child(
+                        IconButton::new("refresh-button", IconName::Refresh)
+                            .flex_shrink_0()
+                            .tooltip(t!("Home.refresh"))
+                            .on_click(
+                                cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx)),
+                            ),
+                    )
+                    .child(self.render_batch_toggle(cx)),
             )
             .child(
                 // 主操作区分隔线（demo：1×18px --border）
@@ -66,7 +80,12 @@ impl HomePage {
             .flex_shrink_0()
             // 窄窗口隐藏 label 后退化为图标按钮，同样需要保住 caret 宽度。
             .min_w(px(52.0))
-            .icon(connection_type_rail_icon(selected))
+            // 「全部类型」用 Apps 网格图标；星号在工具栏里像装饰符，语义不清。
+            .icon(if selected == ConnectionType::All {
+                IconName::Apps.mono().with_size(IconSize::Medium)
+            } else {
+                connection_type_rail_icon(selected)
+            })
             .when(window.bounds().size.width > px(1100.0), |button| {
                 button.label(connection_type_label(selected))
             })
@@ -164,6 +183,21 @@ impl HomePage {
                     )
                 })
             })
+            .into_any_element()
+    }
+
+    /// 批量操作入口：选中态保持高亮；卡片/列表/树共享同一批量选择状态。
+    fn render_batch_toggle(&self, cx: &Context<Self>) -> AnyElement {
+        Button::new("home-batch-toggle")
+            .ghost()
+            .flex_shrink_0()
+            .icon(IconName::ListChecks)
+            .selected(self.batch_mode_active())
+            .tooltip(t!("Connection.batch_operations"))
+            .on_click(cx.listener(|home, _, _, cx| {
+                let next = !home.batch_mode_active();
+                home.set_batch_mode(next, cx);
+            }))
             .into_any_element()
     }
 

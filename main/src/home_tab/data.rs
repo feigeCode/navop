@@ -54,6 +54,7 @@ impl HomePage {
                     _ = this.update(cx, |this, cx| {
                         this.connections = connections;
                         this.external_driver_registry = external_driver_registry;
+                        this.prune_connection_selection();
                         cx.notify();
                     });
                 }

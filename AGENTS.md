@@ -562,6 +562,19 @@
 - **验证方式**：结构 contract 断言宿主 render 只引用实体不内联调用其 render 方法（含 `set_*` 模式同步），真实窗口切换布局确认不再 panic。
 - **适用范围**：`main/src/home_tab/content.rs`（HomePage 嵌入 persistent_connection_sidebar Tree）、任何 View 互相持有 Entity 并嵌入渲染的场景。
 
+- **标题**：主页批量选择状态由 HomePage 持有，三布局共享；嵌入树不再有自带搜索框
+- **触发信号**：给主页卡片/列表/树加批量操作时发现入口缺失或状态分叉；或主页 Tree 布局同时出现工具栏大搜索框和树内“搜索连接或分组”两个搜索框。
+- **根因 / 约束**：树原本把 `ConnectionSelection` 与 `selected_filter`/树内搜索框留在 `PersistentConnectionSidebar`，嵌入主页时树头部被隐藏，批量入口随之消失，树内搜索框又与主页工具栏重复。
+- **正确做法**：`ConnectionSelection` 及 `set_batch_mode` / `select_connection_in_batch` / `visible_manageable_connection_ids` 位于 `home_tab/connection_selection.rs`，侧栏树经 `home_page` 读写同一状态；卡片/列表批量条由 `home_tab/batch_bar.rs` 渲染，Tree 布局的批量条仍由侧栏树内渲染。树入口仅在 `!home_embedded` 时渲染 `render_tree_search`，嵌入时 `tree_rows` 直接读 `home.search_query` 与 `home.selected_filter`。数据加载完成后调用 `prune_connection_selection` 裁剪失效选择。
+- **验证方式**：`cargo test -p main`（home_tab::connection_selection 单元测试、batch_bar/batch_toolbar 契约、`embedded_tree_reuses_home_search_and_filter_without_own_search_box`、`home_batch_mode_is_shared_across_card_list_and_tree_layouts`）。
+- **适用范围**：`main/src/home_tab/{connection_selection,batch_bar,toolbar,home_layout,connection_card,connection_list,data}.rs`、`main/src/persistent_connection_sidebar/{selection,batch_toolbar,rows,tree,mod}.rs`。
+
+- **标题**：后台任务入口图标等应用级自定义 SVG 通过 AssetSource 内嵌并按路径引用
+- **触发信号**：需要替换 tabs 栏后台任务入口等 `IconName` 覆盖不了的图标；`gpui-component` 的 `IconName` 由其 assets 宏生成，本仓库无法添加变体。
+- **正确做法**：SVG 放入 `resources/icons/`，路径常量定义在 `one_core::storage`（如 `NAVOP_BACKGROUND_TASK_ICON`），`main::navop_brand_icon` 以 `include_bytes!` 注册；使用处 `Icon::default().path(常量)`。`Button::icon` / `Toggle::icon` 接受 `impl Into<Icon>`，可直接传 `Icon`。
+- **验证方式**：`cargo test -p one-core background_task`（入口与徽标契约）+ `cargo check -p main`。
+- **适用范围**：`crates/core/src/background_task_panel.rs`、`main/src/main.rs`、`crates/core/src/storage/models.rs`、`resources/icons/`。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

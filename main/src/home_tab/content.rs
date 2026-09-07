@@ -45,7 +45,7 @@ impl HomePage {
         )
     }
 
-    fn home_groups(
+    pub(super) fn home_groups(
         &self,
         query: &str,
         cx: &App,

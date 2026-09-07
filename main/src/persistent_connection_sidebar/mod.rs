@@ -9,7 +9,6 @@ use gpui_component::{
 use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
-use selection::ConnectionSelection;
 
 mod batch_toolbar;
 mod connection_command;
@@ -112,7 +111,6 @@ const FLOATING_CARD_MARGIN: f32 = 8.0;
 
 pub(crate) struct PersistentConnectionSidebar {
     pub(super) home_page: Entity<HomePage>,
-    connection_selection: ConnectionSelection,
     pub(super) tree_expanded: bool,
     pub(super) selected_filter: one_core::storage::ConnectionType,
     pub(super) hide_empty_workspaces: bool,
@@ -192,20 +190,9 @@ impl PersistentConnectionSidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.observe(&home_page, |this, home, cx| {
-            let home = home.read(cx);
-            let valid_ids = home
-                .connections
-                .iter()
-                .filter_map(|connection| {
-                    let id = connection.id?;
-                    home.can_move_connection(id).then_some(id)
-                })
-                .collect();
-            this.connection_selection.retain(&valid_ids);
-            cx.notify();
-        })
-        .detach();
+        // 主页任何状态变化（搜索词、类型筛选、批量选择、数据刷新）都需要重绘树；
+        // 批量选择的失效裁剪由 HomePage::prune_connection_selection 在数据加载时完成。
+        cx.observe(&home_page, |_, _, cx| cx.notify()).detach();
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(rust_i18n::t!("Connection.search_placeholder").to_string())
@@ -223,7 +210,6 @@ impl PersistentConnectionSidebar {
             .clamp(layout.context_sidebar_min, layout.context_sidebar_max);
         Self {
             home_page,
-            connection_selection: ConnectionSelection::default(),
             tree_expanded,
             selected_filter: one_core::storage::ConnectionType::All,
             hide_empty_workspaces: tree_state.hide_empty_workspaces,

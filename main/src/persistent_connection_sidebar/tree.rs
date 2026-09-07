@@ -62,8 +62,12 @@ impl PersistentConnectionSidebar {
             .when(!self.home_embedded, |tree| {
                 tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))
             })
-            .child(self.render_tree_search(palette, cx))
-            .when(self.connection_selection.is_active(), |tree| {
+            // 嵌入主页时不渲染树内搜索框：主页工具栏的搜索与类型筛选直接驱动树，
+            // 避免上下两个搜索框重复。
+            .when(!self.home_embedded, |tree| {
+                tree.child(self.render_tree_search(palette, cx))
+            })
+            .when(self.home_page.read(cx).batch_mode_active(), |tree| {
                 tree.child(self.render_batch_toolbar(&rows, palette, cx))
             })
             .child(
@@ -112,7 +116,18 @@ impl PersistentConnectionSidebar {
 
     pub(super) fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
         let home = self.home_page.read(cx);
-        let query = self.search_input.read(cx).value().trim().to_lowercase();
+        // 嵌入主页时使用主页工具栏的搜索词与类型筛选；停靠/浮动时用树自身的。
+        let (query, type_filter) = if self.home_embedded {
+            (
+                home.search_query.read(cx).trim().to_lowercase(),
+                home.selected_filter,
+            )
+        } else {
+            (
+                self.search_input.read(cx).value().trim().to_lowercase(),
+                self.selected_filter,
+            )
+        };
         let collapsed_workspaces = home
             .workspaces
             .iter()
@@ -136,7 +151,7 @@ impl PersistentConnectionSidebar {
             .iter()
             .filter(|connection| {
                 crate::home_tab::connection_filter::match_connection_type(
-                    self.selected_filter,
+                    type_filter,
                     connection,
                 )
             })
@@ -246,6 +261,8 @@ impl PersistentConnectionSidebar {
                 .count()
         };
         let view_for_batch = cx.entity();
+        let home_for_batch = self.home_page.clone();
+        let batch_active = self.home_page.read(cx).batch_mode_active();
         let view_for_actions = cx.entity();
         let layout = cx.theme().geometry.layout;
         // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
@@ -301,11 +318,7 @@ impl PersistentConnectionSidebar {
                         self.auto_hide_tree,
                         palette,
                     ))
-                    .child(batch_mode_toggle(
-                        view_for_batch,
-                        self.connection_selection.is_active(),
-                        palette,
-                    ))
+                    .child(batch_mode_toggle(home_for_batch, batch_active, palette))
                     .child(self.header_actions_menu(view_for_actions, palette)),
             )
             .into_any_element()

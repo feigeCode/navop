@@ -11,7 +11,16 @@ impl HomePage {
     ) -> AnyElement {
         let conn_id = conn.id;
         let open_connection = conn.clone();
-        let is_selected = selected_id == conn.id;
+        // 最近区是纯快捷入口：不参与批量模式（无勾选框、点击不进选择），
+        // 同一连接在下方分组中的实例才承载批量交互。
+        let batch_mode = self.batch_mode_active() && !recent;
+        let can_manage = conn_id.is_some_and(|id| self.can_move_connection(id));
+        // 批量模式下选中态来自批量选择集（参考常驻侧栏连接树）。
+        let is_selected = if batch_mode {
+            conn_id.is_some_and(|id| self.connection_selection.contains(id))
+        } else {
+            selected_id == conn.id
+        };
         let is_active = conn
             .id
             .is_some_and(|id| cx.global::<ActiveConnections>().is_active(id));
@@ -63,11 +72,46 @@ impl HomePage {
                 this.open_connection_from_quick(&open_connection, window, cx);
                 cx.notify()
             }))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                if batch_mode && can_manage {
+                    if let Some(id) = conn_id {
+                        let mode = if event.modifiers().shift {
+                            connection_selection::ConnectionSelectionMode::Range
+                        } else if event.modifiers().secondary() {
+                            connection_selection::ConnectionSelectionMode::Toggle
+                        } else {
+                            connection_selection::ConnectionSelectionMode::Replace
+                        };
+                        let query = this.search_query.read(cx).to_lowercase();
+                        let visible_ids = this.visible_manageable_connection_ids(&query, cx);
+                        this.select_connection_in_batch(
+                            connection_selection::ConnectionSelectionRequest {
+                                connection_id: id,
+                                mode,
+                                manageable: true,
+                            },
+                            &visible_ids,
+                            cx,
+                        );
+                    }
+                }
                 this.selected_connection_id = conn_id;
                 cx.notify();
             }))
-            .when(is_active, |this| {
+            .when(batch_mode && can_manage, |this| {
+                this.child(div().absolute().top_2().left_2().child(
+                    connection_selection::connection_selection_checkbox(
+                        &cx.entity(),
+                        connection_selection::ConnectionCheckProps {
+                            element_id: SharedString::from(format!("{card_id}-check")),
+                            connection_id: conn_id.unwrap_or(0),
+                            checked: is_selected,
+                        },
+                    ),
+                ))
+            })
+            // 批量模式下左上角由勾选框占用，不再叠加在线状态点。
+            .when(is_active && !batch_mode, |this| {
                 this.child(
                     div()
                         .absolute()

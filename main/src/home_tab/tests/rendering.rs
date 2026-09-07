@@ -198,6 +198,75 @@ fn sidebar_search_aligns_with_home_toolbar_height() {
 }
 
 #[test]
+fn home_batch_mode_is_shared_across_card_list_and_tree_layouts() {
+    let home = include_str!("../../home_tab.rs");
+    let toolbar = include_str!("../toolbar.rs");
+    let batch_bar = include_str!("../batch_bar.rs");
+    let home_layout = include_str!("../home_layout.rs");
+    let card = include_str!("../connection_card.rs");
+    let list = include_str!("../connection_list.rs");
+    let selection = include_str!("../connection_selection.rs");
+
+    // 选择状态由 HomePage 持有，三布局共享；Tree 布局不再重复渲染主页批量条
+    assert!(home.contains("connection_selection"));
+    assert!(selection.contains("fn set_batch_mode"));
+    assert!(toolbar.contains("home-batch-toggle"));
+    assert!(toolbar.contains("IconName::ListChecks"));
+    assert!(home_layout.contains("render_batch_bar"));
+    assert!(home_layout.contains("ConnectionLayout::Tree"));
+    // 卡片与列表在批量模式下渲染勾选框并按修饰键做范围/多选
+    for source in [card, list] {
+        assert!(source.contains("connection_selection_checkbox"));
+        assert!(source.contains("ConnectionSelectionMode::Range"));
+        assert!(source.contains("ConnectionSelectionMode::Toggle"));
+    }
+    // 批量条提供全选可见/移动/删除/退出
+    assert!(batch_bar.contains("home-select-visible-connections"));
+    assert!(batch_bar.contains("home-move-selected-connections"));
+    assert!(batch_bar.contains("home-delete-selected-connections"));
+    assert!(batch_bar.contains("home-exit-batch-connections"));
+}
+
+#[test]
+fn embedded_tree_reuses_home_search_and_filter_without_own_search_box() {
+    let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
+    let implementation = tree.split("#[cfg(test)]").next().unwrap();
+
+    // 树内搜索框与树头部都仅在非嵌入（停靠/浮动）时渲染
+    for marker in [
+        "tree.child(self.render_tree_search(palette, cx))",
+        "tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))",
+    ] {
+        let render_at = implementation.find(marker).expect("渲染点存在");
+        let mut window_start = render_at.saturating_sub(160);
+        while !implementation.is_char_boundary(window_start) {
+            window_start -= 1;
+        }
+        assert!(
+            implementation[window_start..render_at].contains("!self.home_embedded"),
+            "{marker} 应由 !home_embedded 门控"
+        );
+    }
+    // 嵌入时搜索词与类型筛选直接来自主页工具栏
+    assert!(implementation.contains("home.search_query.read(cx)"));
+    assert!(implementation.contains("home.selected_filter"));
+}
+
+#[test]
+fn home_toolbar_groups_utility_controls_into_one_container() {
+    let toolbar = include_str!("../toolbar.rs");
+
+    // 筛选/排序/布局/刷新/批量收纳进同一 muted 分组容器
+    let group = toolbar
+        .find(".bg(cx.theme().muted)")
+        .map(|_| toolbar.contains("render_batch_toggle(cx)"));
+    assert!(group.unwrap_or(false));
+    assert!(toolbar.contains("render_home_type_filter(window, cx)"));
+    // 「全部类型」不再使用星号图标
+    assert!(toolbar.contains("IconName::Apps"));
+}
+
+#[test]
 fn persistent_sidebar_supports_connection_group_drag_and_drop() {
     let rows = include_str!("../../persistent_connection_sidebar/rows.rs");
     let grouping = include_str!("../connection_grouping.rs");

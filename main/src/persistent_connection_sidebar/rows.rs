@@ -13,12 +13,13 @@ use super::row_parts::{
     child_group_button, connection_team_indicator, delete_group_button, edit_group_button,
     tree_chevron, tree_count, tree_label,
 };
-use super::selection::{
-    ConnectionSelectionMode, ConnectionSelectionRequest, connection_selection_checkbox,
-};
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::connection_visuals::ConnectionVisualSize;
+use crate::home_tab::connection_selection::{
+    ConnectionCheckProps, ConnectionSelectionMode, ConnectionSelectionRequest,
+    connection_selection_checkbox,
+};
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 
 impl PersistentConnectionSidebar {
@@ -177,15 +178,15 @@ impl PersistentConnectionSidebar {
         let open_connection = connection.clone();
         let home_for_open = home.clone();
         let home_for_select = home.clone();
-        let batch_mode = self.connection_selection.is_active();
+        let batch_mode = home.read(cx).batch_mode_active();
         let selected = if batch_mode {
-            self.connection_selection.contains(id)
+            home.read(cx).connection_selection.contains(id)
         } else {
             home.read(cx).selected_connection_id == Some(id)
         };
         let can_drag = home.read(cx).can_move_connection(id);
         let view_for_select = cx.entity();
-        let view_for_checkbox = view_for_select.clone();
+        let home_for_checkbox = home.clone();
         let team_indicator = connection.as_ref().and_then(|connection| {
             connection_team_indicator(connection, home.read(cx).cached_team_options(), cx)
         });
@@ -289,9 +290,14 @@ impl PersistentConnectionSidebar {
             })
             .when(batch_mode && can_drag, |row| {
                 row.child(connection_selection_checkbox(
-                    view_for_checkbox,
-                    id,
-                    self.connection_selection.contains(id),
+                    &home_for_checkbox,
+                    ConnectionCheckProps {
+                        element_id: SharedString::from(format!(
+                            "persistent-connection-check-wrap-{id}"
+                        )),
+                        connection_id: id,
+                        checked: selected,
+                    },
                 ))
             })
             .child(icon)

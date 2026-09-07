@@ -85,6 +85,7 @@ impl HomePage {
             search_query,
             editing_connection_id: None,
             selected_connection_id: None,
+            connection_selection: Default::default(),
             filtered_workspace_ids: HashSet::new(),
             workspace_filter_open: false,
             account_menu_open: false,

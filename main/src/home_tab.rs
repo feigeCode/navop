@@ -154,9 +154,12 @@ pub struct HomePage {
     connection_sidebar:
         Option<Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>>,
     search_input: Entity<InputState>,
-    search_query: Entity<String>,
+    /// 工具栏搜索词（嵌入主页的连接树也以此为过滤输入，树内不再重复搜索框）。
+    pub(crate) search_query: Entity<String>,
     pub(crate) editing_connection_id: Option<i64>,
     pub(crate) selected_connection_id: Option<i64>,
+    /// 批量操作选择状态；卡片/列表/树三种布局共享（参考常驻侧栏连接树）。
+    pub(crate) connection_selection: connection_selection::ConnectionSelection,
     pub(crate) filtered_workspace_ids: HashSet<i64>,
     pub(crate) workspace_filter_open: bool,
     pub(crate) account_menu_open: bool,
@@ -209,6 +212,7 @@ impl ConnectionCredentialExportIdentity {
 }
 
 mod auth;
+mod batch_bar;
 mod batch_connection_actions;
 mod cloud_sync;
 mod connection_actions;
@@ -227,6 +231,7 @@ mod connection_list;
 mod connection_list_actions;
 mod connection_open;
 pub(crate) use connection_open::resolve_connection_credentials;
+pub(crate) mod connection_selection;
 mod account_menu;
 mod content;
 mod data;
