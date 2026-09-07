@@ -8,7 +8,7 @@ impl TabContent for HomePage {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        SharedString::from(t!("Home.title"))
+        SharedString::from("")
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {

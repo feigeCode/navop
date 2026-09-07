@@ -2215,6 +2215,10 @@ impl TabContent for SettingsPanel {
         true
     }
 
+    fn show_in_tab_bar(&self, _cx: &App) -> bool {
+        false
+    }
+
     fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !cx.has_global::<AppSettings>() {
             init_settings(cx);

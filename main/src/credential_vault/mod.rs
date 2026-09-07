@@ -109,6 +109,10 @@ impl TabContent for CredentialVaultView {
         true
     }
 
+    fn show_in_tab_bar(&self, _cx: &App) -> bool {
+        false
+    }
+
     fn can_rename(&self, _cx: &App) -> bool {
         false
     }

@@ -396,12 +396,18 @@ fn activate_tab_by_number(number: usize, cx: &mut App) {
     cx.defer(move |cx| {
         _ = active_window.update(cx, |_, window, cx| {
             container.update(cx, |tc, cx| {
-                match tab_number_target(number, tc.pinned_tab_count(), tc.tabs().len()) {
+                // alt-N 用可见 tab 顺序；隐藏的 home 应用 tab 不占编号。
+                let visible_tabs: Vec<usize> = (0..tc.tabs().len())
+                    .filter(|&index| tc.tab_bar_visible(index, cx))
+                    .collect();
+                match tab_number_target(number, tc.pinned_tab_count(), visible_tabs.len()) {
                     Some(ActiveTabSlot::Pinned(index)) => {
                         tc.activate_pinned_tab_at(index, window, cx);
                     }
                     Some(ActiveTabSlot::Regular(index)) => {
-                        tc.set_active_index(index, window, cx);
+                        if let Some(&tab_index) = visible_tabs.get(index) {
+                            tc.set_active_index(tab_index, window, cx);
+                        }
                     }
                     None => {}
                 }
@@ -422,22 +428,7 @@ fn switch_tab(direction: TabCycleDirection, cx: &mut App) {
     cx.defer(move |cx| {
         _ = active_window.update(cx, |_, window, cx| {
             container.update(cx, |tc, cx| {
-                let active_slot = tc
-                    .active_pinned_index()
-                    .map(ActiveTabSlot::Pinned)
-                    .unwrap_or_else(|| ActiveTabSlot::Regular(tc.active_index()));
-                let Some(next_slot) = tab_slot_after_cycle(
-                    active_slot,
-                    tc.pinned_tab_count(),
-                    tc.tabs().len(),
-                    direction,
-                ) else {
-                    return;
-                };
-                match next_slot {
-                    ActiveTabSlot::Pinned(index) => tc.activate_pinned_tab_at(index, window, cx),
-                    ActiveTabSlot::Regular(index) => tc.set_active_index(index, window, cx),
-                }
+                tc.cycle_tab(direction, window, cx);
             });
         });
     });

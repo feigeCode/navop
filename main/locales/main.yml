@@ -179,6 +179,10 @@ Home:
     en: "No connections match your filters."
     zh-CN: "没有符合当前筛选条件的连接。"
     zh-HK: "沒有符合目前篩選條件的連線。"
+  empty_connections:
+    en: "No connections yet. Create your first connection to get started."
+    zh-CN: "还没有连接。创建第一个连接开始使用。"
+    zh-HK: "還沒有連線。建立第一個連線開始使用。"
   clear_filters:
     en: "Clear Filters"
     zh-CN: "清除筛选"
@@ -2257,7 +2261,11 @@ Settings:
       home_layout_desc:
         en: Choose the card or list layout for the existing connection list on Home
         zh-CN: 选择主页现有连接列表使用卡片或列表布局
-        zh-HK: 選擇主頁現有連線列表使用卡片或列表佈局
+        zh-HK: 選擇首頁現有連線列表使用卡片或列表佈局
+      connection_layout:
+        en: Connection Layout
+        zh-CN: 连接布局
+        zh-HK: 連線佈局
       connection_sort:
         en: Connection Sorting
         zh-CN: 连接排序
@@ -4508,6 +4516,16 @@ Serial:
     en: Edit Serial Connection
     zh-CN: 编辑串口连接
     zh-HK: 編輯串口連接
+
+Telnet:
+  new:
+    en: New Telnet Connection
+    zh-CN: 新建 Telnet 连接
+    zh-HK: 新建 Telnet 連線
+  edit:
+    en: Edit Telnet Connection
+    zh-CN: 编辑 Telnet 连接
+    zh-HK: 編輯 Telnet 連線
 
 RemoteDesktopForm:
   title_new:

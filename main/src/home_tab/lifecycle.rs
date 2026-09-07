@@ -40,18 +40,31 @@ impl HomePage {
         });
         let persisted_user_id = load_auth_data().map(|(_, _, user_id, _)| user_id);
 
-        // 订阅搜索输入变化
+        // 订阅搜索输入变化；回车时若是 ssh 命令则直接进入快速连接。
         let query_clone = search_query.clone();
         cx.subscribe_in(
             &search_input,
             window,
-            move |_this, _input, event, _window, cx| {
-                if let InputEvent::Change = event {
-                    query_clone.update(cx, |q, cx| {
-                        *q = _input.read(cx).text().to_string();
+            move |this, input, event, window, cx| {
+                match event {
+                    InputEvent::Change => {
+                        query_clone.update(cx, |q, cx| {
+                            *q = input.read(cx).text().to_string();
+                            cx.notify();
+                        });
                         cx.notify();
-                    });
-                    cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        let query = input.read(cx).text().to_string();
+                        if crate::home::home_connection_quick_open::temporary_ssh_connection(
+                            &query,
+                        )
+                        .is_some()
+                        {
+                            this.show_connection_quick_open_with_query(query, window, cx);
+                        }
+                    }
+                    _ => {}
                 }
             },
         )

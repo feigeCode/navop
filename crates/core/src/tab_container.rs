@@ -8,7 +8,7 @@ use crate::tab_actions::{
     TAB_TITLE_METADATA_KEY, clear_tab_activity, duplicate_tab_id, mark_tab_activity,
     next_duplicate_tab_title, normalize_title, resolve_tab_title,
 };
-use crate::tab_navigation::{ActiveTabSlot, tab_number_target};
+use crate::tab_navigation::{ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle};
 use crate::tab_switcher::{TabSwitcherEntry, open_tab_switcher_dialog};
 use gpui::KeyBinding;
 use gpui::prelude::FluentBuilder;
@@ -451,6 +451,14 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         true
     }
 
+    /// Whether this regular tab renders a label in the tab bar. Home sidebar
+    /// app tabs return false: the tab stays in the container (activation,
+    /// persistence and closing still work) and looks like in-page navigation;
+    /// tab-bar navigation (alt-N, cycling, switcher) skips hidden tabs.
+    fn show_in_tab_bar(&self, cx: &App) -> bool {
+        true
+    }
+
     /// Whether this tab can be renamed from the tab bar.
     fn can_rename(&self, cx: &App) -> bool {
         true
@@ -572,6 +580,7 @@ pub trait TabContentView: 'static + Send + Sync {
     fn title(&self, cx: &App) -> SharedString;
     fn icon(&self, cx: &App) -> Option<Icon>;
     fn closeable(&self, cx: &App) -> bool;
+    fn show_in_tab_bar(&self, cx: &App) -> bool;
     fn can_rename(&self, cx: &App) -> bool;
     fn rename(&self, title: &str, window: &mut Window, cx: &mut App) -> bool;
     fn apply_title(&self, title: &str, window: &mut Window, cx: &mut App);
@@ -641,6 +650,10 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn closeable(&self, cx: &App) -> bool {
         self.read(cx).closeable(cx)
+    }
+
+    fn show_in_tab_bar(&self, cx: &App) -> bool {
+        self.read(cx).show_in_tab_bar(cx)
     }
 
     fn can_rename(&self, cx: &App) -> bool {
@@ -2516,10 +2529,51 @@ impl TabContainer {
     }
 
     fn activate_tab_number(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
-        match tab_number_target(number, self.pinned_tabs.len(), self.tabs.len()) {
+        // alt-N targets the visible (tab bar) ordering: hidden home app tabs
+        // are not part of the displayed numbering.
+        let visible_tabs = self.visible_tab_indices(cx);
+        match tab_number_target(number, self.pinned_tabs.len(), visible_tabs.len()) {
             Some(ActiveTabSlot::Pinned(index)) => self.activate_pinned_tab_at(index, window, cx),
-            Some(ActiveTabSlot::Regular(index)) => self.set_active_index(index, window, cx),
+            Some(ActiveTabSlot::Regular(index)) => {
+                if let Some(&tab_index) = visible_tabs.get(index) {
+                    self.set_active_index(tab_index, window, cx);
+                }
+            }
             None => {}
+        }
+    }
+
+    /// Cycle to the next/previous tab as shown in the tab bar. Hidden home
+    /// app tabs are skipped; if only a hidden tab remains next to the pinned
+    /// area, regular cycling still lands on it so ctrl-tab keeps working.
+    pub fn cycle_tab(
+        &mut self,
+        direction: TabCycleDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let visible_tabs = self.visible_tab_indices(cx);
+        let active_slot = self
+            .active_pinned_index
+            .map(ActiveTabSlot::Pinned)
+            .unwrap_or(ActiveTabSlot::Regular(self.active_index));
+        let regular_count = if visible_tabs.is_empty() && !self.tabs.is_empty() {
+            // Only hidden tabs exist; cycle over them so the shortcut still moves.
+            self.tabs.len()
+        } else {
+            visible_tabs.len()
+        };
+        let Some(next_slot) =
+            tab_slot_after_cycle(active_slot, self.pinned_tabs.len(), regular_count, direction)
+        else {
+            return;
+        };
+        match next_slot {
+            ActiveTabSlot::Pinned(index) => self.activate_pinned_tab_at(index, window, cx),
+            ActiveTabSlot::Regular(index) => {
+                let tab_index = visible_tabs.get(index).copied().unwrap_or(index);
+                self.set_active_index(tab_index, window, cx);
+            }
         }
     }
 
@@ -2540,6 +2594,22 @@ impl TabContainer {
 
     pub fn tabs(&self) -> &[TabItem] {
         &self.tabs
+    }
+
+    /// Whether the regular tab at `index` renders a label in the tab bar.
+    /// Hidden tabs (home sidebar apps) keep their slot in `self.tabs`, so
+    /// activation and persistence are untouched.
+    pub fn tab_bar_visible(&self, index: usize, cx: &App) -> bool {
+        self.tabs
+            .get(index)
+            .is_none_or(|tab| tab.content().show_in_tab_bar(cx))
+    }
+
+    /// Indices of regular tabs that render in the tab bar, in order.
+    fn visible_tab_indices(&self, cx: &App) -> Vec<usize> {
+        (0..self.tabs.len())
+            .filter(|&index| self.tab_bar_visible(index, cx))
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -3877,15 +3947,16 @@ impl TabContainer {
                     active: self.active_pinned_index == Some(index),
                 }),
         );
+        // Hidden home app tabs are unreachable from the switcher: the sidebar
+        // owns their navigation.
         entries.extend(
-            self.tabs
-                .iter()
-                .enumerate()
-                .map(|(index, tab)| TabSwitcherEntry {
+            self.visible_tab_indices(cx)
+                .into_iter()
+                .map(|index| TabSwitcherEntry {
                     index,
                     pinned: false,
-                    title: tab.title(cx),
-                    icon: tab.content().icon(cx),
+                    title: self.tabs[index].title(cx),
+                    icon: self.tabs[index].content().icon(cx),
                     active: self.active_pinned_index.is_none() && index == self.active_index,
                 }),
         );
@@ -4192,7 +4263,12 @@ impl TabContainer {
                             )
                         },
                     )
-                    .children(self.tabs.iter().enumerate().map(|(idx, tab)| {
+                    .children(
+                        self.visible_tab_indices(cx)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(visible_idx, idx)| {
+                        let tab = &self.tabs[idx];
                         let title = tab.title(cx);
                         let icon = tab.content().icon(cx);
                         let connection_status = tab.content().connection_status(cx);
@@ -4206,7 +4282,7 @@ impl TabContainer {
                         let has_activity =
                             !is_active && self.activity_tabs.contains(tab_id.as_ref());
                         let display_number =
-                            tab_display_number(ActiveTabSlot::Regular(idx), pinned_tab_count);
+                            tab_display_number(ActiveTabSlot::Regular(visible_idx), pinned_tab_count);
                         let rename_input_for_tab = self
                             .renaming_tab_id
                             .as_ref()
@@ -5017,6 +5093,7 @@ mod tests {
         status: Option<SharedString>,
         lifecycle: Option<Arc<Mutex<Vec<String>>>>,
         presentation_obscured: bool,
+        tab_bar_hidden: bool,
     }
 
     impl TestTab {
@@ -5028,6 +5105,17 @@ mod tests {
                 status: None,
                 lifecycle: None,
                 presentation_obscured: false,
+                tab_bar_hidden: false,
+            }
+        }
+
+        fn hidden_from_tab_bar(
+            title: &'static str,
+            cx: &mut Context<Self>,
+        ) -> Self {
+            Self {
+                tab_bar_hidden: true,
+                ..Self::new(title, cx)
             }
         }
 
@@ -5043,6 +5131,7 @@ mod tests {
                 status: Some(status.into()),
                 lifecycle: None,
                 presentation_obscured: false,
+                tab_bar_hidden: false,
             }
         }
 
@@ -5058,6 +5147,7 @@ mod tests {
                 status: None,
                 lifecycle: Some(lifecycle),
                 presentation_obscured: false,
+                tab_bar_hidden: false,
             }
         }
 
@@ -5135,6 +5225,10 @@ mod tests {
 
         fn title(&self, _cx: &App) -> SharedString {
             self.title.clone()
+        }
+
+        fn show_in_tab_bar(&self, _cx: &App) -> bool {
+            !self.tab_bar_hidden
         }
 
         fn on_activate(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -5269,6 +5363,101 @@ mod tests {
         assert_eq!(2, tab_display_number(ActiveTabSlot::Pinned(1), 2));
         assert_eq!(3, tab_display_number(ActiveTabSlot::Regular(0), 2));
         assert_eq!(5, tab_display_number(ActiveTabSlot::Regular(2), 2));
+    }
+
+    #[gpui::test]
+    fn hidden_tabs_stay_in_container_but_skip_tab_bar_navigation(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let visible = cx.new(|cx| TestTab::new("visible", cx));
+                let hidden = cx.new(|cx| TestTab::hidden_from_tab_bar("hidden", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("visible", "ssh", visible.clone()),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("hidden", "home", hidden.clone()),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                });
+
+                container.update(cx, |container, cx| {
+                    // 隐藏 tab 仍在容器中（激活/持久化/关闭逻辑不变）。
+                    assert_eq!(2, container.tabs().len());
+                    assert!(container.tab_bar_visible(0, cx));
+                    assert!(!container.tab_bar_visible(1, cx));
+
+                    // alt-1 选中可见 tab；alt-2 越过隐藏 tab 不再命中任何普通 tab。
+                    container.activate_tab_number(1, window, cx);
+                    assert_eq!("visible", container.active_tab().unwrap().id().as_ref());
+                    container.activate_tab_number(2, window, cx);
+                    assert_eq!("visible", container.active_tab().unwrap().id().as_ref());
+
+                    // tab switcher 只包含可见 tab。
+                    let entries = container.tab_switcher_entries(cx);
+                    assert_eq!(1, entries.len());
+                    assert_eq!("visible", entries[0].title.as_ref());
+                });
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn cycle_tab_skips_hidden_tabs_but_can_return_to_pinned_area(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let visible = cx.new(|cx| TestTab::new("visible", cx));
+                let hidden = cx.new(|cx| TestTab::hidden_from_tab_bar("hidden", cx));
+                let pinned = cx.new(|cx| TestTab::new("pinned", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_pinned_tab(TabItem::new("pinned", "app", pinned), cx);
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("visible", "ssh", visible),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("hidden", "home", hidden),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                });
+
+                container.update(cx, |container, cx| {
+                    // 可见普通 tab 上向后循环：回到 pinned 区域而不是隐藏 tab。
+                    container.cycle_tab(TabCycleDirection::Next, window, cx);
+                    assert_eq!(
+                        Some(0),
+                        container.active_pinned_index(),
+                        "cycling from the last visible tab lands on the pinned area"
+                    );
+
+                    // 再向后循环：从 pinned 回到可见普通 tab，跳过隐藏 tab。
+                    container.cycle_tab(TabCycleDirection::Next, window, cx);
+                    assert_eq!(
+                        "visible",
+                        container.active_tab().unwrap().id().as_ref()
+                    );
+                });
+                container
+            })
+            .expect("window opens");
+        });
     }
 
     #[gpui::test]

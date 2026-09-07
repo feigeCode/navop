@@ -15244,6 +15244,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "connection-form",
+ "dirs 6.0.0",
  "extension-host",
  "extension-plugin-adapter",
  "extension-protocol",

@@ -22,4 +22,8 @@ impl TabContent for JsonFormatterView {
     fn title(&self, _cx: &App) -> SharedString {
         SharedString::from(t!("JsonView.json_formatter"))
     }
+
+    fn show_in_tab_bar(&self, _cx: &App) -> bool {
+        false
+    }
 }

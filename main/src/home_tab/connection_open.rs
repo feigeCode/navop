@@ -6,6 +6,17 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.show_connection_quick_open_with_query(String::new(), window, cx);
+    }
+
+    /// 打开快速连接对话框；`query` 预填搜索词（主页搜索框回车 ssh 命令时传入，
+    /// 复用 quick open 的临时连接解析与确认逻辑）。
+    pub(crate) fn show_connection_quick_open_with_query(
+        &mut self,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
             return;
         }
@@ -42,9 +53,13 @@ impl HomePage {
                     }
                 })
         });
-        // 将焦点设置到 List 搜索框，使上下键和 Enter 键可用
+        // 将焦点设置到 List 搜索框，使上下键和 Enter 键可用；预填搜索词
+        // 会触发 delegate 的临时 ssh 解析，直接回车即可连接。
         list_for_focus.update(cx, |state, cx| {
             state.focus(window, cx);
+            if !query.is_empty() {
+                state.set_query(&query, window, cx);
+            }
         });
     }
 

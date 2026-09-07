@@ -80,16 +80,16 @@ impl HomePage {
                 ConnectionSortOrder::Natural => IconName::SortAscending,
                 ConnectionSortOrder::Lru => IconName::SortDescending,
             })
-            .tooltip(t!("Settings.ConnectionDisplay.connection_sort"))
+            .tooltip(t!("Settings.General.ConnectionDisplay.connection_sort"))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 [
                     (
                         ConnectionSortOrder::Natural,
-                        t!("Settings.ConnectionDisplay.connection_sort_natural"),
+                        t!("Settings.General.ConnectionDisplay.connection_sort_natural"),
                     ),
                     (
                         ConnectionSortOrder::Lru,
-                        t!("Settings.ConnectionDisplay.connection_sort_lru"),
+                        t!("Settings.General.ConnectionDisplay.connection_sort_lru"),
                     ),
                 ]
                 .into_iter()
@@ -121,7 +121,7 @@ impl HomePage {
             .ghost()
             .icon(icon)
             .dropdown_caret(true)
-            .tooltip(t!("Settings.ConnectionDisplay.connection_layout"))
+            .tooltip(t!("Settings.General.ConnectionDisplay.connection_layout"))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 [
                     (ConnectionLayout::Card, t!("Home.card_view")),
