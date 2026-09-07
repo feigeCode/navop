@@ -562,6 +562,13 @@
 - **验证方式**：结构 contract 断言宿主 render 只引用实体不内联调用其 render 方法（含 `set_*` 模式同步），真实窗口切换布局确认不再 panic。
 - **适用范围**：`main/src/home_tab/content.rs`（HomePage 嵌入 persistent_connection_sidebar Tree）、任何 View 互相持有 Entity 并嵌入渲染的场景。
 
+- **标题**：延迟打开标签时不能重新租用即将失活的 View
+- **触发信号**：从主页新建本地终端时，虽然用了 `window.defer`，仍报 `cannot update HomePage while it is already being updated`。
+- **根因 / 约束**：`add_and_activate_tab_with_focus` 同步调用旧标签的 `on_deactivate`，其动态派发会执行旧 View 的 `Entity::update`；若 defer 内又包一层 `home.update`，主页仍被租用。`cx.defer_in` 同样会重新租用当前 View，不能替代这个边界。
+- **正确做法**：在原更新内准备配置、标签编号和目标容器；使用 `window.defer`，在回调的 `App` 上创建新 View 并更新标签容器，不再更新原 View。保留焦点和标签生命周期回调，不通过吞 panic 绕过。
+- **验证方式**：运行 `home_tab::tests::local_terminal` 结构契约和 `cargo check -p main --bin navop`；真实窗口回归从活动主页通过快捷键、按钮和自定义 profile 打开本地终端。
+- **适用范围**：`main/src/home/home_tabs.rs::add_local_terminal_tab`，以及任何从当前标签 View 发起的同步标签切换。
+
 - **标题**：主页批量选择状态由 HomePage 持有，三布局共享；嵌入树不再有自带搜索框
 - **触发信号**：给主页卡片/列表/树加批量操作时发现入口缺失或状态分叉；或主页 Tree 布局同时出现工具栏大搜索框和树内“搜索连接或分组”两个搜索框。
 - **根因 / 约束**：树原本把 `ConnectionSelection` 与 `selected_filter`/树内搜索框留在 `PersistentConnectionSidebar`，嵌入主页时树头部被隐藏，批量入口随之消失，树内搜索框又与主页工具栏重复。

@@ -1480,15 +1480,14 @@ impl HomePage {
             .next_available_tab_index("Terminal", cx)
             .or_else(|| (existing_count > 0).then_some(existing_count));
 
-        let home = cx.entity();
+        // Activating the terminal synchronously deactivates the current tab,
+        // which may be HomePage. Do not lease HomePage again inside this defer.
         window.defer(cx, move |window, cx| {
-            home.update(cx, |_this, cx| {
-                let terminal_view =
-                    cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
-                tab_container.update(cx, |tc, cx| {
-                    let tab = TabItem::new(tab_id, "home", terminal_view);
-                    tc.add_and_activate_tab_with_focus(tab, window, cx);
-                });
+            let terminal_view =
+                cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
+            tab_container.update(cx, |tc, cx| {
+                let tab = TabItem::new(tab_id, "home", terminal_view);
+                tc.add_and_activate_tab_with_focus(tab, window, cx);
             });
         });
     }
