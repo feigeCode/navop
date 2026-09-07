@@ -44,7 +44,7 @@ impl HomePage {
                             div().id("connection-quick-open-dialog").child(
                                 List::new(&list)
                                     .search_placeholder(
-                                        t!("Home.quick_open_placeholder").to_string(),
+                                        t!("Home.search_placeholder").to_string(),
                                     )
                                     .with_size(Size::Large)
                                     .max_h(px(420.0)),

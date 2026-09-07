@@ -14,6 +14,7 @@ impl HomePage {
         let view = cx.entity();
         let menu_view = view.clone();
         DropdownButton::new("local-terminal-dropdown")
+            .flex_shrink_0()
             .button(
                 Button::new("local-terminal-button")
                     .icon(IconName::SquareTerminalColor.color())

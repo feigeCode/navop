@@ -35,6 +35,7 @@ impl HomePage {
         Popover::new("workspace-filter-popover")
             .trigger(
                 IconButton::new("workspace-filter", IconName::Filter)
+                    .flex_shrink_0()
                     .tooltip(t!("Workspace.filter")),
             )
             .open(open)

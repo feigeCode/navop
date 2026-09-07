@@ -119,9 +119,6 @@ impl TabContent for ToolboxTab {
     fn icon(&self, _cx: &App) -> Option<gpui_component::Icon> {
         Some(IconName::LayoutDashboard.into())
     }
-    fn show_in_tab_bar(&self, _cx: &App) -> bool {
-        false
-    }
 }
 impl ToolboxTab {
     /// 工具卡片（demo：圆角 12px、padding 16px、图标 38×38 accent-soft 底）。

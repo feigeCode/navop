@@ -159,10 +159,6 @@ impl TabContent for ExtensionManagerView {
                 .color(),
         )
     }
-
-    fn show_in_tab_bar(&self, _cx: &App) -> bool {
-        false
-    }
 }
 
 impl Render for ExtensionManagerView {

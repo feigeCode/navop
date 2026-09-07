@@ -79,8 +79,10 @@ impl HomePage {
                         .bg(cx.theme().success),
                 )
             })
-            .child(self.render_connection_card_actions(&card_id, &conn, can_edit, cx))
-            .child(self.render_connection_card_content(&card_id, &conn, team_badge, cx));
+            .child(self.render_connection_card_content(&card_id, &conn, team_badge, cx))
+            // actions 在 content 之后添加：GPUI 按添加顺序绘制，悬浮按钮必须
+            // 位于团队徽标之上，否则徽标会截获 hover 并盖住按钮。
+            .child(self.render_connection_card_actions(&card_id, &conn, can_edit, cx));
         match conn_id {
             Some(id) => card
                 .context_menu(move |menu, window, cx| {

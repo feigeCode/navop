@@ -54,7 +54,11 @@ fn list_and_card_layouts_render_cached_team_badges() {
     // 卡片团队在名称行内渲染，与连接名同基线对齐
     assert!(card_content.contains("render_team_badge"));
     assert!(sidebar_rows.contains("connection_team_indicator"));
-    assert!(row_parts.contains("persistent-team-"));
+    // 常驻侧栏团队标识与主页卡片徽标同一中性样式（muted 底），且不带
+    // 独立 hitbox（独立元素会截获行 hover）。
+    assert!(row_parts.contains("cx.theme().muted"));
+    assert!(!row_parts.contains("persistent-team-"));
+    assert!(!row_parts.contains("cx.theme().primary"));
 }
 
 #[test]

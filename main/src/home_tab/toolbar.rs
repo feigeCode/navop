@@ -22,12 +22,17 @@ impl HomePage {
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .child(
-                div().flex_1().min_w(gpui::rems(8.0)).child(
-                    Input::new(&self.search_input)
-                        .cleanable(true)
-                        .w_full()
-                        .bg(cx.theme().muted),
-                ),
+                div()
+                    .flex_1()
+                    // 搜索框独占剩余空间；其余工具栏控件 flex_shrink_0，
+                    // 防止窄窗口时按钮收缩把 dropdown caret 裁掉。
+                    .min_w(gpui::rems(4.0))
+                    .child(
+                        Input::new(&self.search_input)
+                            .cleanable(true)
+                            .w_full()
+                            .bg(cx.theme().muted),
+                    ),
             )
             .child(self.render_home_type_filter(window, cx))
             .child(group_filter)
@@ -35,12 +40,18 @@ impl HomePage {
             .child(self.render_layout_button(cx))
             .child(
                 IconButton::new("refresh-button", IconName::Refresh)
+                    .flex_shrink_0()
                     .tooltip(t!("Home.refresh"))
                     .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
             )
             .child(
                 // 主操作区分隔线（demo：1×18px --border）
-                div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border),
+                div()
+                    .flex_shrink_0()
+                    .w(px(1.0))
+                    .h(px(18.0))
+                    .mx_1()
+                    .bg(cx.theme().border),
             )
             .child(self.render_new_connection_button(window, cx))
             .child(self.render_local_terminal_button(window, cx))
@@ -52,6 +63,9 @@ impl HomePage {
         let view = cx.entity();
         Button::new("home-type-filter")
             .ghost()
+            .flex_shrink_0()
+            // 窄窗口隐藏 label 后退化为图标按钮，同样需要保住 caret 宽度。
+            .min_w(px(52.0))
             .icon(connection_type_rail_icon(selected))
             .when(window.bounds().size.width > px(1100.0), |button| {
                 button.label(connection_type_label(selected))
@@ -76,6 +90,7 @@ impl HomePage {
         let selected = AppSettings::global(cx).connection_sort_order;
         Button::new("home-sort")
             .ghost()
+            .flex_shrink_0()
             .icon(match selected {
                 ConnectionSortOrder::Natural => IconName::SortAscending,
                 ConnectionSortOrder::Lru => IconName::SortDescending,
@@ -119,6 +134,10 @@ impl HomePage {
         };
         Button::new("layout-toggle")
             .ghost()
+            .flex_shrink_0()
+            // 图标模式下 Button 会收敛为固定 size_8 方块，内部 overflow_hidden
+            // 会裁掉 dropdown caret；显式 min_w 保证 icon+caret 完整可见。
+            .min_w(px(52.0))
             .icon(icon)
             .dropdown_caret(true)
             .tooltip(t!("Settings.General.ConnectionDisplay.connection_layout"))
@@ -155,6 +174,7 @@ impl HomePage {
     ) -> AnyElement {
         let home = cx.entity();
         DropdownButton::new("home-new-dropdown")
+            .flex_shrink_0()
             .button(
                 // 新建连接是普通命令，不因位置使用 primary（redesign §7.3）。
                 Button::new("new-connect-button")
