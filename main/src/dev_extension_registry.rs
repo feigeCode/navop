@@ -39,6 +39,43 @@ pub struct DevExtensionRegistry {
 
 impl gpui::Global for DevExtensionRegistry {}
 
+/// dev 面板操作日志环(按 root 记;上限 1000,超限丢最旧)。
+#[derive(Default)]
+pub struct DevLogRing(std::cell::RefCell<std::collections::VecDeque<String>>);
+
+impl DevLogRing {
+    const MAX: usize = 1000;
+    pub fn push(&self, root: &std::path::Path, line: String) {
+        let mut queue = self.0.borrow_mut();
+        if queue.len() >= Self::MAX {
+            queue.pop_front();
+        }
+        let root = root.display().to_string();
+        queue.push_back(format!("[{root}] {line}"));
+    }
+    /// 返回某 root 的日志尾部(倒序新→旧)。
+    pub fn tail(&self, root: &std::path::Path, limit: usize) -> Vec<String> {
+        let root_str = root.display().to_string();
+        let prefix = format!("[{root_str}] ");
+        self.0
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with(&prefix))
+            .rev()
+            .take(limit)
+            .map(|line| line[prefix.len()..].to_string())
+            .collect()
+    }
+}
+
+impl gpui::Global for DevLogRing {}
+
+fn push_log(cx: &gpui::App, root: &std::path::Path, message: impl Into<String>) {
+    if let Some(ring) = cx.try_global::<DevLogRing>() {
+        ring.push(root, message.into());
+    }
+}
+
 impl DevExtensionRegistry {
     pub fn global(cx: &gpui::App) -> Option<&Self> {
         cx.try_global::<Self>()
@@ -237,6 +274,16 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
                 .and_then(|project| project.error.clone())
         })
         .flatten();
+        gpui_shell_scope::with_current_app(|cx| {
+            push_log(
+                &*cx,
+                &root,
+                error
+                    .as_deref()
+                    .map(|error| format!("open failed: {error}"))
+                    .unwrap_or_else(|| "project loaded".to_string()),
+            );
+        });
         Ok(HostObject::new()
             .field("id", id)
             .field(
@@ -271,9 +318,15 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         Ok(HostValue::Null)
     }
 
-    fn project_logs(_root: &str, _tail: f64) -> Result<HostValue, HostError> {
-        // M1: 日志面板占位;后续接 dev ring buffer。
-        Ok(HostValue::Array(Vec::new()))
+    fn project_logs(root: &str, tail: f64) -> Result<HostValue, HostError> {
+        let root = std::path::PathBuf::from(root);
+        let logs = gpui_shell_scope::with_current_app(|cx| {
+            cx.try_global::<DevLogRing>()
+                .map(|ring| ring.tail(&root, tail.max(0.0) as usize))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+        Ok(HostValue::Array(logs.into_iter().map(HostValue::Str).collect()))
     }
 
     fn reload_project(root: &str) -> Result<HostValue, HostError> {
@@ -316,6 +369,8 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         logs: Rc::new(project_logs),
         reload: Rc::new(reload_project),
     });
+    cx.default_global::<DevExtensionRegistry>();
+    cx.default_global::<DevLogRing>();
     universal_plugins::set_dev_host_ops(ops, cx);
 }
 
