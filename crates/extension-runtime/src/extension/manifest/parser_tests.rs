@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::{
-    ManifestError, RemoteFileEditorLaunchMode, ShellSurface, load_from_dir,
+    ManifestError, RemoteFileEditorLaunchMode, ShellHostModule, ShellSurface, load_from_dir,
 };
 
 fn write_manifest(dir: &std::path::Path, body: &str) {
@@ -732,26 +732,31 @@ fn manifest_accepts_toolbox_surface_with_log_only_modules() {
 }
 
 #[test]
-fn manifest_rejects_toolbox_surface_with_backends() {
+fn manifest_accepts_toolbox_surface_with_backends_and_backend_modules() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "bad-tool",
-            "title": "Bad Tool",
+            "id": "docker-tool",
+            "title": "Docker Cleaner",
             "entry": "ui/tool.js",
             "surface": "toolbox",
+            "singleton": true,
+            "category": "network",
             "backends": { "main": "provider" },
-            "modules": ["log"]
+            "modules": ["resource", "job", "log"]
         }),
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
-    let error = load_from_dir(tmp.path()).unwrap_err();
-    assert!(error.to_string().contains("toolbox"), "{error}");
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let view = &manifest.contributes.shell_views[0];
+    assert_eq!(view.surface, ShellSurface::Toolbox);
+    assert_eq!(view.backends.len(), 1);
+    assert!(view.modules.contains(&ShellHostModule::Resource));
 }
 
 #[test]
-fn manifest_rejects_toolbox_surface_with_backend_modules() {
+fn manifest_rejects_invalid_toolbox_category() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
@@ -760,16 +765,13 @@ fn manifest_rejects_toolbox_surface_with_backend_modules() {
             "title": "Bad Tool",
             "entry": "ui/tool.js",
             "surface": "toolbox",
-            "modules": ["resource"]
+            "category": "Network Tools!"
         }),
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
     let error = load_from_dir(tmp.path()).unwrap_err();
-    // resource 模块需要 backend,而 toolbox 不允许 backend:两条规则
-    // 任一触发都构成拒绝(fail-closed),不固定依赖哪条先报。
-    let message = error.to_string();
     assert!(
-        message.contains("toolbox") || message.contains("backend"),
-        "{message}"
+        error.to_string().contains("toolbox category"),
+        "{error}"
     );
 }
