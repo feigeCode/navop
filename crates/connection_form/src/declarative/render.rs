@@ -143,7 +143,7 @@ impl DeclarativeForm {
         let password_id = auth_subkey(&field_info.id, "password");
         let reference_selected = self.auth_has_reference(&field_info.id, cx);
         let mut fields = vec![field()
-            .label(field_info.label.clone())
+            .label(t!("Credential.keychain").to_string())
             .items_center()
             .child(
                 self.auth_pickers

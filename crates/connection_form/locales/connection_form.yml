@@ -181,6 +181,10 @@ TeamSync:
     zh-HK: 已保存密鑰
 
 Credential:
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
   manual_input:
     en: Enter manually
     zh-CN: 手工输入
