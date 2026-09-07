@@ -38,10 +38,6 @@ use super::declarative::{
     FormField, FormFieldType, TabGroup, normalized_ssh_auth_type_or_default, to_declarative_config,
 };
 use crate::SshConnectionSelectItem;
-use crate::credential::{
-    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker, create_credential_picker,
-};
 use crate::declarative::DeclarativeForm;
 use crate::ssh_auth::SshAuthOption;
 use crate::team::{
@@ -182,27 +178,6 @@ fn should_use_custom_ssh_tab(fields: &[FormField]) -> bool {
         .any(|field| field.name == "ssh_tunnel_enabled")
 }
 
-fn credential_capabilities_for_fields(
-    config: &MiddlewareFormConfig,
-    username_field: &str,
-    password_field: &str,
-) -> CredentialCapabilities {
-    let has_field = |name: &str| {
-        config
-            .tab_groups
-            .iter()
-            .flat_map(|tab| tab.fields.iter())
-            .any(|field| field.name == name)
-    };
-
-    match (has_field(username_field), has_field(password_field)) {
-        (true, true) => CredentialCapabilities::login(),
-        (true, false) => CredentialCapabilities::username_only(),
-        (false, true) => CredentialCapabilities::password_only(),
-        (false, false) => CredentialCapabilities::default(),
-    }
-}
-
 /// 通用中间件连接表单
 pub struct MiddlewareConnectionForm {
     adapter: Arc<dyn MiddlewareFormAdapter>,
@@ -211,7 +186,6 @@ pub struct MiddlewareConnectionForm {
     active_tab: usize,
     /// 统一声明式字段引擎:字段控件状态与收集均由此承担。
     declarative: Entity<DeclarativeForm>,
-    credential_picker: Entity<CredentialReferencePicker>,
     is_testing: Entity<bool>,
     test_result: Entity<Option<Result<bool, String>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
@@ -278,19 +252,6 @@ impl MiddlewareConnectionForm {
 
         // 默认启用云同步,与数据库表单保持一致
         let sync_enabled = cx.new(|_| true);
-        let credential_picker = create_credential_picker(
-            CredentialPickerConfig::new(
-                "middleware-credential",
-                credential_capabilities_for_fields(&config, "username", "password"),
-            ),
-            window,
-            cx,
-        );
-        let subscriptions = vec![
-            cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
-                cx.notify()
-            }),
-        ];
 
         Self {
             adapter,
@@ -298,7 +259,6 @@ impl MiddlewareConnectionForm {
             focus_handle,
             active_tab: 0,
             declarative,
-            credential_picker,
             is_testing,
             test_result,
             workspace_select,
@@ -309,7 +269,7 @@ impl MiddlewareConnectionForm {
             editing_connection: None,
             editing_extras: HashMap::new(),
             sync_enabled,
-            _subscriptions: subscriptions,
+            _subscriptions: Vec::new(),
         }
     }
 
@@ -382,10 +342,27 @@ impl MiddlewareConnectionForm {
 
         match self.adapter.load_fields(connection) {
             Ok(snapshot) => {
-                self.credential_picker.update(cx, |picker, cx| {
-                    picker.set_reference(snapshot.credential_reference.clone(), window, cx)
-                });
+                // 钥匙串引用 + 手动用户名密码回填到 auth 字段
+                if let Some(auth_name) = self.find_auth_field().map(|field| field.name.clone()) {
+                    self.declarative.update(cx, |form, cx| {
+                        form.set_auth_reference(
+                            &auth_name,
+                            snapshot.credential_reference.clone(),
+                            window,
+                            cx,
+                        );
+                    });
+                    if let Some(username) = snapshot.fields.get("username") {
+                        self.set_field_value(&format!("{auth_name}.username"), username, window, cx);
+                    }
+                    if let Some(password) = snapshot.fields.get("password") {
+                        self.set_field_value(&format!("{auth_name}.password"), password, window, cx);
+                    }
+                }
                 for (key, value) in &snapshot.fields {
+                    if key == "username" || key == "password" {
+                        continue;
+                    }
                     if self.find_field(key).is_some() {
                         self.set_field_value(key, value, window, cx);
                     } else if key != "name" && key != "remark" {
@@ -511,6 +488,14 @@ impl MiddlewareConnectionForm {
             .find(|field| field.name == field_name)
     }
 
+    fn find_auth_field(&self) -> Option<&FormField> {
+        self.config
+            .tab_groups
+            .iter()
+            .flat_map(|group| group.fields.iter())
+            .find(|field| field.field_type == FormFieldType::Auth)
+    }
+
     fn get_input_by_name(&self, field_name: &str, cx: &App) -> Option<Entity<InputState>> {
         self.declarative.read(cx).input_state(field_name)
     }
@@ -536,7 +521,9 @@ impl MiddlewareConnectionForm {
 
     /// 构建表单快照(可见字段 + 透传字段 + 凭据引用)
     fn build_snapshot(&self, cx: &App) -> FormSnapshot {
-        let credential_reference = self.credential_picker.read(cx).selected_reference();
+        let auth_field = self.find_auth_field();
+        let credential_reference = auth_field
+            .and_then(|field| self.declarative.read(cx).auth_reference(&field.name, cx));
         let mut fields = HashMap::new();
 
         for field in self.config.tab_groups.iter().flat_map(|group| &group.fields) {
@@ -544,10 +531,19 @@ impl MiddlewareConnectionForm {
             if !self.field_visible_from_values(field, cx) {
                 continue;
             }
-            // 与数据库表单一致:选择钥匙串引用时隐藏手动账号密码
-            if matches!(field_name.as_str(), "username" | "password")
-                && credential_reference.is_some()
-            {
+            if field.field_type == FormFieldType::Auth {
+                // auth 字段:手动用户名/密码仅在未选钥匙串引用时进入快照
+                if credential_reference.is_none() {
+                    let declarative = self.declarative.read(cx);
+                    fields.insert(
+                        "username".to_string(),
+                        declarative.auth_value(field_name, "username", cx),
+                    );
+                    fields.insert(
+                        "password".to_string(),
+                        declarative.auth_value(field_name, "password", cx),
+                    );
+                }
                 continue;
             }
             fields.insert(
@@ -574,18 +570,30 @@ impl MiddlewareConnectionForm {
     }
 
     fn validate(&self, cx: &App) -> Result<(), String> {
+        let credential_selected = self
+            .find_auth_field()
+            .and_then(|field| self.declarative.read(cx).auth_reference(&field.name, cx))
+            .is_some();
+
         for tab_group in &self.config.tab_groups {
             for field in &tab_group.fields {
                 if !self.field_visible_from_values(field, cx) {
                     continue;
                 }
-                if matches!(field.name.as_str(), "username" | "password")
-                    && self
-                        .credential_picker
-                        .read(cx)
-                        .selected_reference()
-                        .is_some()
-                {
+                if field.field_type == FormFieldType::Auth {
+                    if credential_selected {
+                        continue;
+                    }
+                    if field.required {
+                        let declarative = self.declarative.read(cx);
+                        let username = declarative.auth_value(&field.name, "username", cx);
+                        let password = declarative.auth_value(&field.name, "password", cx);
+                        if username.trim().is_empty() && password.trim().is_empty() {
+                            return Err(
+                                t!("MiddlewareForm.field_required", label = field.label).to_string()
+                            );
+                        }
+                    }
                     continue;
                 }
                 if field.required {
@@ -806,13 +814,6 @@ impl MiddlewareConnectionForm {
         });
     }
 
-    fn render_credential_picker_field(&self) -> Field {
-        field()
-            .label(t!("MiddlewareForm.keychain").to_string())
-            .items_center()
-            .child(div().w_full().child(self.credential_picker.clone()))
-    }
-
     /// 渲染单个声明字段(SSH 自定义页用),控件复用统一引擎的底层输入态。
     fn render_field_by_name(&self, field_name: &str, cx: &mut Context<Self>) -> Field {
         let Some(info) = self.find_field(field_name) else {
@@ -944,47 +945,16 @@ impl MiddlewareConnectionForm {
             .into_any_element()
     }
 
-    /// 常规/普通标签页:统一引擎渲染声明字段,宿主负责钥匙串区块(含账号密码的
-    /// 标签页)与 工作区/团队/云同步 区块(首个标签页)。
+    /// 常规/普通标签页:统一引擎渲染声明字段(auth 字段自带钥匙串选择),
+    /// 宿主负责 工作区/团队/云同步 区块(首个标签页)。
     fn host_current_tab(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let tab_index = self.active_tab;
-        let has_main_credentials = self
-            .config
-            .tab_groups
-            .get(tab_index)
-            .map(|group| {
-                group
-                    .fields
-                    .iter()
-                    .any(|field| matches!(field.name.as_str(), "username" | "password"))
-            })
-            .unwrap_or(false);
-        let credential_selected = self
-            .credential_picker
-            .read(cx)
-            .selected_reference()
-            .is_some();
-        let mut hidden = HashSet::new();
-        if credential_selected {
-            hidden.insert("username".to_string());
-            hidden.insert("password".to_string());
-        }
         self.declarative.update(cx, |declarative, _| {
-            declarative.host_content(tab_index, hidden);
+            declarative.host_content(tab_index, HashSet::new());
         });
 
-        let mut content = v_flex().w_full().gap_4();
-        let is_general_tab = tab_index == 0;
-        if is_general_tab && has_main_credentials {
-            content = content.child(
-                v_form()
-                    .columns(1)
-                    .label_width(px(100.))
-                    .child(self.render_credential_picker_field()),
-            );
-        }
-        content = content.child(self.declarative.clone());
-        if is_general_tab {
+        let mut content = v_flex().w_full().gap_4().child(self.declarative.clone());
+        if tab_index == 0 {
             let chrome = self.render_general_chrome(cx);
             if let Some(chrome) = chrome {
                 content = content.child(chrome);
@@ -1051,6 +1021,7 @@ impl MiddlewareConnectionForm {
         }
         Some(
             v_form()
+                .layout(Axis::Horizontal)
                 .columns(1)
                 .label_width(px(100.))
                 .children(children)
@@ -1132,8 +1103,7 @@ mod tests {
             TabGroup::new("general", "常规").fields(vec![
                 FormField::new("host", "主机", FormFieldType::Text).default("127.0.0.1"),
                 FormField::new("port", "端口", FormFieldType::Number).default("1883"),
-                FormField::new("username", "用户名", FormFieldType::Text).optional(),
-                FormField::new("password", "密码", FormFieldType::Password).optional(),
+                FormField::new("auth", "认证", FormFieldType::Auth).optional(),
             ]),
             TabGroup::new("extra", "扩展").fields(vec![
                 FormField::new("use_flag", "开关", FormFieldType::Checkbox)

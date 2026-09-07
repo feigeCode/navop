@@ -82,12 +82,8 @@ pub fn mqtt_form_tab_groups() -> Vec<TabGroup> {
             FormField::new("port", t!("MqttForm.port"), FormFieldType::Number)
                 .placeholder("1883")
                 .default("1883"),
-            FormField::new("username", t!("MqttForm.username"), FormFieldType::Text)
-                .optional()
-                .placeholder(t!("MqttForm.username_placeholder")),
-            FormField::new("password", t!("MqttForm.password"), FormFieldType::Password)
-                .optional()
-                .placeholder(t!("MqttForm.password_placeholder")),
+            FormField::new("auth", t!("MqttForm.authentication"), FormFieldType::Auth)
+                .optional(),
         ]),
         TabGroup::new("mqtt", t!("MqttForm.tab_mqtt").to_string()).fields(vec![
             FormField::new("client_id", t!("MqttForm.client_id"), FormFieldType::Text)
@@ -430,6 +426,12 @@ mod tests {
             vec!["general", "mqtt", "advanced", "ssl", "ssh", "notes"]
         );
         assert!(groups[0].fields.iter().any(|f| f.name == "host"));
+        assert!(
+            groups[0]
+                .fields
+                .iter()
+                .any(|f| f.name == "auth" && f.field_type == FormFieldType::Auth)
+        );
         assert!(groups[1].fields.iter().any(|f| f.name == "client_id"));
         assert!(groups[1].fields.iter().any(|f| f.name == "clean_session"));
         assert!(groups[2].fields.iter().any(|f| f.name == "connect_timeout"));

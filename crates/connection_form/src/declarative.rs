@@ -252,6 +252,19 @@ impl DeclarativeForm {
             .and_then(|picker| picker.read(cx).selected_reference())
     }
 
+    /// 回填 Auth 字段的钥匙串引用(编辑/预填模式用)。
+    pub fn set_auth_reference(
+        &mut self,
+        field_id: &str,
+        reference: Option<CredentialReference>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(picker) = self.auth_pickers.get(field_id) {
+            picker.update(cx, |picker, cx| picker.set_reference(reference, window, cx));
+        }
+    }
+
     pub fn auth_value(&self, field_id: &str, part: &str, cx: &App) -> String {
         self.values
             .get(&auth_subkey(field_id, part))
