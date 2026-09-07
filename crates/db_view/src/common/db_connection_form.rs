@@ -2556,7 +2556,15 @@ impl DbConnectionForm {
             })
             .collect::<Vec<_>>();
 
-        if visible_fields.is_empty() {
+        let has_main_credentials = current_tab_fields
+            .iter()
+            .any(|field| matches!(field.name.as_str(), "username" | "password"));
+        let has_proxy_credentials = self.field_bool_value("proxy_enabled", cx)
+            && current_tab_fields
+                .iter()
+                .any(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"));
+
+        if visible_fields.is_empty() && !has_main_credentials && !has_proxy_credentials {
             return div()
                 .flex()
                 .items_center()
@@ -2571,27 +2579,27 @@ impl DbConnectionForm {
         let db_type = self.config.db_type.clone();
         let is_builtin_oracle = db_type == DatabaseType::Oracle;
         let is_native_oracle = self.effective_database_type(cx) == DatabaseType::Oracle;
-        let has_main_credentials = current_tab_fields
+        // 钥匙串下拉与账号密码字段成组渲染(不再单独置顶):锚定在首个
+        // username/password 之前;若引用选中导致凭据被隐藏,则锚定到首位。
+        let main_credential_anchor = visible_fields
             .iter()
-            .any(|field| matches!(field.name.as_str(), "username" | "password"));
-        let has_proxy_credentials = self.field_bool_value("proxy_enabled", cx)
-            && current_tab_fields
-                .iter()
-                .any(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"));
+            .position(|(_, field)| matches!(field.name.as_str(), "username" | "password"))
+            .unwrap_or(0);
+        let proxy_credential_anchor = visible_fields
+            .iter()
+            .position(|(_, field)| matches!(field.name.as_str(), "proxy_username" | "proxy_password"))
+            .unwrap_or(0);
 
         v_form()
             .layout(Axis::Horizontal)
             .with_size(Size::Medium)
             .columns(1)
             .label_width(px(100.))
-            .when(has_main_credentials, |form| {
-                form.child(self.render_credential_picker_field(false))
-            })
-            .when(has_proxy_credentials, |form| {
-                form.child(self.render_credential_picker_field(true))
-            })
-            .children(visible_fields.into_iter().map(|(i, field_info)| {
-                let input_idx = field_input_offset + i;
+            .children({
+                let mut rendered: Vec<gpui_component::form::Field> = visible_fields
+                    .into_iter()
+                    .map(|(i, field_info)| {
+                        let input_idx = field_input_offset + i;
                 let is_sqlite_path = matches!(db_type, DatabaseType::SQLite | DatabaseType::DuckDB)
                     && field_info.name == "host";
                 let is_textarea = field_info.field_type == FormFieldType::TextArea;
@@ -2667,7 +2675,17 @@ impl DbConnectionForm {
                                 )
                             }),
                     )
-            }))
+            }).collect();
+            // 钥匙串下拉按锚定位置插入(见上方注释);anchor 默认 0 保证
+            // 无凭据字段时也稳定成组。
+            if has_main_credentials {
+                rendered.insert(main_credential_anchor.min(rendered.len()), self.render_credential_picker_field(false));
+            }
+            if has_proxy_credentials {
+                rendered.insert(proxy_credential_anchor.min(rendered.len()), self.render_credential_picker_field(true));
+            }
+            rendered
+            })
             .when(is_general_tab, |form| {
                 let sync_enabled = self.sync_enabled.clone();
                 let is_sync_checked = *self.sync_enabled.read(cx);
