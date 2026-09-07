@@ -57,7 +57,24 @@ pub struct DeclarativeSelectOption {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclarativeVisibilityRule {
     pub field: String,
-    pub equals: String,
+    /// `Some(v)`:字段值等于 `v` 时可见;`None`:字段缺失或为空时可见。
+    pub equals: Option<String>,
+}
+
+impl DeclarativeVisibilityRule {
+    pub fn field_equals(field: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            equals: Some(value.into()),
+        }
+    }
+
+    pub fn field_missing(field: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            equals: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

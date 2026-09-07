@@ -7,19 +7,14 @@
 
 use rust_i18n::t;
 
+use crate::declarative::{
+    DeclarativeFormConfig, DeclarativeFormField, DeclarativeFormTab, DeclarativeSelectOption,
+    DeclarativeVisibilityRule,
+};
 use crate::ssh_auth::{SshAuthOption, normalize_ssh_auth_type};
 
-/// 表单字段控件类型
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FormFieldType {
-    Text,
-    Number,
-    Password,
-    TextArea,
-    Select,
-    Checkbox,
-    FilePath,
-}
+/// 中间件表单字段控件类型,复用统一声明式引擎的字段类型。
+pub use crate::declarative::DeclarativeFieldType as FormFieldType;
 
 /// 字段可见性规则:另一字段取特定值时才显示(仅等值匹配)
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -264,6 +259,54 @@ pub(crate) fn normalized_ssh_auth_type_or_default(auth_type: &str) -> &str {
     normalize_ssh_auth_type(auth_type)
 }
 
+/// 把中间件 `TabGroup` 配置翻译为统一声明式引擎配置(`DeclarativeFormConfig`)。
+///
+/// 引擎合并过渡层:中间件/扩展连接表单最终都以 `connection_form::declarative`
+/// 为唯一字段 schema,此翻译器保留 `TabGroup` 心智模型的同时让统一引擎可直接消费。
+pub fn to_declarative_config(tab_groups: &[TabGroup]) -> DeclarativeFormConfig {
+    DeclarativeFormConfig {
+        tabs: tab_groups
+            .iter()
+            .map(|group| DeclarativeFormTab {
+                id: group.name.clone(),
+                label: group.label.clone(),
+                fields: group.fields.iter().map(DeclarativeFormField::from).collect(),
+            })
+            .collect(),
+    }
+}
+
+impl From<&FormField> for DeclarativeFormField {
+    fn from(field: &FormField) -> Self {
+        Self {
+            id: field.name.clone(),
+            label: field.label.clone(),
+            field_type: field.field_type,
+            required: field.required,
+            default_value: Some(field.default_value.clone()).filter(|value| !value.is_empty()),
+            placeholder: Some(field.placeholder.clone()).filter(|value| !value.is_empty()),
+            secret: false,
+            options: field
+                .options
+                .iter()
+                .map(|(value, label)| DeclarativeSelectOption {
+                    value: value.clone(),
+                    label: label.clone(),
+                })
+                .collect(),
+            visible_when: field
+                .visible_when
+                .iter()
+                .map(|rule| DeclarativeVisibilityRule {
+                    field: rule.when_field.clone(),
+                    equals: rule.equals.clone(),
+                })
+                .collect(),
+            rows: field.rows,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +333,31 @@ mod tests {
         assert!(names.contains(&"ssh_target_port"));
         // 全部字段均为可选,由引擎按启用状态校验必填
         assert!(group.fields.iter().all(|field| !field.required));
+    }
+
+    #[test]
+    fn tab_groups_translate_to_unified_declarative_config() {
+        let group = TabGroup::new("ssl", "SSL").fields(vec![
+            FormField::new("use_tls", "Use TLS", FormFieldType::Select)
+                .optional()
+                .default("false"),
+            FormField::new("ca_file", "CA", FormFieldType::Text)
+                .optional()
+                .visible_when(FormVisibilityRule::field_equals("use_tls", "true")),
+        ]);
+        let config = to_declarative_config(&[group]);
+        assert_eq!(1, config.tabs.len());
+        assert_eq!("ssl", config.tabs[0].id);
+        assert_eq!(2, config.tabs[0].fields.len());
+        assert_eq!("use_tls", config.tabs[0].fields[0].id);
+        assert_eq!(
+            crate::declarative::DeclarativeFieldType::Select,
+            config.tabs[0].fields[0].field_type
+        );
+        // 可见性规则必须原样保留
+        assert_eq!(
+            Some("true".to_string()),
+            config.tabs[0].fields[1].visible_when[0].equals
+        );
     }
 }

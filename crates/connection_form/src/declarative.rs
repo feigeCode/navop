@@ -411,10 +411,13 @@ impl DeclarativeForm {
     }
 
     pub(super) fn visible(&self, field: &DeclarativeFormField, cx: &App) -> bool {
-        field
-            .visible_when
-            .iter()
-            .all(|rule| self.value(&rule.field, cx) == rule.equals)
+        field.visible_when.iter().all(|rule| {
+            let value = self.value(&rule.field, cx);
+            match &rule.equals {
+                Some(expected) => value == *expected,
+                None => value.trim().is_empty(),
+            }
+        })
     }
 }
 

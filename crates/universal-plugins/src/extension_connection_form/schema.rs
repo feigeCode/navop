@@ -51,7 +51,7 @@ fn field_config(
             .iter()
             .map(|rule| DeclarativeVisibilityRule {
                 field: rule.field.clone(),
-                equals: rule.equals.clone(),
+                equals: Some(rule.equals.clone()),
             })
             .collect(),
     }
