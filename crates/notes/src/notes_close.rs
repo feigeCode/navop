@@ -57,12 +57,6 @@ impl TabContent for NotesView {
         Some(icon.color().with_size(Size::Medium))
     }
 
-    fn show_in_tab_bar(&self, _cx: &App) -> bool {
-        // Home sidebar notes tab hides its label; standalone markdown files
-        // opened from file open remain regular visible tabs.
-        self.standalone_markdown
-    }
-
     fn try_close(
         &mut self,
         _tab_id: &str,

@@ -666,10 +666,6 @@ impl TabContent for DefaultAgentChatPanel {
         self.tab_closeable
     }
 
-    fn show_in_tab_bar(&self, _cx: &App) -> bool {
-        false
-    }
-
     fn dump(&self, _cx: &App) -> serde_json::Value {
         serde_json::json!({
             "version": 1,
