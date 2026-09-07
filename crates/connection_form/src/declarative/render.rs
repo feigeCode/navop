@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div,
-    px,
+    App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
+    div, px,
 };
 use std::collections::HashSet;
 use gpui_component::{
@@ -32,6 +32,14 @@ impl DeclarativeForm {
         field()
             .label(field_info.label.clone())
             .required(field_info.required)
+            .when(
+                field_info.field_type == DeclarativeFieldType::TextArea,
+                |field| field.items_start(),
+            )
+            .when(
+                field_info.field_type != DeclarativeFieldType::TextArea,
+                |field| field.items_center(),
+            )
             .child(
                 h_flex()
                     .w_full()
@@ -252,6 +260,7 @@ impl DeclarativeForm {
             .map(|field| self.render_field(field, cx))
             .collect::<Vec<_>>();
         v_form()
+            .layout(Axis::Horizontal)
             .columns(1)
             .label_width(px(120.))
             .children(rendered)
