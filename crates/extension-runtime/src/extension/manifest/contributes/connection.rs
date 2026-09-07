@@ -54,6 +54,9 @@ pub struct ResourceConnectionFormField {
     pub options: Vec<ResourceConnectionSelectOption>,
     #[serde(default, rename = "visibleWhen")]
     pub visible_when: Vec<ResourceConnectionVisibilityRule>,
+    /// TextArea 行数;缺省 5。
+    #[serde(default)]
+    pub rows: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -64,6 +67,8 @@ pub enum ResourceConnectionFieldType {
     TextArea,
     Select,
     Checkbox,
+    /// 本地文件路径(文本输入 + 浏览按钮)。
+    FilePath,
     /// 认证复合组件:用户名 + 密码 + 钥匙串引用。
     /// 选中钥匙串引用后隐藏手动用户名/密码。
     /// 收集产物:`config[id] = {"credential_reference": {...}}` 或 `{"username": "..."}`,

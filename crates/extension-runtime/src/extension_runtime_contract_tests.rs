@@ -354,6 +354,7 @@ fn resource_connection() -> ResourceConnectionContrib {
                         secret: false,
                         options: Vec::new(),
                         visible_when: Vec::new(),
+                        rows: None,
                     },
                     ResourceConnectionFormField {
                         id: "api_key".into(),
@@ -365,6 +366,7 @@ fn resource_connection() -> ResourceConnectionContrib {
                         secret: true,
                         options: Vec::new(),
                         visible_when: Vec::new(),
+                        rows: None,
                     },
                 ],
             }],

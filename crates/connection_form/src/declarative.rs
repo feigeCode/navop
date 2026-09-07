@@ -559,4 +559,33 @@ mod auth_tests {
         assert_eq!(config["auth"]["credential_reference"]["credential_id"], 42);
         assert!(secrets.is_empty(), "引用模式不得产出手动密码 secret");
     }
+
+    #[gpui::test]
+    fn auth_editing_restores_reference_and_manual_username(cx: &mut TestAppContext) {
+        // 编辑已保存连接:引用模式还原钥匙串引用
+        let reference = json!({
+            "auth": { "credential_reference": { "credential_id": 42, "username": true, "password": true } }
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        let window = open_form(cx, reference);
+        window.root(cx).unwrap().read_with(cx, |root, cx| {
+            assert!(
+                root.form.read(cx).auth_has_reference("auth", cx),
+                "编辑回填应还原已选钥匙串引用"
+            );
+        });
+
+        // 手动模式还原用户名,不进入 secrets(密码靠保留机制)
+        let manual = json!({ "auth": { "username": "root" } })
+            .as_object()
+            .cloned()
+            .unwrap();
+        let window = open_form(cx, manual);
+        window.root(cx).unwrap().read_with(cx, |root, cx| {
+            assert!(!root.form.read(cx).auth_has_reference("auth", cx));
+            assert_eq!("root", root.form.read(cx).auth_value("auth", "username", cx));
+        });
+    }
 }

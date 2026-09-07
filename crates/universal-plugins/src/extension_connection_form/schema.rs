@@ -31,9 +31,10 @@ fn field_config(
             ResourceConnectionFieldType::TextArea => DeclarativeFieldType::TextArea,
             ResourceConnectionFieldType::Select => DeclarativeFieldType::Select,
             ResourceConnectionFieldType::Checkbox => DeclarativeFieldType::Checkbox,
+            ResourceConnectionFieldType::FilePath => DeclarativeFieldType::FilePath,
             ResourceConnectionFieldType::Auth => DeclarativeFieldType::Auth,
         },
-        rows: DECLARATIVE_TEXTAREA_DEFAULT_ROWS,
+        rows: field.rows.unwrap_or(DECLARATIVE_TEXTAREA_DEFAULT_ROWS),
         required: field.required,
         default_value: field.default_value.clone(),
         placeholder: field.placeholder.clone(),
@@ -73,6 +74,7 @@ mod tests {
             secret: false,
             options: Vec::new(),
             visible_when: Vec::new(),
+            rows: None,
         }
     }
 
@@ -89,5 +91,15 @@ mod tests {
         let mapped = field_config(&field(ResourceConnectionFieldType::Auth));
         assert!(!mapped.secret, "Auth 组件由引擎内部管理密码 secret");
         assert!(mapped.options.is_empty());
+    }
+
+    #[test]
+    fn file_path_and_rows_map_to_declarative_engine() {
+        let mapped = field_config(&field(ResourceConnectionFieldType::FilePath));
+        assert_eq!(DeclarativeFieldType::FilePath, mapped.field_type);
+
+        let mut form_field = field(ResourceConnectionFieldType::TextArea);
+        form_field.rows = Some(12);
+        assert_eq!(12, field_config(&form_field).rows);
     }
 }
