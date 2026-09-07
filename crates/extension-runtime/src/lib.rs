@@ -13,7 +13,7 @@ pub mod extension_db_gateway;
 pub mod extension_downloader;
 mod extension_package_layout;
 mod extension_view_host;
-mod global;
+pub mod global;
 pub mod language_extensions;
 mod registration;
 pub mod remote_desktop_provider_install;
@@ -24,7 +24,7 @@ pub use extension::{init, manifest::set_current_host_version};
 pub use extension_view_host::MainExtensionViewHost;
 #[cfg(feature = "wasm-components")]
 pub use extension_wasm::{DocumentRenderArtifact, DocumentRenderRequest, DocumentRenderTheme};
-pub use global::{GlobalExtensionRuntimeCatalog, refresh_global_runtime_catalog};
+pub use global::{GlobalExtensionRuntimeCatalog, global_catalog, refresh_global_runtime_catalog};
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,

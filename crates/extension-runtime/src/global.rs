@@ -56,8 +56,13 @@ impl GlobalExtensionRuntimeCatalog {
     }
 }
 
-pub fn refresh_global_runtime_catalog(cx: &mut impl BorrowAppContext) {
-    let Some(root) = crate::extension::extensions_root()
+/// 读取当前全局 runtime catalog(未初始化时 None)。
+pub fn global_catalog(cx: &gpui::App) -> Option<Arc<ExtensionRuntimeCatalog>> {
+    cx.try_global::<GlobalExtensionRuntimeCatalog>()
+        .and_then(|global| global.get())
+}
+
+pub fn refresh_global_runtime_catalog(cx: &mut impl BorrowAppContext) {    let Some(root) = crate::extension::extensions_root()
         .map(|root| root.join(crate::extension::ExtensionKind::Composite.dir_name()))
     else {
         html_preview::clear_html_preview_transform_provider();

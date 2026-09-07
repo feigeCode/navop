@@ -69,6 +69,8 @@ fn view() -> extension_runtime::RegisteredShellViewContribution {
         extension_root: PathBuf::from("/tmp/com.example.search"),
         entry_path: PathBuf::from("/tmp/com.example.search/ui/explorer.js"),
         surface: extension_runtime::extension::manifest::ShellSurface::Tab,
+        category: None,
+        keywords: Vec::new(),
         singleton: false,
         backends: BTreeMap::from([("search".into(), "com.example.search::main".into())]),
         modules: Default::default(),

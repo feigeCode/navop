@@ -710,6 +710,8 @@ fn shell_view(entry: &str) -> ShellViewContrib {
         icon: None,
         entry: entry.to_string(),
         surface: ShellSurface::Tab,
+        category: None,
+        keywords: None,
         singleton: false,
         backends: std::collections::BTreeMap::from([(
             "search".to_string(),

@@ -1,10 +1,14 @@
 //! Built-in tools use a registry so contributions do not change the home menu.
+//! Extension tools (`contributes.shellViews` with `surface: "toolbox"`) are
+//! appended under their categories; connection-style extensions never appear
+//! here — they belong to `contributes.connections`.
 use crate::{home_tab::HomePage, navigation_applications::NavigationApplication};
 use gpui::{
-    App, ColorExt as _, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, px,
+    App, ColorExt as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
+use gpui::prelude::FluentBuilder as _;
 use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
@@ -20,6 +24,54 @@ pub(crate) struct ToolEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolLaunch {
     OpenTab(NavigationApplication),
+}
+
+/// 扩展贡献的 toolbox shell 视图（surface: "toolbox"）。
+pub(crate) struct ExtensionTool {
+    pub extension_id: String,
+    pub view_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub category: String,
+    pub keywords: Vec<String>,
+}
+
+impl ExtensionTool {
+    /// title/description/keywords 对搜索词的大小写不敏感匹配。
+    pub fn matches(&self, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return true;
+        }
+        self.title.to_lowercase().contains(&query)
+            || self
+                .description
+                .as_deref()
+                .is_some_and(|description| description.to_lowercase().contains(&query))
+            || self
+                .keywords
+                .iter()
+                .any(|keyword| keyword.to_lowercase().contains(&query))
+    }
+}
+
+/// 从全局 runtime catalog 读取 toolbox surface 的 shell 视图。
+pub(crate) fn extension_tools(cx: &App) -> Vec<ExtensionTool> {
+    let Some(catalog) = extension_runtime::global_catalog(cx) else {
+        return Vec::new();
+    };
+    catalog
+        .toolbox_views()
+        .into_iter()
+        .map(|view| ExtensionTool {
+            extension_id: view.extension_id.clone(),
+            view_id: view.id.clone(),
+            title: view.title.clone(),
+            description: view.description.clone(),
+            category: view.category.clone().unwrap_or_else(|| "general".into()),
+            keywords: view.keywords.clone(),
+        })
+        .collect()
 }
 
 pub(crate) fn registered_tools(_cx: &App) -> Vec<ToolEntry> {
@@ -39,12 +91,15 @@ fn builtin_tools() -> Vec<ToolEntry> {
 pub(crate) struct ToolboxTab {
     home: Entity<HomePage>,
     focus_handle: FocusHandle,
+    /// 工具搜索词(扩展工具过滤用;空串显示全部)。
+    tool_search: String,
 }
 impl ToolboxTab {
     pub(crate) fn new(home: Entity<HomePage>, cx: &mut Context<Self>) -> Self {
         Self {
             home,
             focus_handle: cx.focus_handle(),
+            tool_search: String::new(),
         }
     }
 }
@@ -63,6 +118,9 @@ impl TabContent for ToolboxTab {
     }
     fn icon(&self, _cx: &App) -> Option<gpui_component::Icon> {
         Some(IconName::LayoutDashboard.into())
+    }
+    fn show_in_tab_bar(&self, _cx: &App) -> bool {
+        false
     }
 }
 impl ToolboxTab {
@@ -120,6 +178,98 @@ impl ToolboxTab {
             })
     }
 
+    /// 扩展工具卡片（surface: toolbox 的 shell 视图，点击打开 shell tab）。
+    fn render_extension_tool_card(
+        &self,
+        tool: &ExtensionTool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let accent = cx.theme().accent;
+        let accent_soft = cx.theme().accent.opacity(0.12);
+        let (extension_id, view_id) = (tool.extension_id.clone(), tool.view_id.clone());
+        v_flex()
+            .id(SharedString::from(format!(
+                "ext-tool-{}-{}",
+                tool.extension_id, tool.view_id
+            )))
+            .min_w(gpui::rems(12.5))
+            .flex_basis(gpui::rems(14.0))
+            .flex_grow_1()
+            .p_4()
+            .gap_2p5()
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .shadow_sm()
+            .cursor_pointer()
+            .hover(move |style| style.border_color(accent).shadow_sm())
+            .child(
+                div()
+                    .w(px(38.0))
+                    .h(px(38.0))
+                    .rounded(px(10.0))
+                    .bg(accent_soft)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        gpui_component::Icon::new(IconName::TableDesignTool)
+                            .with_size(gpui_component::IconSize::Large)
+                            .text_color(accent),
+                    ),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(tool.title.clone()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(tool.description.clone().unwrap_or_default()),
+            )
+            .on_click(move |_, window, cx| {
+                extension_view::open_shell_view(&extension_id, &view_id, window, cx);
+            })
+    }
+
+    /// 扩展工具区:按 category 分组渲染;搜索词过滤(无匹配返回 None)。
+    fn render_extension_tools(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+        let query = self.tool_search.clone();
+        let tools: Vec<ExtensionTool> = extension_tools(cx)
+            .into_iter()
+            .filter(|tool| tool.matches(&query))
+            .collect();
+        if tools.is_empty() {
+            return None;
+        }
+        // category 排序保证分组稳定;组内沿用 catalog 的 title 排序。
+        let mut grouped: std::collections::BTreeMap<&str, Vec<&ExtensionTool>> = Default::default();
+        for tool in &tools {
+            grouped.entry(&tool.category).or_default().push(tool);
+        }
+        let mut sections = v_flex().gap_4();
+        for (category, tools) in grouped {
+            let mut row = h_flex().flex_wrap().gap_3p5();
+            for tool in tools {
+                row = row.child(self.render_extension_tool_card(tool, cx));
+            }
+            sections = sections
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(category.to_uppercase()),
+                )
+                .child(row);
+        }
+        Some(sections.into_any_element())
+    }
+
     /// 「更多工具」占位卡（demo：虚线边框、无阴影、居中）。
     fn render_ghost_card(&self, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
@@ -173,6 +323,7 @@ impl Render for ToolboxTab {
             tools = tools.child(self.render_tool_card(tool, cx));
         }
         tools = tools.child(self.render_ghost_card(cx));
+        let extension_tools = self.render_extension_tools(cx);
         v_flex()
             .id("toolbox-content")
             .track_focus(&self.focus_handle)
@@ -195,6 +346,9 @@ impl Render for ToolboxTab {
                     .mb_5()
                     .child(t!("Home.toolbox_description").to_string()),
             )
+            .when_some(extension_tools, |container, tools| {
+                container.child(tools)
+            })
             .child(tools)
     }
 }
@@ -211,5 +365,22 @@ mod tests {
             tools[0].launch,
             ToolLaunch::OpenTab(NavigationApplication::JsonFormatter)
         );
+    }
+
+    #[test]
+    fn extension_tool_matches_searches_title_description_and_keywords() {
+        let tool = ExtensionTool {
+            extension_id: "com.example".into(),
+            view_id: "hosts".into(),
+            title: "Hosts Editor".into(),
+            description: Some("Edit /etc/hosts".into()),
+            category: "system".into(),
+            keywords: vec!["dns".into(), "resolve".into()],
+        };
+        assert!(tool.matches(""));
+        assert!(tool.matches("HOSTS"));
+        assert!(tool.matches("etc"));
+        assert!(tool.matches("DNS"));
+        assert!(!tool.matches("docker"));
     }
 }

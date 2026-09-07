@@ -88,7 +88,39 @@ fn validate_shell_view(
         }
     }
     validate_backends(view, ipc_ids)?;
-    validate_modules(view)
+    validate_modules(view)?;
+    validate_surface_rules(view)
+}
+
+/// surface 专属规则：
+///
+/// - `toolbox`：小工具不挂连接、不进 provider 会话，`backends` 与
+///   resource/job/event/blob 模块全部拒绝（需要后端的工具属于连接扩展
+///   形态）；`context`/`runtime` 依赖连接上下文，同样拒绝。仅允许
+///   `log`。
+/// - `tab`：无额外规则。
+fn validate_surface_rules(view: &ShellViewContrib) -> Result<(), ShellViewValidationError> {
+    if view.surface != super::ShellSurface::Toolbox {
+        return Ok(());
+    }
+    if !view.backends.is_empty() {
+        return Err(error(
+            shell_field(view, "backends"),
+            "toolbox surface must not declare backends; use a connection extension instead",
+        ));
+    }
+    for module in &view.modules {
+        if !matches!(module, ShellHostModule::Log) {
+            return Err(error(
+                shell_field(view, "modules"),
+                format!("toolbox surface only allows the `log` module, got `{module:?}`"),
+            ));
+        }
+    }
+    if let Some(category) = view.category.as_deref() {
+        validate_identifier(category, shell_field(view, "category"), "toolbox category")?;
+    }
+    Ok(())
 }
 
 fn validate_gpui_shell_version(manifest: &Manifest) -> Result<(), ShellViewValidationError> {

@@ -5,8 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellSurface {
+    /// 从扩展管理页或 shell 入口打开的普通 tab 视图。
     #[default]
     Tab,
+    /// 工具箱页面聚合的小工具卡片；与连接扩展(contributes.connections)
+    /// 区分：无连接表单、无 shellViewId 关联、面向单机小工具。
+    Toolbox,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -45,4 +49,11 @@ pub struct ShellViewContrib {
     pub backends: BTreeMap<String, String>,
     #[serde(default)]
     pub modules: Vec<ShellHostModule>,
+    /// toolbox surface 专用：卡片所属分类（如 `text`、`network`、`system`）。
+    /// `tab` surface 忽略该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// toolbox surface 专用：搜索关键词，补充 title/description 匹配。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
 }

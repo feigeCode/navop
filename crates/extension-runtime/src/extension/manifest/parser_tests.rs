@@ -1,6 +1,8 @@
 use std::fs;
 
-use super::{ManifestError, RemoteFileEditorLaunchMode, load_from_dir};
+use super::{
+    ManifestError, RemoteFileEditorLaunchMode, ShellSurface, load_from_dir,
+};
 
 fn write_manifest(dir: &std::path::Path, body: &str) {
     fs::write(dir.join("extension.json"), body).unwrap();
@@ -694,4 +696,80 @@ fn reference_resource_plugin_manifests_are_parser_valid() {
         assert_eq!("main", manifest.runtime.ipc[0].id);
         assert!(!manifest.contributes.connections.is_empty());
     }
+}
+
+#[test]
+fn manifest_accepts_toolbox_surface_with_log_only_modules() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "hosts-tool",
+            "title": "Hosts Editor",
+            "entry": "ui/tool.js",
+            "surface": "toolbox",
+            "singleton": true,
+            "category": "system",
+            "keywords": ["hosts", "dns"],
+            "modules": ["log"]
+        }),
+    );
+    write_shell_entry(tmp.path(), "ui/tool.js");
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let view = &manifest.contributes.shell_views[0];
+    assert_eq!(view.surface, ShellSurface::Toolbox);
+    assert_eq!(view.category.as_deref(), Some("system"));
+    assert_eq!(
+        view.keywords.as_deref(),
+        Some(
+            ["hosts", "dns"]
+                .iter()
+                .map(|keyword| keyword.to_string())
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
+}
+
+#[test]
+fn manifest_rejects_toolbox_surface_with_backends() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "bad-tool",
+            "title": "Bad Tool",
+            "entry": "ui/tool.js",
+            "surface": "toolbox",
+            "backends": { "main": "provider" },
+            "modules": ["log"]
+        }),
+    );
+    write_shell_entry(tmp.path(), "ui/tool.js");
+    let error = load_from_dir(tmp.path()).unwrap_err();
+    assert!(error.to_string().contains("toolbox"), "{error}");
+}
+
+#[test]
+fn manifest_rejects_toolbox_surface_with_backend_modules() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "bad-tool",
+            "title": "Bad Tool",
+            "entry": "ui/tool.js",
+            "surface": "toolbox",
+            "modules": ["resource"]
+        }),
+    );
+    write_shell_entry(tmp.path(), "ui/tool.js");
+    let error = load_from_dir(tmp.path()).unwrap_err();
+    // resource 模块需要 backend,而 toolbox 不允许 backend:两条规则
+    // 任一触发都构成拒绝(fail-closed),不固定依赖哪条先报。
+    let message = error.to_string();
+    assert!(
+        message.contains("toolbox") || message.contains("backend"),
+        "{message}"
+    );
 }

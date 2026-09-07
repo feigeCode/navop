@@ -36,12 +36,7 @@ pub fn register_shell_view_opener(opener: Rc<dyn ShellViewOpener>, cx: &mut App)
     cx.set_global(GlobalShellViewOpener { opener });
 }
 
-pub(crate) fn open_shell_view(
-    extension_id: &str,
-    view_id: &str,
-    window: &mut Window,
-    cx: &mut App,
-) {
+pub fn open_shell_view(extension_id: &str, view_id: &str, window: &mut Window, cx: &mut App) {
     let Some(global) = cx.try_global::<GlobalShellViewOpener>() else {
         tracing::warn!(extension_id, view_id, "shell view opener is not registered");
         return;

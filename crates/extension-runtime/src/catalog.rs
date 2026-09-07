@@ -167,6 +167,17 @@ impl ExtensionRuntimeCatalog {
         self.shell_views.values()
     }
 
+    /// 工具箱聚合的 shell 视图（`surface: "toolbox"`），按 title 排序。
+    pub fn toolbox_views(&self) -> Vec<&RegisteredShellViewContribution> {
+        let mut tools: Vec<_> = self
+            .shell_views
+            .values()
+            .filter(|view| view.surface == crate::extension::manifest::ShellSurface::Toolbox)
+            .collect();
+        tools.sort_by(|a, b| a.title.cmp(&b.title));
+        tools
+    }
+
     pub fn shell_view(
         &self,
         extension_id: &str,
