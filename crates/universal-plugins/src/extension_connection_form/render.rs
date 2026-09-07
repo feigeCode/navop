@@ -3,6 +3,7 @@ use gpui::{
     App, Axis, ColorExt, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
     Window, div, px,
 };
+use rust_i18n::t;
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -52,7 +53,7 @@ impl ExtensionConnectionForm {
                     .label_width(px(120.))
                     .child(
                         field()
-                            .label("Name")
+                            .label(t!("ExtensionConnectionForm.name").to_string())
                             .required(true)
                             .items_center()
                             .child(Input::new(&self.name).w_full()),
@@ -66,7 +67,7 @@ impl ExtensionConnectionForm {
                     .label_width(px(120.))
                     .child(
                         field()
-                            .label("Workspace")
+                            .label(t!("ConnectionForm.workspace").to_string())
                             .items_center()
                             .child(Select::new(&self.workspace).w_full()),
                     ),
@@ -95,7 +96,7 @@ impl ExtensionConnectionForm {
                             .label_width(px(120.))
                             .child(
                                 field()
-                                    .label("Remark")
+                                    .label(t!("ConnectionForm.remark").to_string())
                                     .items_center()
                                     .child(Input::new(&self.remark).w_full()),
                             ),
@@ -108,7 +109,7 @@ impl ExtensionConnectionForm {
                     .columns(1)
                     .label_width(px(120.))
                     .child(
-                        field().label("Sync").items_center().child(
+                        field().label(t!("ConnectionForm.cloud_sync").to_string()).items_center().child(
                             Checkbox::new("extension-connection-sync")
                                 .checked(*self.sync_enabled.read(cx))
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -172,14 +173,18 @@ fn action_buttons(testing: bool, cx: &mut Context<ExtensionConnectionForm>) -> i
         .child(
             Button::new("extension-connection-cancel")
                 .small()
-                .label("Cancel")
+                .label(t!("Common.cancel").to_string())
                 .on_click(cx.listener(|this, _, window, cx| this.on_cancel(window, cx))),
         )
         .child(
             Button::new("extension-connection-test")
                 .small()
                 .outline()
-                .label(if testing { "Testing…" } else { "Test" })
+                .label(if testing {
+                    t!("ConnectionForm.testing").to_string()
+                } else {
+                    t!("ConnectionForm.test").to_string()
+                })
                 .disabled(testing)
                 .on_click(cx.listener(|this, _, _, cx| this.on_test(cx))),
         )
@@ -187,7 +192,7 @@ fn action_buttons(testing: bool, cx: &mut Context<ExtensionConnectionForm>) -> i
             Button::new("extension-connection-save")
                 .small()
                 .primary()
-                .label("OK")
+                .label(t!("Common.ok").to_string())
                 .disabled(testing)
                 .on_click(cx.listener(|this, _, window, cx| this.on_save(window, cx))),
         )

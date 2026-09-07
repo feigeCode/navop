@@ -1,6 +1,7 @@
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{input::InputState, select::SelectState};
 use one_core::storage::Workspace;
+use rust_i18n::t;
 
 use super::{ExtensionConnectionForm, WorkspaceItem};
 
@@ -14,12 +15,12 @@ pub(super) fn create_name_input(
     window: &mut Window,
     cx: &mut Context<ExtensionConnectionForm>,
 ) -> Entity<InputState> {
-    create_input(value, "Connection name", window, cx)
+    create_input(value, t!("ExtensionConnectionForm.name_placeholder").to_string(), window, cx)
 }
 
 pub(super) fn create_input(
     value: String,
-    placeholder: &'static str,
+    placeholder: String,
     window: &mut Window,
     cx: &mut Context<ExtensionConnectionForm>,
 ) -> Entity<InputState> {
@@ -38,7 +39,7 @@ pub(super) fn create_workspace_select(
 ) -> Entity<SelectState<Vec<WorkspaceItem>>> {
     let items = std::iter::once(WorkspaceItem {
         id: None,
-        label: "None".into(),
+        label: t!("Common.none").to_string(),
     })
     .chain(workspaces.iter().map(|workspace| WorkspaceItem {
         id: workspace.id,

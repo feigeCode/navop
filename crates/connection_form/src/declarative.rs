@@ -486,7 +486,6 @@ fn typed_value(field_type: DeclarativeFieldType, value: String) -> Result<Value,
 mod tests {
     use super::*;
     use crate::declarative::{DECLARATIVE_TEXTAREA_DEFAULT_ROWS, DeclarativeFieldType};
-    use crate::middleware_form::FormField;
 
     #[test]
     fn file_path_collects_as_text() {
@@ -497,10 +496,10 @@ mod tests {
     }
 
     #[test]
-    fn text_area_default_rows_aligns_with_middleware() {
-        let middleware_field =
-            FormField::new("body", "", crate::middleware_form::FormFieldType::TextArea);
-        assert_eq!(middleware_field.rows, DECLARATIVE_TEXTAREA_DEFAULT_ROWS);
+    fn text_area_default_rows_matches_declarative_engine() {
+        let field =
+            crate::declarative::DeclarativeFormField::new("body", "", DeclarativeFieldType::TextArea);
+        assert_eq!(field.rows, DECLARATIVE_TEXTAREA_DEFAULT_ROWS);
     }
 }
 

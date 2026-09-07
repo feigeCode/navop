@@ -4,6 +4,9 @@
 //! This crate is gated behind the `shell-plugins` feature: without it (the
 //! default) the modules below are not compiled and the crate is empty.
 
+// 扩展连接表单的国际化文案归本 crate 所有。
+rust_i18n::i18n!("locales", fallback = "en");
+
 #[cfg(feature = "shell-plugins")]
 mod extension_connection_form;
 #[cfg(feature = "shell-plugins")]

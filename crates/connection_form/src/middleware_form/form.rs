@@ -34,11 +34,12 @@ use one_core::storage::{
 use rust_i18n::t;
 
 use super::adapter::{FormSnapshot, MiddlewareFormAdapter};
-use super::declarative::{
-    FormField, FormFieldType, TabGroup, normalized_ssh_auth_type_or_default, to_declarative_config,
-};
+use super::declarative::normalized_ssh_auth_type_or_default;
 use crate::SshConnectionSelectItem;
-use crate::declarative::DeclarativeForm;
+use crate::declarative::{
+    DeclarativeFieldType, DeclarativeForm, DeclarativeFormConfig, DeclarativeFormField,
+    DeclarativeFormTab,
+};
 use crate::ssh_auth::SshAuthOption;
 use crate::team::{
     TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
@@ -48,7 +49,7 @@ use crate::team::{
 
 /// 中间件表单配置
 pub struct MiddlewareFormConfig {
-    pub tab_groups: Vec<TabGroup>,
+    pub tab_groups: Vec<DeclarativeFormTab>,
 }
 
 /// 保存成功/失败事件
@@ -172,10 +173,10 @@ fn missing_ssh_tunnel_required_field(
 }
 
 /// 判断是否启用自定义 SSH 标签页渲染(声明了约定 SSH 字段即启用)
-fn should_use_custom_ssh_tab(fields: &[FormField]) -> bool {
+fn should_use_custom_ssh_tab(fields: &[DeclarativeFormField]) -> bool {
     fields
         .iter()
-        .any(|field| field.name == "ssh_tunnel_enabled")
+        .any(|field| field.id == "ssh_tunnel_enabled")
 }
 
 /// 通用中间件连接表单
@@ -212,7 +213,9 @@ impl MiddlewareConnectionForm {
 
         let declarative = cx.new(|cx| {
             DeclarativeForm::new(
-                to_declarative_config(&config.tab_groups),
+                DeclarativeFormConfig {
+                    tabs: config.tab_groups.clone(),
+                },
                 &serde_json::Map::new(),
                 window,
                 cx,
@@ -343,7 +346,7 @@ impl MiddlewareConnectionForm {
         match self.adapter.load_fields(connection) {
             Ok(snapshot) => {
                 // 钥匙串引用 + 手动用户名密码回填到 auth 字段
-                if let Some(auth_name) = self.find_auth_field().map(|field| field.name.clone()) {
+                if let Some(auth_name) = self.find_auth_field().map(|field| field.id.clone()) {
                     self.declarative.update(cx, |form, cx| {
                         form.set_auth_reference(
                             &auth_name,
@@ -480,20 +483,20 @@ impl MiddlewareConnectionForm {
             .unwrap_or_else(|| field_name.to_string())
     }
 
-    fn find_field(&self, field_name: &str) -> Option<&FormField> {
+    fn find_field(&self, field_name: &str) -> Option<&DeclarativeFormField> {
         self.config
             .tab_groups
             .iter()
             .flat_map(|group| group.fields.iter())
-            .find(|field| field.name == field_name)
+            .find(|field| field.id == field_name)
     }
 
-    fn find_auth_field(&self) -> Option<&FormField> {
+    fn find_auth_field(&self) -> Option<&DeclarativeFormField> {
         self.config
             .tab_groups
             .iter()
             .flat_map(|group| group.fields.iter())
-            .find(|field| field.field_type == FormFieldType::Auth)
+            .find(|field| field.field_type == DeclarativeFieldType::Auth)
     }
 
     fn get_input_by_name(&self, field_name: &str, cx: &App) -> Option<Entity<InputState>> {
@@ -504,11 +507,11 @@ impl MiddlewareConnectionForm {
         self.declarative.read(cx).textarea_state(field_name)
     }
 
-    fn field_visible_from_values(&self, field: &FormField, cx: &App) -> bool {
+    fn field_visible_from_values(&self, field: &DeclarativeFormField, cx: &App) -> bool {
         field
             .visible_when
             .iter()
-            .all(|rule| rule.matches(self.get_field_value(&rule.when_field, cx).as_deref()))
+            .all(|rule| rule.matches(self.get_field_value(&rule.field, cx).as_deref()))
     }
 
     fn resolve_referenced_ssh_connection(&self, cx: &App) -> Option<&StoredConnection> {
@@ -523,15 +526,15 @@ impl MiddlewareConnectionForm {
     fn build_snapshot(&self, cx: &App) -> FormSnapshot {
         let auth_field = self.find_auth_field();
         let credential_reference = auth_field
-            .and_then(|field| self.declarative.read(cx).auth_reference(&field.name, cx));
+            .and_then(|field| self.declarative.read(cx).auth_reference(&field.id, cx));
         let mut fields = HashMap::new();
 
         for field in self.config.tab_groups.iter().flat_map(|group| &group.fields) {
-            let field_name = &field.name;
+            let field_name = &field.id;
             if !self.field_visible_from_values(field, cx) {
                 continue;
             }
-            if field.field_type == FormFieldType::Auth {
+            if field.field_type == DeclarativeFieldType::Auth {
                 // auth 字段:手动用户名/密码仅在未选钥匙串引用时进入快照
                 if credential_reference.is_none() {
                     let declarative = self.declarative.read(cx);
@@ -572,7 +575,7 @@ impl MiddlewareConnectionForm {
     fn validate(&self, cx: &App) -> Result<(), String> {
         let credential_selected = self
             .find_auth_field()
-            .and_then(|field| self.declarative.read(cx).auth_reference(&field.name, cx))
+            .and_then(|field| self.declarative.read(cx).auth_reference(&field.id, cx))
             .is_some();
 
         for tab_group in &self.config.tab_groups {
@@ -580,27 +583,27 @@ impl MiddlewareConnectionForm {
                 if !self.field_visible_from_values(field, cx) {
                     continue;
                 }
-                if field.field_type == FormFieldType::Auth {
+                if field.field_type == DeclarativeFieldType::Auth {
                     if credential_selected {
                         continue;
                     }
                     if field.required {
                         let declarative = self.declarative.read(cx);
-                        let username = declarative.auth_value(&field.name, "username", cx);
-                        let password = declarative.auth_value(&field.name, "password", cx);
+                        let username = declarative.auth_value(&field.id, "username", cx);
+                        let password = declarative.auth_value(&field.id, "password", cx);
                         if username.trim().is_empty() && password.trim().is_empty() {
                             return Err(
-                                t!("MiddlewareForm.field_required", label = field.label).to_string()
+                                t!("ConnectionForm.field_required", label = field.label).to_string()
                             );
                         }
                     }
                     continue;
                 }
                 if field.required {
-                    let value = self.get_field_value(&field.name, cx);
+                    let value = self.get_field_value(&field.id, cx);
                     if value.is_none_or(|value| value.trim().is_empty()) {
                         return Err(
-                            t!("MiddlewareForm.field_required", label = field.label).to_string()
+                            t!("ConnectionForm.field_required", label = field.label).to_string()
                         );
                     }
                 }
@@ -636,8 +639,8 @@ impl MiddlewareConnectionForm {
         if let Some(field) = missing_field {
             return Err(format!(
                 "{}: {}",
-                t!("MiddlewareForm.ssh_tunnel_invalid"),
-                t!("MiddlewareForm.ssh_missing_required", field = field)
+                t!("ConnectionForm.ssh_tunnel_invalid"),
+                t!("ConnectionForm.ssh_missing_required", field = field)
             ));
         }
 
@@ -721,7 +724,7 @@ impl MiddlewareConnectionForm {
             let result: Result<bool, String> = task
                 .await
                 .map(|_| true)
-                .map_err(|error| format!("{}: {}", t!("MiddlewareForm.test_failed"), error));
+                .map_err(|error| format!("{}: {}", t!("ConnectionForm.test_failed"), error));
 
             let _ = cx.update(|cx| {
                 is_testing_handle.update(cx, |testing, cx| {
@@ -752,7 +755,7 @@ impl MiddlewareConnectionForm {
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let Some(repo) = storage.get::<ConnectionRepository>() else {
-                let error = t!("MiddlewareForm.repository_missing").to_string();
+                let error = t!("ConnectionForm.repository_missing").to_string();
                 let _ = this.update(cx, |form, cx| {
                     form.set_save_error(error.clone(), cx);
                     cx.emit(MiddlewareFormEvent::SaveError(error));
@@ -773,7 +776,7 @@ impl MiddlewareConnectionForm {
                     });
                 }
                 Err(error) => {
-                    let message = format!("{}: {}", t!("MiddlewareForm.save_failed"), error);
+                    let message = format!("{}: {}", t!("ConnectionForm.save_failed"), error);
                     let _ = this.update(cx, |form, cx| {
                         form.set_save_error(message.clone(), cx);
                         cx.emit(MiddlewareFormEvent::SaveError(message));
@@ -802,7 +805,7 @@ impl MiddlewareConnectionForm {
     /// 测试结果展示文本(`None` 表示尚无结果)
     pub fn test_result_msg(&self, cx: &App) -> Option<String> {
         self.test_result.read(cx).as_ref().map(|r| match r {
-            Ok(_) => format!("✓ {}", t!("MiddlewareForm.test_success")),
+            Ok(_) => format!("✓ {}", t!("ConnectionForm.test_success")),
             Err(e) => format!("✗ {e}"),
         })
     }
@@ -822,18 +825,18 @@ impl MiddlewareConnectionForm {
         if !self.field_visible_from_values(info, cx) {
             return field();
         }
-        let is_password = info.field_type == FormFieldType::Password;
+        let is_password = info.field_type == DeclarativeFieldType::Password;
         field()
             .label(info.label.clone())
             .required(info.required)
             .items_center()
             .child(h_flex().w_full().gap_2().child(match info.field_type {
-                FormFieldType::TextArea => self
-                    .get_textarea_by_name(&info.name, cx)
+                DeclarativeFieldType::TextArea => self
+                    .get_textarea_by_name(&info.id, cx)
                     .map(|state| Textarea::new(&state).w_full().into_any_element())
                     .unwrap_or_else(|| div().w_full().into_any_element()),
                 _ => self
-                    .get_input_by_name(&info.name, cx)
+                    .get_input_by_name(&info.id, cx)
                     .map(|state| {
                         let input = Input::new(&state).w_full();
                         if is_password {
@@ -863,7 +866,7 @@ impl MiddlewareConnectionForm {
             .layout(Axis::Horizontal)
             .with_size(Size::Medium)
             .columns(1)
-            .label_width(px(100.))
+            .label_width(px(120.))
             .child(
                 field()
                     .label(self.field_label("ssh_tunnel_enabled"))
@@ -968,7 +971,7 @@ impl MiddlewareConnectionForm {
         let mut children: Vec<Field> = Vec::new();
         children.push(
             field()
-                .label(t!("MiddlewareForm.workspace").to_string())
+                .label(t!("ConnectionForm.workspace").to_string())
                 .items_center()
                 .child(Select::new(&self.workspace_select).w_full()),
         );
@@ -995,7 +998,7 @@ impl MiddlewareConnectionForm {
             let is_sync_checked = *self.sync_enabled.read(cx);
             children.push(
                 field()
-                    .label(t!("MiddlewareForm.cloud_sync").to_string())
+                    .label(t!("ConnectionForm.cloud_sync").to_string())
                     .items_center()
                     .child(
                         h_flex()
@@ -1014,7 +1017,7 @@ impl MiddlewareConnectionForm {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(t!("MiddlewareForm.cloud_sync_desc").to_string()),
+                                    .child(t!("ConnectionForm.cloud_sync_desc").to_string()),
                             ),
                     ),
             );
@@ -1023,7 +1026,7 @@ impl MiddlewareConnectionForm {
             v_form()
                 .layout(Axis::Horizontal)
                 .columns(1)
-                .label_width(px(100.))
+                .label_width(px(120.))
                 .children(children)
                 .into_any_element(),
         )
@@ -1042,7 +1045,7 @@ impl Render for MiddlewareConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current_tab_group = &self.config.tab_groups[self.active_tab];
         let current_tab_fields = &current_tab_group.fields;
-        let current_tab_name = current_tab_group.name.as_str();
+        let current_tab_name = current_tab_group.id.as_str();
         let tab_content = if current_tab_name == "ssh" && should_use_custom_ssh_tab(current_tab_fields)
         {
             self.render_ssh_tab_content(window, cx)
@@ -1065,7 +1068,7 @@ impl Render for MiddlewareConnectionForm {
                                 .config
                                 .tab_groups
                                 .get(*ix)
-                                .is_some_and(|tab| tab.name == "ssh")
+                                .is_some_and(|tab| tab.id == "ssh")
                             {
                                 this.sync_ssh_connection_selection(window, cx);
                             }
@@ -1092,26 +1095,28 @@ impl Render for MiddlewareConnectionForm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::middleware_form::declarative::FormVisibilityRule;
+    use crate::declarative::DeclarativeVisibilityRule;
     use gpui::{Task, TestAppContext, VisualTestContext, WindowOptions};
     use one_core::settings::AppSettings;
     use one_core::storage::{MqttParams, SshAuthMethod, SshParams};
 
     /// 测试用标签页:常规 + 条件字段扩展页 + 共享 SSH/备注页
-    fn mock_tab_groups() -> Vec<TabGroup> {
+    fn mock_tab_groups() -> Vec<DeclarativeFormTab> {
         vec![
-            TabGroup::new("general", "常规").fields(vec![
-                FormField::new("host", "主机", FormFieldType::Text).default("127.0.0.1"),
-                FormField::new("port", "端口", FormFieldType::Number).default("1883"),
-                FormField::new("auth", "认证", FormFieldType::Auth).optional(),
+            DeclarativeFormTab::new("general", "常规").fields(vec![
+                DeclarativeFormField::new("host", "主机", DeclarativeFieldType::Text)
+                    .default("127.0.0.1"),
+                DeclarativeFormField::new("port", "端口", DeclarativeFieldType::Number)
+                    .default("1883"),
+                DeclarativeFormField::new("auth", "认证", DeclarativeFieldType::Auth).optional(),
             ]),
-            TabGroup::new("extra", "扩展").fields(vec![
-                FormField::new("use_flag", "开关", FormFieldType::Checkbox)
+            DeclarativeFormTab::new("extra", "扩展").fields(vec![
+                DeclarativeFormField::new("use_flag", "开关", DeclarativeFieldType::Checkbox)
                     .optional()
                     .default("false"),
-                FormField::new("token", "令牌", FormFieldType::Text)
+                DeclarativeFormField::new("token", "令牌", DeclarativeFieldType::Text)
                     .optional()
-                    .visible_when(FormVisibilityRule::field_equals("use_flag", "true")),
+                    .visible_when(DeclarativeVisibilityRule::field_equals("use_flag", "true")),
             ]),
             super::super::declarative::ssh_tab_group(),
             super::super::declarative::notes_tab_group(),

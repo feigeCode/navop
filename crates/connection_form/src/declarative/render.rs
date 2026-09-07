@@ -3,6 +3,7 @@ use gpui::{
     App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
     div, px,
 };
+use rust_i18n::t;
 use std::collections::HashSet;
 use gpui_component::{
     IconName,
@@ -23,13 +24,13 @@ impl DeclarativeForm {
         &self,
         field_info: &DeclarativeFormField,
         cx: &mut Context<Self>,
-    ) -> gpui_component::form::Field {
+    ) -> Vec<gpui_component::form::Field> {
         if field_info.field_type == DeclarativeFieldType::Auth {
             return self.render_auth_field(field_info, cx);
         }
         let id = field_info.id.clone();
         let checkbox_id = id.clone();
-        field()
+        vec![field()
             .label(field_info.label.clone())
             .required(field_info.required)
             .when(
@@ -130,40 +131,41 @@ impl DeclarativeForm {
                                 })),
                         )
                     }),
-            )
+            )]
     }
 
     fn render_auth_field(
         &self,
         field_info: &DeclarativeFormField,
         cx: &mut Context<Self>,
-    ) -> gpui_component::form::Field {
+    ) -> Vec<gpui_component::form::Field> {
         let username_id = auth_subkey(&field_info.id, "username");
         let password_id = auth_subkey(&field_info.id, "password");
         let reference_selected = self.auth_has_reference(&field_info.id, cx);
-        field()
+        let mut fields = vec![field()
             .label(field_info.label.clone())
-            .items_start()
+            .items_center()
             .child(
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .child(
-                        self.auth_pickers
-                            .get(&field_info.id)
-                            .map(|picker| div().w_full().child(picker.clone()))
-                            .unwrap_or_else(|| div().w_full()),
-                    )
-                    .when(!reference_selected, |flex| {
-                        flex.child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(self.render_auth_input(&username_id, false, cx))
-                                .child(self.render_auth_input(&password_id, true, cx)),
-                        )
-                    }),
-            )
+                self.auth_pickers
+                    .get(&field_info.id)
+                    .map(|picker| div().w_full().child(picker.clone()))
+                    .unwrap_or_else(|| div().w_full()),
+            )];
+        if !reference_selected {
+            fields.push(
+                field()
+                    .label(t!("Credential.username").to_string())
+                    .items_center()
+                    .child(self.render_auth_input(&username_id, false, cx)),
+            );
+            fields.push(
+                field()
+                    .label(t!("Credential.password").to_string())
+                    .items_center()
+                    .child(self.render_auth_input(&password_id, true, cx)),
+            );
+        }
+        fields
     }
 
     fn render_auth_input(
@@ -257,7 +259,7 @@ impl DeclarativeForm {
             .collect::<Vec<_>>();
         let rendered = selected
             .into_iter()
-            .map(|field| self.render_field(field, cx))
+            .flat_map(|field| self.render_field(field, cx))
             .collect::<Vec<_>>();
         v_form()
             .layout(Axis::Horizontal)

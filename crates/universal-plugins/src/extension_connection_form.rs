@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use connection_form::declarative::DeclarativeForm;
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Window};
+use rust_i18n::t;
 use gpui_component::{
     input::InputState,
     select::{SelectItem, SelectState},
@@ -105,7 +106,7 @@ impl ExtensionConnectionForm {
                 .as_ref()
                 .and_then(|connection| connection.remark.clone())
                 .unwrap_or_default(),
-            "Optional note",
+            t!("ExtensionConnectionForm.remark_placeholder").to_string(),
             window,
             cx,
         );
@@ -233,7 +234,7 @@ impl ExtensionConnectionForm {
     pub(super) fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.name.read(cx).text().to_string().trim().to_string();
         if name.is_empty() {
-            self.set_error("Connection name is required", cx);
+            self.set_error(t!("ExtensionConnectionForm.name_required"), cx);
             return;
         }
         let (config, updates) = match self.draft(cx) {
@@ -285,7 +286,7 @@ impl ExtensionConnectionForm {
         };
         let storage = cx.global::<GlobalStorageState>().storage.clone();
         let Some(repository) = storage.get::<ConnectionRepository>() else {
-            self.set_error("Connection repository is unavailable", cx);
+            self.set_error(t!("ConnectionForm.repository_missing"), cx);
             return;
         };
         let outcome = persist_connection(&repository, &mut connection);
@@ -318,7 +319,7 @@ impl ExtensionConnectionForm {
 
     fn test_result_msg(&self, cx: &App) -> Option<String> {
         self.test_result.read(cx).as_ref().map(|result| match result {
-            Ok(()) => "✓ Connection successful".to_string(),
+            Ok(()) => format!("✓ {}", t!("ConnectionForm.test_success")),
             Err(error) => format!("✗ {error}"),
         })
     }

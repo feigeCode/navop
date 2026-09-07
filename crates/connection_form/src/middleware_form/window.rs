@@ -24,15 +24,15 @@ use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
 use super::adapter::{MiddlewareFormAdapter, MiddlewareFormSavedCallback};
-use super::declarative::TabGroup;
 use super::form::{MiddlewareConnectionForm, MiddlewareFormConfig, MiddlewareFormEvent};
+use crate::declarative::DeclarativeFormTab;
 
 /// 中间件表单窗口配置
 pub struct MiddlewareFormWindowConfig {
     /// 中间件适配器(决定参数映射与测试连接)
     pub adapter: Arc<dyn MiddlewareFormAdapter>,
     /// 声明式标签页配置
-    pub tab_groups: Vec<TabGroup>,
+    pub tab_groups: Vec<DeclarativeFormTab>,
     /// 正在编辑的连接(`None` 表示新建)
     pub editing_connection: Option<StoredConnection>,
     /// 预填连接(不进入编辑模式)
@@ -261,9 +261,9 @@ impl Render for MiddlewareFormWindow {
                             .small()
                             .outline()
                             .label(if is_testing {
-                                t!("MiddlewareForm.testing").to_string()
+                                t!("ConnectionForm.testing").to_string()
                             } else {
-                                t!("MiddlewareForm.test").to_string()
+                                t!("ConnectionForm.test").to_string()
                             })
                             .disabled(is_testing)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -275,7 +275,7 @@ impl Render for MiddlewareFormWindow {
                             Button::new("middleware-save-continue")
                                 .small()
                                 .outline()
-                                .label(t!("MiddlewareForm.save_and_continue").to_string())
+                                .label(t!("ConnectionForm.save_and_continue").to_string())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.on_save_and_continue(window, cx);
                                 })),

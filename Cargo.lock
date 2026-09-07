@@ -15258,6 +15258,7 @@ dependencies = [
  "gpui_ce_components",
  "gpui_ce_components_shell",
  "one-core",
+ "rust-i18n",
  "serde_json",
  "smol",
  "tempfile",
