@@ -24,7 +24,7 @@ use gpui_component::{
     VirtualListScrollHandle, h_flex,
     input::{IndentInline, OutdentInline},
     menu::{ContextMenuExt, PopupMenu},
-    scroll::{ScrollableMask, Scrollbar},
+    scroll::{ScrollableMask, Scrollbar, ScrollbarShow},
     v_flex,
 };
 use rust_i18n::t;
@@ -3064,7 +3064,11 @@ where
                 .right_0()
                 .bottom_0()
                 .w(SCROLLBAR_WIDTH)
-                .child(Scrollbar::vertical(&self.vertical_scroll_handle)),
+                .child(
+                    Scrollbar::vertical(&self.vertical_scroll_handle)
+                        .scrollbar_show(ScrollbarShow::Always)
+                        .viewport_from_layout(),
+                ),
         )
     }
 
@@ -3080,7 +3084,11 @@ where
             .right_0()
             .bottom_0()
             .h(SCROLLBAR_WIDTH)
-            .child(Scrollbar::horizontal(&self.horizontal_scroll_handle))
+            .child(
+                Scrollbar::horizontal(&self.horizontal_scroll_handle)
+                    .scrollbar_show(ScrollbarShow::Always)
+                    .viewport_from_layout(),
+            )
     }
 }
 
@@ -3155,6 +3163,18 @@ mod tests {
 
         assert_eq!(vec![0, 1, 2], columns);
         assert_eq!(None, selected_delegate_column_range(0, 0, 1));
+    }
+
+    #[test]
+    fn table_scrollbars_use_their_overlay_layout_as_viewport() {
+        let source = include_str!("state.rs");
+
+        assert!(source.contains(
+            "Scrollbar::vertical(&self.vertical_scroll_handle)\n                        .scrollbar_show(ScrollbarShow::Always)\n                        .viewport_from_layout()"
+        ));
+        assert!(source.contains(
+            "Scrollbar::horizontal(&self.horizontal_scroll_handle)\n                    .scrollbar_show(ScrollbarShow::Always)\n                    .viewport_from_layout()"
+        ));
     }
 }
 
