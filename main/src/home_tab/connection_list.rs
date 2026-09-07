@@ -11,7 +11,9 @@ impl HomePage {
     ) -> AnyElement {
         let conn_id = conn.id;
         let open_connection = conn.clone();
-        let batch_mode = self.batch_mode_active();
+        // 最近区是纯快捷入口：不参与批量模式（无勾选框、点击不进选择），
+        // 同一连接在下方分组中的实例才承载批量交互。
+        let batch_mode = self.batch_mode_active() && !recent;
         let can_manage = conn_id.is_some_and(|id| self.can_move_connection(id));
         // 批量模式下选中态来自批量选择集（参考常驻侧栏连接树）。
         let is_selected = if batch_mode {

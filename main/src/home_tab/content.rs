@@ -104,8 +104,12 @@ impl HomePage {
             _ => (RECENT_ROW_FALLBACK, px(0.0)),
         };
         let groups = self.home_groups(query, cx);
-        let recent =
-            recent::recent_connections(&self.connections, self.selected_filter, query, columns);
+        // 最近区不参与搜索：有搜索词时隐藏，避免同一连接在最近区与分组中重复出现。
+        let recent = if query.is_empty() {
+            recent::recent_connections(&self.connections, self.selected_filter, query, columns)
+        } else {
+            Vec::new()
+        };
         let visible_count = groups
             .iter()
             .flat_map(|(_, _, connections)| connections.iter())

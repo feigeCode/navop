@@ -214,11 +214,13 @@ fn home_batch_mode_is_shared_across_card_list_and_tree_layouts() {
     assert!(toolbar.contains("IconName::ListChecks"));
     assert!(home_layout.contains("render_batch_bar"));
     assert!(home_layout.contains("ConnectionLayout::Tree"));
-    // 卡片与列表在批量模式下渲染勾选框并按修饰键做范围/多选
+    // 卡片与列表在批量模式下渲染勾选框并按修饰键做范围/多选；
+    // 最近区为不参与批量的快捷入口（同一连接可能在此与分组同时出现）
     for source in [card, list] {
         assert!(source.contains("connection_selection_checkbox"));
         assert!(source.contains("ConnectionSelectionMode::Range"));
         assert!(source.contains("ConnectionSelectionMode::Toggle"));
+        assert!(source.contains("self.batch_mode_active() && !recent"));
     }
     // 批量条提供全选可见/移动/删除/退出
     assert!(batch_bar.contains("home-select-visible-connections"));
@@ -264,6 +266,21 @@ fn home_toolbar_groups_utility_controls_into_one_container() {
     assert!(toolbar.contains("render_home_type_filter(window, cx)"));
     // 「全部类型」不再使用星号图标
     assert!(toolbar.contains("IconName::Apps"));
+}
+
+#[test]
+fn recent_section_does_not_participate_in_search() {
+    let content = include_str!("../content.rs");
+    // 有搜索词时最近区整体隐藏，同一连接只出现在下方分组中
+    assert!(content.contains("最近区不参与搜索"));
+    let gate = content
+        .find("recent::recent_connections")
+        .expect("最近区渲染点存在");
+    let mut start = gate.saturating_sub(220);
+    while !content.is_char_boundary(start) {
+        start -= 1;
+    }
+    assert!(content[start..gate].contains("query.is_empty()"));
 }
 
 #[test]

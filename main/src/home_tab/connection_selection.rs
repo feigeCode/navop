@@ -176,7 +176,8 @@ impl HomePage {
         self.connection_selection.retain(&valid_ids);
     }
 
-    /// 当前页面可见且可管理的连接 id（按分组展示顺序；最近区为子集，不重复计入）。
+    /// 当前页面参与批量操作的可见连接 id（按分组展示顺序）。
+    /// 最近区为不参与批量的快捷入口，故可见集仅取分组列表（最近区本就其子集）。
     pub(super) fn visible_manageable_connection_ids(&self, query: &str, cx: &App) -> Vec<i64> {
         self.home_groups(query, cx)
             .into_iter()
