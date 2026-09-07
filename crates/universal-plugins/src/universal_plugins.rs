@@ -592,3 +592,20 @@ mod tests {
         assert_eq!(b"secret-value", secret.as_slice());
     }
 }
+
+/// 打开/测试 extension 连接前把 Auth 密码簿引用解析为运行时明文。
+///
+/// 与 DB driver.json 走同一 `ConnectionRepository::resolve_runtime_connection`
+/// 机制;解析副本仅存内存,禁止落盘/同步/日志。仓库不可用时原样返回。
+pub(crate) fn resolve_extension_connection_for_runtime(
+    connection: one_core::storage::StoredConnection,
+    cx: &gpui::App,
+) -> anyhow::Result<one_core::storage::StoredConnection> {
+    let Some(repository) = cx
+        .try_global::<GlobalStorageState>()
+        .and_then(|state| state.storage.get::<ConnectionRepository>())
+    else {
+        return Ok(connection);
+    };
+    repository.resolve_runtime_connection(&connection)
+}

@@ -130,6 +130,12 @@ impl ShellPluginHost {
         let view = self
             .contribution(&contribution.extension_id, shell_view_id)
             .ok_or_else(|| anyhow!("extension shell view was not found"))?;
+        // 与 DB 驱动一致的统一凭据解析:Auth 密码簿引用在内存中还原为明文,
+        // 随 open 载荷送达 provider;解析副本不落盘。
+        let connection = crate::universal_plugins::resolve_extension_connection_for_runtime(
+            connection,
+            cx,
+        )?;
         let launch = ShellConnectionLaunch::new(&connection, &contribution, &view)?;
         let host = self.clone();
         let extension_id = contribution.extension_id;

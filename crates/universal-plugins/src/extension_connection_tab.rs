@@ -46,7 +46,12 @@ impl ExtensionConnectionTab {
             .lease(connection_id);
         let runtime_id = contribution.runtime_id.clone();
         let title = connection.name.clone().into();
-        let launch = ExtensionResourceLaunch::new(&connection, &contribution);
+        let resolved = crate::universal_plugins::resolve_extension_connection_for_runtime(
+            connection.clone(),
+            cx,
+        )
+        .unwrap_or(connection);
+        let launch = ExtensionResourceLaunch::new(&resolved, &contribution);
         let view = cx.new(|cx| Self {
             connection_lease: Some(connection_lease),
             title,

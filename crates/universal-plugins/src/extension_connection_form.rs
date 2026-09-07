@@ -184,13 +184,23 @@ impl ExtensionConnectionForm {
     }
 
     pub(super) fn on_test(&mut self, cx: &mut Context<Self>) {
-        let (config, secrets) = match self.test_draft(cx) {
+        let (mut config, secrets) = match self.test_draft(cx) {
             Ok(draft) => draft,
             Err(error) => {
                 self.set_error(error, cx);
                 return;
             }
         };
+        // 与 DB 驱动一致的统一凭据解析:Auth 密码簿引用解析为运行时明文后测试。
+        if let Some(repository) = cx
+            .try_global::<GlobalStorageState>()
+            .and_then(|state| state.storage.get::<ConnectionRepository>())
+        {
+            if let Err(error) = repository.resolve_extension_runtime_config(&mut config) {
+                self.set_error(error.to_string(), cx);
+                return;
+            }
+        }
         let contribution = self.contribution.clone();
         let service = cx.global::<GlobalUniversalPluginService>().service();
         self.is_testing.update(cx, |testing, cx| {
