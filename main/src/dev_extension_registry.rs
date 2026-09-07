@@ -361,6 +361,83 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         Ok(HostValue::Null)
     }
 
+    fn watch_project(root: &str) -> Result<HostValue, HostError> {
+        let root = std::path::PathBuf::from(root);
+        if !root.join("extension.json").is_file() {
+            return Err(host_error(format!(
+                "extension.json not found in {}",
+                root.display()
+            )));
+        }
+        gpui_shell_scope::with_current_app(|cx| {
+            let Some(watch_set) = cx.try_global::<DevWatchSet>() else {
+                return HostValue::Bool(false);
+            };
+            let mut watch_set = watch_set.0.borrow_mut();
+            if watch_set.contains_key(&root) {
+                return HostValue::Bool(true);
+            }
+            let Some(last_sig) = source_fingerprint(&root) else {
+                return HostValue::Bool(false);
+            };
+            let watch_root = root.clone();
+            let task = cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(800))
+                        .await;
+                    // 变更检测与重载都回主线程做,Global 访问需要 &App。
+                    let _ = cx.update(|cx| {
+                        let Some(watch_set) = cx.try_global::<DevWatchSet>() else {
+                            return;
+                        };
+                        let Some(current) = source_fingerprint(&watch_root) else {
+                            return;
+                        };
+                        let changed = {
+                            let mut watch_set = watch_set.0.borrow_mut();
+                            let Some((last, _)) = watch_set.get_mut(&watch_root) else {
+                                return;
+                            };
+                            let changed = current != *last;
+                            *last = current.clone();
+                            changed
+                        };
+                        if changed {
+                            let _ = cx.update_default_global::<DevExtensionRegistry, _>(
+                                |registry, cx| {
+                                    registry.load(watch_root.clone(), cx);
+                                },
+                            );
+                            if let Some(dev_id) = cx
+                                .try_global::<DevExtensionRegistry>()
+                                .and_then(|registry| {
+                                    registry
+                                        .projects()
+                                        .iter()
+                                        .find(|project| project.root == watch_root)
+                                })
+                                .and_then(|project| project.manifest.as_ref())
+                                .map(|manifest| manifest.id.clone())
+                            {
+                                for window in cx.windows().to_vec() {
+                                    let _ = window.update(cx, |_, window, cx| {
+                                        let _ = extension_view::close_shell_extension(
+                                            &dev_id, window, cx,
+                                        );
+                                    });
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            watch_set.insert(root, (last_sig, task));
+            HostValue::Bool(true)
+        })
+        .ok_or_else(|| host_error("no active app context"))
+    }
+
     let ops = Rc::new(universal_plugins::DevHostOps {
         list: Rc::new(projects_value),
         open: Rc::new(open_project),
@@ -368,9 +445,11 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         open_view: Rc::new(open_view),
         logs: Rc::new(project_logs),
         reload: Rc::new(reload_project),
+        watch: Rc::new(watch_project),
     });
     cx.default_global::<DevExtensionRegistry>();
     cx.default_global::<DevLogRing>();
+    cx.default_global::<DevWatchSet>();
     universal_plugins::set_dev_host_ops(ops, cx);
 }
 
@@ -379,6 +458,59 @@ fn strip_dev_prefix(id: &str) -> String {
         .unwrap_or(id)
         .to_string()
 }
+
+/// 工程目录 source 指纹:recursive scan ui/ + entry,按 (相对路径, mt_s) 排序。
+/// dev 视图少、文件小,轮询成本可忽略。
+fn source_fingerprint(root: &std::path::Path) -> Option<String> {
+    let entry_rel = {
+        let manifest = load_from_dir(root).ok()?;
+        manifest
+            .contributes
+            .shell_views
+            .first()?
+            .entry
+            .clone()
+    };
+    let mut hashes = Vec::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for item in entries.flatten() {
+            let path = item.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let rel = path.strip_prefix(root).ok()?.to_string_lossy().to_string();
+            // 只指纹 ui/、entry、manifest 与构建元数据。
+            let interesting = rel.starts_with("ui/")
+                || rel == entry_rel
+                || rel.ends_with(".json")
+                || rel.ends_with(".js");
+            if !interesting {
+                continue;
+            }
+            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+            let ms = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis();
+            hashes.push(format!("{rel}:{ms}"));
+        }
+    }
+    hashes.sort();
+    Some(hashes.join(","))
+}
+
+/// 按工程目录的变更轮询 watch 任务表(root → (last_sig, task))。
+/// 自动重载已开启的工程。
+#[derive(Default)]
+pub struct DevWatchSet(
+    std::cell::RefCell<
+        std::collections::HashMap<std::path::PathBuf, (String, gpui::Task<()>)>,
+    >,
+);
+impl gpui::Global for DevWatchSet {}
 
 #[cfg(test)]
 mod tests {
@@ -498,7 +630,6 @@ mod tests {
                 .surface;
             assert_eq!(first_surface, ShellSurface::Tab);
 
-            // 改写 extension.json 后 reload:同目录替换而非追加。
             write_manifest(&root, "com.example.tool", "toolbox");
             registry.load(root.clone(), cx);
             assert_eq!(registry.projects().len(), 1);
@@ -511,5 +642,21 @@ mod tests {
                 .surface;
             assert_eq!(after, ShellSurface::Toolbox);
         });
+    }
+
+    #[test]
+    fn fingerprint_changes_when_ui_source_changes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("tool");
+        std::fs::create_dir_all(root.join("ui")).unwrap();
+        write_manifest(&root, "com.example.tool", "tab");
+
+        let before = source_fingerprint(&root).expect("fingerprint");
+        let ui_entry = root.join("ui/tool.js");
+        std::fs::write(&ui_entry, "export default class V {}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&ui_entry, "export default class V { render(){} }").unwrap();
+        let after = source_fingerprint(&root).expect("fingerprint after");
+        assert_ne!(before, after);
     }
 }

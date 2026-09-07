@@ -23,6 +23,8 @@ pub struct DevHostOps {
     pub logs: Rc<dyn Fn(&str, f64) -> Result<HostValue, HostError>>,
     /// 重载工程:关闭已开视图 + 重读 manifest + 重建 catalog。返回 { error? }。
     pub reload: Rc<dyn Fn(&str) -> Result<HostValue, HostError>>,
+    /// 启动对工程目录的文件变更轮询,变化时自动重载。返回 { watching: bool }。
+    pub watch: Rc<dyn Fn(&str) -> Result<HostValue, HostError>>,
 }
 
 impl gpui::Global for GlobalDevHostOps {}
@@ -53,6 +55,7 @@ pub(super) fn dev_module() -> HostModule {
     let open_view = Rc::clone(&ops.open_view);
     let logs = Rc::clone(&ops.logs);
     let reload = Rc::clone(&ops.reload);
+    let watch = Rc::clone(&ops.watch);
     HostModule::new("navop.dev")
         .declarations(
             r#"
@@ -68,6 +71,7 @@ pub(super) fn dev_module() -> HostModule {
             export function list(): DevProjectInfo[];
             export function open(rootDir: string): { id: string; error?: string };
             export function reload(rootDir: string): { error?: string };
+            export function watch(rootDir: string): { watching: boolean; error?: string };
             export function remove(rootDir: string): void;
             export function openView(extensionId: string, viewId: string): void;
             export function logs(rootDir: string, tail?: number): string[];
@@ -81,6 +85,10 @@ pub(super) fn dev_module() -> HostModule {
         .function("reload", move |arguments| {
             let root = arguments.string(0)?;
             reload(&root)
+        })
+        .function("watch", move |arguments| {
+            let root = arguments.string(0)?;
+            watch(&root)
         })
         .function("remove", move |arguments| {
             let root = arguments.string(0)?;
