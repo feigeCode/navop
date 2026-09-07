@@ -2,6 +2,18 @@ mod blob;
 mod components;
 pub(crate) mod connection;
 mod context;
+pub mod dev;
+
+pub use dev::{DevHostOps, GlobalDevHostOps, set_dev_host_ops};
+
+/// main 层 dev 操作实现所需的 gpui-shell 类型 re-export。
+/// feature-gated,与 shell-plugins 一致;非 shell-plugins 构建下不存在。
+#[cfg(feature = "shell-plugins")]
+pub mod gpui_shell_reexport {
+    pub use gpui_shell::{
+        HostError, HostObject, HostValue, with_current_app,
+    };
+}
 mod event;
 mod grant;
 mod job;

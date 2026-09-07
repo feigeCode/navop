@@ -23,6 +23,8 @@ pub enum ShellHostModule {
     Blob,
     Log,
     Runtime,
+    /// 开发者工具专用（navop.dev host 模块）。
+    Dev,
 }
 
 impl ShellHostModule {

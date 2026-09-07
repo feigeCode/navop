@@ -14,6 +14,7 @@ mod connection_sort;
 mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
+mod dev_extension_registry;
 mod env_file;
 mod extension_update;
 mod file_association;
@@ -78,6 +79,9 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
         }
         one_core::storage::NAVOP_MQTT_LINE_ICON => {
             include_bytes!("../../resources/icons/mqtt-line.svg")
+        }
+        one_core::storage::NAVOP_BACKGROUND_TASK_ICON => {
+            include_bytes!("../../resources/icons/background-task.svg")
         }
         crate::home_tab::NAVOP_HISTORY_ICON => {
             include_bytes!("../../resources/icons/history.svg")
@@ -428,6 +432,8 @@ fn main() {
         extension_runtime::init(cx);
         #[cfg(feature = "shell-plugins")]
         universal_plugins::init(cx);
+        #[cfg(feature = "shell-plugins")]
+        dev_extension_registry::install_dev_host_ops(cx);
 
         let settings = AppSettings::current(cx);
         let saved_state = settings.main_window_state.as_ref();

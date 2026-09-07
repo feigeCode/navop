@@ -5,7 +5,7 @@ use gpui::{App, Window};
 use gpui_shell::{LoadedScriptView, ViewLoadOptions, policy::Policy};
 
 use super::{
-    PreparedShellView, ShellPluginHost, blob::blob_module, context::context_module,
+    PreparedShellView, ShellPluginHost, blob::blob_module, context::context_module, dev,
     event::event_module, job::job_module, log::log_module, resource::resource_module,
     runtime::runtime_module, session::ShellMountSession,
 };
@@ -87,6 +87,9 @@ fn load_with_session(
     }
     if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Log) {
         policy = policy.with_host_module(log_module(&prepared.contribution))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Dev) {
+        policy = policy.with_host_module(dev::dev_module())?;
     }
     let options = ViewLoadOptions::new(
         &prepared.contribution.extension_root,

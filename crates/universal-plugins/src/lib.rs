@@ -20,7 +20,10 @@ pub use extension_connection_form::{ExtensionConnectionForm, ExtensionConnection
 #[cfg(feature = "shell-plugins")]
 pub use extension_connection_tab::ExtensionConnectionTab;
 #[cfg(feature = "shell-plugins")]
-pub use shell_plugin_host::{ConnectionShellOpen, ShellPluginHost};
+pub use shell_plugin_host::{
+    ConnectionShellOpen, DevHostOps, GlobalDevHostOps, ShellPluginHost, gpui_shell_reexport,
+    set_dev_host_ops,
+};
 #[cfg(feature = "shell-plugins")]
 pub use universal_plugins::{
     GlobalUniversalPluginService, UniversalPluginService, init, spawn_shutdown,

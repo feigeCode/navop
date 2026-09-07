@@ -163,6 +163,7 @@ fn validate_modules(view: &ShellViewContrib) -> Result<(), ShellViewValidationEr
                 | ShellHostModule::Blob
                 | ShellHostModule::Log
                 | ShellHostModule::Runtime
+                | ShellHostModule::Dev
         ) {
             return Err(error(
                 shell_field(view, "modules"),
