@@ -309,26 +309,10 @@ impl ExtensionManagerView {
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let action_busy = self.busy.is_some();
-        let mut actions = summary
-            .shell_views
-            .iter()
-            .cloned()
-            .map(|shell_view| {
-                let extension_id = summary.name.clone();
-                let view_id = shell_view.id.clone();
-                Button::new(format!(
-                    "extension-manager-open-{}-{}",
-                    extension_id, view_id
-                ))
-                .small()
-                .primary()
-                .label(shell_view.title)
-                .disabled(action_busy)
-                .on_click(move |_, window, cx| {
-                    crate::shell::open_shell_view(&extension_id, &view_id, window, cx);
-                })
-            })
-            .collect::<Vec<_>>();
+        // 打开入口不在扩展管理页:连接类由「新建连接」聚合,非连接工具由
+        // 「工具箱」聚合(见 catalog::toolbox_views)。这里只保留生命周期
+        // 管理操作(重载/卸载)。
+        let mut actions = Vec::new();
         let summary_for_reload = summary.clone();
         let reload = Button::new(format!("extension-manager-reload-{}", summary.name))
             .small()

@@ -782,3 +782,42 @@ fn write_composite_manifest(root: &std::path::Path, id: &str, content: &str) {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("extension.json"), content).unwrap();
 }
+
+#[test]
+fn catalog_toolbox_views_exclude_connection_owned_shell_views() {
+    // 独立工具(tab surface + toolbox surface,未被连接引用)进工具箱;
+    // 连接 shellViewId 引用的视图不进。
+    let mut standalone_tab = shell_view("ui/standalone.js");
+    standalone_tab.id = "standalone-tool".into();
+    standalone_tab.singleton = true;
+    standalone_tab.surface = crate::extension::manifest::ShellSurface::Tab;
+
+    let mut standalone_toolbox = shell_view("ui/toolbox.js");
+    standalone_toolbox.id = "toolbox-tool".into();
+    standalone_toolbox.surface = crate::extension::manifest::ShellSurface::Toolbox;
+
+    let mut owned = shell_view("ui/explorer.js");
+    owned.id = "explorer".into();
+
+    let mut manifest = base_manifest();
+    manifest.contributes.shell_views.push(standalone_tab);
+    manifest.contributes.shell_views.push(standalone_toolbox);
+    manifest.contributes.shell_views.push(owned);
+    manifest.contributes.connections.push(resource_connection());
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let tools = catalog.toolbox_views();
+    let ids: Vec<&str> = tools.iter().map(|view| view.id.as_str()).collect();
+    assert!(
+        ids.contains(&"standalone-tool"),
+        "独立 tab 工具应进工具箱: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"toolbox-tool"),
+        "toolbox surface 工具应进工具箱: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"explorer"),
+        "连接关联的 shell view 不应进工具箱: {ids:?}"
+    );
+}
