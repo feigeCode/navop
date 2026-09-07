@@ -39,23 +39,25 @@ pub fn set_dev_host_ops(ops: Rc<DevHostOps>, cx: &mut gpui::App) {
     cx.set_global(GlobalDevHostOps { ops });
 }
 
-/// 装配 navop.dev 模块;操作集缺失时返回空模块(所有调用 MethodNotFound)。
-pub(super) fn dev_module() -> HostModule {
-    let Some(ops) = gpui_shell::with_current_app(|cx| {
+/// 取当前 host call 栈内的 dev 操作集;装配期(非 host 栈)返回 None,
+/// 因此实际读取放到每个 function 的 closure 内部。
+fn current_ops() -> Option<Rc<DevHostOps>> {
+    gpui_shell::with_current_app(|cx| {
         cx.try_global::<GlobalDevHostOps>()
             .map(|global| Rc::clone(&global.ops))
     })
     .flatten()
-    else {
-        return HostModule::new("navop.dev");
-    };
-    let list = Rc::clone(&ops.list);
-    let open = Rc::clone(&ops.open);
-    let remove = Rc::clone(&ops.remove);
-    let open_view = Rc::clone(&ops.open_view);
-    let logs = Rc::clone(&ops.logs);
-    let reload = Rc::clone(&ops.reload);
-    let watch = Rc::clone(&ops.watch);
+}
+
+fn with_ops(
+    f: impl FnOnce(&DevHostOps) -> Result<HostValue, HostError>,
+) -> Result<HostValue, HostError> {
+    let ops = current_ops().ok_or_else(|| HostError::new("dev host ops not available"))?;
+    f(&ops)
+}
+
+/// 装配 navop.dev 模块。函数体延迟取 ops,装配期无需 host 栈。
+pub(super) fn dev_module() -> HostModule {
     HostModule::new("navop.dev")
         .declarations(
             r#"
@@ -77,27 +79,27 @@ pub(super) fn dev_module() -> HostModule {
             export function logs(rootDir: string, tail?: number): string[];
             "#,
         )
-        .function("list", move |_| list())
+        .function("list", move |_| with_ops(|ops| (ops.list)()))
         .function("open", move |arguments| {
             let root = arguments.string(0)?;
-            open(&root)
+            with_ops(|ops| (ops.open)(&root))
         })
         .function("reload", move |arguments| {
             let root = arguments.string(0)?;
-            reload(&root)
+            with_ops(|ops| (ops.reload)(&root))
         })
         .function("watch", move |arguments| {
             let root = arguments.string(0)?;
-            watch(&root)
+            with_ops(|ops| (ops.watch)(&root))
         })
         .function("remove", move |arguments| {
             let root = arguments.string(0)?;
-            remove(&root)
+            with_ops(|ops| (ops.remove)(&root))
         })
         .function("openView", move |arguments| {
             let extension_id = arguments.string(0)?;
             let view_id = arguments.string(1)?;
-            open_view(&extension_id, &view_id)
+            with_ops(|ops| (ops.open_view)(&extension_id, &view_id))
         })
         .function("logs", move |arguments| {
             let root = arguments.string(0)?;
@@ -106,6 +108,6 @@ pub(super) fn dev_module() -> HostModule {
                 .map(|_| arguments.number(1))
                 .transpose()?
                 .unwrap_or(200.0);
-            logs(&root, tail)
+            with_ops(|ops| (ops.logs)(&root, tail))
         })
 }
