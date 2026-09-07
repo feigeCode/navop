@@ -2579,15 +2579,18 @@ impl DbConnectionForm {
         let db_type = self.config.db_type.clone();
         let is_builtin_oracle = db_type == DatabaseType::Oracle;
         let is_native_oracle = self.effective_database_type(cx) == DatabaseType::Oracle;
-        // 钥匙串下拉与账号密码字段成组渲染(不再单独置顶):锚定在首个
-        // username/password 之前;若引用选中导致凭据被隐藏,则锚定到首位。
-        let main_credential_anchor = visible_fields
+        // 钥匙串下拉与账号密码字段成组渲染:锚定在原始声明序中首个
+        // username/password 之前。引用被选中导致凭据隐藏时,锚点按"仍排在
+        // 该凭据之前的可见字段数"计算,下拉留在原位置,不会跳到表单顶部。
+        let main_credential_anchor = current_tab_fields
             .iter()
-            .position(|(_, field)| matches!(field.name.as_str(), "username" | "password"))
+            .position(|field| matches!(field.name.as_str(), "username" | "password"))
+            .map(|orig| visible_fields.iter().take_while(|(index, _)| *index < orig).count())
             .unwrap_or(0);
-        let proxy_credential_anchor = visible_fields
+        let proxy_credential_anchor = current_tab_fields
             .iter()
-            .position(|(_, field)| matches!(field.name.as_str(), "proxy_username" | "proxy_password"))
+            .position(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"))
+            .map(|orig| visible_fields.iter().take_while(|(index, _)| *index < orig).count())
             .unwrap_or(0);
 
         v_form()
