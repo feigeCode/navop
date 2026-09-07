@@ -340,14 +340,14 @@ impl DeclarativeForm {
         cx.notify();
     }
 
-    pub(super) fn value(&self, id: &str, cx: &App) -> String {
+    pub fn value(&self, id: &str, cx: &App) -> String {
         self.values
             .get(id)
             .map(|value| value.read(cx).clone())
             .unwrap_or_default()
     }
 
-    pub(super) fn set_field_value(
+    pub fn set_field_value(
         &mut self,
         id: &str,
         value: &str,

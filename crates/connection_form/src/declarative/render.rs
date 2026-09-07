@@ -3,6 +3,7 @@ use gpui::{
     App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div,
     px,
 };
+use std::collections::HashSet;
 use gpui_component::{
     IconName,
     button::{Button, ButtonVariants as _},
@@ -181,16 +182,12 @@ impl Focusable for DeclarativeForm {
 
 impl Render for DeclarativeForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.apply_pending_file_path(window, cx);
         let tabs = self.config.tabs.clone();
         let active = self.active_tab.min(tabs.len().saturating_sub(1));
         let fields = tabs
             .get(active)
             .map(|tab| tab.fields.clone())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|field| self.visible(field, cx))
-            .collect::<Vec<_>>();
+            .unwrap_or_default();
         v_flex()
             .size_full()
             .gap_4()
@@ -205,11 +202,50 @@ impl Render for DeclarativeForm {
                         .children(tabs.iter().map(|tab| Tab::new().label(tab.label.clone()))),
                 )
             })
-            .child(
-                v_form()
-                    .columns(1)
-                    .label_width(px(120.))
-                    .children(fields.iter().map(|field| self.render_field(field, cx))),
-            )
+            .child(self.render_fields(&fields, &HashSet::new(), window, cx))
+    }
+}
+
+impl DeclarativeForm {
+    /// 渲染单个 tab 的声明字段(不含 TabBar),供宿主在自绘页内复用统一引擎。
+    ///
+    /// `hidden`:需隐藏的字段 id 集合(如选中钥匙串引用后的 username/password)。
+    pub fn render_tab_fields(
+        &mut self,
+        tab_index: usize,
+        hidden: &HashSet<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let fields = self
+            .config
+            .tabs
+            .get(tab_index)
+            .map(|tab| tab.fields.clone())
+            .unwrap_or_default();
+        self.render_fields(&fields, hidden, window, cx)
+    }
+
+    fn render_fields(
+        &mut self,
+        fields: &[DeclarativeFormField],
+        hidden: &HashSet<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        self.apply_pending_file_path(window, cx);
+        let selected = fields
+            .iter()
+            .filter(|field| !hidden.contains(&field.id) && self.visible(field, cx))
+            .collect::<Vec<_>>();
+        let rendered = selected
+            .into_iter()
+            .map(|field| self.render_field(field, cx))
+            .collect::<Vec<_>>();
+        v_form()
+            .columns(1)
+            .label_width(px(120.))
+            .children(rendered)
+            .into_any_element()
     }
 }
