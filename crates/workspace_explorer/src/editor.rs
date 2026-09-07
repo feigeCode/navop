@@ -8,13 +8,26 @@ use crate::diff::SideBySideDiff;
 use crate::file_system::LoadedFile;
 use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
-use gpui::{App, Context, Entity, EventEmitter, Subscription};
+use gpui::{App, Context, Entity, EventEmitter, KeyBinding, Subscription, actions};
 use gpui_component::input::EditorState;
 use notes::NotesView;
 use one_ui::StatusPresentation;
 use remote_file_editor::EditorMode;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+actions!(workspace_editor, [SaveDocument]);
+
+pub(crate) const WORKSPACE_EDITOR_KEY_CONTEXT: &str = "WorkspaceEditor";
+
+/// 编辑器键盘快捷键。`secondary-s` 在 macOS 上为 Cmd+S,其他平台为 Ctrl+S。
+pub(crate) fn keybindings() -> Vec<KeyBinding> {
+    vec![KeyBinding::new(
+        "secondary-s",
+        SaveDocument,
+        Some(WORKSPACE_EDITOR_KEY_CONTEXT),
+    )]
+}
 
 #[derive(Clone, Debug)]
 pub enum WorkspaceEditorEvent {

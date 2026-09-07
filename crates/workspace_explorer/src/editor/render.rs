@@ -1,7 +1,9 @@
-use super::{DiffEditors, DocumentPolicy, WorkspaceEditor, format_size};
+use super::{
+    DiffEditors, DocumentPolicy, WorkspaceEditor, WORKSPACE_EDITOR_KEY_CONTEXT, format_size,
+};
 use gpui::{
-    AnyElement, Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     Disableable as _, IconName, Selectable as _, Sizable as _, Size,
@@ -360,6 +362,8 @@ impl Render for WorkspaceEditor {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
+            .key_context(WORKSPACE_EDITOR_KEY_CONTEXT)
+            .on_action(cx.listener(Self::save_from_keyboard))
             .bg(self.theme.background)
             .text_color(self.theme.foreground)
             .child(self.render_tabs(cx))
