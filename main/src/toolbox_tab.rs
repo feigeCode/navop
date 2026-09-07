@@ -128,9 +128,8 @@ impl ToolboxTab {
         let accent_soft = cx.theme().accent.opacity(0.12);
         v_flex()
             .id(SharedString::from(format!("tool-{}", tool.id)))
-            .min_w(gpui::rems(12.5))
-            .flex_basis(gpui::rems(14.0))
-            .flex_grow_1()
+            .w(gpui::rems(13.0))
+            .flex_shrink_0()
             .p_4()
             .gap_2p5()
             .rounded(px(12.0))
@@ -189,9 +188,8 @@ impl ToolboxTab {
                 "ext-tool-{}-{}",
                 tool.extension_id, tool.view_id
             )))
-            .min_w(gpui::rems(12.5))
-            .flex_basis(gpui::rems(14.0))
-            .flex_grow_1()
+            .w(gpui::rems(13.0))
+            .flex_shrink_0()
             .p_4()
             .gap_2p5()
             .rounded(px(12.0))
@@ -271,9 +269,8 @@ impl ToolboxTab {
     fn render_ghost_card(&self, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         v_flex()
-            .min_w(gpui::rems(12.5))
-            .flex_basis(gpui::rems(14.0))
-            .flex_grow_1()
+            .w(gpui::rems(13.0))
+            .flex_shrink_0()
             .p_4()
             .gap_2p5()
             .rounded(px(12.0))
@@ -315,7 +312,7 @@ impl ToolboxTab {
 
 impl Render for ToolboxTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut tools = h_flex().flex_wrap().gap_3p5().max_w(gpui::rems(47.5));
+        let mut tools = h_flex().flex_wrap().gap_3p5();
         for tool in registered_tools(cx) {
             tools = tools.child(self.render_tool_card(tool, cx));
         }

@@ -25,6 +25,10 @@ pub struct DevHostOps {
     pub reload: Rc<dyn Fn(&str) -> Result<HostValue, HostError>>,
     /// 启动对工程目录的文件变更轮询,变化时自动重载。返回 { watching: bool }。
     pub watch: Rc<dyn Fn(&str) -> Result<HostValue, HostError>>,
+    /// 弹出原生目录选择;返回 "pending",结果经 pickResult 轮询。
+    pub pick_start: Rc<dyn Fn() -> Result<HostValue, HostError>>,
+    /// 读取 pick_start 的结果(选好返回路径字符串,未完成 null)。
+    pub pick_result: Rc<dyn Fn() -> Result<HostValue, HostError>>,
 }
 
 impl gpui::Global for GlobalDevHostOps {}
@@ -74,6 +78,8 @@ pub(super) fn dev_module() -> HostModule {
             export function open(rootDir: string): { id: string; error?: string };
             export function reload(rootDir: string): { error?: string };
             export function watch(rootDir: string): { watching: boolean; error?: string };
+            export function pickDirectory(): "pending";
+            export function pickResult(): string | null;
             export function remove(rootDir: string): void;
             export function openView(extensionId: string, viewId: string): void;
             export function logs(rootDir: string, tail?: number): string[];
@@ -92,6 +98,10 @@ pub(super) fn dev_module() -> HostModule {
             let root = arguments.string(0)?;
             with_ops(|ops| (ops.watch)(&root))
         })
+        .function("pickDirectory", move |_| {
+            with_ops(|ops| (ops.pick_start)())
+        })
+        .function("pickResult", move |_| with_ops(|ops| (ops.pick_result)()))
         .function("remove", move |arguments| {
             let root = arguments.string(0)?;
             with_ops(|ops| (ops.remove)(&root))

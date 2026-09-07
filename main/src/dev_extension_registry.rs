@@ -438,6 +438,50 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         .ok_or_else(|| host_error("no active app context"))
     }
 
+    fn pick_directory_start() -> Result<HostValue, HostError> {
+        let launched = gpui_shell_scope::with_current_app(|cx| {
+            let prompt = cx.prompt_for_paths(gpui::PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some("选择扩展工程目录（含 extension.json）".into()),
+            });
+            if let Some(pick) = cx.try_global::<DevPickState>() {
+                *pick.0.borrow_mut() = None;
+            }
+            cx.spawn(async move |cx| {
+                let picked = match prompt.await {
+                    Ok(Ok(Some(paths))) => paths.first().map(|path| path.display().to_string()),
+                    _ => None,
+                };
+                if let Some(picked) = picked {
+                    let _ = cx.update(|cx| {
+                        if let Some(pick) = cx.try_global::<DevPickState>() {
+                            *pick.0.borrow_mut() = Some(picked);
+                        }
+                    });
+                }
+            });
+            true
+        });
+        if launched == Some(true) {
+            Ok(HostValue::Str("pending".into()))
+        } else {
+            Err(host_error("no active app context for directory picker"))
+        }
+    }
+
+    fn pick_directory_result() -> Result<HostValue, HostError> {
+        let picked = gpui_shell_scope::with_current_app(|cx| {
+            cx.try_global::<DevPickState>()
+                .and_then(|pick| pick.0.borrow().clone())
+        })
+        .flatten();
+        Ok(picked
+            .map(HostValue::Str)
+            .unwrap_or(HostValue::Null))
+    }
+
     let ops = Rc::new(universal_plugins::DevHostOps {
         list: Rc::new(projects_value),
         open: Rc::new(open_project),
@@ -446,10 +490,13 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
         logs: Rc::new(project_logs),
         reload: Rc::new(reload_project),
         watch: Rc::new(watch_project),
+        pick_start: Rc::new(pick_directory_start),
+        pick_result: Rc::new(pick_directory_result),
     });
     cx.default_global::<DevExtensionRegistry>();
     cx.default_global::<DevLogRing>();
     cx.default_global::<DevWatchSet>();
+    cx.default_global::<DevPickState>();
     universal_plugins::set_dev_host_ops(ops, cx);
 }
 
@@ -511,6 +558,11 @@ pub struct DevWatchSet(
     >,
 );
 impl gpui::Global for DevWatchSet {}
+
+/// 原生目录选择结果槽:pick_start 清空并起 task 等 modal,pick_result 读取。
+#[derive(Default)]
+pub struct DevPickState(std::cell::RefCell<Option<String>>);
+impl gpui::Global for DevPickState {}
 
 #[cfg(test)]
 mod tests {
