@@ -6115,7 +6115,9 @@ impl SftpView {
                             }),
                     )
                     .child(div().flex_1().min_w(px(100.)).child(
-                        Progress::new("file-transfer-process").value(display_progress as f32),
+                        Progress::new("file-transfer-process")
+                            .with_size(Size::Small)
+                            .value(display_progress as f32),
                     ))
                     .child(
                         div()

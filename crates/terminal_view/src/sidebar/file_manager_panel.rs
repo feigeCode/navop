@@ -5228,7 +5228,9 @@ impl FileManagerPanel {
                     .items_center()
                     .child(
                         div().flex_1().child(
-                            Progress::new("fm-transfer-progress").value(progress_pct as f32),
+                            Progress::new("fm-transfer-progress")
+                                .with_size(Size::Small)
+                                .value(progress_pct as f32),
                         ),
                     )
                     .when(pending_count > 0, |el| {
