@@ -3287,6 +3287,30 @@ Settings:
         zh-CN: 全局代理设置已生效
         zh-HK: 全局代理設置已生效
 
+  Database:
+    title:
+      en: Database
+      zh-CN: 数据库
+      zh-HK: 資料庫
+
+  Terminal:
+    title:
+      en: Terminal
+      zh-CN: 终端
+      zh-HK: 終端
+
+  Agent:
+    title:
+      en: Agent
+      zh-CN: Agent
+      zh-HK: Agent
+
+  Mcp:
+    title:
+      en: MCP
+      zh-CN: MCP
+      zh-HK: MCP
+
   Sync:
     title:
       en: Sync

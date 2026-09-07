@@ -1,5 +1,6 @@
 pub mod agent_settings;
 pub mod appearance;
+pub mod database_settings;
 mod appearance_import;
 mod appearance_state;
 pub mod llm_providers_view;

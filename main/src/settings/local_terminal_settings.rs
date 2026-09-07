@@ -7,10 +7,16 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    setting::{SettingField, SettingGroup, SettingItem},
     v_flex,
 };
-use one_core::settings::{AppSettings, LocalTerminalCustomProfile};
+use one_core::settings::{
+    AppSettings, LocalTerminalCustomProfile, LocalTerminalProfileKind,
+    LocalTerminalProfileSettings,
+};
 use rust_i18n::t;
+
+use crate::local_terminal_profiles::{effective_kind, setting_options};
 
 struct TerminalProfileRow {
     id: String,
@@ -21,6 +27,45 @@ struct TerminalProfileRow {
 
 struct TerminalProfilesEditor {
     rows: Vec<TerminalProfileRow>,
+}
+
+/// 本地终端设置分组：默认 profile 与自定义 profile 编辑。
+pub fn local_terminal_setting_group(defaults: &LocalTerminalProfileSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.LocalTerminal.group_title"))
+        .items(vec![
+            local_terminal_profile_item(defaults.kind),
+            SettingItem::render(move |_options, window, cx| render(window, cx)).keywords([
+                t!("Settings.General.LocalTerminal.custom_profiles").to_string(),
+                t!("Settings.General.LocalTerminal.custom_command").to_string(),
+            ]),
+        ])
+}
+
+fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.LocalTerminal.profile"),
+        SettingField::dropdown(
+            setting_options(cfg!(target_os = "windows")),
+            |cx: &App| {
+                SharedString::from(
+                    effective_kind(
+                        AppSettings::global(cx).local_terminal_profile.kind,
+                        cfg!(target_os = "windows"),
+                    )
+                    .as_str(),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.local_terminal_profile.kind =
+                        LocalTerminalProfileKind::parse(value.as_ref());
+                });
+            },
+        )
+        .default_value(SharedString::from(default.as_str())),
+    )
+    .description(t!("Settings.General.LocalTerminal.profile_desc").to_string())
 }
 
 pub(crate) fn render(window: &mut Window, cx: &mut App) -> gpui::AnyElement {

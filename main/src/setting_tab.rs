@@ -5,14 +5,11 @@ use std::sync::Arc;
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
-use crate::local_terminal_profiles::{
-    effective_kind as effective_local_terminal_profile_kind,
-    setting_options as local_terminal_profile_options,
-};
-use crate::onetcli_app::GlobalHomePage;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
+use crate::settings::database_settings::database_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
+use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
 use crate::settings::notes_shortcuts::{
@@ -63,17 +60,15 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::GlobalStorageState;
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
-const SYNC_SETTINGS_PAGE_INDEX: usize = 1;
-const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
+const SYNC_SETTINGS_PAGE_INDEX: usize = 5;
+const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, ConnectionSortOrder, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
-    GlobalProxySettings, HomeConnectionLayout, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN,
-    LOCALE_ZH_HK, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-    LocalTerminalProfileSettings, PersonalSyncBackendKind, PersonalSyncSettings, ProxyType,
-    StartupDefaultPage, SyncProvider, effective_locale_for_setting, is_installed_font_family,
-    is_supported_grid_monospace_font,
+    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
+    LOCALE_SYSTEM, LOCALE_ZH_CN,
+    LOCALE_ZH_HK, PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -523,41 +518,6 @@ impl SettingsPanel {
                         .title(t!("Settings.General.Startup.group_title"))
                         .items(vec![
                             SettingItem::new(
-                                t!("Settings.General.Startup.default_page"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            StartupDefaultPage::Home.as_str().into(),
-                                            t!("Settings.General.Startup.default_page_home").into(),
-                                        ),
-                                        (
-                                            StartupDefaultPage::AiWorkbench.as_str().into(),
-                                            t!(
-                                                "Settings.General.Startup.default_page_ai_workbench"
-                                            )
-                                            .into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).startup_default_page.as_str(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let page = StartupDefaultPage::from_str(val.as_ref());
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.startup_default_page = page;
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.startup_default_page.as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Startup.default_page_desc").to_string(),
-                            ),
-                            SettingItem::new(
                                 master_key_setting_title,
                                 SettingField::switch(
                                     move |cx: &App| {
@@ -573,99 +533,6 @@ impl SettingsPanel {
                                 .default_value(default_master_key_setting),
                             )
                             .description(master_key_setting_description),
-                        ]),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.ConnectionDisplay.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.ConnectionDisplay.home_layout"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            HomeConnectionLayout::Card.as_str().into(),
-                                            t!("Home.card_view").into(),
-                                        ),
-                                        (
-                                            HomeConnectionLayout::List.as_str().into(),
-                                            t!("Home.list_view").into(),
-                                        ),
-                                        (
-                                            HomeConnectionLayout::Tree.as_str().into(),
-                                            t!("Home.tree_view").into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx)
-                                                .home_connection_layout
-                                                .as_str(),
-                                        )
-                                    },
-                                    |value: SharedString, cx: &mut App| {
-                                        let layout = HomeConnectionLayout::from_value(&value);
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.home_connection_layout = layout;
-                                        });
-                                        let home = cx
-                                            .try_global::<GlobalHomePage>()
-                                            .map(|global| global.home_page.clone());
-                                        if let Some(home) = home {
-                                            home.update(cx, |home, cx| {
-                                                home.set_connection_layout(layout, cx)
-                                            });
-                                        }
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.home_connection_layout.as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.ConnectionDisplay.home_layout_desc")
-                                    .to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.ConnectionDisplay.connection_sort"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            ConnectionSortOrder::Natural.as_str().into(),
-                                            t!("Settings.General.ConnectionDisplay.connection_sort_natural")
-                                                .into(),
-                                        ),
-                                        (
-                                            ConnectionSortOrder::Lru.as_str().into(),
-                                            t!("Settings.General.ConnectionDisplay.connection_sort_lru")
-                                                .into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).connection_sort_order.as_str(),
-                                        )
-                                    },
-                                    |value: SharedString, cx: &mut App| {
-                                        let order = ConnectionSortOrder::from_value(&value);
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.connection_sort_order = order;
-                                        });
-                                        // 立即刷新主页与连接侧栏，使新的排序方式即时生效
-                                        let home = cx
-                                            .try_global::<GlobalHomePage>()
-                                            .map(|global| global.home_page.clone());
-                                        if let Some(home) = home {
-                                            home.update(cx, |_, cx| cx.notify());
-                                        }
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.connection_sort_order.as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.ConnectionDisplay.connection_sort_desc")
-                                    .to_string(),
-                            ),
                         ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.FileTransfer.group_title"))
@@ -908,183 +775,6 @@ impl SettingsPanel {
                             )
                             .description(t!("Settings.General.Font.font_size_desc").to_string()),
                         ),
-                    local_terminal_setting_group(&default_settings.local_terminal_profile),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Database.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Database.open_mode"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            "single".into(),
-                                            t!("Settings.General.Database.open_mode_single").into(),
-                                        ),
-                                        (
-                                            "workspace".into(),
-                                            t!("Settings.General.Database.open_mode_workspace")
-                                                .into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx).database_open_mode.as_str(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.database_open_mode =
-                                                DatabaseOpenMode::from_str(&val);
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings.database_open_mode.as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Database.open_mode_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Database.large_text_editor_open_mode"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            "sidebar_preview".into(),
-                                            t!(
-                                                "Settings.General.Database.large_text_editor_open_mode_sidebar"
-                                            )
-                                            .into(),
-                                        ),
-                                        (
-                                            "dialog".into(),
-                                            t!(
-                                                "Settings.General.Database.large_text_editor_open_mode_dialog"
-                                            )
-                                            .into(),
-                                        ),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(
-                                            AppSettings::global(cx)
-                                                .large_text_cell_editor_open_mode
-                                                .as_str(),
-                                        )
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let mode =
-                                            LargeTextCellEditorOpenMode::from_str(val.as_ref());
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.large_text_cell_editor_open_mode = mode;
-                                        });
-                                    },
-                                )
-                                .default_value(SharedString::from(
-                                    default_settings
-                                        .large_text_cell_editor_open_mode
-                                        .as_str(),
-                                )),
-                            )
-                            .description(
-                                t!("Settings.General.Database.large_text_editor_open_mode_desc")
-                                    .to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Database.auto_save"),
-                                SettingField::switch(
-                                    |cx: &App| AppSettings::global(cx).enable_sql_auto_save,
-                                    |val: bool, cx: &mut App| {
-                                        let interval =
-                                            AppSettings::global(cx).sql_auto_save_interval;
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.enable_sql_auto_save = val;
-                                        });
-                                        AppSettings::update_auto_save_config(
-                                            val,
-                                            interval,
-                                            cx,
-                                        );
-                                    },
-                                )
-                                .default_value(default_settings.enable_sql_auto_save),
-                            )
-                            .description(
-                                t!("Settings.General.Database.auto_save_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Database.auto_save_interval"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 1.0,
-                                        max: 60.0,
-                                        step: 1.0,
-                                    },
-                                    |cx: &App| AppSettings::global(cx).sql_auto_save_interval,
-                                    |val: f64, cx: &mut App| {
-                                        let enabled = AppSettings::global(cx).enable_sql_auto_save;
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.sql_auto_save_interval = val;
-                                        });
-                                        AppSettings::update_auto_save_config(
-                                            enabled,
-                                            val,
-                                            cx,
-                                        );
-                                    },
-                                )
-                                .default_value(default_settings.sql_auto_save_interval),
-                            )
-                            .description(
-                                t!("Settings.General.Database.auto_save_interval_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Database.sql_query_max_rows"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 0.0,
-                                        max: 1_000_000.0,
-                                        step: 100.0,
-                                    },
-                                    |cx: &App| AppSettings::global(cx).sql_query_max_rows as f64,
-                                    |val: f64, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.sql_query_max_rows = val as u32;
-                                        });
-                                    },
-                                )
-                                .default_value(default_settings.sql_query_max_rows as f64),
-                            )
-                            .description(
-                                t!("Settings.General.Database.sql_query_max_rows_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Database.table_row_height"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 24.0,
-                                        max: 100.0,
-                                        step: 2.0,
-                                    },
-                                    |cx: &App| AppSettings::global(cx).table_row_height as f64,
-                                    |val: f64, cx: &mut App| {
-                                        let height = val as u32;
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.table_row_height = height;
-                                        });
-                                        one_ui::set_table_row_height(height, cx);
-                                    },
-                                )
-                                .default_value(default_settings.table_row_height as f64),
-                            )
-                            .description(
-                                t!("Settings.General.Database.table_row_height_desc").to_string(),
-                            ),
-                        ]),
-                    sql_format_setting_group(),
-                    mcp_tool_exposure_setting_group(&default_settings.tool_exposure),
-                    agent_setting_group(&default_settings.ai_chat),
-                    agent_tool_exposure_setting_group(&default_settings.tool_exposure),
-                    mcp_setting_group(&default_settings.mcp),
                     SettingGroup::new()
                         .title(t!("Settings.General.Log.group_title"))
                         .item(
@@ -1121,6 +811,31 @@ impl SettingsPanel {
                                 t!("Settings.General.Proxy.open").to_string(),
                             ]),
                         ),
+                ]),
+            // 数据库设置页
+            SettingPage::new(t!("Settings.Database.title"))
+                .resettable(true)
+                .groups(vec![
+                    database_setting_group(),
+                    sql_format_setting_group(),
+                ]),
+            // 终端设置页
+            SettingPage::new(t!("Settings.Terminal.title"))
+                .resettable(true)
+                .group(local_terminal_setting_group(&default_settings.local_terminal_profile)),
+            // Agent 设置页
+            SettingPage::new(t!("Settings.Agent.title"))
+                .resettable(true)
+                .groups(vec![
+                    agent_setting_group(&default_settings.ai_chat),
+                    agent_tool_exposure_setting_group(&default_settings.tool_exposure),
+                ]),
+            // MCP 设置页
+            SettingPage::new(t!("Settings.Mcp.title"))
+                .resettable(true)
+                .groups(vec![
+                    mcp_tool_exposure_setting_group(&default_settings.tool_exposure),
+                    mcp_setting_group(&default_settings.mcp),
                 ]),
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
@@ -1161,16 +876,22 @@ impl SettingsPanel {
             )),
             // 关于页面
             SettingPage::new(t!("Settings.About.title"))
-                .group(SettingGroup::new().item(
-                    SettingItem::render(move |_options, _window, cx| render_about_section(cx))
-                        .search_texts([
-                            t!("Settings.About.title").to_string(),
-                            t!("Settings.About.version").to_string(),
-                            t!("Settings.About.opensource_label").to_string(),
-                            t!("Settings.About.disclaimer_title").to_string(),
-                            t!("Settings.About.data_safety_title").to_string(),
-                        ]),
-                ))
+                .group(
+                    SettingGroup::new()
+                        .title(t!("Settings.About.title"))
+                        .item(
+                            SettingItem::render(move |_options, _window, cx| {
+                                render_about_section(cx)
+                            })
+                            .search_texts([
+                                t!("Settings.About.title").to_string(),
+                                t!("Settings.About.version").to_string(),
+                                t!("Settings.About.opensource_label").to_string(),
+                                t!("Settings.About.disclaimer_title").to_string(),
+                                t!("Settings.About.data_safety_title").to_string(),
+                            ]),
+                        ),
+                )
                 .group(about_update_setting_group(default_settings.auto_update)),
         ];
         if !is_feature_enabled(Feature::TeamManagement, cx) {
@@ -1178,47 +899,6 @@ impl SettingsPanel {
         }
         pages
     }
-}
-
-fn local_terminal_setting_group(defaults: &LocalTerminalProfileSettings) -> SettingGroup {
-    SettingGroup::new()
-        .title(t!("Settings.General.LocalTerminal.group_title"))
-        .items(vec![
-            local_terminal_profile_item(defaults.kind),
-            SettingItem::render(move |_options, window, cx| {
-                crate::settings::local_terminal_settings::render(window, cx)
-            })
-            .keywords([
-                t!("Settings.General.LocalTerminal.custom_profiles").to_string(),
-                t!("Settings.General.LocalTerminal.custom_command").to_string(),
-            ]),
-        ])
-}
-
-fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem {
-    SettingItem::new(
-        t!("Settings.General.LocalTerminal.profile"),
-        SettingField::dropdown(
-            local_terminal_profile_options(cfg!(target_os = "windows")),
-            |cx: &App| {
-                SharedString::from(
-                    effective_local_terminal_profile_kind(
-                        AppSettings::global(cx).local_terminal_profile.kind,
-                        cfg!(target_os = "windows"),
-                    )
-                    .as_str(),
-                )
-            },
-            |value: SharedString, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| {
-                    settings.local_terminal_profile.kind =
-                        LocalTerminalProfileKind::parse(value.as_ref());
-                });
-            },
-        )
-        .default_value(SharedString::from(default.as_str())),
-    )
-    .description(t!("Settings.General.LocalTerminal.profile_desc").to_string())
 }
 
 fn sync_setting_group(
@@ -3736,14 +3416,16 @@ mod tests {
     use rust_i18n::t;
 
     use super::{
-        AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, LocalTerminalProfileKind,
-        ProxyType, WINDOW_SHORTCUTS, build_app_http_client, builtin_monospace_font_options,
-        emit_team_key_change_event, is_supported_font_file, local_terminal_profile_options,
-        master_key_setting_enabled, merge_font_options_with_custom_fonts, parse_font_families,
-        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
-        team_key_refresh_success_message, team_key_rotation_inputs_valid,
+        AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType, WINDOW_SHORTCUTS,
+        build_app_http_client, builtin_monospace_font_options, emit_team_key_change_event,
+        is_supported_font_file, master_key_setting_enabled, merge_font_options_with_custom_fonts,
+        parse_font_families, personal_sync_backend_options, personal_sync_status_label,
+        personal_sync_status_view_model, team_key_refresh_success_message,
+        team_key_rotation_inputs_valid,
     };
+    use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
+    use one_core::settings::LocalTerminalProfileKind;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
