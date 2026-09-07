@@ -14,6 +14,7 @@ mod connection_sort;
 mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
+#[cfg(feature = "shell-plugins")]
 mod dev_extension_registry;
 mod env_file;
 mod extension_update;
