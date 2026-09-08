@@ -1,11 +1,11 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use anyhow::{Context, Result};
-use tree_sitter::{Language, WasmStore, wasmtime};
+use tree_sitter::{Language, Parser, WasmStore, wasmtime};
 
 use super::LanguageManifest;
 
@@ -36,6 +36,23 @@ pub(super) fn load_wasm_language(name: &str, bytes: &[u8]) -> Result<Language> {
         .load_language(name, bytes)
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("load wasm language {name}"))
+}
+
+pub(super) fn parser_factory(
+    name: &str,
+    bytes: &[u8],
+) -> gpui_component::highlighter::LanguageParserFactory {
+    let name = name.to_string();
+    let bytes = bytes.to_vec();
+    Arc::new(move || {
+        let mut store = WasmStore::new(&ENGINE).map_err(anyhow::Error::msg)?;
+        let language = store
+            .load_language(&name, &bytes)
+            .map_err(anyhow::Error::msg)?;
+        let mut parser = Parser::new();
+        parser.set_wasm_store(store)?;
+        Ok((parser, language))
+    })
 }
 
 pub(crate) fn register_manifest(manifest: LanguageManifest, source_path: PathBuf, loaded: bool) {
