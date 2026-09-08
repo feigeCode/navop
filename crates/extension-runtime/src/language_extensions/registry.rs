@@ -22,6 +22,7 @@ struct RuntimeState {
 }
 
 static STATE: LazyLock<Mutex<RuntimeState>> = LazyLock::new(Mutex::default);
+static LOAD_LOCK: LazyLock<Mutex<()>> = LazyLock::new(Mutex::default);
 static ENGINE: LazyLock<wasmtime::Engine> = LazyLock::new(wasmtime::Engine::default);
 static WASM_STORE: LazyLock<Mutex<WasmStore>> = LazyLock::new(|| {
     let store = WasmStore::new(&ENGINE).expect("init language extension wasm store");
@@ -77,6 +78,7 @@ pub(crate) fn forget(name: &str) {
 }
 
 pub(super) fn load_registered(identifier: &str) -> Result<bool> {
+    let _load_guard = LOAD_LOCK.lock().unwrap();
     let registered = {
         let state = STATE.lock().unwrap();
         state
@@ -97,6 +99,13 @@ pub(super) fn load_registered(identifier: &str) -> Result<bool> {
     let Some(registered) = registered else {
         return Ok(false);
     };
+    if registered.loaded
+        && gpui_component::highlighter::LanguageRegistry::singleton()
+            .language(&registered.manifest.name)
+            .is_some()
+    {
+        return Ok(true);
+    }
     super::InstalledExtension::load_from_dir(&registered.source_path)?
         .register(gpui_component::highlighter::LanguageRegistry::singleton())?;
     Ok(true)

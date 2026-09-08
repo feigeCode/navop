@@ -1,7 +1,7 @@
 use crate::file_policy::{
     EditorMode, FilePolicy, decode_text_content, determine_file_policy_with_limit,
 };
-use crate::language::language_for_path;
+use crate::language::load_language_for_path;
 use crate::{
     CloseIntercept, RemoteMutationCallback, active_index_after_close, active_index_after_open,
     decide_close_intercept,
@@ -433,7 +433,7 @@ impl RemoteFileEditorWindow {
             let file_size = bytes.len();
             let policy = determine_file_policy_with_limit(file_size, max_bytes)?;
             let text = decode_text_content(&bytes)?;
-            let language = language_for_path(&task_remote_path, policy.is_large_file);
+            let language = load_language_for_path(&task_remote_path, policy.is_large_file)?;
             Ok::<_, anyhow::Error>(LoadedFile {
                 text,
                 policy,

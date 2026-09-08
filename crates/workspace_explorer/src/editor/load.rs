@@ -163,10 +163,10 @@ impl WorkspaceEditor {
                 let repository = repository.clone();
                 let change = change.clone();
                 cx.background_spawn(async move {
-                    let language = remote_file_editor::language_for_path(
+                    let language = remote_file_editor::load_language_for_path(
                         &change.path.to_string_lossy(),
                         false,
-                    );
+                    )?;
                     load_diff(&repository, &change)
                         .map(|diff| LoadedDocument::from_diff(diff, language))
                 })
