@@ -299,9 +299,7 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InitialContentLayout {
     home_tab_id: &'static str,
-    workbench_tab_id: &'static str,
     pin_home: bool,
-    pin_workbench: bool,
     active_pinned_index: Option<usize>,
 }
 
@@ -346,15 +344,11 @@ impl QuitRequestState {
     }
 }
 
-fn initial_content_layout(startup_default_page: StartupDefaultPage) -> InitialContentLayout {
-    let pin_home = true;
-    let pin_workbench = startup_default_page == StartupDefaultPage::AiWorkbench;
+fn initial_content_layout() -> InitialContentLayout {
     InitialContentLayout {
         home_tab_id: "home",
-        workbench_tab_id: "ai-workbench",
-        pin_home,
-        pin_workbench,
-        active_pinned_index: Some(if pin_workbench { 1 } else { 0 }),
+        pin_home: true,
+        active_pinned_index: Some(0),
     }
 }
 
@@ -366,7 +360,7 @@ use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::llm::notifier::emit_provider_config_changed;
 use one_core::llm::storage::{ProviderRepository, refresh_onetcli_models};
-use one_core::settings::{AppSettings, GlobalCurrentUser, MainWindowState, StartupDefaultPage};
+use one_core::settings::{AppSettings, GlobalCurrentUser, MainWindowState};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{
     GlobalTabContainer, TabContainer, TabContainerEvent, TabContentRegistry, TabItem,
@@ -382,7 +376,7 @@ use std::path::{Path, PathBuf};
 
 use crate::setting_tab;
 use db::GlobalDbState;
-use one_core::storage::{ConnectionRepository, GlobalStorageState, traits::Repository};
+use one_core::storage::{ConnectionRepository, GlobalStorageState};
 
 fn activate_tab_by_number(number: usize, cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
@@ -1367,7 +1361,7 @@ impl OnetCliApp {
         .detach();
 
         let settings = AppSettings::current(cx);
-        let layout = initial_content_layout(settings.startup_default_page);
+        let layout = initial_content_layout();
         // 侧边栏展开状态完全跟随用户上次保存的选择，进入主页不强制展开。
         let connection_sidebar_expanded = settings.connection_sidebar_expanded;
         let tab_container = cx.new(|cx| {
@@ -1452,23 +1446,6 @@ impl OnetCliApp {
             if layout.pin_home {
                 let home_tab = TabItem::new(layout.home_tab_id, "app", home_page.clone());
                 tc.insert_pinned_tab_at(0, home_tab, cx);
-            }
-            if layout.pin_workbench {
-                let connections = cx
-                    .global::<GlobalStorageState>()
-                    .storage
-                    .get::<ConnectionRepository>()
-                    .and_then(|repo| repo.list().ok())
-                    .unwrap_or_default();
-                let (scope, catalog, mentions) =
-                    ai_chat_view::build_workbench_resource_state(&connections);
-                let workbench = cx.new(|cx| {
-                    ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
-                        scope, catalog, mentions, window, cx,
-                    )
-                });
-                let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
-                tc.add_pinned_tab(workbench_tab, cx);
             }
         });
 
@@ -1669,30 +1646,28 @@ mod tests {
         initial_content_layout, log_file_appender,
     };
     use one_core::gpui_tokio::Tokio;
-    use one_core::settings::StartupDefaultPage;
     use ssh::SshSessionServiceState;
     use std::io::Write;
 
     #[test]
-    fn initial_layout_keeps_home_pinned_before_the_ai_workbench() {
-        let layout = initial_content_layout(StartupDefaultPage::AiWorkbench);
-
+    fn initial_layout_always_opens_home_without_the_ai_workbench() {
+        let layout = initial_content_layout();
         assert!(layout.pin_home);
         assert_eq!("home", layout.home_tab_id);
-        assert_eq!("ai-workbench", layout.workbench_tab_id);
-        assert!(layout.pin_workbench);
-        assert_eq!(Some(1), layout.active_pinned_index);
-    }
+        assert_eq!(Some(0), layout.active_pinned_index);
 
-    #[test]
-    fn initial_layout_always_pins_home_and_respects_startup_selection() {
-        let home = initial_content_layout(StartupDefaultPage::Home);
-        let ai = initial_content_layout(StartupDefaultPage::AiWorkbench);
-        assert!(home.pin_home && ai.pin_home);
-        assert!(!home.pin_workbench);
-        assert!(ai.pin_workbench);
-        assert_eq!(home.active_pinned_index, Some(0));
-        assert_eq!(ai.active_pinned_index, Some(1));
+        let source = include_str!("onetcli_app.rs");
+        let constructor = source
+            .split("pub fn new(window:")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("fn persist_connection_sidebar_expanded")
+                    .next()
+            })
+            .expect("application constructor");
+        assert!(!constructor.contains("settings.startup_default_page"));
+        assert!(!constructor.contains("DefaultAgentChatPanel::new_workbench"));
     }
 
     #[test]
