@@ -108,7 +108,10 @@ pub use message::{
 };
 pub use message_view::{
     render_assistant_text, render_messages, render_messages_with_code_actions,
-    render_status_message, render_system_message, render_thinking, render_user_message,
+    render_messages_with_code_actions_and_activity, render_running_activity,
+    render_sidebar_messages_with_code_actions,
+    render_sidebar_messages_with_code_actions_and_activity, render_status_message,
+    render_system_message, render_thinking, render_user_message,
 };
 pub use model_settings::{
     ModelSettings, ModelSettingsEvent, ModelSettingsLabels, ModelSettingsPanel,
