@@ -1080,6 +1080,7 @@ pub struct TabContainer {
     left_padding: Option<gpui::Pixels>,
     top_padding: Option<gpui::Pixels>,
     navigation_sidebar_expanded: Option<bool>,
+    reserve_navigation_sidebar_toggle: bool,
     home_active: Option<bool>,
     on_home: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     on_add_tab: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
@@ -1148,6 +1149,7 @@ impl TabContainer {
             left_padding: None,
             top_padding: None,
             navigation_sidebar_expanded: None,
+            reserve_navigation_sidebar_toggle: false,
             home_active: None,
             on_home: None,
             on_add_tab: None,
@@ -1237,6 +1239,7 @@ impl TabContainer {
 
     pub fn with_navigation_sidebar_toggle(mut self, expanded: bool) -> Self {
         self.navigation_sidebar_expanded = Some(expanded);
+        self.reserve_navigation_sidebar_toggle = true;
         self
     }
 
@@ -4022,10 +4025,13 @@ impl TabContainer {
             .border_b_1()
             .border_color(border_color)
             .child(left_window_drag_region)
-            .when_some(navigation_sidebar_expanded, |this, expanded| {
+            .when(self.reserve_navigation_sidebar_toggle || navigation_sidebar_expanded.is_some(), |this| {
+                let expanded = navigation_sidebar_expanded.unwrap_or_default();
                 this.child(
                     div()
                         .id("navigation-sidebar-toggle-boundary")
+                        // Keep the button's measured width when Home hides the control.
+                        .when(navigation_sidebar_expanded.is_none(), |this| this.invisible())
                         .flex_shrink_0()
                         .h_full()
                         .flex()
