@@ -38,6 +38,7 @@ members = [
     "crates/remote_desktop_view",
     "crates/windows_rdp_host",
     "crates/notes",
+    "crates/known_hosts_view",
     "crates/json_view",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
@@ -144,6 +145,7 @@ remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }
 json_view = { path = "crates/json_view" }
+known_hosts_view = { path = "crates/known_hosts_view" }
 markdown-source = { path = "crates/markdown-source" }
 markdown-editor = { path = "crates/markdown-editor" }
 er_flow = { path = "crates/er_flow" }

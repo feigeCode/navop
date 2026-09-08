@@ -10,6 +10,7 @@ pub(crate) enum NavigationApplication {
     Toolbox,
     SessionLogs,
     CredentialVault,
+    KnownHosts,
     Extensions,
 }
 
@@ -19,7 +20,14 @@ pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
     if show_team {
         applications.push(Team);
     }
-    applications.extend([Notes, Extensions, Toolbox, CredentialVault, SessionLogs]);
+    applications.extend([
+        Notes,
+        Extensions,
+        Toolbox,
+        CredentialVault,
+        KnownHosts,
+        SessionLogs,
+    ]);
     applications
 }
 
@@ -35,6 +43,7 @@ impl NavigationApplication {
             Self::JsonFormatter => t!("Home.json_formatter").to_string(),
             Self::SessionLogs => t!("Home.session_logs").to_string(),
             Self::CredentialVault => t!("Home.credential_vault").to_string(),
+            Self::KnownHosts => t!("Home.known_hosts").to_string(),
             Self::Extensions => t!("Home.extensions").to_string(),
         }
     }
@@ -49,6 +58,8 @@ impl NavigationApplication {
             // 会话日志用线性图标；IconName::Terminal 的默认资源是固定填充彩色 SVG。
             Self::SessionLogs => gpui_component::IconName::SquareTerminal,
             Self::CredentialVault => gpui_component::IconName::Key,
+            // 已知主机使用线性图标，与侧栏其余 *_Line 图标风格一致。
+            Self::KnownHosts => gpui_component::IconName::ServerLine,
             Self::Extensions => gpui_component::IconName::ExtensionsLine,
         }
     }
@@ -69,6 +80,7 @@ mod tests {
                 Extensions,
                 Toolbox,
                 CredentialVault,
+                KnownHosts,
                 SessionLogs
             ]
         );
@@ -80,6 +92,7 @@ mod tests {
                 Extensions,
                 Toolbox,
                 CredentialVault,
+                KnownHosts,
                 SessionLogs
             ]
         );

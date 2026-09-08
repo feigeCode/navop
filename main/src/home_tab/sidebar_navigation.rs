@@ -170,6 +170,7 @@ impl HomePage {
                     NavigationApplication::Toolbox => "home-app-toolbox",
                     NavigationApplication::SessionLogs => "home-app-session-logs",
                     NavigationApplication::CredentialVault => "home-app-vault",
+                    NavigationApplication::KnownHosts => "home-app-known-hosts",
                     NavigationApplication::Extensions => "home-app-extensions",
                 },
                 Icon::new(application.icon()).mono(),

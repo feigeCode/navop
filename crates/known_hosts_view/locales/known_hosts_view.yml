@@ -1,0 +1,59 @@
+_version: 2
+
+KnownHosts:
+  title:
+    en: Known Hosts
+    zh-CN: 已知主机
+    zh-HK: 已知主機
+  count:
+    en: "%{count} hosts"
+    zh-CN: "共 %{count} 台主机"
+    zh-HK: "共 %{count} 部主機"
+  scan:
+    en: Scan System
+    zh-CN: 扫描系统
+    zh-HK: 掃描系統
+  scanning:
+    en: Scanning...
+    zh-CN: 正在扫描...
+    zh-HK: 正在掃描...
+  scan_unavailable:
+    en: The system OpenSSH known_hosts file is unavailable on this platform.
+    zh-CN: 当前平台无法访问系统 OpenSSH known_hosts 文件。
+    zh-HK: 目前平台無法存取系統 OpenSSH known_hosts 檔。
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  loading:
+    en: Loading...
+    zh-CN: 正在加载...
+    zh-HK: 正在載入...
+  load_error:
+    en: Failed to load known hosts.
+    zh-CN: 加载已知主机失败。
+    zh-HK: 載入已知主機失敗。
+  empty:
+    en: No known hosts yet
+    zh-CN: 还没有已知主机
+    zh-HK: 還沒有已知主機
+  empty_help:
+    en: Known hosts are SSH servers you have connected to. Scan the system known_hosts file to import them.
+    zh-CN: 已知主机是你连接过的 SSH 服务器。可扫描系统 known_hosts 文件将其导入。
+    zh-HK: 已知主機是你連線過的 SSH 伺服器。可掃描系統 known_hosts 檔將其匯入。
+  toolbar_help:
+    en: Scan the system known_hosts or refresh the app trust list.
+    zh-CN: 扫描系统 known_hosts，或刷新应用可信列表。
+    zh-HK: 掃描系統 known_hosts，或重新整理應用可信列表。
+  source_help:
+    en: SSH servers trusted in this app, most recently used first.
+    zh-CN: 本应用信任的 SSH 服务器，按最近使用排序。
+    zh-HK: 本應用信任的 SSH 伺服器，按最近使用排序。
+  copy:
+    en: Copy host identity
+    zh-CN: 复制主机标识
+    zh-HK: 複製主機識別
+  remove:
+    en: Remove trusted host
+    zh-CN: 删除可信主机
+    zh-HK: 刪除可信主機

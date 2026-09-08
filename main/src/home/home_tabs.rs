@@ -2,6 +2,8 @@ use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
 use crate::session_logs::SessionLogsPage;
+
+use known_hosts_view::KnownHostsPage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Window};
@@ -1369,6 +1371,23 @@ impl HomePage {
                     |window, cx| {
                         let vault = cx.new(|cx| CredentialVaultView::new(window, cx));
                         TabItem::new("credential-vault", "home", vault)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    pub(crate) fn add_known_hosts_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "known-hosts",
+                    |window, cx| {
+                        let page = cx.new(|cx| KnownHostsPage::new(window, cx));
+                        TabItem::new("known-hosts", "home", page)
                     },
                     window,
                     cx,

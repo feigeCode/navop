@@ -295,6 +295,10 @@ Home:
     en: Keychain
     zh-CN: 钥匙串
     zh-HK: 鑰匙串
+  known_hosts:
+    en: Known Hosts
+    zh-CN: 已知主机
+    zh-HK: 已知主機
   StartCenter:
     get_started:
       en: START CENTER

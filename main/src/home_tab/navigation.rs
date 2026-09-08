@@ -18,6 +18,7 @@ impl HomePage {
             NavigationApplication::CredentialVault => {
                 self.add_credential_vault_tab(window, cx);
             }
+            NavigationApplication::KnownHosts => self.add_known_hosts_tab(window, cx),
             NavigationApplication::Extensions => self.add_extensions_tab(window, cx),
         }
     }

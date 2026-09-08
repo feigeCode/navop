@@ -6929,6 +6929,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "known_hosts_view"
+version = "0.16.1"
+dependencies = [
+ "gpui-ce",
+ "gpui_ce_components",
+ "one-core",
+ "rust-i18n",
+ "ssh",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7790,6 +7801,7 @@ dependencies = [
  "gpui_ce_platform",
  "interprocess",
  "json_view",
+ "known_hosts_view",
  "mongodb-runtime",
  "mongodb_view",
  "mqtt-runtime",
@@ -13443,6 +13455,7 @@ version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "dirs 6.0.0",
  "hmac 0.12.1",
  "rand 0.10.2",
