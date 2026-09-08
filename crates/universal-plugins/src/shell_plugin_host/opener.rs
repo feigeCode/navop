@@ -14,9 +14,6 @@ impl extension_view::ShellViewOpener for ShellPluginHost {
         let Some(contribution) = self.contribution(extension_id, view_id) else {
             return;
         };
-        if contribution.singleton && self.has_open_view(extension_id, &contribution.view_key) {
-            return;
-        }
         let tab_id = if contribution.singleton {
             format!("shell:{}", contribution.view_key)
         } else {
@@ -28,7 +25,6 @@ impl extension_view::ShellViewOpener for ShellPluginHost {
         };
         let host = self.clone();
         let extension_key = extension_id.to_string();
-        let view_key = contribution.view_key.clone();
         let tabs = cx.global::<GlobalTabContainer>().primary_pane();
         tabs.update(cx, |tabs, cx| {
             tabs.activate_or_add_tab_lazy(
@@ -45,7 +41,7 @@ impl extension_view::ShellViewOpener for ShellPluginHost {
                         window,
                         cx,
                     );
-                    registry.register_tab(extension_key, view_key, view.downgrade());
+                    registry.register_tab(extension_key, view.downgrade());
                     TabItem::new(tab_id, format!("shell:{extension_id}"), view)
                 },
                 window,
@@ -105,22 +101,6 @@ impl extension_view::ShellViewOpener for ShellPluginHost {
     }
 }
 
-impl ShellPluginHost {
-    fn has_open_view(&self, extension_id: &str, view_key: &str) -> bool {
-        self.tabs.borrow().get(extension_id).is_some_and(|tabs| {
-            tabs.iter().any(|tab| {
-                matches!(
-                    tab,
-                    TrackedPluginTab::Shell {
-                        view_key: tracked,
-                        tab,
-                    } if tracked == view_key && tab.upgrade().is_some()
-                )
-            })
-        })
-    }
-}
-
 fn finish_failed(
     service: &crate::universal_plugins::UniversalPluginService,
     retiring: &Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
@@ -129,4 +109,15 @@ fn finish_failed(
     retiring.borrow_mut().remove(extension_id);
     service.finish_extension_retire(extension_id);
     false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn singleton_open_delegates_reactivation_to_tab_container() {
+        let source = include_str!("opener.rs");
+        let obsolete_guard = ["contribution.singleton", "self.has_open_view"].join(" && ");
+        assert!(!source.contains(&obsolete_guard));
+        assert!(source.contains("tabs.activate_or_add_tab_lazy("));
+    }
 }

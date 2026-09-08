@@ -3,13 +3,17 @@
 //! appended under their categories; connection-style extensions never appear
 //! here — they belong to `contributes.connections`.
 use crate::{home_tab::HomePage, navigation_applications::NavigationApplication};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ColorExt as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    App, AppContext as _, ColorExt as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, IconName, Sizable, h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
+};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 
@@ -91,14 +95,27 @@ fn builtin_tools() -> Vec<ToolEntry> {
 pub(crate) struct ToolboxTab {
     home: Entity<HomePage>,
     focus_handle: FocusHandle,
-    /// 工具搜索词(扩展工具过滤用;空串显示全部)。
+    search_input: Entity<InputState>,
     tool_search: String,
 }
 impl ToolboxTab {
-    pub(crate) fn new(home: Entity<HomePage>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(home: Entity<HomePage>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("搜索工具…")
+                .clean_on_escape()
+        });
+        cx.subscribe(&search_input, |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.tool_search = input.read(cx).value().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             home,
             focus_handle: cx.focus_handle(),
+            search_input,
             tool_search: String::new(),
         }
     }
@@ -121,29 +138,29 @@ impl TabContent for ToolboxTab {
     }
 }
 impl ToolboxTab {
-    /// 工具卡片（demo：圆角 12px、padding 16px、图标 38×38 accent-soft 底）。
+    /// 内置工具卡片。
     fn render_tool_card(&self, tool: ToolEntry, cx: &Context<Self>) -> impl IntoElement {
         let home = self.home.clone();
         let accent = cx.theme().accent;
         let accent_soft = cx.theme().accent.opacity(0.12);
         v_flex()
             .id(SharedString::from(format!("tool-{}", tool.id)))
-            .w(gpui::rems(13.0))
+            .w(gpui::rems(18.0))
+            .min_h(gpui::rems(7.5))
             .flex_shrink_0()
-            .p_4()
-            .gap_2p5()
-            .rounded(px(12.0))
+            .p_3()
+            .gap_2()
+            .rounded(px(8.0))
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
-            .shadow_sm()
             .cursor_pointer()
-            .hover(move |style| style.border_color(accent).shadow_sm())
+            .hover(move |style| style.border_color(accent))
             .child(
                 div()
-                    .w(px(38.0))
-                    .h(px(38.0))
-                    .rounded(px(10.0))
+                    .w(px(32.0))
+                    .h(px(32.0))
+                    .rounded(px(8.0))
                     .bg(accent_soft)
                     .flex()
                     .items_center()
@@ -174,7 +191,7 @@ impl ToolboxTab {
             })
     }
 
-    /// 扩展工具卡片（surface: toolbox 的 shell 视图，点击打开 shell tab）。
+    /// 扩展工具卡片（surface: toolbox 的 shell 视图）。
     fn render_extension_tool_card(
         &self,
         tool: &ExtensionTool,
@@ -188,22 +205,22 @@ impl ToolboxTab {
                 "ext-tool-{}-{}",
                 tool.extension_id, tool.view_id
             )))
-            .w(gpui::rems(13.0))
+            .w(gpui::rems(18.0))
+            .min_h(gpui::rems(7.5))
             .flex_shrink_0()
-            .p_4()
-            .gap_2p5()
-            .rounded(px(12.0))
+            .p_3()
+            .gap_2()
+            .rounded(px(8.0))
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
-            .shadow_sm()
             .cursor_pointer()
-            .hover(move |style| style.border_color(accent).shadow_sm())
+            .hover(move |style| style.border_color(accent))
             .child(
                 div()
-                    .w(px(38.0))
-                    .h(px(38.0))
-                    .rounded(px(10.0))
+                    .w(px(32.0))
+                    .h(px(32.0))
+                    .rounded(px(8.0))
                     .bg(accent_soft)
                     .flex()
                     .items_center()
@@ -224,56 +241,34 @@ impl ToolboxTab {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(tool.description.clone().unwrap_or_default()),
+                    .child(format!(
+                        "{}  ·  {}",
+                        tool.category,
+                        tool.description.clone().unwrap_or_default()
+                    )),
             )
             .on_click(move |_, window, cx| {
                 extension_view::open_shell_view(&extension_id, &view_id, window, cx);
             })
     }
 
-    /// 扩展工具区:按 category 分组渲染;搜索词过滤(无匹配返回 None)。
-    fn render_extension_tools(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
-        let query = self.tool_search.clone();
-        let tools: Vec<ExtensionTool> = extension_tools(cx)
+    fn filtered_extension_tools(&self, cx: &Context<Self>) -> Vec<ExtensionTool> {
+        extension_tools(cx)
             .into_iter()
-            .filter(|tool| tool.matches(&query))
-            .collect();
-        if tools.is_empty() {
-            return None;
-        }
-        // category 排序保证分组稳定;组内沿用 catalog 的 title 排序。
-        let mut grouped: std::collections::BTreeMap<&str, Vec<&ExtensionTool>> = Default::default();
-        for tool in &tools {
-            grouped.entry(&tool.category).or_default().push(tool);
-        }
-        let mut sections = v_flex().gap_4();
-        for (category, tools) in grouped {
-            let mut row = h_flex().flex_wrap().gap_3p5();
-            for tool in tools {
-                row = row.child(self.render_extension_tool_card(tool, cx));
-            }
-            sections = sections
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(category.to_uppercase()),
-                )
-                .child(row);
-        }
-        Some(sections.into_any_element())
+            .filter(|tool| tool.matches(&self.tool_search))
+            .collect()
     }
 
     /// 「更多工具」占位卡（demo：虚线边框、无阴影、居中）。
     fn render_ghost_card(&self, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         v_flex()
-            .w(gpui::rems(13.0))
+            .w(gpui::rems(18.0))
+            .min_h(gpui::rems(7.5))
             .flex_shrink_0()
             .p_4()
             .gap_2p5()
-            .rounded(px(12.0))
+            .rounded(px(8.0))
             .border_1()
             .border_dashed()
             .border_color(cx.theme().border)
@@ -312,38 +307,80 @@ impl ToolboxTab {
 
 impl Render for ToolboxTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut tools = h_flex().flex_wrap().gap_3p5();
-        for tool in registered_tools(cx) {
+        let query = self.tool_search.trim().to_lowercase();
+        let builtin_tools = registered_tools(cx)
+            .into_iter()
+            .filter(|tool| {
+                query.is_empty()
+                    || tool.title.to_lowercase().contains(&query)
+                    || tool.description.to_lowercase().contains(&query)
+                    || tool.id.contains(&query)
+            })
+            .collect::<Vec<_>>();
+        let extension_tools = self.filtered_extension_tools(cx);
+        let has_results = !builtin_tools.is_empty() || !extension_tools.is_empty();
+        let mut tools = h_flex().w_full().flex_wrap().gap_3();
+        for tool in builtin_tools {
             tools = tools.child(self.render_tool_card(tool, cx));
         }
-        tools = tools.child(self.render_ghost_card(cx));
-        let extension_tools = self.render_extension_tools(cx);
+        for tool in &extension_tools {
+            tools = tools.child(self.render_extension_tool_card(tool, cx));
+        }
+        if query.is_empty() {
+            tools = tools.child(self.render_ghost_card(cx));
+        }
         v_flex()
             .id("toolbox-content")
             .track_focus(&self.focus_handle)
             .size_full()
             .overflow_y_scroll()
-            .px_7()
-            .py_6()
+            .px_8()
+            .py_7()
             .bg(cx.theme().background)
             .child(
                 div()
-                    .text_base()
+                    .text_xl()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .mb_1()
+                    .mb_2()
                     .child(t!("Home.toolbox").to_string()),
             )
             .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .mb_5()
-                    .child(t!("Home.toolbox_description").to_string()),
+                h_flex()
+                    .w_full()
+                    .mb_6()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("Home.toolbox_description").to_string()),
+                    )
+                    .child(Input::new(&self.search_input).w(gpui::rems(18.0)).small()),
             )
-            .when_some(extension_tools, |container, tools| {
+            .when(has_results || query.is_empty(), |container| {
                 container.child(tools)
             })
-            .child(tools)
+            .when(!has_results && !query.is_empty(), |container| {
+                container.child(
+                    v_flex()
+                        .w_full()
+                        .py_12()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("未找到工具"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("尝试搜索名称、描述、分类或关键词。"),
+                        ),
+                )
+            })
     }
 }
 

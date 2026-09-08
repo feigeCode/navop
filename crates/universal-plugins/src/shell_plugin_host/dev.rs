@@ -70,17 +70,18 @@ pub(super) fn dev_module() -> HostModule {
               root: string;
               id: string;
               name: string;
-              version: string;
-              error?: string;
-              views: DevViewInfo[];
-            }
+               version: string;
+               error?: string;
+               watching: boolean;
+               views: DevViewInfo[];
+             }
             export function list(): DevProjectInfo[];
-            export function open(rootDir: string): { id: string; error?: string };
-            export function reload(rootDir: string): { error?: string };
+            export function open(rootDir: string): { root: string; id: string; error?: string };
+            export function reload(rootDir: string): { root: string; id: string; error?: string };
             export function watch(rootDir: string): { watching: boolean; error?: string };
             export function pickDirectory(): "pending";
             export function pickResult(): string | null;
-            export function remove(rootDir: string): void;
+            export function remove(rootDir: string): { root: string; id: string; error?: string };
             export function openView(extensionId: string, viewId: string): void;
             export function logs(rootDir: string, tail?: number): string[];
             "#,

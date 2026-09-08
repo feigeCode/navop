@@ -10,9 +10,7 @@ pub use dev::{DevHostOps, GlobalDevHostOps, set_dev_host_ops};
 /// feature-gated,与 shell-plugins 一致;非 shell-plugins 构建下不存在。
 #[cfg(feature = "shell-plugins")]
 pub mod gpui_shell_reexport {
-    pub use gpui_shell::{
-        HostError, HostObject, HostValue, with_current_app,
-    };
+    pub use gpui_shell::{HostError, HostObject, HostValue, with_current_app};
 }
 mod event;
 mod grant;
@@ -68,7 +66,6 @@ pub struct ShellPluginHost {
 #[cfg_attr(test, allow(dead_code))]
 enum TrackedPluginTab {
     Shell {
-        view_key: String,
         tab: WeakEntity<ShellPluginTab>,
     },
     Headless {
@@ -144,14 +141,11 @@ impl ShellPluginHost {
             .ok_or_else(|| anyhow!("extension shell view was not found"))?;
         // 与 DB 驱动一致的统一凭据解析:Auth 密码簿引用在内存中还原为明文,
         // 随 open 载荷送达 provider;解析副本不落盘。
-        let connection = crate::universal_plugins::resolve_extension_connection_for_runtime(
-            connection,
-            cx,
-        )?;
+        let connection =
+            crate::universal_plugins::resolve_extension_connection_for_runtime(connection, cx)?;
         let launch = ShellConnectionLaunch::new(&connection, &contribution, &view)?;
         let host = self.clone();
         let extension_id = contribution.extension_id;
-        let view_key = view.view_key.clone();
         let title = connection.name;
         let tab_id = format!("extension-connection:{connection_id}");
         let tab_container = cx.global::<GlobalTabContainer>().primary_pane();
@@ -171,7 +165,7 @@ impl ShellPluginHost {
                         window,
                         cx,
                     );
-                    registry_host.register_tab(extension_id, view_key, tab.downgrade());
+                    registry_host.register_tab(extension_id, tab.downgrade());
                     TabItem::new(tab_id, "extension-connection", tab)
                 },
                 window,
@@ -283,17 +277,12 @@ impl ShellPluginHost {
         self.service.clone()
     }
 
-    fn register_tab(
-        &self,
-        extension_id: String,
-        view_key: String,
-        tab: WeakEntity<ShellPluginTab>,
-    ) {
+    fn register_tab(&self, extension_id: String, tab: WeakEntity<ShellPluginTab>) {
         self.tabs
             .borrow_mut()
             .entry(extension_id)
             .or_default()
-            .push(TrackedPluginTab::Shell { view_key, tab });
+            .push(TrackedPluginTab::Shell { tab });
     }
 
     pub fn register_headless_tab(

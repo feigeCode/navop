@@ -1314,8 +1314,9 @@ impl HomePage {
             tabs.update(cx, |tabs, cx| {
                 tabs.activate_or_add_tab_lazy(
                     "toolbox",
-                    |_, cx| {
-                        let view = cx.new(|cx| crate::toolbox_tab::ToolboxTab::new(home, cx));
+                    |window, cx| {
+                        let view =
+                            cx.new(|cx| crate::toolbox_tab::ToolboxTab::new(home, window, cx));
                         TabItem::new("toolbox", "home", view)
                     },
                     window,

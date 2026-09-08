@@ -54,6 +54,7 @@ pub(crate) fn capabilities_from_permissions(
                 };
                 match expand_grant_path(path, extension_root) {
                     Some(root) => {
+                        let root = canonicalize_grant_root(root);
                         if read {
                             read_roots.push(root);
                         } else {
@@ -85,6 +86,10 @@ pub(crate) fn capabilities_from_permissions(
         .network_hosts(hosts)
         .execute(ExecuteGrant::Allowed(commands));
     (capabilities, skipped)
+}
+
+fn canonicalize_grant_root(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
 }
 
 /// 展开 `${pluginDir}`、`~`、`%VAR%` 前缀；无法展开返回 None。
@@ -249,7 +254,10 @@ mod tests {
             &permissions(&["fs:read:%NAVOP_MISSING_VAR%/data"]),
             std::path::Path::new("/tmp/ext"),
         );
-        assert_eq!(skipped, vec!["fs:read:%NAVOP_MISSING_VAR%/data".to_string()]);
+        assert_eq!(
+            skipped,
+            vec!["fs:read:%NAVOP_MISSING_VAR%/data".to_string()]
+        );
         assert!(!capabilities.has_read_access());
     }
 

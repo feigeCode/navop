@@ -722,7 +722,7 @@ fn resolve_ipc_command(command: &str, working_dir: &Path) -> PathBuf {
     }
 }
 
-pub(super) fn load_installed_composite_manifests(
+pub(crate) fn load_installed_composite_manifests(
     root: &Path,
 ) -> Result<Vec<Manifest>, ExtensionRuntimeError> {
     if !root.exists() {
