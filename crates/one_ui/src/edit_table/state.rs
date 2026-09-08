@@ -47,6 +47,19 @@ fn selected_delegate_column_range(
         .then(|| first_data_col - row_number_offset..=max_col - row_number_offset)
 }
 
+fn batch_edit_changes(
+    cells: impl IntoIterator<Item = CellCoord>,
+    value: String,
+    row_number_offset: usize,
+) -> Vec<(usize, usize, String)> {
+    cells
+        .into_iter()
+        .filter_map(|(row, col)| {
+            (col >= row_number_offset).then(|| (row, col - row_number_offset, value.clone()))
+        })
+        .collect()
+}
+
 const SCROLLBAR_WIDTH: Pixels = px(16.);
 const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
 
@@ -1223,6 +1236,9 @@ where
         if self.editing_cell == Some((row_ix, col_ix)) {
             return;
         }
+        if !self.selection.contains(row_ix, col_ix) {
+            self.select_cell(row_ix, col_ix, cx);
+        }
         let delegate_col_ix = if self.delegate.row_number_enabled(cx) {
             col_ix.saturating_sub(1)
         } else {
@@ -1256,9 +1272,19 @@ where
                 .map(|editor| editor.get_value(cx))
                 .unwrap_or_default();
 
-            let accepted =
+            let selected_cells = self.selection.all_cells();
+            let accepted = if selected_cells.len() > 1 {
+                let row_number_offset = if self.delegate.row_number_enabled(cx) {
+                    1
+                } else {
+                    0
+                };
+                let changes = batch_edit_changes(selected_cells, new_value, row_number_offset);
+                self.delegate.set_cell_values(changes, window, cx)
+            } else {
                 self.delegate
-                    .on_cell_edited(row_ix, delegate_col_ix, new_value, window, cx);
+                    .on_cell_edited(row_ix, delegate_col_ix, new_value, window, cx)
+            };
             if accepted {
                 cx.emit(EditTableEvent::CellEdited(row_ix, col_ix));
             }
@@ -3163,6 +3189,30 @@ mod tests {
 
         assert_eq!(vec![0, 1, 2], columns);
         assert_eq!(None, selected_delegate_column_range(0, 0, 1));
+    }
+
+    #[test]
+    fn batch_edit_applies_the_same_value_to_every_selected_data_cell() {
+        let changes = batch_edit_changes([(2, 1), (3, 1), (4, 1)], "active".to_string(), 1);
+
+        assert_eq!(
+            vec![
+                (2, 0, "active".to_string()),
+                (3, 0, "active".to_string()),
+                (4, 0, "active".to_string()),
+            ],
+            changes
+        );
+    }
+
+    #[test]
+    fn batch_edit_skips_row_number_cells_and_maps_data_columns() {
+        let changes = batch_edit_changes([(1, 0), (1, 1), (1, 3)], "7".to_string(), 1);
+
+        assert_eq!(
+            vec![(1, 0, "7".to_string()), (1, 2, "7".to_string())],
+            changes
+        );
     }
 
     #[test]
