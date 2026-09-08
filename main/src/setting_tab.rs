@@ -3079,9 +3079,8 @@ fn shortcut_specs_for_entry(entry: &ShortcutEntry, cx: &App) -> Vec<String> {
     }
     if let Some(action_id) = entry.action_id {
         if let Some(shortcuts) = AppSettings::global(cx).custom_keybindings.get(action_id) {
-            if !shortcuts.is_empty() {
-                return shortcuts.clone();
-            }
+            // 空 override 表示用户显式清空该快捷键，展示“未设置”。
+            return shortcuts.clone();
         }
     }
 
@@ -3105,11 +3104,20 @@ fn render_shortcut_value(key_str: &str, cx: &App) -> gpui::AnyElement {
 }
 
 fn render_shortcut_values(key_specs: &[String], cx: &App) -> gpui::AnyElement {
+    let non_empty: Vec<&String> = key_specs.iter().filter(|s| !s.trim().is_empty()).collect();
+    if non_empty.is_empty() {
+        return div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(t!("Settings.Shortcuts.not_set").to_string())
+            .into_any_element();
+    }
+
     h_flex()
         .gap_1()
         .flex_wrap()
         .justify_end()
-        .children(key_specs.iter().map(|key| render_shortcut_value(key, cx)))
+        .children(non_empty.iter().map(|key| render_shortcut_value(key, cx)))
         .into_any_element()
 }
 
@@ -3127,6 +3135,18 @@ fn set_current_system_hotkey(spec: String, cx: &mut App) {
     crate::app_init::refresh_system_hotkey(cx);
 }
 
+fn clear_current_system_hotkey(cx: &mut App) {
+    set_current_system_hotkey(String::new(), cx);
+}
+
+fn clear_entry_shortcut(entry: &ShortcutEntry, cx: &mut App) {
+    if entry.system_hotkey {
+        clear_current_system_hotkey(cx);
+    } else if let Some(action_id) = entry.action_id {
+        clear_custom_keybinding(action_id, cx);
+    }
+}
+
 fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
     AppSettings::update_and_save(cx, |settings| {
         settings
@@ -3139,6 +3159,15 @@ fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
 fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
     AppSettings::update_and_save(cx, |settings| {
         settings.custom_keybindings.remove(action_id);
+    });
+    crate::onetcli_app::refresh_keybindings(cx);
+}
+
+fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
+    AppSettings::update_and_save(cx, |settings| {
+        settings
+            .custom_keybindings
+            .insert(action_id.to_string(), Vec::new());
     });
     crate::onetcli_app::refresh_keybindings(cx);
 }
@@ -3285,6 +3314,27 @@ fn render_shortcut_editor(
                         }
                     }),
             )
+            .group("shortcut-clear")
+            .when(entry.system_hotkey || entry.action_id.is_some(), {
+                let state = state.clone();
+                move |this| {
+                    this.child(
+                        Button::new("system-hotkey-clear")
+                            .label(t!("Settings.Shortcuts.clear").to_string())
+                            .ghost()
+                            .xsmall()
+                            .on_click(move |_, _, cx| {
+                                clear_entry_shortcut(entry, cx);
+                                let state = state.clone();
+                                state.update(cx, |state, cx| {
+                                    state.active_editor_id = None;
+                                    state.invalid_capture = false;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                }
+            })
             .into_any_element();
     }
 
@@ -3329,7 +3379,17 @@ fn render_shortcut_editor(
                                 reset_custom_keybinding(action_id, cx);
                             }
                         }),
-                ),
+                )
+                .when(entry.system_hotkey || entry.action_id.is_some(), |this| {
+                    this.child(
+                        Button::new("system-hotkey-clear")
+                            .icon(IconName::Delete)
+                            .ghost()
+                            .xsmall()
+                            .tooltip(t!("Settings.Shortcuts.clear").to_string())
+                            .on_click(move |_, _, cx| clear_entry_shortcut(entry, cx)),
+                    )
+                }),
         )
         .into_any_element()
 }

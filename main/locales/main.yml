@@ -3499,9 +3499,9 @@ Settings:
       zh-CN: 系统热键
       zh-HK: 系統熱鍵
     system_hotkey_desc:
-      en: Customize shortcuts with keystroke syntax like cmd-alt-m or ctrl-space. Invalid input is ignored.
-      zh-CN: 使用类似 cmd-alt-m 或 ctrl-space 的快捷键格式自定义快捷键。非法输入不会保存。
-      zh-HK: 使用類似 cmd-alt-m 或 ctrl-space 的快捷鍵格式自定義快捷鍵。非法輸入不會保存。
+      en: Customize shortcuts with keystroke syntax like cmd-alt-m or ctrl-space. Invalid input is ignored. Use Clear to disable a system hotkey.
+      zh-CN: 使用类似 cmd-alt-m 或 ctrl-space 的快捷键格式自定义快捷键。非法输入不会保存。点击「清空」可禁用系统热键。
+      zh-HK: 使用類似 cmd-alt-m 或 ctrl-space 的快捷鍵格式自定義快捷鍵。非法輸入不會保存。點擊「清空」可停用系統熱鍵。
     press_shortcut:
       en: Press shortcut
       zh-CN: 按下快捷键
@@ -3514,6 +3514,14 @@ Settings:
       en: Reset
       zh-CN: 重置
       zh-HK: 重置
+    clear:
+      en: Clear
+      zh-CN: 清空
+      zh-HK: 清空
+    not_set:
+      en: Not set
+      zh-CN: 未设置
+      zh-HK: 未設定
     window:
       en: Window Management
       zh-CN: 窗口管理
