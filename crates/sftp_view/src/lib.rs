@@ -62,8 +62,8 @@ use one_ui::file_conflict_prompt::{
 use one_ui::marquee_text::marquee_text;
 use one_ui::{IconButton, IconButtonRole};
 use remote_file_editor::{
-    ExternalEditorOpenRequest, RemoteMutationCallback, open_remote_file_editor,
-    open_remote_file_external_editor,
+    ExternalEditorOpenRequest, OpenRemoteFileRequest, RemoteMutationCallback,
+    open_remote_file_editor, open_remote_file_external_editor, open_remote_file_with_default,
 };
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
@@ -2304,7 +2304,7 @@ impl SftpView {
             self.push_remote_history(self.remote_current_path.clone());
             self.refresh_remote_dir(cx);
         } else {
-            self.open_remote_file(full_path, window, cx);
+            self.open_remote_file_default(full_path, window, cx);
         }
         cx.notify();
     }
@@ -2322,6 +2322,44 @@ impl SftpView {
         } else {
             self.open_remote_editor(full_path, window, cx);
         }
+    }
+
+    fn open_remote_file_default(
+        &self,
+        full_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if image_format_for_path(&full_path).is_some() {
+            self.open_remote_file(full_path, window, cx);
+        } else {
+            self.open_remote_editor_default(full_path, window, cx);
+        }
+    }
+
+    fn open_remote_editor_default(
+        &self,
+        full_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::error(t!("Error.sftp_not_connected").to_string()),
+                cx,
+            );
+            return;
+        };
+
+        open_remote_file_with_default(
+            OpenRemoteFileRequest {
+                remote_path: full_path,
+                client,
+                on_remote_changed: self.remote_mutation_callback(cx),
+            },
+            window,
+            cx,
+        );
     }
 
     fn open_remote_editor(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -9159,5 +9197,66 @@ mod tests {
         )
         .unwrap();
         assert!(tar_command.contains("tar -tf '/tmp/release.tar.gz'"));
+    }
+}
+
+/// 默认（双击）打开入口的接线契约：普通文件按用户模式路由，显式菜单仍保有各自入口。
+#[cfg(test)]
+mod default_open_wiring_tests {
+    fn method_body<'a>(source: &'a str, name: &str) -> &'a str {
+        let marker = format!("fn {name}(");
+        let start = source.find(&marker).expect(name);
+        let rest = &source[start..];
+        let body_start = start + marker.len();
+        let end = rest[marker.len()..]
+            .find("\n    fn ")
+            .map(|offset| body_start + offset)
+            .unwrap_or(source.len());
+        &source[start..end]
+    }
+
+    #[test]
+    fn default_open_routes_regular_files_through_the_shared_mode_helper() {
+        let source = include_str!("lib.rs");
+
+        let default = method_body(source, "open_remote_file_default");
+        assert!(
+            default.contains("image_format_for_path"),
+            "default open keeps the image preview branch"
+        );
+        assert!(
+            default.contains("open_remote_editor_default"),
+            "default open routes regular files to the mode-aware editor"
+        );
+
+        let editor_default = method_body(source, "open_remote_editor_default");
+        assert!(
+            editor_default.contains("open_remote_file_with_default("),
+            "default editor open reuses the shared routing helper"
+        );
+    }
+
+    #[test]
+    fn explicit_built_in_edit_and_external_menus_keep_their_own_entries() {
+        let source = include_str!("lib.rs");
+
+        let built_in = method_body(source, "open_remote_file");
+        assert!(
+            built_in.contains("open_remote_editor("),
+            "explicit built-in Edit still opens the built-in editor"
+        );
+
+        let built_in_editor = method_body(source, "open_remote_editor");
+        assert!(
+            built_in_editor.contains("open_remote_file_editor("),
+            "explicit Edit route calls the built-in editor API"
+        );
+
+        let external = method_body(source, "open_remote_external_editor");
+        assert!(
+            external.contains("ExternalEditorOpenRequest")
+                && external.contains("open_remote_file_external_editor("),
+            "explicit Edit With route still opens the chosen external editor"
+        );
     }
 }

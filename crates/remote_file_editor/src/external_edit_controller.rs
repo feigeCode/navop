@@ -16,10 +16,7 @@ use smol::Timer;
 use tokio::sync::Mutex;
 
 use crate::external_session::snapshot_from_metadata;
-use crate::{
-    MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, RemoteMutationCallback, UploadDecision,
-    decide_upload,
-};
+use crate::{RemoteFileSnapshot, RemoteMutationCallback, UploadDecision, decide_upload};
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -235,6 +232,9 @@ impl ExternalEditController {
     }
 
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let max_bytes = one_core::settings::AppSettings::current(cx)
+            .remote_file_editor
+            .max_file_size_bytes();
         let client = self.client.clone();
         let remote_path = self.remote_path.clone();
         let local_path = self.local_path.clone();
@@ -244,9 +244,7 @@ impl ExternalEditController {
                 .stat(&remote_path)
                 .await?
                 .ok_or_else(|| anyhow!("Remote file no longer exists"))?;
-            let bytes = client
-                .read_file(&remote_path, MAX_EDITABLE_FILE_SIZE)
-                .await?;
+            let bytes = client.read_file(&remote_path, max_bytes).await?;
             let local_hash = local_content_hash(&bytes);
             tokio::fs::write(local_path, bytes).await?;
             Ok((snapshot_from_metadata(&metadata), local_hash))

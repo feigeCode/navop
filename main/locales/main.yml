@@ -2689,18 +2689,42 @@ Settings:
         en: Remote File Editor
         zh-CN: 远程文件编辑器
         zh-HK: 遠端檔案編輯器
+      open_mode:
+        en: Default Opening Mode
+        zh-CN: 默认打开方式
+        zh-HK: 預設開啟方式
+      open_mode_desc:
+        en: Files opened by double-click use the built-in editor or your default external editor. Images still open in preview; explicit Edit and Edit With actions are unaffected.
+        zh-CN: 双击打开的普通文件将使用内置编辑器或默认外部编辑器。图片仍以预览方式打开；显式的“编辑”和“使用外部编辑器编辑”操作不受影响。
+        zh-HK: 雙擊開啟的普通檔案將使用內建編輯器或預設外部編輯器。圖片仍以預覽方式開啟；顯式的「編輯」和「使用外部編輯器編輯」操作不受影響。
+      open_mode_built_in:
+        en: Built-in Editor
+        zh-CN: 内置编辑器
+        zh-HK: 內建編輯器
+      open_mode_external:
+        en: External Editor
+        zh-CN: 外部编辑器
+        zh-HK: 外部編輯器
       default_editor:
         en: Default External Editor
         zh-CN: 默认外部编辑器
         zh-HK: 預設外部編輯器
       default_editor_desc:
-        en: Put this installed editor first in matching Edit With menus
-        zh-CN: 在匹配的“使用外部编辑器编辑”菜单中优先显示此编辑器
-        zh-HK: 在匹配的「使用外部編輯器編輯」選單中優先顯示此編輯器
+        en: Preferred editor in matching Edit With menus; also opens files when Default Opening Mode is External.
+        zh-CN: 在匹配的“使用外部编辑器编辑”菜单中优先显示此编辑器；当“默认打开方式”为“外部编辑器”时也用它打开文件。
+        zh-HK: 在匹配的「使用外部編輯器編輯」選單中優先顯示此編輯器；當「預設開啟方式」為「外部編輯器」時也用它開啟檔案。
       none:
         en: No preference
         zh-CN: 无偏好
         zh-HK: 無偏好
+      max_file_size_mib:
+        en: Max Editable File Size (MiB)
+        zh-CN: 最大可编辑文件大小（MiB）
+        zh-HK: 最大可編輯檔案大小（MiB）
+      max_file_size_mib_desc:
+        en: Maximum remote file size for built-in and external editors (1-1024 MiB, default 10). Applies on the next open or reload. Large files may use significant memory.
+        zh-CN: 内置和外部编辑器允许读取的最大远程文件大小（1-1024 MiB，默认 10）。下次打开或重新加载时生效，大文件可能占用较多内存。
+        zh-HK: 內建及外部編輯器允許讀取的最大遠端檔案大小（1-1024 MiB，預設 10）。下次開啟或重新載入時生效，大檔案可能佔用較多記憶體。
       auto_upload:
         en: Automatically Upload External Editor Changes
         zh-CN: 自动上传外部编辑器的修改

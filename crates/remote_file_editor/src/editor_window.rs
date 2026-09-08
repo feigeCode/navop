@@ -1,5 +1,5 @@
 use crate::file_policy::{
-    EditorMode, FilePolicy, MAX_EDITABLE_FILE_SIZE, decode_text_content, determine_file_policy,
+    EditorMode, FilePolicy, decode_text_content, determine_file_policy_with_limit,
 };
 use crate::language::language_for_path;
 use crate::{
@@ -422,15 +422,16 @@ impl RemoteFileEditorWindow {
         let remote_path = tab.remote_path.clone();
         let task_remote_path = remote_path.clone();
         let client = self.client.clone();
+        let max_bytes = one_core::settings::AppSettings::current(cx)
+            .remote_file_editor
+            .max_file_size_bytes();
         let task = Tokio::spawn(cx, async move {
             let bytes = {
                 let mut client = client.lock().await;
-                client
-                    .read_file(&task_remote_path, MAX_EDITABLE_FILE_SIZE)
-                    .await?
+                client.read_file(&task_remote_path, max_bytes).await?
             };
             let file_size = bytes.len();
-            let policy = determine_file_policy(file_size)?;
+            let policy = determine_file_policy_with_limit(file_size, max_bytes)?;
             let text = decode_text_content(&bytes)?;
             let language = language_for_path(&task_remote_path, policy.is_large_file);
             Ok::<_, anyhow::Error>(LoadedFile {
