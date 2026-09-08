@@ -4,6 +4,40 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.17.0] - 2026-09-08
+
+#### 更新内容
+
+- 新增「已知主机」页面，展示应用信任的 SSH 主机、密钥算法和指纹，并支持复制主机标识与移除可信主机。
+- 优化主页连接卡片、连接树和账户入口布局，改善常用连接管理与窗口空间利用。
+- 设置页支持清除快捷键并禁用系统快捷键，快捷键配置反馈更加清晰。
+
+#### 修复与优化
+
+- 修复已知主机列表无法渲染、卡片高度异常的问题，并完善系统 `known_hosts` 扫描导入和后台加载。
+- 优化 AI 对话中的运行中活动显示，避免任务执行期间缺少状态反馈。
+- 修复标签栏导航切换槽位和工作区排序恢复相关问题。
+- 更新 Linux/CJK 输入支持及相关界面稳定性。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.17.0) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Added a Known Hosts page for trusted SSH hosts, showing key algorithms and fingerprints, with actions to copy the host identity or remove a trusted host.
+- Refined home connection cards, the connection tree, and the account entry layout for better connection management and use of window space.
+- Settings now support clearing shortcuts and disabling system shortcuts, with clearer shortcut configuration feedback.
+
+#### Fixes and Improvements
+
+- Fixed the Known Hosts list failing to render and cards expanding to an incorrect height; system `known_hosts` scanning/import and background loading are also handled more reliably.
+- Improved the running activity display in AI conversations so task progress remains visible during execution.
+- Fixed issues related to the tab-bar navigation toggle slot and workspace-order restoration.
+- Updated Linux/CJK input support and related UI stability improvements.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.16.1...v0.17.0
+
 ## [v0.16.1] - 2026-09-05
 
 #### 修复与优化
