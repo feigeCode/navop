@@ -17,8 +17,8 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, clipboard::Clipboard, h_flex,
-    scroll::Scrollbar, spinner::Spinner, v_flex,
+    ActiveTheme, Icon, IconName, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
+    spinner::Spinner, v_flex,
 };
 use rust_i18n::t;
 
@@ -584,7 +584,12 @@ pub fn render_running_activity(theme: &AgentChatTheme) -> AnyElement {
                 .color(color)
                 .animation_id("ai-chat-activity-spinner"),
         )
-        .child(div().flex_1().min_w_0().child(t!("AgentUi.running").to_string()))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(t!("AgentUi.running").to_string()),
+        )
         .into_any_element()
 }
 

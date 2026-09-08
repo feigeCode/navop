@@ -67,8 +67,8 @@ use crate::input::{
     ComposerSkillSummary, ComposerSubAgentItem, ComposerTarget, MentionItem, QueuedPromptPreview,
 };
 use crate::message_view::{
-    render_messages_with_code_actions_and_activity,
-    render_sidebar_messages_with_code_actions_and_activity, render_running_activity,
+    render_messages_with_code_actions_and_activity, render_running_activity,
+    render_sidebar_messages_with_code_actions_and_activity,
 };
 use crate::pending_submission::{PendingSubmission, PendingSubmissions};
 use crate::persistence;
