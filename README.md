@@ -61,7 +61,7 @@
 
 - SSH and local terminals with draggable split panes, quick commands, broadcast input, shell integration, session lock, recording and replay, and session logs; Telnet and serial connections are also supported.
 - Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, ZMODEM transfer, and server-to-server copy.
-- Reusable local, remote (`ssh -R`), and dynamic SOCKS port forwarding; X11 forwarding; host-key change warnings with explicit fingerprints; optional legacy SSH algorithms.
+- Reusable local, remote (`ssh -R`), and dynamic SOCKS port forwarding; X11 forwarding; host-key change warnings with explicit fingerprints; a Known Hosts page for reviewing, importing, and removing trusted SSH host keys; optional legacy SSH algorithms.
 - Import SecureCRT sessions, monitor servers, and connect to remote desktops over RDP and VNC. On Windows, native MSTSC integration embeds the Microsoft RDP ActiveX control directly in the app via a C++ host, so you can use it inside a tab, in a fullscreen window, or launch the native `mstsc.exe` client; across platforms a pure-Rust IronRDP canvas backend renders RDP sessions.
 
 ### Editing, AI, and extensibility
@@ -133,6 +133,13 @@ flatpak --user install flatpark dev.navop.Navop
 ```
 
 If macOS Gatekeeper reports that Apple cannot check the app, run `sudo xattr -rd com.apple.quarantine /Applications/Navop.app`.
+
+On Windows, Navop is also available through [Scoop](https://scoop.sh) (installing the portable edition with data persistence handled by Scoop):
+
+```powershell
+scoop bucket add extras
+scoop install navop
+```
 
 For the full artifact table, Windows portable-mode notes, upgrade migration from v0.10.1 or earlier ZIPs, and the Oracle Instant Client / pure-Go driver note, see the [Install & update guide](https://docs.navop.dev/en-US/guide/install-update).
 

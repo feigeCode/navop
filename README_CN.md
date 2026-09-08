@@ -61,7 +61,7 @@
 
 - 可拖拽分屏的 SSH 与本地终端，支持快捷命令、广播输入、Shell integration、会话锁定、会话录制回放和会话日志；同时支持 Telnet 与串口连接。
 - 通过 SFTP 上传下载、搜索、收藏、远程编辑、拖拽传输、ZMODEM 传输和跨服务器复制管理远程文件。
-- 可复用的本地、远程（`ssh -R`）与动态 SOCKS 端口转发；X11 转发；主机密钥变更指纹确认；可按连接启用旧版 SSH 算法。
+- 可复用的本地、远程（`ssh -R`）与动态 SOCKS 端口转发；X11 转发；主机密钥变更指纹确认；「已知主机」页面可查看、导入和移除信任的 SSH 主机密钥；可按连接启用旧版 SSH 算法。
 - 导入 SecureCRT 等外部工具的会话，进行服务器监控，并支持 RDP/VNC 远程桌面。Windows 上集成原生 MSTSC：通过 C++ 宿主将微软 RDP ActiveX 控件直接内嵌到应用中，可在页签内、全屏窗口中连接，也可一键启动原生 `mstsc.exe` 客户端；跨平台则由纯 Rust 的 IronRDP canvas 后端渲染 RDP 会话。
 
 ### 编辑、AI 与扩展
@@ -133,6 +133,13 @@ flatpak --user install flatpark dev.navop.Navop
 ```
 
 如果 macOS 提示“Apple 无法检查其是否包含恶意软件”，请执行 `sudo xattr -rd com.apple.quarantine /Applications/Navop.app`。
+
+Windows 用户也可以通过 [Scoop](https://scoop.sh) 安装（使用便携版包，数据持久化由 Scoop 管理）：
+
+```powershell
+scoop bucket add extras
+scoop install navop
+```
 
 完整的安装包选择表、Windows 便携模式说明、v0.10.1 及更早版本 ZIP 的升级迁移，以及 Oracle Instant Client / 纯 Go 驱动说明，请参阅[安装与更新指南](https://docs.navop.dev/guide/install-update)。
 

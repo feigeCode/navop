@@ -25,6 +25,17 @@ Navop 提供 macOS、Windows 和 Linux 桌面版本。安装包、系统架构�
 
 每个发布版本的 `sha256sums.txt` 用于校验下载完整性。企业环境应在安装前保存版本号、文件名和校验值，便于回溯。
 
+## 通过 Scoop 安装（Windows）
+
+Navop 已收录在 Scoop 官方 `extras` bucket。安装的是便携版包，`data` 数据目录持久化由 Scoop 管理：
+
+```powershell
+scoop bucket add extras
+scoop install navop
+```
+
+后续通过 `scoop update navop` 升级。 Scoop 安装与 MSI/EXE 安装版使用不同的数据目录；从安装版切换到 Scoop（或反向）时，请参考下文便携模式说明迁移 `data` 目录。
+
 ## Windows 安装版
 
 常规安装可以选择 `navop-<version>-windows-x64.msi` 或 `navop-<version>-windows-x64.exe`；32 位 Windows 请下载名称中明确包含 `win32` 的安装包，例如 `navop-<version>-win32.exe`。EXE 安装包内嵌并启动同一套 MSI 安装流程，因此两者默认都安装到当前用户目录，创建开始菜单和桌面快捷方式，注册支持的文件关联，使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。使用默认的当前用户安装位置时不需要管理员权限。
