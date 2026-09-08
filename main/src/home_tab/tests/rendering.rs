@@ -162,7 +162,11 @@ fn home_sidebar_refinement_contracts() {
     assert!(!card.contains("hover_border"));
     // 账户 fallback 中性化：不用 Avatar hash 自动色
     assert!(account.contains("neutral_avatar_for_url"));
-    assert!(account.contains("IconName::CircleUser"));
+    assert!(account.contains("IconName::User"));
+    assert!(account.contains("IconSize::Default"));
+    assert!(account.contains(".bg(gpui::transparent_black().opacity(0.025))"));
+    assert!(account.contains(".px_2()"));
+    assert!(account.contains("None => Icon::new(IconName::User)"));
     assert!(!account.contains("Avatar::new()\n                .name("));
 }
 

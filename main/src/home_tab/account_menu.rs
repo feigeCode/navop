@@ -32,7 +32,8 @@ impl IntoElement for AccountTrigger {
             .w_full()
             .gap_2()
             .items_center()
-            .p_1p5()
+            .px_2()
+            .py_1p5()
             .rounded(px(9.0))
             .cursor_pointer()
             .when(self.selected, |row| row.bg(self.hover_bg))
@@ -79,11 +80,22 @@ fn neutral_avatar_for_url(url: Option<String>, size: gpui::Pixels) -> AnyElement
             .src(url)
             .with_size(gpui_component::Size::Size(size))
             .into_any_element(),
-        // 单色用户图标直接承担头像槽位，继承行文字颜色（中性）。
-        None => Icon::new(IconName::CircleUser)
+        // 保留头像槽位尺寸，只缩小内部线稿，避免粗圆环在侧栏底部过度抢眼。
+        None => div()
             .size(size)
-            .mono()
+            .rounded_full()
+            .border_1()
+            .border_color(gpui::transparent_black().opacity(0.08))
+            .bg(gpui::transparent_black().opacity(0.025))
+            .flex()
             .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .child(
+                Icon::new(IconName::User)
+                    .with_size(IconSize::Default)
+                    .mono(),
+            )
             .into_any_element(),
     }
 }
@@ -96,7 +108,14 @@ fn neutral_avatar(
 ) -> AnyElement {
     let url = avatar.and_then(|(_, url)| url.clone());
     let _ = name; // fallback 用统一单色图标，不取首字母
-    neutral_avatar_for_url(url, size)
+    match url {
+        Some(url) => neutral_avatar_for_url(Some(url), size),
+        None => Icon::new(IconName::User)
+            .with_size(IconSize::Default)
+            .mono()
+            .flex_shrink_0()
+            .into_any_element(),
+    }
 }
 
 impl HomePage {
