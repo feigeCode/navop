@@ -313,13 +313,16 @@ where
 {
     Ok(Vec::<Value>::deserialize(deserializer)?
         .into_iter()
-        .filter_map(|value| match serde_json::from_value(value) {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                tracing::warn!("跳过不兼容的扩展市场条目: {err}");
-                None
-            }
-        })
+        .filter_map(
+            |value| match serde_json::from_value::<MarketplaceEntry>(value) {
+                Ok(entry) if entry.kind != ExtensionKind::Unsupported => Some(entry),
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::warn!("跳过不兼容的扩展市场条目: {err}");
+                    None
+                }
+            },
+        )
         .collect())
 }
 

@@ -14,9 +14,7 @@ impl HomePage {
 
         cx.spawn(async move |this, cx: &mut AsyncApp| match load_task.await {
             Ok(mut workspaces) => {
-                workspaces.sort_by(|left, right| {
-                    crate::connection_sort::connection_name_cmp(&left.name, &right.name)
-                });
+                sort_workspaces(&mut workspaces);
                 _ = this.update(cx, |this, cx| {
                     this.workspaces = workspaces;
                     cx.notify();
@@ -54,6 +52,7 @@ impl HomePage {
                     _ = this.update(cx, |this, cx| {
                         this.connections = connections;
                         this.external_driver_registry = external_driver_registry;
+                        this.prune_connection_selection();
                         cx.notify();
                     });
                 }
@@ -167,5 +166,52 @@ impl HomePage {
     pub(crate) fn refresh_local_home_data(&mut self, cx: &mut Context<Self>) {
         self.load_workspaces(cx);
         self.load_connections(cx);
+    }
+}
+
+fn sort_workspaces(workspaces: &mut [Workspace]) {
+    workspaces.sort_by(|left, right| {
+        left.sort_order
+            .cmp(&right.sort_order)
+            .then_with(|| crate::connection_sort::connection_name_cmp(&left.name, &right.name))
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace(name: &str, sort_order: Option<i32>) -> Workspace {
+        let mut workspace = Workspace::new(name.to_string());
+        workspace.sort_order = sort_order;
+        workspace
+    }
+
+    #[test]
+    fn workspace_reload_preserves_drag_order() {
+        let mut workspaces = vec![
+            workspace("alpha", Some(2)),
+            workspace("zulu", Some(0)),
+            workspace("middle", Some(1)),
+        ];
+        sort_workspaces(&mut workspaces);
+        assert_eq!(
+            vec!["zulu", "middle", "alpha"],
+            workspaces
+                .iter()
+                .map(|ws| ws.name.as_str())
+                .collect::<Vec<_>>()
+        );
+        sort_workspaces(&mut workspaces);
+        assert_eq!(Some(0), workspaces[0].sort_order);
+    }
+
+    #[test]
+    fn workspace_equal_orders_use_natural_names() {
+        for order in [None, Some(0)] {
+            let mut workspaces = vec![workspace("group-10", order), workspace("group-2", order)];
+            sort_workspaces(&mut workspaces);
+            assert_eq!("group-2", workspaces[0].name);
+        }
     }
 }

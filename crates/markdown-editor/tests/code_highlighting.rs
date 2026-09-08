@@ -17,11 +17,8 @@ fn markdown_editor_does_not_bundle_a_native_rust_grammar() {
     // fenced 语言一律由 extension-runtime 的 wasm 扩展提供。运行时注册表断言
     // 不可靠——`cargo test --all` 的 feature unification 会把 main 经
     // gpui-component-shell 启用的 tree-sitter-rust 一并链接进测试二进制。
-    let manifest = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/Cargo.toml"
-    ))
-    .expect("Cargo.toml must be readable");
+    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("Cargo.toml must be readable");
     for line in manifest.lines() {
         let line = line.trim();
         assert!(

@@ -1,25 +1,13 @@
+use gpui::{Context, Window};
+use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderRegistry};
 use std::sync::Arc;
 
-use gpui::{AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window};
-use gpui_component::{WindowExt, notification::Notification};
-use one_core::gpui_tokio::Tokio;
-use remote_desktop::RemoteDesktopProtocol;
-use std::sync::{
-    Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-
-use crate::database_driver_install_progress::{
-    DriverInstallProgressSnapshot, DriverInstallProgressView, driver_install_progress_callback,
-    mark_driver_install_finished, open_driver_install_progress_dialog,
-    watch_driver_install_progress,
-};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 use crate::extension_downloader::{
-    DownloadProgressCallback, MarketplaceEntry,
-    download_marketplace_entry_to_staging_with_progress, fetch_default_manifest_url,
-    fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
+    DownloadProgressCallback, MarketplaceEntry, fetch_default_manifest_url, fetch_manifest_url,
+    install_marketplace_entry_generic, install_marketplace_entry_with_progress,
 };
+use crate::install_flow::{notify_error, run_install_with_progress_prompt};
 use one_core::storage::RemoteDesktopBackendPreference;
 use one_core::storage::StoredConnection;
 use one_core::tab_container::TabOpenMode;
@@ -155,141 +143,50 @@ fn prompt_install_provider_with_completion<T, F>(
         notify_error(window, cx, "扩展系统未初始化，无法安装远程桌面插件");
         return;
     }
-
-    let answer = window.prompt(
-        PromptLevel::Warning,
+    let install_provider_id = provider_id.clone();
+    run_install_with_progress_prompt(
+        window,
+        cx,
+        (provider_id.clone(), connection_name.clone()),
         "需要安装远程桌面插件",
-        Some(&format!(
+        format!(
             "连接「{}」需要安装「{}」远程桌面插件。",
             connection_name,
             protocol.label()
-        )),
+        ),
         &["下载并安装", "取消"],
-        cx,
-    );
-    let http_client = cx.http_client();
-    let window_handle = window.window_handle();
-    let progress_view = cx.new(|_| DriverInstallProgressView::new(&provider_id, &connection_name));
-    let progress_view_weak = progress_view.downgrade();
-    let progress_snapshot = Arc::new(Mutex::new(DriverInstallProgressSnapshot::default()));
-    let progress_finished = Arc::new(AtomicBool::new(false));
-    watch_driver_install_progress(
-        progress_view_weak.clone(),
-        Arc::clone(&progress_snapshot),
-        Arc::clone(&progress_finished),
-        cx,
-    );
-
-    cx.spawn(async move |this: WeakEntity<T>, cx: &mut AsyncApp| {
-        if answer.await.ok() != Some(0) {
-            progress_finished.store(true, Ordering::Relaxed);
-            return;
-        }
-        open_install_progress_dialog(window_handle, progress_view, cx);
-        let install_provider_id = provider_id.clone();
-        let progress_callback = driver_install_progress_callback(progress_snapshot);
-        let task = Tokio::spawn(cx, async move {
+        move |http_client, progress_callback| {
             install_remote_desktop_provider_from_marketplace(
                 http_client,
-                &install_provider_id,
+                install_provider_id,
                 progress_callback,
             )
-            .await
-        });
-        let outcome = match task.await {
-            Ok(Ok(_summary)) => Ok(()),
-            Ok(Err(error)) => Err(format!("{error:?}")),
-            Err(error) => Err(format!("任务执行失败: {error}")),
-        };
-        progress_finished.store(true, Ordering::Relaxed);
-        finish_install_and_open(
-            window_handle,
-            this,
-            provider_id,
-            progress_view_weak,
-            outcome,
-            on_success,
-            cx,
-        );
-    })
-    .detach();
+        },
+        on_success,
+        format!("已安装 {provider_id} 远程桌面插件"),
+        "安装远程桌面插件失败".to_string(),
+    );
 }
 
 async fn install_remote_desktop_provider_from_marketplace(
     http_client: Arc<dyn gpui::http_client::HttpClient>,
-    provider_id: &str,
+    provider_id: String,
     on_progress: DownloadProgressCallback,
 ) -> anyhow::Result<ExtensionSummary> {
     let manifest = fetch_default_manifest_url(http_client.clone()).await?;
     let entries = manifest.into_entries();
-    let entry = find_remote_desktop_provider_entry(&entries, provider_id)
+    let entry = find_remote_desktop_provider_entry(&entries, &provider_id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("扩展市场未找到远程桌面插件 {provider_id}"))?;
-    let staging =
-        download_marketplace_entry_to_staging_with_progress(http_client, &entry, on_progress)
-            .await?;
-    let result = install_staged_remote_desktop_provider(&staging);
-    let _ = std::fs::remove_dir_all(&staging);
-    result
-}
-
-fn install_staged_remote_desktop_provider(
-    staging: &std::path::Path,
-) -> anyhow::Result<ExtensionSummary> {
-    let registry =
-        ExtensionRegistry::global().ok_or_else(|| anyhow::anyhow!("扩展系统未初始化"))?;
-    let registry = registry
-        .read()
-        .map_err(|error| anyhow::anyhow!("registry lock poisoned: {error}"))?;
-    install_from_staging_generic(
-        staging,
-        &registry,
-        Some(ExtensionKind::RemoteDesktopProvider),
+    let summary = install_marketplace_entry_with_progress(
+        http_client,
+        &entry,
+        ExtensionKind::RemoteDesktopProvider,
+        on_progress,
     )
-}
-
-fn open_install_progress_dialog(
-    window_handle: gpui::AnyWindowHandle,
-    progress_view: gpui::Entity<DriverInstallProgressView>,
-    cx: &mut AsyncApp,
-) {
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-        open_driver_install_progress_dialog(progress_view, window, cx);
-    });
-}
-
-fn finish_install_and_open<T: 'static>(
-    window_handle: gpui::AnyWindowHandle,
-    target: WeakEntity<T>,
-    provider_id: String,
-    progress_view: gpui::WeakEntity<DriverInstallProgressView>,
-    outcome: Result<(), String>,
-    on_success: impl FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
-    cx: &mut AsyncApp,
-) {
-    if outcome.is_ok() {
-        mark_driver_install_finished(&progress_view, cx);
-    }
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-        window.close_dialog(cx);
-        if let Some(target) = target.upgrade() {
-            target.update(cx, |target, cx| match outcome {
-                Ok(()) => {
-                    notify_success(window, cx, format!("已安装 {provider_id} 远程桌面插件"));
-                    on_success(target, window, cx);
-                }
-                Err(error) => notify_error(window, cx, format!("安装远程桌面插件失败: {error}")),
-            });
-        }
-    });
-}
-
-fn notify_error<T>(window: &mut Window, cx: &mut Context<T>, message: impl Into<String>) {
-    window.push_notification(Notification::error(message.into()), cx);
-}
-
-fn notify_success<T>(window: &mut Window, cx: &mut Context<T>, message: impl Into<String>) {
-    window.push_notification(Notification::success(message.into()), cx);
+    .await?;
+    RemoteDesktopProviderRegistry::refresh_global_registry();
+    Ok(summary)
 }
 
 #[cfg(test)]

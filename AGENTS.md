@@ -317,6 +317,13 @@
 
 #### 已沉淀经验
 
+- **标题**：扩展机制收敛时先做全仓 + 外部仓库死代码审计，`extension-api` 不是孤儿而是 WIT 契约宿主
+- **触发信号**：试图删除某个 extension-* crate 或“统一扩展机制”时，凭 `rg` 在 workspace 内没找到 `use extension_api` 就判定它是死 crate；或看到 `extension-host/src/runtime.rs` 的 `IpcExtensionRuntime`/`ComponentExtensionRuntime`/`ExtensionRuntimeFactory` 而以为它是统一运行时核心。
+- **根因 / 约束**：`extension-api` 的 Rust 代码确实无任何 crate 编译依赖，但它的 `wit/` 目录是 `extension-wasm` 全部 component bindings 的 WIT 源（9 处 `path: "../extension-api/wit"`），删除即破 wasm 组件路径；用户明确保留 wasm 时不能删。`extension-host/src/runtime.rs` 才是真死机制：零消费（workspace + 外部 `navop-extensions` 都不引），且是被 `extension-plugin-adapter::ActivationManager` 取代的废弃“统一 IPC/Component 运行时抽象”，其中 `ComponentExtensionRuntime` 是 TODO 占位。`crates/elasticsearch-provider` 非 workspace member、无人引用，是悬挂目录，但不在构建里。
+- **正确做法**：收敛前同时 grep workspace 与 `../navop-extensions`（该仓库的 Cargo.toml 依赖面决定外部 ABI）；区分“无 crate 编译依赖”和“被 fixture/bindings 以路径/WIT 引用”。对外部驱动在用符号（`extension-host` 的 client/process/transport/host_api/universal_plugin、`extension-driver` 的 `serve`/`Driver`）绝不轻动。DB SQL 驱动的 `IpcDriverRegistry`(driver.json) 与 `ExtensionRuntimeCatalog`(extension.json) 是刻意分层：`db` crate 依赖 `extension-runtime` 会成环，且设计 Non-Goals 明确不发明统一 SQL 协议。
+- **验证方式**：删除前后跑 `cargo check -p extension-host -p extension-plugin-adapter -p db -p extension-runtime -p universal-plugins -p main`、`cargo test -p extension-host -p extension-plugin-adapter -p extension-runtime`、`cargo clippy -p extension-host --all-targets`；并确认 `navop-extensions` 无 `extension_host::runtime`/`runtime.rs` 符号引用。
+- **适用范围**：`crates/extension-*`、`crates/universal-plugins`、`crates/db/src/ipc/registry.rs`、`crates/extension-runtime/src/extension_db_gateway.rs`、`crates/elasticsearch-provider`，以及任何“统一/删除扩展机制”类改造。
+
 - **标题**：GPUI UI 测试不要直接依赖真实 Tokio worker 的完成时序
 - **触发信号**：`#[gpui::test]` 覆盖 UI 加载时，代码路径内部调用 `one_core::gpui_tokio::Tokio::spawn`，测试出现非确定性 background thread / scheduler 活动，或需要等待真实多线程 Tokio worker 才能断言 UI 状态。
 - **根因 / 约束**：`Tokio::spawn` 使用全局 Tokio runtime，再通过 GPUI `background_spawn` 回到测试调度器；这会让本应确定性的 UI 测试混入真实多线程调度。
@@ -540,6 +547,40 @@
 - **正确做法**：需要独立调色板的富文本使用 `gpui_base::TextView` 和完整的 `gpui_base::TextViewStyle`，显式设置 foreground、muted foreground、link、selection、code background、border 与 light/dark 模式；同时保留代码块/表格圆角和全局 syntax highlighter fallback。
 - **验证方式**：样式 contract 断言完整语义色映射；终端主题测试覆盖所有内置调色板与背景的基础明度差；运行 `cargo test -p ai_chat_view`、终端主题测试和 `cargo check -p main`。
 - **适用范围**：`crates/ai_chat_view`，以及终端、远程桌面、编辑器等在应用全局主题之外渲染 Markdown/HTML 的嵌入式面板。
+
+- **标题**：把 main 里互相依赖的插件 UI 模块迁入 crate 必须整簇搬移并下沉 app 级 Global
+- **触发信号**：想把 `main/src/shell_plugin_host` + `shell_plugin_tab` 之类“插件机制”抽出到新 crate，却发现 host 依赖 `UniversalPluginService`、`GlobalTabContainer`、headless `ExtensionConnectionTab` 等仍在 main 里的符号，而 Rust 库 crate 无法 `use main`（bin）。
+- **根因 / 约束**：迁移对象只要引用了任何仍留在 main 的类型，就必须把它们一起搬出或先下沉到 crate，否则必然双向依赖。`shell_plugc`…具体到 Navop：`shell_plugin_host/shell_plugin_tab/universal_plugins/extension_connection_tab/extension_connection_form` 是一整簇互相 `crate::` 引用的单元，`cx.global::<GlobalTabContainer>()` 这类 app 级 tab 打开入口是所有 UI 共同的硬依赖，只能把 `GlobalTabContainer`（仅 `Entity<TabContainer>` 包装）下沉到 `one_core::tab_container`，不能反向注入。
+- **正确做法**：整簇 5 个模块一次搬入新 crate（`crates/universal-plugins`），功能开关用 crate 自带 `shell-plugins` optional dep feature 表达（main 的 `shell-plugins` 改为 `["universal-plugins/shell-plugins"]`），默认 off 时 crate 为空。搬移时把 `pub(crate)`→`pub` 只改 main 真实消费的边界（global 类型、load/service/open_connection/resource_connection/register_headless_tab 与 `ConnectionShellOpen` 字段），簇内引用 `crate::` 路径在新 crate 里解析位置不变，多数文件零改动。main 侧只改 import 路径。
+- **验证方式**：双态验证 `cargo check -p main`（feature off）与 `cargo check -p main --features shell-plugins` 及 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。
+- **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,onetcli_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
+
+- **标题**：View 内联渲染自己的引用方会造成 GPUI 实体租约重入 panic
+- **触发信号**：运行时在 `entity_map.rs` 报 `cannot read X while it is already being updated`，场景为 A::render 中直接 `b.update(cx, |b, cx| b.render_something(cx))`，且该路径内部再 `this.a.read(cx)` / `this.a.update(cx)`。
+- **根因 / 约束**：GPUI 渲染 View 时持有其实体租约；同一帧渲染路径中任何代码再 read/update 该实体即 panic。把整段子视图手动塞回某个方法，等于把对方的 render 搬进了自己的租约。
+- **正确做法**：需要渲染“会反向读取当前实体”的子视图时，把子视图作为实体子节点渲染（`view.clone()` 作 child / AnyView），子视图在自己的 `Render::render` 租约里读取父实体；模式切换用显式字段（如 `home_embedded`）控制子视图输出。事件回调里的 read/update 不受此约束。
+- **验证方式**：结构 contract 断言宿主 render 只引用实体不内联调用其 render 方法（含 `set_*` 模式同步），真实窗口切换布局确认不再 panic。
+- **适用范围**：`main/src/home_tab/content.rs`（HomePage 嵌入 persistent_connection_sidebar Tree）、任何 View 互相持有 Entity 并嵌入渲染的场景。
+
+- **标题**：延迟打开标签时不能重新租用即将失活的 View
+- **触发信号**：从主页新建本地终端时，虽然用了 `window.defer`，仍报 `cannot update HomePage while it is already being updated`。
+- **根因 / 约束**：`add_and_activate_tab_with_focus` 同步调用旧标签的 `on_deactivate`，其动态派发会执行旧 View 的 `Entity::update`；若 defer 内又包一层 `home.update`，主页仍被租用。`cx.defer_in` 同样会重新租用当前 View，不能替代这个边界。
+- **正确做法**：在原更新内准备配置、标签编号和目标容器；使用 `window.defer`，在回调的 `App` 上创建新 View 并更新标签容器，不再更新原 View。保留焦点和标签生命周期回调，不通过吞 panic 绕过。
+- **验证方式**：运行 `home_tab::tests::local_terminal` 结构契约和 `cargo check -p main --bin navop`；真实窗口回归从活动主页通过快捷键、按钮和自定义 profile 打开本地终端。
+- **适用范围**：`main/src/home/home_tabs.rs::add_local_terminal_tab`，以及任何从当前标签 View 发起的同步标签切换。
+
+- **标题**：主页批量选择状态由 HomePage 持有，三布局共享；嵌入树不再有自带搜索框
+- **触发信号**：给主页卡片/列表/树加批量操作时发现入口缺失或状态分叉；或主页 Tree 布局同时出现工具栏大搜索框和树内“搜索连接或分组”两个搜索框。
+- **根因 / 约束**：树原本把 `ConnectionSelection` 与 `selected_filter`/树内搜索框留在 `PersistentConnectionSidebar`，嵌入主页时树头部被隐藏，批量入口随之消失，树内搜索框又与主页工具栏重复。
+- **正确做法**：`ConnectionSelection` 及 `set_batch_mode` / `select_connection_in_batch` / `visible_manageable_connection_ids` 位于 `home_tab/connection_selection.rs`，侧栏树经 `home_page` 读写同一状态；卡片/列表批量条由 `home_tab/batch_bar.rs` 渲染，Tree 布局的批量条仍由侧栏树内渲染。树入口仅在 `!home_embedded` 时渲染 `render_tree_search`，嵌入时 `tree_rows` 直接读 `home.search_query` 与 `home.selected_filter`。数据加载完成后调用 `prune_connection_selection` 裁剪失效选择。
+- **验证方式**：`cargo test -p main`（home_tab::connection_selection 单元测试、batch_bar/batch_toolbar 契约、`embedded_tree_reuses_home_search_and_filter_without_own_search_box`、`home_batch_mode_is_shared_across_card_list_and_tree_layouts`）。
+- **适用范围**：`main/src/home_tab/{connection_selection,batch_bar,toolbar,home_layout,connection_card,connection_list,data}.rs`、`main/src/persistent_connection_sidebar/{selection,batch_toolbar,rows,tree,mod}.rs`。
+
+- **标题**：后台任务入口图标等应用级自定义 SVG 通过 AssetSource 内嵌并按路径引用
+- **触发信号**：需要替换 tabs 栏后台任务入口等 `IconName` 覆盖不了的图标；`gpui-component` 的 `IconName` 由其 assets 宏生成，本仓库无法添加变体。
+- **正确做法**：SVG 放入 `resources/icons/`，路径常量定义在 `one_core::storage`（如 `NAVOP_BACKGROUND_TASK_ICON`），`main::navop_brand_icon` 以 `include_bytes!` 注册；使用处 `Icon::default().path(常量)`。`Button::icon` / `Toggle::icon` 接受 `impl Into<Icon>`，可直接传 `Icon`。
+- **验证方式**：`cargo test -p one-core background_task`（入口与徽标契约）+ `cargo check -p main`。
+- **适用范围**：`crates/core/src/background_task_panel.rs`、`main/src/main.rs`、`crates/core/src/storage/models.rs`、`resources/icons/`。
 
 ### 执行原则
 

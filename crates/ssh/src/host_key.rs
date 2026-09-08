@@ -234,6 +234,19 @@ pub enum HostKeyAcceptance {
     Insecure,
 }
 
+/// A host that has been trusted in the app's host-key trust store, surfaced to
+/// the "Known Hosts" UI.  Time fields are seconds since the Unix epoch; they are
+/// `None` for records created by an older trust-store version.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KnownHost {
+    pub identity: HostKeyIdentity,
+    pub algorithm: String,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub discovered_at: Option<u64>,
+    pub last_seen: Option<u64>,
+}
+
 /// A fail-closed host-key rejection.  The details intentionally contain only
 /// endpoint/key metadata; credentials and private key material never enter
 /// these messages.
@@ -499,6 +512,127 @@ impl HostKeyVerifier {
         Ok(algorithms)
     }
 
+    /// Enumerate the hosts currently trusted in the app trust store, newest
+    /// activity first.  Used by the Known Hosts UI and by import tools.
+    ///
+    /// Listing is tolerant: an individual entry that fails to re-parse (for
+    /// example from an older or partial write) is skipped with a warning
+    /// instead of hiding the rest of the list.  Structural store errors
+    /// (invalid JSON, unsupported version) still fail the whole call.
+    pub fn list_known_hosts(&self) -> Result<Vec<KnownHost>, String> {
+        let _lock = trust_store_lock();
+        let Some(persisted) = self.read_persisted_entries()? else {
+            return Ok(Vec::new());
+        };
+        let path_label = self
+            .trust_store_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unset>".to_owned());
+        let mut hosts = Vec::new();
+        for entry in persisted {
+            match StoredHostKey::try_from(entry) {
+                Ok(entry) => hosts.push(KnownHost {
+                    identity: entry.identity,
+                    algorithm: entry.details.algorithm,
+                    fingerprint: entry.details.fingerprint,
+                    public_key: entry.public_key,
+                    discovered_at: entry.discovered_at,
+                    last_seen: entry.last_seen,
+                }),
+                Err(error) => tracing::warn!(
+                    target: "host_key",
+                    path = %path_label,
+                    error,
+                    "skipping invalid host-key trust entry while listing known hosts"
+                ),
+            }
+        }
+        hosts.sort_by_key(|host| std::cmp::Reverse(host.last_seen.unwrap_or_default()));
+        Ok(hosts)
+    }
+
+    /// Remove one trusted host-key identity from the app trust store.
+    pub fn remove_known_host(&self, identity: &HostKeyIdentity) -> Result<bool, String> {
+        let _lock = trust_store_lock();
+        let mut entries = self.load_app_entries()?;
+        let original_len = entries.len();
+        entries.retain(|entry| entry.identity != *identity);
+        if entries.len() == original_len {
+            return Ok(false);
+        }
+        self.save_app_entries(&entries)?;
+        Ok(true)
+    }
+
+    /// Import host keys from an OpenSSH `known_hosts` file into the app trust
+    /// store.  Only plain, concrete host patterns (host or `[host]:port`) are
+    /// importable; hashed names, wildcards, negated patterns, certificate
+    /// authorities and revoked keys are skipped.  Returns the number of hosts
+    /// newly imported (already-trusted identities are left untouched).
+    pub fn import_system_known_hosts(&self, path: &Path) -> Result<usize, String> {
+        let input = match fs::read_to_string(path) {
+            Ok(input) => input,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => {
+                return Err(format!(
+                    "read OpenSSH known_hosts {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+
+        let _lock = trust_store_lock();
+        let mut entries = self.load_app_entries()?;
+        let now = now_secs();
+        let mut imported = 0usize;
+        for parsed in ssh_key::known_hosts::KnownHosts::new(&input) {
+            let entry = match parsed {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), error = %error, "skipping malformed known_hosts entry");
+                    continue;
+                }
+            };
+            if matches!(
+                entry.marker(),
+                Some(
+                    ssh_key::known_hosts::Marker::CertAuthority
+                        | ssh_key::known_hosts::Marker::Revoked
+                )
+            ) {
+                continue;
+            }
+            let ssh_key::known_hosts::HostPatterns::Patterns(patterns) = entry.host_patterns()
+            else {
+                continue;
+            };
+            let public_key = entry.public_key().clone();
+            let details = HostKeyDetails::from_public_key(&public_key);
+            for pattern in patterns {
+                let Some((host, port)) = known_host_pattern_to_identity(pattern) else {
+                    continue;
+                };
+                let identity = HostKeyIdentity::new(host, port, HostKeyRoute::Direct);
+                if entries.iter().any(|entry| entry.identity == identity) {
+                    continue;
+                }
+                entries.push(StoredHostKey {
+                    identity,
+                    public_key: public_key_string(&public_key),
+                    details: details.clone(),
+                    discovered_at: Some(now),
+                    last_seen: Some(now),
+                });
+                imported += 1;
+            }
+        }
+        if imported > 0 {
+            self.save_app_entries(&entries)?;
+        }
+        Ok(imported)
+    }
+
     /// Verify a server key and, in `AcceptNew`, persist an unknown key.
     pub fn verify(
         &self,
@@ -523,10 +657,7 @@ impl HostKeyVerifier {
             }
         };
 
-        let app_matches = app_entries
-            .iter()
-            .filter(|entry| entry.identity == *identity)
-            .collect::<Vec<_>>();
+        let presented_public_key = public_key_string(server_public_key);
         let confirmation = self.confirmed_keys.iter().find(|confirmation| {
             confirmation.identity == *identity && confirmation.details == presented
         });
@@ -546,11 +677,35 @@ impl HostKeyVerifier {
                 });
             }
         };
-        if !app_matches.is_empty() {
-            if app_matches
-                .iter()
-                .any(|entry| entry.public_key == public_key_string(server_public_key))
-            {
+
+        let mut app_entries = app_entries;
+        let mut app_known_index = None;
+        let mut app_has_entry = false;
+        for (index, entry) in app_entries.iter().enumerate() {
+            if entry.identity != *identity {
+                continue;
+            }
+            app_has_entry = true;
+            if entry.public_key == presented_public_key {
+                app_known_index = Some(index);
+            }
+        }
+
+        if app_has_entry {
+            if let Some(index) = app_known_index {
+                if let Some(entry) = app_entries.get_mut(index) {
+                    entry.last_seen = Some(now_secs());
+                }
+                if let Err(reason) = self.save_app_entries(&app_entries) {
+                    // A timestamp write must not turn a successful verification
+                    // into a failure; the trust decision is already made.
+                    tracing::warn!(
+                        target: "host_key",
+                        identity = %identity,
+                        reason,
+                        "could not record known-host last_seen"
+                    );
+                }
                 return Ok(HostKeyAcceptance::Known);
             }
             if let Some(confirmation) = confirmation.filter(|entry| entry.replace_existing) {
@@ -559,8 +714,9 @@ impl HostKeyVerifier {
             return Err(HostKeyRejection::Changed {
                 identity: identity.clone(),
                 presented,
-                expected: app_matches
+                expected: app_entries
                     .iter()
+                    .filter(|entry| entry.identity == *identity)
                     .map(|entry| entry.details.clone())
                     .collect(),
             });
@@ -589,11 +745,14 @@ impl HostKeyVerifier {
         if self.policy == HostKeyPolicy::AcceptNew {
             let public_key = public_key_string(server_public_key);
             let details = HostKeyDetails::from_public_key(server_public_key);
+            let now = now_secs();
             let mut entries = app_entries;
             entries.push(StoredHostKey {
                 identity: identity.clone(),
                 public_key,
                 details,
+                discovered_at: Some(now),
+                last_seen: Some(now),
             });
             if let Err(reason) = self.save_app_entries(&entries) {
                 return Err(HostKeyRejection::StoreUnavailable {
@@ -632,10 +791,13 @@ impl HostKeyVerifier {
         if confirmation.replace_existing {
             entries.retain(|entry| entry.identity != *identity);
         }
+        let now = now_secs();
         entries.push(StoredHostKey {
             identity: identity.clone(),
             public_key: public_key_string(server_public_key),
             details: presented.clone(),
+            discovered_at: Some(now),
+            last_seen: Some(now),
         });
         self.save_app_entries(&entries)
             .map_err(|reason| HostKeyRejection::StoreUnavailable {
@@ -647,8 +809,19 @@ impl HostKeyVerifier {
     }
 
     fn load_app_entries(&self) -> Result<Vec<StoredHostKey>, String> {
-        let Some(path) = &self.trust_store_path else {
+        let Some(entries) = self.read_persisted_entries()? else {
             return Ok(Vec::new());
+        };
+        entries.into_iter().map(StoredHostKey::try_from).collect()
+    }
+
+    /// Read and structurally validate the trust store, returning `None` when
+    /// the file does not exist yet.  Entries are returned unvalidated so
+    /// callers can decide whether one bad row is fatal (verification) or only
+    /// worth skipping (listing).
+    fn read_persisted_entries(&self) -> Result<Option<Vec<PersistedHostKey>>, String> {
+        let Some(path) = &self.trust_store_path else {
+            return Ok(Some(Vec::new()));
         };
         match fs::read(path) {
             Ok(bytes) => {
@@ -663,13 +836,9 @@ impl HostKeyVerifier {
                         path.display()
                     ));
                 }
-                store
-                    .entries
-                    .into_iter()
-                    .map(StoredHostKey::try_from)
-                    .collect()
+                Ok(Some(store.entries))
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(format!(
                 "read host-key trust store {}: {error}",
                 path.display()
@@ -806,6 +975,8 @@ struct StoredHostKey {
     identity: HostKeyIdentity,
     public_key: String,
     details: HostKeyDetails,
+    discovered_at: Option<u64>,
+    last_seen: Option<u64>,
 }
 
 struct OpenSshHostKey {
@@ -828,6 +999,10 @@ struct PersistedHostKey {
     public_key: String,
     algorithm: String,
     fingerprint: String,
+    #[serde(default)]
+    discovered_at: Option<u64>,
+    #[serde(default)]
+    last_seen: Option<u64>,
 }
 
 impl From<&StoredHostKey> for PersistedHostKey {
@@ -839,6 +1014,8 @@ impl From<&StoredHostKey> for PersistedHostKey {
             public_key: entry.public_key.clone(),
             algorithm: entry.details.algorithm.clone(),
             fingerprint: entry.details.fingerprint.clone(),
+            discovered_at: entry.discovered_at,
+            last_seen: entry.last_seen,
         }
     }
 }
@@ -859,6 +1036,8 @@ impl TryFrom<PersistedHostKey> for StoredHostKey {
             identity: HostKeyIdentity::new(entry.host, entry.port, entry.route),
             public_key: entry.public_key,
             details,
+            discovered_at: entry.discovered_at,
+            last_seen: entry.last_seen,
         })
     }
 }
@@ -903,6 +1082,47 @@ fn trust_store_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+/// Recover a concrete (host, port) from an OpenSSH `known_hosts` pattern.
+/// Returns `None` for hashed names, wildcards, negations and ambiguous forms
+/// (bare `host:port` without brackets is treated as an IPv6 literal and skipped).
+fn known_host_pattern_to_identity(pattern: &str) -> Option<(String, u16)> {
+    let pattern = pattern.trim();
+    if pattern.is_empty()
+        || pattern.starts_with('!')
+        || pattern.starts_with('|')
+        || pattern.contains('*')
+        || pattern.contains('?')
+    {
+        return None;
+    }
+    let (host, port) = if let Some(rest) = pattern.strip_prefix('[') {
+        let Some((host, remainder)) = rest.split_once(']') else {
+            return None;
+        };
+        let port = match remainder.strip_prefix(':') {
+            Some(next) => next.parse::<u16>().ok()?,
+            None => 22,
+        };
+        (host, port)
+    } else {
+        if pattern.contains(':') {
+            return None;
+        }
+        (pattern, 22)
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_owned(), port))
 }
 
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
@@ -1706,5 +1926,214 @@ mod tests {
 
         assert!(known_hosts_match(&patterns, "hashed.example"));
         assert!(!known_hosts_match(&patterns, "other.example"));
+    }
+
+    fn hashed_known_hosts_line(host: &str) -> String {
+        use base64::Engine as _;
+        let salt = b"01234567890123456789".to_vec();
+        let mut mac = HmacSha1::new_from_slice(&salt).expect("valid HMAC key");
+        mac.update(host.as_bytes());
+        let hash = mac.finalize().into_bytes();
+        let encode = base64::engine::general_purpose::STANDARD;
+        format!("|1|{}|{}", encode.encode(salt), encode.encode(hash))
+    }
+
+    #[test]
+    fn accepted_host_is_listed_with_algorithm_fingerprint_and_timestamps() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &presented)
+            .expect("accept new");
+
+        let hosts = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .list_known_hosts()
+            .expect("list known hosts");
+
+        assert_eq!(hosts.len(), 1);
+        let host = &hosts[0];
+        assert_eq!(host.identity, id);
+        assert_eq!(host.algorithm, "ssh-ed25519");
+        assert!(host.fingerprint.starts_with("SHA256:"));
+        assert_eq!(host.public_key, public_key_string(&presented));
+        assert!(host.discovered_at.is_some());
+        assert!(host.last_seen.is_some());
+    }
+
+    #[test]
+    fn reusing_known_host_preserves_metadata() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &presented)
+            .expect("seed app trust");
+
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path);
+        assert_eq!(
+            verifier.verify(&id, &presented).expect("known host reuses"),
+            HostKeyAcceptance::Known
+        );
+
+        let hosts = verifier.list_known_hosts().expect("list known hosts");
+        assert_eq!(hosts.len(), 1);
+        assert!(hosts[0].discovered_at.is_some());
+        assert!(hosts[0].last_seen.is_some());
+        assert!(hosts[0].discovered_at <= hosts[0].last_seen);
+    }
+
+    #[test]
+    fn legacy_trust_store_without_metadata_still_loads() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &presented)
+            .expect("seed app trust");
+        let mut store: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read seeded trust store"))
+                .expect("parse seeded trust store");
+        for entry in store["entries"].as_array_mut().expect("entries array") {
+            entry
+                .as_object_mut()
+                .expect("entry object")
+                .remove("discovered_at");
+            entry
+                .as_object_mut()
+                .expect("entry object")
+                .remove("last_seen");
+        }
+        fs::write(
+            &path,
+            serde_json::to_string(&store).expect("serialize legacy store"),
+        )
+        .expect("write legacy trust store");
+
+        let hosts = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .list_known_hosts()
+            .expect("legacy store should load");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].discovered_at, None);
+        assert_eq!(hosts[0].last_seen, None);
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .verify(&id, &presented)
+                .expect("legacy key should remain trusted"),
+            HostKeyAcceptance::Known
+        );
+    }
+
+    #[test]
+    fn import_system_known_hosts_imports_plain_and_skips_ambiguous() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_path = temp.path().join("keys.json");
+        let known_hosts_path = temp.path().join("known_hosts");
+        let plain_key = key(ssh_key::Algorithm::Ed25519);
+        let port_key = key(ssh_key::Algorithm::Ed25519);
+        let revoked_key = key(ssh_key::Algorithm::Ed25519);
+        let content = format!(
+            "plain.example {}\n[port.example]:2200 {}\n*.wild.example {}\n!neg.example {}\n{}\n@revoked revoked.example {}\n@cert-authority ca.example {}\nnot-a-valid-known-hosts-line\n",
+            public_key_string(&plain_key),
+            public_key_string(&port_key),
+            public_key_string(&port_key),
+            public_key_string(&plain_key),
+            hashed_known_hosts_line("hashed.example"),
+            public_key_string(&revoked_key),
+            public_key_string(&plain_key),
+        );
+        fs::write(&known_hosts_path, content).expect("write known_hosts");
+
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &app_path);
+        let imported = verifier
+            .import_system_known_hosts(&known_hosts_path)
+            .expect("import system known_hosts");
+
+        assert_eq!(imported, 2);
+        let hosts = verifier.list_known_hosts().expect("list known hosts");
+        let identities = hosts
+            .iter()
+            .map(|host| host.identity.clone())
+            .collect::<Vec<_>>();
+        assert!(identities.contains(&identity("plain.example", 22)));
+        assert!(identities.contains(&identity("port.example", 2200)));
+    }
+
+    #[test]
+    fn import_system_known_hosts_is_idempotent() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_path = temp.path().join("keys.json");
+        let known_hosts_path = temp.path().join("known_hosts");
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        fs::write(
+            &known_hosts_path,
+            format!("plain.example {}\n", public_key_string(&presented)),
+        )
+        .expect("write known_hosts");
+
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &app_path);
+        assert_eq!(
+            verifier
+                .import_system_known_hosts(&known_hosts_path)
+                .expect("first import"),
+            1
+        );
+        assert_eq!(
+            verifier
+                .import_system_known_hosts(&known_hosts_path)
+                .expect("second import"),
+            0
+        );
+    }
+
+    #[test]
+    fn missing_known_hosts_file_imports_nothing() {
+        let temp = TempDir::new().expect("temp dir");
+        let verifier =
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, temp.path().join("keys.json"));
+        assert_eq!(
+            verifier
+                .import_system_known_hosts(&temp.path().join("missing_known_hosts"))
+                .expect("missing file is not an error"),
+            0
+        );
+    }
+
+    #[test]
+    fn list_known_hosts_skips_a_single_corrupt_entry() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let good_id = identity("good.example", 22);
+        let bad_id = identity("bad.example", 22);
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path);
+        verifier
+            .verify(&good_id, &key(ssh_key::Algorithm::Ed25519))
+            .expect("seed good host");
+        verifier
+            .verify(&bad_id, &key(ssh_key::Algorithm::Ed25519))
+            .expect("seed bad host");
+
+        let mut store: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read seeded trust store"))
+                .expect("parse seeded trust store");
+        for entry in store["entries"].as_array_mut().expect("entries array") {
+            if entry["host"] == "bad.example" {
+                entry["fingerprint"] = serde_json::Value::String("SHA256:corrupt".to_owned());
+            }
+        }
+        fs::write(
+            &path,
+            serde_json::to_string(&store).expect("serialize store"),
+        )
+        .expect("rewrite trust store");
+
+        let hosts = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .list_known_hosts()
+            .expect("listing tolerates a corrupt entry");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].identity, good_id);
     }
 }

@@ -8,7 +8,6 @@ impl HomePage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let sftp_connection = conn.clone();
-        let duplicate_connection = conn.clone();
         let edit_connection = conn.clone();
         let delete_connection_id = conn.id;
         let delete_connection_name = conn.name.clone();
@@ -22,13 +21,17 @@ impl HomePage {
             .w(HOME_CONNECTION_LIST_ACTIONS_WIDTH)
             .flex_shrink_0()
             .justify_end()
+            .p_0p5()
+            .rounded(px(8.0))
             .group_hover("", |style| style.opacity(1.0))
             .opacity(0.0)
             .when(conn.connection_type == ConnectionType::SshSftp, |this| {
                 this.child(
                     IconButton::new(
                         SharedString::from(format!("sftp-list-conn-{}", conn.id.unwrap_or(0))),
-                        Icon::new(IconName::FolderOpen),
+                        Icon::new(IconName::FolderOpen)
+                            .mono()
+                            .with_size(IconSize::Small),
                     )
                     .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.open_sftp"))
@@ -41,20 +44,8 @@ impl HomePage {
             .when(can_edit, |this| {
                 this.child(
                     IconButton::new(
-                        SharedString::from(format!("duplicate-list-conn-{}", conn.id.unwrap_or(0))),
-                        Icon::new(IconName::Copy),
-                    )
-                    .role(IconButtonRole::Compact)
-                    .tooltip(t!("Home.duplicate_connection"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.duplicate_connection(duplicate_connection.clone(), window, cx);
-                    })),
-                )
-                .child(
-                    IconButton::new(
                         SharedString::from(format!("edit-list-conn-{}", conn.id.unwrap_or(0))),
-                        Icon::new(IconName::Edit),
+                        Icon::new(IconName::Edit).mono().with_size(IconSize::Small),
                     )
                     .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.edit_connection"))
@@ -66,7 +57,9 @@ impl HomePage {
                 .child(
                     IconButton::new(
                         SharedString::from(format!("delete-list-conn-{}", conn.id.unwrap_or(0))),
-                        Icon::new(IconName::Remove),
+                        Icon::new(IconName::Remove)
+                            .mono()
+                            .with_size(IconSize::Small),
                     )
                     .role(IconButtonRole::Compact)
                     .text_color(cx.theme().danger)

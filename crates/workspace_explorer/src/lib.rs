@@ -24,4 +24,5 @@ pub use theme::WorkspaceTheme;
 /// Registers workspace explorer keyboard shortcuts.
 pub fn init(cx: &mut gpui::App) {
     cx.bind_keys(explorer::keybindings());
+    cx.bind_keys(editor::keybindings());
 }

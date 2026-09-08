@@ -1,4 +1,23 @@
 use one_core::cloud_sync::personal::{SyncStoreError, SyncStoreHealth};
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// 本会话内最近一次同步（任意路由）成功完成的 Unix 秒时间戳，供账户菜单展示相对时间。
+static LAST_SYNC_COMPLETED_AT: AtomicI64 = AtomicI64::new(0);
+
+pub fn note_sync_completed() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    LAST_SYNC_COMPLETED_AT.store(now, Ordering::Relaxed);
+}
+
+pub fn last_sync_completed_at() -> Option<i64> {
+    match LAST_SYNC_COMPLETED_AT.load(Ordering::Relaxed) {
+        0 => None,
+        timestamp => Some(timestamp),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersonalSyncRuntimeStatus {

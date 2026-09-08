@@ -14,13 +14,15 @@ use gpui_component::{
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 use smol::Timer;
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 use terminal::recording::{
     RecordingFileLimits, SessionLogCatalog, SessionLogEntry, SessionLogFavorites,
     load_session_log_favorites, scan_session_logs, session_logs_directory,
 };
 
 const SESSION_LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const SESSION_LOG_PAGE_SIZE: usize = 50;
+const SESSION_LOG_LOAD_MORE_THRESHOLD: usize = 10;
 
 pub(crate) struct SessionLogsPage {
     focus_handle: FocusHandle,
@@ -33,6 +35,8 @@ pub(crate) struct SessionLogsPage {
     load_generation: u64,
     favorite_saving: bool,
     deleting: bool,
+    selected_ids: HashSet<String>,
+    visible_count: usize,
     scroll_handle: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -44,8 +48,10 @@ impl SessionLogsPage {
                 .placeholder(t!("SessionLogs.search_placeholder").to_string())
                 .clean_on_escape()
         });
-        let subscription = cx.subscribe(&search_input, |_, _, event: &InputEvent, cx| {
+        let subscription = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                this.visible_count = SESSION_LOG_PAGE_SIZE;
+                this.selected_ids.clear();
                 cx.notify();
             }
         });
@@ -61,6 +67,8 @@ impl SessionLogsPage {
             load_generation: 0,
             favorite_saving: false,
             deleting: false,
+            selected_ids: HashSet::new(),
+            visible_count: SESSION_LOG_PAGE_SIZE,
             scroll_handle: UniformListScrollHandle::default(),
             _subscriptions: vec![subscription],
         };
@@ -146,6 +154,7 @@ impl SessionLogsPage {
             Ok((favorites, catalog)) => {
                 self.favorites = favorites;
                 self.catalog = catalog;
+                prune_selection(&mut self.selected_ids, &self.catalog.entries);
             }
             Err(error) => self.load_error = Some(error),
         }
@@ -160,6 +169,56 @@ impl SessionLogsPage {
             .filter(|entry| model::session_log_matches(entry, &query))
             .cloned()
             .collect()
+    }
+
+    pub(super) fn toggle_selected(&mut self, recording_id: String) {
+        if !self.selected_ids.insert(recording_id.clone()) {
+            self.selected_ids.remove(&recording_id);
+        }
+    }
+
+    pub(super) fn select_all_filtered(&mut self, cx: &App) {
+        self.selected_ids.extend(
+            self.filtered_entries(cx)
+                .into_iter()
+                .map(|entry| entry.header.navop.recording_id),
+        );
+    }
+
+    pub(super) fn clear_selection(&mut self) {
+        self.selected_ids.clear();
+    }
+
+    pub(super) fn load_more(&mut self, total: usize, cx: &mut Context<Self>) {
+        let next = next_visible_count(self.visible_count, total);
+        if next != self.visible_count {
+            self.visible_count = next;
+            cx.notify();
+        }
+    }
+}
+
+fn next_visible_count(visible: usize, total: usize) -> usize {
+    (visible + SESSION_LOG_PAGE_SIZE).min(total)
+}
+
+fn prune_selection(selected_ids: &mut HashSet<String>, entries: &[SessionLogEntry]) {
+    selected_ids.retain(|id| {
+        entries
+            .iter()
+            .any(|entry| entry.header.navop.recording_id == *id)
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pagination_loads_fixed_batches_without_exceeding_total() {
+        assert_eq!(100, next_visible_count(50, 125));
+        assert_eq!(125, next_visible_count(100, 125));
+        assert_eq!(125, next_visible_count(125, 125));
     }
 }
 

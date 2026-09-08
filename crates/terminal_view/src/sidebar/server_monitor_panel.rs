@@ -1799,8 +1799,7 @@ async fn collect_remote_stats(
     session_manager: Arc<SshSessionManager>,
     session_id: &str,
 ) -> Result<String> {
-    let output =
-        exec_push_script(&session_manager, &build_collect_command(session_id)).await?;
+    let output = exec_push_script(&session_manager, &build_collect_command(session_id)).await?;
     if output.trim().is_empty() {
         Err(anyhow!("empty monitor payload"))
     } else {
@@ -1862,10 +1861,7 @@ async fn drain_channel_output(channel: &mut RusshChannel) -> Result<String> {
 
 /// 通过 `sh -s` 从 stdin 读取监控脚本；`--session` 由脚本自行解析。
 fn build_collect_command(session_id: &str) -> String {
-    format!(
-        "sh -s -- --session {}",
-        shell_quote(session_id)
-    )
+    format!("sh -s -- --session {}", shell_quote(session_id))
 }
 
 fn shell_quote(value: &str) -> String {
@@ -2097,8 +2093,7 @@ cpu:
         let command = build_collect_command("session-12'34");
 
         assert_eq!(
-            command,
-            "sh -s -- --session 'session-12'\"'\"'34'",
+            command, "sh -s -- --session 'session-12'\"'\"'34'",
             "采集必须通过 sh -s 会话推送，不再引用远端脚本路径"
         );
         assert!(
@@ -2123,9 +2118,6 @@ cpu:
             !source.contains(&deploy_marker),
             "不得保留向远端部署 collect.sh 的写入逻辑"
         );
-        assert!(
-            source.contains("sh -s"),
-            "采集必须走 sh -s 会话推送"
-        );
+        assert!(source.contains("sh -s"), "采集必须走 sh -s 会话推送");
     }
 }

@@ -272,7 +272,10 @@ impl NotesView {
         if current == Some(mode) || current.is_none() {
             return;
         }
-        let session = self.markdown_sessions.get_mut(document_id).expect("checked above");
+        let session = self
+            .markdown_sessions
+            .get_mut(document_id)
+            .expect("checked above");
         switch_markdown_mode(session, mode, window, cx);
         self.tree
             .markdown_view_modes

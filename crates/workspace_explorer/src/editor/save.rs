@@ -1,4 +1,4 @@
-use super::{DocumentKey, WorkspaceEditor, WorkspaceEditorEvent};
+use super::{DocumentKey, SaveDocument, WorkspaceEditor, WorkspaceEditorEvent};
 use crate::file_system::save_file;
 use gpui::{AppContext as _, AsyncApp, Context, WeakEntity, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
@@ -13,6 +13,15 @@ struct SaveOutcome {
 }
 
 impl WorkspaceEditor {
+    pub(super) fn save_from_keyboard(
+        &mut self,
+        _: &SaveDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save(false, window, cx);
+    }
+
     pub(super) fn save(
         &mut self,
         close_after_save: bool,

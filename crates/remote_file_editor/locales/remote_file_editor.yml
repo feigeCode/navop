@@ -143,6 +143,10 @@ RemoteFileEditor:
       en: Configure the external editor executable path first
       zh-CN: 请先配置外部编辑器可执行文件路径
       zh-HK: 請先設定外部編輯器可執行檔路徑
+    default_external_editor_required:
+      en: No default external editor is configured. Select one in Settings before opening files with External mode.
+      zh-CN: 尚未配置默认外部编辑器，请先在设置中选择一个，再使用“外部编辑器”打开模式。
+      zh-HK: 尚未設定預設外部編輯器，請先在設定中選擇一個，再使用「外部編輯器」開啟模式。
     external_uploaded:
       en: Remote file uploaded
       zh-CN: 远程文件已上传

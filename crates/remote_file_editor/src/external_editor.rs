@@ -22,9 +22,8 @@ use crate::external_edit_controller::{
 use crate::external_editor_confirmation::confirm_external_program;
 use crate::external_session::snapshot_from_metadata;
 use crate::{
-    LaunchTemplateContext, MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, RemoteMutationCallback,
-    launch_external_editor, matching_editors, render_args, resolve_editor_program,
-    session_temp_file,
+    LaunchTemplateContext, RemoteFileSnapshot, RemoteMutationCallback, launch_external_editor,
+    matching_editors, render_args, resolve_editor_program, session_temp_file,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -248,6 +247,9 @@ fn prepare_external_edit<T>(
         .parent()
         .expect("external edit session directory must have a cache root")
         .to_path_buf();
+    let max_bytes = AppSettings::current(cx)
+        .remote_file_editor
+        .max_file_size_bytes();
     Tokio::spawn_result(cx, async move {
         let (metadata, bytes) = {
             let mut client = client.lock().await;
@@ -255,9 +257,7 @@ fn prepare_external_edit<T>(
                 .stat(&remote_path)
                 .await?
                 .ok_or_else(|| anyhow!("Remote file no longer exists"))?;
-            let bytes = client
-                .read_file(&remote_path, MAX_EDITABLE_FILE_SIZE)
-                .await?;
+            let bytes = client.read_file(&remote_path, max_bytes).await?;
             (metadata, bytes)
         };
         tokio::fs::create_dir_all(cache_root).await?;

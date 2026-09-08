@@ -12,7 +12,10 @@ use crate::real_databases::postgres::core_flow::{
 #[tokio::test]
 async fn postgres_real_import_export_round_trips_sql_csv_and_json() {
     let Some(config) = postgres_config() else {
-        skip_database("PostgreSQL", "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)");
+        skip_database(
+            "PostgreSQL",
+            "ONETCLI_TEST_POSTGRES_PASSWORD (empty string is valid)",
+        );
         return;
     };
     let config = optional_database(

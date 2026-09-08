@@ -1248,9 +1248,7 @@ impl SettingsPanel {
                         h_flex()
                             .items_center()
                             .justify_between()
-                            .child(
-                                div().text_sm().child(t!("Settings.selection_highlight")),
-                            )
+                            .child(div().text_sm().child(t!("Settings.selection_highlight")))
                             .child(
                                 Switch::new("selection-highlight-switch")
                                     .checked(selection_highlight)

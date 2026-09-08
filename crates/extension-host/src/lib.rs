@@ -12,7 +12,6 @@ pub mod manifest;
 pub mod negotiation;
 pub mod process;
 pub mod process_session;
-pub mod runtime;
 pub mod transport;
 pub mod universal_plugin;
 
@@ -28,10 +27,6 @@ pub use process::{ProcessHandle, SpawnConfig, SpawnTransport};
 pub use process_session::{
     DEFAULT_SESSION_REQUEST_TIMEOUT, DEFAULT_SESSION_SHUTDOWN_GRACE, NotificationReceiver,
     ProcessRpcSession, ProcessRpcSessionConfig,
-};
-pub use runtime::{
-    ComponentExtensionRuntime, ExtensionRuntime, ExtensionRuntimeFactory, ExtensionRuntimeType,
-    IpcExtensionRuntime,
 };
 pub use transport::{FramedTransport, ReadFramed, WriteFramed};
 pub use universal_plugin::{OpenAuthorizer, UniversalPluginClient};

@@ -11,13 +11,12 @@ mod auth;
 mod ai_chat_acp;
 mod app_init;
 mod connection_sort;
+mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
+#[cfg(feature = "shell-plugins")]
+mod dev_extension_registry;
 mod env_file;
-#[cfg(feature = "shell-plugins")]
-mod extension_connection_form;
-#[cfg(feature = "shell-plugins")]
-mod extension_connection_tab;
 mod extension_update;
 mod file_association;
 mod file_open;
@@ -25,7 +24,7 @@ mod home;
 mod home_tab;
 mod license;
 mod local_terminal_profiles;
-mod navigation_quick_open;
+mod navigation_applications;
 pub mod new_connection;
 mod onetcli_app;
 mod persistent_connection_sidebar;
@@ -39,21 +38,16 @@ mod public_mcp_runtime;
 mod session_logs;
 mod setting_tab;
 mod settings;
-#[cfg(feature = "shell-plugins")]
-mod shell_plugin_host;
-#[cfg(feature = "shell-plugins")]
-mod shell_plugin_tab;
 mod sync_conflict_dialog;
 mod team_management;
-#[cfg(feature = "shell-plugins")]
-mod universal_plugins;
+mod toolbox_tab;
 mod update;
-mod user_avatar;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
 
-use crate::onetcli_app::{GlobalTabContainer, OnetCliApp};
+use crate::onetcli_app::OnetCliApp;
 use gpui::*;
+use one_core::tab_container::GlobalTabContainer;
 
 use gpui_component::{DialogStateChanged, Root};
 use gpui_component_assets::Assets;
@@ -86,6 +80,15 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
         }
         one_core::storage::NAVOP_MQTT_LINE_ICON => {
             include_bytes!("../../resources/icons/mqtt-line.svg")
+        }
+        one_core::storage::NAVOP_BACKGROUND_TASK_ICON => {
+            include_bytes!("../../resources/icons/background-task.svg")
+        }
+        crate::home_tab::NAVOP_HISTORY_ICON => {
+            include_bytes!("../../resources/icons/history.svg")
+        }
+        crate::home_tab::NAVOP_HOME_LINE_ICON => {
+            include_bytes!("../../resources/icons/home-line.svg")
         }
         _ => return None,
     };
@@ -430,6 +433,8 @@ fn main() {
         extension_runtime::init(cx);
         #[cfg(feature = "shell-plugins")]
         universal_plugins::init(cx);
+        #[cfg(feature = "shell-plugins")]
+        dev_extension_registry::install_dev_host_ops(cx);
 
         let settings = AppSettings::current(cx);
         let saved_state = settings.main_window_state.as_ref();
@@ -809,6 +814,10 @@ mod embedded_cli_removal_tests {
                 .titlebar
                 .as_ref()
                 .and_then(|titlebar| titlebar.title.as_deref())
+        );
+        assert_eq!(
+            gpui::WindowBackgroundAppearance::Transparent,
+            options.window_background
         );
     }
 }

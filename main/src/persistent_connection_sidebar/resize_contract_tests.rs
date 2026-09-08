@@ -10,7 +10,8 @@ fn connection_tree_width_is_mouse_resizable_with_bounds() {
     let resize = include_str!("resize.rs");
 
     assert!(sidebar.contains("tree_width: Pixels"));
-    assert!(tree.contains(".w(self.tree_width)"));
+    // 停靠树以固定宽度渲染（主页 Tree 布局走满宽分支，见 render_tree_impl 的 Option<Pixels>）。
+    assert!(tree.contains("self.render_tree_impl(Some(self.tree_width), true, cx)"));
     assert!(tree.contains("render_tree_resize_handle"));
     assert!(resize.contains(".cursor_col_resize()"));
     assert!(resize.contains(".on_drag("));

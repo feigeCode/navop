@@ -16,7 +16,6 @@ fn extension_kind_maps_stable_directories() {
         "remote_desktop_providers",
         ExtensionKind::RemoteDesktopProvider.dir_name()
     );
-    assert_eq!("mcp_helpers", ExtensionKind::McpHelper.dir_name());
     assert_eq!("acp_agents", ExtensionKind::AcpAgent.dir_name());
     assert_eq!("composite", ExtensionKind::Composite.dir_name());
 }
@@ -36,17 +35,17 @@ fn extension_kind_parses_remote_desktop_provider() {
 }
 
 #[test]
-fn extension_kind_parses_mcp_helper() {
-    let kind: ExtensionKind = serde_json::from_str(r#""mcp_helper""#).unwrap();
-
-    assert_eq!(ExtensionKind::McpHelper, kind);
-}
-
-#[test]
 fn extension_kind_parses_acp_agent() {
     let kind: ExtensionKind = serde_json::from_str(r#""acp_agent""#).unwrap();
 
     assert_eq!(ExtensionKind::AcpAgent, kind);
+}
+
+#[test]
+fn extension_kind_defaults_unknown_kinds_to_unsupported() {
+    let kind: ExtensionKind = serde_json::from_str(r#""mcp_helper""#).unwrap();
+
+    assert_eq!(ExtensionKind::Unsupported, kind);
 }
 
 #[test]
@@ -393,7 +392,6 @@ fn builtin_registry_registers_all_extension_providers() {
             .provider(ExtensionKind::RemoteDesktopProvider)
             .is_some()
     );
-    assert!(registry.provider(ExtensionKind::McpHelper).is_some());
     assert!(registry.provider(ExtensionKind::AcpAgent).is_some());
     assert!(registry.provider(ExtensionKind::Composite).is_some());
     assert_eq!(

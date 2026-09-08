@@ -7,19 +7,21 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable, h_flex,
     menu::ContextMenuExt,
 };
+use rust_i18n::t;
 
 use super::drag::DragConnection;
 use super::row_parts::{
     child_group_button, connection_team_indicator, delete_group_button, edit_group_button,
-    tree_chevron, tree_count, tree_label,
-};
-use super::selection::{
-    ConnectionSelectionMode, ConnectionSelectionRequest, connection_selection_checkbox,
+    tree_chevron, tree_connection_icon_slot, tree_count, tree_label,
 };
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::connection_visuals::ConnectionVisualSize;
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
+use crate::home_tab::connection_selection::{
+    ConnectionCheckProps, ConnectionSelectionMode, ConnectionSelectionRequest,
+    connection_selection_checkbox,
+};
 
 impl PersistentConnectionSidebar {
     pub(super) fn render_tree_row(
@@ -29,6 +31,12 @@ impl PersistentConnectionSidebar {
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         match row {
+            ConnectionTreeRow::RecentHeader { count, expanded } => {
+                self.render_recent_header(count, expanded, palette, cx)
+            }
+            ConnectionTreeRow::RecentConnection { id, name } => {
+                self.render_connection_row(id, name, 0, None, true, palette, cx)
+            }
             row @ ConnectionTreeRow::Workspace { .. } => {
                 self.render_workspace_row(row, palette, cx)
             }
@@ -37,8 +45,49 @@ impl PersistentConnectionSidebar {
                 name,
                 depth,
                 workspace_id,
-            } => self.render_connection_row(id, name, depth, workspace_id, palette, cx),
+            } => self.render_connection_row(id, name, depth, workspace_id, false, palette, cx),
         }
+    }
+
+    fn render_recent_header(
+        &self,
+        count: usize,
+        expanded: bool,
+        palette: SidebarPalette,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
+        let home = self.home_page.clone();
+        let tree = cx.theme().geometry.tree;
+        let row_height = if self.home_embedded {
+            tree.row_height + gpui::px(4.0)
+        } else {
+            tree.row_height
+        };
+        h_flex()
+            .id("home-tree-recent-header")
+            .w_full()
+            .h(row_height)
+            .px(tree.base_padding)
+            .gap_1()
+            .items_center()
+            .cursor_pointer()
+            .hover(move |row| row.bg(palette.hover))
+            .on_click(move |_, _, cx| {
+                home.update(cx, |home, cx| {
+                    home.toggle_recent_connections(cx);
+                });
+            })
+            .child(tree_chevron(true, expanded, cx))
+            .child(
+                Icon::default()
+                    .path(crate::home_tab::NAVOP_HISTORY_ICON)
+                    .mono()
+                    .with_size(IconSize::Default)
+                    .text_color(palette.muted_foreground),
+            )
+            .child(tree_label(t!("Home.recent_connections").to_string()))
+            .child(tree_count(count, palette))
+            .into_any_element()
     }
 
     fn render_workspace_row(
@@ -64,11 +113,16 @@ impl PersistentConnectionSidebar {
         let rename_config = self.workspace_dialog_config(id, cx);
         let view_for_menu = view.clone();
         let tree = cx.theme().geometry.tree;
+        let row_height = if self.home_embedded {
+            tree.row_height + gpui::px(4.0)
+        } else {
+            tree.row_height
+        };
         h_flex()
             .id(ElementId::Name(group.clone()))
             .group(group.clone())
             .w_full()
-            .h(tree.row_height)
+            .h(row_height)
             .border_l_2()
             .border_color(gpui::transparent_black())
             .pl(tree.base_padding + tree.indent * depth)
@@ -164,6 +218,7 @@ impl PersistentConnectionSidebar {
         name: String,
         depth: usize,
         workspace_id: Option<i64>,
+        recent: bool,
         palette: SidebarPalette,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
@@ -177,15 +232,15 @@ impl PersistentConnectionSidebar {
         let open_connection = connection.clone();
         let home_for_open = home.clone();
         let home_for_select = home.clone();
-        let batch_mode = self.connection_selection.is_active();
+        let batch_mode = home.read(cx).batch_mode_active() && !recent;
         let selected = if batch_mode {
-            self.connection_selection.contains(id)
+            home.read(cx).connection_selection.contains(id)
         } else {
             home.read(cx).selected_connection_id == Some(id)
         };
-        let can_drag = home.read(cx).can_move_connection(id);
+        let can_drag = !recent && home.read(cx).can_move_connection(id);
         let view_for_select = cx.entity();
-        let view_for_checkbox = view_for_select.clone();
+        let home_for_checkbox = home.clone();
         let team_indicator = connection.as_ref().and_then(|connection| {
             connection_team_indicator(connection, home.read(cx).cached_team_options(), cx)
         });
@@ -202,15 +257,24 @@ impl PersistentConnectionSidebar {
         };
         let view_for_menu = cx.entity();
         let tree = cx.theme().geometry.tree;
+        let row_height = if self.home_embedded {
+            tree.row_height + gpui::px(4.0)
+        } else {
+            tree.row_height
+        };
         let visual_depth = if workspace_id.is_some() {
             depth + 1
         } else {
             depth
         };
         h_flex()
-            .id(SharedString::from(format!("persistent-connection-{id}")))
+            .id(SharedString::from(if recent {
+                format!("home-tree-recent-connection-{id}")
+            } else {
+                format!("persistent-connection-{id}")
+            }))
             .w_full()
-            .h(tree.row_height)
+            .h(row_height)
             .border_l_2()
             .border_color(if selected {
                 palette.selected_border
@@ -227,18 +291,22 @@ impl PersistentConnectionSidebar {
             .when(!selected, |this| {
                 this.hover(move |this| this.bg(palette.hover))
             })
-            .drag_over::<DragConnection>(move |this, _, _, _| {
-                this.bg(palette.hover).border_color(palette.accent)
+            .when(!recent, |row| {
+                row.drag_over::<DragConnection>(move |this, _, _, _| {
+                    this.bg(palette.hover).border_color(palette.accent)
+                })
+                .on_drop(cx.listener(
+                    move |this, drag: &DragConnection, _, cx| {
+                        if let Some(workspace_id) = workspace_id {
+                            this.set_workspace_collapsed(workspace_id, false, cx);
+                        }
+                        this.home_page.update(cx, |home, cx| {
+                            home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);
+                        });
+                        cx.notify();
+                    },
+                ))
             })
-            .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
-                if let Some(workspace_id) = workspace_id {
-                    this.set_workspace_collapsed(workspace_id, false, cx);
-                }
-                this.home_page.update(cx, |home, cx| {
-                    home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);
-                });
-                cx.notify();
-            }))
             .when(can_drag, |this| {
                 this.on_drag(drag, |drag, _, _, cx| {
                     cx.stop_propagation();
@@ -282,16 +350,24 @@ impl PersistentConnectionSidebar {
                 });
             })
             .context_menu(move |menu, window, cx| {
-                Self::build_connection_context_menu(menu, &view_for_menu, id, window, cx)
+                let home = view_for_menu.read(cx).home_page.clone();
+                super::connection_context_menu::build_connection_context_menu(
+                    menu, &home, id, window, cx,
+                )
             })
             .when(batch_mode && can_drag, |row| {
                 row.child(connection_selection_checkbox(
-                    view_for_checkbox,
-                    id,
-                    self.connection_selection.contains(id),
+                    &home_for_checkbox,
+                    ConnectionCheckProps {
+                        element_id: SharedString::from(format!(
+                            "persistent-connection-check-wrap-{id}"
+                        )),
+                        connection_id: id,
+                        checked: selected,
+                    },
                 ))
             })
-            .child(icon)
+            .child(tree_connection_icon_slot(icon, palette))
             .child(tree_label(name))
             .when_some(team_indicator, |row, indicator| row.child(indicator))
             .into_any_element()
@@ -307,5 +383,35 @@ mod tests {
             source.contains("collapse_after_open"),
             "双击打开会话后应通过 collapse_after_open 触发自动隐藏"
         );
+    }
+
+    #[test]
+    fn recent_tree_connections_have_namespaced_ids_and_no_batch_or_drag_behavior() {
+        let source = include_str!("rows.rs");
+
+        assert!(source.contains("home-tree-recent-connection-{id}"));
+        assert!(source.contains("batch_mode_active() && !recent"));
+        assert!(source.contains("!recent && home.read(cx).can_move_connection(id)"));
+        assert!(source.contains(".when(!recent, |row|"));
+    }
+
+    #[test]
+    fn tree_connections_render_icons_inside_the_shared_visual_slot() {
+        let rows = include_str!("rows.rs");
+        let parts = include_str!("row_parts.rs");
+
+        assert!(rows.contains("tree_connection_icon_slot(icon, palette)"));
+        assert!(parts.contains("fn tree_connection_icon_slot"));
+        assert!(parts.contains(".size(px(24.0))"));
+        assert!(parts.contains(".bg(palette.muted)"));
+    }
+
+    #[test]
+    fn embedded_home_tree_adds_vertical_breathing_room_without_widening_docked_rows() {
+        let source = include_str!("rows.rs");
+
+        assert!(source.contains("if self.home_embedded"));
+        assert!(source.contains("tree.row_height + gpui::px(4.0)"));
+        assert!(source.contains("else {\n            tree.row_height"));
     }
 }

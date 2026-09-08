@@ -21,26 +21,56 @@ use super::tree_model::{
 use super::{PersistentConnectionSidebar, SidebarPalette};
 
 impl PersistentConnectionSidebar {
+    /// 主页 Tree 布局嵌入的树视图：满宽、无 resize 手柄，交互与常驻侧栏一致。
+    pub(crate) fn render_home_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        self.home_embedded = true;
+        self.render_tree_impl(None, false, cx)
+    }
+
+    /// 停靠渲染（docked=true 时树从窗口顶部开始，macOS 头部需避让红绿灯）。
+    pub(crate) fn render_docked_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        self.home_embedded = false;
+        self.render_tree_impl(Some(self.tree_width), true, cx)
+    }
+
     pub(super) fn render_connection_tree(
         &mut self,
-        palette: SidebarPalette,
+        _palette: SidebarPalette,
         _window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        self.home_embedded = false;
+        self.render_tree_impl(Some(self.tree_width), false, cx)
+    }
+
+    /// width 为 Some 时按固定宽度停靠渲染（含 resize 手柄），None 时满宽嵌入主页。
+    fn render_tree_impl(
+        &mut self,
+        width: Option<gpui::Pixels>,
+        macos_titlebar_inset: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette(cx);
         let rows = self.tree_rows(cx);
         v_flex()
             .relative()
-            .w(self.tree_width)
-            .min_w(self.tree_width)
-            .max_w(self.tree_width)
+            .when_some(width, |tree, width| tree.w(width).min_w(width).max_w(width))
+            .w_full()
             .h_full()
             .min_h_0()
             .flex_shrink_0()
             .bg(palette.background)
             .text_color(palette.foreground)
-            .child(self.render_tree_header(palette, cx))
-            .child(self.render_tree_search(palette, cx))
-            .when(self.connection_selection.is_active(), |tree| {
+            // 嵌入主页时隐藏树头部：页面标题行已提供计数与分组菜单，避免重复。
+            .when(!self.home_embedded, |tree| {
+                tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))
+            })
+            // 嵌入主页时不渲染树内搜索框：主页工具栏的搜索与类型筛选直接驱动树，
+            // 避免上下两个搜索框重复。
+            .when(!self.home_embedded, |tree| {
+                tree.child(self.render_tree_search(palette, cx))
+            })
+            .when(self.home_page.read(cx).batch_mode_active(), |tree| {
                 tree.child(self.render_batch_toolbar(&rows, palette, cx))
             })
             .child(
@@ -50,28 +80,57 @@ impl PersistentConnectionSidebar {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(
-                        uniform_list("persistent-connection-tree", rows.len(), {
-                            cx.processor(move |this, range: Range<usize>, _window, cx| {
-                                range
-                                    .filter_map(|idx| rows.get(idx).cloned())
-                                    .map(|row| this.render_tree_row(row, palette, cx))
-                                    .collect()
+                    .when(rows.is_empty(), |body| {
+                        // 过滤空态：树内就地改筛选，不提供清除按钮（DESIGN §10）。
+                        body.child(
+                            div()
+                                .w_full()
+                                .px_3()
+                                .py_7()
+                                .flex()
+                                .justify_center()
+                                .text_xs()
+                                .text_color(palette.muted_foreground)
+                                .child(t!("Home.no_filter_results")),
+                        )
+                    })
+                    .when(!rows.is_empty(), |body| {
+                        body.child(
+                            uniform_list("persistent-connection-tree", rows.len(), {
+                                cx.processor(move |this, range: Range<usize>, _window, cx| {
+                                    range
+                                        .filter_map(|idx| rows.get(idx).cloned())
+                                        .map(|row| this.render_tree_row(row, palette, cx))
+                                        .collect()
+                                })
                             })
-                        })
-                        .size_full()
-                        .py_1()
-                        .track_scroll(&self.tree_scroll_handle)
-                        .with_sizing_behavior(ListSizingBehavior::Auto),
-                    ),
+                            .size_full()
+                            .py_1()
+                            .track_scroll(&self.tree_scroll_handle)
+                            .with_sizing_behavior(ListSizingBehavior::Auto),
+                        )
+                    }),
             )
-            .child(self.render_tree_resize_handle(cx))
+            .when(width.is_some(), |tree| {
+                tree.child(self.render_tree_resize_handle(cx))
+            })
             .into_any_element()
     }
 
     pub(super) fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
         let home = self.home_page.read(cx);
-        let query = self.search_input.read(cx).value().trim().to_lowercase();
+        // 嵌入主页时使用主页工具栏的搜索词与类型筛选；停靠/浮动时用树自身的。
+        let (query, type_filter) = if self.home_embedded {
+            (
+                home.search_query.read(cx).trim().to_lowercase(),
+                home.selected_filter,
+            )
+        } else {
+            (
+                self.search_input.read(cx).value().trim().to_lowercase(),
+                self.selected_filter,
+            )
+        };
         let collapsed_workspaces = home
             .workspaces
             .iter()
@@ -93,7 +152,9 @@ impl PersistentConnectionSidebar {
         let mut connections = home
             .connections
             .iter()
-            .filter(|connection| home.match_connection_type(connection))
+            .filter(|connection| {
+                crate::home_tab::connection_filter::match_connection_type(type_filter, connection)
+            })
             .filter_map(|connection| {
                 let id = connection.id?;
                 if home.match_connection(connection, &query) {
@@ -139,7 +200,7 @@ impl PersistentConnectionSidebar {
         }
         let searching = !query.is_empty();
         let expanded_workspaces = std::collections::HashSet::new();
-        build_connection_tree_rows(
+        let mut rows = build_connection_tree_rows(
             &workspaces,
             &connections,
             if searching {
@@ -147,7 +208,28 @@ impl PersistentConnectionSidebar {
             } else {
                 &collapsed_workspaces
             },
-        )
+        );
+        if self.home_embedded && query.is_empty() {
+            let recent = crate::home_tab::recent_connections(&home.connections, type_filter, "", 4);
+            if !recent.is_empty() {
+                let expanded = !home.recent_connections_collapsed();
+                let mut recent_rows = vec![ConnectionTreeRow::RecentHeader {
+                    count: recent.len(),
+                    expanded,
+                }];
+                if expanded {
+                    recent_rows.extend(recent.into_iter().filter_map(|connection| {
+                        Some(ConnectionTreeRow::RecentConnection {
+                            id: connection.id?,
+                            name: connection.name,
+                        })
+                    }));
+                }
+                recent_rows.append(&mut rows);
+                return recent_rows;
+            }
+        }
+        rows
     }
 
     fn render_tree_search(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
@@ -181,28 +263,40 @@ impl PersistentConnectionSidebar {
             .into_any_element()
     }
 
-    fn render_tree_header(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
+    fn render_tree_header(
+        &self,
+        palette: SidebarPalette,
+        macos_titlebar_inset: bool,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
         let connection_count = {
             let home = self.home_page.read(cx);
             home.connections
                 .iter()
-                .filter(|connection| home.match_connection_type(connection))
+                .filter(|connection| {
+                    crate::home_tab::connection_filter::match_connection_type(
+                        self.selected_filter,
+                        connection,
+                    )
+                })
                 .count()
         };
         let view_for_batch = cx.entity();
+        let home_for_batch = self.home_page.clone();
+        let batch_active = self.home_page.read(cx).batch_mode_active();
         let view_for_actions = cx.entity();
         let layout = cx.theme().geometry.layout;
+        // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
+        let titlebar_inset = cfg!(target_os = "macos") && macos_titlebar_inset;
         h_flex()
             .w_full()
             .h(layout.embedded_panel_header)
             .flex_shrink_0()
             .pr_2()
-            // The navigation rail is gone, so on macOS the header starts at
-            // the window edge and must clear the full traffic-light strip.
-            .when(cfg!(target_os = "macos"), |this| {
-                this.pl(layout.macos_title_bar_content_padding)
+            .when(titlebar_inset, |header| {
+                header.pl(layout.macos_title_bar_content_padding)
             })
-            .when(!cfg!(target_os = "macos"), |this| this.pl_2())
+            .when(!titlebar_inset, |header| header.pl_2())
             .items_center()
             .justify_between()
             // On macOS the header continues the traffic-light strip. On
@@ -245,11 +339,7 @@ impl PersistentConnectionSidebar {
                         self.auto_hide_tree,
                         palette,
                     ))
-                    .child(batch_mode_toggle(
-                        view_for_batch,
-                        self.connection_selection.is_active(),
-                        palette,
-                    ))
+                    .child(batch_mode_toggle(home_for_batch, batch_active, palette))
                     .child(self.header_actions_menu(view_for_actions, palette)),
             )
             .into_any_element()
@@ -287,5 +377,48 @@ mod tests {
             .find("batch_mode_toggle(")
             .expect("连接树头部应渲染批量操作开关");
         assert!(toggle < batch, "自动隐藏开关应位于批量操作开关的左侧");
+    }
+
+    #[test]
+    fn embedded_home_tree_prepends_recent_connections_only_without_search() {
+        let source = include_str!("tree.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+
+        assert!(implementation.contains("self.home_embedded && query.is_empty()"));
+        assert!(implementation.contains("home_tab::recent_connections"));
+        assert!(implementation.contains("ConnectionTreeRow::RecentHeader"));
+        assert!(implementation.contains("ConnectionTreeRow::RecentConnection"));
+    }
+
+    #[test]
+    fn each_tree_render_entry_restores_its_own_embedding_mode() {
+        let source = include_str!("tree.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+
+        let home = implementation
+            .split("fn render_home_tree")
+            .nth(1)
+            .expect("home tree entry exists")
+            .split("fn render_docked_tree")
+            .next()
+            .unwrap();
+        let docked = implementation
+            .split("fn render_docked_tree")
+            .nth(1)
+            .expect("docked tree entry exists")
+            .split("fn render_connection_tree")
+            .next()
+            .unwrap();
+        let floating = implementation
+            .split("fn render_connection_tree")
+            .nth(1)
+            .expect("floating tree entry exists")
+            .split("fn render_tree_impl")
+            .next()
+            .unwrap();
+
+        assert!(home.contains("self.home_embedded = true"));
+        assert!(docked.contains("self.home_embedded = false"));
+        assert!(floating.contains("self.home_embedded = false"));
     }
 }

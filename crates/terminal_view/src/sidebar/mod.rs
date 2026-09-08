@@ -352,9 +352,9 @@ fn terminal_toolbar_icon_button(
             .active(colors.muted)
     };
 
-        IconButton::new(id, panel.icon())
-            .hit_size(item_size)
-            .glyph_size(OneIconSize::Small)
+    IconButton::new(id, panel.icon())
+        .hit_size(item_size)
+        .glyph_size(OneIconSize::Small)
         .custom(style)
         .selected(selected)
         .tooltip(panel.title())
@@ -1850,7 +1850,8 @@ mod tests {
     fn agent_theme_preserves_terminal_dark_mode_for_markdown() {
         let application_theme = Theme::from(ThemeColor::dark().as_ref());
         let terminal_theme = TerminalTheme::from_application_theme(&application_theme);
-        let agent_theme = agent_theme_from_terminal_theme(&terminal_theme, application_theme.radius);
+        let agent_theme =
+            agent_theme_from_terminal_theme(&terminal_theme, application_theme.radius);
         let markdown_style = agent_theme.markdown_style();
 
         assert!(terminal_theme.is_dark());

@@ -2460,7 +2460,6 @@ impl SqlEditor {
             editor.lsp_mut().completion_provider = Some(default_provider_trait);
             editor.lsp_mut().hover_provider = Some(default_hover_provider_trait);
             editor.project_gutter_marker_renderer(Rc::new(render_sql_gutter_marker));
-            editor.on_context_menu(Rc::new(show_sql_editor_context_menu));
 
             editor
         });
@@ -2763,9 +2762,20 @@ impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = self.editor_font(cx);
         let font_size = AppSettings::global(cx).sql_editor_font_size as f32;
+        // The right-click menu must be attached through the editor element
+        // builder: gpui-component reinstalls its own context menu on the
+        // EditorState on every frame, so a handler set once at construction
+        // is silently replaced and never shown. The builder is invoked while
+        // the editor entity is still being updated, so reading it back from
+        // inside the callback panics — snapshot the capabilities here, where
+        // the editor is quiescent, and reuse the copy at click time.
+        let capabilities = self.editor.read(cx).context_menu_capabilities();
         div().size_full().child(
             ExtendedEditor::new(&self.extended_editor)
                 .gutter_marker_renderer(Rc::new(render_sql_gutter_marker))
+                .context_menu(move |_, _, cx| {
+                    sql_editor_native_menu(capabilities, cx.read_from_clipboard().is_some())
+                })
                 .font(font)
                 .text_size(gpui::px(font_size))
                 .line_height(gpui::px(font_size * 1.5))
@@ -2774,15 +2784,12 @@ impl Render for SqlEditor {
     }
 }
 
-fn show_sql_editor_context_menu(
-    _: gpui_base::input::NativeMenu,
+fn sql_editor_native_menu(
     capabilities: gpui_base::input::InputContextMenuCapabilities,
-    position: gpui::Point<gpui::Pixels>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let model = sql_editor_context_menu(capabilities, cx.read_from_clipboard().is_some());
-    let menu = model
+    clipboard_available: bool,
+) -> PlatformNativeMenu {
+    let model = sql_editor_context_menu(capabilities, clipboard_available);
+    model
         .items
         .into_iter()
         .fold(PlatformNativeMenu::new(), |menu, item| match item {
@@ -2792,8 +2799,7 @@ fn show_sql_editor_context_menu(
                 disabled,
                 action,
             } => menu.menu_with_disabled(label, disabled, action),
-        });
-    menu.show(position, window, cx);
+        })
 }
 
 fn sql_editor_context_menu(
@@ -3137,6 +3143,24 @@ mod tests {
             .expect("SqlEditor render impl exists");
 
         assert!(render.contains(".gutter_marker_renderer(Rc::new(render_sql_gutter_marker))"));
+    }
+
+    #[test]
+    fn sql_editor_wires_context_menu_through_the_editor_element_builder() {
+        let source = include_str!("sql_editor.rs");
+
+        // gpui-component reinstalls the editor context menu on every frame, so
+        // the SQL run items must be attached via the element builder in render
+        // instead of a one-time state-level handler. The builder runs while the
+        // editor is being updated, so capabilities are snapshotted in render
+        // and must not be re-read from the entity at click time.
+        let render = source
+            .split("impl Render for SqlEditor")
+            .nth(1)
+            .expect("SqlEditor render impl exists");
+        assert!(render.contains(".context_menu("));
+        assert!(render.contains("context_menu_capabilities()"));
+        assert!(!render.contains("input.read(cx)"));
     }
 
     #[test]

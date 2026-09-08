@@ -88,7 +88,13 @@ fn validate_shell_view(
         }
     }
     validate_backends(view, ipc_ids)?;
-    validate_modules(view)
+    validate_modules(view)?;
+    // 分类是 toolbox 卡片分组标识,tab surface 忽略但仍校验合法形式,
+    // 避免同名字段在不同 surface 下有两套规则。
+    if let Some(category) = view.category.as_deref() {
+        validate_identifier(category, shell_field(view, "category"), "toolbox category")?;
+    }
+    Ok(())
 }
 
 fn validate_gpui_shell_version(manifest: &Manifest) -> Result<(), ShellViewValidationError> {
@@ -157,6 +163,7 @@ fn validate_modules(view: &ShellViewContrib) -> Result<(), ShellViewValidationEr
                 | ShellHostModule::Blob
                 | ShellHostModule::Log
                 | ShellHostModule::Runtime
+                | ShellHostModule::Dev
         ) {
             return Err(error(
                 shell_field(view, "modules"),

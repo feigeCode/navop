@@ -10,9 +10,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use connection_form::credential::resolve_connection_for_runtime;
+use connection_form::declarative::{
+    DeclarativeFieldType, DeclarativeFormField, DeclarativeFormTab,
+};
 use connection_form::middleware_form::{
-    FormField, FormFieldType, FormSnapshot, MiddlewareFormAdapter, MiddlewareFormSavedCallback,
-    MiddlewareFormWindow, MiddlewareFormWindowConfig, TabGroup, notes_tab_group, ssh_tab_group,
+    FormSnapshot, MiddlewareFormAdapter, MiddlewareFormSavedCallback, MiddlewareFormWindow,
+    MiddlewareFormWindowConfig, notes_tab_group, ssh_tab_group,
 };
 use gpui::{App, AsyncApp, Task};
 use one_core::cloud_sync::TeamOption;
@@ -70,41 +73,45 @@ impl MqttFormConfig {
 ///
 /// 常规 / MQTT(中间件特性扩展) / 高级 / SSL / SSH / 备注,
 /// SSH 与备注页复用引擎提供的共享构造器。
-pub fn mqtt_form_tab_groups() -> Vec<TabGroup> {
+pub fn mqtt_form_tab_groups() -> Vec<DeclarativeFormTab> {
     vec![
-        TabGroup::new("general", t!("MqttForm.tab_general").to_string()).fields(vec![
-            FormField::new("name", t!("MqttForm.name"), FormFieldType::Text)
+        DeclarativeFormTab::new("general", t!("MqttForm.tab_general").to_string()).fields(vec![
+            DeclarativeFormField::new("name", t!("MqttForm.name"), DeclarativeFieldType::Text)
                 .placeholder(t!("MqttForm.name_placeholder"))
                 .default("Local MQTT"),
-            FormField::new("host", t!("MqttForm.host"), FormFieldType::Text)
+            DeclarativeFormField::new("host", t!("MqttForm.host"), DeclarativeFieldType::Text)
                 .placeholder("127.0.0.1")
                 .default("127.0.0.1"),
-            FormField::new("port", t!("MqttForm.port"), FormFieldType::Number)
+            DeclarativeFormField::new("port", t!("MqttForm.port"), DeclarativeFieldType::Number)
                 .placeholder("1883")
                 .default("1883"),
-            FormField::new("username", t!("MqttForm.username"), FormFieldType::Text)
-                .optional()
-                .placeholder(t!("MqttForm.username_placeholder")),
-            FormField::new("password", t!("MqttForm.password"), FormFieldType::Password)
-                .optional()
-                .placeholder(t!("MqttForm.password_placeholder")),
+            DeclarativeFormField::new(
+                "auth",
+                t!("MqttForm.authentication"),
+                DeclarativeFieldType::Auth,
+            )
+            .optional(),
         ]),
-        TabGroup::new("mqtt", t!("MqttForm.tab_mqtt").to_string()).fields(vec![
-            FormField::new("client_id", t!("MqttForm.client_id"), FormFieldType::Text)
-                .optional()
-                .placeholder(t!("MqttForm.client_id_placeholder")),
-            FormField::new(
+        DeclarativeFormTab::new("mqtt", t!("MqttForm.tab_mqtt").to_string()).fields(vec![
+            DeclarativeFormField::new(
+                "client_id",
+                t!("MqttForm.client_id"),
+                DeclarativeFieldType::Text,
+            )
+            .optional()
+            .placeholder(t!("MqttForm.client_id_placeholder")),
+            DeclarativeFormField::new(
                 "keep_alive",
                 t!("MqttForm.keep_alive"),
-                FormFieldType::Number,
+                DeclarativeFieldType::Number,
             )
             .optional()
             .placeholder("30")
             .default("30"),
-            FormField::new(
+            DeclarativeFormField::new(
                 "clean_session",
                 t!("MqttForm.clean_session"),
-                FormFieldType::Select,
+                DeclarativeFieldType::Select,
             )
             .optional()
             .default("true")
@@ -113,24 +120,28 @@ pub fn mqtt_form_tab_groups() -> Vec<TabGroup> {
                 ("false".to_string(), t!("Common.no").to_string()),
             ]),
         ]),
-        TabGroup::new("advanced", t!("MqttForm.tab_advanced").to_string()).fields(vec![
-            FormField::new(
+        DeclarativeFormTab::new("advanced", t!("MqttForm.tab_advanced").to_string()).fields(vec![
+            DeclarativeFormField::new(
                 "connect_timeout",
                 t!("MqttForm.connect_timeout"),
-                FormFieldType::Number,
+                DeclarativeFieldType::Number,
             )
             .optional()
             .placeholder("10")
             .default("10"),
         ]),
-        TabGroup::new("ssl", t!("MqttForm.tab_ssl").to_string()).fields(vec![
-            FormField::new("use_tls", t!("MqttForm.use_tls"), FormFieldType::Select)
-                .optional()
-                .default("false")
-                .options(vec![
-                    ("false".to_string(), t!("Common.no").to_string()),
-                    ("true".to_string(), t!("Common.yes").to_string()),
-                ]),
+        DeclarativeFormTab::new("ssl", t!("MqttForm.tab_ssl").to_string()).fields(vec![
+            DeclarativeFormField::new(
+                "use_tls",
+                t!("MqttForm.use_tls"),
+                DeclarativeFieldType::Select,
+            )
+            .optional()
+            .default("false")
+            .options(vec![
+                ("false".to_string(), t!("Common.no").to_string()),
+                ("true".to_string(), t!("Common.yes").to_string()),
+            ]),
         ]),
         ssh_tab_group(),
         notes_tab_group(),
@@ -394,7 +405,7 @@ impl MiddlewareFormAdapter for MqttFormAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use connection_form::middleware_form::FormVisibilityRule;
+    use connection_form::declarative::DeclarativeVisibilityRule;
     use one_core::storage::MqttParams;
 
     fn snapshot_for(params: &MqttParams) -> FormSnapshot {
@@ -423,24 +434,30 @@ mod tests {
     #[test]
     fn tab_groups_declare_expected_tabs_and_fields() {
         let groups = mqtt_form_tab_groups();
-        let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+        let names: Vec<&str> = groups.iter().map(|g| g.id.as_str()).collect();
 
         assert_eq!(
             names,
             vec!["general", "mqtt", "advanced", "ssl", "ssh", "notes"]
         );
-        assert!(groups[0].fields.iter().any(|f| f.name == "host"));
-        assert!(groups[1].fields.iter().any(|f| f.name == "client_id"));
-        assert!(groups[1].fields.iter().any(|f| f.name == "clean_session"));
-        assert!(groups[2].fields.iter().any(|f| f.name == "connect_timeout"));
-        assert!(groups[3].fields.iter().any(|f| f.name == "use_tls"));
+        assert!(groups[0].fields.iter().any(|f| f.id == "host"));
+        assert!(
+            groups[0]
+                .fields
+                .iter()
+                .any(|f| f.id == "auth" && f.field_type == DeclarativeFieldType::Auth)
+        );
+        assert!(groups[1].fields.iter().any(|f| f.id == "client_id"));
+        assert!(groups[1].fields.iter().any(|f| f.id == "clean_session"));
+        assert!(groups[2].fields.iter().any(|f| f.id == "connect_timeout"));
+        assert!(groups[3].fields.iter().any(|f| f.id == "use_tls"));
         assert!(
             groups[4]
                 .fields
                 .iter()
-                .any(|f| f.name == "ssh_tunnel_enabled")
+                .any(|f| f.id == "ssh_tunnel_enabled")
         );
-        assert!(groups[5].fields.iter().any(|f| f.name == "remark"));
+        assert!(groups[5].fields.iter().any(|f| f.id == "remark"));
     }
 
     #[test]
@@ -556,7 +573,7 @@ mod tests {
     #[test]
     fn visibility_rule_helper_exists_for_future_conditional_fields() {
         // 引擎支持条件字段(供后续 Kafka SASL 等场景使用)
-        let rule = FormVisibilityRule::field_equals("use_tls", "true");
+        let rule = DeclarativeVisibilityRule::field_equals("use_tls", "true");
         assert!(rule.matches(Some("true")));
     }
 }

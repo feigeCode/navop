@@ -349,6 +349,8 @@ impl ExtensionRuntimeCatalog {
                     extension_root: manifest.manifest_dir.clone(),
                     entry_path: resolve_extension_path(&manifest.manifest_dir, &view.entry),
                     surface: view.surface,
+                    category: view.category.clone(),
+                    keywords: view.keywords.clone().unwrap_or_default(),
                     singleton: view.singleton,
                     backends,
                     modules: view.modules.iter().copied().collect(),
@@ -720,7 +722,7 @@ fn resolve_ipc_command(command: &str, working_dir: &Path) -> PathBuf {
     }
 }
 
-pub(super) fn load_installed_composite_manifests(
+pub(crate) fn load_installed_composite_manifests(
     root: &Path,
 ) -> Result<Vec<Manifest>, ExtensionRuntimeError> {
     if !root.exists() {

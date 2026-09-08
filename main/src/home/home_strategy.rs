@@ -83,10 +83,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
         window: &mut Window,
         cx: &mut Context<HomePage>,
     ) {
-        window.push_notification(
-            "Extension connections require the shell-plugins build",
-            cx,
-        );
+        window.push_notification("Extension connections require the shell-plugins build", cx);
     }
 }
 
@@ -104,7 +101,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             return;
         };
         let Some(host) = cx
-            .try_global::<crate::shell_plugin_host::ShellPluginHost>()
+            .try_global::<universal_plugins::ShellPluginHost>()
             .cloned()
         else {
             window.push_notification("Extension runtime is unavailable", cx);
@@ -127,13 +124,13 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             let connection = self.connection;
             let title = connection.name.clone();
             let service = cx
-                .global::<crate::universal_plugins::GlobalUniversalPluginService>()
+                .global::<universal_plugins::GlobalUniversalPluginService>()
                 .service();
             let extension_id = contribution.extension_id.clone();
             let runtime_id = contribution.runtime_id.clone();
             let registry = host.clone();
             let tabs = cx
-                .global::<crate::onetcli_app::GlobalTabContainer>()
+                .global::<one_core::tab_container::GlobalTabContainer>()
                 .primary_pane();
             tabs.update(cx, |tabs, cx| {
                 let tab_id = format!("extension-connection:{connection_id}");
@@ -141,7 +138,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
                     tab_id.clone(),
                     mode,
                     move |_, cx| {
-                        let tab = crate::extension_connection_tab::ExtensionConnectionTab::load(
+                        let tab = universal_plugins::ExtensionConnectionTab::load(
                             service,
                             connection,
                             contribution,
@@ -155,7 +152,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
                 );
             });
         } else if let Err(error) = host.open_connection(
-            crate::shell_plugin_host::ConnectionShellOpen {
+            universal_plugins::ConnectionShellOpen {
                 connection: self.connection,
                 contribution,
                 mode,

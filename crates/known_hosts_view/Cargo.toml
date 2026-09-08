@@ -1,0 +1,18 @@
+[package]
+name = "known_hosts_view"
+version = "0.16.1"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+one-core.workspace = true
+rust-i18n.workspace = true
+ssh.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

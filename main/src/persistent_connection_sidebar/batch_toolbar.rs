@@ -11,6 +11,7 @@ use rust_i18n::t;
 
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
+use crate::home_tab::HomePage;
 
 impl PersistentConnectionSidebar {
     pub(super) fn render_batch_toolbar(
@@ -19,11 +20,12 @@ impl PersistentConnectionSidebar {
         palette: SidebarPalette,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
-        let selected_count = self.connection_selection.len();
+        let home = self.home_page.read(cx);
+        let selected_count = home.connection_selection.len();
+        let selected_ids = home.connection_selection.ids();
         let visible_ids = self.manageable_visible_connection_ids(rows, cx);
         let move_targets = self.move_targets(cx);
-        let selected_ids = self.connection_selection.ids();
-        let view = cx.entity();
+        let home = self.home_page.clone();
         h_flex()
             .w_full()
             .h_9()
@@ -31,7 +33,8 @@ impl PersistentConnectionSidebar {
             .items_center()
             .gap_1()
             .px_2()
-            .border_r_1()
+            // 嵌入主页满宽渲染时不带右侧分隔线（停靠时用于与内容区分隔）。
+            .when(!self.home_embedded, |bar| bar.border_r_1())
             .border_b_1()
             .border_color(palette.border)
             .bg(palette.muted)
@@ -43,18 +46,14 @@ impl PersistentConnectionSidebar {
                     .text_color(palette.foreground)
                     .child(t!("Connection.batch_selected", count = selected_count).to_string()),
             )
-            .child(select_visible_button(view.clone(), visible_ids))
+            .child(select_visible_button(home.clone(), visible_ids))
             .child(move_connections_button(
-                view.clone(),
-                self.home_page.clone(),
+                home.clone(),
                 selected_ids.clone(),
                 move_targets,
             ))
-            .child(delete_connections_button(
-                self.home_page.clone(),
-                selected_ids,
-            ))
-            .child(exit_batch_mode_button(view))
+            .child(delete_connections_button(home.clone(), selected_ids))
+            .child(exit_batch_mode_button(home))
             .into_any_element()
     }
 
@@ -87,7 +86,7 @@ impl PersistentConnectionSidebar {
 }
 
 pub(super) fn batch_mode_toggle(
-    view: gpui::Entity<PersistentConnectionSidebar>,
+    home: gpui::Entity<HomePage>,
     active: bool,
     palette: SidebarPalette,
 ) -> Toggle {
@@ -98,7 +97,7 @@ pub(super) fn batch_mode_toggle(
         .text_color(palette.foreground)
         .tooltip(t!("Connection.batch_operations"))
         .on_click(move |checked, _, cx| {
-            view.update(cx, |this, cx| this.set_batch_mode(*checked, cx));
+            home.update(cx, |home, cx| home.set_batch_mode(*checked, cx));
         })
 }
 
@@ -125,26 +124,21 @@ pub(super) fn auto_hide_tree_toggle(
         })
 }
 
-fn select_visible_button(
-    view: gpui::Entity<PersistentConnectionSidebar>,
-    visible_ids: Vec<i64>,
-) -> IconButton {
+fn select_visible_button(home: gpui::Entity<HomePage>, visible_ids: Vec<i64>) -> IconButton {
     let disabled = visible_ids.is_empty();
     IconButton::new("persistent-select-visible-connections", IconName::Check)
         .role(IconButtonRole::Compact)
         .tooltip(t!("Connection.batch_select_visible"))
         .disabled(disabled)
         .on_click(move |_, _, cx| {
-            view.update(cx, |this, cx| {
-                this.connection_selection.select_visible(&visible_ids);
-                cx.notify();
+            home.update(cx, |home, cx| {
+                home.select_visible_connections(&visible_ids, cx);
             });
         })
 }
 
 fn move_connections_button(
-    view: gpui::Entity<PersistentConnectionSidebar>,
-    home: gpui::Entity<crate::home_tab::HomePage>,
+    home: gpui::Entity<HomePage>,
     selected_ids: Vec<i64>,
     move_targets: Vec<(Option<i64>, String)>,
 ) -> AnyElement {
@@ -154,15 +148,14 @@ fn move_connections_button(
         .tooltip(t!("Connection.move_to_group"))
         .disabled(disabled)
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            append_move_targets(menu, &view, &home, &selected_ids, &move_targets)
+            append_move_targets(menu, &home, &selected_ids, &move_targets)
         })
         .into_any_element()
 }
 
 fn append_move_targets(
     menu: PopupMenu,
-    view: &gpui::Entity<PersistentConnectionSidebar>,
-    home: &gpui::Entity<crate::home_tab::HomePage>,
+    home: &gpui::Entity<HomePage>,
     selected_ids: &[i64],
     move_targets: &[(Option<i64>, String)],
 ) -> PopupMenu {
@@ -170,25 +163,19 @@ fn append_move_targets(
         .iter()
         .cloned()
         .fold(menu, |menu, (workspace_id, label)| {
-            let view = view.clone();
             let home = home.clone();
             let selected_ids = selected_ids.to_vec();
             menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
                 home.update(cx, |home, cx| {
                     home.move_connections_to_workspace(selected_ids.clone(), workspace_id, cx);
-                });
-                view.update(cx, |this, cx| {
-                    this.connection_selection.clear();
+                    home.connection_selection.clear();
                     cx.notify();
                 });
             }))
         })
 }
 
-fn delete_connections_button(
-    home: gpui::Entity<crate::home_tab::HomePage>,
-    selected_ids: Vec<i64>,
-) -> IconButton {
+fn delete_connections_button(home: gpui::Entity<HomePage>, selected_ids: Vec<i64>) -> IconButton {
     let disabled = selected_ids.is_empty();
     IconButton::new("persistent-delete-selected-connections", IconName::Remove)
         .role(IconButtonRole::Compact)
@@ -201,12 +188,12 @@ fn delete_connections_button(
         })
 }
 
-fn exit_batch_mode_button(view: gpui::Entity<PersistentConnectionSidebar>) -> IconButton {
+fn exit_batch_mode_button(home: gpui::Entity<HomePage>) -> IconButton {
     IconButton::new("persistent-exit-batch-connections", IconName::Close)
         .role(IconButtonRole::Compact)
         .tooltip(t!("Connection.batch_exit"))
         .on_click(move |_, _, cx| {
-            view.update(cx, |this, cx| this.set_batch_mode(false, cx));
+            home.update(cx, |home, cx| home.set_batch_mode(false, cx));
         })
 }
 
@@ -220,5 +207,17 @@ mod tests {
         assert!(source.contains("persistent-delete-selected-connections"));
         assert!(source.contains("persistent-exit-batch-connections"));
         assert!(source.contains(".icon(IconName::ListChecks)"));
+    }
+
+    #[test]
+    fn batch_selection_state_lives_on_home_page() {
+        // 批量选择状态由 HomePage 持有，卡片/列表/树共享，切换布局不丢选择。
+        let source = include_str!("batch_toolbar.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(source.contains("home.connection_selection"));
+        assert!(source.contains("home.set_batch_mode"));
+        assert!(!source.contains("self.connection_selection"));
     }
 }

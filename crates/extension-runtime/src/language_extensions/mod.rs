@@ -80,6 +80,10 @@ impl InstalledExtension {
             &self.locals,
         );
         registry.register(&self.manifest.name, &config);
+        registry.register_parser_factory(
+            &self.manifest.name,
+            registry::parser_factory(&self.manifest.name, &self.wasm_bytes),
+        );
         for extension in &self.manifest.file_extensions {
             registry.register(&normalize_extension(extension), &config);
         }

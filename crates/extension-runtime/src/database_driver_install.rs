@@ -1,25 +1,15 @@
-use gpui::{AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window};
-use gpui_component::{WindowExt, notification::Notification};
-use one_core::gpui_tokio::Tokio;
+use gpui::{Context, Window};
 use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection, Workspace};
 use one_core::tab_container::TabOpenMode;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
-use crate::database_driver_install_progress::{
-    DriverInstallProgressSnapshot, DriverInstallProgressView, driver_install_progress_callback,
-    mark_driver_install_finished, open_driver_install_progress_dialog,
-    watch_driver_install_progress,
-};
 use crate::extension::ExtensionKind;
 use crate::extension::{ExtensionRegistry, ExtensionSummary};
 use crate::extension_downloader::{
-    DownloadProgressCallback, MarketplaceEntry,
-    download_marketplace_entry_to_staging_with_progress, fetch_default_manifest_url,
-    fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
+    DownloadProgressCallback, MarketplaceEntry, fetch_default_manifest_url, fetch_manifest_url,
+    install_marketplace_entry_generic, install_marketplace_entry_with_progress,
 };
+use crate::install_flow::{notify_error, run_install_with_progress_prompt};
 const DUCKDB_DRIVER_ID: &str = "duckdb";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,88 +320,59 @@ fn prompt_install_driver_with_completion<T, F>(
         notify_error(window, cx, format!("扩展系统未初始化，无法安装 {api} 驱动"));
         return;
     }
-
     let requirement_message = minimum_version
         .as_deref()
         .map(|version| format!("（最低版本 {version}）"))
         .unwrap_or_default();
-    let answer = window.prompt(
-        PromptLevel::Warning,
+    let install_driver_id = driver_id.clone();
+    let install_minimum_version = minimum_version.clone();
+    run_install_with_progress_prompt(
+        window,
+        cx,
+        (driver_id.clone(), connection_name.clone()),
         "需要安装或更新驱动",
-        Some(&format!(
+        format!(
             "连接「{}」需要安装或更新「{}」{} 驱动{}。",
             connection_name, driver_id, api, requirement_message
-        )),
+        ),
         &["下载并安装/更新", "取消"],
-        cx,
-    );
-    let http_client = cx.http_client();
-    let window_handle = window.window_handle();
-    let progress_view = cx.new(|_| DriverInstallProgressView::new(&driver_id, &connection_name));
-    let progress_view_weak = progress_view.downgrade();
-    let progress_snapshot = Arc::new(Mutex::new(DriverInstallProgressSnapshot::default()));
-    let progress_finished = Arc::new(AtomicBool::new(false));
-    watch_driver_install_progress(
-        progress_view_weak.clone(),
-        Arc::clone(&progress_snapshot),
-        Arc::clone(&progress_finished),
-        cx,
-    );
-
-    cx.spawn(async move |this: WeakEntity<T>, cx: &mut AsyncApp| {
-        if answer.await.ok() != Some(0) {
-            progress_finished.store(true, Ordering::Relaxed);
-            return;
-        }
-        open_install_progress_dialog(window_handle, progress_view, cx);
-        let install_driver_id = driver_id.clone();
-        let install_minimum_version = minimum_version.clone();
-        let progress_callback = driver_install_progress_callback(progress_snapshot);
-        let task = Tokio::spawn(cx, async move {
+        move |http_client, progress_callback| {
             install_database_driver_from_marketplace(
                 http_client,
-                &install_driver_id,
-                install_minimum_version.as_deref(),
+                install_driver_id,
+                install_minimum_version,
                 progress_callback,
             )
-            .await
-        });
-        let outcome = match task.await {
-            Ok(Ok(_summary)) => Ok(()),
-            Ok(Err(error)) => Err(format!("{error:?}")),
-            Err(error) => Err(format!("任务执行失败: {error}")),
-        };
-        progress_finished.store(true, Ordering::Relaxed);
-        finish_install_and_open(
-            window_handle,
-            this,
-            api,
-            driver_id,
-            progress_view_weak,
-            outcome,
-            on_success,
-            cx,
-        );
-    })
-    .detach();
+        },
+        on_success,
+        format!("已安装 {driver_id} {api} 驱动"),
+        format!("安装 {api} 驱动失败"),
+    );
 }
 
 async fn install_database_driver_from_marketplace(
     http_client: Arc<dyn gpui::http_client::HttpClient>,
-    driver_id: &str,
-    minimum_version: Option<&str>,
+    driver_id: String,
+    minimum_version: Option<String>,
     on_progress: DownloadProgressCallback,
 ) -> anyhow::Result<ExtensionSummary> {
     let manifest = fetch_default_manifest_url(http_client.clone()).await?;
     let entries = manifest.into_entries();
-    let entry =
-        find_database_driver_entry_for_requirement(&entries, driver_id, minimum_version)?.clone();
-    let staging =
-        download_marketplace_entry_to_staging_with_progress(http_client, &entry, on_progress)
-            .await?;
-    let result = install_staged_database_driver(&staging);
-    let _ = std::fs::remove_dir_all(&staging);
-    result
+    let entry = find_database_driver_entry_for_requirement(
+        &entries,
+        &driver_id,
+        minimum_version.as_deref(),
+    )?
+    .clone();
+    let summary = install_marketplace_entry_with_progress(
+        http_client,
+        &entry,
+        ExtensionKind::DatabaseDriver,
+        on_progress,
+    )
+    .await?;
+    db::ipc::IpcDriverRegistry::refresh_global_registry();
+    Ok(summary)
 }
 
 pub(crate) fn find_database_driver_entry_for_requirement<'a>(
@@ -438,60 +399,6 @@ fn display_driver_version(version: &str) -> &str {
     } else {
         version
     }
-}
-
-fn install_staged_database_driver(staging: &std::path::Path) -> anyhow::Result<ExtensionSummary> {
-    let registry =
-        ExtensionRegistry::global().ok_or_else(|| anyhow::anyhow!("扩展系统未初始化"))?;
-    let registry = registry
-        .read()
-        .map_err(|error| anyhow::anyhow!("registry lock poisoned: {error}"))?;
-    install_from_staging_generic(staging, &registry, Some(ExtensionKind::DatabaseDriver))
-}
-
-fn open_install_progress_dialog(
-    window_handle: gpui::AnyWindowHandle,
-    progress_view: gpui::Entity<DriverInstallProgressView>,
-    cx: &mut AsyncApp,
-) {
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-        open_driver_install_progress_dialog(progress_view, window, cx);
-    });
-}
-
-fn finish_install_and_open<T: 'static>(
-    window_handle: gpui::AnyWindowHandle,
-    target: WeakEntity<T>,
-    api: String,
-    driver_id: String,
-    progress_view: gpui::WeakEntity<DriverInstallProgressView>,
-    outcome: Result<(), String>,
-    on_success: impl FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
-    cx: &mut AsyncApp,
-) {
-    if outcome.is_ok() {
-        mark_driver_install_finished(&progress_view, cx);
-    }
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-        window.close_dialog(cx);
-        if let Some(target) = target.upgrade() {
-            target.update(cx, |target, cx| match outcome {
-                Ok(()) => {
-                    notify_success(window, cx, format!("已安装 {driver_id} {api} 驱动"));
-                    on_success(target, window, cx);
-                }
-                Err(error) => notify_error(window, cx, format!("安装 {api} 驱动失败: {error}")),
-            });
-        }
-    });
-}
-
-fn notify_error<T>(window: &mut Window, cx: &mut Context<T>, message: impl Into<String>) {
-    window.push_notification(Notification::error(message.into()), cx);
-}
-
-fn notify_success<T>(window: &mut Window, cx: &mut Context<T>, message: impl Into<String>) {
-    window.push_notification(Notification::success(message.into()), cx);
 }
 
 fn required_external_driver(config: &DbConnectionConfig) -> DriverRequirement {

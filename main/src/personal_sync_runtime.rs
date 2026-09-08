@@ -933,10 +933,13 @@ fn personal_sync_status_from_task(
     result: Result<Result<(), SyncStoreError>, tokio::task::JoinError>,
 ) -> PersonalSyncRuntimeStatus {
     match result {
-        Ok(Ok(())) => PersonalSyncRuntimeStatus::Ready {
-            health: SyncStoreHealth::Ready,
-            message: None,
-        },
+        Ok(Ok(())) => {
+            crate::personal_sync_status::note_sync_completed();
+            PersonalSyncRuntimeStatus::Ready {
+                health: SyncStoreHealth::Ready,
+                message: None,
+            }
+        }
         Ok(Err(error)) => PersonalSyncRuntimeStatus::from_error(error),
         Err(error) => PersonalSyncRuntimeStatus::failed(&error.to_string()),
     }

@@ -1,12 +1,8 @@
 use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
-};
+use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
-    tooltip::Tooltip,
 };
 use rust_i18n::t;
 
@@ -107,31 +103,40 @@ pub(super) fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
         .into_any_element()
 }
 
+pub(super) fn tree_connection_icon_slot(icon: Icon, palette: SidebarPalette) -> AnyElement {
+    div()
+        .size(px(24.0))
+        .flex_shrink_0()
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.muted)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon.with_size(gpui_component::IconSize::Default))
+        .into_any_element()
+}
+
 pub(super) fn connection_team_indicator(
     connection: &one_core::storage::StoredConnection,
     teams: &[one_core::cloud_sync::TeamOption],
     cx: &gpui::App,
 ) -> Option<AnyElement> {
     let badge = connection_team_badge(connection.team_id.as_deref(), teams)?;
-    let tooltip: SharedString = badge.tooltip.into();
+    // 与主页卡片团队徽标同一中性样式（redesign §5.4）：muted 底、
+    // active 用前景色、departed/unknown 用弱化前景色；不带独立 hitbox，
+    // 避免截获行 hover。完整名称与状态放 tooltip 之外不展示，与卡片一致。
     Some(
         div()
-            .id(format!(
-                "persistent-team-{}",
-                connection.id.unwrap_or_default()
-            ))
             .flex_shrink_0()
             .max_w(px(92.0))
             .px_1p5()
             .py_0p5()
             .rounded(px(4.0))
-            .bg(if badge.active {
-                cx.theme().primary
-            } else {
-                cx.theme().muted
-            })
+            .bg(cx.theme().muted)
             .text_color(if badge.active {
-                cx.theme().primary_foreground
+                cx.theme().foreground
             } else {
                 cx.theme().muted_foreground
             })
@@ -139,7 +144,6 @@ pub(super) fn connection_team_indicator(
             .overflow_hidden()
             .text_ellipsis()
             .whitespace_nowrap()
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .child(badge.name)
             .into_any_element(),
     )

@@ -233,6 +233,10 @@ MqttForm:
     en: "Leave empty to auto-generate"
     zh-CN: "留空自动生成"
     zh-HK: "留空自動生成"
+  authentication:
+    en: "Authentication"
+    zh-CN: "认证"
+    zh-HK: "認證"
   username:
     en: "Username"
     zh-CN: "用户名"

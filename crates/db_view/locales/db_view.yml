@@ -139,6 +139,25 @@ Common:
     zh-CN: 此操作不可恢复。
     zh-HK: 此操作不可恢復。
 
+# 输入编辑菜单
+Input:
+  Cut:
+    en: Cut
+    zh-CN: 剪切
+    zh-HK: 剪切
+  Copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  Paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  Select All:
+    en: Select All
+    zh-CN: 全选
+    zh-HK: 全選
+
 # 连接操作
 Connection:
   edit:

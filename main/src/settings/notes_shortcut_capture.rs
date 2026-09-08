@@ -54,6 +54,15 @@ pub(super) fn reset_shortcut(command_id: &str, cx: &mut App) {
     crate::onetcli_app::refresh_keybindings(cx);
 }
 
+pub(super) fn clear_shortcut(command_id: &str, cx: &mut App) {
+    AppSettings::update_and_save(cx, |settings| {
+        settings
+            .custom_keybindings
+            .insert(command_id.to_string(), Vec::new());
+    });
+    crate::onetcli_app::refresh_keybindings(cx);
+}
+
 pub(super) fn clear_capture(state: &Entity<NotesShortcutCaptureState>, cx: &mut App) {
     state.update(cx, |state, cx| {
         state.active_command_id = None;

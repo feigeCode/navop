@@ -18,7 +18,7 @@ pub use connection_key::{
 pub use dynamic_socks::{DynamicSocksConfig, DynamicSocksTunnel, start_dynamic_socks_forward};
 pub use host_key::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyPolicy, HostKeyProxyType,
-    HostKeyRejection, HostKeyRoute, HostKeyVerifier,
+    HostKeyRejection, HostKeyRoute, HostKeyVerifier, KnownHost,
 };
 pub use remote_forwarding::{
     RemotePortForwardConfig, RemotePortForwardTunnel, start_remote_port_forward_with_config,

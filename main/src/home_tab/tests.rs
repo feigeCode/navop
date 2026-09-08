@@ -3,6 +3,7 @@ use one_core::storage::DbConnectionConfig;
 
 use super::keybindings::{OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER};
 
+mod local_terminal;
 mod rendering;
 mod sync;
 mod titles;
