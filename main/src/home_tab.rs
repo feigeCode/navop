@@ -138,6 +138,15 @@ impl HomePage {
     ) {
         self.connection_sidebar = Some(sidebar);
     }
+
+    pub(crate) fn recent_connections_collapsed(&self) -> bool {
+        self.recent_collapsed
+    }
+
+    pub(crate) fn toggle_recent_connections(&mut self, cx: &mut Context<Self>) {
+        self.recent_collapsed = !self.recent_collapsed;
+        cx.notify();
+    }
 }
 
 pub struct HomePage {
@@ -253,6 +262,8 @@ mod team_permissions;
 mod toolbar;
 mod workspace;
 mod workspace_filter;
+
+pub(crate) use recent::recent_connections;
 
 use connection_badge::ConnectionTeamBadge;
 pub(crate) use connection_badge::connection_team_badge;

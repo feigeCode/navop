@@ -3,7 +3,7 @@ use super::{ConnectionType, StoredConnection};
 
 /// Takes no workspace selection or global sort order, intentionally.
 /// `limit` 为当前布局一行容量（卡片视图=共享网格列数），由调用方决定。
-pub(super) fn recent_connections(
+pub(crate) fn recent_connections(
     connections: &[StoredConnection],
     filter: ConnectionType,
     query: &str,

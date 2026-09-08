@@ -103,6 +103,21 @@ pub(super) fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
         .into_any_element()
 }
 
+pub(super) fn tree_connection_icon_slot(icon: Icon, palette: SidebarPalette) -> AnyElement {
+    div()
+        .size(px(24.0))
+        .flex_shrink_0()
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.muted)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon.with_size(gpui_component::IconSize::Default))
+        .into_any_element()
+}
+
 pub(super) fn connection_team_indicator(
     connection: &one_core::storage::StoredConnection,
     teams: &[one_core::cloud_sync::TeamOption],

@@ -21,6 +21,14 @@ pub(crate) struct ConnectionNodeInput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ConnectionTreeRow {
+    RecentHeader {
+        count: usize,
+        expanded: bool,
+    },
+    RecentConnection {
+        id: i64,
+        name: String,
+    },
     Workspace {
         id: i64,
         name: String,
@@ -497,6 +505,8 @@ mod tests {
     fn row_shape(rows: &[ConnectionTreeRow]) -> Vec<(&'static str, usize)> {
         rows.iter()
             .map(|row| match row {
+                ConnectionTreeRow::RecentHeader { .. } => ("recent-header", 0),
+                ConnectionTreeRow::RecentConnection { .. } => ("recent-connection", 0),
                 ConnectionTreeRow::Workspace { depth, .. } => ("workspace", *depth),
                 ConnectionTreeRow::Connection { depth, .. } => ("connection", *depth),
             })

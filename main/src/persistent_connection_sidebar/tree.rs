@@ -23,11 +23,13 @@ use super::{PersistentConnectionSidebar, SidebarPalette};
 impl PersistentConnectionSidebar {
     /// 主页 Tree 布局嵌入的树视图：满宽、无 resize 手柄，交互与常驻侧栏一致。
     pub(crate) fn render_home_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        self.home_embedded = true;
         self.render_tree_impl(None, false, cx)
     }
 
     /// 停靠渲染（docked=true 时树从窗口顶部开始，macOS 头部需避让红绿灯）。
     pub(crate) fn render_docked_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        self.home_embedded = false;
         self.render_tree_impl(Some(self.tree_width), true, cx)
     }
 
@@ -37,6 +39,7 @@ impl PersistentConnectionSidebar {
         _window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        self.home_embedded = false;
         self.render_tree_impl(Some(self.tree_width), false, cx)
     }
 
@@ -197,7 +200,7 @@ impl PersistentConnectionSidebar {
         }
         let searching = !query.is_empty();
         let expanded_workspaces = std::collections::HashSet::new();
-        build_connection_tree_rows(
+        let mut rows = build_connection_tree_rows(
             &workspaces,
             &connections,
             if searching {
@@ -205,7 +208,28 @@ impl PersistentConnectionSidebar {
             } else {
                 &collapsed_workspaces
             },
-        )
+        );
+        if self.home_embedded && query.is_empty() {
+            let recent = crate::home_tab::recent_connections(&home.connections, type_filter, "", 4);
+            if !recent.is_empty() {
+                let expanded = !home.recent_connections_collapsed();
+                let mut recent_rows = vec![ConnectionTreeRow::RecentHeader {
+                    count: recent.len(),
+                    expanded,
+                }];
+                if expanded {
+                    recent_rows.extend(recent.into_iter().filter_map(|connection| {
+                        Some(ConnectionTreeRow::RecentConnection {
+                            id: connection.id?,
+                            name: connection.name,
+                        })
+                    }));
+                }
+                recent_rows.append(&mut rows);
+                return recent_rows;
+            }
+        }
+        rows
     }
 
     fn render_tree_search(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
@@ -353,5 +377,48 @@ mod tests {
             .find("batch_mode_toggle(")
             .expect("连接树头部应渲染批量操作开关");
         assert!(toggle < batch, "自动隐藏开关应位于批量操作开关的左侧");
+    }
+
+    #[test]
+    fn embedded_home_tree_prepends_recent_connections_only_without_search() {
+        let source = include_str!("tree.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+
+        assert!(implementation.contains("self.home_embedded && query.is_empty()"));
+        assert!(implementation.contains("home_tab::recent_connections"));
+        assert!(implementation.contains("ConnectionTreeRow::RecentHeader"));
+        assert!(implementation.contains("ConnectionTreeRow::RecentConnection"));
+    }
+
+    #[test]
+    fn each_tree_render_entry_restores_its_own_embedding_mode() {
+        let source = include_str!("tree.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+
+        let home = implementation
+            .split("fn render_home_tree")
+            .nth(1)
+            .expect("home tree entry exists")
+            .split("fn render_docked_tree")
+            .next()
+            .unwrap();
+        let docked = implementation
+            .split("fn render_docked_tree")
+            .nth(1)
+            .expect("docked tree entry exists")
+            .split("fn render_connection_tree")
+            .next()
+            .unwrap();
+        let floating = implementation
+            .split("fn render_connection_tree")
+            .nth(1)
+            .expect("floating tree entry exists")
+            .split("fn render_tree_impl")
+            .next()
+            .unwrap();
+
+        assert!(home.contains("self.home_embedded = true"));
+        assert!(docked.contains("self.home_embedded = false"));
+        assert!(floating.contains("self.home_embedded = false"));
     }
 }
