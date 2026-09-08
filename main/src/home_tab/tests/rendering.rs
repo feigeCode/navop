@@ -287,11 +287,11 @@ fn embedded_tree_reuses_home_search_and_filter_without_own_search_box() {
 }
 
 #[test]
-fn home_toolbar_groups_utility_controls_into_one_container() {
+fn home_toolbar_uses_a_continuous_secondary_action_strip() {
     let toolbar = include_str!("../toolbar.rs");
 
-    // 筛选组与排序/布局组使用同一视觉容器，刷新和批量操作留在组外。
-    assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 3);
+    // 搜索框之后只有一条连续工具带，不再给筛选和视图各套一个输入框式外框。
+    assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 1);
     assert!(toolbar.contains("render_home_type_filter(window, cx)"));
     assert!(toolbar.contains("render_sort_button(cx)"));
     assert!(toolbar.contains("render_layout_button(cx)"));
@@ -309,11 +309,52 @@ fn home_toolbar_uses_monochrome_icons_and_visual_separators() {
     assert!(!toolbar.contains("toolbar_separator(cx)"));
     assert!(!toolbar.contains("ToolbarGroupExt"));
     assert!(toolbar.contains("Icon::new(IconName::Refresh)"));
-    assert!(toolbar.contains("Icon::new(icon).mono()"));
+    assert!(toolbar.contains("IconButton::new(\n            \"layout-toggle\""));
     assert!(toolbar.contains("Icon::new(IconName::ListChecks)"));
     assert!(workspace_filter.contains("Icon::new(IconName::Filter)"));
     assert!(local_terminal.contains("IconName::SquareTerminal)"));
     assert!(!local_terminal.contains("SquareTerminalColor"));
+}
+
+#[test]
+fn new_connection_is_the_primary_home_action() {
+    let toolbar = include_str!("../toolbar.rs");
+    let new_connection = toolbar
+        .split("Button::new(\"new-connect-button\")")
+        .nth(1)
+        .expect("new connection button exists")
+        .split(".when(window.bounds()")
+        .next()
+        .expect("new connection button has a responsive label");
+
+    assert!(new_connection.contains(".primary()"));
+    assert!(!new_connection.contains(".outline()"));
+}
+
+#[test]
+fn home_search_keeps_a_comfortable_desktop_width() {
+    let toolbar = include_str!("../toolbar.rs");
+
+    assert!(toolbar.contains("window.bounds().size.width > px(1400.0)"));
+    assert!(toolbar.contains("search.min_w(gpui::rems(46.0))"));
+    assert!(toolbar.contains(".min_w(gpui::rems(4.0))"));
+}
+
+#[test]
+fn home_layout_switcher_uses_a_plain_icon_button() {
+    let toolbar = include_str!("../toolbar.rs");
+    let layout_switcher = toolbar
+        .split("fn render_layout_button")
+        .nth(1)
+        .expect("layout switcher exists")
+        .split("fn render_batch_toggle")
+        .next()
+        .expect("layout switcher has an end marker");
+
+    assert!(layout_switcher.contains("IconButton::new"));
+    assert!(layout_switcher.contains("dropdown_menu_with_anchor"));
+    assert!(!layout_switcher.contains("dropdown_caret"));
+    assert!(!layout_switcher.contains(".min_w(px(52.0))"));
 }
 
 #[test]

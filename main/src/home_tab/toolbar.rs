@@ -27,6 +27,9 @@ impl HomePage {
                     // 搜索框独占剩余空间；其余工具栏控件 flex_shrink_0，
                     // 防止窄窗口时按钮收缩把 dropdown caret 裁掉。
                     .min_w(gpui::rems(4.0))
+                    .when(window.bounds().size.width > px(1400.0), |search| {
+                        search.min_w(gpui::rems(46.0))
+                    })
                     .child(
                         Input::new(&self.search_input)
                             .cleanable(true)
@@ -35,46 +38,29 @@ impl HomePage {
                     ),
             )
             .child(
-                // 筛选条件单独成组，和排序/视图职责分离。
+                // 次要工具保持为一条连续操作带，只由按钮自身表达 hover/selected。
                 h_flex()
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
-                    .p_1()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().muted)
                     .child(self.render_home_type_filter(window, cx))
-                    .child(group_filter),
-            )
-            .child(
-                // 排序和布局都改变连接的呈现方式，放在同一紧凑组内。
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .p_1()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().muted)
+                    .child(group_filter)
                     .child(self.render_sort_button(cx))
-                    .child(self.render_layout_button(cx)),
+                    .child(self.render_layout_button(cx))
+                    .child(
+                        IconButton::new(
+                            "refresh-button",
+                            Icon::new(IconName::Refresh)
+                                .mono()
+                                .with_size(IconSize::Small),
+                        )
+                        .ghost()
+                        .flex_shrink_0()
+                        .tooltip(t!("Home.refresh"))
+                        .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
+                    )
+                    .child(self.render_batch_toggle(cx)),
             )
-            .child(
-                IconButton::new(
-                    "refresh-button",
-                    Icon::new(IconName::Refresh)
-                        .mono()
-                        .with_size(IconSize::Small),
-                )
-                .ghost()
-                .flex_shrink_0()
-                .tooltip(t!("Home.refresh"))
-                .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
-            )
-            .child(self.render_batch_toggle(cx))
             .child(
                 // 主操作区分隔线（demo：1×18px --border）
                 div()
@@ -125,43 +111,43 @@ impl HomePage {
 
     fn render_sort_button(&self, cx: &Context<Self>) -> AnyElement {
         let selected = AppSettings::global(cx).connection_sort_order;
-        Button::new("home-sort")
-            .ghost()
-            .flex_shrink_0()
-            .icon(
-                Icon::new(match selected {
-                    ConnectionSortOrder::Natural => IconName::SortAscending,
-                    ConnectionSortOrder::Lru => IconName::SortDescending,
-                })
-                .mono()
-                .with_size(IconSize::Small),
-            )
-            .tooltip(t!("Settings.General.ConnectionDisplay.connection_sort"))
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                [
-                    (
-                        ConnectionSortOrder::Natural,
-                        t!("Settings.General.ConnectionDisplay.connection_sort_natural"),
-                    ),
-                    (
-                        ConnectionSortOrder::Lru,
-                        t!("Settings.General.ConnectionDisplay.connection_sort_lru"),
-                    ),
-                ]
-                .into_iter()
-                .fold(menu, |menu, (order, label)| {
-                    menu.item(
-                        PopupMenuItem::new(label.to_string())
-                            .checked(selected == order)
-                            .on_click(move |_, _, cx| {
-                                AppSettings::update_and_save(cx, |settings| {
-                                    settings.connection_sort_order = order
-                                });
-                            }),
-                    )
-                })
+        IconButton::new(
+            "home-sort",
+            Icon::new(match selected {
+                ConnectionSortOrder::Natural => IconName::SortAscending,
+                ConnectionSortOrder::Lru => IconName::SortDescending,
             })
-            .into_any_element()
+            .mono()
+            .with_size(IconSize::Small),
+        )
+        .ghost()
+        .flex_shrink_0()
+        .tooltip(t!("Settings.General.ConnectionDisplay.connection_sort"))
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+            [
+                (
+                    ConnectionSortOrder::Natural,
+                    t!("Settings.General.ConnectionDisplay.connection_sort_natural"),
+                ),
+                (
+                    ConnectionSortOrder::Lru,
+                    t!("Settings.General.ConnectionDisplay.connection_sort_lru"),
+                ),
+            ]
+            .into_iter()
+            .fold(menu, |menu, (order, label)| {
+                menu.item(
+                    PopupMenuItem::new(label.to_string())
+                        .checked(selected == order)
+                        .on_click(move |_, _, cx| {
+                            AppSettings::update_and_save(cx, |settings| {
+                                settings.connection_sort_order = order
+                            });
+                        }),
+                )
+            })
+        })
+        .into_any_element()
     }
 
     /// 视图切换：图标反映当前布局，菜单内三项带勾选态（redesign §7.2：当前视图可发现）。
@@ -173,39 +159,37 @@ impl HomePage {
             ConnectionLayout::List => IconName::Menu,
             ConnectionLayout::Tree => IconName::Network,
         };
-        Button::new("layout-toggle")
-            .ghost()
-            .flex_shrink_0()
-            // 图标模式下 Button 会收敛为固定 size_8 方块，内部 overflow_hidden
-            // 会裁掉 dropdown caret；显式 min_w 保证 icon+caret 完整可见。
-            .min_w(px(52.0))
-            .icon(Icon::new(icon).mono().with_size(IconSize::Small))
-            .dropdown_caret(true)
-            .tooltip(t!("Settings.General.ConnectionDisplay.connection_layout"))
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                [
-                    (ConnectionLayout::Card, t!("Home.card_view")),
-                    (ConnectionLayout::List, t!("Home.list_view")),
-                    (ConnectionLayout::Tree, t!("Home.tree_view")),
-                ]
-                .into_iter()
-                .fold(menu, |menu, (layout, label)| {
-                    let view = view.clone();
-                    menu.item(
-                        PopupMenuItem::new(label.to_string())
-                            .checked(layout == current)
-                            .on_click(move |_, _, cx| {
-                                view.update(cx, |home, cx| {
-                                    home.set_connection_layout(layout.into(), cx);
-                                    AppSettings::update_and_save(cx, |settings| {
-                                        settings.home_connection_layout = layout.into()
-                                    });
+        IconButton::new(
+            "layout-toggle",
+            Icon::new(icon).mono().with_size(IconSize::Small),
+        )
+        .ghost()
+        .flex_shrink_0()
+        .tooltip(t!("Settings.General.ConnectionDisplay.connection_layout"))
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+            [
+                (ConnectionLayout::Card, t!("Home.card_view")),
+                (ConnectionLayout::List, t!("Home.list_view")),
+                (ConnectionLayout::Tree, t!("Home.tree_view")),
+            ]
+            .into_iter()
+            .fold(menu, |menu, (layout, label)| {
+                let view = view.clone();
+                menu.item(
+                    PopupMenuItem::new(label.to_string())
+                        .checked(layout == current)
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |home, cx| {
+                                home.set_connection_layout(layout.into(), cx);
+                                AppSettings::update_and_save(cx, |settings| {
+                                    settings.home_connection_layout = layout.into()
                                 });
-                            }),
-                    )
-                })
+                            });
+                        }),
+                )
             })
-            .into_any_element()
+        })
+        .into_any_element()
     }
 
     /// 批量操作入口：选中态保持高亮；卡片/列表/树共享同一批量选择状态。
@@ -236,9 +220,8 @@ impl HomePage {
         DropdownButton::new("home-new-dropdown")
             .flex_shrink_0()
             .button(
-                // 新建连接是普通命令，不因位置使用 primary（redesign §7.3）。
                 Button::new("new-connect-button")
-                    .outline()
+                    .primary()
                     .icon(Icon::new(IconName::Plus).mono().with_size(IconSize::Small))
                     .when(window.bounds().size.width > px(1000.0), |button| {
                         button.label(t!("Home.new_connection"))

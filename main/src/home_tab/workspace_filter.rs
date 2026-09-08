@@ -35,16 +35,16 @@ impl HomePage {
 
         Popover::new("workspace-filter-popover")
             .trigger(
-                Button::new("workspace-filter")
-                    .ghost()
-                    .flex_shrink_0()
-                    .icon(
-                        Icon::new(IconName::Filter)
-                            .mono()
-                            .with_size(IconSize::Small),
-                    )
-                    .selected(!self.filtered_workspace_ids.is_empty())
-                    .tooltip(t!("Workspace.filter")),
+                IconButton::new(
+                    "workspace-filter",
+                    Icon::new(IconName::Filter)
+                        .mono()
+                        .with_size(IconSize::Small),
+                )
+                .ghost()
+                .flex_shrink_0()
+                .selected(!self.filtered_workspace_ids.is_empty())
+                .tooltip(t!("Workspace.filter")),
             )
             .open(open)
             .on_open_change(cx.listener(|this, open, _, cx| {
