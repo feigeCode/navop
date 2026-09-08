@@ -14,7 +14,8 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 
     assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
     assert!(launcher.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
-    assert!(launcher.contains("IconName::SquareTerminalColor.color()"));
+    assert!(launcher.contains("IconName::SquareTerminal)"));
+    assert!(launcher.contains(".mono()"));
     assert!(launcher.contains("launch_target_is_default"));
     assert!(launcher.contains("LocalTerminalLaunchTarget::Custom"));
 }
@@ -68,6 +69,37 @@ fn connection_hover_actions_have_stable_ids() {
 
     assert!(list_actions.contains("conn-list-actions-{}"));
     assert!(card_actions.contains("{card_id}-actions"));
+}
+
+#[test]
+fn connection_hover_actions_do_not_duplicate_connections() {
+    let list_actions = include_str!("../connection_list_actions.rs");
+    let card_actions = include_str!("../connection_card_actions.rs");
+
+    for source in [list_actions, card_actions] {
+        assert!(!source.contains("duplicate_connection"));
+        assert!(!source.contains("Home.duplicate_connection"));
+        assert!(!source.contains("IconName::Copy"));
+    }
+}
+
+#[test]
+fn connection_identity_and_hover_icons_share_a_consistent_scale() {
+    let visuals = include_str!("../../connection_visuals.rs");
+    let card_content = include_str!("../connection_card_content.rs");
+    let list_item = include_str!("../connection_list.rs");
+    let list_actions = include_str!("../connection_list_actions.rs");
+    let card_actions = include_str!("../connection_card_actions.rs");
+
+    assert!(visuals.contains("Self::Card => IconSize::Large"));
+    for source in [card_content, list_item] {
+        assert!(source.contains(".bg(cx.theme().muted)"));
+        assert!(source.contains(".border_color(cx.theme().border)"));
+    }
+    for source in [list_actions, card_actions] {
+        assert!(source.contains(".with_size(IconSize::Small)"));
+        assert!(source.contains(".mono()"));
+    }
 }
 
 #[test]
@@ -258,14 +290,37 @@ fn embedded_tree_reuses_home_search_and_filter_without_own_search_box() {
 fn home_toolbar_groups_utility_controls_into_one_container() {
     let toolbar = include_str!("../toolbar.rs");
 
-    // 筛选/排序/布局/刷新/批量收纳进同一 muted 分组容器
-    let group = toolbar
-        .find(".bg(cx.theme().muted)")
-        .map(|_| toolbar.contains("render_batch_toggle(cx)"));
-    assert!(group.unwrap_or(false));
+    // 筛选组与排序/布局组使用同一视觉容器，刷新和批量操作留在组外。
+    assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 3);
     assert!(toolbar.contains("render_home_type_filter(window, cx)"));
+    assert!(toolbar.contains("render_sort_button(cx)"));
+    assert!(toolbar.contains("render_layout_button(cx)"));
+    assert!(toolbar.contains("render_batch_toggle(cx)"));
     // 「全部类型」不再使用星号图标
     assert!(toolbar.contains("IconName::Apps"));
+}
+
+#[test]
+fn home_toolbar_uses_monochrome_icons_and_visual_separators() {
+    let toolbar = include_str!("../toolbar.rs");
+    let workspace_filter = include_str!("../workspace_filter.rs");
+    let local_terminal = include_str!("../local_terminal.rs");
+
+    assert!(!toolbar.contains("toolbar_separator(cx)"));
+    assert!(!toolbar.contains("ToolbarGroupExt"));
+    assert!(toolbar.contains("Icon::new(IconName::Refresh)"));
+    assert!(toolbar.contains("Icon::new(icon).mono()"));
+    assert!(toolbar.contains("Icon::new(IconName::ListChecks)"));
+    assert!(workspace_filter.contains("Icon::new(IconName::Filter)"));
+    assert!(local_terminal.contains("IconName::SquareTerminal)"));
+    assert!(!local_terminal.contains("SquareTerminalColor"));
+}
+
+#[test]
+fn workspace_filter_exposes_its_active_state() {
+    let workspace_filter = include_str!("../workspace_filter.rs");
+
+    assert!(workspace_filter.contains(".selected(!self.filtered_workspace_ids.is_empty())"));
 }
 
 #[test]

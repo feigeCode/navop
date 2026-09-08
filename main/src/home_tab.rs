@@ -62,7 +62,7 @@ use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{
-    ConnectionVisualSize, connection_type_label, connection_type_rail_icon,
+    ConnectionVisualSize, connection_type_label, connection_type_navigation_icon,
 };
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
@@ -90,7 +90,7 @@ actions!(
     ]
 );
 
-const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
+const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(96.0);
 // 侧栏舒适宽度收窄（redesign §8.2），把空间让给主工作面。
 const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(184.0);
 const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(58.0);

@@ -1,4 +1,5 @@
 use super::*;
+use gpui_component::Selectable as _;
 
 impl HomePage {
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -34,8 +35,15 @@ impl HomePage {
 
         Popover::new("workspace-filter-popover")
             .trigger(
-                IconButton::new("workspace-filter", IconName::Filter)
+                Button::new("workspace-filter")
+                    .ghost()
                     .flex_shrink_0()
+                    .icon(
+                        Icon::new(IconName::Filter)
+                            .mono()
+                            .with_size(IconSize::Small),
+                    )
+                    .selected(!self.filtered_workspace_ids.is_empty())
                     .tooltip(t!("Workspace.filter")),
             )
             .open(open)

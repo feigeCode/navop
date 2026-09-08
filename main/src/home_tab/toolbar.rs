@@ -35,29 +35,46 @@ impl HomePage {
                     ),
             )
             .child(
-                // 筛选/排序/布局/刷新/批量统一收纳进分组容器：
-                // 与搜索框同款 muted 底与圆角，幽灵按钮在容器内不再各自为战。
+                // 筛选条件单独成组，和排序/视图职责分离。
                 h_flex()
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
                     .p_1()
                     .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
                     .bg(cx.theme().muted)
                     .child(self.render_home_type_filter(window, cx))
-                    .child(group_filter)
-                    .child(self.render_sort_button(cx))
-                    .child(self.render_layout_button(cx))
-                    .child(
-                        IconButton::new("refresh-button", IconName::Refresh)
-                            .flex_shrink_0()
-                            .tooltip(t!("Home.refresh"))
-                            .on_click(
-                                cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx)),
-                            ),
-                    )
-                    .child(self.render_batch_toggle(cx)),
+                    .child(group_filter),
             )
+            .child(
+                // 排序和布局都改变连接的呈现方式，放在同一紧凑组内。
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .p_1()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().muted)
+                    .child(self.render_sort_button(cx))
+                    .child(self.render_layout_button(cx)),
+            )
+            .child(
+                IconButton::new(
+                    "refresh-button",
+                    Icon::new(IconName::Refresh)
+                        .mono()
+                        .with_size(IconSize::Small),
+                )
+                .ghost()
+                .flex_shrink_0()
+                .tooltip(t!("Home.refresh"))
+                .on_click(cx.listener(|home, _, _, cx| home.refresh_local_home_data(cx))),
+            )
+            .child(self.render_batch_toggle(cx))
             .child(
                 // 主操作区分隔线（demo：1×18px --border）
                 div()
@@ -82,9 +99,10 @@ impl HomePage {
             .min_w(px(52.0))
             // 「全部类型」用 Apps 网格图标；星号在工具栏里像装饰符，语义不清。
             .icon(if selected == ConnectionType::All {
-                IconName::Apps.mono().with_size(IconSize::Medium)
+                IconName::Apps.mono().with_size(IconSize::Small)
             } else {
-                connection_type_rail_icon(selected)
+                connection_type_navigation_icon(selected, ConnectionVisualSize::Tree)
+                    .with_size(IconSize::Small)
             })
             .when(window.bounds().size.width > px(1100.0), |button| {
                 button.label(connection_type_label(selected))
@@ -110,10 +128,14 @@ impl HomePage {
         Button::new("home-sort")
             .ghost()
             .flex_shrink_0()
-            .icon(match selected {
-                ConnectionSortOrder::Natural => IconName::SortAscending,
-                ConnectionSortOrder::Lru => IconName::SortDescending,
-            })
+            .icon(
+                Icon::new(match selected {
+                    ConnectionSortOrder::Natural => IconName::SortAscending,
+                    ConnectionSortOrder::Lru => IconName::SortDescending,
+                })
+                .mono()
+                .with_size(IconSize::Small),
+            )
             .tooltip(t!("Settings.General.ConnectionDisplay.connection_sort"))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 [
@@ -157,7 +179,7 @@ impl HomePage {
             // 图标模式下 Button 会收敛为固定 size_8 方块，内部 overflow_hidden
             // 会裁掉 dropdown caret；显式 min_w 保证 icon+caret 完整可见。
             .min_w(px(52.0))
-            .icon(icon)
+            .icon(Icon::new(icon).mono().with_size(IconSize::Small))
             .dropdown_caret(true)
             .tooltip(t!("Settings.General.ConnectionDisplay.connection_layout"))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
@@ -191,7 +213,11 @@ impl HomePage {
         Button::new("home-batch-toggle")
             .ghost()
             .flex_shrink_0()
-            .icon(IconName::ListChecks)
+            .icon(
+                Icon::new(IconName::ListChecks)
+                    .mono()
+                    .with_size(IconSize::Small),
+            )
             .selected(self.batch_mode_active())
             .tooltip(t!("Connection.batch_operations"))
             .on_click(cx.listener(|home, _, _, cx| {
@@ -213,7 +239,7 @@ impl HomePage {
                 // 新建连接是普通命令，不因位置使用 primary（redesign §7.3）。
                 Button::new("new-connect-button")
                     .outline()
-                    .icon(IconName::Plus)
+                    .icon(Icon::new(IconName::Plus).mono().with_size(IconSize::Small))
                     .when(window.bounds().size.width > px(1000.0), |button| {
                         button.label(t!("Home.new_connection"))
                     })

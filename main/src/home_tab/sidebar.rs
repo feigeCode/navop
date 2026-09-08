@@ -42,8 +42,11 @@ impl HomePage {
                     .child(
                         v_flex()
                             .px_2()
-                            .py_1()
+                            .pt_2()
+                            .pb_1()
                             .gap_1()
+                            .border_t_1()
+                            .border_color(cx.theme().sidebar_border)
                             .child(self.render_account_entry(window, cx))
                             .child(self.render_settings_entry(window, cx)),
                     ),

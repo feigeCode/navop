@@ -121,7 +121,7 @@ impl HomePage {
         let mut body = v_flex()
             .w_full()
             .min_w_0()
-            .gap_4()
+            .gap_5()
             .child(self.render_content_heading(visible_count, cx));
         if visible_count == 0 {
             body = body.child(self.render_empty_home(cx));
@@ -154,6 +154,7 @@ impl HomePage {
         h_flex()
             .w_full()
             .gap_2()
+            .items_center()
             .child(
                 div()
                     .text_lg()
@@ -270,7 +271,7 @@ impl HomePage {
         v_flex()
             .id("home-recent-group")
             .w_full()
-            .gap_2()
+            .gap_2p5()
             .child(
                 h_flex()
                     .gap_2()
@@ -343,10 +344,11 @@ impl HomePage {
             .id(SharedString::from(format!("home-group-{id:?}")))
             .w_full()
             .min_w_0()
-            .gap_2()
+            .gap_2p5()
             .child(
                 h_flex()
-                    .gap_2()
+                    .gap_1()
+                    .items_center()
                     .child(
                         Button::new(SharedString::from(format!("group-toggle-{id:?}")))
                             .ghost()
@@ -392,7 +394,7 @@ impl HomePage {
             .flex()
             .w_full()
             .min_w_0()
-            .gap_3()
+            .gap_2p5()
             .when(layout != ConnectionLayout::Card, |grid| grid.flex_col());
         if layout == ConnectionLayout::Card {
             grid = grid.flex_wrap();

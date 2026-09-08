@@ -38,7 +38,7 @@ impl ConnectionVisualSize {
             Self::Tree => IconSize::Default,
             Self::Rail => IconSize::Medium,
             Self::List => IconSize::Large,
-            Self::Card => IconSize::Display,
+            Self::Card => IconSize::Large,
             Self::Hero => IconSize::Hero,
         }
     }
@@ -263,7 +263,7 @@ mod tests {
     fn semantic_connection_sizes_map_to_the_shared_icon_scale() {
         assert_eq!(ConnectionVisualSize::Tree.icon_size(), IconSize::Default);
         assert_eq!(ConnectionVisualSize::List.icon_size(), IconSize::Large);
-        assert_eq!(ConnectionVisualSize::Card.icon_size(), IconSize::Display);
+        assert_eq!(ConnectionVisualSize::Card.icon_size(), IconSize::Large);
         assert_eq!(ConnectionVisualSize::Hero.icon_size(), IconSize::Hero);
         assert_eq!(ConnectionVisualSize::Rail.icon_size(), IconSize::Medium);
     }

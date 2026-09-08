@@ -14,12 +14,15 @@ impl HomePage {
 
         h_flex()
             .items_center()
-            .gap_2()
+            .gap_2p5()
             .w_full()
             .child(
                 div()
-                    .size(gpui::rems(2.5))
-                    .rounded(cx.theme().radius)
+                    .size(gpui::rems(2.375))
+                    .rounded(px(9.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().muted)
                     .flex()
                     .items_center()
                     .justify_center()

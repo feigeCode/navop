@@ -49,8 +49,9 @@ impl HomePage {
             .id(row_id.clone())
             .w_full()
             .px_3p5()
-            .py_2()
-            .border_b_1()
+            .py_2p5()
+            .rounded(px(10.0))
+            .border_1()
             .border_color(cx.theme().border)
             .items_center()
             .gap_3()
@@ -111,8 +112,17 @@ impl HomePage {
                 )
             })
             .child(
-                self.connection_icon(&conn, ConnectionVisualSize::List)
-                    .flex_shrink_0(),
+                div()
+                    .size(gpui::rems(2.25))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().muted)
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .child(self.connection_icon(&conn, ConnectionVisualSize::List)),
             )
             .child(
                 v_flex()

@@ -17,7 +17,11 @@ impl HomePage {
             .flex_shrink_0()
             .button(
                 Button::new("local-terminal-button")
-                    .icon(IconName::SquareTerminalColor.color())
+                    .icon(
+                        Icon::new(IconName::SquareTerminal)
+                            .mono()
+                            .with_size(IconSize::Small),
+                    )
                     .when(window.bounds().size.width > px(1100.0), |button| {
                         button.label(t!("Home.local_terminal").to_string())
                     })
