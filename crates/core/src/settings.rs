@@ -1564,14 +1564,47 @@ impl AppSettings {
     pub fn apply(&self, cx: &mut App) {
         gpui_component::set_locale(effective_locale_for_setting(&self.locale));
         crate::themes::apply_appearance(self, cx);
-        self.apply_font_size(cx);
 
         // 同步自动保存配置
         self.sync_auto_save_config(cx);
     }
 
+    /// 将通用字体设置（字号 + 字体族）应用到主题，并同步 GPUI 的 Base 层。
+    ///
+    /// 直接修改 `Theme` 的公共字段不会自动刷新 Base 层副本（滚动条、文本视图
+    /// 默认样式等都从 Base 层读取），因此必须调用 [`Theme::sync_base`] 重建。
+    fn apply_font_settings(&self, cx: &mut App) {
+        let family = self.font_family.trim();
+        // 自定义导入字体（通过 add_fonts 注册）在启动早期尚未进入字体列表，
+        // 因此需额外从 custom_fonts 配置中判定，避免被误判为未安装。
+        let is_custom_font = self.custom_fonts.iter().any(|font| {
+            font.families
+                .iter()
+                .any(|candidate| candidate.trim().eq_ignore_ascii_case(family))
+        });
+        let installed = cx.text_system().all_font_names();
+        let resolved = if family.is_empty()
+            || (!is_custom_font && !is_installed_font_family(family, &installed))
+        {
+            // 未安装的字体族回退到系统 UI 字体，避免渲染异常
+            ".SystemUIFont".to_string()
+        } else {
+            family.to_string()
+        };
+
+        let theme = Theme::global_mut(cx);
+        theme.font_family = resolved.into();
+        theme.font_size = px(self.font_size as f32);
+        Theme::sync_base(cx);
+    }
+
     pub fn apply_font_size(&self, cx: &mut App) {
-        Theme::global_mut(cx).font_size = px(self.font_size as f32);
+        self.apply_font_settings(cx);
+    }
+
+    /// 应用通用字体族设置到主题（设置面板修改"字体"后调用）。
+    pub fn apply_font_family(&self, cx: &mut App) {
+        self.apply_font_settings(cx);
     }
 
     /// 同步自动保存配置到全局状态

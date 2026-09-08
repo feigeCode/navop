@@ -157,6 +157,9 @@ pub fn apply_appearance(settings: &AppSettings, cx: &mut App) {
     // additional ring outside the control bounds.
     Theme::global_mut(cx).focus_ring = false;
     apply_custom_accent(settings, cx);
+    // Theme::change 会通过主题配置的 typography 重置 font_family，这里重新应用
+    // 用户配置的通用字体（字号 + 字体族），确保主题切换后字体设置仍生效。
+    settings.apply_font_size(cx);
     cx.refresh_windows();
 }
 

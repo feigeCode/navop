@@ -753,6 +753,8 @@ impl SettingsPanel {
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.font_family = val.to_string();
                                         });
+                                        AppSettings::current(cx).apply_font_family(cx);
+                                        cx.refresh_windows();
                                     },
                                 )
                                 .default_value(SharedString::from(default_settings.font_family)),
