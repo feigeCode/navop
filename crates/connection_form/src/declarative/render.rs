@@ -3,8 +3,6 @@ use gpui::{
     App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
     div, px,
 };
-use rust_i18n::t;
-use std::collections::HashSet;
 use gpui_component::{
     IconName,
     button::{Button, ButtonVariants as _},
@@ -16,6 +14,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
+use rust_i18n::t;
+use std::collections::HashSet;
 
 use super::{DeclarativeFieldType, DeclarativeForm, DeclarativeFormField, auth_subkey};
 
@@ -30,108 +30,112 @@ impl DeclarativeForm {
         }
         let id = field_info.id.clone();
         let checkbox_id = id.clone();
-        vec![field()
-            .label(field_info.label.clone())
-            .required(field_info.required)
-            .when(
-                field_info.field_type == DeclarativeFieldType::TextArea,
-                |field| field.items_start(),
-            )
-            .when(
-                field_info.field_type != DeclarativeFieldType::TextArea,
-                |field| field.items_center(),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .when(
-                        field_info.field_type == DeclarativeFieldType::Select,
-                        |el| {
-                            if let Some(state) = self.selects.get(&id) {
-                                el.child(Select::new(state).w_full())
-                            } else {
-                                el
-                            }
-                        },
-                    )
-                    .when(
-                        field_info.field_type == DeclarativeFieldType::Checkbox,
-                        |el| {
-                            let checked = self.value(&id, cx).parse::<bool>().unwrap_or(false);
-                            el.child(
-                                Checkbox::new(format!("{id}-checkbox"))
-                                    .checked(checked)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(value) = this.values.get(&checkbox_id) {
-                                            let next =
-                                                !value.read(cx).parse::<bool>().unwrap_or(false);
-                                            value.update(cx, |value, cx| {
-                                                *value = next.to_string();
-                                                cx.notify();
-                                            });
-                                        }
-                                    })),
-                            )
-                        },
-                    )
-                    .when(
-                        !matches!(
-                            field_info.field_type,
-                            DeclarativeFieldType::Select
-                                | DeclarativeFieldType::Checkbox
-                                | DeclarativeFieldType::TextArea
-                        ),
-                        |el| {
-                            if let Some(state) = self.inputs.get(&id) {
-                                let input = Input::new(state).w_full();
-                                el.child(
-                                    if field_info.field_type == DeclarativeFieldType::Password {
-                                        input.mask_toggle()
-                                    } else {
-                                        input
-                                    },
-                                )
-                            } else {
-                                el
-                            }
-                        },
-                    )
-                    .when(
-                        field_info.field_type == DeclarativeFieldType::TextArea,
-                        |el| {
-                            if let Some(state) = self.textareas.get(&id) {
-                                el.child(Textarea::new(state).w_full())
-                            } else {
-                                el
-                            }
-                        },
-                    )
-                    .when(
-                        field_info.field_type == DeclarativeFieldType::FilePath,
-                        |el| {
-                            let file_field = field_info.id.clone();
-                            el.child(
-                                Button::new(format!("{file_field}-browse-file"))
-                                    .icon(IconName::FolderOpen)
-                                    .ghost()
-                                    .on_click(cx.listener(move |this, _, _window, cx| {
-                                        this.browse_file_path(&file_field, cx);
-                                    })),
-                            )
-                        },
-                    )
-                    .when(field_info.secret, |el| {
-                        let field_id = id.clone();
-                        el.child(
-                            Button::new(format!("{id}-clear-secret"))
-                                .ghost()
-                                .label("Clear")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.clear_secret(&field_id, window, cx);
-                                })),
+        vec![
+            field()
+                .label(field_info.label.clone())
+                .required(field_info.required)
+                .when(
+                    field_info.field_type == DeclarativeFieldType::TextArea,
+                    |field| field.items_start(),
+                )
+                .when(
+                    field_info.field_type != DeclarativeFieldType::TextArea,
+                    |field| field.items_center(),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .when(
+                            field_info.field_type == DeclarativeFieldType::Select,
+                            |el| {
+                                if let Some(state) = self.selects.get(&id) {
+                                    el.child(Select::new(state).w_full())
+                                } else {
+                                    el
+                                }
+                            },
                         )
-                    }),
-            )]
+                        .when(
+                            field_info.field_type == DeclarativeFieldType::Checkbox,
+                            |el| {
+                                let checked = self.value(&id, cx).parse::<bool>().unwrap_or(false);
+                                el.child(
+                                    Checkbox::new(format!("{id}-checkbox"))
+                                        .checked(checked)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(value) = this.values.get(&checkbox_id) {
+                                                let next = !value
+                                                    .read(cx)
+                                                    .parse::<bool>()
+                                                    .unwrap_or(false);
+                                                value.update(cx, |value, cx| {
+                                                    *value = next.to_string();
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })),
+                                )
+                            },
+                        )
+                        .when(
+                            !matches!(
+                                field_info.field_type,
+                                DeclarativeFieldType::Select
+                                    | DeclarativeFieldType::Checkbox
+                                    | DeclarativeFieldType::TextArea
+                            ),
+                            |el| {
+                                if let Some(state) = self.inputs.get(&id) {
+                                    let input = Input::new(state).w_full();
+                                    el.child(
+                                        if field_info.field_type == DeclarativeFieldType::Password {
+                                            input.mask_toggle()
+                                        } else {
+                                            input
+                                        },
+                                    )
+                                } else {
+                                    el
+                                }
+                            },
+                        )
+                        .when(
+                            field_info.field_type == DeclarativeFieldType::TextArea,
+                            |el| {
+                                if let Some(state) = self.textareas.get(&id) {
+                                    el.child(Textarea::new(state).w_full())
+                                } else {
+                                    el
+                                }
+                            },
+                        )
+                        .when(
+                            field_info.field_type == DeclarativeFieldType::FilePath,
+                            |el| {
+                                let file_field = field_info.id.clone();
+                                el.child(
+                                    Button::new(format!("{file_field}-browse-file"))
+                                        .icon(IconName::FolderOpen)
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                            this.browse_file_path(&file_field, cx);
+                                        })),
+                                )
+                            },
+                        )
+                        .when(field_info.secret, |el| {
+                            let field_id = id.clone();
+                            el.child(
+                                Button::new(format!("{id}-clear-secret"))
+                                    .ghost()
+                                    .label("Clear")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.clear_secret(&field_id, window, cx);
+                                    })),
+                            )
+                        }),
+                ),
+        ]
     }
 
     fn render_auth_field(
@@ -142,15 +146,17 @@ impl DeclarativeForm {
         let username_id = auth_subkey(&field_info.id, "username");
         let password_id = auth_subkey(&field_info.id, "password");
         let reference_selected = self.auth_has_reference(&field_info.id, cx);
-        let mut fields = vec![field()
-            .label(t!("Credential.keychain").to_string())
-            .items_center()
-            .child(
-                self.auth_pickers
-                    .get(&field_info.id)
-                    .map(|picker| div().w_full().child(picker.clone()))
-                    .unwrap_or_else(|| div().w_full()),
-            )];
+        let mut fields = vec![
+            field()
+                .label(t!("Credential.keychain").to_string())
+                .items_center()
+                .child(
+                    self.auth_pickers
+                        .get(&field_info.id)
+                        .map(|picker| div().w_full().child(picker.clone()))
+                        .unwrap_or_else(|| div().w_full()),
+                ),
+        ];
         if !reference_selected {
             fields.push(
                 field()

@@ -124,10 +124,7 @@ pub(super) fn auto_hide_tree_toggle(
         })
 }
 
-fn select_visible_button(
-    home: gpui::Entity<HomePage>,
-    visible_ids: Vec<i64>,
-) -> IconButton {
+fn select_visible_button(home: gpui::Entity<HomePage>, visible_ids: Vec<i64>) -> IconButton {
     let disabled = visible_ids.is_empty();
     IconButton::new("persistent-select-visible-connections", IconName::Check)
         .role(IconButtonRole::Compact)
@@ -178,10 +175,7 @@ fn append_move_targets(
         })
 }
 
-fn delete_connections_button(
-    home: gpui::Entity<HomePage>,
-    selected_ids: Vec<i64>,
-) -> IconButton {
+fn delete_connections_button(home: gpui::Entity<HomePage>, selected_ids: Vec<i64>) -> IconButton {
     let disabled = selected_ids.is_empty();
     IconButton::new("persistent-delete-selected-connections", IconName::Remove)
         .role(IconButtonRole::Compact)

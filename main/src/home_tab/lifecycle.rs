@@ -45,27 +45,23 @@ impl HomePage {
         cx.subscribe_in(
             &search_input,
             window,
-            move |this, input, event, window, cx| {
-                match event {
-                    InputEvent::Change => {
-                        query_clone.update(cx, |q, cx| {
-                            *q = input.read(cx).text().to_string();
-                            cx.notify();
-                        });
+            move |this, input, event, window, cx| match event {
+                InputEvent::Change => {
+                    query_clone.update(cx, |q, cx| {
+                        *q = input.read(cx).text().to_string();
                         cx.notify();
-                    }
-                    InputEvent::PressEnter { .. } => {
-                        let query = input.read(cx).text().to_string();
-                        if crate::home::home_connection_quick_open::temporary_ssh_connection(
-                            &query,
-                        )
-                        .is_some()
-                        {
-                            this.show_connection_quick_open_with_query(query, window, cx);
-                        }
-                    }
-                    _ => {}
+                    });
+                    cx.notify();
                 }
+                InputEvent::PressEnter { .. } => {
+                    let query = input.read(cx).text().to_string();
+                    if crate::home::home_connection_quick_open::temporary_ssh_connection(&query)
+                        .is_some()
+                    {
+                        this.show_connection_quick_open_with_query(query, window, cx);
+                    }
+                }
+                _ => {}
             },
         )
         .detach();

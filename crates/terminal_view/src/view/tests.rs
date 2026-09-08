@@ -1,9 +1,9 @@
+use super::block_selection::BlockSelection;
 use super::recording_footer::{format_recording_elapsed, recording_output_path};
 use super::render_surface::terminal_viewport_bounds;
 use super::tab_content::recording_playback_tab_title;
 use super::terminal_layout::terminal_grid_size;
 use super::workspace_support::map_connection_status;
-use super::block_selection::BlockSelection;
 use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,
     UnbracketedPasteHazard, WrappedLineSegment, block_selection_text_from_rows,

@@ -15,7 +15,12 @@ pub(super) fn create_name_input(
     window: &mut Window,
     cx: &mut Context<ExtensionConnectionForm>,
 ) -> Entity<InputState> {
-    create_input(value, t!("ExtensionConnectionForm.name_placeholder").to_string(), window, cx)
+    create_input(
+        value,
+        t!("ExtensionConnectionForm.name_placeholder").to_string(),
+        window,
+        cx,
+    )
 }
 
 pub(super) fn create_input(

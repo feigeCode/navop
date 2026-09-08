@@ -150,10 +150,7 @@ impl PersistentConnectionSidebar {
             .connections
             .iter()
             .filter(|connection| {
-                crate::home_tab::connection_filter::match_connection_type(
-                    type_filter,
-                    connection,
-                )
+                crate::home_tab::connection_filter::match_connection_type(type_filter, connection)
             })
             .filter_map(|connection| {
                 let id = connection.id?;

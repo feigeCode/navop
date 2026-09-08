@@ -66,9 +66,9 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
-    LOCALE_SYSTEM, LOCALE_ZH_CN,
-    LOCALE_ZH_HK, PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
-    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
+    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, PersonalSyncBackendKind, PersonalSyncSettings,
+    ProxyType, SyncProvider, effective_locale_for_setting, is_installed_font_family,
+    is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -492,7 +492,10 @@ impl SettingsPanel {
                                             LOCALE_ZH_HK.into(),
                                             t!("Settings.General.Language.zh_hk").into(),
                                         ),
-                                        (LOCALE_EN.into(), t!("Settings.General.Language.en").into()),
+                                        (
+                                            LOCALE_EN.into(),
+                                            t!("Settings.General.Language.en").into(),
+                                        ),
                                     ],
                                     |cx: &App| {
                                         SharedString::from(AppSettings::global(cx).locale.clone())
@@ -552,10 +555,8 @@ impl SettingsPanel {
                                 .default_value(default_settings.direct_server_transfer_enabled),
                             )
                             .description(
-                                t!(
-                                    "Settings.General.FileTransfer.direct_server_transfer_desc"
-                                )
-                                .to_string(),
+                                t!("Settings.General.FileTransfer.direct_server_transfer_desc")
+                                    .to_string(),
                             ),
                         ),
                     notes_setting_group(),
@@ -728,30 +729,26 @@ impl SettingsPanel {
                                             window
                                                 .spawn(cx, async move |cx| {
                                                     if let Ok(Ok(Some(paths))) = future.await {
-                                                        let _ = cx.update(
-                                                            |_view, cx: &mut App| {
-                                                                let message =
-                                                                    import_custom_fonts(paths, cx);
-                                                                let _ = cx.update_window(
-                                                                    target_window,
-                                                                    |_, window, cx| {
-                                                                        window.push_notification(
-                                                                            message, cx,
-                                                                        );
-                                                                        window.refresh();
-                                                                    },
-                                                                );
-                                                            },
-                                                        );
+                                                        let _ = cx.update(|_view, cx: &mut App| {
+                                                            let message =
+                                                                import_custom_fonts(paths, cx);
+                                                            let _ = cx.update_window(
+                                                                target_window,
+                                                                |_, window, cx| {
+                                                                    window.push_notification(
+                                                                        message, cx,
+                                                                    );
+                                                                    window.refresh();
+                                                                },
+                                                            );
+                                                        });
                                                     }
                                                 })
                                                 .detach();
                                         })
                                 }),
                             )
-                            .description(
-                                t!("Settings.General.Font.custom_fonts_desc").to_string(),
-                            ),
+                            .description(t!("Settings.General.Font.custom_fonts_desc").to_string()),
                         )
                         .item(
                             SettingItem::new(
@@ -815,14 +812,13 @@ impl SettingsPanel {
             // 数据库设置页
             SettingPage::new(t!("Settings.Database.title"))
                 .resettable(true)
-                .groups(vec![
-                    database_setting_group(),
-                    sql_format_setting_group(),
-                ]),
+                .groups(vec![database_setting_group(), sql_format_setting_group()]),
             // 终端设置页
             SettingPage::new(t!("Settings.Terminal.title"))
                 .resettable(true)
-                .group(local_terminal_setting_group(&default_settings.local_terminal_profile)),
+                .group(local_terminal_setting_group(
+                    &default_settings.local_terminal_profile,
+                )),
             // Agent 设置页
             SettingPage::new(t!("Settings.Agent.title"))
                 .resettable(true)
@@ -856,15 +852,20 @@ impl SettingsPanel {
                     .keywords(shortcut_search_texts()),
                 ),
             ),
-            SettingPage::new(t!("LlmProviders.title")).group(SettingGroup::new().item(
-                SettingItem::render(move |_options, _window, _cx| {
-                    llm_view.clone().into_any_element()
-                })
-                .keywords([t!("LlmProviders.title").to_string()]),
-            )),
+            SettingPage::new(t!("LlmProviders.title")).group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_options, _window, _cx| {
+                        llm_view.clone().into_any_element()
+                    })
+                    .keywords([t!("LlmProviders.title").to_string()]),
+                ),
+            ),
             // 账户设置页
-            SettingPage::new(t!("Settings.Account.title")).group(SettingGroup::new().item(
-                SettingItem::render(move |_options, window, cx| render_account_section(window, cx))
+            SettingPage::new(t!("Settings.Account.title")).group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_options, window, cx| {
+                        render_account_section(window, cx)
+                    })
                     .keywords([
                         t!("Settings.Account.title").to_string(),
                         t!("Settings.Account.username").to_string(),
@@ -873,16 +874,13 @@ impl SettingsPanel {
                         t!("Auth.logout").to_string(),
                         t!("License.import_offline").to_string(),
                     ]),
-            )),
+                ),
+            ),
             // 关于页面
             SettingPage::new(t!("Settings.About.title"))
                 .group(
-                    SettingGroup::new()
-                        .title(t!("Settings.About.title"))
-                        .item(
-                            SettingItem::render(move |_options, _window, cx| {
-                                render_about_section(cx)
-                            })
+                    SettingGroup::new().title(t!("Settings.About.title")).item(
+                        SettingItem::render(move |_options, _window, cx| render_about_section(cx))
                             .search_texts([
                                 t!("Settings.About.title").to_string(),
                                 t!("Settings.About.version").to_string(),
@@ -890,7 +888,7 @@ impl SettingsPanel {
                                 t!("Settings.About.disclaimer_title").to_string(),
                                 t!("Settings.About.data_safety_title").to_string(),
                             ]),
-                        ),
+                    ),
                 )
                 .group(about_update_setting_group(default_settings.auto_update)),
         ];

@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use connection_form::declarative::DeclarativeForm;
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Window};
-use rust_i18n::t;
 use gpui_component::{
     input::InputState,
     select::{SelectItem, SelectState},
@@ -17,6 +16,7 @@ use one_core::{
     connection_notifier::emit_connection_event,
     storage::{ConnectionRepository, GlobalStorageState, StoredConnection, Workspace},
 };
+use rust_i18n::t;
 
 use self::{
     fields::{create_input, create_name_input, create_workspace_select, optional_input_text},
@@ -318,9 +318,12 @@ impl ExtensionConnectionForm {
     }
 
     fn test_result_msg(&self, cx: &App) -> Option<String> {
-        self.test_result.read(cx).as_ref().map(|result| match result {
-            Ok(()) => format!("✓ {}", t!("ConnectionForm.test_success")),
-            Err(error) => format!("✗ {error}"),
-        })
+        self.test_result
+            .read(cx)
+            .as_ref()
+            .map(|result| match result {
+                Ok(()) => format!("✓ {}", t!("ConnectionForm.test_success")),
+                Err(error) => format!("✗ {error}"),
+            })
     }
 }

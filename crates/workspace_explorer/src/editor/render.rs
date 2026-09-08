@@ -1,5 +1,5 @@
 use super::{
-    DiffEditors, DocumentPolicy, WorkspaceEditor, WORKSPACE_EDITOR_KEY_CONTEXT, format_size,
+    DiffEditors, DocumentPolicy, WORKSPACE_EDITOR_KEY_CONTEXT, WorkspaceEditor, format_size,
 };
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,

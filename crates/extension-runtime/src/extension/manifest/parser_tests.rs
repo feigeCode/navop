@@ -770,8 +770,5 @@ fn manifest_rejects_invalid_toolbox_category() {
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
     let error = load_from_dir(tmp.path()).unwrap_err();
-    assert!(
-        error.to_string().contains("toolbox category"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("toolbox category"), "{error}");
 }

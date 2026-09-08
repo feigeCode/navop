@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use connection_form::credential::resolve_connection_for_runtime;
-use connection_form::declarative::{DeclarativeFieldType, DeclarativeFormField, DeclarativeFormTab};
+use connection_form::declarative::{
+    DeclarativeFieldType, DeclarativeFormField, DeclarativeFormTab,
+};
 use connection_form::middleware_form::{
     FormSnapshot, MiddlewareFormAdapter, MiddlewareFormSavedCallback, MiddlewareFormWindow,
     MiddlewareFormWindowConfig, notes_tab_group, ssh_tab_group,
@@ -129,13 +131,17 @@ pub fn mqtt_form_tab_groups() -> Vec<DeclarativeFormTab> {
             .default("10"),
         ]),
         DeclarativeFormTab::new("ssl", t!("MqttForm.tab_ssl").to_string()).fields(vec![
-            DeclarativeFormField::new("use_tls", t!("MqttForm.use_tls"), DeclarativeFieldType::Select)
-                .optional()
-                .default("false")
-                .options(vec![
-                    ("false".to_string(), t!("Common.no").to_string()),
-                    ("true".to_string(), t!("Common.yes").to_string()),
-                ]),
+            DeclarativeFormField::new(
+                "use_tls",
+                t!("MqttForm.use_tls"),
+                DeclarativeFieldType::Select,
+            )
+            .optional()
+            .default("false")
+            .options(vec![
+                ("false".to_string(), t!("Common.no").to_string()),
+                ("true".to_string(), t!("Common.yes").to_string()),
+            ]),
         ]),
         ssh_tab_group(),
         notes_tab_group(),

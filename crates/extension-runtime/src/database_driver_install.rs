@@ -6,9 +6,8 @@ use std::sync::Arc;
 use crate::extension::ExtensionKind;
 use crate::extension::{ExtensionRegistry, ExtensionSummary};
 use crate::extension_downloader::{
-    DownloadProgressCallback, MarketplaceEntry,
-    fetch_default_manifest_url, fetch_manifest_url, install_marketplace_entry_generic,
-    install_marketplace_entry_with_progress,
+    DownloadProgressCallback, MarketplaceEntry, fetch_default_manifest_url, fetch_manifest_url,
+    install_marketplace_entry_generic, install_marketplace_entry_with_progress,
 };
 use crate::install_flow::{notify_error, run_install_with_progress_prompt};
 const DUCKDB_DRIVER_ID: &str = "duckdb";
@@ -359,9 +358,12 @@ async fn install_database_driver_from_marketplace(
 ) -> anyhow::Result<ExtensionSummary> {
     let manifest = fetch_default_manifest_url(http_client.clone()).await?;
     let entries = manifest.into_entries();
-    let entry =
-        find_database_driver_entry_for_requirement(&entries, &driver_id, minimum_version.as_deref())?
-            .clone();
+    let entry = find_database_driver_entry_for_requirement(
+        &entries,
+        &driver_id,
+        minimum_version.as_deref(),
+    )?
+    .clone();
     let summary = install_marketplace_entry_with_progress(
         http_client,
         &entry,

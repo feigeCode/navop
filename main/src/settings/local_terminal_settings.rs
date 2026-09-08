@@ -11,8 +11,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::settings::{
-    AppSettings, LocalTerminalCustomProfile, LocalTerminalProfileKind,
-    LocalTerminalProfileSettings,
+    AppSettings, LocalTerminalCustomProfile, LocalTerminalProfileKind, LocalTerminalProfileSettings,
 };
 use rust_i18n::t;
 

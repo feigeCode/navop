@@ -174,9 +174,7 @@ fn missing_ssh_tunnel_required_field(
 
 /// 判断是否启用自定义 SSH 标签页渲染(声明了约定 SSH 字段即启用)
 fn should_use_custom_ssh_tab(fields: &[DeclarativeFormField]) -> bool {
-    fields
-        .iter()
-        .any(|field| field.id == "ssh_tunnel_enabled")
+    fields.iter().any(|field| field.id == "ssh_tunnel_enabled")
 }
 
 /// 通用中间件连接表单
@@ -356,10 +354,20 @@ impl MiddlewareConnectionForm {
                         );
                     });
                     if let Some(username) = snapshot.fields.get("username") {
-                        self.set_field_value(&format!("{auth_name}.username"), username, window, cx);
+                        self.set_field_value(
+                            &format!("{auth_name}.username"),
+                            username,
+                            window,
+                            cx,
+                        );
                     }
                     if let Some(password) = snapshot.fields.get("password") {
-                        self.set_field_value(&format!("{auth_name}.password"), password, window, cx);
+                        self.set_field_value(
+                            &format!("{auth_name}.password"),
+                            password,
+                            window,
+                            cx,
+                        );
                     }
                 }
                 for (key, value) in &snapshot.fields {
@@ -503,7 +511,11 @@ impl MiddlewareConnectionForm {
         self.declarative.read(cx).input_state(field_name)
     }
 
-    fn get_textarea_by_name(&self, field_name: &str, cx: &App) -> Option<Entity<gpui_component::input::TextareaState>> {
+    fn get_textarea_by_name(
+        &self,
+        field_name: &str,
+        cx: &App,
+    ) -> Option<Entity<gpui_component::input::TextareaState>> {
         self.declarative.read(cx).textarea_state(field_name)
     }
 
@@ -525,11 +537,16 @@ impl MiddlewareConnectionForm {
     /// 构建表单快照(可见字段 + 透传字段 + 凭据引用)
     fn build_snapshot(&self, cx: &App) -> FormSnapshot {
         let auth_field = self.find_auth_field();
-        let credential_reference = auth_field
-            .and_then(|field| self.declarative.read(cx).auth_reference(&field.id, cx));
+        let credential_reference =
+            auth_field.and_then(|field| self.declarative.read(cx).auth_reference(&field.id, cx));
         let mut fields = HashMap::new();
 
-        for field in self.config.tab_groups.iter().flat_map(|group| &group.fields) {
+        for field in self
+            .config
+            .tab_groups
+            .iter()
+            .flat_map(|group| &group.fields)
+        {
             let field_name = &field.id;
             if !self.field_visible_from_values(field, cx) {
                 continue;
@@ -592,9 +609,8 @@ impl MiddlewareConnectionForm {
                         let username = declarative.auth_value(&field.id, "username", cx);
                         let password = declarative.auth_value(&field.id, "password", cx);
                         if username.trim().is_empty() && password.trim().is_empty() {
-                            return Err(
-                                t!("ConnectionForm.field_required", label = field.label).to_string()
-                            );
+                            return Err(t!("ConnectionForm.field_required", label = field.label)
+                                .to_string());
                         }
                     }
                     continue;
@@ -830,23 +846,25 @@ impl MiddlewareConnectionForm {
             .label(info.label.clone())
             .required(info.required)
             .items_center()
-            .child(h_flex().w_full().gap_2().child(match info.field_type {
-                DeclarativeFieldType::TextArea => self
-                    .get_textarea_by_name(&info.id, cx)
-                    .map(|state| Textarea::new(&state).w_full().into_any_element())
-                    .unwrap_or_else(|| div().w_full().into_any_element()),
-                _ => self
-                    .get_input_by_name(&info.id, cx)
-                    .map(|state| {
-                        let input = Input::new(&state).w_full();
-                        if is_password {
-                            input.mask_toggle().into_any_element()
-                        } else {
-                            input.into_any_element()
-                        }
-                    })
-                    .unwrap_or_else(|| div().w_full().into_any_element()),
-            }))
+            .child(
+                h_flex().w_full().gap_2().child(match info.field_type {
+                    DeclarativeFieldType::TextArea => self
+                        .get_textarea_by_name(&info.id, cx)
+                        .map(|state| Textarea::new(&state).w_full().into_any_element())
+                        .unwrap_or_else(|| div().w_full().into_any_element()),
+                    _ => self
+                        .get_input_by_name(&info.id, cx)
+                        .map(|state| {
+                            let input = Input::new(&state).w_full();
+                            if is_password {
+                                input.mask_toggle().into_any_element()
+                            } else {
+                                input.into_any_element()
+                            }
+                        })
+                        .unwrap_or_else(|| div().w_full().into_any_element()),
+                }),
+            )
     }
 
     /// SSH 标签页:启用开关 + 引用已有连接 + 手动字段
@@ -1046,12 +1064,12 @@ impl Render for MiddlewareConnectionForm {
         let current_tab_group = &self.config.tab_groups[self.active_tab];
         let current_tab_fields = &current_tab_group.fields;
         let current_tab_name = current_tab_group.id.as_str();
-        let tab_content = if current_tab_name == "ssh" && should_use_custom_ssh_tab(current_tab_fields)
-        {
-            self.render_ssh_tab_content(window, cx)
-        } else {
-            self.host_current_tab(cx)
-        };
+        let tab_content =
+            if current_tab_name == "ssh" && should_use_custom_ssh_tab(current_tab_fields) {
+                self.render_ssh_tab_content(window, cx)
+            } else {
+                self.host_current_tab(cx)
+            };
 
         v_flex()
             .gap_4()

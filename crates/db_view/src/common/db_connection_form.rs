@@ -2585,12 +2585,22 @@ impl DbConnectionForm {
         let main_credential_anchor = current_tab_fields
             .iter()
             .position(|field| matches!(field.name.as_str(), "username" | "password"))
-            .map(|orig| visible_fields.iter().take_while(|(index, _)| *index < orig).count())
+            .map(|orig| {
+                visible_fields
+                    .iter()
+                    .take_while(|(index, _)| *index < orig)
+                    .count()
+            })
             .unwrap_or(0);
         let proxy_credential_anchor = current_tab_fields
             .iter()
             .position(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"))
-            .map(|orig| visible_fields.iter().take_while(|(index, _)| *index < orig).count())
+            .map(|orig| {
+                visible_fields
+                    .iter()
+                    .take_while(|(index, _)| *index < orig)
+                    .count()
+            })
             .unwrap_or(0);
 
         v_form()

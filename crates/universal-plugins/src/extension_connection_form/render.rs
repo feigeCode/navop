@@ -1,9 +1,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Axis, ColorExt, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
-    Window, div, px,
+    App, Axis, ColorExt, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Window, div, px,
 };
-use rust_i18n::t;
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -15,6 +14,7 @@ use gpui_component::{
     select::Select,
     v_flex,
 };
+use rust_i18n::t;
 
 use super::ExtensionConnectionForm;
 
@@ -109,16 +109,19 @@ impl ExtensionConnectionForm {
                     .columns(1)
                     .label_width(px(120.))
                     .child(
-                        field().label(t!("ConnectionForm.cloud_sync").to_string()).items_center().child(
-                            Checkbox::new("extension-connection-sync")
-                                .checked(*self.sync_enabled.read(cx))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.sync_enabled.update(cx, |enabled, cx| {
-                                        *enabled = !*enabled;
-                                        cx.notify();
-                                    });
-                                })),
-                        ),
+                        field()
+                            .label(t!("ConnectionForm.cloud_sync").to_string())
+                            .items_center()
+                            .child(
+                                Checkbox::new("extension-connection-sync")
+                                    .checked(*self.sync_enabled.read(cx))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.sync_enabled.update(cx, |enabled, cx| {
+                                            *enabled = !*enabled;
+                                            cx.notify();
+                                        });
+                                    })),
+                            ),
                     ),
             )
     }

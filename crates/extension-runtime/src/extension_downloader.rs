@@ -1,7 +1,10 @@
 use std::{
     collections::BTreeSet,
     path::{Component, Path, PathBuf},
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -49,12 +52,9 @@ pub async fn install_marketplace_entry_with_registry(
     requested_kind: ExtensionKind,
     on_progress: DownloadProgressCallback,
 ) -> Result<ExtensionSummary> {
-    let staging = download_marketplace_entry_to_staging_with_progress(
-        http_client,
-        entry,
-        on_progress,
-    )
-    .await?;
+    let staging =
+        download_marketplace_entry_to_staging_with_progress(http_client, entry, on_progress)
+            .await?;
     install_staged_entry(&staging, registry, requested_kind)
 }
 
@@ -67,12 +67,9 @@ pub async fn install_marketplace_entry_with_progress(
     requested_kind: ExtensionKind,
     on_progress: DownloadProgressCallback,
 ) -> Result<ExtensionSummary> {
-    let staging = download_marketplace_entry_to_staging_with_progress(
-        http_client,
-        entry,
-        on_progress,
-    )
-    .await?;
+    let staging =
+        download_marketplace_entry_to_staging_with_progress(http_client, entry, on_progress)
+            .await?;
     let registry = ExtensionRegistry::global().ok_or_else(|| anyhow!("扩展系统未初始化"))?;
     let registry = registry
         .read()

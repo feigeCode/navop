@@ -46,7 +46,8 @@ impl HomePage {
                     .child(self.render_toolbar(window, cx))
                     // Tree 布局的批量操作条由嵌入的侧栏树自行渲染，主页不再重复。
                     .when(
-                        self.batch_mode_active() && self.connection_layout != ConnectionLayout::Tree,
+                        self.batch_mode_active()
+                            && self.connection_layout != ConnectionLayout::Tree,
                         |layout| layout.child(self.render_batch_bar(cx)),
                     )
                     .child(

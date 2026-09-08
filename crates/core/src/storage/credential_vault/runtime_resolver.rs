@@ -93,17 +93,13 @@ impl ConnectionRepository {
     /// 账号密码):`config[field].credential_reference` 被替换为
     /// `config[field] = {"username": ..., "password": ...}`,随 open 载荷送达
     /// provider。仅用于内存中的连接尝试,禁止落盘/同步/日志。
-    pub fn resolve_extension_runtime_config(
-        &self,
-        config: &mut Map<String, Value>,
-    ) -> Result<()> {
-        resolve_extension_auth_objects(config, |reference| self.fetch_referenced_credential(reference))
+    pub fn resolve_extension_runtime_config(&self, config: &mut Map<String, Value>) -> Result<()> {
+        resolve_extension_auth_objects(config, |reference| {
+            self.fetch_referenced_credential(reference)
+        })
     }
 
-    fn resolve_extension_tunnel(
-        &self,
-        connection: StoredConnection,
-    ) -> Result<StoredConnection> {
+    fn resolve_extension_tunnel(&self, connection: StoredConnection) -> Result<StoredConnection> {
         let params = connection.to_extension_params()?;
         let mut config = params.config;
         self.resolve_extension_runtime_config(&mut config)?;

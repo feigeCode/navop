@@ -3,9 +3,7 @@ mod types;
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, FocusHandle, PathPromptOptions, Window,
-};
+use gpui::{App, AppContext, AsyncApp, Context, Entity, FocusHandle, PathPromptOptions, Window};
 use gpui_component::{
     input::{InputEvent, InputState, TextareaState},
     select::{SelectEvent, SelectState},
@@ -14,8 +12,8 @@ use one_core::storage::CredentialReference;
 use serde_json::{Map, Value};
 
 use crate::credential::{
-    create_credential_picker, CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
-    CredentialReferencePicker,
+    CredentialCapabilities, CredentialPickerConfig, CredentialPickerEvent,
+    CredentialReferencePicker, create_credential_picker,
 };
 
 pub use types::*;
@@ -193,14 +191,8 @@ impl DeclarativeForm {
     ) {
         let (mut username, mut password, mut reference) = (String::new(), String::new(), None);
         if let Some(Value::Object(object)) = initial.get(&field.id) {
-            username = object
-                .get("username")
-                .map(value_text)
-                .unwrap_or_default();
-            password = object
-                .get("password")
-                .map(value_text)
-                .unwrap_or_default();
+            username = object.get("username").map(value_text).unwrap_or_default();
+            password = object.get("password").map(value_text).unwrap_or_default();
             reference = object
                 .get("credential_reference")
                 .and_then(|value| serde_json::from_value(value.clone()).ok());
@@ -235,9 +227,13 @@ impl DeclarativeForm {
             window,
             cx,
         );
-        cx.subscribe_in(&picker, window, |_, _, _: &CredentialPickerEvent, _, inner| {
-            inner.notify();
-        })
+        cx.subscribe_in(
+            &picker,
+            window,
+            |_, _, _: &CredentialPickerEvent, _, inner| {
+                inner.notify();
+            },
+        )
         .detach();
         auth_pickers.insert(field.id.clone(), picker);
     }
@@ -356,7 +352,9 @@ impl DeclarativeForm {
                     .tabs
                     .iter()
                     .flat_map(|tab| &tab.fields)
-                    .filter(|field| field.field_type == DeclarativeFieldType::Auth && self.visible(field, cx))
+                    .filter(|field| {
+                        field.field_type == DeclarativeFieldType::Auth && self.visible(field, cx)
+                    })
                     .map(|field| auth_subkey(&field.id, "password")),
             )
             .collect()
@@ -414,7 +412,9 @@ impl DeclarativeForm {
 
     /// 渲染前应用 FilePath 浏览结果(需 Window 写回输入态)。
     pub(super) fn apply_pending_file_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let pending = self.pending_file_path.update(cx, |pending, _| pending.take());
+        let pending = self
+            .pending_file_path
+            .update(cx, |pending, _| pending.take());
         if let Some((id, path)) = pending {
             self.set_field_value(&id, &path, window, cx);
         }
@@ -497,8 +497,11 @@ mod tests {
 
     #[test]
     fn text_area_default_rows_matches_declarative_engine() {
-        let field =
-            crate::declarative::DeclarativeFormField::new("body", "", DeclarativeFieldType::TextArea);
+        let field = crate::declarative::DeclarativeFormField::new(
+            "body",
+            "",
+            DeclarativeFieldType::TextArea,
+        );
         assert_eq!(field.rows, DECLARATIVE_TEXTAREA_DEFAULT_ROWS);
     }
 }
@@ -563,7 +566,10 @@ mod auth_tests {
     fn collect_auth(
         window: &gpui::WindowHandle<AuthTestRoot>,
         cx: &mut TestAppContext,
-    ) -> (Map<String, Value>, std::collections::HashMap<String, String>) {
+    ) -> (
+        Map<String, Value>,
+        std::collections::HashMap<String, String>,
+    ) {
         let root = window.root(cx).expect("表单根节点应存在");
         root.read_with(cx, |root, cx| root.form.read(cx).collect(cx))
             .expect("表单应可收集")
@@ -578,7 +584,10 @@ mod auth_tests {
         let window = open_form(cx, initial);
         let (config, secrets) = collect_auth(&window, cx);
         assert_eq!(config["auth"]["username"], "root");
-        assert_eq!(secrets.get("auth.password").map(String::as_str), Some("s3cret"));
+        assert_eq!(
+            secrets.get("auth.password").map(String::as_str),
+            Some("s3cret")
+        );
     }
 
     #[gpui::test]
@@ -620,7 +629,10 @@ mod auth_tests {
         let window = open_form(cx, manual);
         window.root(cx).unwrap().read_with(cx, |root, cx| {
             assert!(!root.form.read(cx).auth_has_reference("auth", cx));
-            assert_eq!("root", root.form.read(cx).auth_value("auth", "username", cx));
+            assert_eq!(
+                "root",
+                root.form.read(cx).auth_value("auth", "username", cx)
+            );
         });
     }
 }

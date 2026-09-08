@@ -1,7 +1,5 @@
 use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, IntoElement, ParentElement, Styled, div, px,
-};
+use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},

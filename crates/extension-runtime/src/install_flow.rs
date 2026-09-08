@@ -13,7 +13,8 @@ use one_core::gpui_tokio::Tokio;
 
 use crate::database_driver_install_progress::{
     DriverInstallProgressSnapshot, DriverInstallProgressView, driver_install_progress_callback,
-    mark_driver_install_finished, open_driver_install_progress_dialog, watch_driver_install_progress,
+    mark_driver_install_finished, open_driver_install_progress_dialog,
+    watch_driver_install_progress,
 };
 use crate::extension::ExtensionSummary;
 use crate::extension_downloader::DownloadProgressCallback;
@@ -68,7 +69,10 @@ pub(crate) fn run_install_with_progress_prompt<T, Fut, F>(
         }
         open_install_progress_dialog(window_handle, progress_view, cx);
         let progress_callback = driver_install_progress_callback(progress_snapshot);
-        let task = Tokio::spawn(cx, async move { install(http_client, progress_callback).await });
+        let task = Tokio::spawn(
+            cx,
+            async move { install(http_client, progress_callback).await },
+        );
         let outcome = match task.await {
             Ok(Ok(_summary)) => Ok(()),
             Ok(Err(error)) => Err(format!("{error:?}")),
@@ -134,7 +138,11 @@ pub(crate) fn finish_install_and_open<T: 'static>(
     });
 }
 
-pub(crate) fn notify_error<T>(window: &mut Window, cx: &mut Context<T>, message: impl Into<String>) {
+pub(crate) fn notify_error<T>(
+    window: &mut Window,
+    cx: &mut Context<T>,
+    message: impl Into<String>,
+) {
     window.push_notification(Notification::error(message.into()), cx);
 }
 

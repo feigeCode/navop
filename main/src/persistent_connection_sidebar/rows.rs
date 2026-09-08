@@ -16,11 +16,11 @@ use super::row_parts::{
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::connection_visuals::ConnectionVisualSize;
+use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 use crate::home_tab::connection_selection::{
     ConnectionCheckProps, ConnectionSelectionMode, ConnectionSelectionRequest,
     connection_selection_checkbox,
 };
-use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 
 impl PersistentConnectionSidebar {
     pub(super) fn render_tree_row(

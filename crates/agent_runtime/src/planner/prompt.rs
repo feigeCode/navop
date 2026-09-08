@@ -434,12 +434,14 @@ mod tests {
 
         let messages = history_to_messages(&history);
         let first_non_system = messages.iter().position(|m| m.role != Role::System);
-        let has_late_system = messages
-            .iter()
-            .enumerate()
-            .any(|(index, m)| m.role == Role::System && first_non_system.is_some_and(|f| index > f));
+        let has_late_system = messages.iter().enumerate().any(|(index, m)| {
+            m.role == Role::System && first_non_system.is_some_and(|f| index > f)
+        });
 
-        assert!(!has_late_system, "system 消息不得出现在首个非 system 消息之后: {messages:?}");
+        assert!(
+            !has_late_system,
+            "system 消息不得出现在首个非 system 消息之后: {messages:?}"
+        );
     }
 
     #[test]

@@ -23,9 +23,7 @@ pub fn database_setting_group() -> SettingGroup {
                         ),
                     ],
                     |cx: &App| {
-                        SharedString::from(
-                            AppSettings::global(cx).database_open_mode.as_str(),
-                        )
+                        SharedString::from(AppSettings::global(cx).database_open_mode.as_str())
                     },
                     |val: SharedString, cx: &mut App| {
                         AppSettings::update_and_save(cx, |settings| {
@@ -44,17 +42,13 @@ pub fn database_setting_group() -> SettingGroup {
                     vec![
                         (
                             "sidebar_preview".into(),
-                            t!(
-                                "Settings.General.Database.large_text_editor_open_mode_sidebar"
-                            )
-                            .into(),
+                            t!("Settings.General.Database.large_text_editor_open_mode_sidebar")
+                                .into(),
                         ),
                         (
                             "dialog".into(),
-                            t!(
-                                "Settings.General.Database.large_text_editor_open_mode_dialog"
-                            )
-                            .into(),
+                            t!("Settings.General.Database.large_text_editor_open_mode_dialog")
+                                .into(),
                         ),
                     ],
                     |cx: &App| {
@@ -72,9 +66,7 @@ pub fn database_setting_group() -> SettingGroup {
                     },
                 )
                 .default_value(SharedString::from(
-                    default_settings
-                        .large_text_cell_editor_open_mode
-                        .as_str(),
+                    default_settings.large_text_cell_editor_open_mode.as_str(),
                 )),
             )
             .description(
