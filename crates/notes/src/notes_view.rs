@@ -377,6 +377,9 @@ mod external_markdown_tests {
         let tab_content = cx.debug_bounds("tab-content").expect("tab content");
         let markdown_editor = cx.debug_bounds("markdown-editor").expect("markdown editor");
         let dropdown = cx.debug_bounds("tab-dropdown-btn").expect("tab dropdown");
+        let background_task = cx
+            .debug_bounds("background-task-entry")
+            .expect("background task entry");
 
         assert_eq!(
             main_slot.right(),
@@ -384,9 +387,14 @@ mod external_markdown_tests {
             "main={main_slot:?}, container={tab_container:?}, bar={tab_bar:?}, content={tab_content:?}, editor={markdown_editor:?}"
         );
         assert_eq!(
-            tab_bar.right(),
             dropdown.right(),
-            "Markdown content must not determine the tab switcher's horizontal position"
+            background_task.left(),
+            "Markdown content must not move the tab switcher away from the trailing tab-bar chrome"
+        );
+        assert_eq!(
+            tab_bar.right(),
+            background_task.right(),
+            "the trailing tab-bar chrome must keep consuming the right edge regardless of content"
         );
     }
 

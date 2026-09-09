@@ -15,6 +15,36 @@ use fixtures::{
     write_broken_wasm_importer_extension, write_wasm_importer_extension,
 };
 
+/// The platform the test harness runs on. `ManifestConnectionImportHost` only
+/// exposes candidates whose `platform` matches the host's current platform, so
+/// tests that exercise visible candidates must label them with the runner's own
+/// platform instead of hard-coding `Platform::Macos` (which silently hides them
+/// on Linux/Windows CI and turns a permission check into `UndeclaredCandidate`).
+#[cfg(target_os = "windows")]
+fn runner_platform() -> Platform {
+    Platform::Windows
+}
+
+#[cfg(target_os = "linux")]
+fn runner_platform() -> Platform {
+    Platform::Linux
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn runner_platform() -> Platform {
+    Platform::Macos
+}
+
+/// A build target platform that is guaranteed to differ from the runner's own,
+/// so a candidate tagged with it is always hidden on the current host.
+fn other_platform() -> Platform {
+    match runner_platform() {
+        Platform::Windows => Platform::Linux,
+        Platform::Linux => Platform::Macos,
+        Platform::Macos => Platform::Windows,
+    }
+}
+
 #[test]
 fn connection_import_provider_lists_manifest_importers_with_scoped_ids() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -238,7 +268,7 @@ fn manifest_connection_import_host_requires_manifest_fs_read_permission() {
     let host = ManifestConnectionImportHost::new(
         vec![CandidateFile {
             id: "connections".to_string(),
-            platform: Some(Platform::Macos),
+            platform: Some(runner_platform()),
             path: candidate_path.to_string_lossy().to_string(),
         }],
         Vec::<String>::new(),
@@ -294,7 +324,7 @@ fn manifest_connection_import_host_rejects_reads_for_other_platform_candidates()
     let host = ManifestConnectionImportHost::new(
         vec![CandidateFile {
             id: "windows-only".to_string(),
-            platform: Some(Platform::Windows),
+            platform: Some(other_platform()),
             path: path.clone(),
         }],
         [format!("fs:read:{path}")],
@@ -333,7 +363,7 @@ fn manifest_connection_import_host_reads_nested_directory_entries() {
     let host = ManifestConnectionImportHost::new(
         vec![CandidateFile {
             id: "securecrt-config".to_string(),
-            platform: Some(Platform::Macos),
+            platform: Some(runner_platform()),
             path: config_path.clone(),
         }],
         [format!("fs:read:{config_path}")],
@@ -358,7 +388,7 @@ fn manifest_connection_import_host_rejects_nested_directory_parent_escape() {
     let host = ManifestConnectionImportHost::new(
         vec![CandidateFile {
             id: "securecrt-config".to_string(),
-            platform: Some(Platform::Macos),
+            platform: Some(runner_platform()),
             path: config_path.clone(),
         }],
         [format!("fs:read:{config_path}")],

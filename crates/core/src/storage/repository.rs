@@ -950,6 +950,9 @@ mod tests {
 
     #[test]
     fn extension_connections_use_standard_repository_and_scoped_secrets() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::crypto::set_master_key_for_session("extension-connection-test-key").unwrap();
         let (conn, repo) = test_repository();
         let params = ExtensionConnectionParams::new(

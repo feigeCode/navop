@@ -351,7 +351,7 @@ fn windows_setup_requires_native_desktop_atl_and_system_typelib() {
             X64_TARGET,
             X86_TARGET,
             PROBE_BUILD,
-            "$vs2022VersionRange = \"[17.0,18.0)\"",
+            "$supportedVisualStudioVersionRange = \"[17.0,19.0)\"",
             "chcp 65001 >nul",
             "Compile-only probe gate",
         ],

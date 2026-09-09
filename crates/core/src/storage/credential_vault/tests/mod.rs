@@ -7,7 +7,7 @@ mod repository_tests;
 mod resolver_tests;
 mod runtime_resolver_tests;
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::MutexGuard;
 
 use tempfile::TempDir;
 
@@ -18,8 +18,7 @@ use crate::storage::migration::run_migrations;
 use super::super::CredentialRepository;
 
 pub(super) fn crypto_guard() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    crate::crypto::crypto_test_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

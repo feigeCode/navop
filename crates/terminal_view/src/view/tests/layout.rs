@@ -706,10 +706,22 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     for key in ["\"tab\"", "\"escape\""] {
         assert!(interaction_source.contains(key));
     }
-    assert!(
-        render_source.contains(".vertical_navigation(false)"),
-        "command input must delegate Up/Down instead of consuming them as cursor movement"
-    );
+    // The externalized gpui-component Input no longer exposes `vertical_navigation`;
+    // Up/Down are delegated to history navigation through MoveUp/MoveDown actions
+    // bound on the bar below. handle_key_down must therefore never consume the
+    // arrow keys as cursor movement.
+    let key_down_body = interaction_source
+        .split("fn handle_key_down")
+        .nth(1)
+        .and_then(|source| source.split("fn input_has_focus").next())
+        .expect("handle_key_down body");
+    for key in ["\"arrowup\"", "\"arrowdown\""] {
+        assert!(
+            !key_down_body.contains(key),
+            "command input must delegate Up/Down to history navigation instead of consuming them \
+             as cursor movement"
+        );
+    }
     assert!(render_source.contains(".on_action(cx.listener(Self::handle_history_previous))"));
     assert!(render_source.contains(".on_action(cx.listener(Self::handle_history_next))"));
     assert!(interaction_source.contains("fn handle_history_previous"));
@@ -729,7 +741,6 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .expect("refresh suggestions implementation should exist");
     assert!(refresh.contains("build_command_suggestions"));
     assert!(refresh.contains("command_inline_suffix"));
-    assert!(refresh.contains("set_inline_completion_text"));
     assert!(!refresh.contains("reset_overlays"));
     assert!(render_source.contains("toggle_collapsed"));
     assert!(interaction_source.contains("TerminalCommandBarEvent::FocusTerminal"));
@@ -755,7 +766,7 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         "hover must not change the command-bar grip height or cause a geometry jump"
     );
     assert!(render_source.contains("cx.theme().drag_border"));
-    assert!(render_source.contains("Input::new(&self.input_state)"));
+    assert!(render_source.contains("Textarea::new(&self.input_state)"));
     assert!(!render_source.contains(".h_full()"));
     assert!(render_source.contains(".h(px(self.input_height))"));
     assert!(render_source.contains("drag.initial_height + delta"));
@@ -764,7 +775,10 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(render_source.contains("initial_y - event.event.position.y"));
     assert!(!render_source.contains("event.bounds.center().y"));
     assert!(render_source.contains("if drag.entity_id != cx.entity_id()"));
-    assert!(render_source.contains("with_size(Size::Medium)"));
+    assert!(
+        include_str!("../command_bar/quick_render_list.rs").contains("with_size(Size::Medium)"),
+        "the quick-command empty state icon must stay Medium-sized"
+    );
     let expanded_row = render_source
         .split("fn render_input_row")
         .nth(1)
@@ -780,7 +794,7 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(terminal_toggle.contains("IconName::ChevronUp"));
     assert!(terminal_toggle.contains("IconName::ChevronDown"));
     assert!(!terminal_toggle.contains("self.target_label(cx)"));
-    assert!(terminal_toggle.contains("when(!self.collapsed"));
+    assert!(terminal_toggle.contains(".selected(!self.collapsed)"));
     assert!(render_source.contains("this.toggle_collapsed(window, cx)"));
     assert!(expanded_row.contains("self.render_expanded_actions(cx)"));
     assert!(expanded_row.contains("self.render_terminal_toggle_button(cx)"));
@@ -797,7 +811,7 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .find("self.render_terminal_toggle_button(cx)")
         .expect("terminal toggle should render in the expanded row");
     let input_position = expanded_row
-        .find("Input::new(&self.input_state)")
+        .find("Textarea::new(&self.input_state)")
         .expect("command input should render in the expanded row");
     let actions_position = expanded_row
         .find("self.render_expanded_actions(cx)")

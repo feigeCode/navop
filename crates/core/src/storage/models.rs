@@ -2504,6 +2504,9 @@ mod tests {
 
     #[test]
     fn extension_connection_encrypts_arbitrary_secret_fields() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crypto::set_master_key_for_session("extension-connection-test-key").unwrap();
         let params = ExtensionConnectionParams::new(
             "com.example.search",

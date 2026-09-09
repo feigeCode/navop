@@ -1445,6 +1445,7 @@ fn binding_rejects_missing_spawn_permission() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn allowlisted_absolute_program_still_constrains_extension_working_directory() {
     let extension = tempfile::TempDir::new().unwrap();

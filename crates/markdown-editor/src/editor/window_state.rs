@@ -678,7 +678,7 @@ mod tests {
             (table_block, second_cell, table_id)
         });
 
-        cx.update(|window, _| window.blur());
+        cx.update(|window, cx| window.blur(cx));
         redraw(cx);
         let baseline = cx.debug_bounds("table-root").expect("table root lays out");
         assert!(
@@ -761,7 +761,7 @@ mod tests {
             );
         });
 
-        cx.update(|window, _| window.blur());
+        cx.update(|window, cx| window.blur(cx));
         redraw(cx);
         assert!(
             cx.debug_bounds("table-toolbar").is_none(),

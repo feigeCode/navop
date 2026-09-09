@@ -230,7 +230,12 @@ mod tests {
     fn invalid_development_manifest_does_not_remove_valid_views() {
         let valid = development_manifest("dev.valid", "/tmp/valid", "tool");
         let mut invalid = development_manifest("dev.invalid", "/tmp/invalid", "tool");
-        invalid.contributes.shell_views[0].category = None;
+        // `shellView.category` is optional (only validated when present), so make
+        // the development manifest genuinely invalid instead: a toolbox view with
+        // an undeclared IPC runtime backend is rejected by `validate_backends`.
+        invalid.contributes.shell_views[0]
+            .backends
+            .insert("search".into(), "missing".into());
 
         let (catalog, accepted, report) =
             build_catalog_with_development(Vec::new(), &[valid, invalid]).unwrap();

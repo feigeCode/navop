@@ -209,7 +209,10 @@ fn legacy_location_config_without_flag_keeps_files_layout() -> Result<()> {
     let custom = temp.path().join("custom-notes");
     std::fs::create_dir_all(config.parent().unwrap())?;
     std::fs::create_dir_all(&custom)?;
-    std::fs::write(&config, format!(r#"{{"root":"{}"}}"#, custom.display()))?;
+    // Windows paths use backslashes, which must be escaped inside JSON strings;
+    // otherwise `configured_location_from` fails to parse the legacy config.
+    let escaped_root = custom.display().to_string().replace('\\', "\\\\");
+    std::fs::write(&config, format!(r#"{{"root":"{escaped_root}"}}"#))?;
 
     let (root, use_files_subdir) = NotesStorage::configured_location_from(&config, &default)?;
     assert_eq!(custom, root);

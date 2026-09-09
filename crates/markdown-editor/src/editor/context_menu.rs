@@ -1360,7 +1360,7 @@ mod tests {
             (table_block, cell)
         });
 
-        cx.update(|window, _cx| window.blur());
+        cx.update(|window, cx| window.blur(cx));
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
                 editor.apply_table_menu_action(
