@@ -57,11 +57,18 @@ fn validate_fs_permission(permission: &str) -> Result<ValidatedPermission, Permi
         || windows_env_path_prefix(path).is_some()
         || path.starts_with('/')
         || path == "${task.workspace}"
-        || path == "${user_pick}";
+        || path == "${user_pick}"
+        || path == "${pluginDir}"
+        || path.starts_with("${pluginDir}/");
     if !allowed {
         return invalid(permission, "文件路径必须是绝对路径、~/ 或允许的变量");
     }
-    let risk = if path == "~" {
+    // shell 工具扩展会声明 ${pluginDir} 内读写自身数据；绝对路径写入
+    //（如 /etc/hosts）本身就该在安装审批里以 High 呈现。
+    let in_plugin_dir = path == "${pluginDir}" || path.starts_with("${pluginDir}/");
+    let risk = if permission.starts_with("fs:write:") && !in_plugin_dir {
+        PermissionRisk::High
+    } else if path == "~" {
         PermissionRisk::High
     } else {
         PermissionRisk::Normal
@@ -241,12 +248,30 @@ fn is_valid_db_scope(scope: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_permission;
+    use super::{PermissionRisk, validate_permission};
 
     #[test]
     fn secret_permission_allows_termius_localkey_scope() {
         let permission = validate_permission("secrets:read:termius.localkey").unwrap();
 
         assert_eq!(permission.raw, "secrets:read:termius.localkey");
+    }
+
+    #[test]
+    fn fs_write_outside_plugin_dir_is_high_risk() {
+        let permission = validate_permission("fs:write:/etc/hosts").unwrap();
+        assert_eq!(permission.risk, PermissionRisk::High);
+    }
+
+    #[test]
+    fn fs_write_inside_plugin_dir_is_normal_risk() {
+        let permission = validate_permission("fs:write:${pluginDir}/data").unwrap();
+        assert_eq!(permission.risk, PermissionRisk::Normal);
+    }
+
+    #[test]
+    fn fs_read_plugin_dir_is_allowed() {
+        let permission = validate_permission("fs:read:${pluginDir}/assets").unwrap();
+        assert_eq!(permission.risk, PermissionRisk::Normal);
     }
 }

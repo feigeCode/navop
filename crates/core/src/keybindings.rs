@@ -120,10 +120,13 @@ pub fn resolve_shortcuts(
     let Some(shortcuts) = overrides.get(action_id) else {
         return fallback();
     };
-    if shortcuts.is_empty()
-        || shortcuts
-            .iter()
-            .any(|shortcut| !is_valid_shortcut(shortcut))
+    if shortcuts.is_empty() {
+        // 空 override 表示用户显式清空/禁用该快捷键，不再回退默认值。
+        return Vec::new();
+    }
+    if shortcuts
+        .iter()
+        .any(|shortcut| !is_valid_shortcut(shortcut))
     {
         return fallback();
     }
@@ -213,19 +216,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_shortcuts_falls_back_for_empty_or_invalid_override() {
-        let overrides = HashMap::from([
-            ("app.quit".to_string(), Vec::<String>::new()),
-            (
-                "app.open".to_string(),
-                vec!["cmd-not-a-real-key".to_string()],
-            ),
-        ]);
+    fn resolve_shortcuts_empty_override_means_disabled() {
+        let overrides = HashMap::from([("app.quit".to_string(), Vec::<String>::new())]);
 
-        assert_eq!(
-            vec!["cmd-q".to_string()],
-            resolve_shortcuts(&overrides, "app.quit", &["cmd-q"])
-        );
+        assert!(resolve_shortcuts(&overrides, "app.quit", &["cmd-q"]).is_empty());
+    }
+
+    #[test]
+    fn resolve_shortcuts_falls_back_for_invalid_override() {
+        let overrides = HashMap::from([(
+            "app.open".to_string(),
+            vec!["cmd-not-a-real-key".to_string()],
+        )]);
+
         assert_eq!(
             vec!["cmd-o".to_string()],
             resolve_shortcuts(&overrides, "app.open", &["cmd-o"])

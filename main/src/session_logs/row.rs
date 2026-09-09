@@ -2,6 +2,7 @@ use gpui::{FontWeight, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -63,6 +64,18 @@ impl SessionLogsPage {
             .min_w_0()
             .items_center()
             .gap_3()
+            .child(
+                Checkbox::new(button_id("session-log-select", &actions.recording_id))
+                    .checked(self.selected_ids.contains(&actions.recording_id))
+                    .disabled(self.deleting)
+                    .on_click(cx.listener({
+                        let id = actions.recording_id.clone();
+                        move |page, _, _, cx| {
+                            page.toggle_selected(id.clone());
+                            cx.notify();
+                        }
+                    })),
+            )
             .child(backend_icon(entry.header.navop.backend, cx))
             .child(entry_summary(entry, cx))
             .child(self.render_entry_actions(actions, cx))

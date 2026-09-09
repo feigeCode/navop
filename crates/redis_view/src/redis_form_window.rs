@@ -1077,19 +1077,9 @@ impl Render for RedisFormWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Context, Entity, IntoElement, ParentElement, Render, TestAppContext, Window, div};
+    use gpui::TestAppContext;
     use gpui_component::{Root, Theme};
     use one_core::settings::AppSettings;
-
-    struct FormTestRoot {
-        form: Entity<RedisFormWindow>,
-    }
-
-    impl Render for FormTestRoot {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().child(self.form.clone())
-        }
-    }
 
     fn redis_connection(name: &str) -> StoredConnection {
         StoredConnection::new_redis(

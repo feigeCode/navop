@@ -14,7 +14,7 @@ use rust_i18n::t;
 use std::ops::Range;
 use terminal::recording::SessionLogEntry;
 
-use super::SessionLogsPage;
+use super::{SESSION_LOG_LOAD_MORE_THRESHOLD, SessionLogsPage};
 
 impl Render for SessionLogsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -56,6 +56,51 @@ impl SessionLogsPage {
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("session-logs-select-all")
+                            .label(t!("SessionLogs.select_all").to_string())
+                            .small()
+                            .ghost()
+                            .disabled(self.loading || self.deleting)
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                page.select_all_filtered(cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("session-logs-clear-selection")
+                            .label(t!("SessionLogs.clear_selection").to_string())
+                            .small()
+                            .ghost()
+                            .disabled(self.selected_ids.is_empty() || self.deleting)
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                page.clear_selection();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("session-logs-delete-selected")
+                            .icon(IconName::Delete)
+                            .label(if self.selected_ids.is_empty() {
+                                t!("SessionLogs.delete_selected").to_string()
+                            } else {
+                                t!(
+                                    "SessionLogs.delete_selected_count",
+                                    count = self.selected_ids.len()
+                                )
+                                .to_string()
+                            })
+                            .small()
+                            .danger()
+                            .disabled(self.selected_ids.is_empty() || self.loading || self.deleting)
+                            .on_click(cx.listener(|page, _, window, cx| {
+                                page.request_delete_selected(window, cx)
+                            })),
+                    ),
+            )
             .child(
                 Button::new("session-logs-refresh")
                     .icon(IconName::Refresh)
@@ -151,10 +196,15 @@ impl SessionLogsPage {
         if entries.is_empty() {
             return empty_state(has_query, self.loading, cx).into_any_element();
         }
-        let item_count = entries.len();
+        let total_count = entries.len();
+        let item_count = total_count.min(self.visible_count);
+        let entries = entries.into_iter().take(item_count).collect::<Vec<_>>();
         uniform_list("session-logs-list", item_count, {
             cx.processor(
                 move |this: &mut SessionLogsPage, range: Range<usize>, _window, cx| {
+                    if range.end >= item_count.saturating_sub(SESSION_LOG_LOAD_MORE_THRESHOLD) {
+                        this.load_more(total_count, cx);
+                    }
                     range
                         .filter_map(|index| {
                             let entry = entries.get(index).cloned()?;

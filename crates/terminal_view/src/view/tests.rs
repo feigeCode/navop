@@ -1,3 +1,4 @@
+use super::block_selection::BlockSelection;
 use super::recording_footer::{format_recording_elapsed, recording_output_path};
 use super::render_surface::terminal_viewport_bounds;
 use super::tab_content::recording_playback_tab_title;

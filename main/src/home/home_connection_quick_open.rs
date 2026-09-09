@@ -8,7 +8,7 @@ use gpui_component::{
     ActiveTheme, IndexPath, WindowExt, h_flex,
     list::{ListDelegate, ListItem, ListState},
 };
-use one_core::storage::StoredConnection;
+use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
@@ -40,6 +40,11 @@ impl ConnectionQuickOpenDelegate {
     }
 
     fn apply_filter(&mut self) {
+        if let Some(connection) = temporary_ssh_connection(&self.search_query) {
+            self.filtered_items = vec![connection];
+            self.selected_index = Some(IndexPath::default());
+            return;
+        }
         if self.search_query.is_empty() {
             self.filtered_items = self.items.clone();
             return;
@@ -61,6 +66,143 @@ fn quick_open_matches_connection(connection: &StoredConnection, query: &str) -> 
             .label()
             .to_lowercase()
             .contains(query)
+}
+
+fn parse_temporary_ssh_command(input: &str) -> Option<(String, String, u16)> {
+    let mut args = input.split_whitespace();
+    if args.next()? != "ssh" {
+        return None;
+    }
+    let mut destination = None;
+    let mut explicit_port = None;
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("-p") {
+            let value = if value.is_empty() {
+                args.next()?
+            } else {
+                value
+            };
+            if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            let port = value.parse::<u16>().ok().filter(|port| *port > 0)?;
+            explicit_port.get_or_insert(port);
+        } else if arg.starts_with('-') || destination.replace(arg).is_some() {
+            return None;
+        }
+    }
+    let destination = destination?;
+    let (username, address) = destination.split_once('@').unwrap_or(("", destination));
+    let (host, port) = match address.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => (host, port.parse().ok()?),
+        _ => (address, 22),
+    };
+    let port = explicit_port.unwrap_or(port);
+    (!host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_'))
+        && !host.starts_with('-')
+        && !username.contains('@')
+        && port > 0)
+        .then(|| (username.to_string(), host.to_string(), port))
+}
+
+pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> {
+    let (username, host, port) = parse_temporary_ssh_command(input)?;
+    let name = format!(
+        "SSH {}{host} (temporary)",
+        if username.is_empty() {
+            String::new()
+        } else {
+            format!("{username}@")
+        }
+    );
+    let params = SshParams {
+        host,
+        port,
+        prompt_username: username.is_empty().then_some(true),
+        username,
+        auth_method: SshAuthMethod::Password {
+            password: String::new(),
+        },
+        prompt_password: Some(true),
+        sftp_account: None,
+        sftp_default_directory: None,
+        credential_reference: None,
+        keyboard_interactive: None,
+        terminal_encoding: Default::default(),
+        terminal_type: Default::default(),
+        account_expect: Default::default(),
+        connect_timeout: None,
+        keepalive_interval: None,
+        keepalive_max: None,
+        default_directory: None,
+        init_script: None,
+        disable_shell_integration: None,
+        x11_forwarding: None,
+        allow_legacy_algorithms: None,
+        jump_server: None,
+        disabled_jump_server: None,
+        proxy: None,
+        os_id: None,
+        icon: None,
+        icon_file_path: None,
+    };
+    Some(StoredConnection::new_ssh(name, params, None))
+}
+
+#[cfg(test)]
+mod temporary_ssh_tests {
+    use super::parse_temporary_ssh_command;
+
+    #[test]
+    fn parses_temporary_ssh_targets_without_persisting() {
+        assert!(
+            super::temporary_ssh_connection("ssh example.com")
+                .unwrap()
+                .id
+                .is_none()
+        );
+        assert!(parse_temporary_ssh_command("ssh host:invalid").is_none());
+        assert!(parse_temporary_ssh_command("ssh host:0").is_none());
+        assert!(parse_temporary_ssh_command("ssh host;whoami").is_none());
+        assert_eq!(
+            Some(("alice".into(), "example.com".into(), 22)),
+            parse_temporary_ssh_command("ssh alice@example.com")
+        );
+        assert_eq!(
+            Some(("".into(), "127.0.0.1".into(), 2222)),
+            parse_temporary_ssh_command("ssh 127.0.0.1:2222")
+        );
+        for command in [
+            "ssh -p 2222 alice@example.com",
+            "ssh alice@example.com -p 2222",
+            "ssh -p2222 alice@example.com",
+            "ssh alice@example.com -p2222",
+        ] {
+            assert_eq!(
+                Some(("alice".into(), "example.com".into(), 2222)),
+                parse_temporary_ssh_command(command),
+                "{command}"
+            );
+            let connection = super::temporary_ssh_connection(command).unwrap();
+            assert!(connection.id.is_none());
+            assert_eq!(2222, connection.to_ssh_params().unwrap().port);
+        }
+        for command in [
+            "ssh -p host",
+            "ssh host -p",
+            "ssh -p 0 host",
+            "ssh -p 65536 host",
+            "ssh -p invalid host",
+            "ssh -p 22",
+            "ssh -i key host",
+            "ssh host extra",
+        ] {
+            assert!(parse_temporary_ssh_command(command).is_none(), "{command}");
+        }
+    }
 }
 
 impl ListDelegate for ConnectionQuickOpenDelegate {

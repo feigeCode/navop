@@ -14,44 +14,10 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 
     assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
     assert!(launcher.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
-    assert!(launcher.contains("IconName::SquareTerminalColor.color()"));
+    assert!(launcher.contains("IconName::SquareTerminal)"));
+    assert!(launcher.contains(".mono()"));
     assert!(launcher.contains("launch_target_is_default"));
     assert!(launcher.contains("LocalTerminalLaunchTarget::Custom"));
-}
-
-#[test]
-fn both_home_styles_expose_credential_vault_in_their_sidebars() {
-    let toolbar = include_str!("../toolbar.rs");
-    let legacy_sidebar = include_str!("../sidebar_navigation.rs");
-    let modern_home = include_str!("../modern_home.rs");
-    let navigation = include_str!("../navigation.rs");
-    let quick_open = include_str!("../../navigation_quick_open.rs");
-    let applications_panel = modern_home
-        .split("fn render_applications_panel")
-        .nth(1)
-        .and_then(|source| source.split("fn render_account_panel").next())
-        .expect("modern applications panel section");
-
-    assert!(!toolbar.contains("\"credential-vault-button\""));
-    assert!(!toolbar.contains("add_credential_vault_tab"));
-
-    assert!(legacy_sidebar.contains("\"legacy-open-credential-vault\""));
-    assert!(legacy_sidebar.contains("NavigationApplication::CredentialVault"));
-    assert!(
-        legacy_sidebar.contains("home.activate_navigation_application(application, window, cx)")
-    );
-
-    assert!(applications_panel.contains("home_application_id("));
-    assert!(
-        applications_panel
-            .contains("home.activate_navigation_application(application, window, cx)")
-    );
-    assert!(modern_home.contains("\"home-app-credential-vault\""));
-    assert!(modern_home.contains("NavigationApplication::CredentialVault"));
-    assert!(navigation.contains("NavigationApplication::CredentialVault =>"));
-    assert!(navigation.contains("self.add_credential_vault_tab(window, cx)"));
-    assert!(quick_open.contains("t!(\"Home.credential_vault\")"));
-    assert!(!applications_panel.contains("home.add_credential_vault_tab(window, cx)"));
 }
 
 #[test]
@@ -79,15 +45,21 @@ fn connection_team_badge_uses_cached_team_name() {
 fn list_and_card_layouts_render_cached_team_badges() {
     let list_item = include_str!("../connection_list.rs");
     let card = include_str!("../connection_card.rs");
+    let card_content = include_str!("../connection_card_content.rs");
     let sidebar_rows = include_str!("../../persistent_connection_sidebar/rows.rs");
     let row_parts = include_str!("../../persistent_connection_sidebar/row_parts.rs");
 
     assert!(list_item.contains("connection_team_badge"));
-    assert!(list_item.contains("conn-list-team-"));
+    assert!(list_item.contains("render_team_badge"));
     assert!(card.contains("connection_team_badge"));
-    assert!(card.contains("conn-team-"));
+    // 卡片团队在名称行内渲染，与连接名同基线对齐
+    assert!(card_content.contains("render_team_badge"));
     assert!(sidebar_rows.contains("connection_team_indicator"));
-    assert!(row_parts.contains("persistent-team-"));
+    // 常驻侧栏团队标识与主页卡片徽标同一中性样式（muted 底），且不带
+    // 独立 hitbox（独立元素会截获行 hover）。
+    assert!(row_parts.contains("cx.theme().muted"));
+    assert!(!row_parts.contains("persistent-team-"));
+    assert!(!row_parts.contains("cx.theme().primary"));
 }
 
 #[test]
@@ -96,7 +68,106 @@ fn connection_hover_actions_have_stable_ids() {
     let card_actions = include_str!("../connection_card_actions.rs");
 
     assert!(list_actions.contains("conn-list-actions-{}"));
-    assert!(card_actions.contains("conn-card-actions-{}"));
+    assert!(card_actions.contains("{card_id}-actions"));
+}
+
+#[test]
+fn connection_hover_actions_do_not_duplicate_connections() {
+    let list_actions = include_str!("../connection_list_actions.rs");
+    let card_actions = include_str!("../connection_card_actions.rs");
+
+    for source in [list_actions, card_actions] {
+        assert!(!source.contains("duplicate_connection"));
+        assert!(!source.contains("Home.duplicate_connection"));
+        assert!(!source.contains("IconName::Copy"));
+    }
+}
+
+#[test]
+fn connection_identity_and_hover_icons_share_a_consistent_scale() {
+    let visuals = include_str!("../../connection_visuals.rs");
+    let card_content = include_str!("../connection_card_content.rs");
+    let list_item = include_str!("../connection_list.rs");
+    let list_actions = include_str!("../connection_list_actions.rs");
+    let card_actions = include_str!("../connection_card_actions.rs");
+
+    assert!(visuals.contains("Self::Card => IconSize::Large"));
+    for source in [card_content, list_item] {
+        assert!(source.contains(".bg(cx.theme().muted)"));
+        assert!(source.contains(".border_color(cx.theme().border)"));
+    }
+    for source in [list_actions, card_actions] {
+        assert!(source.contains(".with_size(IconSize::Small)"));
+        assert!(source.contains(".mono()"));
+    }
+}
+
+#[test]
+fn home_redesign_layout_contracts() {
+    let content = include_str!("../content.rs");
+    let card = include_str!("../connection_card.rs");
+
+    // 统一网格：卡片固定共享列宽，不再按组 grow/basis 自适应拉宽
+    assert!(content.contains(".w(card_width)"));
+    assert!(!content.contains("flex_grow_1()"));
+    assert!(!content.contains("flex_basis"));
+    // 共享几何由内容区统一计算一次
+    assert!(content.contains("grid::card_grid_metrics"));
+    // 最近区与普通区分组使用命名空间 ID，同一连接重复展示不冲突
+    assert!(card.contains("conn-card-recent"));
+    assert!(card.contains("conn-card\""));
+    // 卡片不使用常驻或悬停阴影
+    assert!(!card.contains("shadow_md"));
+    assert!(!card.contains("shadow_sm"));
+    // 最近区使用历史语义图标而非收藏星标，逐项「最近」角标已删除
+    assert!(content.contains("NAVOP_HISTORY_ICON"));
+    assert!(!content.contains("IconName::StarFill"));
+    assert!(!card.contains("recent_badge"));
+}
+
+#[test]
+fn group_expand_commands_live_in_a_menu() {
+    let content = include_str!("../content.rs");
+    // 展开全部/折叠全部归入「分组」菜单，不再各占一个标题栏按钮（redesign §4.3）
+    assert!(content.contains("home-group-menu"));
+    assert!(!content.contains("Button::new(\"home-expand-all\")"));
+    assert!(!content.contains("Button::new(\"home-collapse-all\")"));
+}
+
+#[test]
+fn home_sidebar_refinement_contracts() {
+    let nav = include_str!("../sidebar_navigation.rs");
+    let sidebar = include_str!("../sidebar.rs");
+    let card = include_str!("../connection_card.rs");
+    let account = include_str!("../account_menu.rs");
+    let applications = include_str!("../../navigation_applications.rs");
+
+    // 导航行本地 helper：hover 与选中分离，selected+hover 不被普通 hover 覆盖
+    assert!(nav.contains("fn home_nav_row"));
+    assert!(nav.contains("hover_bg"));
+    assert!(nav.contains("active_bg"));
+    assert!(nav.contains(".focus_visible("));
+    assert!(nav.contains(".on_key_down("));
+    assert!(!nav.contains("SidebarMenuItem::new"));
+    // 功能图标统一线性单色；Home 用自有线稿资源；会话日志用 SquareTerminal 线性资源
+    assert!(nav.contains("NAVOP_HOME_LINE_ICON"));
+    assert!(nav.contains(".mono()"));
+    assert!(applications.contains("IconName::SquareTerminal"));
+    assert!(!applications.contains("IconName::Terminal,"));
+    // 侧栏右边线读 sidebar_border，非通用 border
+    assert!(sidebar.contains("sidebar_border"));
+    assert!(!sidebar.contains("cx.theme().border"));
+    // 卡片：非选中 hover 才生效，selected+hover 保留选中组合
+    assert!(card.contains(".when(!is_selected, |this|"));
+    assert!(!card.contains("hover_border"));
+    // 账户 fallback 中性化：不用 Avatar hash 自动色
+    assert!(account.contains("neutral_avatar_for_url"));
+    assert!(account.contains("IconName::User"));
+    assert!(account.contains("IconSize::Default"));
+    assert!(account.contains(".bg(gpui::transparent_black().opacity(0.025))"));
+    assert!(account.contains(".px_2()"));
+    assert!(account.contains("None => Icon::new(IconName::User)"));
+    assert!(!account.contains("Avatar::new()\n                .name("));
 }
 
 #[test]
@@ -124,180 +195,35 @@ fn connection_render_uses_cached_team_permissions() {
 
 #[test]
 fn team_key_entry_uses_team_management_feature_gate() {
-    let toolbar = include_str!("../toolbar.rs");
-
-    assert!(toolbar.contains("is_feature_enabled(Feature::TeamManagement, cx)"));
-}
-
-#[test]
-fn personal_and_team_keys_share_one_toolbar_menu() {
-    let toolbar = include_str!("../toolbar.rs");
-
-    assert!(toolbar.contains("Button::new(\"key-menu-button\")"));
-    assert!(toolbar.contains(".dropdown_caret(true)"));
-    assert!(toolbar.contains("Encryption.personal_key_unlocked"));
-    assert!(toolbar.contains("Encryption.personal_key_locked"));
-    assert!(toolbar.contains("Encryption.team_key"));
-    assert!(!toolbar.contains("Button::new(\"team-key-button\")"));
-}
-
-#[test]
-fn home_overview_is_compact_and_avoids_duplicate_search() {
-    let toolbar = include_str!("../toolbar.rs");
-    let content = include_str!("../content.rs");
-    let card = include_str!("../connection_card.rs").replace("\r\n", "\n");
-    let render = include_str!("../render.rs");
-    let modern_home = include_str!("../modern_home.rs").replace("\r\n", "\n");
-
-    assert!(toolbar.contains("Input::new(&self.search_input)"));
-    assert!(content.contains("max_w(px(1160.0))"));
-    assert!(content.contains("MODERN_HOME_CARD_MIN_WIDTH"));
-    assert!(content.contains("MODERN_HOME_CARD_MAX_WIDTH"));
-    assert!(content.contains(".flex_grow_1()"));
-    assert!(card.contains("px(76.0)"));
-    assert!(!card.contains(".shadow_sm()\n            .group"));
-    assert!(render.contains("self.render_modern_home(window, cx)"));
-    assert!(modern_home.contains("modern-home-start-center"));
-    assert!(modern_home.contains("START_CENTER_MAX_WIDTH: gpui::Pixels = px(1200.0)"));
-    assert!(modern_home.contains(".max_w(START_CENTER_MAX_WIDTH)"));
-    assert!(modern_home.contains("modern-home-hero"));
-    assert!(modern_home.contains("modern-home-recent-column"));
-    assert!(modern_home.contains("modern-home-side-column"));
-    assert!(!modern_home.contains("render_connection_card"));
-    // Direct view.update is only allowed inside the recent-row dropdown menu
-    // (PopupMenuItem callbacks do not go through window.listener_for).
     assert!(
-        !modern_home.replace(
-            "open_view.update(cx, |home, cx| {\n                                        home.open_connection_from_quick(&open_conn, window, cx);\n                                    });",
-            ""
-        ).replace(
-            "edit_view.update(cx, |home, cx| {\n                                        home.edit_connection(edit_conn.clone(), window, cx);\n                                    });",
-            ""
-        ).replace("new_tab_view.update", "")
-        .replace("remove_view.update", "")
-        .contains("view.update(cx, |home")
+        include_str!("../account_menu.rs")
+            .contains("is_feature_enabled(Feature::TeamManagement, cx)")
     );
-    assert!(modern_home.contains("modern-home-sync"));
-    assert!(modern_home.contains("modern-home-keys"));
-    // 开始中心固定在窗口高度内，不允许整页滚动。
-    assert!(modern_home.contains(
-        ".id(\"modern-home-start-center\")\n            .size_full()\n            .overflow_hidden()"
-    ));
-    assert!(!modern_home.contains(
-        "modern-home-start-center\"\n            .size_full()\n            .overflow_y_scroll()"
-    ));
-    assert!(!modern_home.contains(".min_h_full()"));
-    assert!(modern_home.contains("self.render_local_terminal_button(window, cx)"));
-    assert!(!modern_home.contains("modern-home-local-terminal"));
-    assert!(!modern_home.contains("IconName::Terminal).with_size(px(42.0))"));
-    assert!(!modern_home.contains(".read(cx)"));
 }
 
 #[test]
-fn modern_start_center_separates_primary_work_from_supporting_tools() {
-    let modern_home = include_str!("../modern_home.rs").replace("\r\n", "\n");
-
-    for stable_id in [
-        "modern-home-hero",
-        "modern-home-recent-panel",
-        "modern-home-applications-panel",
-        "modern-home-side-panel",
-        "modern-home-create-panel",
-        "modern-home-status-panel",
-        "modern-home-sync",
-        "modern-home-keys",
-        "modern-home-account-panel",
+fn account_menu_groups_sync_keys_and_authentication() {
+    let account = include_str!("../account_menu.rs");
+    for key in [
+        "Encryption.personal_key",
+        "Home.unlock_state_unlocked",
+        "Home.unlock_state_locked",
+        "Encryption.team_key",
+        "Auth.logout",
+        "Auth.login",
     ] {
-        assert!(modern_home.contains(stable_id));
+        assert!(account.contains(key));
     }
-    assert!(modern_home.contains(".flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)"));
-    assert!(modern_home.contains(".flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)"));
-    assert!(modern_home.contains(".items_stretch()"));
-    assert!(modern_home.contains(".flex_grow_factor(2.0)"));
-    assert!(modern_home.contains(".flex_grow_1()"));
-    // 最近列表内部滚动、状态区不拉伸、账户紧跟状态之后。
-    assert!(modern_home.contains(".w_full()\n                            .overflow_y_scroll()"));
-    let status_panel = modern_home
-        .split("fn render_status_panel")
-        .nth(1)
-        .and_then(|source| source.split("fn surface_panel").next())
-        .expect("render_status_panel source");
-    assert!(
-        status_panel.contains(".flex_shrink_0()"),
-        "状态面板不应吸收侧栏剩余高度"
-    );
-    assert!(
-        !status_panel.contains(".flex_grow_1()"),
-        "状态面板拉伸会把账户面板挤出首屏"
-    );
-    assert!(modern_home.contains("surface_panel(\"modern-home-side-panel\", cx)"));
-    // 创建与导入是独立卡片，不再挤在 side-panel 内部。
-    assert!(modern_home.contains("surface_panel(\"modern-home-create-panel\", cx)"));
-    assert!(!modern_home.contains("fn render_create_panel"));
-    assert!(modern_home.contains(".self_stretch()"));
-    assert!(modern_home.contains(".id(\"modern-home-status-panel\")"));
-    assert!(modern_home.contains(".flex_1()"));
-    assert!(modern_home.contains("render_recent_connections_panel"));
-    assert!(modern_home.contains("render_applications_panel"));
-    assert!(modern_home.contains("render_status_panel"));
-    assert!(modern_home.contains("render_account_panel"));
-    assert!(!modern_home.contains("render_workspace_tools"));
-    assert!(!modern_home.contains("start_center_card_slot"));
-    assert!(modern_home.contains(".filter(|conn| conn.last_used_at.is_some())"));
-    assert!(
-        modern_home.contains("recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at))")
-    );
-    assert!(modern_home.contains("recent.truncate(8)"));
-    assert!(modern_home.contains(".min_h(px(50.0))"));
-    assert!(modern_home.contains(".min_h(px(140.0))"));
-    assert!(!modern_home.contains(".min_h(px(210.0))"));
-    assert!(
-        modern_home.contains("home.open_connection_from_quick(&row_open_connection, window, cx)")
-    );
-    // Quick-open rows open on a single click: the start center is a dashboard,
-    // and double-click adds friction to the most frequent recovery action.
-    assert!(
-        modern_home.contains(".on_click(window.listener_for(&view, move |home, _, window, cx|")
-    );
-    assert!(!modern_home.contains(".on_double_click("));
-    // Rows carry a context menu on the trailing chevron for secondary actions.
-    assert!(modern_home.contains("recent-conn-menu-"));
-    assert!(modern_home.contains("Home.recent_actions_tooltip"));
-    assert!(modern_home.contains("IconName::ExternalLink"));
-    assert!(modern_home.contains("IconName::Edit"));
-    // 菜单还提供"在新标签打开"，复用 quick-open 的后台打开模式。
-    assert!(modern_home.contains("Home.open_in_new_tab"));
-    assert!(modern_home.contains("IconName::PanelRight"));
-    assert!(modern_home.contains("TabOpenMode::Background"));
-    // 以及"移除最近记录"，仅清空最近使用时间，不删除连接本身。
-    assert!(modern_home.contains("Home.remove_recent"));
-    assert!(modern_home.contains("IconName::Remove"));
-    assert!(modern_home.contains("remove_recent_connection(remove_conn_id, cx)"));
-    // Subtitle shows the connection endpoint, not just the type label.
-    assert!(modern_home.contains("card_connection_info(&conn)"));
-    assert!(modern_home.contains("conn.connection_type.label()"));
+    assert!(account.contains("Anchor::TopLeft"));
 }
 
 #[test]
-fn modern_start_center_shortcuts_are_attached_to_their_actions() {
-    let modern_home = include_str!("../modern_home.rs");
-    let shortcuts = include_str!("../modern_home_shortcuts.rs");
-    let local_terminal = include_str!("../local_terminal.rs");
-
-    // Shortcuts live in button tooltips, not as standalone badges that
-    // fragment the hero action row.
-    assert!(modern_home.contains("new_connection_tooltip(cx)"));
-    assert!(modern_home.contains("quick_open_tooltip(cx)"));
-    assert!(!modern_home.contains("new_connection_shortcut(cx)"));
-    assert!(!modern_home.contains("quick_open_shortcut(cx)"));
-    assert!(!modern_home.contains("terminal_shortcut(cx)"));
-    assert!(local_terminal.contains("modern_home_shortcuts::terminal_tooltip(cx)"));
-    assert!(shortcuts.contains("fn shortcut_text_for"));
-    assert!(shortcuts.contains("action_id::HOME_QUICK_OPEN"));
-    assert!(shortcuts.contains("action_id::HOME_NEW_CONNECTION"));
-    assert!(shortcuts.contains("action_id::HOME_OPEN_LOCAL_TERMINAL"));
+fn home_shortcuts_are_attached_to_their_actions() {
+    let toolbar = include_str!("../toolbar.rs");
+    let shortcuts = include_str!("../home_shortcuts.rs");
+    assert!(toolbar.contains("new_connection_tooltip(cx)"));
+    assert!(include_str!("../local_terminal.rs").contains("home_shortcuts::terminal_tooltip(cx)"));
     assert!(shortcuts.contains("shortcuts_for(cx, action, &[fallback])"));
-    assert!(shortcuts.contains("unwrap_or_else(|| fallback.to_string())"));
 }
 
 #[test]
@@ -305,6 +231,156 @@ fn sidebar_search_aligns_with_home_toolbar_height() {
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
     assert!(tree.contains("fn render_tree_search"));
     assert!(tree.contains(".h_10()"));
+}
+
+#[test]
+fn home_batch_mode_is_shared_across_card_list_and_tree_layouts() {
+    let home = include_str!("../../home_tab.rs");
+    let toolbar = include_str!("../toolbar.rs");
+    let batch_bar = include_str!("../batch_bar.rs");
+    let home_layout = include_str!("../home_layout.rs");
+    let card = include_str!("../connection_card.rs");
+    let list = include_str!("../connection_list.rs");
+    let selection = include_str!("../connection_selection.rs");
+
+    // 选择状态由 HomePage 持有，三布局共享；Tree 布局不再重复渲染主页批量条
+    assert!(home.contains("connection_selection"));
+    assert!(selection.contains("fn set_batch_mode"));
+    assert!(toolbar.contains("home-batch-toggle"));
+    assert!(toolbar.contains("IconName::ListChecks"));
+    assert!(home_layout.contains("render_batch_bar"));
+    assert!(home_layout.contains("ConnectionLayout::Tree"));
+    // 卡片与列表在批量模式下渲染勾选框并按修饰键做范围/多选；
+    // 最近区为不参与批量的快捷入口（同一连接可能在此与分组同时出现）
+    for source in [card, list] {
+        assert!(source.contains("connection_selection_checkbox"));
+        assert!(source.contains("ConnectionSelectionMode::Range"));
+        assert!(source.contains("ConnectionSelectionMode::Toggle"));
+        assert!(source.contains("self.batch_mode_active() && !recent"));
+    }
+    // 批量条提供全选可见/移动/删除/退出
+    assert!(batch_bar.contains("home-select-visible-connections"));
+    assert!(batch_bar.contains("home-move-selected-connections"));
+    assert!(batch_bar.contains("home-delete-selected-connections"));
+    assert!(batch_bar.contains("home-exit-batch-connections"));
+}
+
+#[test]
+fn embedded_tree_reuses_home_search_and_filter_without_own_search_box() {
+    let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
+    let implementation = tree.split("#[cfg(test)]").next().unwrap();
+
+    // 树内搜索框与树头部都仅在非嵌入（停靠/浮动）时渲染
+    for marker in [
+        "tree.child(self.render_tree_search(palette, cx))",
+        "tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))",
+    ] {
+        let render_at = implementation.find(marker).expect("渲染点存在");
+        let mut window_start = render_at.saturating_sub(160);
+        while !implementation.is_char_boundary(window_start) {
+            window_start -= 1;
+        }
+        assert!(
+            implementation[window_start..render_at].contains("!self.home_embedded"),
+            "{marker} 应由 !home_embedded 门控"
+        );
+    }
+    // 嵌入时搜索词与类型筛选直接来自主页工具栏
+    assert!(implementation.contains("home.search_query.read(cx)"));
+    assert!(implementation.contains("home.selected_filter"));
+}
+
+#[test]
+fn home_toolbar_uses_a_continuous_secondary_action_strip() {
+    let toolbar = include_str!("../toolbar.rs");
+
+    // 搜索框之后只有一条连续工具带，不再给筛选和视图各套一个输入框式外框。
+    assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 1);
+    assert!(toolbar.contains("render_home_type_filter(window, cx)"));
+    assert!(toolbar.contains("render_sort_button(cx)"));
+    assert!(toolbar.contains("render_layout_button(cx)"));
+    assert!(toolbar.contains("render_batch_toggle(cx)"));
+    // 「全部类型」不再使用星号图标
+    assert!(toolbar.contains("IconName::Apps"));
+}
+
+#[test]
+fn home_toolbar_uses_monochrome_icons_and_visual_separators() {
+    let toolbar = include_str!("../toolbar.rs");
+    let workspace_filter = include_str!("../workspace_filter.rs");
+    let local_terminal = include_str!("../local_terminal.rs");
+
+    assert!(!toolbar.contains("toolbar_separator(cx)"));
+    assert!(!toolbar.contains("ToolbarGroupExt"));
+    assert!(toolbar.contains("Icon::new(IconName::Refresh)"));
+    assert!(toolbar.contains("IconButton::new(\n            \"layout-toggle\""));
+    assert!(toolbar.contains("Icon::new(IconName::ListChecks)"));
+    assert!(workspace_filter.contains("Icon::new(IconName::Filter)"));
+    assert!(local_terminal.contains("IconName::SquareTerminal)"));
+    assert!(!local_terminal.contains("SquareTerminalColor"));
+}
+
+#[test]
+fn new_connection_is_the_primary_home_action() {
+    let toolbar = include_str!("../toolbar.rs");
+    let new_connection = toolbar
+        .split("Button::new(\"new-connect-button\")")
+        .nth(1)
+        .expect("new connection button exists")
+        .split(".when(window.bounds()")
+        .next()
+        .expect("new connection button has a responsive label");
+
+    assert!(new_connection.contains(".primary()"));
+    assert!(!new_connection.contains(".outline()"));
+}
+
+#[test]
+fn home_search_keeps_a_comfortable_desktop_width() {
+    let toolbar = include_str!("../toolbar.rs");
+
+    assert!(toolbar.contains("window.bounds().size.width > px(1400.0)"));
+    assert!(toolbar.contains("search.min_w(gpui::rems(46.0))"));
+    assert!(toolbar.contains(".min_w(gpui::rems(4.0))"));
+}
+
+#[test]
+fn home_layout_switcher_uses_a_plain_icon_button() {
+    let toolbar = include_str!("../toolbar.rs");
+    let layout_switcher = toolbar
+        .split("fn render_layout_button")
+        .nth(1)
+        .expect("layout switcher exists")
+        .split("fn render_batch_toggle")
+        .next()
+        .expect("layout switcher has an end marker");
+
+    assert!(layout_switcher.contains("IconButton::new"));
+    assert!(layout_switcher.contains("dropdown_menu_with_anchor"));
+    assert!(!layout_switcher.contains("dropdown_caret"));
+    assert!(!layout_switcher.contains(".min_w(px(52.0))"));
+}
+
+#[test]
+fn workspace_filter_exposes_its_active_state() {
+    let workspace_filter = include_str!("../workspace_filter.rs");
+
+    assert!(workspace_filter.contains(".selected(!self.filtered_workspace_ids.is_empty())"));
+}
+
+#[test]
+fn recent_section_does_not_participate_in_search() {
+    let content = include_str!("../content.rs");
+    // 有搜索词时最近区整体隐藏，同一连接只出现在下方分组中
+    assert!(content.contains("最近区不参与搜索"));
+    let gate = content
+        .find("recent::recent_connections")
+        .expect("最近区渲染点存在");
+    let mut start = gate.saturating_sub(220);
+    while !content.is_char_boundary(start) {
+        start -= 1;
+    }
+    assert!(content[start..gate].contains("query.is_empty()"));
 }
 
 #[test]
@@ -334,104 +410,9 @@ fn persistent_sidebar_groups_expose_a_rename_interaction() {
 }
 
 #[test]
-fn legacy_and_modern_home_layouts_are_both_kept() {
-    let render = include_str!("../render.rs");
-    let legacy_home = include_str!("../legacy_home.rs");
-    let content = include_str!("../content.rs");
-    let card = include_str!("../connection_card.rs");
-    let sidebar = include_str!("../sidebar.rs");
-    let sidebar_navigation = include_str!("../sidebar_navigation.rs");
-    let filter_bar = include_str!("../../persistent_connection_sidebar/filter_bar.rs");
-    let modern_home = include_str!("../modern_home.rs");
-    let quick_open = include_str!("../../navigation_quick_open.rs");
-
-    assert!(render.contains("self.render_legacy_home(window, cx)"));
-    assert!(render.contains("self.render_modern_home(window, cx)"));
-    assert!(legacy_home.contains("self.render_sidebar(window, cx)"));
-    assert!(content.contains("slot.w(px(320.0)).flex_shrink_0()"));
-    assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
-    assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
-    assert!(!sidebar.contains("\"legacy-open-home\""));
-    assert!(sidebar_navigation.contains("visible_connection_types()"));
-    assert!(sidebar_navigation.contains("this.set_selected_filter(filter, cx);"));
-    assert!(filter_bar.contains("ConnectionType::all()"));
-    assert!(modern_home.contains("all_navigation_applications("));
-    assert!(quick_open.contains("fn overflow_connection_types()"));
-    assert!(sidebar.contains("legacy-home-sidebar-toggle"));
-    assert!(sidebar_navigation.contains("Icon::new(IconName::User)"));
-    assert!(sidebar_navigation.contains("\"legacy-more-connection-types\""));
-    assert!(sidebar_navigation.contains("\"legacy-more-applications\""));
-    assert_eq!(
-        sidebar_navigation.matches("show_label: false").count(),
-        2,
-        "the two legacy overflow buttons should render only their ellipsis icon"
-    );
-    assert!(filter_bar.contains("\"persistent-filter-button\""));
-    assert!(sidebar_navigation.contains("show_legacy_connection_navigation_quick_open"));
-    assert!(sidebar_navigation.contains("show_application_navigation_quick_open"));
-    assert!(filter_bar.contains(".checked(selected_filter == filter)"));
-}
-
-#[test]
-fn legacy_ai_workbench_uses_the_monochrome_line_icon() {
-    let sidebar = include_str!("../sidebar_navigation.rs");
-
-    assert!(sidebar.contains("\"legacy-open-ai-workbench\""));
-    assert!(sidebar.contains("NavigationApplication::AiWorkbench => IconName::AILine"));
-    assert!(!sidebar.contains("NavigationApplication::AiWorkbench => IconName::AI,"));
-}
-
-#[test]
-fn settings_entry_moves_from_home_navigation_to_the_global_tab_bar() {
-    let sidebar_navigation = include_str!("../sidebar_navigation.rs");
-    let modern_home = include_str!("../modern_home.rs");
-    let navigation = include_str!("../navigation.rs");
-    let quick_open = include_str!("../../navigation_quick_open.rs");
-    let tab_container = include_str!("../../../../crates/core/src/tab_container.rs");
-
-    // 原入口已从现代主页磁贴与传统侧边栏移除。
-    assert!(!modern_home.contains("home-app-settings"));
-    assert!(!sidebar_navigation.contains("legacy-open-settings"));
-    assert!(!navigation.contains("NavigationApplication::Settings"));
-    assert!(!quick_open.contains("trailing_navigation_applications"));
-    assert!(!quick_open.contains("NavigationApplication::Settings"));
-    // 设置按钮由 tab 容器渲染，位于后台任务入口之后。
-    assert!(tab_container.contains("\"tab-bar-settings\""));
-    assert!(tab_container.contains("with_settings_button("));
-    assert!(tab_container.contains("IconName::Settings"));
-    let settings_offset = tab_container.find("\"tab-bar-settings-entry\"").unwrap();
-    let background_offset = tab_container.find("\"background-task-entry\"").unwrap();
-    assert!(
-        background_offset < settings_offset,
-        "设置按钮必须位于后台任务管理入口之后"
-    );
-}
-
-#[test]
-fn modern_home_cards_are_small_and_fill_each_row() {
-    let home = include_str!("../../home_tab.rs");
-    let content = include_str!("../content.rs");
-
-    assert!(home.contains("MODERN_HOME_CARD_MIN_WIDTH: gpui::Pixels = px(220.0)"));
-    assert!(home.contains("MODERN_HOME_CARD_MAX_WIDTH: gpui::Pixels = px(260.0)"));
-    assert!(
-        content
-            .matches(".flex_basis(MODERN_HOME_CARD_MIN_WIDTH)")
-            .count()
-            >= 3
-    );
-    assert!(content.matches(".flex_grow_1()").count() >= 3);
-}
-
-#[test]
-fn collapsed_modern_sidebar_lets_home_content_use_the_full_width() {
-    let content = include_str!("../content.rs");
-    let app = include_str!("../../onetcli_app.rs");
-
-    assert!(content.contains("center_modern_content"));
-    assert!(content.contains("!legacy && self.persistent_sidebar_expanded"));
-    assert!(content.contains(".when(center_modern_content"));
-    assert!(app.contains("home.set_persistent_sidebar_expanded(expanded, cx)"));
+fn both_settings_entries_use_the_existing_tab_opener() {
+    assert!(include_str!("../sidebar_navigation.rs").contains("home.add_settings_tab(window, cx)"));
+    assert!(include_str!("../../onetcli_app.rs").contains("home.add_settings_tab(window, cx)"));
 }
 
 #[test]

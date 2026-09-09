@@ -936,6 +936,7 @@ impl QuickCommandPanel {
                         .child(editor_state.clone())
                         .into_any_element(),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1182,6 +1183,7 @@ impl QuickCommandPanel {
                         .bg(colors.background)
                         .child(Input::new(&input).small().w_full()),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1229,6 +1231,7 @@ impl QuickCommandPanel {
                             t!("QuickCommand.delete_group_confirm", name = group_name).to_string(),
                         ),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)
@@ -1387,6 +1390,7 @@ impl QuickCommandPanel {
                         )
                         .into_any_element(),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("QuickCommand.delete_action").to_string())

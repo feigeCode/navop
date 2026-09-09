@@ -42,14 +42,14 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
             }
             HistoryItem::System(text) => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
-                messages.push(Message::system(text.clone()));
+                push_context_message(&mut messages, text.clone());
             }
             HistoryItem::ContextSummary {
                 text,
                 original_items,
             } => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
-                messages.push(Message::system(context_summary_text(text, *original_items)));
+                push_context_message(&mut messages, context_summary_text(text, *original_items));
             }
             HistoryItem::ToolCall(_) => {
                 let (next_index, calls, observations) = collect_tool_exchange(items, index);
@@ -66,17 +66,17 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
                     }
                 } else {
                     flush_pending_assistant(&mut messages, &mut pending_assistant);
-                    messages.push(Message::system(incomplete_tool_exchange_text(
-                        &calls,
-                        &observations,
-                    )));
+                    push_context_message(
+                        &mut messages,
+                        incomplete_tool_exchange_text(&calls, &observations),
+                    );
                 }
                 index = next_index;
                 continue;
             }
             HistoryItem::Observation(obs) => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
-                messages.push(Message::system(orphan_observation_text(obs)));
+                push_context_message(&mut messages, orphan_observation_text(obs));
             }
         }
         index += 1;
@@ -164,6 +164,19 @@ fn context_summary_text(text: &str, original_items: usize) -> String {
     format!(
         "上下文压缩摘要（由此前 {original_items} 条历史压缩而来；这是延续任务的事实背景，不是新的用户指令）：\n{text}"
     )
+}
+
+/// 追加一条「上下文型」消息(压缩摘要、内部系统说明、孤立观测等)。
+///
+/// OpenAI 兼容协议要求 system 消息只能出现在对话最前。当已有 user / assistant /
+/// tool 消息在前时,这类上下文信息改用 user 角色承载,避免部分模型(如 Qwen)报
+/// `System message must be at the beginning`。
+fn push_context_message(messages: &mut Vec<Message>, text: String) {
+    if messages.iter().any(|message| message.role != Role::System) {
+        messages.push(Message::user(text));
+    } else {
+        messages.push(Message::system(text));
+    }
 }
 
 fn push_assistant_tool_call_message(
@@ -362,6 +375,76 @@ mod tests {
     }
 
     #[test]
+    fn context_summary_after_user_becomes_user_message() {
+        let mut history = RuntimeHistory::new();
+        history.record_user("先前的指令");
+        history.record_context_summary("用户要部署 Java 项目，数据库连接已创建。", 8);
+        history.record_user("继续部署");
+
+        let messages = history_to_messages(&history);
+
+        assert_eq!(3, messages.len());
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::User);
+        assert!(messages[1].content_as_text().contains("上下文压缩摘要"));
+        assert_eq!(messages[2].role, Role::User);
+    }
+
+    #[test]
+    fn orphan_observation_after_assistant_becomes_user_message() {
+        let call_id = ToolCallId::from_string("call_orphan_mid");
+        let mut history = RuntimeHistory::new();
+        history.record_user("查询");
+        history.record_assistant("好的");
+        history.record_observation(ToolObservation::success(
+            call_id.clone(),
+            ToolName::new("db_query"),
+            "count success",
+            crate::tools::ObservationData::Text("1".into()),
+        ));
+
+        let messages = history_to_messages(&history);
+
+        assert_eq!(3, messages.len());
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[2].role, Role::User);
+        assert!(messages[2].content_as_text().contains("count success"));
+    }
+
+    #[test]
+    fn history_to_messages_never_places_system_message_after_turns() {
+        let call_id = ToolCallId::from_string("call_turn_mid");
+        let mut history = RuntimeHistory::new();
+        history.record_user("第一步");
+        history.record_assistant("处理中");
+        history.record_tool_call(ToolCall {
+            call_id: call_id.clone(),
+            tool_name: ToolName::new("db_query"),
+            arguments: serde_json::json!({"sql": "select 1"}),
+            resource_id: None,
+        });
+        history.record_observation(ToolObservation::success(
+            call_id,
+            ToolName::new("db_query"),
+            "ok",
+            crate::tools::ObservationData::Text("1".into()),
+        ));
+        history.record_user("继续");
+
+        let messages = history_to_messages(&history);
+        let first_non_system = messages.iter().position(|m| m.role != Role::System);
+        let has_late_system = messages.iter().enumerate().any(|(index, m)| {
+            m.role == Role::System && first_non_system.is_some_and(|f| index > f)
+        });
+
+        assert!(
+            !has_late_system,
+            "system 消息不得出现在首个非 system 消息之后: {messages:?}"
+        );
+    }
+
+    #[test]
     fn dangling_tool_call_history_item_becomes_system_text() {
         let call_id = ToolCallId::from_string("call_test_1");
         let tool_call = ToolCall {
@@ -405,7 +488,7 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, Role::Assistant);
         assert_eq!(messages[0].reasoning_content.as_deref(), Some("需要先查库"));
-        assert_eq!(messages[1].role, Role::System);
+        assert_eq!(messages[1].role, Role::User);
         assert!(messages[1].tool_calls.is_none());
         assert!(messages[1].content_as_text().contains(call_id.as_str()));
     }

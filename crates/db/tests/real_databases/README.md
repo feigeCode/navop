@@ -18,7 +18,7 @@ SQLite, the SQLite compare test, and DuckDB run by default:
 ./script/run-real-db-tests.sh
 ```
 
-The script does not start a database server and never provides default credentials. MySQL and PostgreSQL run only when their password environment variable is present. An empty PostgreSQL password is valid and is handled correctly.
+The script does not start a database server and never provides default credentials. MySQL and PostgreSQL tests skip automatically (with a note on stderr) when their password environment variable is absent, so `cargo test --all` stays green on machines and CI runners without a local database server. When the variable is present the tests run for real. An empty PostgreSQL password is valid and is handled correctly.
 
 ## Environment variables
 

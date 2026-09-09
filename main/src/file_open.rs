@@ -1,4 +1,4 @@
-use crate::onetcli_app::{GlobalHomePage, GlobalTabContainer};
+use crate::onetcli_app::GlobalHomePage;
 use anyhow::{Context as _, Result, bail};
 use gpui::{App, AppContext, Window};
 use gpui_component::{WindowExt, notification::Notification};
@@ -7,6 +7,7 @@ use one_core::storage::{
     ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, GlobalStorageState,
     StoredConnection, traits::Repository,
 };
+use one_core::tab_container::GlobalTabContainer;
 use one_core::tab_container::{TabItem, TabOpenMode};
 use rust_i18n::t;
 use sha2::{Digest, Sha256};

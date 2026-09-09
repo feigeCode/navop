@@ -40,41 +40,51 @@ impl HomePage {
         });
         let persisted_user_id = load_auth_data().map(|(_, _, user_id, _)| user_id);
 
-        // 订阅搜索输入变化
+        // 订阅搜索输入变化；回车时若是 ssh 命令则直接进入快速连接。
         let query_clone = search_query.clone();
         cx.subscribe_in(
             &search_input,
             window,
-            move |_this, _input, event, _window, cx| {
-                if let InputEvent::Change = event {
+            move |this, input, event, window, cx| match event {
+                InputEvent::Change => {
                     query_clone.update(cx, |q, cx| {
-                        *q = _input.read(cx).text().to_string();
+                        *q = input.read(cx).text().to_string();
                         cx.notify();
                     });
                     cx.notify();
                 }
+                InputEvent::PressEnter { .. } => {
+                    let query = input.read(cx).text().to_string();
+                    if crate::home::home_connection_quick_open::temporary_ssh_connection(&query)
+                        .is_some()
+                    {
+                        this.show_connection_quick_open_with_query(query, window, cx);
+                    }
+                }
+                _ => {}
             },
         )
         .detach();
 
         let mut page = Self {
             focus_handle: cx.focus_handle(),
-            home_active: true,
             selected_filter: ConnectionType::All,
             connection_layout: AppSettings::current(cx).home_connection_layout.into(),
-            home_page_style: AppSettings::current(cx).home_page_style,
             sidebar_collapsed: false,
-            persistent_sidebar_expanded: AppSettings::current(cx).connection_sidebar_expanded,
+            collapsed_groups: HashSet::new(),
+            recent_collapsed: false,
             workspaces: Vec::new(),
             connections: Vec::new(),
             tab_container,
+            connection_sidebar: None,
             search_input,
             search_query,
             editing_connection_id: None,
             selected_connection_id: None,
-            connection_scroll_handle: UniformListScrollHandle::new(),
+            connection_selection: Default::default(),
             filtered_workspace_ids: HashSet::new(),
             workspace_filter_open: false,
+            account_menu_open: false,
             workspace_filter_list: None,
             _subscriptions: Vec::new(),
             cloud_sync_service: Arc::new(std::sync::RwLock::new(CloudSyncService::new())),

@@ -1,7 +1,5 @@
 use gpui::prelude::FluentBuilder;
-use gpui_component::{
-    ElementExt as _, Sizable as _, button::Button, scroll::ScrollableElement as _,
-};
+use gpui_component::{Sizable as _, button::Button, scroll::ScrollableElement as _};
 
 use super::*;
 use crate::pointer::scale_filled_remote_cursor_bounds;
@@ -402,157 +400,159 @@ impl Render for RemoteDesktopView {
             && (fallback_reason.is_some() || canvas_retry_available);
         let view = cx.entity();
 
-        let content = div()
-            .id("remote-desktop-content")
-            .w_full()
-            .flex_grow(1.0)
-            .min_w_0()
-            .min_h_0()
-            .relative()
-            .flex()
-            .items_center()
-            .justify_center()
-            .overflow_hidden()
-            .track_focus(&self.focus_handle)
-            .when(!uses_windows_native, |this| {
-                this.key_context(REMOTE_DESKTOP_CONTEXT)
-                    .on_action(cx.listener(Self::send_tab))
-                    .on_action(cx.listener(Self::send_shift_tab))
-                    .on_action(cx.listener(Self::remote_copy))
-                    .on_action(cx.listener(Self::remote_paste))
-                    .capture_key_down(cx.listener(Self::handle_key_down))
-                    .capture_key_up(cx.listener(Self::handle_key_up))
-                    .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
-                    .on_hover(cx.listener(|this, hovered, _, _| {
-                        this.cursor.set_pointer_hovered(*hovered);
-                    }))
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                        this.send_pointer_move(event.position, window, cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            window.focus(&this.focus_handle, cx);
+        let content = gpui_component::ElementExt::on_prepaint(
+            div()
+                .id("remote-desktop-content")
+                .w_full()
+                .flex_grow(1.0)
+                .min_w_0()
+                .min_h_0()
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .track_focus(&self.focus_handle)
+                .when(!uses_windows_native, |this| {
+                    this.key_context(REMOTE_DESKTOP_CONTEXT)
+                        .on_action(cx.listener(Self::send_tab))
+                        .on_action(cx.listener(Self::send_shift_tab))
+                        .on_action(cx.listener(Self::remote_copy))
+                        .on_action(cx.listener(Self::remote_paste))
+                        .capture_key_down(cx.listener(Self::handle_key_down))
+                        .capture_key_up(cx.listener(Self::handle_key_up))
+                        .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
+                        .on_hover(cx.listener(|this, hovered, _, _| {
+                            this.cursor.set_pointer_hovered(*hovered);
+                        }))
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                             this.send_pointer_move(event.position, window, cx);
-                            this.send_mouse_button(event.button, true);
                             cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            window.focus(&this.focus_handle, cx);
-                            this.send_pointer_move(event.position, window, cx);
-                            this.send_mouse_button(event.button, true);
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                window.focus(&this.focus_handle, cx);
+                                this.send_pointer_move(event.position, window, cx);
+                                this.send_mouse_button(event.button, true);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                window.focus(&this.focus_handle, cx);
+                                this.send_pointer_move(event.position, window, cx);
+                                this.send_mouse_button(event.button, true);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Middle,
+                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                window.focus(&this.focus_handle, cx);
+                                this.send_pointer_move(event.position, window, cx);
+                                this.send_mouse_button(event.button, true);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                                this.send_pointer_move(event.position, window, cx);
+                                this.send_mouse_button(event.button, false);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_up(
+                            MouseButton::Right,
+                            cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                                this.send_pointer_move(event.position, window, cx);
+                                this.send_mouse_button(event.button, false);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_up(
+                            MouseButton::Middle,
+                            cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                                this.send_pointer_move(event.position, window, cx);
+                                this.send_mouse_button(event.button, false);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                            this.send_scroll(event);
                             cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            window.focus(&this.focus_handle, cx);
-                            this.send_pointer_move(event.position, window, cx);
-                            this.send_mouse_button(event.button, true);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                            this.send_pointer_move(event.position, window, cx);
-                            this.send_mouse_button(event.button, false);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Right,
-                        cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                            this.send_pointer_move(event.position, window, cx);
-                            this.send_mouse_button(event.button, false);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Middle,
-                        cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                            this.send_pointer_move(event.position, window, cx);
-                            this.send_mouse_button(event.button, false);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                        this.send_scroll(event);
-                        cx.stop_propagation();
-                    }))
-                    .child(remote_desktop_frame_canvas(canvas_paint))
-            })
-            .when(
-                should_show_empty_status(
-                    show_empty_status,
-                    uses_windows_native,
-                    show_failure_detail,
-                    self.connected,
-                ),
-                |this| {
-                    this.child(
-                        div()
-                            .min_w_0()
-                            .max_w_full()
-                            .flex_shrink_0()
-                            .overflow_hidden()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap_3()
-                            .text_center()
-                            .px_4()
-                            .py_2()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                div()
-                                    .w_full()
-                                    .whitespace_normal()
-                                    .child(self.status.clone()),
-                            )
-                            .when_some(failure_detail, |this, detail| {
-                                let clipboard_detail = detail.clone();
-                                this.child(
+                        }))
+                        .child(remote_desktop_frame_canvas(canvas_paint))
+                })
+                .when(
+                    should_show_empty_status(
+                        show_empty_status,
+                        uses_windows_native,
+                        show_failure_detail,
+                        self.connected,
+                    ),
+                    |this| {
+                        this.child(
+                            div()
+                                .min_w_0()
+                                .max_w_full()
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_3()
+                                .text_center()
+                                .px_4()
+                                .py_2()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
                                     div()
                                         .w_full()
-                                        .max_h(px(320.0))
-                                        .overflow_scrollbar()
-                                        .rounded_md()
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .bg(cx.theme().muted)
-                                        .p_3()
-                                        .text_left()
-                                        .text_xs()
                                         .whitespace_normal()
-                                        .child(detail),
+                                        .child(self.status.clone()),
                                 )
-                                .child(
-                                    Button::new("remote-desktop-copy-diagnostic")
-                                        .small()
-                                        .outline()
-                                        .compact()
-                                        .label(t!("RemoteDesktop.copy_diagnostic").to_string())
-                                        .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                clipboard_detail.to_string(),
-                                            ));
-                                        }),
-                                )
-                            }),
-                    )
-                },
-            )
-            .on_prepaint(move |bounds, window, cx| {
+                                .when_some(failure_detail, |this, detail| {
+                                    let clipboard_detail = detail.clone();
+                                    this.child(
+                                        div()
+                                            .w_full()
+                                            .max_h(px(320.0))
+                                            .overflow_scrollbar()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .bg(cx.theme().muted)
+                                            .p_3()
+                                            .text_left()
+                                            .text_xs()
+                                            .whitespace_normal()
+                                            .child(detail),
+                                    )
+                                    .child(
+                                        Button::new("remote-desktop-copy-diagnostic")
+                                            .small()
+                                            .outline()
+                                            .compact()
+                                            .label(t!("RemoteDesktop.copy_diagnostic").to_string())
+                                            .on_click(move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    clipboard_detail.to_string(),
+                                                ));
+                                            }),
+                                    )
+                                }),
+                        )
+                    },
+                ),
+            move |bounds, window, cx| {
                 view.update(cx, |view, view_cx| {
                     view.update_content_bounds(bounds, window.scale_factor(), view_cx);
                 });
-            });
+            },
+        );
 
         div()
             .size_full()

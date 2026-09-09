@@ -2,7 +2,7 @@ use crate::model::{ExplorerEntry, sort_entries};
 use anyhow::{Context as _, Result};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use remote_file_editor::{
-    FilePolicy, decode_text_content, determine_file_policy, language_for_path,
+    FilePolicy, decode_text_content, determine_file_policy, load_language_for_path,
 };
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -112,7 +112,7 @@ pub(crate) fn load_file(path: &Path) -> Result<LoadedFile> {
     let file_size = bytes.len();
     let policy = determine_file_policy(file_size)?;
     let text = decode_text_content(&bytes)?;
-    let language = language_for_path(&path.to_string_lossy(), policy.is_large_file);
+    let language = load_language_for_path(&path.to_string_lossy(), policy.is_large_file)?;
     Ok(LoadedFile {
         text,
         policy,

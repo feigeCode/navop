@@ -18,7 +18,10 @@ pub use model::{
     filter_installed, filter_marketplace, filter_updatable_marketplace,
     marketplace_entry_install_id, marketplace_install_state,
 };
-pub use shell::{ShellViewOpener, register_shell_view_opener};
+pub use shell::{
+    ShellViewOpener, close_shell_extension, finish_shell_extension, open_shell_view,
+    register_shell_view_opener,
+};
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
 #[cfg(test)]

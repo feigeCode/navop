@@ -25,7 +25,7 @@ pub fn init_window_systems(window: &Window, cx: &mut App) {
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) fn is_valid_system_hotkey(spec: &str) -> bool {
-    system_hotkey::parse_project_hotkey(spec).is_ok()
+    spec.trim().is_empty() || system_hotkey::parse_project_hotkey(spec).is_ok()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -115,7 +115,11 @@ mod system_hotkey {
 
         install_toggle_dispatcher(cx);
 
-        let hotkey = build_toggle_hotkey(cx);
+        let Some(hotkey) = build_toggle_hotkey(cx) else {
+            tracing::debug!("系统级热键已清空，跳过注册");
+            set_registered_hotkey(None, None);
+            return;
+        };
         let hotkey_id = hotkey.id();
 
         let Some(result) = with_hotkey_manager(|manager| manager.register(hotkey)) else {
@@ -142,7 +146,10 @@ mod system_hotkey {
             }
         }
 
-        let hotkey = build_toggle_hotkey(cx);
+        let Some(hotkey) = build_toggle_hotkey(cx) else {
+            set_registered_hotkey(None, None);
+            return;
+        };
         let hotkey_id = hotkey.id();
         let Some(result) = with_hotkey_manager(|manager| manager.register(hotkey)) else {
             return;
@@ -209,7 +216,7 @@ mod system_hotkey {
         }
     }
 
-    pub(crate) fn build_toggle_hotkey(cx: &App) -> HotKey {
+    pub(crate) fn build_toggle_hotkey(cx: &App) -> Option<HotKey> {
         let settings = AppSettings::global(cx);
         toggle_hotkey_from_config(
             settings.current_system_hotkey(),
@@ -223,13 +230,16 @@ mod system_hotkey {
         Ok(hotkey.parse::<HotKey>()?)
     }
 
-    pub(crate) fn toggle_hotkey_from_config(spec: &str, fallback: &str) -> HotKey {
-        parse_project_hotkey(spec).unwrap_or_else(|err| {
+    pub(crate) fn toggle_hotkey_from_config(spec: &str, fallback: &str) -> Option<HotKey> {
+        if spec.trim().is_empty() {
+            return None;
+        }
+        Some(parse_project_hotkey(spec).unwrap_or_else(|err| {
             tracing::warn!(
                 "系统级热键配置非法，已回退默认值: input={spec:?}, fallback={fallback:?}, err={err:?}"
             );
             parse_project_hotkey(fallback).expect("默认系统级热键定义非法")
-        })
+        }))
     }
 
     fn default_toggle_hotkey_spec() -> &'static str {
@@ -424,9 +434,26 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     #[test]
     fn toggle_hotkey_from_config_falls_back_to_default_when_invalid() {
-        let hotkey = system_hotkey::toggle_hotkey_from_config("cmd-alt-invalid", "ctrl-space");
+        let hotkey = system_hotkey::toggle_hotkey_from_config("cmd-alt-invalid", "ctrl-space")
+            .expect("非法配置应回退默认值");
 
         assert_eq!(hotkey.key, HotkeyCode::Space);
         assert!(hotkey.mods.contains(HotkeyModifiers::CONTROL));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn toggle_hotkey_from_config_returns_none_when_cleared() {
+        assert!(system_hotkey::toggle_hotkey_from_config("", "ctrl-space").is_none());
+        assert!(system_hotkey::toggle_hotkey_from_config("  ", "ctrl-space").is_none());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn is_valid_system_hotkey_accepts_empty_as_disabled() {
+        assert!(is_valid_system_hotkey(""));
+        assert!(is_valid_system_hotkey("  "));
+        assert!(is_valid_system_hotkey("cmd-alt-m"));
+        assert!(!is_valid_system_hotkey("cmd-alt-invalid"));
     }
 }

@@ -27,6 +27,11 @@ struct FavoriteSaveResult {
 
 #[derive(Clone)]
 struct DeleteRequest {
+    items: Vec<DeleteItem>,
+}
+
+#[derive(Clone)]
+struct DeleteItem {
     recording_id: String,
     path: PathBuf,
 }
@@ -46,7 +51,9 @@ impl SessionLogsPage {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string_lossy().to_string());
-        let request = DeleteRequest { recording_id, path };
+        let request = DeleteRequest {
+            items: vec![DeleteItem { recording_id, path }],
+        };
         let view_entity = cx.entity().clone();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let entity = view_entity.clone();
@@ -79,11 +86,54 @@ impl SessionLogsPage {
         });
     }
 
+    pub(super) fn request_delete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.deleting {
+            return;
+        }
+        let items = self
+            .catalog
+            .entries
+            .iter()
+            .filter(|entry| self.selected_ids.contains(&entry.header.navop.recording_id))
+            .map(|entry| DeleteItem {
+                recording_id: entry.header.navop.recording_id.clone(),
+                path: entry.path.clone(),
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return;
+        }
+        let count = items.len();
+        let request = DeleteRequest { items };
+        let entity = cx.entity().clone();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let entity = entity.clone();
+            let request = request.clone();
+            alert
+                .title(t!("SessionLogs.delete_title").to_string())
+                .description(
+                    t!("SessionLogs.delete_selected_description", count = count).to_string(),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Common.delete").to_string())
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.delete_logs(request.clone(), window, cx));
+                    true
+                })
+        });
+    }
+
     fn delete_log(&mut self, request: DeleteRequest, window: &mut Window, cx: &mut Context<Self>) {
         if self.deleting {
             return;
         }
-        let Some(directory) = self.directory.clone() else {
+        if self.directory.is_none() {
             show_error(
                 t!("SessionLogs.data_directory_unavailable").to_string(),
                 window,
@@ -91,25 +141,36 @@ impl SessionLogsPage {
             );
             return;
         };
+        self.delete_logs(request, window, cx);
+    }
+
+    fn delete_logs(&mut self, request: DeleteRequest, window: &mut Window, cx: &mut Context<Self>) {
+        if self.deleting {
+            return;
+        }
+        let Some(directory) = self.directory.clone() else {
+            return;
+        };
         self.begin_delete();
         cx.notify();
-        let delete_request = request.clone();
         let delete_task = cx.background_spawn(async move {
-            delete_session_log_file(&delete_request.path).map_err(|error| error.to_string())?;
+            let results = delete_session_log_files(request.items);
             if let Ok(mut favorites) = load_session_log_favorites(&directory) {
-                favorites.set(&delete_request.recording_id, false);
-                // Favorite cleanup is best-effort: the log file itself is the
-                // primary artifact, and a stale favorite ID is harmless.
+                for (item, result) in &results {
+                    if result.is_ok() {
+                        favorites.set(&item.recording_id, false);
+                    }
+                }
                 _ = save_session_log_favorites(&directory, &favorites);
             }
-            Ok(())
+            results
         });
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let result = delete_task.await;
             _ = cx.update_window(window_handle, |_, window, cx| {
                 _ = this.update(cx, |this, cx| {
-                    this.finish_delete(request, result, window, cx);
+                    this.finish_delete(result, window, cx);
                 });
             });
         })
@@ -118,30 +179,46 @@ impl SessionLogsPage {
 
     fn finish_delete(
         &mut self,
-        request: DeleteRequest,
-        result: Result<(), String>,
+        result: Vec<(DeleteItem, Result<(), String>)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.finish_delete_state();
-        match result {
-            Ok(()) => {
-                self.catalog.entries.retain(|entry| {
-                    entry.path != request.path
-                        && entry.header.navop.recording_id != request.recording_id
-                });
-                self.favorites.set(&request.recording_id, false);
-                window.push_notification(
-                    Notification::success(t!("SessionLogs.delete_success").to_string())
-                        .autohide(true),
-                    cx,
-                );
-            }
-            Err(error) => show_error(
-                t!("SessionLogs.delete_failed", error = error).to_string(),
+        let successful = result
+            .iter()
+            .filter_map(|(item, result)| result.is_ok().then_some(item))
+            .collect::<Vec<_>>();
+        for item in &successful {
+            self.catalog.entries.retain(|entry| {
+                entry.path != item.path && entry.header.navop.recording_id != item.recording_id
+            });
+            self.favorites.set(&item.recording_id, false);
+            self.selected_ids.remove(&item.recording_id);
+        }
+        if result.iter().all(|(_, result)| result.is_ok()) {
+            window.push_notification(
+                Notification::success(
+                    t!("SessionLogs.delete_success_count", count = successful.len()).to_string(),
+                )
+                .autohide(true),
+                cx,
+            );
+        } else {
+            let failures = result
+                .iter()
+                .filter_map(|(item, result)| {
+                    result
+                        .as_ref()
+                        .err()
+                        .map(|error| format!("{}: {error}", item.path.display()))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            show_error(
+                t!("SessionLogs.delete_failed", error = failures).to_string(),
                 window,
                 cx,
-            ),
+            );
         }
         cx.notify();
         self.refresh(cx);
@@ -355,6 +432,16 @@ fn delete_session_log_file(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
+fn delete_session_log_files(items: Vec<DeleteItem>) -> Vec<(DeleteItem, Result<(), String>)> {
+    items
+        .into_iter()
+        .map(|item| {
+            let result = delete_session_log_file(&item.path).map_err(|error| error.to_string());
+            (item, result)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +461,28 @@ mod tests {
             std::fs::read_to_string(directory.path().join("session.txt")).unwrap()
         );
         assert_eq!("new", std::fs::read_to_string(output).unwrap());
+    }
+
+    #[test]
+    fn batch_delete_reports_each_file_independently() {
+        let directory = tempdir().unwrap();
+        let existing = directory.path().join("existing.cast");
+        let missing = directory.path().join("missing.cast");
+        std::fs::write(&existing, "log").unwrap();
+
+        let results = delete_session_log_files(vec![
+            DeleteItem {
+                recording_id: "existing".into(),
+                path: existing.clone(),
+            },
+            DeleteItem {
+                recording_id: "missing".into(),
+                path: missing,
+            },
+        ]);
+
+        assert!(results[0].1.is_ok());
+        assert!(results[1].1.is_err());
+        assert!(!existing.exists());
     }
 }

@@ -14,7 +14,7 @@ use one_core::settings::AppSettings;
 use rust_i18n::t;
 
 use super::notes_shortcut_capture::{
-    NotesShortcutCapture, NotesShortcutCaptureState, clear_capture, reset_shortcut,
+    NotesShortcutCapture, NotesShortcutCaptureState, clear_capture, clear_shortcut, reset_shortcut,
 };
 use super::notes_shortcut_labels::command_label;
 
@@ -58,7 +58,6 @@ fn row_model(descriptor: NotesShortcutDescriptor, cx: &App) -> NotesShortcutRow 
     let current_keys = AppSettings::global(cx)
         .custom_keybindings
         .get(&descriptor.command_id)
-        .filter(|keys| !keys.is_empty())
         .cloned()
         .unwrap_or_else(|| descriptor.default_keys.clone());
     NotesShortcutRow {
@@ -144,6 +143,7 @@ fn render_current_shortcut(
 ) -> gpui::AnyElement {
     let command_id = row.command_id.clone();
     let reset_id = row.command_id.clone();
+    let clear_id = row.command_id.clone();
     let focus_handle = state.read(cx).focus_handle.clone();
     h_flex()
         .gap_2()
@@ -154,7 +154,8 @@ fn render_current_shortcut(
                 .invisible()
                 .group_hover("notes-shortcut-row", |this| this.visible())
                 .child(edit_button(command_id, state.clone(), focus_handle))
-                .child(reset_button(reset_id)),
+                .child(reset_button(reset_id))
+                .child(clear_button(clear_id)),
         )
         .into_any_element()
 }
@@ -188,6 +189,15 @@ fn reset_button(command_id: String) -> Button {
         .on_click(move |_, _, cx| reset_shortcut(&command_id, cx))
 }
 
+fn clear_button(command_id: String) -> Button {
+    Button::new(format!("clear-notes-shortcut-{command_id}"))
+        .icon(IconName::Delete)
+        .ghost()
+        .xsmall()
+        .tooltip(t!("Settings.Shortcuts.clear").to_string())
+        .on_click(move |_, _, cx| clear_shortcut(&command_id, cx))
+}
+
 fn cancel_capture_button(state: Entity<NotesShortcutCaptureState>) -> Button {
     Button::new("cancel-notes-shortcut-capture")
         .label(t!("Common.cancel").to_string())
@@ -196,7 +206,14 @@ fn cancel_capture_button(state: Entity<NotesShortcutCaptureState>) -> Button {
         .on_click(move |_, _, cx| clear_capture(&state, cx))
 }
 
-fn render_shortcut_values(keys: &[String], _cx: &App) -> gpui::AnyElement {
+fn render_shortcut_values(keys: &[String], cx: &App) -> gpui::AnyElement {
+    if keys.is_empty() {
+        return div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(t!("Settings.Shortcuts.not_set").to_string())
+            .into_any_element();
+    }
     h_flex()
         .gap_1()
         .flex_wrap()

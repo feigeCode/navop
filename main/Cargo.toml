@@ -1,6 +1,6 @@
 [package]
 name = "main"
-version = "0.16.0"
+version = "0.16.1"
 publish.workspace = true
 edition.workspace = true
 
@@ -13,8 +13,6 @@ gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql"] }
 gpui-component-assets = { workspace = true }
-gpui-shell = { workspace = true }
-gpui-component-shell = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -42,8 +40,8 @@ extension-plugin-adapter.workspace = true
 extension-protocol.workspace = true
 extension_view = { workspace = true }
 notes = { workspace = true }
+universal-plugins.workspace = true
 json_view = { workspace = true }
-api_tools = { workspace = true, optional = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
 agent_runtime = { workspace = true }
@@ -53,6 +51,7 @@ tool_runtime = { workspace = true }
 port_forwarding = { workspace = true }
 port_forwarding_view = { workspace = true }
 sftp_view = { workspace = true }
+known_hosts_view = { workspace = true }
 ssh.workspace = true
 redis_view = { workspace = true }
 redis-runtime.workspace = true
@@ -93,7 +92,6 @@ tempfile = "3"
 
 [features]
 default = ["wasm-components", "embedded-webview", "windows-native-rdp"]
-api-testing = ["dep:api_tools"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
@@ -103,6 +101,7 @@ github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []
 screenshot-safe = []
+shell-plugins = ["universal-plugins/shell-plugins"]
 wasm-components = ["extension-runtime/wasm-components"]
 windows-native-rdp = ["remote_desktop_view/windows-native-rdp"]
 

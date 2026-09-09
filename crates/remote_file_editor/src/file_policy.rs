@@ -16,11 +16,18 @@ pub struct FilePolicy {
 }
 
 pub fn determine_file_policy(file_size: usize) -> Result<FilePolicy> {
-    if file_size > MAX_EDITABLE_FILE_SIZE {
+    determine_file_policy_with_limit(file_size, MAX_EDITABLE_FILE_SIZE)
+}
+
+pub(crate) fn determine_file_policy_with_limit(
+    file_size: usize,
+    max_bytes: usize,
+) -> Result<FilePolicy> {
+    if file_size > max_bytes {
         return Err(anyhow!(
             "File too large to edit: {} bytes exceeds limit {} bytes",
             file_size,
-            MAX_EDITABLE_FILE_SIZE
+            max_bytes
         ));
     }
 
@@ -42,6 +49,20 @@ pub fn decode_text_content(bytes: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{EditorMode, MAX_EDITABLE_FILE_SIZE, decode_text_content, determine_file_policy};
+
+    #[test]
+    fn configured_limit_allows_larger_files_and_enforces_boundary() {
+        let limit = 20 * 1024 * 1024;
+        assert_eq!(
+            EditorMode::PlainText,
+            super::determine_file_policy_with_limit(13_536_279, limit)
+                .unwrap()
+                .mode
+        );
+        assert!(super::determine_file_policy_with_limit(limit, limit).is_ok());
+        assert!(super::determine_file_policy_with_limit(limit + 1, limit).is_err());
+        assert!(super::determine_file_policy_with_limit(1024 * 1024 + 1, 1024 * 1024).is_err());
+    }
 
     #[test]
     fn determine_file_policy_uses_code_mode_for_small_files() {

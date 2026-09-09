@@ -1,0 +1,43 @@
+[package]
+name = "llm-connector"
+version = "1.4.0"
+edition = "2024"
+authors = ["lipi <lipicoder@qq.com>"]
+license = "MIT"
+publish = false
+
+[lib]
+name = "llm_connector"
+path = "src/lib.rs"
+
+[features]
+default = ["reqwest", "streaming"]
+reqwest = ["dep:reqwest", "dep:tokio", "dep:futures-util", "dep:bytes"]
+streaming = ["reqwest", "dep:pin-project-lite"]
+tencent = ["reqwest", "dep:sha2", "dep:hmac", "dep:hex"]
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+bytes = { workspace = true, optional = true }
+chrono.workspace = true
+futures-util = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+log.workspace = true
+mime_guess = "2.0"
+pin-project-lite = { version = "0.2", optional = true }
+rand.workspace = true
+reqwest = { workspace = true, features = ["json"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+dotenvy = "0.15"
+futures.workspace = true
+http = "1"
+tokio = { workspace = true, features = ["full"] }
+wiremock = "0.6"

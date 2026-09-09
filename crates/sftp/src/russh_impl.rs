@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use russh::ChannelMsg;
 use russh::client::{self, Handle};
 use russh::keys::PublicKeyOrCertificate;
+use russh_sftp::client::Config as SftpConfig;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
@@ -37,8 +38,18 @@ const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
 const PIPELINE_CHUNK_SIZE: u32 = 61440; // 60 KB per read request (within 65535 packet limit)
 const MAX_INFLIGHT_REQUESTS: usize = 64; // 最多 64 个并发请求
 const PIPELINE_THRESHOLD: u64 = 512 * 1024; // 超过 512 KB 的文件才走流水线
+const SFTP_MAX_PACKET_LEN: u32 = 256 * 1024;
+const SFTP_REQUEST_TIMEOUT_SECS: u64 = 300;
 const OWNER_LOOKUP_BATCH_SIZE: usize = 128;
 const OWNER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn sftp_session_config() -> SftpConfig {
+    SftpConfig {
+        max_packet_len: SFTP_MAX_PACKET_LEN,
+        max_concurrent_writes: MAX_INFLIGHT_REQUESTS,
+        request_timeout_secs: SFTP_REQUEST_TIMEOUT_SECS,
+    }
+}
 
 /// A downloaded file is written beside its destination and becomes visible
 /// only after the complete byte range has been verified and synced.
@@ -773,12 +784,15 @@ where
             ));
         }
 
-        file.flush()
-            .await
-            .map_err(|error| anyhow!("Failed to flush remote temporary file: {}", error))?;
-        file.sync_all()
-            .await
-            .map_err(|error| anyhow!("Failed to sync remote temporary file: {}", error))?;
+        file.flush().await.map_err(|error| {
+            anyhow!(
+                "Failed to finalize remote temporary file after the client wrote {} of {} bytes (WRITE acknowledgement or fsync, {}s request timeout): {}",
+                written,
+                expected_size,
+                SFTP_REQUEST_TIMEOUT_SECS,
+                error
+            )
+        })?;
 
         let actual_size = file
             .metadata()
@@ -1219,7 +1233,8 @@ impl RusshSftpClient {
             guard.open_raw_channel().await?
         };
         channel.request_subsystem(true, "sftp").await?;
-        let sftp = SftpSession::new(channel.into_stream()).await?;
+        let sftp =
+            SftpSession::new_with_config(channel.into_stream(), sftp_session_config()).await?;
 
         Ok(Self {
             sftp,
@@ -1454,7 +1469,7 @@ impl RusshSftpClient {
             raw.set_limits(limits);
         }
 
-        raw.set_timeout(300);
+        raw.set_timeout(SFTP_REQUEST_TIMEOUT_SECS);
 
         let raw = Arc::new(raw);
         self.raw_sftp = Some(Arc::clone(&raw));
@@ -2058,7 +2073,8 @@ impl SftpClient for RusshSftpClient {
         let channel = session.channel_open_session().await?;
         channel.request_subsystem(true, "sftp").await?;
 
-        let sftp = SftpSession::new(channel.into_stream()).await?;
+        let sftp =
+            SftpSession::new_with_config(channel.into_stream(), sftp_session_config()).await?;
         let accepted_server_public_key = accepted_server_public_key
             .lock()
             .map_err(|_| anyhow!("SFTP server host key capture lock was poisoned"))?
@@ -2247,8 +2263,8 @@ impl SftpClient for RusshSftpClient {
             |mut remote_file| async {
                 let mut buffer = vec![0u8; BUFFER_SIZE];
                 let mut transferred = 0u64;
+                let started_at = Instant::now();
                 let mut last_update = Instant::now();
-                let mut speed_samples: Vec<f64> = Vec::new();
 
                 loop {
                     ensure_not_cancelled(&cancelled)?;
@@ -2272,19 +2288,17 @@ impl SftpClient for RusshSftpClient {
                     let elapsed = now.duration_since(last_update).as_secs_f64();
 
                     if elapsed >= 0.1 {
-                        let speed = bytes_read as f64 / elapsed;
-                        speed_samples.push(speed);
-                        if speed_samples.len() > 10 {
-                            speed_samples.remove(0);
-                        }
-
-                        let avg_speed =
-                            speed_samples.iter().sum::<f64>() / speed_samples.len() as f64;
+                        let total_elapsed = started_at.elapsed().as_secs_f64();
+                        let speed = if total_elapsed > 0.0 {
+                            transferred as f64 / total_elapsed
+                        } else {
+                            0.0
+                        };
 
                         progress(TransferProgress {
                             transferred,
                             total: total_size,
-                            speed: avg_speed,
+                            speed,
                             current_file: None,
                             current_file_transferred: 0,
                             current_file_total: 0,
@@ -2855,10 +2869,7 @@ impl SftpClient for RusshSftpClient {
                 let remote_file_path =
                     format!("{}/{}", upload_root.trim_end_matches('/'), relative_str);
 
-                let current_file_name = file_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+                let current_file_name = relative_str.clone();
 
                 let local_file = File::open(file_path)
                     .await
@@ -3292,6 +3303,19 @@ mod tests {
         assert_eq!(
             expected_chunk_len(chunk_size, total_size).expect("final chunk must be valid"),
             17
+        );
+    }
+
+    #[test]
+    fn sftp_session_config_uses_bounded_large_transfer_window_and_timeout() {
+        let config = sftp_session_config();
+
+        assert_eq!(config.max_packet_len, SFTP_MAX_PACKET_LEN);
+        assert_eq!(config.max_concurrent_writes, MAX_INFLIGHT_REQUESTS);
+        assert_eq!(config.request_timeout_secs, SFTP_REQUEST_TIMEOUT_SECS);
+        assert_eq!(
+            config.max_packet_len as usize * config.max_concurrent_writes,
+            16 * 1024 * 1024
         );
     }
 

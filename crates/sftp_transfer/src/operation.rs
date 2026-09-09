@@ -1,14 +1,46 @@
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use gpui::SharedString;
-use sftp::ProgressCallback;
+use sftp::{ProgressCallback, TransferCancelled, TransferProgress};
 
 use super::{
     SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpDeleteRemoteRequest,
     SftpDownloadExecution, SftpDownloadRequest, SftpTransferId, SftpTransferOperation,
     SftpTransferProvider, SftpUploadExecution, SftpUploadRequest,
 };
+
+const MAX_UPLOAD_ATTEMPTS: usize = 2;
+const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
+const PERMANENT_UPLOAD_ERRORS: &[&str] = &[
+    "permission denied",
+    "authentication",
+    "no such file",
+    "not found",
+    "disk quota",
+    "no space left",
+    "read-only file system",
+];
+const TRANSIENT_UPLOAD_ERRORS: &[&str] = &[
+    "timeout",
+    "timed out",
+    "connection reset",
+    "connection refused",
+    "connection closed",
+    "channel closed",
+    "broken pipe",
+    "unexpected eof",
+    "network is unreachable",
+    "temporarily unavailable",
+    "try again",
+];
 
 pub(super) enum TransferRequest {
     Upload(SftpUploadRequest),
@@ -87,6 +119,21 @@ impl TransferRequest {
         }
     }
 
+    pub(super) fn open_folder(&self) -> Option<PathBuf> {
+        match self {
+            Self::Download(request) if request.is_dir => Some(request.local_path.clone()),
+            Self::Download(request) => Some(
+                request
+                    .local_path
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf(),
+            ),
+            Self::Upload(_) | Self::DeleteRemote(_) => None,
+        }
+    }
+
     pub(super) fn background_kind(&self) -> &'static str {
         match self {
             Self::Upload(_) => "sftp-upload",
@@ -145,10 +192,109 @@ pub(super) async fn execute_transfer(
     progress: ProgressCallback,
 ) -> Result<()> {
     match execution {
-        TransferExecution::Upload(execution) => provider.upload(execution, progress).await,
+        TransferExecution::Upload(execution) => {
+            execute_upload_with_retry(provider, execution, progress).await
+        }
         TransferExecution::Download(execution) => provider.download(execution, progress).await,
         TransferExecution::DeleteRemote(execution) => {
             provider.delete_remote(execution, progress).await
+        }
+    }
+}
+
+async fn execute_upload_with_retry(
+    provider: Arc<dyn SftpTransferProvider>,
+    execution: SftpUploadExecution,
+    progress: ProgressCallback,
+) -> Result<()> {
+    let progress: Arc<dyn Fn(TransferProgress) + Send + Sync> = progress.into();
+    for attempt in 1..=MAX_UPLOAD_ATTEMPTS {
+        let result = provider
+            .upload(execution.clone(), clone_progress_callback(&progress))
+            .await;
+        let Err(error) = result else {
+            return Ok(());
+        };
+        if attempt == MAX_UPLOAD_ATTEMPTS || !is_retryable_upload_error(&error) {
+            return final_upload_error(error, attempt);
+        }
+        ensure_upload_not_cancelled(&execution.cancelled)?;
+        tracing::warn!(
+            transfer_id = execution.id.as_u64(),
+            attempt,
+            max_attempts = MAX_UPLOAD_ATTEMPTS,
+            error = %error,
+            "retrying transient SFTP upload failure with a fresh SFTP channel"
+        );
+        tokio::time::sleep(UPLOAD_RETRY_DELAY).await;
+        ensure_upload_not_cancelled(&execution.cancelled)?;
+    }
+    unreachable!("upload attempt loop must return")
+}
+
+fn clone_progress_callback(
+    progress: &Arc<dyn Fn(TransferProgress) + Send + Sync>,
+) -> ProgressCallback {
+    let progress = Arc::clone(progress);
+    Box::new(move |value| progress(value))
+}
+
+fn ensure_upload_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
+    if cancelled.load(Ordering::Relaxed) {
+        Err(TransferCancelled.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn is_retryable_upload_error(error: &anyhow::Error) -> bool {
+    if error.downcast_ref::<TransferCancelled>().is_some() {
+        return false;
+    }
+    let message = format!("{error:#}").to_ascii_lowercase();
+    !PERMANENT_UPLOAD_ERRORS
+        .iter()
+        .any(|candidate| message.contains(candidate))
+        && TRANSIENT_UPLOAD_ERRORS
+            .iter()
+            .any(|candidate| message.contains(candidate))
+}
+
+fn final_upload_error(error: anyhow::Error, attempts: usize) -> Result<()> {
+    if attempts == 1 {
+        Err(error)
+    } else {
+        Err(anyhow!(
+            "SFTP upload failed after {attempts} attempts; last error: {error:#}"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_retryable_upload_error;
+    use anyhow::anyhow;
+
+    #[test]
+    fn retry_classifier_accepts_timeout_and_transport_failures() {
+        for message in [
+            "Timeout",
+            "connection reset by peer",
+            "Failed to write remote file: broken pipe",
+        ] {
+            assert!(is_retryable_upload_error(&anyhow!(message)), "{message}");
+        }
+    }
+
+    #[test]
+    fn retry_classifier_rejects_permanent_failures() {
+        for message in [
+            "Permission denied",
+            "No such file",
+            "Authentication failed",
+            "Timeout while reporting no space left on device",
+        ] {
+            assert!(!is_retryable_upload_error(&anyhow!(message)), "{message}");
         }
     }
 }

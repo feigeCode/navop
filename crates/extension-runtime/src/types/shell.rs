@@ -15,6 +15,10 @@ pub struct RegisteredShellViewContribution {
     pub extension_root: PathBuf,
     pub entry_path: PathBuf,
     pub surface: ShellSurface,
+    /// toolbox surface 的卡片分类；`tab` surface 为 None。
+    pub category: Option<String>,
+    /// toolbox surface 的搜索关键词。
+    pub keywords: Vec<String>,
     pub singleton: bool,
     pub backends: BTreeMap<String, String>,
     pub modules: BTreeSet<ShellHostModule>,

@@ -5,7 +5,7 @@ use crate::message_tool_group::{
     MessageRenderItem, message_render_items, render_tool_target_group,
 };
 use crate::theme::{
-    AgentChatTheme, resolve_agent_chat_theme, themed_markdown, with_agent_chat_theme,
+    AgentChatTheme, resolve_agent_chat_theme, themed_html, themed_markdown, with_agent_chat_theme,
 };
 use crate::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant,
@@ -17,8 +17,8 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
-    text::TextView, v_flex,
+    ActiveTheme, Icon, IconName, Sizable, Size, clipboard::Clipboard, h_flex,
+    scroll::Scrollbar, spinner::Spinner, v_flex,
 };
 use rust_i18n::t;
 
@@ -92,7 +92,10 @@ pub fn render_messages_with_code_actions(
         scroll_handle,
         code_actions,
         theme,
-        MessageListLayout::Centered,
+        MessageListExtras {
+            layout: MessageListLayout::Centered,
+            activity: None,
+        },
         window,
         cx,
     )
@@ -111,7 +114,59 @@ pub fn render_sidebar_messages_with_code_actions(
         scroll_handle,
         code_actions,
         theme,
-        MessageListLayout::EdgeToEdge,
+        MessageListExtras {
+            layout: MessageListLayout::EdgeToEdge,
+            activity: None,
+        },
+        window,
+        cx,
+    )
+}
+
+/// 与 [`render_messages_with_code_actions`] 相同，但在消息列表末尾额外渲染一段
+/// 活动指示（例如"执行中…"），用于在 Agent 运行期间给出实时的进行中反馈。
+pub fn render_messages_with_code_actions_and_activity(
+    messages: &[ChatMessageUI],
+    scroll_handle: &ScrollHandle,
+    code_actions: Option<&CodeBlockActionRegistry>,
+    theme: Option<&AgentChatTheme>,
+    activity: Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    render_messages_with_layout(
+        messages,
+        scroll_handle,
+        code_actions,
+        theme,
+        MessageListExtras {
+            layout: MessageListLayout::Centered,
+            activity,
+        },
+        window,
+        cx,
+    )
+}
+
+/// 侧边栏版，带活动指示（见 [`render_messages_with_code_actions_and_activity`]）。
+pub fn render_sidebar_messages_with_code_actions_and_activity(
+    messages: &[ChatMessageUI],
+    scroll_handle: &ScrollHandle,
+    code_actions: Option<&CodeBlockActionRegistry>,
+    theme: Option<&AgentChatTheme>,
+    activity: Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    render_messages_with_layout(
+        messages,
+        scroll_handle,
+        code_actions,
+        theme,
+        MessageListExtras {
+            layout: MessageListLayout::EdgeToEdge,
+            activity,
+        },
         window,
         cx,
     )
@@ -123,17 +178,23 @@ enum MessageListLayout {
     EdgeToEdge,
 }
 
+struct MessageListExtras {
+    layout: MessageListLayout,
+    activity: Option<AnyElement>,
+}
+
 fn render_messages_with_layout(
     messages: &[ChatMessageUI],
     scroll_handle: &ScrollHandle,
     code_actions: Option<&CodeBlockActionRegistry>,
     theme: Option<&AgentChatTheme>,
-    layout: MessageListLayout,
+    extras: MessageListExtras,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let MessageListExtras { layout, activity } = extras;
     let theme = resolve_agent_chat_theme(theme, cx);
-    let items: Vec<AnyElement> = message_render_items(messages)
+    let mut items: Vec<AnyElement> = message_render_items(messages)
         .into_iter()
         .map(|item| {
             div()
@@ -145,6 +206,17 @@ fn render_messages_with_layout(
                 .into_any_element()
         })
         .collect();
+    if let Some(activity) = activity {
+        items.push(
+            div()
+                .debug_selector(|| "ai-chat-message-slot".to_string())
+                .min_w_0()
+                .self_stretch()
+                .flex_shrink_0()
+                .child(activity)
+                .into_any_element(),
+        );
+    }
 
     div()
         .id("ai-chat-messages")
@@ -276,9 +348,10 @@ fn render_user_message_themed<E: MessageExtension>(
                         .min_w_0()
                         .whitespace_normal()
                         .child(
-                            TextView::html(
+                            themed_html(
                                 SharedString::from(format!("user-msg-{}", msg.id)),
                                 plain_text_html,
+                                theme,
                             )
                             .selectable(true)
                             .w_full(),
@@ -491,6 +564,28 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
 pub fn render_thinking(cx: &App) -> AnyElement {
     let theme = AgentChatTheme::from_app(cx);
     render_thinking_themed(&theme)
+}
+
+/// 一段"执行中…"活动指示，渲染在消息列表末尾，作为 Agent 运行期间的实时进行中反馈。
+pub fn render_running_activity(theme: &AgentChatTheme) -> AnyElement {
+    let color = theme.muted_foreground;
+    h_flex()
+        .debug_selector(|| "ai-chat-activity".to_string())
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .py_1()
+        .text_xs()
+        .text_color(color)
+        .child(
+            Spinner::new()
+                .small()
+                .color(color)
+                .animation_id("ai-chat-activity-spinner"),
+        )
+        .child(div().flex_1().min_w_0().child(t!("AgentUi.running").to_string()))
+        .into_any_element()
 }
 
 fn render_thinking_themed(theme: &AgentChatTheme) -> AnyElement {

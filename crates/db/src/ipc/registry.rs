@@ -16,6 +16,14 @@ mod entry;
 const DRIVER_MANIFEST_FILE: &str = "driver.json";
 static IPC_DRIVER_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static IPC_HOST_VERSION: OnceLock<RwLock<Option<Version>>> = OnceLock::new();
+/// 应用级单一驱动注册表实例。首次 `load_default` 建立，扩展管理面在
+/// 数据库驱动安装/卸载/重载后通过 [`IpcDriverRegistry::refresh_global_registry`]
+/// 失效重建，避免每调用点重复扫描 `extensions/database_drivers/`。
+static GLOBAL_DRIVER_REGISTRY: OnceLock<RwLock<Option<IpcDriverRegistry>>> = OnceLock::new();
+
+fn global_registry_slot() -> &'static RwLock<Option<IpcDriverRegistry>> {
+    GLOBAL_DRIVER_REGISTRY.get_or_init(|| RwLock::new(None))
+}
 
 fn default_driver_api() -> String {
     "database".to_string()
@@ -454,7 +462,31 @@ pub struct IpcDriverSkippedEntry {
 
 impl IpcDriverRegistry {
     pub fn load_default() -> Self {
-        Self::load_from_dirs(&discovery::default_driver_dirs()).unwrap_or_else(|_| Self::empty())
+        if let Some(cached) = global_registry_slot()
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
+        {
+            return cached;
+        }
+        let built = Self::load_from_dirs(&discovery::default_driver_dirs())
+            .unwrap_or_else(|_| Self::empty());
+        if let Ok(mut slot) = global_registry_slot().write() {
+            if slot.is_none() {
+                *slot = Some(built.clone());
+            }
+        }
+        built
+    }
+
+    /// 失效并重建全局驱动注册表。扩展管理面在数据库驱动安装/卸载/重载后调用，
+    /// 使后续 `load_default` 读到最新驱动而不依赖进程重启。
+    pub fn refresh_global_registry() {
+        let rebuilt = Self::load_from_dirs(&discovery::default_driver_dirs())
+            .unwrap_or_else(|_| Self::empty());
+        if let Ok(mut slot) = global_registry_slot().write() {
+            *slot = Some(rebuilt);
+        }
     }
 
     pub fn from_drivers(mut drivers: Vec<IpcDriverManifest>) -> Self {

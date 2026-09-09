@@ -205,6 +205,8 @@ impl ConnectionType {
 /// (MQTT/RocketMQ 品牌图标已随内置实现移至扩展子模块,由扩展自带图标提供。)
 pub const NAVOP_TDENGINE_COLOR_ICON: &str = "navop/tdengine-color.svg";
 pub const NAVOP_TDENGINE_LINE_COLOR_ICON: &str = "navop/tdengine-line-color.svg";
+/// 后台任务入口的任务语义图标（待办清单 + 勾选），内嵌于应用 AssetSource。
+pub const NAVOP_BACKGROUND_TASK_ICON: &str = "navop/background-task.svg";
 
 /// Database type enumeration
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

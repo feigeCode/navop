@@ -167,6 +167,30 @@ impl ExtensionRuntimeCatalog {
         self.shell_views.values()
     }
 
+    /// 工具箱聚合的 shell 视图（`surface: "toolbox"`），按 title 排序。
+    /// 工具箱聚合的非连接 shell 视图:未被任何 connection 的
+    /// `shellViewId` 引用的 view(独立工具越 surface 都进工具箱,连接关联
+    /// 视图由连接打开)。按 title 排序。
+    pub fn toolbox_views(&self) -> Vec<&RegisteredShellViewContribution> {
+        let connection_view_keys: std::collections::HashSet<(&str, &str)> = self
+            .resource_connections()
+            .filter_map(|conn| {
+                conn.shell_view_id
+                    .as_deref()
+                    .map(|view_id| (conn.extension_id.as_str(), view_id))
+            })
+            .collect();
+        let mut tools: Vec<_> = self
+            .shell_views
+            .values()
+            .filter(|view| {
+                !connection_view_keys.contains(&(view.extension_id.as_str(), view.id.as_str()))
+            })
+            .collect();
+        tools.sort_by(|a, b| a.title.cmp(&b.title));
+        tools
+    }
+
     pub fn shell_view(
         &self,
         extension_id: &str,

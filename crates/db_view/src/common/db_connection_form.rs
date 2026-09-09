@@ -1019,6 +1019,92 @@ impl DbFormConfig {
         }
     }
 
+    /// TDengine 连接表单配置(WebSocket 经 taosAdapter,默认端口 6041,默认用户 root)
+    pub fn tdengine() -> Self {
+        Self {
+            db_type: DatabaseType::TDengine,
+            title: format!("{} (TDengine)", t!("Common.new")),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![
+                TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
+                    FormField::new(
+                        "name",
+                        t!("ConnectionForm.connection_name"),
+                        FormFieldType::Text,
+                    )
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "TDengine"
+                        )
+                        .to_string(),
+                    )
+                    .default("Local TDengine"),
+                    FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
+                        .placeholder("localhost")
+                        .default("localhost"),
+                    FormField::new("port", t!("ConnectionForm.port"), FormFieldType::Number)
+                        .placeholder("6041 (taosAdapter port)")
+                        .default("6041"),
+                    FormField::new(
+                        "username",
+                        t!("ConnectionForm.username"),
+                        FormFieldType::Text,
+                    )
+                    .placeholder("root")
+                    .default("root"),
+                    FormField::new(
+                        "password",
+                        t!("ConnectionForm.password"),
+                        FormFieldType::Password,
+                    )
+                    .placeholder("taosdata"),
+                    FormField::new(
+                        "database",
+                        t!("ConnectionForm.database"),
+                        FormFieldType::Text,
+                    )
+                    .optional()
+                    .placeholder(t!("ConnectionForm.database_optional").to_string()),
+                ]),
+                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
+                    FormField::new(
+                        "connect_timeout",
+                        t!("ConnectionForm.connect_timeout"),
+                        FormFieldType::Number,
+                    )
+                    .optional()
+                    .placeholder("30")
+                    .default("30"),
+                ]),
+                TabGroup::new("ssl", t!("ConnectionForm.ssl")).fields(vec![
+                    FormField::new("schema", t!("ConnectionForm.schema"), FormFieldType::Select)
+                        .optional()
+                        .default("ws")
+                        .options(vec![
+                            ("ws".to_string(), t!("ConnectionForm.schema_ws").to_string()),
+                            (
+                                "wss".to_string(),
+                                t!("ConnectionForm.schema_wss").to_string(),
+                            ),
+                        ]),
+                ]),
+                Self::ssh_tab_group(),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
+            ],
+        }
+    }
+
     /// SQLite form configuration
     pub fn sqlite() -> Self {
         let default_db_path = get_config_dir()
@@ -2470,7 +2556,15 @@ impl DbConnectionForm {
             })
             .collect::<Vec<_>>();
 
-        if visible_fields.is_empty() {
+        let has_main_credentials = current_tab_fields
+            .iter()
+            .any(|field| matches!(field.name.as_str(), "username" | "password"));
+        let has_proxy_credentials = self.field_bool_value("proxy_enabled", cx)
+            && current_tab_fields
+                .iter()
+                .any(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"));
+
+        if visible_fields.is_empty() && !has_main_credentials && !has_proxy_credentials {
             return div()
                 .flex()
                 .items_center()
@@ -2485,27 +2579,40 @@ impl DbConnectionForm {
         let db_type = self.config.db_type.clone();
         let is_builtin_oracle = db_type == DatabaseType::Oracle;
         let is_native_oracle = self.effective_database_type(cx) == DatabaseType::Oracle;
-        let has_main_credentials = current_tab_fields
+        // 钥匙串下拉与账号密码字段成组渲染:锚定在原始声明序中首个
+        // username/password 之前。引用被选中导致凭据隐藏时,锚点按"仍排在
+        // 该凭据之前的可见字段数"计算,下拉留在原位置,不会跳到表单顶部。
+        let main_credential_anchor = current_tab_fields
             .iter()
-            .any(|field| matches!(field.name.as_str(), "username" | "password"));
-        let has_proxy_credentials = self.field_bool_value("proxy_enabled", cx)
-            && current_tab_fields
-                .iter()
-                .any(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"));
+            .position(|field| matches!(field.name.as_str(), "username" | "password"))
+            .map(|orig| {
+                visible_fields
+                    .iter()
+                    .take_while(|(index, _)| *index < orig)
+                    .count()
+            })
+            .unwrap_or(0);
+        let proxy_credential_anchor = current_tab_fields
+            .iter()
+            .position(|field| matches!(field.name.as_str(), "proxy_username" | "proxy_password"))
+            .map(|orig| {
+                visible_fields
+                    .iter()
+                    .take_while(|(index, _)| *index < orig)
+                    .count()
+            })
+            .unwrap_or(0);
 
         v_form()
             .layout(Axis::Horizontal)
             .with_size(Size::Medium)
             .columns(1)
             .label_width(px(100.))
-            .when(has_main_credentials, |form| {
-                form.child(self.render_credential_picker_field(false))
-            })
-            .when(has_proxy_credentials, |form| {
-                form.child(self.render_credential_picker_field(true))
-            })
-            .children(visible_fields.into_iter().map(|(i, field_info)| {
-                let input_idx = field_input_offset + i;
+            .children({
+                let mut rendered: Vec<gpui_component::form::Field> = visible_fields
+                    .into_iter()
+                    .map(|(i, field_info)| {
+                        let input_idx = field_input_offset + i;
                 let is_sqlite_path = matches!(db_type, DatabaseType::SQLite | DatabaseType::DuckDB)
                     && field_info.name == "host";
                 let is_textarea = field_info.field_type == FormFieldType::TextArea;
@@ -2581,7 +2688,17 @@ impl DbConnectionForm {
                                 )
                             }),
                     )
-            }))
+            }).collect();
+            // 钥匙串下拉按锚定位置插入(见上方注释);anchor 默认 0 保证
+            // 无凭据字段时也稳定成组。
+            if has_main_credentials {
+                rendered.insert(main_credential_anchor.min(rendered.len()), self.render_credential_picker_field(false));
+            }
+            if has_proxy_credentials {
+                rendered.insert(proxy_credential_anchor.min(rendered.len()), self.render_credential_picker_field(true));
+            }
+            rendered
+            })
             .when(is_general_tab, |form| {
                 let sync_enabled = self.sync_enabled.clone();
                 let is_sync_checked = *self.sync_enabled.read(cx);

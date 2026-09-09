@@ -3,6 +3,7 @@ use super::*;
 const ORACLE_GO_DRIVER_ID: &str = "oracle-go";
 
 impl HomePage {
+    #[cfg(feature = "shell-plugins")]
     pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editing = self.editing_connection_id.and_then(|id| {
             self.connections
@@ -38,7 +39,7 @@ impl HomePage {
             );
             return;
         };
-        let config = crate::extension_connection_form::ExtensionConnectionFormConfig {
+        let config = universal_plugins::ExtensionConnectionFormConfig {
             contribution,
             editing_connection: Some(connection.clone()),
             workspaces: self.workspaces.clone(),
@@ -55,11 +56,7 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(format!("Edit {}", connection.name)).size(700.0, 650.0),
             move |window, cx| {
-                cx.new(|cx| {
-                    crate::extension_connection_form::ExtensionConnectionForm::new(
-                        config, window, cx,
-                    )
-                })
+                cx.new(|cx| universal_plugins::ExtensionConnectionForm::new(config, window, cx))
             },
             Some(window),
             cx,

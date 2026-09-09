@@ -335,9 +335,11 @@ team_id
 | `Text` | string | 单行文本 |
 | `Number` | number | 整数或浮点输入；manifest 默认值当前要求整数格式 |
 | `Password` | 不进入公开 config | 必须同时声明 `secret: true` |
-| `TextArea` | string | 多行文本 |
+| `TextArea` | string | 多行文本；可用 `rows` 指定行数（缺省 5） |
 | `Select` | string | 必须提供唯一的 options |
 | `Checkbox` | boolean | 默认值必须为 `true` 或 `false` |
+| `FilePath` | string | 本地文件路径；宿主提供文本输入 + 浏览按钮 |
+| `Auth` | object | 用户名 + 密码 + 钥匙串引用复合组件；选中钥匙串引用后隐藏手动账号密码。手动模式产出 `config[id] = {"username": "..."}` 且密码进入 secrets（键 `{id}.password`）；引用模式产出 `config[id] = {"credential_reference": {...}}`。打开/测试连接时宿主会把引用解析为运行时明文（与数据库 driver.json 同一凭据解析机制），解析结果不落盘 |
 
 规则：
 
@@ -350,6 +352,7 @@ team_id
 - `visibleWhen` 引用的字段必须存在。
 - 多条 `visibleWhen` 按 AND 处理。
 - 编辑连接时，secret 留空表示保留；点击 Clear 表示明确删除。
+- `Auth` 与 `FilePath` 不得声明 `secret: true`；`Auth` 依赖钥匙串引用与手动输入，不应声明 `defaultValue`/`options`。
 
 ### 6.4 shellViewId
 

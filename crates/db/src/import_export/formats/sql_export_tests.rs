@@ -82,6 +82,59 @@ impl DbConnection for PagedConnection {
 
     async fn query(&self, query: &str) -> std::result::Result<SqlResult, DbError> {
         self.queries.lock().unwrap().push(query.to_string());
+        if query.contains("INFORMATION_SCHEMA.COLUMNS") {
+            let schema_columns = [
+                ("id", "BIGINT", "NO", "PRI", None, None),
+                ("name", "VARCHAR", "YES", "", None, Some("utf8mb4")),
+            ];
+            let rows = schema_columns
+                .into_iter()
+                .map(|(name, data_type, nullable, key, default, charset)| {
+                    vec![
+                        Some(name.to_string()),
+                        Some(data_type.to_string()),
+                        Some(nullable.to_string()),
+                        Some(key.to_string()),
+                        default.map(str::to_string),
+                        Some(String::new()),
+                        charset.map(str::to_string),
+                        charset.map(|charset| format!("{charset}_general_ci")),
+                    ]
+                })
+                .collect();
+            return Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: [
+                    "COLUMN_NAME",
+                    "COLUMN_TYPE",
+                    "IS_NULLABLE",
+                    "COLUMN_KEY",
+                    "COLUMN_DEFAULT",
+                    "COLUMN_COMMENT",
+                    "CHARACTER_SET_NAME",
+                    "COLLATION_NAME",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+                column_meta: [
+                    "COLUMN_NAME",
+                    "COLUMN_TYPE",
+                    "IS_NULLABLE",
+                    "COLUMN_KEY",
+                    "COLUMN_DEFAULT",
+                    "COLUMN_COMMENT",
+                    "CHARACTER_SET_NAME",
+                    "COLLATION_NAME",
+                ]
+                .into_iter()
+                .map(|name| QueryColumnMeta::new(name, "VARCHAR"))
+                .collect(),
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 1,
+            }));
+        }
         let mut rows = self.pages.lock().unwrap().remove(0);
         let mut columns = vec!["id".to_string(), "name".to_string()];
         let mut column_meta = vec![
@@ -423,7 +476,11 @@ async fn sql_export_streams_table_data_in_pages() {
             "SELECT * FROM `app`.`users` LIMIT 1000 OFFSET 0",
             "SELECT * FROM `app`.`users` LIMIT 1000 OFFSET 1000",
         ],
-        connection.queries()
+        connection
+            .queries()
+            .into_iter()
+            .filter(|query| !query.contains("INFORMATION_SCHEMA.COLUMNS"))
+            .collect::<Vec<_>>()
     );
     let events = events.lock().unwrap();
     assert_eq!(2, events.len());

@@ -1,7 +1,7 @@
 use std::{fs, sync::Arc};
 
 use crate::extension::{
-    DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry, McpHelperExtensionProvider,
+    DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry,
     RemoteDesktopProviderExtensionProvider,
 };
 use crate::extension_downloader::{
@@ -75,29 +75,6 @@ fn stage_local_tarball_then_install_staging_installs_remote_desktop_provider() {
     assert_eq!("rdp", summary.name);
     assert!(summary.path.join("remote_desktop_provider.json").exists());
     assert!(summary.path.join("onetcli-rdp-helper").exists());
-}
-
-#[test]
-fn stage_local_tarball_then_install_staging_installs_mcp_helper() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let tarball = tmp.path().join("mcp-helper.tar.gz");
-    fs::write(&tarball, mcp_helper_tarball_bytes()).unwrap();
-
-    let mut registry = ExtensionRegistry::new(tmp.path().join("extensions"));
-    registry.register_provider(Arc::new(McpHelperExtensionProvider));
-
-    let staging = stage_local_tarball(&tarball).unwrap();
-    assert_eq!(
-        ExtensionKind::McpHelper,
-        detect_package_kind(&staging).unwrap()
-    );
-    let summary = install_from_staging_generic(&staging, &registry, None).unwrap();
-    let _ = fs::remove_dir_all(staging);
-
-    assert_eq!(ExtensionKind::McpHelper, summary.kind);
-    assert_eq!("onetcli-public-mcp", summary.name);
-    assert!(summary.path.join("mcp_helper.json").exists());
-    assert!(summary.path.join("onetcli-public-mcp").exists());
 }
 
 #[cfg(unix)]
@@ -218,25 +195,6 @@ fn remote_desktop_provider_tarball_bytes() -> Vec<u8> {
                 "icon": "Monitor",
                 "default_port": 3389
             }
-        }"#,
-    );
-    let encoder = archive.into_inner().unwrap();
-    encoder.finish().unwrap()
-}
-
-fn mcp_helper_tarball_bytes() -> Vec<u8> {
-    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    let mut archive = tar::Builder::new(encoder);
-    append_executable_bytes(&mut archive, "onetcli-public-mcp", b"helper");
-    append_bytes(
-        &mut archive,
-        "mcp_helper.json",
-        br#"{
-            "id": "onetcli-public-mcp",
-            "name": "Navop MCP Helper",
-            "description": "Navop MCP stdio bridge",
-            "version": "1.2.3",
-            "entry": { "command": "./onetcli-public-mcp" }
         }"#,
     );
     let encoder = archive.into_inner().unwrap();

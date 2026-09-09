@@ -27,6 +27,6 @@ jobs:
           set -euo pipefail
           gh workflow run release.yml \
             --repo "$GITHUB_REPOSITORY" \
-            --ref dev \
+            --ref main \
             -f tag="$RELEASE_TAG" \
             -f platform=all

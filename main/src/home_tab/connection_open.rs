@@ -6,6 +6,17 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.show_connection_quick_open_with_query(String::new(), window, cx);
+    }
+
+    /// 打开快速连接对话框；`query` 预填搜索词（主页搜索框回车 ssh 命令时传入，
+    /// 复用 quick open 的临时连接解析与确认逻辑）。
+    pub(crate) fn show_connection_quick_open_with_query(
+        &mut self,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
             return;
         }
@@ -32,7 +43,7 @@ impl HomePage {
                         content.p_0().child(
                             div().id("connection-quick-open-dialog").child(
                                 List::new(&list)
-                                    .search_placeholder(t!("Home.open_connection").to_string())
+                                    .search_placeholder(t!("Home.search_placeholder").to_string())
                                     .with_size(Size::Large)
                                     .max_h(px(420.0)),
                             ),
@@ -40,9 +51,13 @@ impl HomePage {
                     }
                 })
         });
-        // 将焦点设置到 List 搜索框，使上下键和 Enter 键可用
+        // 将焦点设置到 List 搜索框，使上下键和 Enter 键可用；预填搜索词
+        // 会触发 delegate 的临时 ssh 解析，直接回车即可连接。
         list_for_focus.update(cx, |state, cx| {
             state.focus(window, cx);
+            if !query.is_empty() {
+                state.set_query(&query, window, cx);
+            }
         });
     }
 
@@ -233,28 +248,6 @@ impl HomePage {
 
         if let Err(err) = result {
             tracing::warn!("更新连接最近使用时间失败: {err}");
-            return;
-        }
-        self.load_connections(cx);
-    }
-
-    /// 把连接从"最近使用"列表移除（仅清空最近使用时间，不删除连接本身）。
-    pub(super) fn remove_recent_connection(
-        &mut self,
-        connection_id: Option<i64>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(connection_id) = connection_id else {
-            return;
-        };
-        let storage = cx.global::<GlobalStorageState>().storage.clone();
-        let result = storage
-            .get::<ConnectionRepository>()
-            .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))
-            .and_then(|repo| repo.clear_last_used(connection_id));
-
-        if let Err(err) = result {
-            tracing::warn!("清除连接最近使用时间失败: {err}");
             return;
         }
         self.load_connections(cx);

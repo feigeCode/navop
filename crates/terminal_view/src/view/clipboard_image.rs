@@ -221,6 +221,7 @@ impl TerminalView {
                         })
                         .into_any_element(),
                 )
+                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .show_cancel(true)

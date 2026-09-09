@@ -97,14 +97,7 @@ pub enum HomeConnectionLayout {
     #[default]
     Card,
     List,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HomePageStyle {
-    Legacy,
-    #[default]
-    Modern,
+    Tree,
 }
 
 /// SQL 格式化时的关键字大小写策略；Preserve 保持用户原文不改变大小写
@@ -171,26 +164,6 @@ impl SqlIndentStyle {
     }
 }
 
-impl HomePageStyle {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Legacy => "legacy",
-            Self::Modern => "modern",
-        }
-    }
-
-    pub fn from_value(value: &str) -> Self {
-        match value {
-            "legacy" => Self::Legacy,
-            _ => Self::Modern,
-        }
-    }
-
-    pub fn uses_persistent_sidebar(self) -> bool {
-        self == Self::Modern
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionSortOrder {
@@ -222,12 +195,14 @@ impl HomeConnectionLayout {
         match self {
             Self::Card => "card",
             Self::List => "list",
+            Self::Tree => "tree",
         }
     }
 
     pub fn from_value(value: &str) -> Self {
         match value {
             "list" => Self::List,
+            "tree" => Self::Tree,
             _ => Self::Card,
         }
     }
@@ -967,8 +942,6 @@ pub struct AppSettings {
     pub portable_remember_master_key: bool,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
-    #[serde(default)]
-    pub home_page_style: HomePageStyle,
     /// 连接列表排序方式
     #[serde(default)]
     pub connection_sort_order: ConnectionSortOrder,
@@ -1310,7 +1283,6 @@ impl Default for AppSettings {
             require_master_key_on_startup: false,
             portable_remember_master_key: false,
             home_connection_layout: HomeConnectionLayout::default(),
-            home_page_style: HomePageStyle::default(),
             connection_sort_order: ConnectionSortOrder::default(),
             connection_sidebar_expanded: true,
             connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
@@ -1564,14 +1536,47 @@ impl AppSettings {
     pub fn apply(&self, cx: &mut App) {
         gpui_component::set_locale(effective_locale_for_setting(&self.locale));
         crate::themes::apply_appearance(self, cx);
-        self.apply_font_size(cx);
 
         // 同步自动保存配置
         self.sync_auto_save_config(cx);
     }
 
+    /// 将通用字体设置（字号 + 字体族）应用到主题，并同步 GPUI 的 Base 层。
+    ///
+    /// 直接修改 `Theme` 的公共字段不会自动刷新 Base 层副本（滚动条、文本视图
+    /// 默认样式等都从 Base 层读取），因此必须调用 [`Theme::sync_base`] 重建。
+    fn apply_font_settings(&self, cx: &mut App) {
+        let family = self.font_family.trim();
+        // 自定义导入字体（通过 add_fonts 注册）在启动早期尚未进入字体列表，
+        // 因此需额外从 custom_fonts 配置中判定，避免被误判为未安装。
+        let is_custom_font = self.custom_fonts.iter().any(|font| {
+            font.families
+                .iter()
+                .any(|candidate| candidate.trim().eq_ignore_ascii_case(family))
+        });
+        let installed = cx.text_system().all_font_names();
+        let resolved = if family.is_empty()
+            || (!is_custom_font && !is_installed_font_family(family, &installed))
+        {
+            // 未安装的字体族回退到系统 UI 字体，避免渲染异常
+            ".SystemUIFont".to_string()
+        } else {
+            family.to_string()
+        };
+
+        let theme = Theme::global_mut(cx);
+        theme.font_family = resolved.into();
+        theme.font_size = px(self.font_size as f32);
+        Theme::sync_base(cx);
+    }
+
     pub fn apply_font_size(&self, cx: &mut App) {
-        Theme::global_mut(cx).font_size = px(self.font_size as f32);
+        self.apply_font_settings(cx);
+    }
+
+    /// 应用通用字体族设置到主题（设置面板修改"字体"后调用）。
+    pub fn apply_font_family(&self, cx: &mut App) {
+        self.apply_font_settings(cx);
     }
 
     /// 同步自动保存配置到全局状态
@@ -1596,7 +1601,7 @@ mod tests {
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
-        HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
         SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
@@ -2006,7 +2011,6 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
-        assert_eq!(HomePageStyle::Modern, settings.home_page_style);
         assert_eq!(ConnectionSortOrder::Natural, settings.connection_sort_order);
         assert!(settings.connection_sidebar_expanded);
     }
@@ -2049,9 +2053,31 @@ mod tests {
         .expect("connection display preferences should deserialize");
 
         assert_eq!(HomeConnectionLayout::List, settings.home_connection_layout);
-        assert_eq!(HomePageStyle::Legacy, settings.home_page_style);
         assert!(!settings.connection_sidebar_expanded);
         assert!(!settings.connection_sidebar_tree_state.hide_empty_workspaces);
+    }
+
+    #[test]
+    fn retired_home_styles_preserve_sidebar_preferences() {
+        for style in [None, Some("legacy"), Some("modern")] {
+            let mut json = serde_json::json!({
+                "connection_sidebar_expanded": false,
+                "connection_sidebar_tree_state": {
+                    "tree_width": 348, "auto_hide_tree": false,
+                    "hide_empty_workspaces": true
+                }
+            });
+            if let Some(style) = style {
+                json["home_page_style"] = style.into();
+            }
+            let settings: AppSettings = serde_json::from_value(json).unwrap();
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert!(saved.get("home_page_style").is_none());
+            assert!(!settings.connection_sidebar_expanded);
+            assert_eq!(348, settings.connection_sidebar_tree_state.tree_width);
+            assert!(!settings.connection_sidebar_tree_state.auto_hide_tree);
+            assert!(settings.connection_sidebar_tree_state.hide_empty_workspaces);
+        }
     }
 
     #[test]

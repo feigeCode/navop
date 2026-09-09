@@ -10,15 +10,22 @@ use one_core::settings::{AppSettings, RemoteFileEditorOverride, RemoteFileEditor
 use remote_file_editor::editor_supports_current_platform;
 use rust_i18n::t;
 
+#[path = "remote_file_editor_mode.rs"]
+mod remote_file_editor_mode;
+#[path = "remote_file_editor_size.rs"]
+mod remote_file_editor_size;
+
 pub fn remote_file_editor_setting_group(
     default_settings: &RemoteFileEditorUserSettings,
     cx: &App,
 ) -> SettingGroup {
     let editors = installed_editors(cx);
     let mut items = vec![
+        remote_file_editor_mode::open_mode_item(default_settings),
         default_editor_item(default_settings, &editors),
         auto_upload_item(default_settings),
         conflict_check_item(default_settings),
+        remote_file_editor_size::max_file_size_item(default_settings),
     ];
     items.extend(editors.into_iter().map(editor_override_item));
     SettingGroup::new()

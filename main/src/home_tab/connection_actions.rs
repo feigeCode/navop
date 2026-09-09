@@ -70,6 +70,7 @@ impl HomePage {
                 self.show_remote_desktop_form(protocol, window, cx);
             }
             ConnectionType::Extension => {
+                #[cfg(feature = "shell-plugins")]
                 if cx.global::<ActiveConnections>().is_active(connection_id) {
                     let name = connection.name;
                     window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -85,6 +86,10 @@ impl HomePage {
                 } else {
                     self.editing_connection_id = Some(connection_id);
                     self.show_extension_form(window, cx);
+                }
+                #[cfg(not(feature = "shell-plugins"))]
+                {
+                    let _ = (connection_id, &connection);
                 }
             }
             _ => {}

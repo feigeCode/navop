@@ -2,7 +2,9 @@ use crate::home_tab::HomePage;
 use gpui::{Context, Window};
 use gpui_component::WindowExt;
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
-use one_core::tab_container::{TabItem, TabOpenMode};
+#[cfg(feature = "shell-plugins")]
+use one_core::tab_container::TabItem;
+use one_core::tab_container::TabOpenMode;
 use remote_desktop::RemoteDesktopProtocol;
 
 pub(crate) trait ConnectionOpenStrategy {
@@ -44,15 +46,44 @@ pub(crate) fn build_connection_open_strategy(
             connection,
             protocol: RemoteDesktopProtocol::Vnc,
         }),
-        ConnectionType::Extension => Box::new(ExtensionOpenStrategy { connection }),
+        ConnectionType::Extension => {
+            #[cfg(feature = "shell-plugins")]
+            {
+                Box::new(ExtensionOpenStrategy { connection })
+            }
+            #[cfg(not(feature = "shell-plugins"))]
+            {
+                let _ = &connection;
+                Box::new(ExtensionOpenStrategy {
+                    _connection: connection,
+                })
+            }
+        }
         _ => Box::new(NoopOpenStrategy),
     }
 }
 
 struct ExtensionOpenStrategy {
+    #[cfg(feature = "shell-plugins")]
     connection: StoredConnection,
+    #[cfg(not(feature = "shell-plugins"))]
+    _connection: StoredConnection,
 }
 
+#[cfg(not(feature = "shell-plugins"))]
+impl ConnectionOpenStrategy for ExtensionOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        _home: &mut HomePage,
+        _mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        window.push_notification("Extension connections require the shell-plugins build", cx);
+    }
+}
+
+#[cfg(feature = "shell-plugins")]
 impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -66,7 +97,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             return;
         };
         let Some(host) = cx
-            .try_global::<crate::shell_plugin_host::ShellPluginHost>()
+            .try_global::<universal_plugins::ShellPluginHost>()
             .cloned()
         else {
             window.push_notification("Extension runtime is unavailable", cx);
@@ -89,13 +120,13 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             let connection = self.connection;
             let title = connection.name.clone();
             let service = cx
-                .global::<crate::universal_plugins::GlobalUniversalPluginService>()
+                .global::<universal_plugins::GlobalUniversalPluginService>()
                 .service();
             let extension_id = contribution.extension_id.clone();
             let runtime_id = contribution.runtime_id.clone();
             let registry = host.clone();
             let tabs = cx
-                .global::<crate::onetcli_app::GlobalTabContainer>()
+                .global::<one_core::tab_container::GlobalTabContainer>()
                 .primary_pane();
             tabs.update(cx, |tabs, cx| {
                 let tab_id = format!("extension-connection:{connection_id}");
@@ -103,7 +134,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
                     tab_id.clone(),
                     mode,
                     move |_, cx| {
-                        let tab = crate::extension_connection_tab::ExtensionConnectionTab::load(
+                        let tab = universal_plugins::ExtensionConnectionTab::load(
                             service,
                             connection,
                             contribution,
@@ -117,7 +148,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
                 );
             });
         } else if let Err(error) = host.open_connection(
-            crate::shell_plugin_host::ConnectionShellOpen {
+            universal_plugins::ConnectionShellOpen {
                 connection: self.connection,
                 contribution,
                 mode,
