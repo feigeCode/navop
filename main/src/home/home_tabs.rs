@@ -3,12 +3,12 @@ use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
 use crate::session_logs::SessionLogsPage;
 
-use known_hosts_view::KnownHostsPage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
+use known_hosts_view::KnownHostsPage;
 use mongodb_view::MongoTabView;
 use notes::NotesView;
 use one_core::license::Feature;
