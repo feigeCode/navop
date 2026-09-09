@@ -1225,6 +1225,9 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_team_key_cache_loads_cloud_team_metadata() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, repo, membership_repo) = test_storage();
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
         service
@@ -1267,6 +1270,9 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_team_roles_uses_bounded_concurrency() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, _, _) = test_storage();
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
         service
@@ -1304,6 +1310,9 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_team_roles_prefers_aggregate_membership_query() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, _, _) = test_storage();
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
         service
@@ -1346,6 +1355,9 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_removes_departed_team_cache_and_runtime_key() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, repo, membership_repo) = test_storage();
         membership_repo
             .upsert(&TeamMembershipCache {
@@ -1417,6 +1429,9 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_removes_team_when_membership_is_confirmed_absent() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, repo, membership_repo) = test_storage();
         repo.upsert(&TeamKeyCache {
             scope: test_scope(),
@@ -1476,6 +1491,9 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_failure_marks_membership_unknown_without_clearing_key() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, repo, membership_repo) = test_storage();
         membership_repo
             .upsert(&TeamMembershipCache {
@@ -1547,6 +1565,9 @@ mod tests {
 
     #[tokio::test]
     async fn save_or_initialize_team_key_initializes_missing_verification() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (storage, repo, _) = test_storage();
         repo.upsert(&TeamKeyCache {
             scope: test_scope(),

@@ -101,6 +101,17 @@ static ENCRYPTION_KEY: RwLock<Option<[u8; 32]>> = RwLock::new(None);
 /// 全局原始主密钥存储（用于云同步等需要原始密钥的场景）
 static RAW_MASTER_KEY: RwLock<Option<Zeroizing<String>>> = RwLock::new(None);
 
+/// Serializes tests that read or mutate the process-global master key
+/// (`ENCRYPTION_KEY` / `RAW_MASTER_KEY`). The crypto module tests and the
+/// cloud-sync tests that derive team keys from the master key must all hold this
+/// lock, otherwise a concurrent `set_master_key` from one test can make another
+/// test's refresh/sync path observe an unexpected master-key state.
+#[cfg(test)]
+pub(crate) fn crypto_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// 获取数据目录路径
 fn get_data_dir() -> Option<PathBuf> {
     crate::app_dirs::data_dir()
@@ -726,7 +737,7 @@ pub fn try_restore_master_key() -> bool {
 mod tests {
     use super::*;
     use crate::key_storage::KeyStorage;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     #[derive(Default)]
     struct MemoryKeyStorage {
@@ -819,13 +830,18 @@ mod tests {
     }
 
     fn test_mutex() -> &'static Mutex<()> {
-        static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-        MUTEX.get_or_init(|| Mutex::new(()))
+        super::crypto_test_lock()
+    }
+
+    fn crypto_guard() -> std::sync::MutexGuard<'static, ()> {
+        // Tolerate poisoning: a panic in any test while holding the shared
+        // master-key lock must not cascade-fail every other lock acquisition.
+        test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[test]
     fn test_encrypt_decrypt() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         set_master_key("test_key_123").expect("configure test master key");
 
         let original = "my_secret_password";
@@ -842,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_key_verification() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         let master_key = "test_key_123";
         let verification = generate_key_verification(master_key);
 
@@ -852,7 +868,7 @@ mod tests {
 
     #[test]
     fn test_empty_password() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         set_master_key("test_key").expect("configure test master key");
 
         let encrypted = encrypt_password("");
@@ -866,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_no_master_key() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         clear_master_key();
 
         let original = "password123";
@@ -881,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_already_encrypted() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         set_master_key("test_key").expect("configure test master key");
 
         let original = "password";
@@ -959,7 +975,7 @@ mod tests {
 
     #[test]
     fn first_setup_does_not_publish_when_verification_save_fails() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         let storage = MemoryKeyStorage::default();
         clear_in_memory_master_key();
 
@@ -980,7 +996,7 @@ mod tests {
 
     #[test]
     fn unlock_does_not_publish_after_partial_storage_failure() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         let storage = FailOnceKeyStorage::fail_save("old-key");
         clear_in_memory_master_key();
 
@@ -1001,7 +1017,7 @@ mod tests {
 
     #[test]
     fn session_only_unlock_does_not_publish_after_partial_delete_failure() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         let storage = FailOnceKeyStorage::fail_delete("old-key");
         clear_in_memory_master_key();
 
@@ -1022,7 +1038,7 @@ mod tests {
 
     #[test]
     fn successful_setup_publishes_after_persistence() {
-        let _guard = test_mutex().lock().unwrap();
+        let _guard = crypto_guard();
         let storage = MemoryKeyStorage::default();
         clear_in_memory_master_key();
 

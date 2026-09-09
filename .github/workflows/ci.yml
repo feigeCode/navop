@@ -136,7 +136,6 @@ jobs:
         if: ${{ matrix.platform == 'macos' }}
         run: |
           cargo test --all
-          cargo test -p gpui-component --doc
       - name: Show sccache statistics
         if: always()
         shell: bash

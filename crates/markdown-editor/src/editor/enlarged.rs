@@ -490,7 +490,7 @@ mod tests {
                 .entity
                 .clone()
         });
-        cx.update(|window, _| window.blur());
+        cx.update(|window, cx| window.blur(cx));
         redraw(cx);
 
         let source_button = cx
@@ -533,7 +533,7 @@ mod tests {
                 .entity
                 .clone()
         });
-        cx.update(|window, _| window.blur());
+        cx.update(|window, cx| window.blur(cx));
         redraw(cx);
 
         math_block.update(cx, |block, cx| {

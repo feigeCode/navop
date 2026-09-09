@@ -171,7 +171,7 @@ fn sidebar_center_clips_active_view_intrinsic_size_at_every_flex_boundary() {
         .find("let center = if bottom.is_empty()")
         .expect("sidebar center layout");
     let center_end = renderer[center_start..]
-        .find("let mut root = div()")
+        .find("let mut root = gpui_component::ElementExt::on_prepaint(")
         .map(|offset| center_start + offset)
         .expect("sidebar root layout");
     let center = &renderer[center_start..center_end];
@@ -307,7 +307,7 @@ fn sidebar_resize_uses_tab_container_bounds_instead_of_window_bounds() {
     let renderer = &source[renderer_start..renderer_end];
 
     assert!(renderer.contains(".id(\"tab-sidebar-root\")"));
-    assert!(renderer.contains(".on_prepaint({"));
+    assert!(renderer.contains("ElementExt::on_prepaint("));
     assert!(renderer.contains("container.sidebar_bounds = bounds;"));
 
     let handler_start = source
