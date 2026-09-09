@@ -799,7 +799,7 @@ fn catalog_toolbox_views_exclude_connection_owned_shell_views() {
     let mut owned = shell_view("ui/explorer.js");
     owned.id = "explorer".into();
 
-    let mut manifest = base_manifest();
+    let mut manifest = shell_manifest();
     manifest.contributes.shell_views.push(standalone_tab);
     manifest.contributes.shell_views.push(standalone_toolbox);
     manifest.contributes.shell_views.push(owned);

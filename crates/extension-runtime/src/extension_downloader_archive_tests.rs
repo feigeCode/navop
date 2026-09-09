@@ -209,14 +209,6 @@ fn append_bytes(
     append_bytes_with_mode(archive, name, bytes, 0o644);
 }
 
-fn append_executable_bytes(
-    archive: &mut tar::Builder<flate2::write::GzEncoder<Vec<u8>>>,
-    name: &str,
-    bytes: &[u8],
-) {
-    append_bytes_with_mode(archive, name, bytes, 0o755);
-}
-
 fn append_bytes_with_mode(
     archive: &mut tar::Builder<flate2::write::GzEncoder<Vec<u8>>>,
     name: &str,
