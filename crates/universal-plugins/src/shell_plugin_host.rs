@@ -76,6 +76,17 @@ enum TrackedPluginTab {
 
 impl gpui::Global for ShellPluginHost {}
 
+impl ShellPluginHost {
+    pub fn resource_workbench_for_connection(
+        &self,
+        extension_id: &str,
+        contribution_id: &str,
+    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
+        self.service
+            .resource_workbench_for_connection(extension_id, contribution_id)
+    }
+}
+
 pub(crate) struct PreparedShellView {
     pub(crate) contribution: extension_runtime::RegisteredShellViewContribution,
     pub(crate) activations: Vec<ActivationHandle>,
@@ -101,7 +112,7 @@ impl ShellPluginHost {
         })
     }
 
-    pub(crate) fn contribution(
+    pub fn contribution(
         &self,
         extension_id: &str,
         view_id: &str,

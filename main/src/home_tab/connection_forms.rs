@@ -3,7 +3,6 @@ use super::*;
 const ORACLE_GO_DRIVER_ID: &str = "oracle-go";
 
 impl HomePage {
-    #[cfg(feature = "shell-plugins")]
     pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editing = self.editing_connection_id.and_then(|id| {
             self.connections

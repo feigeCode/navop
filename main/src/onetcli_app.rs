@@ -273,9 +273,7 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
             );
         }
 
-        #[cfg(feature = "shell-plugins")]
         let plugin_shutdown_task = cx.update(|cx| universal_plugins::spawn_shutdown(cx));
-        #[cfg(feature = "shell-plugins")]
         if let Some(shutdown_task) = plugin_shutdown_task {
             if let Err(error) = shutdown_task.await {
                 tracing::warn!(

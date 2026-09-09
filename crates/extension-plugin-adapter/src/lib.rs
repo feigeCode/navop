@@ -27,7 +27,9 @@ mod job_activation_state;
 #[cfg(test)]
 mod job_activation_tests;
 pub mod provider_permissions;
+pub mod resource_session;
 pub mod universal_host;
+pub mod workbench_dispatch;
 
 pub use activation::{
     ActivationError, ActivationHandle, ActivationManager, HostApiFactory, ManagedRpcSession,
@@ -54,7 +56,14 @@ pub use provider_permissions::{
     NetworkEndpoint, ProviderPermissionError, ProviderPermissionSet, ResourceOpenAuthorizer,
     SecretReference,
 };
+pub use resource_session::{
+    ResourceScope, ResourceSessionHandle, ResourceSessionIdentity, ResourceSessionOwner,
+};
 pub use universal_host::{MapSecretResolver, SecretResolver, UniversalProviderHost};
+pub use workbench_dispatch::{
+    BindingContext, WorkbenchDispatchError, WorkbenchRequest, build_request, decode_result,
+    dispatch_invoke, dispatch_invoke_scoped, ensure_capabilities,
+};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PluginAdapterError {
@@ -71,6 +80,10 @@ pub enum PluginAdapterError {
     },
     #[error("failed to resolve IPC path `{path}`: {message}")]
     PathResolution { path: PathBuf, message: String },
+    #[error("resource session is closed")]
+    SessionClosed,
+    #[error("resource session operation failed: {0}")]
+    Session(String),
 }
 
 /// 把静态 IPC binding 转为一次 native process session 的启动配置。

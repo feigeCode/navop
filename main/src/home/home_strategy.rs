@@ -2,9 +2,7 @@ use crate::home_tab::HomePage;
 use gpui::{Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
-#[cfg(feature = "shell-plugins")]
-use one_core::tab_container::TabItem;
-use one_core::tab_container::TabOpenMode;
+use one_core::tab_container::{TabItem, TabOpenMode};
 use remote_desktop::RemoteDesktopProtocol;
 
 pub(crate) trait ConnectionOpenStrategy {
@@ -50,28 +48,13 @@ pub(crate) fn build_connection_open_strategy(
             connection,
             protocol: RemoteDesktopProtocol::Vnc,
         }),
-        ConnectionType::Extension => {
-            #[cfg(feature = "shell-plugins")]
-            {
-                Box::new(ExtensionOpenStrategy { connection })
-            }
-            #[cfg(not(feature = "shell-plugins"))]
-            {
-                let _ = &connection;
-                Box::new(ExtensionOpenStrategy {
-                    _connection: connection,
-                })
-            }
-        }
+        ConnectionType::Extension => Box::new(ExtensionOpenStrategy { connection }),
         _ => Box::new(NoopOpenStrategy),
     }
 }
 
 struct ExtensionOpenStrategy {
-    #[cfg(feature = "shell-plugins")]
     connection: StoredConnection,
-    #[cfg(not(feature = "shell-plugins"))]
-    _connection: StoredConnection,
 }
 
 #[cfg(not(feature = "shell-plugins"))]
@@ -79,11 +62,48 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
         _home: &mut HomePage,
-        _mode: TabOpenMode,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<HomePage>,
     ) {
-        window.push_notification("Extension connections require the shell-plugins build", cx);
+        let Ok(params) = self.connection.to_extension_params() else {
+            window.push_notification("Extension connection data is invalid", cx);
+            return;
+        };
+        let Some(service) = cx
+            .try_global::<universal_plugins::GlobalUniversalPluginService>()
+            .map(|global| global.service())
+        else {
+            window.push_notification("Extension runtime is unavailable", cx);
+            return;
+        };
+        // 无 Shell 构建以 workbench 绑定为决策点:
+        // 有原生工作台即可打开(legacy shellViewId 不阻塞),
+        // 没有工作台才提示需要 shell-plugins 构建。
+        let Some(workbench) = service
+            .resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
+        else {
+            window.push_notification(
+                "This extension connection requires the shell-plugins build",
+                cx,
+            );
+            return;
+        };
+        let Some(contribution) =
+            service.resource_connection(&params.extension_id, &params.contribution_id)
+        else {
+            window.push_notification("This extension contribution is unavailable", cx);
+            return;
+        };
+        open_native_extension_connection(
+            service,
+            self.connection,
+            contribution,
+            workbench,
+            mode,
+            window,
+            cx,
+        );
     }
 }
 
@@ -119,38 +139,21 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             );
             return;
         };
-        if contribution.shell_view_id.is_none() {
-            let connection_id = self.connection.id.expect("saved extension connection");
-            let connection = self.connection;
-            let title = connection.name.clone();
+        if let Some(workbench) =
+            host.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
+        {
             let service = cx
                 .global::<universal_plugins::GlobalUniversalPluginService>()
                 .service();
-            let extension_id = contribution.extension_id.clone();
-            let runtime_id = contribution.runtime_id.clone();
-            let registry = host.clone();
-            let tabs = cx
-                .global::<one_core::tab_container::GlobalTabContainer>()
-                .primary_pane();
-            tabs.update(cx, |tabs, cx| {
-                let tab_id = format!("extension-connection:{connection_id}");
-                tabs.activate_or_add_tab_lazy_with_mode(
-                    tab_id.clone(),
-                    mode,
-                    move |_, cx| {
-                        let tab = universal_plugins::ExtensionConnectionTab::load(
-                            service,
-                            connection,
-                            contribution,
-                            cx,
-                        );
-                        registry.register_headless_tab(extension_id, runtime_id, tab.downgrade());
-                        TabItem::new(tab_id, title, tab)
-                    },
-                    window,
-                    cx,
-                );
-            });
+            open_native_extension_connection(
+                service,
+                self.connection,
+                contribution,
+                workbench,
+                mode,
+                window,
+                cx,
+            );
         } else if let Err(error) = host.open_connection(
             universal_plugins::ConnectionShellOpen {
                 connection: self.connection,
@@ -163,6 +166,45 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification(format!("Failed to open extension connection: {error}"), cx);
         }
     }
+}
+
+/// 打开原生扩展连接工作台 tab(共享实现,两种 feature 构建都使用)。
+/// headless tab 到 ShellPluginHost 的注册由 ExtensionConnectionTab::load
+/// 内部按 global 存在性自行处理。
+#[allow(clippy::too_many_arguments)]
+fn open_native_extension_connection(
+    service: universal_plugins::UniversalPluginService,
+    connection: StoredConnection,
+    contribution: extension_runtime::RegisteredResourceConnectionContribution,
+    workbench: extension_runtime::RegisteredResourceWorkbenchContribution,
+    mode: TabOpenMode,
+    window: &mut Window,
+    cx: &mut Context<HomePage>,
+) {
+    let connection_id = connection.id.expect("saved extension connection");
+    let title = connection.name.clone();
+    let tabs = cx
+        .global::<one_core::tab_container::GlobalTabContainer>()
+        .primary_pane();
+    tabs.update(cx, |tabs, cx| {
+        let tab_id = format!("extension-connection:{connection_id}");
+        tabs.activate_or_add_tab_lazy_with_mode(
+            tab_id.clone(),
+            mode,
+            move |_, cx| {
+                let tab = universal_plugins::ExtensionConnectionTab::load(
+                    service,
+                    connection,
+                    contribution,
+                    workbench,
+                    cx,
+                );
+                TabItem::new(tab_id, title, tab)
+            },
+            window,
+            cx,
+        );
+    });
 }
 
 struct SshOpenStrategy {

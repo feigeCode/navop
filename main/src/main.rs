@@ -431,7 +431,6 @@ fn main() {
         }
         notes::init(cx);
         extension_runtime::init(cx);
-        #[cfg(feature = "shell-plugins")]
         universal_plugins::init(cx);
         #[cfg(feature = "shell-plugins")]
         dev_extension_registry::install_dev_host_ops(cx);

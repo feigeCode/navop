@@ -18,8 +18,8 @@ use super::types::{
     RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
     RegisteredKeybindingContribution, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellViewContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
-    slot_item_from_menu,
+    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
+    command_descriptor, runtime_key, slot_item_from_menu,
 };
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -267,6 +267,7 @@ impl ExtensionRuntimeCatalog {
         self.register_ipc_runtimes(&manifest)?;
         self.register_shell_views(&manifest)?;
         self.register_resource_connections(&manifest)?;
+        self.register_resource_workbenches(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
         self.register_document_renderers(&manifest)?;
         self.register_document_exporters(&manifest)?;
@@ -389,6 +390,28 @@ impl ExtensionRuntimeCatalog {
                     shell_view_id: connection.shell_view_id.clone(),
                     form: connection.form.clone(),
                 },
+            );
+        }
+        Ok(())
+    }
+
+    fn register_resource_workbenches(
+        &mut self,
+        manifest: &Manifest,
+    ) -> Result<(), ExtensionRuntimeError> {
+        let mut bound_connections = HashSet::new();
+        for workbench in &manifest.contributes.resource_workbenches {
+            validate_resource_workbench(manifest, workbench, &mut bound_connections)?;
+            let key = runtime_key(&manifest.id, &workbench.id);
+            if self.resource_workbenches.contains_key(&key) {
+                return Err(ExtensionRuntimeError::InvalidResourceWorkbench(format!(
+                    "duplicate workbench id `{}`",
+                    workbench.id
+                )));
+            }
+            self.resource_workbenches.insert(
+                key,
+                RegisteredResourceWorkbenchContribution::from_manifest(&manifest.id, workbench),
             );
         }
         Ok(())
@@ -682,6 +705,84 @@ fn validate_remote_file_editor(
         )
     }) {
         return Err(invalid("platforms contains an unsupported value"));
+    }
+    Ok(())
+}
+
+fn validate_resource_workbench(
+    manifest: &Manifest,
+    workbench: &crate::extension::manifest::ResourceWorkbenchContrib,
+    bound_connections: &mut HashSet<String>,
+) -> Result<(), ExtensionRuntimeError> {
+    let invalid = |reason: &str| {
+        ExtensionRuntimeError::InvalidResourceWorkbench(format!("{}: {reason}", workbench.id))
+    };
+    if workbench.schema_version != 1 {
+        return Err(invalid("unsupported schemaVersion"));
+    }
+    if workbench.id.trim().is_empty() || workbench.title.trim().is_empty() {
+        return Err(invalid("id and title must not be empty"));
+    }
+    if workbench.connection_ids.is_empty() || workbench.runtime_id.trim().is_empty() {
+        return Err(invalid("connectionIds and runtimeId must not be empty"));
+    }
+    if !manifest
+        .runtime
+        .ipc
+        .iter()
+        .any(|runtime| runtime.id == workbench.runtime_id)
+    {
+        return Err(invalid("runtimeId does not reference an IPC runtime"));
+    }
+    let connections = &manifest.contributes.connections;
+    for connection_id in &workbench.connection_ids {
+        if !bound_connections.insert(connection_id.clone()) {
+            return Err(invalid("a connection is bound to more than one workbench"));
+        }
+        let Some(connection) = connections
+            .iter()
+            .find(|connection| connection.id == *connection_id)
+        else {
+            return Err(invalid("connectionIds references an unknown connection"));
+        };
+        if connection.runtime_id != workbench.runtime_id
+            || connection.resource_type != workbench.resource_type
+        {
+            return Err(invalid("runtimeId/resourceType does not match connection"));
+        }
+    }
+    if !workbench
+        .pages
+        .iter()
+        .any(|page| page.id == workbench.default_page)
+    {
+        return Err(invalid("defaultPage references an unknown page"));
+    }
+    for page in &workbench.pages {
+        if let Some(action) = page.load.as_ref().or(page.execute.as_ref()) {
+            if !workbench.operations.contains_key(&action.operation) {
+                return Err(invalid("page references an unknown operation"));
+            }
+        }
+    }
+    for navigation in &workbench.navigation {
+        if !workbench
+            .pages
+            .iter()
+            .any(|page| page.id == navigation.page_id)
+        {
+            return Err(invalid("navigation references an unknown page"));
+        }
+    }
+    for tree in &workbench.tree {
+        if !workbench.pages.iter().any(|page| page.id == tree.page_id) {
+            return Err(invalid("tree references an unknown page"));
+        }
+        if let Some(children) = &tree.children {
+            if !workbench.operations.contains_key(&children.operation) {
+                return Err(invalid("tree references an unknown operation"));
+            }
+        }
     }
     Ok(())
 }

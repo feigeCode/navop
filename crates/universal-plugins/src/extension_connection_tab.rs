@@ -9,14 +9,17 @@ use one_core::{
     tab_container::{TabContent, TabContentEvent},
 };
 
-use crate::shell_plugin_host::connection::{ExtensionResourceLaunch, OpenedExtensionResource};
+use crate::extension_resource::{ExtensionResourceLaunch, OpenedExtensionResource};
 use crate::universal_plugins::UniversalPluginService;
 
 enum State {
     Connecting,
     Connected {
         activation: ActivationHandle,
-        resource: OpenedExtensionResource,
+        /// 连接主会话唯一所有者;workbench 只持有 handle。
+        #[allow(dead_code)]
+        session: extension_plugin_adapter::ResourceSessionOwner,
+        workbench: Entity<resource_view::NativeResourceWorkbench>,
     },
     Failed(String),
 }
@@ -26,7 +29,7 @@ pub struct ExtensionConnectionTab {
     title: SharedString,
     focus_handle: FocusHandle,
     service: UniversalPluginService,
-    #[cfg(not(test))]
+    workbench: extension_runtime::RegisteredResourceWorkbenchContribution,
     runtime_id: String,
     state: State,
     closing: bool,
@@ -38,6 +41,7 @@ impl ExtensionConnectionTab {
         service: UniversalPluginService,
         connection: StoredConnection,
         contribution: extension_runtime::RegisteredResourceConnectionContribution,
+        workbench: extension_runtime::RegisteredResourceWorkbenchContribution,
         cx: &mut App,
     ) -> Entity<Self> {
         let connection_id = connection.id.expect("saved extension connection");
@@ -57,7 +61,7 @@ impl ExtensionConnectionTab {
             title,
             focus_handle: cx.focus_handle(),
             service: service.clone(),
-            #[cfg(not(test))]
+            workbench,
             runtime_id: runtime_id.clone(),
             state: State::Connecting,
             closing: false,
@@ -72,6 +76,7 @@ impl ExtensionConnectionTab {
             })
             .detach();
         });
+        register_with_shell_host(&view, &contribution, cx);
         view
     }
 
@@ -81,10 +86,24 @@ impl ExtensionConnectionTab {
         cx: &mut Context<Self>,
     ) {
         self.state = match result {
-            Ok((activation, resource)) if !self.closing => State::Connected {
-                activation,
-                resource,
-            },
+            Ok((activation, resource)) if !self.closing => {
+                let identity = extension_plugin_adapter::ResourceSessionIdentity {
+                    extension_id: self.workbench.extension_id.clone(),
+                    runtime_id: self.runtime_id.clone(),
+                    runtime_generation: resource.generation(),
+                    session_epoch: 0,
+                };
+                let session = resource.into_session(identity);
+                let handle = session.handle();
+                let workbench = cx.new(|cx| {
+                    resource_view::NativeResourceWorkbench::new(self.workbench.clone(), handle, cx)
+                });
+                State::Connected {
+                    activation,
+                    session,
+                    workbench,
+                }
+            }
             Ok((activation, mut resource)) => {
                 let service = self.service.clone();
                 one_core::gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -106,14 +125,15 @@ impl ExtensionConnectionTab {
         self.connection_lease.take();
         let State::Connected {
             activation,
-            mut resource,
+            session,
+            workbench: _,
         } = state
         else {
             return Task::ready(true);
         };
         let service = self.service.clone();
         let task = one_core::gpui_tokio::Tokio::spawn_result(cx, async move {
-            resource.close().await;
+            let _ = session.close().await;
             let _ = service.deactivate_activation(&activation).await;
             Ok(())
         });
@@ -124,7 +144,6 @@ impl ExtensionConnectionTab {
         self.close(cx)
     }
 
-    #[cfg(not(test))]
     pub(crate) fn runtime_changed(&mut self, runtime_id: &str, cx: &mut Context<Self>) {
         if runtime_id != self.runtime_id {
             return;
@@ -151,20 +170,42 @@ async fn connect_resource(
     }
 }
 
+/// 当 Shell host global 存在(shell-plugins 构建)时,把 headless tab
+/// 注册进宿主重启通知;无 Shell 构建下是 no-op。
+fn register_with_shell_host(
+    view: &Entity<ExtensionConnectionTab>,
+    contribution: &extension_runtime::RegisteredResourceConnectionContribution,
+    cx: &App,
+) {
+    #[cfg(feature = "shell-plugins")]
+    if let Some(host) = cx.try_global::<crate::shell_plugin_host::ShellPluginHost>() {
+        host.register_headless_tab(
+            contribution.extension_id.clone(),
+            contribution.runtime_id.clone(),
+            view.downgrade(),
+        );
+    }
+    #[cfg(not(feature = "shell-plugins"))]
+    {
+        let _ = (view, contribution, cx);
+    }
+}
+
 impl Drop for ExtensionConnectionTab {
     fn drop(&mut self) {
         self.connection_lease.take();
         let state = std::mem::replace(&mut self.state, State::Failed("Connection dropped".into()));
         let State::Connected {
             activation,
-            mut resource,
+            session,
+            workbench: _,
         } = state
         else {
             return;
         };
         let service = self.service.clone();
         self.tokio.spawn(async move {
-            resource.close().await;
+            let _ = session.close().await;
             let _ = service.deactivate_activation(&activation).await;
         });
     }
@@ -182,11 +223,13 @@ impl Render for ExtensionConnectionTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div().size_full().p_4().child(match &self.state {
             State::Connecting => "Connecting extension...".to_string(),
-            State::Connected { resource, .. } => {
-                format!(
-                    "Connected\n\nCapabilities:\n{}",
-                    resource.capabilities().join("\n")
-                )
+            State::Connected { workbench, .. } => {
+                return div()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(workbench.clone());
             }
             State::Failed(error) => format!("Extension connection failed: {error}"),
         })

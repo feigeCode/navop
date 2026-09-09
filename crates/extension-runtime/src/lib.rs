@@ -28,7 +28,7 @@ pub use global::{GlobalExtensionRuntimeCatalog, global_catalog, refresh_global_r
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellViewContribution,
+    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]

@@ -9,8 +9,11 @@ use crate::{
         DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, IpcEntry, IpcRuntime,
         IpcTransport, Manifest, MenuCommandRef, MenuContrib, ResourceConnectionContrib,
         ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
-        ResourceConnectionFormTab, RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib,
-        WasmRuntime, WasmRuntimeKind,
+        ResourceConnectionFormTab, ResourceWorkbenchContrib, ResourceWorkbenchEffect,
+        ResourceWorkbenchOperation, ResourceWorkbenchOperationMode, ResourceWorkbenchPage,
+        ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchTemplate,
+        RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib, WasmRuntime,
+        WasmRuntimeKind,
         contributes::{
             RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
         },
@@ -328,6 +331,135 @@ fn runtime_catalog_rejects_unknown_visibility_field() {
         error.to_string().contains("unknown visibility field"),
         "{error}"
     );
+}
+
+#[test]
+fn runtime_catalog_registers_resource_workbench_for_connection() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .shell_views
+        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.connections.push(resource_connection());
+    manifest
+        .contributes
+        .resource_workbenches
+        .push(resource_workbench());
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let workbench = catalog
+        .resource_workbench_for_connection("com.example.tools", "search")
+        .unwrap();
+
+    assert_eq!("search-workbench", workbench.id);
+    assert_eq!("overview", workbench.default_page);
+}
+
+/// 万物可连验证:不同 resourceType(docker/mq/nacos)的工作台声明
+/// 走同一套注册与查询,不引入领域分支。
+#[test]
+fn runtime_catalog_supports_workbenches_across_resource_types() {
+    for resource_type in ["docker", "mq", "nacos"] {
+        let mut manifest = shell_manifest();
+        manifest
+            .contributes
+            .shell_views
+            .push(shell_view("ui/explorer.js"));
+        let mut connection = resource_connection();
+        connection.resource_type = resource_type.into();
+        manifest.contributes.connections.push(connection);
+        let mut workbench = resource_workbench();
+        workbench.resource_type = resource_type.into();
+        manifest.contributes.resource_workbenches.push(workbench);
+
+        let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+        let registered = catalog
+            .resource_workbench_for_connection("com.example.tools", "search")
+            .unwrap_or_else(|| panic!("workbench for {resource_type} must resolve"));
+        assert_eq!(resource_type, registered.resource_type);
+    }
+}
+
+/// 同连接被两个工作台绑定时必须被拒绝(一对一绑定约束)。
+#[test]
+fn runtime_catalog_rejects_second_workbench_on_same_connection() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .shell_views
+        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.connections.push(resource_connection());
+    manifest
+        .contributes
+        .resource_workbenches
+        .push(resource_workbench());
+    let mut duplicate = resource_workbench();
+    duplicate.id = "second-workbench".into();
+    manifest.contributes.resource_workbenches.push(duplicate);
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(
+        error.to_string().contains("more than one workbench"),
+        "{error}"
+    );
+}
+
+/// 跨扩展 connectionIds 引用必须被拒绝。
+#[test]
+fn runtime_catalog_rejects_workbench_with_unknown_connection() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .resource_workbenches
+        .push(resource_workbench());
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(error.to_string().contains("unknown connection"), "{error}");
+}
+
+fn resource_workbench() -> ResourceWorkbenchContrib {
+    ResourceWorkbenchContrib {
+        schema_version: 1,
+        id: "search-workbench".into(),
+        title: "Search".into(),
+        connection_ids: vec!["search".into()],
+        runtime_id: "provider".into(),
+        resource_type: "elasticsearch".into(),
+        default_page: "overview".into(),
+        operations: [(
+            "clusterInfo".into(),
+            ResourceWorkbenchOperation {
+                mode: ResourceWorkbenchOperationMode::Invoke,
+                method: "elasticsearch/cluster/info".into(),
+                requires: vec!["elasticsearch/cluster/info".into()],
+                effect: ResourceWorkbenchEffect::Read,
+                params: Default::default(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        navigation: vec![],
+        tree: vec![],
+        pages: vec![ResourceWorkbenchPage {
+            id: "overview".into(),
+            title: "Overview".into(),
+            template: ResourceWorkbenchTemplate::Json,
+            renderer: ResourceWorkbenchRenderer {
+                kind: ResourceWorkbenchRendererKind::Native,
+                view_id: None,
+                fallback: None,
+            },
+            load: Some(crate::extension::manifest::ResourceWorkbenchAction {
+                operation: "clusterInfo".into(),
+            }),
+            execute: None,
+            collection: None,
+            inputs: vec![],
+            scope: None,
+        }],
+    }
 }
 
 fn resource_connection() -> ResourceConnectionContrib {

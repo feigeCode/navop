@@ -42,7 +42,7 @@ members = [
     "crates/json_view",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
-    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview", "crates/mqtt-runtime", "crates/mqtt_view"]
+    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview", "crates/mqtt-runtime", "crates/mqtt_view", "crates/resource_view"]
 resolver = "2"
 
 [workspace.package]
@@ -152,6 +152,7 @@ er_flow = { path = "crates/er_flow" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }
 extension-plugin-adapter = { path = "crates/extension-plugin-adapter" }
+resource_view = { path = "crates/resource_view" }
 extension-driver = { path = "crates/extension-driver" }
 extension-runtime = { path = "crates/extension-runtime", default-features = false }
 extension_view = { path = "crates/extension_view" }

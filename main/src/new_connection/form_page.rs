@@ -18,7 +18,6 @@ use crate::new_connection::connection_kind::NewConnectionKind;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
-#[cfg(feature = "shell-plugins")]
 use universal_plugins::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
 
 pub(crate) enum NewConnectionFormResult {
@@ -72,15 +71,11 @@ impl NewConnectionFormPage for NewConnectionKind {
                     cx,
                 )
             }
-            #[cfg(feature = "shell-plugins")]
             Self::Extension(contribution) => build_extension_form(parent, contribution, window, cx),
-            #[cfg(not(feature = "shell-plugins"))]
-            Self::Extension(_) => NewConnectionFormResult::Blocked,
         }
     }
 }
 
-#[cfg(feature = "shell-plugins")]
 fn build_extension_form(
     parent: Entity<HomePage>,
     contribution: extension_runtime::RegisteredResourceConnectionContribution,
