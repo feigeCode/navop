@@ -224,6 +224,7 @@ test("portable Linux disables WebView while standard builds keep it", () => {
   const workspaceCargo = read("Cargo.toml");
   const cargo = read("crates/ai_chat_view/Cargo.toml");
   const mainCargo = read("main/Cargo.toml");
+  const universalPluginsCargo = read("crates/universal-plugins/Cargo.toml");
   const htmlCodeBlock = read(
     "crates/ai_chat_view/src/html_code_block.rs",
   );
@@ -263,14 +264,18 @@ test("portable Linux disables WebView while standard builds keep it", () => {
   );
   assert.match(
     mainCargo,
-    /gpui-shell = \{ workspace = true, optional = true \}/,
+    /shell-plugins = \["universal-plugins\/shell-plugins"\]/,
   );
   assert.match(
-    mainCargo,
-    /gpui-component-shell = \{ workspace = true, optional = true \}/,
+    universalPluginsCargo,
+    /gpui-shell = \{[^}]*optional = true[^}]*\}/,
   );
   assert.match(
-    mainCargo,
+    universalPluginsCargo,
+    /gpui-component-shell = \{[^}]*optional = true[^}]*\}/,
+  );
+  assert.match(
+    universalPluginsCargo,
     /shell-plugins = \["dep:gpui-shell", "dep:gpui-component-shell"\]/,
   );
   assert.match(
