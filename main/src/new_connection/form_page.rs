@@ -55,6 +55,8 @@ impl NewConnectionFormPage for NewConnectionKind {
             Self::Telnet => build_telnet_form(parent, window, cx),
             Self::PortForwarding => build_port_forwarding_form(parent, window, cx),
             Self::MoreConnections => open_extensions_tab(parent, parent_window, cx),
+            // 空类目「+」安装入口:与「更多连接」行为一致,跳转扩展管理页
+            Self::InstallCategoryExtensions(_) => open_extensions_tab(parent, parent_window, cx),
             Self::Database(db_type) => {
                 build_database_form(parent, db_type, None, external_driver_registry, window, cx)
             }

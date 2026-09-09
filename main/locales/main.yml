@@ -1915,6 +1915,10 @@ NewConnection:
     en: Time Series
     zh-CN: 时序数据库
     zh-HK: 時序資料庫
+  category_middleware:
+    en: Middleware
+    zh-CN: 中间件
+    zh-HK: 中間件
   category_terminal:
     en: Terminal
     zh-CN: 终端
@@ -1931,6 +1935,14 @@ NewConnection:
     en: "More Connections"
     zh-CN: "更多连接"
     zh-HK: "更多連線"
+  more_middleware:
+    en: "Install middleware extensions"
+    zh-CN: "安装中间件扩展"
+    zh-HK: "安裝中間件擴展"
+  more_time_series:
+    en: "Install time-series database extensions"
+    zh-CN: "安装时序数据库扩展"
+    zh-HK: "安裝時序資料庫擴展"
   description_ssh:
     en: Remote server terminal and file connection
     zh-CN: 远程服务器终端与文件连接

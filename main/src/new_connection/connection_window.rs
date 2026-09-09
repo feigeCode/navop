@@ -71,6 +71,9 @@ impl NewConnectionWindow {
                     .map(NewConnectionKind::Extension),
             );
         }
+        // Extension 贡献项追加后,为空类目(中间件/时序数据库)补「+」安装入口;
+        // 需在 MoreConnections 压回末尾之前调用,保证「+」项排在所属类目分组末尾
+        NewConnectionKind::append_empty_category_install_entries(&mut connection_kinds);
         if let Some(more_connections) = more_connections {
             connection_kinds.push(more_connections);
         }
@@ -329,7 +332,8 @@ impl NewConnectionWindow {
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.selected_kind = Some(click_kind.clone());
-                if matches!(click_kind, NewConnectionKind::MoreConnections) {
+                // 「更多连接」与空类目「+」安装入口:单击即跳转扩展管理页
+                if click_kind.opens_extensions_tab_on_click() {
                     this.open_selected(window, cx);
                     return;
                 }
@@ -513,6 +517,37 @@ mod tests {
         assert!(visible_items.contains("self.connection_kinds"));
         assert!(!visible_items.contains("NewConnectionKind::all()"));
         assert!(!render.contains("NewConnectionKind::all()"));
+    }
+
+    #[test]
+    fn empty_category_install_entries_appended_before_more_connections() {
+        let source = include_str!("connection_window.rs");
+        let new_fn = source
+            .split("pub(crate) fn new(")
+            .nth(1)
+            .expect("new connection window constructor exists")
+            .split("fn first_visible_item_in(")
+            .next()
+            .expect("constructor has an end marker");
+
+        // Extension 贡献项追加后、MoreConnections 压回末尾之前,为空类目补「+」安装入口
+        assert!(new_fn.contains("NewConnectionKind::append_empty_category_install_entries"));
+        assert!(
+            new_fn
+                .split("append_empty_category_install_entries")
+                .nth(1)
+                .expect("install entries call exists")
+                .contains("push(more_connections)")
+        );
+        // 「+」安装入口与「更多连接」共用单击跳转行为
+        let card = source
+            .split("fn render_connection_type_card(")
+            .nth(1)
+            .expect("card render exists")
+            .split("fn render_selection_footer(")
+            .next()
+            .expect("card render has an end marker");
+        assert!(card.contains("click_kind.opens_extensions_tab_on_click()"));
     }
 
     #[test]
