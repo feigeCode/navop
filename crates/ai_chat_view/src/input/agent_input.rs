@@ -1438,6 +1438,8 @@ fn is_running_plan_status(status: &str) -> bool {
     matches!(status, "running" | "in_progress")
 }
 
+// 渲染辅助函数:参数对应计划项行的展示要素
+#[allow(clippy::too_many_arguments)]
 fn plan_item_row(
     view: Entity<AgentInput>,
     item: ComposerPlanItem,
@@ -1699,6 +1701,8 @@ fn subagent_item_status_style(
     }
 }
 
+// 渲染辅助函数:参数对应上下文模式面板的完整状态
+#[allow(clippy::too_many_arguments)]
 fn render_context_mode_content(
     view: Entity<AgentInput>,
     options: Vec<ComposerTarget>,

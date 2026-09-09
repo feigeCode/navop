@@ -308,7 +308,8 @@ fn connection_type_to_resource_kind(conn_type: &ConnectionType, params: &str) ->
         }
         ConnectionType::Redis => ResourceKind::Redis,
         ConnectionType::MongoDB => ResourceKind::Mongo,
-        ConnectionType::Mqtt => ResourceKind::Other("mqtt".into()),
+        // 旧 Mqtt/Rocketmq 变体仅用于历史数据识别(已迁移为 Extension)
+        ConnectionType::Mqtt | ConnectionType::Rocketmq => ResourceKind::Other("middleware".into()),
         ConnectionType::SshSftp => ResourceKind::Ssh,
         ConnectionType::Serial => ResourceKind::Terminal,
         ConnectionType::Telnet => ResourceKind::Terminal,

@@ -866,7 +866,9 @@ fn external_driver_compatible_host_form(driver: &IpcDriverManifest) -> DbFormCon
         Some(DatabaseType::MSSQL) => DbFormConfig::mssql(),
         Some(DatabaseType::Oracle) => DbFormConfig::oracle(),
         Some(DatabaseType::ClickHouse) => DbFormConfig::clickhouse(),
-        Some(DatabaseType::TDengine) => DbFormConfig::tdengine(),
+        // TDengine 专属表单已随原生插件移除:声明 compatible=TDengine 的驱动
+        // 复用 MySQL 兼容表单的 ssl 页(taosAdapter 同为 ws/wss 方言)。
+        Some(DatabaseType::TDengine) => DbFormConfig::mysql(),
         _ => DbFormConfig::mysql(),
     }
 }

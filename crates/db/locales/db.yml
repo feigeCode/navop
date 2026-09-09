@@ -721,6 +721,10 @@ ObjectView:
       en: Collation
       zh-CN: 排序规则
       zh-HK: 定序
+    column_count:
+      en: Columns
+      zh-CN: 列数
+      zh-HK: 欄位數
     columns:
       en: Columns
       zh-CN: 列
@@ -777,6 +781,10 @@ ObjectView:
       en: Increment
       zh-CN: 增量
       zh-HK: 增量
+    keep:
+      en: Retention
+      zh-CN: 保留策略
+      zh-HK: 保留策略
     key:
       en: Key
       zh-CN: 键
@@ -817,10 +825,18 @@ ObjectView:
       en: Owner
       zh-CN: 所有者
       zh-HK: 擁有者
+    precision:
+      en: Precision
+      zh-CN: 精度
+      zh-HK: 精度
     primary_key:
       en: Primary Key
       zh-CN: 主键
       zh-HK: 主鍵
+    replica:
+      en: Replica
+      zh-CN: 副本
+      zh-HK: 副本
     return_type:
       en: Return Type
       zh-CN: 返回类型
@@ -837,6 +853,10 @@ ObjectView:
       en: Size
       zh-CN: 大小
       zh-HK: 大小
+    stable_name:
+      en: Super Table
+      zh-CN: 所属超级表
+      zh-HK: 所屬超級表
     start:
       en: Start
       zh-CN: 起始值
@@ -857,6 +877,10 @@ ObjectView:
       en: Tablespace
       zh-CN: 表空间
       zh-HK: 資料表空間
+    tag_count:
+      en: Tags
+      zh-CN: 标签数
+      zh-HK: 標籤數
     temporary_tablespace:
       en: Temp Tablespace
       zh-CN: 临时表空间
@@ -873,3 +897,23 @@ ObjectView:
       en: Unique
       zh-CN: 唯一
       zh-HK: 唯一
+    vgroups:
+      en: VGroups
+      zh-CN: VGroups
+      zh-HK: VGroups
+
+# TDengine 专属文案
+Tdengine:
+  table_kind:
+    stable:
+      en: Super Table
+      zh-CN: 超级表
+      zh-HK: 超級表
+    child:
+      en: Child Table
+      zh-CN: 子表
+      zh-HK: 子表
+    normal:
+      en: Normal Table
+      zh-CN: 普通表
+      zh-HK: 普通表

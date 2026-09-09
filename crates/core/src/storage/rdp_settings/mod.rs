@@ -10,7 +10,7 @@ pub use security::*;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RdpSettings {
     pub admin_session: bool,
@@ -31,21 +31,5 @@ impl RdpSettings {
             settings.audio.mode = RdpAudioMode::Disabled;
         }
         settings
-    }
-}
-
-impl Default for RdpSettings {
-    fn default() -> Self {
-        Self {
-            admin_session: false,
-            display: RdpDisplaySettings::default(),
-            resources: RdpResourceSettings::default(),
-            performance: RdpPerformanceSettings::default(),
-            audio: RdpAudioSettings::default(),
-            input: RdpInputSettings::default(),
-            security: RdpSecuritySettings::default(),
-            gateway: RdpGatewaySettings::default(),
-            connection: RdpConnectionSettings::default(),
-        }
     }
 }

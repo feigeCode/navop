@@ -226,15 +226,11 @@ pub(super) fn build_entry(
 }
 
 fn normalize_ssh_expect(value: SshAccountExpect) -> Result<SshAccountExpect, String> {
+    let username_label = t!("CredentialForm.username");
+    let password_label = t!("CredentialForm.password");
     Ok(SshAccountExpect {
-        username: normalize_expect_step(
-            value.username,
-            &t!("CredentialForm.username").to_string(),
-        )?,
-        password: normalize_expect_step(
-            value.password,
-            &t!("CredentialForm.password").to_string(),
-        )?,
+        username: normalize_expect_step(value.username, username_label.as_ref())?,
+        password: normalize_expect_step(value.password, password_label.as_ref())?,
     })
 }
 

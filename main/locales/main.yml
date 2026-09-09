@@ -1538,6 +1538,10 @@ ConnectionType:
     en: "MQTT"
     zh-CN: "MQTT"
     zh-HK: "MQTT"
+  rocketmq:
+    en: "RocketMQ"
+    zh-CN: "RocketMQ"
+    zh-HK: "RocketMQ"
   serial:
     en: "Serial"
     zh-CN: "串口"
@@ -1677,10 +1681,6 @@ Connection:
     en: Copy MongoDB Address
     zh-CN: 复制 MongoDB 地址
     zh-HK: 複製 MongoDB 位址
-  copy_mqtt_target:
-    en: Copy MQTT Address
-    zh-CN: 复制 MQTT 地址
-    zh-HK: 複製 MQTT 位址
   copy_serial_port:
     en: Copy Serial Port
     zh-CN: 复制串口名称
@@ -1983,10 +1983,6 @@ Connection:
       en: MongoDB
       zh-CN: MongoDB
       zh-HK: MongoDB
-    type_mqtt:
-      en: MQTT
-      zh-CN: MQTT
-      zh-HK: MQTT
     type_serial:
       en: Serial
       zh-CN: 串口
@@ -2105,7 +2101,7 @@ NewConnection:
   category_middleware:
     en: Middleware
     zh-CN: 中间件
-    zh-HK: 中介軟體
+    zh-HK: 中間件
   category_terminal:
     en: Terminal
     zh-CN: 终端
@@ -2122,6 +2118,14 @@ NewConnection:
     en: "More Connections"
     zh-CN: "更多连接"
     zh-HK: "更多連線"
+  more_middleware:
+    en: "Install middleware extensions"
+    zh-CN: "安装中间件扩展"
+    zh-HK: "安裝中間件擴展"
+  more_time_series:
+    en: "Install time-series database extensions"
+    zh-CN: "安装时序数据库扩展"
+    zh-HK: "安裝時序資料庫擴展"
   description_ssh:
     en: Remote server terminal and file connection
     zh-CN: 远程服务器终端与文件连接
@@ -2142,10 +2146,6 @@ NewConnection:
     en: MongoDB database connection
     zh-CN: MongoDB 数据库连接
     zh-HK: MongoDB 資料庫連線
-  description_mqtt:
-    en: MQTT message broker connection
-    zh-CN: MQTT 消息中间件连接
-    zh-HK: MQTT 訊息中介軟體連線
   description_serial:
     en: Serial device connection
     zh-CN: 串口设备连接
@@ -2187,6 +2187,52 @@ ConnectionForm:
     en: Sync this connection across devices
     zh-CN: 在多设备间同步此连接
     zh-HK: 在多設備間同步此連線
+  # 扩展连接表单(composite 扩展贡献的连接,布局对齐数据库新建连接)
+  name_placeholder:
+    en: Connection name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  general:
+    en: General
+    zh-CN: 常规
+    zh-HK: 常規
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  # 扩展连接 SSH 隧道页签(与数据库连接窗口的 SSH 页签一致)
+  ssh:
+    en: SSH
+    zh-CN: SSH
+    zh-HK: SSH
+  ssh_timeout:
+    en: SSH timeout (seconds)
+    zh-CN: SSH 超时（秒）
+    zh-HK: SSH 逾時（秒）
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  workspace:
+    en: Workspace
+    zh-CN: 工作空间
+    zh-HK: 工作空間
+  remark_placeholder:
+    en: Optional note
+    zh-CN: 可选备注
+    zh-HK: 可選備註
+  test_success:
+    en: Connection successful
+    zh-CN: 连接成功
+    zh-HK: 連線成功
+  name_required:
+    en: Connection name is required
+    zh-CN: 连接名称不能为空
+    zh-HK: 連線名稱不能為空
+  repository_unavailable:
+    en: Connection repository is unavailable
+    zh-CN: 连接仓库不可用
+    zh-HK: 連線儲存庫不可用
 
 # 设置页面
 Settings:

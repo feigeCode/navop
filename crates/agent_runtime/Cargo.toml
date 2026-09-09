@@ -29,3 +29,6 @@ rust-i18n.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
 serde_json.workspace = true
 tempfile = "3"
+
+[lints]
+workspace = true

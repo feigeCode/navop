@@ -1626,7 +1626,6 @@ mod tests {
         let settings = SqlFormatSettings {
             keyword_case: SqlKeywordCase::Upper,
             indent: SqlIndentStyle::Tabs,
-            ..SqlFormatSettings::default()
         };
         let json = serde_json::to_string(&settings).expect("serialize sql format settings");
         assert_eq!(r#"{"keyword_case":"upper","indent":"tabs"}"#, json.as_str());
@@ -1638,7 +1637,6 @@ mod tests {
             SqlFormatSettings {
                 keyword_case: SqlKeywordCase::Lower,
                 indent: SqlIndentStyle::TwoSpaces,
-                ..SqlFormatSettings::default()
             },
             partial
         );

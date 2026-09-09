@@ -1248,9 +1248,8 @@ where
         let input = self
             .delegate
             .build_input(row_ix, delegate_col_ix, window, cx);
-        if input.is_some() {
+        if let Some((input, subscriptions)) = input {
             self.editing_cell = Some((row_ix, col_ix));
-            let (input, subscriptions) = input.unwrap();
             self.editing_input = Some(input);
             self._subscriptions = subscriptions;
             cx.emit(EditTableEvent::CellEditing(row_ix, col_ix));
@@ -2113,17 +2112,17 @@ where
                 || self.selection.ranges.iter().any(|r| !r.is_single()));
 
         // 计算选区边框（只在选区边界显示，且仅限单元格选择模式）
-        let (border_top, border_bottom, border_left, border_right) =
-            if is_in_selection && row_ix.is_some() {
-                let r = row_ix.unwrap();
+        let (border_top, border_bottom, border_left, border_right) = match (is_in_selection, row_ix)
+        {
+            (true, Some(r)) => {
                 let top = r == 0 || !self.selection.contains(r - 1, col_ix);
                 let bottom = !self.selection.contains(r + 1, col_ix);
                 let left = col_ix == 0 || !self.selection.contains(r, col_ix - 1);
                 let right = !self.selection.contains(r, col_ix + 1);
                 (top, bottom, left, right)
-            } else {
-                (false, false, false, false)
-            };
+            }
+            _ => (false, false, false, false),
+        };
 
         // 旧的单选逻辑（向后兼容）
         let is_select_cell = match self.selected_cell {

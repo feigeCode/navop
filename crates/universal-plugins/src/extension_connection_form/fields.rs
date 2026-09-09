@@ -1,4 +1,4 @@
-use gpui::{App, AppContext, Context, Entity, Window};
+use gpui::{App, AppContext, Context, Entity, SharedString, Window};
 use gpui_component::{input::InputState, select::SelectState};
 use one_core::storage::Workspace;
 use rust_i18n::t;
@@ -25,10 +25,11 @@ pub(super) fn create_name_input(
 
 pub(super) fn create_input(
     value: String,
-    placeholder: String,
+    placeholder: impl Into<SharedString>,
     window: &mut Window,
     cx: &mut Context<ExtensionConnectionForm>,
 ) -> Entity<InputState> {
+    let placeholder = placeholder.into();
     cx.new(|cx| {
         let mut input = InputState::new(window, cx).placeholder(placeholder);
         input.set_value(value, window, cx);

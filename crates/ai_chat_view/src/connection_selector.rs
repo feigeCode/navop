@@ -125,7 +125,9 @@ fn connection_type_icon(conn_type: &ConnectionType) -> Icon {
         ConnectionType::Database => IconName::Database.mono(),
         ConnectionType::Redis => IconName::Database.mono(),
         ConnectionType::MongoDB => IconName::Database.mono(),
-        ConnectionType::Mqtt => Icon::default().path(one_core::storage::NAVOP_MQTT_LINE_ICON),
+        // 旧 Mqtt/Rocketmq 变体仅用于历史数据识别(已迁移为 Extension),
+        // 品牌图标由扩展自带,此处保留通用网络图标兜底
+        ConnectionType::Mqtt | ConnectionType::Rocketmq => IconName::Network.mono(),
         ConnectionType::SshSftp => IconName::Terminal.mono(),
         ConnectionType::Serial => IconName::SquareTerminal.mono(),
         ConnectionType::Telnet => IconName::SquareTerminal.mono(),

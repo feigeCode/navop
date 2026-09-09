@@ -39,14 +39,14 @@ impl ToolExposureSurface {
         }
     }
 
-    fn current<'a>(self, settings: &'a AppSettings) -> &'a ToolExposureToolsetSettings {
+    fn current(self, settings: &AppSettings) -> &ToolExposureToolsetSettings {
         match self {
             Self::Mcp => &settings.tool_exposure.mcp,
             Self::Agent => &settings.tool_exposure.agent,
         }
     }
 
-    fn current_mut<'a>(self, settings: &'a mut AppSettings) -> &'a mut ToolExposureToolsetSettings {
+    fn current_mut(self, settings: &mut AppSettings) -> &mut ToolExposureToolsetSettings {
         match self {
             Self::Mcp => &mut settings.tool_exposure.mcp,
             Self::Agent => &mut settings.tool_exposure.agent,

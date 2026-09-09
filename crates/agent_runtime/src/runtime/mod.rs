@@ -218,7 +218,7 @@ impl Runtime {
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
         let cancellation = CancellationToken::new();
         let pending = match session.begin_pending_tool_resolution(call_id, cancellation.clone()) {
-            PendingToolResolution::Ready(pending) => pending,
+            PendingToolResolution::Ready(pending) => *pending,
             PendingToolResolution::Busy => {
                 return Err(RuntimeError::SessionBusy(session_id.clone()));
             }

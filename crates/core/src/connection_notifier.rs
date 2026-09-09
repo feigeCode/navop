@@ -41,6 +41,9 @@ pub enum ConnectionDataEvent {
     CloudSyncRequested,
     /// 团队缓存已刷新，打开的表单应重新读取团队选项
     TeamCacheUpdated,
+    /// 数据库驱动扩展被安装/卸载,订阅方应重扫 IPC 驱动注册表
+    /// (新建连接页的驱动卡片可见性依赖 HomePage 缓存的注册表)
+    ExtensionDriversChanged,
 }
 
 /// 全局连接数据通知器

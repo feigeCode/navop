@@ -19,8 +19,9 @@ pub fn last_sync_completed_at() -> Option<i64> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum PersonalSyncRuntimeStatus {
+    #[default]
     Disabled,
     Ready {
         health: SyncStoreHealth,
@@ -31,12 +32,6 @@ pub enum PersonalSyncRuntimeStatus {
         health: SyncStoreHealth,
         message: String,
     },
-}
-
-impl Default for PersonalSyncRuntimeStatus {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 impl PersonalSyncRuntimeStatus {

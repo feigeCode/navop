@@ -85,6 +85,8 @@ pub(crate) fn apply_code_block_features(
         })
 }
 
+// 工具栏渲染辅助函数:各参数来自同一渲染调用点的自然拆解
+#[allow(clippy::too_many_arguments)]
 fn render_code_block_toolbar(
     block_key: u64,
     code: SharedString,
@@ -128,7 +130,7 @@ fn render_code_block_toolbar(
             let action_code = code.to_string();
             let action_lang = lang.as_ref().map(ToString::to_string);
             let mut button = Button::new(SharedString::from(format!("{}-{idx}", action.id)))
-                .icon(action.icon.clone())
+                .icon(action.icon)
                 .ghost()
                 .xsmall()
                 .on_click(move |_, window, cx| {

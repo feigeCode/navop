@@ -4,7 +4,7 @@ use std::ops::Range;
 pub type CellCoord = (usize, usize);
 
 /// 单元格范围（矩形选区）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CellRange {
     /// 选择起点
     pub start: CellCoord,
@@ -79,15 +79,6 @@ impl CellRange {
     /// 扩展范围到指定单元格
     pub fn extend_to(&mut self, coord: CellCoord) {
         self.end = coord;
-    }
-}
-
-impl Default for CellRange {
-    fn default() -> Self {
-        Self {
-            start: (0, 0),
-            end: (0, 0),
-        }
     }
 }
 

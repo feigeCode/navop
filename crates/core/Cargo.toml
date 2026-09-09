@@ -56,3 +56,6 @@ windows = { workspace = true, features = [
 
 [build-dependencies]
 dotenvy = "0.15"
+
+[lints]
+workspace = true

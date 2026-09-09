@@ -237,7 +237,10 @@ impl ConnectionRepository {
         let cloud_id = item
             .cloud_id
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("Cloud connection requires cloud_id"))?;
+            .ok_or_else(|| anyhow::anyhow!("Cloud connection requires cloud_id"))?
+            .to_string();
+        // 云端下行可能携带旧版 Mqtt/Rocketmq 形态,写入前归一为扩展连接
+        item.try_migrate_legacy_middleware_connection();
         let connection_type = item.connection_type.to_string();
         let encrypted_params = item.try_encrypt_params()?;
         let sync_enabled = i64::from(item.sync_enabled);
@@ -307,6 +310,8 @@ impl Repository for ConnectionRepository {
     }
 
     fn insert(&self, item: &mut Self::Entity) -> Result<i64> {
+        // 导入/恢复等路径可能落库旧版 Mqtt/Rocketmq 形态,写入前归一为扩展连接
+        item.try_migrate_legacy_middleware_connection();
         let name = item.name.clone();
         let connection_type = item.connection_type.to_string();
         let params_str = item.try_encrypt_params()?;
@@ -341,6 +346,19 @@ impl Repository for ConnectionRepository {
         let id = item
             .id
             .ok_or_else(|| anyhow::anyhow!("Cannot update without ID"))?;
+        // item 为共享引用:旧类型数据克隆后归一再落库,避免旧形态重新写回
+        let migrated;
+        let item = if matches!(
+            item.connection_type,
+            ConnectionType::Mqtt | ConnectionType::Rocketmq
+        ) {
+            let mut normalized = item.clone();
+            normalized.try_migrate_legacy_middleware_connection();
+            migrated = normalized;
+            &migrated
+        } else {
+            item
+        };
         let name = item.name.clone();
         let connection_type = item.connection_type.to_string();
         let params_str = item.try_encrypt_params()?;

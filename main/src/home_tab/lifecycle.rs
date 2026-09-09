@@ -211,6 +211,10 @@ impl HomePage {
                     ConnectionDataEvent::TeamCacheUpdated => {
                         this.load_team_options(cx);
                     }
+                    ConnectionDataEvent::ExtensionDriversChanged => {
+                        // 数据库驱动扩展被安装/卸载,重扫 IPC 驱动注册表
+                        this.reload_external_driver_registry(cx);
+                    }
                 },
             )
             .detach();

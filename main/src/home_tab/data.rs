@@ -64,6 +64,22 @@ impl HomePage {
         .detach();
     }
 
+    /// 扩展安装/卸载导致数据库驱动集合变化后,仅重扫 IPC 驱动注册表(不重载连接列表)。
+    ///
+    /// 新建连接窗口的驱动卡片可见性依赖这里缓存的注册表;
+    /// 不重扫的话要等重启或下一次连接 CRUD 才能看到新驱动。
+    pub(super) fn reload_external_driver_registry(&mut self, cx: &mut Context<Self>) {
+        let scan_task = cx.background_spawn(async move { IpcDriverRegistry::load_default() });
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let external_driver_registry = scan_task.await;
+            _ = this.update(cx, |this, cx| {
+                this.external_driver_registry = external_driver_registry;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn load_team_options(&mut self, cx: &mut Context<Self>) {
         let Some(requested_user_id) = self.team_permissions.user_id().map(str::to_owned) else {
             return;

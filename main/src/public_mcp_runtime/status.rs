@@ -2,8 +2,9 @@ use public_mcp::discovery::PublicMcpMode;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PublicMcpRuntimeStatus {
+    #[default]
     Disabled,
     Starting {
         generation: u64,
@@ -19,12 +20,6 @@ pub enum PublicMcpRuntimeStatus {
         generation: u64,
         message: String,
     },
-}
-
-impl Default for PublicMcpRuntimeStatus {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 impl PublicMcpRuntimeStatus {

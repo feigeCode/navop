@@ -407,10 +407,6 @@ fn connection_endpoint(connection: &StoredConnection) -> Option<String> {
             .ok()
             .map(|params| format!("{}:{}/{}", params.host, params.port, params.db_index)),
         ConnectionType::MongoDB => mongodb_endpoint(connection),
-        ConnectionType::Mqtt => connection
-            .to_mqtt_params()
-            .ok()
-            .map(|params| format!("{}:{}", params.host, params.port)),
         ConnectionType::Serial => connection
             .to_serial_params()
             .ok()
@@ -685,7 +681,8 @@ pub(crate) fn personal_sync_event_from_connection_event(
         }
         ConnectionDataEvent::SchemaChanged { .. }
         | ConnectionDataEvent::CloudSyncRequested
-        | ConnectionDataEvent::TeamCacheUpdated => None,
+        | ConnectionDataEvent::TeamCacheUpdated
+        | ConnectionDataEvent::ExtensionDriversChanged => None,
     }
 }
 

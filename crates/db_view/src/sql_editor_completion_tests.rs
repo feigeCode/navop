@@ -1,7 +1,6 @@
-/// Property-based tests for SQL Completion Provider - DotColumn Filtering
+/// Property-based tests for SQL Completion Provider - Dot Column Filtering
 ///
 /// **Feature: sql-smart-completion**
-
 #[cfg(test)]
 mod tests {
     use crate::sql_editor::{

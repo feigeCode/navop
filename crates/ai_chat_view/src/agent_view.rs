@@ -497,7 +497,7 @@ fn merge_live_session_summaries(
             .get(summary.id.as_str())
             .map_or(summary, |live| (*live).clone())
     }));
-    summaries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.updated_at));
     summaries
 }
 
@@ -3943,6 +3943,8 @@ impl Render for AgentChatView {
     }
 }
 
+// 组合器上下文构建:参数与会话状态字段一一对应,装箱改签名收益低
+#[allow(clippy::too_many_arguments)]
 fn build_composer_context(
     resources: &ResourceContext,
     tool_execution_mode: ToolExecutionMode,

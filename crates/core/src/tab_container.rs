@@ -3358,7 +3358,7 @@ impl TabContainer {
             .background(header_background)
             .border_color(border)
             .leading(
-                Icon::new(contribution.icon.clone())
+                Icon::new(contribution.icon)
                     .with_size(IconSize::Small)
                     .text_color(text_color),
             )
@@ -3516,7 +3516,7 @@ impl TabContainer {
                     "tab-sidebar-show-{}-{}",
                     id.owner, id.local_id
                 )))
-                .icon(Icon::new(contribution.icon.clone()).text_color(text_color))
+                .icon(Icon::new(contribution.icon).text_color(text_color))
                 .ghost()
                 .compact()
                 .tooltip(t!("Sidebar.show_panel").to_string())
@@ -3846,7 +3846,7 @@ impl TabContainer {
         let sidebar_panels = self.resolved_sidebar_panels(cx);
         let has_sidebar_layout = sidebar_panels
             .iter()
-            .any(|panel| panel.visible || (!panel.visible && panel.contribution.policy.hideable));
+            .any(|panel| panel.visible || panel.contribution.policy.hideable);
         let active_view = active_tab.map(|tab| tab.content().view());
 
         div()
@@ -4705,6 +4705,8 @@ impl TabContainer {
             ))
     }
 
+    // 渲染辅助函数:平台/关闭行为等参数来自同一调用点的拆解,装箱改签名收益低
+    #[allow(clippy::too_many_arguments)]
     fn render_control_button(
         &self,
         id: &'static str,

@@ -15,7 +15,7 @@ fn launch_materializes_secret_refs_without_secret_values() {
     .unwrap();
     let mut connection = StoredConnection::new_extension("Search".into(), params, None);
     connection.id = Some(42);
-    let launch = ShellConnectionLaunch::new(&connection, &contribution(), &view()).unwrap();
+    let launch = ShellConnectionLaunch::new(&connection, &contribution(), &view(), None).unwrap();
 
     assert_eq!(
         Some("secret://self/42:api_key"),
