@@ -187,6 +187,14 @@ fn reload_extension_runtime(kind: extension_view::ExtensionKind, cx: &mut App) {
     }
     crate::refresh_global_runtime_catalog(cx);
     crate::extension::refresh_runtime_contributions(cx);
+    // 数据库驱动集合变化:广播事件让 HomePage 等订阅方重扫 IPC 驱动注册表,
+    // 否则新建连接页的驱动卡片要等重启/连接 CRUD 后才可见
+    if matches!(kind, extension_view::ExtensionKind::DatabaseDriver) {
+        one_core::connection_notifier::emit_connection_event_from_app(
+            one_core::connection_notifier::ConnectionDataEvent::ExtensionDriversChanged,
+            cx,
+        );
+    }
 }
 
 fn refresh_language_extension_manifests() {

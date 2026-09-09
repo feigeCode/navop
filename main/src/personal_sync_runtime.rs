@@ -681,7 +681,8 @@ pub(crate) fn personal_sync_event_from_connection_event(
         }
         ConnectionDataEvent::SchemaChanged { .. }
         | ConnectionDataEvent::CloudSyncRequested
-        | ConnectionDataEvent::TeamCacheUpdated => None,
+        | ConnectionDataEvent::TeamCacheUpdated
+        | ConnectionDataEvent::ExtensionDriversChanged => None,
     }
 }
 

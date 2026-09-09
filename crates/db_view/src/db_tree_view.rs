@@ -947,7 +947,8 @@ impl DbTreeView {
             | ConnectionDataEvent::CredentialUpdated { .. }
             | ConnectionDataEvent::CredentialDeleted { .. }
             | ConnectionDataEvent::CloudSyncRequested
-            | ConnectionDataEvent::TeamCacheUpdated => {}
+            | ConnectionDataEvent::TeamCacheUpdated
+            | ConnectionDataEvent::ExtensionDriversChanged => {}
         }
     }
 
