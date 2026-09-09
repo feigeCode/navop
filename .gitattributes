@@ -1,1 +1,3 @@
+* text=auto eol=lf
+
 crates/terminal/src/shell_integration.sh text eol=lf
