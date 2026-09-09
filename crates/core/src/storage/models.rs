@@ -254,6 +254,9 @@ impl DatabaseType {
     pub fn external_driver_id(&self) -> Option<&str> {
         match self {
             Self::External { driver_id } => Some(driver_id),
+            // TDengine 自 v0.16 起由 tdengine IPC 驱动扩展提供,统一走外部驱动路径
+            // (连接表单/打开守卫/树菜单/IPC 协议均据此路由到驱动扩展)
+            Self::TDengine => Some("tdengine"),
             _ => None,
         }
     }

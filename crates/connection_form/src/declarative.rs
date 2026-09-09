@@ -15,6 +15,8 @@ pub use types::*;
 pub struct DeclarativeForm {
     pub(super) config: DeclarativeFormConfig,
     pub(super) active_tab: usize,
+    /// 嵌入模式:隐藏自身页签栏,由宿主(如扩展连接表单)统一驱动页签
+    pub(super) embedded: bool,
     pub(super) focus_handle: FocusHandle,
     pub(super) values: HashMap<String, Entity<String>>,
     pub(super) inputs: HashMap<String, Entity<InputState>>,
@@ -118,6 +120,7 @@ impl DeclarativeForm {
         Self {
             config,
             active_tab: 0,
+            embedded: false,
             focus_handle: cx.focus_handle(),
             values,
             inputs,
@@ -125,6 +128,26 @@ impl DeclarativeForm {
             selects,
             cleared_secrets: HashSet::new(),
         }
+    }
+
+    /// 声明式表单的页签数量(宿主嵌入模式下用于构建统一页签栏)
+    pub fn tab_count(&self) -> usize {
+        self.config.tabs.len()
+    }
+
+    /// 指定页签的标签文本(越界返回 None)
+    pub fn tab_label(&self, index: usize) -> Option<String> {
+        self.config.tabs.get(index).map(|tab| tab.label.clone())
+    }
+
+    /// 切换激活页签(宿主嵌入模式由宿主调用)
+    pub fn set_active_tab(&mut self, index: usize) {
+        self.active_tab = index;
+    }
+
+    /// 开启嵌入模式:隐藏自身页签栏,页签由宿主统一渲染与切换
+    pub fn set_embedded(&mut self, embedded: bool) {
+        self.embedded = embedded;
     }
 
     pub fn collect(

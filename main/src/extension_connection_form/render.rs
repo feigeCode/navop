@@ -25,83 +25,84 @@ impl Focusable for ExtensionConnectionForm {
     }
 }
 
-impl Render for ExtensionConnectionForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let testing = *self.is_testing.read(cx);
-        let status = self.test_result.read(cx).clone();
-
-        v_flex()
-            .size_full()
-            .child(
-                div()
-                    .flex_1()
-                    .p_4()
-                    .overflow_y_scrollbar()
-                    .child(self.render_tab_bar(cx))
-                    .child(self.render_tab_content(cx)),
-            )
-            .when_some(status, |el, status| {
-                el.child(self.render_test_banner(status, cx))
-            })
-            .child(self.render_footer(testing, cx))
-    }
-}
-
 impl ExtensionConnectionForm {
-    /// 页签栏:常规/备注(布局对齐数据库新建连接窗口)
+    /// manifest 声明的表单页签数量
+    fn manifest_tab_count(&self, cx: &App) -> usize {
+        self.fields.read(cx).tab_count()
+    }
+
+    /// 统一页签栏:manifest 页签(来自扩展声明,已中文化)+ 宿主"备注"页签
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().justify_center().child(
-            TabBar::new("extension-connection-tabs")
-                .with_size(Size::Large)
-                .underline()
-                .selected_index(self.active_tab)
-                .on_click(cx.listener(|this, ix: &usize, _window, cx| {
-                    this.active_tab = *ix;
-                    cx.notify();
-                }))
-                .child(Tab::new().label(t!("ConnectionForm.general").to_string()))
-                .child(Tab::new().label(t!("ConnectionForm.remark").to_string())),
-        )
+        let tab_count = self.manifest_tab_count(cx);
+        let mut bar = TabBar::new("extension-connection-tabs")
+            .with_size(Size::Large)
+            .underline()
+            .selected_index(self.active_tab)
+            .on_click(cx.listener(move |this, index: &usize, _window, cx| {
+                this.active_tab = *index;
+                let tab_count = this.fields.read(cx).tab_count();
+                let fields_index = (*index).min(tab_count.saturating_sub(1));
+                this.fields
+                    .update(cx, |form, _| form.set_active_tab(fields_index));
+                cx.notify();
+            }));
+        for index in 0..tab_count {
+            if let Some(label) = self.fields.read(cx).tab_label(index) {
+                bar = bar.child(Tab::new().label(label));
+            }
+        }
+        div()
+            .flex()
+            .justify_center()
+            .child(bar.child(Tab::new().label(t!("ConnectionForm.remark").to_string())))
     }
 
     fn render_tab_content(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.active_tab == 0 {
-            self.render_general_tab(cx).into_any_element()
+        if self.active_tab < self.manifest_tab_count(cx) {
+            self.render_manifest_tab(cx).into_any_element()
         } else {
             self.render_remark_tab(cx).into_any_element()
         }
     }
 
-    /// 常规页:名称 + 扩展声明字段 + 工作空间/团队
-    fn render_general_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// manifest 页签内容:首页签附带名称/工作空间/团队,其余页签仅扩展声明字段
+    fn render_manifest_tab(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_first_tab = self.active_tab == 0;
         v_flex()
             .gap_4()
             .min_h(px(250.))
-            .child(
-                v_form().columns(1).child(
-                    field()
-                        .label(t!("ConnectionForm.name").to_string())
-                        .required(true)
-                        .child(Input::new(&self.name).w_full()),
-                ),
-            )
-            .child(self.fields.clone())
-            .child(
-                v_form().columns(1).child(
-                    field()
-                        .label(t!("ConnectionForm.workspace").to_string())
-                        .child(Select::new(&self.workspace).w_full()),
-                ),
-            )
-            .when(connection_form::team::team_management_enabled(cx), |this| {
+            .when(is_first_tab, |this| {
                 this.child(
                     v_form().columns(1).child(
                         field()
-                            .label(connection_form::team::team_label())
-                            .child(Select::new(&self.team).w_full()),
+                            .label(t!("ConnectionForm.name").to_string())
+                            .required(true)
+                            .child(Input::new(&self.name).w_full()),
                     ),
                 )
             })
+            .child(self.fields.clone())
+            .when(is_first_tab, |this| {
+                this.child(
+                    v_form().columns(1).child(
+                        field()
+                            .label(t!("ConnectionForm.workspace").to_string())
+                            .child(Select::new(&self.workspace).w_full()),
+                    ),
+                )
+            })
+            .when(
+                is_first_tab && connection_form::team::team_management_enabled(cx),
+                |this| {
+                    this.child(
+                        v_form().columns(1).child(
+                            field()
+                                .label(connection_form::team::team_label())
+                                .child(Select::new(&self.team).w_full()),
+                        ),
+                    )
+                },
+            )
     }
 
     /// 备注页:备注 + 云端同步(与数据库表单的备注页一致)
@@ -226,5 +227,27 @@ impl ExtensionConnectionForm {
                     .disabled(testing)
                     .on_click(cx.listener(|this, _, window, cx| this.on_save(window, cx))),
             )
+    }
+}
+
+impl Render for ExtensionConnectionForm {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let testing = *self.is_testing.read(cx);
+        let status = self.test_result.read(cx).clone();
+
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .flex_1()
+                    .p_4()
+                    .overflow_y_scrollbar()
+                    .child(self.render_tab_bar(cx))
+                    .child(self.render_tab_content(cx)),
+            )
+            .when_some(status, |el, status| {
+                el.child(self.render_test_banner(status, cx))
+            })
+            .child(self.render_footer(testing, cx))
     }
 }

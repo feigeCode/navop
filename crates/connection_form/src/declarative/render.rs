@@ -126,7 +126,7 @@ impl Render for DeclarativeForm {
         v_flex()
             .size_full()
             .gap_4()
-            .when(tabs.len() > 1, |el| {
+            .when(!self.embedded && tabs.len() > 1, |el| {
                 el.child(
                     TabBar::new("declarative-connection-tabs")
                         .selected_index(active)

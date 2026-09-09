@@ -206,6 +206,10 @@ fn build_database_form(
     window: &mut Window,
     cx: &mut Context<NewConnectionWindow>,
 ) -> NewConnectionFormResult {
+    // 内置类型若由 IPC 驱动扩展提供服务(如 TDengine),统一补全 driver_id,
+    // 使其走 driver.json 声明式表单与安装守卫,而非已移除的原生表单
+    let external_driver_id =
+        external_driver_id.or_else(|| db_type.external_driver_id().map(str::to_string));
     if let Some(driver_id) = external_driver_id.as_deref() {
         if external_driver_registry.find(driver_id).is_none() {
             extension_runtime::database_driver_install::prompt_install_database_driver(

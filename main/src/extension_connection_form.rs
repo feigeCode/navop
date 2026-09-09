@@ -88,6 +88,8 @@ impl ExtensionConnectionForm {
         let name = create_name_input(name_value, window, cx);
         let form_config = declarative_config(&config.contribution.form);
         let fields = cx.new(|cx| DeclarativeForm::new(form_config, &initial_config, window, cx));
+        // 嵌入模式:manifest 页签与宿主"备注"页签由本表单统一渲染切换
+        fields.update(cx, |form, _| form.set_embedded(true));
         let selected_workspace = config
             .editing_connection
             .as_ref()

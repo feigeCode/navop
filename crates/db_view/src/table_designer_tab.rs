@@ -3578,6 +3578,7 @@ mod tests {
         DatabaseType::all()
             .into_iter()
             .filter(|database_type| !matches!(database_type, DatabaseType::TDengine))
+            .cloned()
             .collect()
     }
 
