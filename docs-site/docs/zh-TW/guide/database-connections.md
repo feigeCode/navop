@@ -1,6 +1,6 @@
 # 資料庫連線
 
-Navop 內建 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 與 ClickHouse，並可透過擴充加入達夢、金倉、GBase 8s、OceanBase、openGauss、IoTDB 等驅動。欄位與能力依驅動和伺服器版本而異。
+Navop 內建 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse 與 TDengine（官方 taos WebSocket 驅動，經 taosAdapter :6041 連線，純 Rust 無需本機 C 相依），並可透過擴充加入達夢、金倉、GBase 8s、OceanBase、openGauss、IoTDB 等驅動。欄位與能力依驅動和伺服器版本而異。
 
 內建 Oracle 驅動需要 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)；若不想安裝 Instant Client，可從擴充市場安裝純 Go Oracle 驅動。連線 Oracle 時可依需求選擇 Native 或 Go 驅動。
 

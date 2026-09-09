@@ -1,5 +1,5 @@
 use std::ops::Deref;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use crate::cloud_sync::models::data_type;
 use crate::cloud_sync::personal::{PersonalSyncLocalRepositorySource, PersonalSyncLocalSource};
@@ -695,8 +695,7 @@ fn credential(name: &str, sync_enabled: bool) -> CredentialEntry {
 }
 
 fn credential_crypto_mutex() -> &'static Mutex<()> {
-    static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-    MUTEX.get_or_init(|| Mutex::new(()))
+    crate::crypto::crypto_test_lock()
 }
 
 struct CredentialFixture {

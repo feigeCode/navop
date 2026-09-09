@@ -18,7 +18,7 @@ New rows can be entered from scratch or cloned. Change primary and unique fields
 
 Local row changes remain pending until submitted. Before deleting, confirm the count and primary keys, especially while sorted, paged, or filtered. Tables without a stable key may not be safe for single-row editing.
 
-If the selection is wrong, discard pending changes before submission. Production deletions should use a controlled query, transaction, and backup rather than relying on manual recovery.
+If the selection is wrong, discard pending changes before submission. Selecting multiple cells enables batch editing, applying one value to every selected cell at once — useful for normalizing status or category fields. Production deletions should use a controlled query, transaction, and backup rather than relying on manual recovery.
 
 ## Preview SQL and submit
 

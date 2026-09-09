@@ -1,12 +1,12 @@
 # Home, workspaces, and connections
 
-The home screen is the entry point for every saved resource. Workspaces group connections, while card and list views, search, and ordering make large sets easier to navigate. Organizing a connection does not change the remote service itself.
+The home screen is the entry point for every saved resource. Workspaces group connections, while unified grid and tree views, search, and ordering make large sets easier to navigate. Organizing a connection does not change the remote service itself.
 
 ![Recent connections dashboard](/images/app1.png)
 
 ## Organize the home screen
 
-The home dashboard keeps recent connections beside New Connection, Terminal, Quick Open, sync, import, Notes, AI workbench, and extension shortcuts. Search by connection name and switch between card and list layouts. Create workspaces for production, staging, local development, customers, or projects; edit their names, reorder them, and filter the visible connections. Use unmistakable names and visual cues for production resources.
+The home dashboard keeps recent connections beside New Connection, Terminal, Quick Open, sync, import, Notes, AI workbench, and extension shortcuts. Search by connection name or type and switch between grid and tree layouts. Create workspaces for production, staging, local development, customers, or projects; edit their names, drag to reorder (order persists across reloads), filter the visible connections, and use batch mode to move or delete multiple connections at once. Use unmistakable names and visual cues for production resources.
 
 The connection list order is configurable under **Settings → General → Connection Display**: it defaults to natural name order (numeric segments such as IP addresses compared by value, case-insensitive) and can be switched to "Most Recently Used" (LRU). The setting applies to the Home connection list, Redis/MongoDB workspace tabs, and the persistent sidebar connection tree, taking effect immediately.
 
@@ -22,9 +22,9 @@ New Connection includes databases, Redis, MongoDB, SSH/SFTP, local Terminal, RDP
 
 Existing connections can be edited, copied, or deleted. A copy is useful for a related environment, but change its name, destination, and credentials immediately. Close tabs, terminals, transfers, and forwards that use a connection before editing or deleting it.
 
-## Search and maintain connections
+## Search, quick open, and ad-hoc SSH
 
-Search changes only what is displayed. Cards work well for a smaller set of recognizable resources, while list views make dense browsing and ordering easier; double-click the reviewed target to open it. Closing a database or terminal tab does not delete the saved connection. Periodically remove obsolete entries, normalize names, and confirm workspace membership. Never put a password or token in a connection name; hostnames and internal addresses may also require redaction in screenshots.
+Search changes only what is displayed. Quick Open (from the tab bar) also supports **ad-hoc SSH connections**: enter a host, port, and credentials to open a one-off session without creating a saved connection — ideal for troubleshooting an unfamiliar server. Cards work well for a smaller set of recognizable resources, while list views make dense browsing and ordering easier; double-click the reviewed target to open it. Closing a database or terminal tab does not delete the saved connection. Periodically remove obsolete entries, normalize names, and confirm workspace membership. Never put a password or token in a connection name; hostnames and internal addresses may also require redaction in screenshots.
 
 Duplicating a tab automatically appends a number that reuses freed slots (e.g. `192.168.1.1` → `192.168.1.1(1)`), and tab widths adapt to content so long titles are not truncated.
 

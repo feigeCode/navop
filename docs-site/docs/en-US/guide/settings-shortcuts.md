@@ -1,6 +1,6 @@
 # Settings, fonts, and shortcuts
 
-Settings controls appearance, databases, terminals, remote editing, Notes, LLMs, MCP, logs, and updates. Test changes outside a critical session. A font or shortcut issue may not damage data, but it can change what you see or which action fires.
+Settings are organized into dedicated pages for databases, terminals, Agents, and MCP, covering appearance, remote editing, Notes, LLMs, logs, and updates. Test changes outside a critical session. A font or shortcut issue may not damage data, but it can change what you see or which action fires.
 
 ## Set language and appearance
 
@@ -38,7 +38,7 @@ MCP settings control Temporary/Persistent mode, permission profile, and Tool Exp
 
 ## Customize shortcuts
 
-Shortcuts are grouped for global actions, terminal, database, table, remote editing, Redis, and Notes. Search existing bindings before changing them, and account for operating-system and input-method interception. Avoid easy single-key bindings for destructive actions.
+Shortcuts are grouped for global actions, terminal, database, table, remote editing, Redis, and Notes. Bindings can be cleared, and system-wide hotkeys can be disabled entirely (disabling the global hotkey releases the registered system-level combinations). Search existing bindings before changing them, and account for operating-system and input-method interception. Avoid easy single-key bindings for destructive actions.
 
 If a shortcut fails, check focus, platform, input method, and conflicts before resetting or choosing another combination.
 

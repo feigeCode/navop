@@ -1461,7 +1461,8 @@ fn rdp_presentation_status_stays_outside_the_native_child_bounds() {
         .find("\n        div()\n            .size_full()\n            .min_w_0()")
         .expect("remote desktop root")..];
     assert!(root.contains(".flex()\n            .flex_col()"));
-    assert!(source.contains(".on_prepaint(move |bounds, window, cx|"));
+    assert!(source.contains("gpui_component::ElementExt::on_prepaint("));
+    assert!(source.contains("move |bounds, window, cx| {"));
     assert!(source.contains("view.update_content_bounds(bounds, window.scale_factor(), view_cx)"));
     assert!(!root.contains(".on_children_prepainted("));
     let status = root
@@ -1705,7 +1706,8 @@ fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cur
 
 fn assert_parent_bounded_remote_desktop_content(source: &str) {
     let content_start = source
-        .find("let content = div()")
+        .find("let content = gpui_component::ElementExt::on_prepaint(")
+        .or_else(|| source.find("let content = div()"))
         .expect("remote desktop content");
     let root_start = source[content_start..]
         .find("\n        div()\n            .size_full()\n            .min_w_0()")
@@ -1752,7 +1754,8 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     ] {
         assert!(root.contains(constraint));
     }
-    assert!(content.contains(".on_prepaint(move |bounds, window, cx|"));
+    assert!(source.contains("gpui_component::ElementExt::on_prepaint("));
+    assert!(source.contains("move |bounds, window, cx| {"));
     assert!(content.contains("view.update_content_bounds(bounds, window.scale_factor(), view_cx)"));
     assert!(!root.contains(".on_children_prepainted("));
 }

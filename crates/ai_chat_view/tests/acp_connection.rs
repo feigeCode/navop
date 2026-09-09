@@ -92,7 +92,22 @@ async fn prompt_timeout_sends_cancel_and_returns_to_ready() {
         events.last(),
         Some(RuntimeEvent::TurnFailed { reason, .. }) if reason.contains("timed out")
     ));
-    assert_eq!(AcpConnectionPhase::Ready, connection.phase());
+    // The phase returns to Ready on a separate task after the failed turn
+    // settles; poll with a deadline so the assertion does not race that async
+    // transition (the timeout->cancel handshake can outlive the emitted event).
+    let ready_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if connection.phase() == AcpConnectionPhase::Ready {
+            break;
+        }
+        if tokio::time::Instant::now() >= ready_deadline {
+            panic!(
+                "connection did not return to Ready after prompt timeout, phase={:?}",
+                connection.phase()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]

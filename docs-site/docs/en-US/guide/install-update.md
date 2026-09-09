@@ -23,6 +23,17 @@ If Gatekeeper blocks the first macOS launch, verify the official release source 
 
 Use `sha256sums.txt` from the same release to verify download integrity.
 
+## Install via Scoop (Windows)
+
+Navop is available in the official Scoop `extras` bucket. Scoop installs the portable edition and persists the `data` directory for you:
+
+```powershell
+scoop bucket add extras
+scoop install navop
+```
+
+Upgrade later with `scoop update navop`. A Scoop install uses its own data directory, separate from the MSI/EXE installers; when switching between them, migrate the `data` directory as described in the portable-mode notes below.
+
 ## Windows installers
 
 Choose either `navop-<version>-windows-x64.msi` or `navop-<version>-windows-x64.exe` for a normal Windows installation. On 32-bit Windows, download a package whose name explicitly contains `win32`, such as `navop-<version>-win32.exe`. The EXE installer embeds and launches the same MSI installation, so both install for the current user by default, create Start menu and desktop shortcuts, register supported file associations, use the normal Windows user data directories, and support remembered master-key unlock. The default per-user location does not require administrator privileges.

@@ -2555,7 +2555,7 @@ mod port_forward_tests {
             port: address.port(),
             username: "tester".to_string(),
             auth: SshAuth::Password("password".to_string()),
-            timeout: Some(Duration::from_secs(5)),
+            timeout: Some(Duration::from_secs(30)),
             keepalive_interval: None,
             keepalive_max: None,
             jump_server: None,

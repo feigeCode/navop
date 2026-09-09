@@ -3,7 +3,7 @@
   <p><img src="resources/navop-icon.png" alt="Navop" width="120" /></p>
   <h1>Navop</h1>
   <p><strong>数据库、SSH、SFTP、终端、远程桌面、监控与 AI 一体化的原生桌面工作台。</strong></p>
-  <p>基于 <a href="https://gpui.rs">GPUI</a> 与 Rust 构建 · GPU 加速渲染</p>
+  <p>基于 <a href="https://gpui.rs">GPUI</a> 与 Rust 构建 · GPU 加速渲染 · 无 WebView</p>
 
   <p>
     <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="下载量" /></a>
@@ -21,6 +21,7 @@
     <img src="https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse" />
     <img src="https://img.shields.io/badge/SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white" alt="SQL Server" />
     <img src="https://img.shields.io/badge/Oracle-F80000?logo=oracle&logoColor=white" alt="Oracle" />
+    <img src="https://img.shields.io/badge/TDengine-1B73B4" alt="TDengine" />
     <img src="https://img.shields.io/badge/Dameng%20DM-C71D23" alt="达梦 DM" />
     <img src="https://img.shields.io/badge/KingbaseES-005BAC" alt="金仓 KingbaseES" />
     <img src="https://img.shields.io/badge/GBase%208s-1E73BE" alt="GBase 8s" />
@@ -29,6 +30,7 @@
     <img src="https://img.shields.io/badge/Apache%20IoTDB-1B3A6B?logo=apache&logoColor=white" alt="Apache IoTDB" />
     <img src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white" alt="Redis" />
     <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
+    <img src="https://img.shields.io/badge/MQTT-660066?logo=mqtt&logoColor=white" alt="MQTT" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
     <img src="https://img.shields.io/badge/Port%20Forwarding-0F766E" alt="端口转发" />
@@ -53,26 +55,31 @@
 
 ### 数据库与数据工具
 
-- 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse；通过扩展安装达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB 和神通 Oscar 驱动。
+- 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse 与 TDengine（官方 taos WebSocket 驱动）；通过扩展安装达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB 和神通 Oscar 驱动。
 - 浏览数据库对象，编辑和执行 SQL 并查看执行计划，导入导出数据，比较 Schema/Data，并通过 ER 图查看关系。
-- 专用的 Redis 与 MongoDB 界面、持久化 SQL 执行历史、存储过程与函数编辑，以及代理和 SSH 隧道路由。
+- 专用的 Redis 与 MongoDB 界面；MQTT 中间件连接提供订阅、消息、发布三个视图（MQTT 3.1.1 + rustls 加密，支持 SSH 隧道与断线自动重订阅）。
+- 表数据页签支持批量编辑选中单元格，日期/时间/数值列使用对应的类型化编辑控件，支持右键复制表名与字段名。
 
 ### 远程连接与运维
 
-- 可拖拽分屏的 SSH 与本地终端，支持快捷命令、广播输入、Shell integration、会话锁定、会话录制回放和会话日志；同时支持 Telnet 与串口连接。
-- 通过 SFTP 上传下载、搜索、收藏、远程编辑、拖拽传输、ZMODEM 传输和跨服务器复制管理远程文件。
-- 可复用的本地、远程（`ssh -R`）与动态 SOCKS 端口转发；X11 转发；主机密钥变更指纹确认；可按连接启用旧版 SSH 算法。
+- 可拖拽分屏的 SSH 与本地终端，支持快捷命令、广播输入、Shell integration、会话锁定、会话录制回放；会话日志支持搜索、批量删除与增量加载；同时支持 Telnet 与串口连接。
+- 通过 SFTP 上传下载、搜索、收藏、远程编辑（可配置大小上限与默认编辑器）、拖拽传输、ZMODEM 传输和跨服务器复制管理远程文件。
+- 可复用的本地、远程（`ssh -R`）与动态 SOCKS 端口转发；X11 转发；主机密钥变更指纹确认；「已知主机」页面可查看、导入和移除信任的 SSH 主机密钥；可按连接启用旧版 SSH 算法。
 - 导入 SecureCRT 等外部工具的会话，进行服务器监控，并支持 RDP/VNC 远程桌面。Windows 上集成原生 MSTSC：通过 C++ 宿主将微软 RDP ActiveX 控件直接内嵌到应用中，可在页签内、全屏窗口中连接，也可一键启动原生 `mstsc.exe` 客户端；跨平台则由纯 Rust 的 IronRDP canvas 后端渲染 RDP 会话。
 
 ### 编辑、AI 与扩展
 
-- 本地 Markdown 笔记，支持 Mermaid 图、数学公式，并可导出为 HTML、PDF 或 DOCX。
+- 本地 Markdown 笔记，支持 Mermaid 图、数学公式，并可导出为 HTML、PDF 或 DOCX；内置编辑器支持保存快捷键与 WASM 语言解析器语法高亮。
 - 使用 AI 生成和解释 SQL、分析数据、生成图表、辅助终端操作、调用工具和运行 Agent 工作流；通过 ACP 接入 Codex、Claude Code 和 OpenCode 等外部 Agent。
-- Agent Hub 在同一工作区查看终端 Agent、项目文件、Git 分支、变更列表和并排 Diff；扩展市场提供数据库驱动、远程桌面 provider、文档渲染器、连接导入器和外部编辑器。官方扩展在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 仓库独立构建发布。
+- Agent Hub 在同一工作区查看终端 Agent、项目文件、Git 分支、变更列表和并排 Diff；工具箱聚合扩展小工具并与连接扩展区分。
+- 扩展市场提供数据库驱动、远程桌面 provider、文档渲染器、连接导入器和外部编辑器。官方扩展在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 仓库独立构建发布。
+- 快速打开支持临时 SSH 连接，标签栏提供新建连接入口，临时会话无需先保存连接。
 
 ### 原生桌面体验
 
 - 基于 GPUI 的原生界面与 GPU 加速渲染；亮色、深色、跟随系统模式，可导入主题，并配置强调色和窗口透明度。
+- 主页统一网格布局与树形视图，最近连接、批量连接管理，工作区拖拽排序持久化。
+- 设置页按数据库、终端、Agent、MCP 拆分为独立分页；快捷键支持清除与禁用系统快捷键。
 - 支持 English、简体中文和繁体中文界面。
 - 加密同步不同设备上的个人连接、凭据与设置。
 
@@ -125,14 +132,21 @@ navop skill install --target codex --scope user
 
 请从 [GitHub Releases](https://github.com/feigeCode/navop/releases/latest) 下载最新版本。每个版本都包含用于校验文件的 `sha256sums.txt`。安装包覆盖 macOS（DMG 与 tar.gz，Apple Silicon / Intel）、Windows（MSI 与 EXE 安装版，以及普通与便携 ZIP）和 Linux（tar.gz、deb、rpm、AppImage），命名遵循 `navop-<version>-<平台>-<架构>.<扩展名>` 规则。
 
+如果 macOS 提示“Apple 无法检查其是否包含恶意软件”，请执行 `sudo xattr -rd com.apple.quarantine /Applications/Navop.app`。
+
+Windows 用户也可以通过 [Scoop](https://scoop.sh) 安装（使用便携版包，数据持久化由 Scoop 管理）：
+
+```powershell
+scoop bucket add extras
+scoop install navop
+```
+
 Navop 也已在 [FlatPark](https://flatpark.org/zh-Hans/apps/dev.navop.Navop/) 上架社区 Flatpak 软件包：
 
 ```bash
 flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
 flatpak --user install flatpark dev.navop.Navop
 ```
-
-如果 macOS 提示“Apple 无法检查其是否包含恶意软件”，请执行 `sudo xattr -rd com.apple.quarantine /Applications/Navop.app`。
 
 完整的安装包选择表、Windows 便携模式说明、v0.10.1 及更早版本 ZIP 的升级迁移，以及 Oracle Instant Client / 纯 Go 驱动说明，请参阅[安装与更新指南](https://docs.navop.dev/guide/install-update)。
 

@@ -12,6 +12,16 @@ Local profiles include the system shell, PowerShell, CMD, WSL, Git Bash, or a cu
 
 The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. Verify the shell, operating system, host, and current directory before running generated commands; local PowerShell, custom programs, and remote Linux shells are not interchangeable.
 
+## Manage known hosts
+
+The Known Hosts page lists every SSH host trusted by Navop with its host/port, route (direct, proxy, jump), key algorithm, and SHA-256 fingerprint, sorted by most recent use. The toolbar provides:
+
+- **Scan System**: imports plain-text entries from the system OpenSSH `known_hosts` file (hashed names, wildcards, CAs, and revoked entries are skipped); already-trusted hosts are never overwritten.
+- **Copy host identity**: copies the full identity (host:port + route) to the clipboard for diagnostics or shared confirmation.
+- **Remove trusted host**: deletes the host key from the app trust store; the next connection asks for host-key confirmation again.
+
+After removing a trust record, reconnect and confirm to restore trust if the server key is unchanged. Host-key change warnings continue to rely on the fingerprint comparison shown at connect time.
+
 ## Agent Hub: code, resources, and Git
 
 Agent Hub brings the terminal Agent, project file tree, Git branches, change list, and side-by-side diff into one workspace, keeping coding, resource navigation, and version control in context beside Navop's local terminals, SSH sessions, and connections.
