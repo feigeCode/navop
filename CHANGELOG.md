@@ -8,16 +8,31 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### 更新内容
 
-- 新增「已知主机」页面，展示应用信任的 SSH 主机、密钥算法和指纹，并支持复制主机标识与移除可信主机。
-- 优化主页连接卡片、连接树和账户入口布局，改善常用连接管理与窗口空间利用。
-- 设置页支持清除快捷键并禁用系统快捷键，快捷键配置反馈更加清晰。
+- 新增「已知主机」页面：集中查看应用信任的 SSH 主机的密钥算法与指纹，支持复制主机标识、移除可信主机，并可扫描系统 `known_hosts` 导入。
+- 表数据编辑支持批量修改选中的多个单元格，结果表格滚动条与视口布局同步优化。
+- 远程文件编辑器：支持配置文件大小上限与默认编辑器，打开路由更完善。
+- 会话日志支持批量删除与增量加载，大量日志下浏览更流畅。
+- 设置页重构：按数据库、终端、Agent、MCP 拆分为独立分页；快捷键支持清除与禁用系统快捷键。
+- 连接表单统一声明式引擎：新增 Auth（用户名/密码/钥匙串）复合字段，MQTT 等中间件表单迁移到统一引擎，钥匙串引用端到端解析。
+- 工具箱：聚合扩展小工具并与连接扩展区分，小工具允许声明后端与全部 host 模块。
+- 快速打开支持临时 SSH 连接，标签栏新增连接入口；主页统一网格布局、树形视图与更克制的视觉层次，连接批量管理上线。
+- 编辑器：支持保存快捷键，WASM 语言解析器启用后语法高亮恢复。
+- Windows 现支持通过 Scoop 安装：`scoop bucket add extras && scoop install navop`。
 
 #### 修复与优化
 
-- 修复已知主机列表无法渲染、卡片高度异常的问题，并完善系统 `known_hosts` 扫描导入和后台加载。
-- 优化 AI 对话中的运行中活动显示，避免任务执行期间缺少状态反馈。
-- 修复标签栏导航切换槽位和工作区排序恢复相关问题。
-- 更新 Linux/CJK 输入支持及相关界面稳定性。
+- 修复 macOS x86_64 上 `gpui` 框架 BOOL 类型差异导致的发布构建失败；同步更新 GPUI/CJK 输入（XIM、macOS IME）支持，Rocky Linux 10 可正常运行。
+- 修复编辑器语法高亮丢失与右键菜单回调中读取编辑器崩溃的问题。
+- 修复 SQL 编辑器右键菜单崩溃并补全剪切/复制/粘贴国际化。
+- 修复新建本地终端时 HomePage 重入崩溃；最近区不再参与搜索与批量操作，避免同一连接重复交互。
+- 修复主页工作区拖拽排序在重载后丢失的问题；团队徽标与工具栏控件精修。
+- 修复标签栏导航切换槽位显示异常。
+- 修复启动时默认打开 AI 工作台的行为，现保持用户上次的页面。
+- 修复终端块选区在滚动时丢失的问题。
+- 优化 AI 对话中的运行中活动显示；规范 Agent 上下文消息角色分配以兼容 OpenAI 协议。
+- 修复钥匙串引用隐藏凭据后下拉跳到表单顶部的问题。
+- 优化 SFTP/终端文件传输进度条尺寸。
+- 扩展管理页不再直接打开视图，入口按贡献分类；扩展机制收敛清理死代码，通用插件机制抽取为独立 crate。
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.17.0) 下载桌面端安装包
 
@@ -25,16 +40,31 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### What's New
 
-- Added a Known Hosts page for trusted SSH hosts, showing key algorithms and fingerprints, with actions to copy the host identity or remove a trusted host.
-- Refined home connection cards, the connection tree, and the account entry layout for better connection management and use of window space.
-- Settings now support clearing shortcuts and disabling system shortcuts, with clearer shortcut configuration feedback.
+- New Known Hosts page: review key algorithms and fingerprints of SSH hosts trusted by the app, copy or remove trusted host identities, and import entries from the system `known_hosts` file.
+- Table data editing supports batch-editing selected cells, with improved result-grid scrollbars and viewport layout.
+- Remote file editor: configurable file size limits and default editor, with improved open routing.
+- Session logs support batch delete and incremental loading for smoother browsing of large histories.
+- Settings redesign: dedicated pages for database, terminal, Agent, and MCP settings; shortcuts can be cleared and system shortcuts disabled.
+- Unified declarative connection-form engine: new Auth (username/password/keychain) composite field; middleware forms such as MQTT migrate to the engine with end-to-end keychain reference resolution.
+- Toolbox: aggregates extension tools, separated from connection extensions; tools may declare backends and full host modules.
+- Quick open supports ad-hoc SSH connections with a new tab-bar entry; the home page gains a unified grid layout, tree view, restrained visual hierarchy, and batch connection management.
+- Editor: save shortcuts, and syntax highlighting restored with WASM language parsers enabled.
+- Navop is now installable on Windows via Scoop: `scoop bucket add extras && scoop install navop`.
 
 #### Fixes and Improvements
 
-- Fixed the Known Hosts list failing to render and cards expanding to an incorrect height; system `known_hosts` scanning/import and background loading are also handled more reliably.
-- Improved the running activity display in AI conversations so task progress remains visible during execution.
-- Fixed issues related to the tab-bar navigation toggle slot and workspace-order restoration.
-- Updated Linux/CJK input support and related UI stability improvements.
+- Fixed the release build failure on macOS x86_64 caused by a BOOL type difference in the GPUI framework; updated GPUI with CJK input (XIM, macOS IME) support, and Rocky Linux 10 now works.
+- Fixed editor syntax-highlighting loss and a crash when the context menu read the editor during callbacks.
+- Fixed the SQL editor context-menu crash and completed cut/copy/paste localization.
+- Fixed a HomePage re-entrancy crash when creating a new local terminal; the recent section no longer participates in search or batch operations to avoid duplicate interactions.
+- Fixed home workspace drag order being lost on reload; refined team badges and toolbar controls.
+- Fixed the tab-bar navigation toggle slot display.
+- Startup no longer forces the AI workbench open; the last visited page is preserved.
+- Fixed terminal block selections being lost while scrolling.
+- Improved the running-activity display in AI conversations; normalized Agent context message roles for OpenAI-protocol compatibility.
+- Fixed the keychain dropdown jumping to the top of the form when credentials are hidden.
+- Resized SFTP/terminal transfer progress bars.
+- The extension manager no longer opens views directly and groups entries by contribution; the extension mechanism was consolidated with dead code removed, and the universal plugin mechanism was extracted into its own crate.
 
 **Full Changelog**: https://github.com/feigeCode/navop/compare/v0.16.1...v0.17.0
 
