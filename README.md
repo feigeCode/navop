@@ -1,9 +1,8 @@
-
 <div align="center">
   <p><img src="resources/navop-icon.png" alt="Navop" width="120" /></p>
   <h1>Navop</h1>
-  <p><strong>A native, all-in-one workspace for databases, SSH, SFTP, terminals, remote desktop, monitoring, and AI.</strong></p>
-  <p>Built with <a href="https://gpui.rs">GPUI</a> and Rust · GPU-accelerated rendering</p>
+  <p><strong>A native, all-in-one workspace for databases, SSH, SFTP, terminals, remote desktop, monitoring, and AI agents.</strong></p>
+  <p>Built with <a href="https://gpui.rs">GPUI</a> and Rust · GPU-accelerated rendering · No WebView</p>
 
   <p>
     <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="Downloads" /></a>
@@ -21,6 +20,7 @@
     <img src="https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse" />
     <img src="https://img.shields.io/badge/SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white" alt="SQL Server" />
     <img src="https://img.shields.io/badge/Oracle-F80000?logo=oracle&logoColor=white" alt="Oracle" />
+    <img src="https://img.shields.io/badge/TDengine-1B73B4" alt="TDengine" />
     <img src="https://img.shields.io/badge/Dameng%20DM-C71D23" alt="Dameng DM" />
     <img src="https://img.shields.io/badge/KingbaseES-005BAC" alt="KingbaseES" />
     <img src="https://img.shields.io/badge/GBase%208s-1E73BE" alt="GBase 8s" />
@@ -29,6 +29,7 @@
     <img src="https://img.shields.io/badge/Apache%20IoTDB-1B3A6B?logo=apache&logoColor=white" alt="Apache IoTDB" />
     <img src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white" alt="Redis" />
     <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
+    <img src="https://img.shields.io/badge/MQTT-660066?logo=mqtt&logoColor=white" alt="MQTT" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
     <img src="https://img.shields.io/badge/Port%20Forwarding-0F766E" alt="Port Forwarding" />
@@ -53,26 +54,31 @@
 
 ### Databases and data tools
 
-- Built-in support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse; extension drivers add Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and Oscar.
+- Built-in support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, ClickHouse, and TDengine (via the official taos WebSocket driver); extension drivers add Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and Oscar.
 - Browse database objects, edit and run SQL with execution plans, import and export data, compare schemas and data, and visualize relationships with ER diagrams.
-- Dedicated Redis and MongoDB interfaces, persistent SQL history, stored procedure and function editing, and proxy or SSH-tunnel routing for supported connections.
+- Dedicated Redis and MongoDB interfaces; MQTT middleware connections with subscribe, messages, and publish views (MQTT 3.1.1 over rustls, SSH tunneling, auto-resubscribe).
+- Table-data tabs support batch-editing selected cells, typed editors for date/time/numeric columns, and copying table or column names from context menus.
 
 ### Remote access and operations
 
-- SSH and local terminals with draggable split panes, quick commands, broadcast input, shell integration, session lock, recording and replay, and session logs; Telnet and serial connections are also supported.
-- Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, ZMODEM transfer, and server-to-server copy.
+- SSH and local terminals with draggable split panes, quick commands, broadcast input, shell integration, session lock, recording and replay, searchable session logs with batch delete and incremental loading; Telnet and serial connections are also supported.
+- Manage remote files with SFTP uploads, downloads, search, favorites, remote editing (configurable size limits and default editor), drag-and-drop, ZMODEM transfer, and server-to-server copy.
 - Reusable local, remote (`ssh -R`), and dynamic SOCKS port forwarding; X11 forwarding; host-key change warnings with explicit fingerprints; a Known Hosts page for reviewing, importing, and removing trusted SSH host keys; optional legacy SSH algorithms.
-- Import SecureCRT sessions, monitor servers, and connect to remote desktops over RDP and VNC. On Windows, native MSTSC integration embeds the Microsoft RDP ActiveX control directly in the app via a C++ host, so you can use it inside a tab, in a fullscreen window, or launch the native `mstsc.exe` client; across platforms a pure-Rust IronRDP canvas backend renders RDP sessions.
+- Import SecureCRT sessions, monitor servers with native charts, and connect to remote desktops over RDP and VNC. On Windows, native MSTSC integration embeds the Microsoft RDP ActiveX control directly in the app via a C++ host, so you can use it inside a tab, in a fullscreen window, or launch the native `mstsc.exe` client; across platforms a pure-Rust IronRDP canvas backend renders RDP sessions.
 
 ### Editing, AI, and extensibility
 
-- Local Markdown notes with Mermaid diagrams, math rendering, and export to HTML, PDF, or DOCX.
+- Local Markdown notes with Mermaid diagrams, math rendering, and export to HTML, PDF, or DOCX; the built-in editor supports save shortcuts and WASM language parsers for syntax highlighting.
 - AI for SQL generation and explanation, data analysis, charts, terminal assistance, tool calling, and agent workflows; connect external agents through ACP for Codex, Claude Code, and OpenCode.
-- Agent Hub keeps a terminal agent, project files, Git branches, changes, and side-by-side diffs in one workspace; the extension marketplace adds database drivers, remote desktop providers, document renderers, connection importers, and external editors. First-party extensions are built and published from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository.
+- Agent Hub keeps a terminal agent, project files, Git branches, changes, and side-by-side diffs in one workspace; the toolbox aggregates extension tools alongside connection extensions.
+- The extension marketplace adds database drivers, remote desktop providers, document renderers, connection importers, and external editors. First-party extensions are built and published from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository.
+- Quick open supports ad-hoc SSH connections from the tab bar, so throwaway sessions no longer need a saved connection.
 
 ### Native desktop experience
 
 - Native GPUI interface with GPU-accelerated rendering; light, dark, and system themes, importable themes, accent colors, and window opacity.
+- Home page with a unified grid layout, tree view, recent connections, batch connection management, and workspace drag-order persistence.
+- Settings organized into dedicated database, terminal, Agent, and MCP pages; shortcuts can be cleared and system-wide hotkeys disabled.
 - English, Simplified Chinese, and Traditional Chinese interfaces.
 - Encrypted synchronization of personal connections, credentials, and settings across devices.
 
@@ -125,13 +131,6 @@ The separate [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package is o
 
 Download the latest build from [GitHub Releases](https://github.com/feigeCode/navop/releases/latest). Each release includes `sha256sums.txt` for checksum verification. Artifacts are available for macOS (DMG and tar.gz, Apple Silicon / Intel), Windows (MSI and EXE installers, plus standard and portable ZIP), and Linux (tar.gz, deb, rpm, and AppImage), following the `navop-<version>-<platform>-<arch>.<ext>` naming convention.
 
-Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a community Flatpak package:
-
-```bash
-flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
-flatpak --user install flatpark dev.navop.Navop
-```
-
 If macOS Gatekeeper reports that Apple cannot check the app, run `sudo xattr -rd com.apple.quarantine /Applications/Navop.app`.
 
 On Windows, Navop is also available through [Scoop](https://scoop.sh) (installing the portable edition with data persistence handled by Scoop):
@@ -139,6 +138,13 @@ On Windows, Navop is also available through [Scoop](https://scoop.sh) (installin
 ```powershell
 scoop bucket add extras
 scoop install navop
+```
+
+Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a community Flatpak package:
+
+```bash
+flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak --user install flatpark dev.navop.Navop
 ```
 
 For the full artifact table, Windows portable-mode notes, upgrade migration from v0.10.1 or earlier ZIPs, and the Oracle Instant Client / pure-Go driver note, see the [Install & update guide](https://docs.navop.dev/en-US/guide/install-update).
@@ -185,11 +191,11 @@ Navop is maintained independently. Stars, focused pull requests, bug reports, an
 ## Star History
 
 <a href="https://star-history.dera.page/#feigeCode/navop&type=date&logscale=&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=feigeCode/navop&type=date&theme=dark&logscale&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
- </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=feigeCode/navop&type=date&theme=dark&logscale&legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+    <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+  </picture>
 </a>
 
 ## Credits

@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "version": "0.17.0",
+  "release_page_url": "https://navop.pdyyds.cn/releases/v0.17.0/",
+  "release_notes": "### 更新内容\n\n- 新增「已知主机」页面，展示应用信任的 SSH 主机、密钥算法和指纹，并支持复制主机标识与移除可信主机。\n- 优化主页连接卡片、连接树和账户入口布局，改善常用连接管理与窗口空间利用。\n- 设置页支持清除快捷键并禁用系统快捷键，快捷键配置反馈更加清晰。\n\n### 修复与优化\n\n- 修复已知主机列表无法渲染、卡片高度异常的问题，并完善系统 `known_hosts` 扫描导入和后台加载。\n- 优化 AI 对话中的运行中活动显示，避免任务执行期间缺少状态反馈。\n- 修复标签栏导航切换槽位和工作区排序恢复相关问题。\n- 更新 Linux/CJK 输入支持及相关界面稳定性。\n\n国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.17.0) 下载桌面端安装包\n\n---\n\n### What's New\n\n- Added a Known Hosts page for trusted SSH hosts, showing key algorithms and fingerprints, with actions to copy the host identity or remove a trusted host.\n- Refined home connection cards, the connection tree, and the account entry layout for better connection management and use of window space.\n- Settings now support clearing shortcuts and disabling system shortcuts, with clearer shortcut configuration feedback.\n\n### Fixes and Improvements\n\n- Fixed the Known Hosts list failing to render and cards expanding to an incorrect height; system `known_hosts` scanning/import and background loading are also handled more reliably.\n- Improved the running activity display in AI conversations so task progress remains visible during execution.\n- Fixed issues related to the tab-bar navigation toggle slot and workspace-order restoration.\n- Updated Linux/CJK input support and related UI stability improvements.\n\n**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.16.1...v0.17.0",
+  "downloads": {
+    "aarch64-apple-darwin": "https://navop.pdyyds.cn/releases/v0.17.0/navop-aarch64-apple-darwin.tar.gz",
+    "x86_64-apple-darwin": "https://navop.pdyyds.cn/releases/v0.17.0/navop-x86_64-apple-darwin.tar.gz",
+    "x86_64-unknown-linux-gnu": "https://navop.pdyyds.cn/releases/v0.17.0/navop-x86_64-unknown-linux-gnu.tar.gz",
+    "x86_64-pc-windows-msvc": "https://navop.pdyyds.cn/releases/v0.17.0/navop-x86_64-pc-windows-msvc.zip",
+    "i686-pc-windows-msvc": "https://navop.pdyyds.cn/releases/v0.17.0/navop-i686-pc-windows-msvc.zip",
+    "aarch64-unknown-linux-gnu": "https://navop.pdyyds.cn/releases/v0.17.0/navop-aarch64-unknown-linux-gnu.tar.gz"
+  },
+  "fallback_downloads": {
+    "aarch64-apple-darwin": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-aarch64-apple-darwin.tar.gz",
+    "x86_64-apple-darwin": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-x86_64-apple-darwin.tar.gz",
+    "x86_64-unknown-linux-gnu": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-x86_64-unknown-linux-gnu.tar.gz",
+    "x86_64-pc-windows-msvc": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-x86_64-pc-windows-msvc.zip",
+    "i686-pc-windows-msvc": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-i686-pc-windows-msvc.zip",
+    "aarch64-unknown-linux-gnu": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-aarch64-unknown-linux-gnu.tar.gz"
+  },
+  "sha256s": {
+    "aarch64-apple-darwin": "c9e485ff363ccde32b8f6d2f0f2a51be345e184557c8bf0114a6493d8bda2589",
+    "x86_64-apple-darwin": "7a5b9bcd2c6efe7e448a0d7fe74b269568f15d1da0038ebe2a90d58878be58bf",
+    "x86_64-unknown-linux-gnu": "4c6715cddc881232d56dc88f051d6e7f6a7e48d1198982c3feaffc5239dd4461",
+    "x86_64-pc-windows-msvc": "70342b7b299536e2f5033e870871e42787201c2bf30a39a4dd34fc7414d26849",
+    "i686-pc-windows-msvc": "aa90f57ab1b23dce8e6fd59dceb48806fabaf4e37ff48cb3929856e8fb9e8264",
+    "aarch64-unknown-linux-gnu": "53304bf21d90204957ba7868a07ed34912023be939a0e38e5d45e7191b4f74a8"
+  },
+  "packages": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "file": "navop-0.17.0-1.x86_64.rpm",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-1.x86_64.rpm",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-1.x86_64.rpm",
+      "sha256": "b29865db48013a34a7c78e318661b43238dc346083bd071df295ca15bebcc774",
+      "size": 76651324
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu-portable",
+      "file": "navop-0.17.0-linux-arm64-portable.tar.gz",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-linux-arm64-portable.tar.gz",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-linux-arm64-portable.tar.gz",
+      "sha256": "57a529cdf54d0410444b382138df487dbe8206fe213e19dc4cbffa503bab6396",
+      "size": 77997076
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "file": "navop-0.17.0-linux-arm64.tar.gz",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-linux-arm64.tar.gz",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-linux-arm64.tar.gz",
+      "sha256": "53304bf21d90204957ba7868a07ed34912023be939a0e38e5d45e7191b4f74a8",
+      "size": 73252029
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu-portable",
+      "file": "navop-0.17.0-linux-x64-portable.tar.gz",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-linux-x64-portable.tar.gz",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-linux-x64-portable.tar.gz",
+      "sha256": "8f737c713206343e5bd7f024ac05d142a183bcede787304dd6ccfa0dffbd8c0c",
+      "size": 81324159
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "file": "navop-0.17.0-linux-x64.tar.gz",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-linux-x64.tar.gz",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-linux-x64.tar.gz",
+      "sha256": "4c6715cddc881232d56dc88f051d6e7f6a7e48d1198982c3feaffc5239dd4461",
+      "size": 77100097
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "file": "navop-0.17.0-macos-arm64.dmg",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-macos-arm64.dmg",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-macos-arm64.dmg",
+      "sha256": "6fc57337d9b13739764af820c0544264d883ee27fb161f0d4ecbc8597c867f6c",
+      "size": 72303127
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "file": "navop-0.17.0-macos-arm64.tar.gz",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-macos-arm64.tar.gz",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-macos-arm64.tar.gz",
+      "sha256": "c9e485ff363ccde32b8f6d2f0f2a51be345e184557c8bf0114a6493d8bda2589",
+      "size": 64938809
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "file": "navop-0.17.0-macos-x64.dmg",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-macos-x64.dmg",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-macos-x64.dmg",
+      "sha256": "5f1030e026f2769dacc905e62b1ba85261ac3c7b7f222af828984fc4f580ad20",
+      "size": 80049010
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "file": "navop-0.17.0-macos-x64.tar.gz",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-macos-x64.tar.gz",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-macos-x64.tar.gz",
+      "sha256": "7a5b9bcd2c6efe7e448a0d7fe74b269568f15d1da0038ebe2a90d58878be58bf",
+      "size": 71552208
+    },
+    {
+      "target": "i686-pc-windows-msvc-portable",
+      "file": "navop-0.17.0-win32-portable.zip",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-win32-portable.zip",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-win32-portable.zip",
+      "sha256": "86a966e7c2ad60c1d7297b00820ecb8ba2b82be95594ac328498b179e3099c29",
+      "size": 64237931
+    },
+    {
+      "target": "i686-pc-windows-msvc",
+      "file": "navop-0.17.0-win32.exe",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-win32.exe",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-win32.exe",
+      "sha256": "be78d393ad2a15cca017a29af8308bf9eb8fdce2536b4413162e07dcf0f5ed4a",
+      "size": 52437638
+    },
+    {
+      "target": "i686-pc-windows-msvc",
+      "file": "navop-0.17.0-win32.msi",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-win32.msi",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-win32.msi",
+      "sha256": "22355994adf0c376213d1c2acc42effa2a851765a65d33c0869a76452c899bbb",
+      "size": 51539968
+    },
+    {
+      "target": "i686-pc-windows-msvc",
+      "file": "navop-0.17.0-win32.zip",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-win32.zip",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-win32.zip",
+      "sha256": "aa90f57ab1b23dce8e6fd59dceb48806fabaf4e37ff48cb3929856e8fb9e8264",
+      "size": 64237827
+    },
+    {
+      "target": "x86_64-pc-windows-msvc-portable",
+      "file": "navop-0.17.0-windows-x64-portable.zip",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-windows-x64-portable.zip",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-windows-x64-portable.zip",
+      "sha256": "b291a2fa0f0cf01149252d4080874c57a3ec36e829993fe5c91c47bb41172f59",
+      "size": 76961064
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "file": "navop-0.17.0-windows-x64.exe",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-windows-x64.exe",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-windows-x64.exe",
+      "sha256": "9924975e1032c3027e62982617653b0d6a2b4e053445da1153f1ebad5d8509ef",
+      "size": 60564382
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "file": "navop-0.17.0-windows-x64.msi",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-windows-x64.msi",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-windows-x64.msi",
+      "sha256": "4fd52f71269abeda1f4a7068429c065d199f7311a6859b62142e4e2de1e3a0d0",
+      "size": 59482112
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "file": "navop-0.17.0-windows-x64.zip",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop-0.17.0-windows-x64.zip",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop-0.17.0-windows-x64.zip",
+      "sha256": "70342b7b299536e2f5033e870871e42787201c2bf30a39a4dd34fc7414d26849",
+      "size": 76960960
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "file": "navop_0.17.0_amd64.AppImage",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop_0.17.0_amd64.AppImage",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop_0.17.0_amd64.AppImage",
+      "sha256": "99fec4b8bda099eb5051768b03df6bca5cc4384da5bb059f390e412d7e8da761",
+      "size": 139344376
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "file": "navop_0.17.0_amd64.deb",
+      "url": "https://navop.pdyyds.cn/releases/v0.17.0/navop_0.17.0_amd64.deb",
+      "github_url": "https://github.com/feigeCode/navop/releases/download/v0.17.0/navop_0.17.0_amd64.deb",
+      "sha256": "58e04f24ff6182997d49db8a244110c3368e3e30c73eb9be2a696ae29be723b0",
+      "size": 54162454
+    }
+  ]
+}
