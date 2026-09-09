@@ -137,7 +137,10 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
             "id": "com.example.search",
             "name": "Search",
             "version": "1.0.0",
-            "engines": { "onetcli": ">=0.1.0" },
+            "engines": {
+                "onetcli": ">=0.1.0",
+                "gpui_shell": "0.2.0"
+            },
             "permissions": ["shell:exec", "spawn:./bin/provider"],
             "runtime": {
                 "ipc": [{
@@ -243,6 +246,12 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
             }
         }"#,
     );
+    fs::create_dir_all(tmp.path().join("ui")).unwrap();
+    fs::write(
+        tmp.path().join("ui/search-editor.js"),
+        "export default class {}\n",
+    )
+    .unwrap();
 
     let manifest = load_from_dir(tmp.path()).unwrap();
     let workbench = &manifest.contributes.resource_workbenches[0];
