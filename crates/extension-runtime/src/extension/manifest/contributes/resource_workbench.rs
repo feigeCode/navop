@@ -132,6 +132,30 @@ pub struct ResourceWorkbenchPage {
     pub inputs: Vec<ResourceWorkbenchInput>,
     #[serde(default)]
     pub scope: Option<String>,
+    /// detail/query 页面的路由参数声明(如 {"name": {"type": "string", "required": true}})。
+    #[serde(default)]
+    pub route: Option<BTreeMap<String, ResourceWorkbenchRouteParam>>,
+    /// 页面内跳转链接(如 Index → Mapping)。
+    #[serde(default)]
+    pub links: Vec<ResourceWorkbenchLink>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchRouteParam {
+    #[serde(rename = "type")]
+    pub value_type: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchLink {
+    pub title: String,
+    #[serde(rename = "pageId")]
+    pub page_id: String,
+    pub route: BTreeMap<String, ResourceWorkbenchBinding>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -178,6 +202,17 @@ pub struct ResourceWorkbenchCollection {
     pub key_paths: Vec<String>,
     pub pagination: ResourceWorkbenchPagination,
     pub columns: Vec<ResourceWorkbenchColumn>,
+    /// 行点击跳转声明:按 selection 绑定构造目标页 route。
+    #[serde(default)]
+    pub open: Option<ResourceWorkbenchOpen>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchOpen {
+    #[serde(rename = "pageId")]
+    pub page_id: String,
+    pub route: BTreeMap<String, ResourceWorkbenchBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

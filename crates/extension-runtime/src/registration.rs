@@ -764,6 +764,17 @@ fn validate_resource_workbench(
                 return Err(invalid("page references an unknown operation"));
             }
         }
+        // collection open 与 links 的目标页必须存在。
+        if let Some(open) = page.collection.as_ref().and_then(|c| c.open.as_ref()) {
+            if !workbench.pages.iter().any(|page| page.id == open.page_id) {
+                return Err(invalid("collection open references an unknown page"));
+            }
+        }
+        for link in &page.links {
+            if !workbench.pages.iter().any(|page| page.id == link.page_id) {
+                return Err(invalid("page link references an unknown page"));
+            }
+        }
     }
     for navigation in &workbench.navigation {
         if !workbench

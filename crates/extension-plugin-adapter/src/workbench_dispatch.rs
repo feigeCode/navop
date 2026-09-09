@@ -248,6 +248,99 @@ pub async fn dispatch_invoke_scoped(
     dispatch_invoke(&scope.session(), workbench, operation_id, context).await
 }
 
+/// job 模式:启动命名 job 操作,轮询到终态,读取结果并关闭。
+/// 返回解码后的 JSON 结果;Cancelled/Failed 转为 Provider 错误。
+pub async fn dispatch_job(
+    session: &ResourceSessionHandle,
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+    context: &BindingContext,
+) -> Result<serde_json::Value, WorkbenchDispatchError> {
+    use extension_protocol::job::JobState;
+
+    const POLL_INTERVAL_MS: u64 = 150;
+    const MAX_POLL_ATTEMPTS: u32 = 2000;
+
+    let request = build_request(workbench, operation_id, context)?;
+    let client = session.client();
+    ensure_capabilities(workbench, operation_id, session.capabilities())?;
+    let operation = workbench
+        .operations
+        .get(operation_id)
+        .ok_or_else(|| WorkbenchDispatchError::UnknownOperation(operation_id.to_string()))?;
+    let resource_id = session
+        .resource_id()
+        .await
+        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+
+    let handle = client
+        .start_job(&extension_protocol::job::JobStartParams {
+            resource_id: Some(resource_id),
+            method: operation.method.clone(),
+            params: request.params,
+        })
+        .await
+        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+
+    let outcome: Result<(), WorkbenchDispatchError> = 'poll: {
+        for _ in 0..MAX_POLL_ATTEMPTS {
+            let status = client
+                .job_status(&handle)
+                .await
+                .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+            match status.state {
+                JobState::Succeeded => break 'poll Ok(()),
+                JobState::Failed => {
+                    break 'poll Err(WorkbenchDispatchError::Provider(
+                        status.message.unwrap_or_else(|| "job failed".into()),
+                    ));
+                }
+                JobState::Cancelled => {
+                    break 'poll Err(WorkbenchDispatchError::Provider("job cancelled".into()));
+                }
+                JobState::Queued | JobState::Running => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
+        // 上限保护:不无限轮询。
+        Err(WorkbenchDispatchError::Provider(
+            "job did not reach a terminal state within the host poll budget".into(),
+        ))
+    };
+
+    let result = match outcome {
+        Ok(()) => client
+            .job_result(&handle)
+            .await
+            .map_err(|error| WorkbenchDispatchError::Provider(error.to_string())),
+        Err(error) => {
+            let _ = client.cancel_job(&handle).await;
+            let _ = client.close_job(&handle).await;
+            return Err(error);
+        }
+    }?;
+    let decoded = decode_result(
+        client,
+        &extension_protocol::resource::ResourceInvokeResult {
+            result: result.result,
+        },
+    )
+    .await;
+
+    let _ = client.close_job(&handle).await;
+    decoded
+}
+
+/// scope 变体的 job 调度。
+pub async fn dispatch_job_scoped(
+    scope: &ResourceScope,
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+    context: &BindingContext,
+) -> Result<serde_json::Value, WorkbenchDispatchError> {
+    dispatch_job(&scope.session(), workbench, operation_id, context).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

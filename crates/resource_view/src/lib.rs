@@ -5,6 +5,8 @@
 //! 的命名操作入口,连接主会话由宿主 tab 唯一持有。
 
 pub mod custom_page_host;
+pub mod query_page;
+pub mod route_binding;
 
 pub use custom_page_host::{
     CustomPageHost, DirtyGuardDecision, GlobalCustomPageHost, MountHandle, PageRenderer,
@@ -13,19 +15,14 @@ pub use custom_page_host::{
 
 use extension_plugin_adapter::{
     BindingContext, ResourceSessionHandle, WorkbenchDispatchError,
-    dispatch_invoke_scoped as dispatch_invoke,
+    dispatch_invoke_scoped as dispatch_invoke, dispatch_job_scoped as dispatch_job,
 };
 use extension_runtime::RegisteredResourceWorkbenchContribution;
-use extension_runtime::extension::manifest::{
-    ResourceWorkbenchCollection, ResourceWorkbenchPage, ResourceWorkbenchTemplate,
-};
+use extension_runtime::extension::manifest::{ResourceWorkbenchPage, ResourceWorkbenchTemplate};
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px,
 };
-
-/// 页面事件:通知宿主 tab 页面切换/加载状态变化。
-pub struct WorkbenchEvent;
 
 /// 单个页面的加载状态。
 pub enum PageState {
@@ -47,6 +44,11 @@ pub struct NativeResourceWorkbench {
     load_revision: u64,
     focus_handle: FocusHandle,
     tokio: tokio::runtime::Handle,
+    /// query 页面输入状态(按页面 id 保存,切换页面不丢失草稿)。
+    query_inputs: std::collections::BTreeMap<String, Entity<query_page::QueryInputState>>,
+    /// query 页面执行状态。
+    query_result: Option<Result<serde_json::Value, String>>,
+    query_running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +57,24 @@ pub struct PageSelection {
     pub route: serde_json::Value,
 }
 
+/// 渲染用的页面状态快照(避免渲染期间持有 self 借用)。
+enum PageStateSnapshot {
+    Idle,
+    Loading,
+    Loaded(serde_json::Value),
+    Failed(String),
+}
+
 impl NativeResourceWorkbench {
+    fn page_state_snapshot(&self) -> PageStateSnapshot {
+        match &self.page_state {
+            PageState::Idle => PageStateSnapshot::Idle,
+            PageState::Loading => PageStateSnapshot::Loading,
+            PageState::Loaded(value) => PageStateSnapshot::Loaded(value.clone()),
+            PageState::Failed(error) => PageStateSnapshot::Failed(error.clone()),
+        }
+    }
+
     pub fn new(
         descriptor: RegisteredResourceWorkbenchContribution,
         session: ResourceSessionHandle,
@@ -71,6 +90,9 @@ impl NativeResourceWorkbench {
             load_revision: 0,
             focus_handle: cx.focus_handle(),
             tokio: one_core::gpui_tokio::Tokio::handle(cx),
+            query_inputs: Default::default(),
+            query_result: None,
+            query_running: false,
         };
         this.load_current_page(cx);
         this
@@ -90,6 +112,7 @@ impl NativeResourceWorkbench {
         }
         self.selected_page = page_id;
         self.route = serde_json::Value::Null;
+        self.query_result = None;
         self.load_current_page(cx);
     }
 
@@ -105,6 +128,7 @@ impl NativeResourceWorkbench {
         }
         self.selected_page = page_id;
         self.route = route;
+        self.query_result = None;
         self.load_current_page(cx);
     }
 
@@ -122,7 +146,10 @@ impl NativeResourceWorkbench {
             cx.notify();
             return;
         };
-        if page.template == ResourceWorkbenchTemplate::Tasks {
+        if matches!(
+            page.template,
+            ResourceWorkbenchTemplate::Tasks | ResourceWorkbenchTemplate::Query
+        ) {
             self.page_state = PageState::Idle;
             cx.notify();
             return;
@@ -157,7 +184,6 @@ impl NativeResourceWorkbench {
                     Err(WorkbenchDispatchError::Provider(join_error.to_string()))
                 });
             let _ = this.update(cx, |this, cx| {
-                // 迟到结果防护:仅当请求未变更时应用。
                 if this.load_revision != revision {
                     return;
                 }
@@ -169,6 +195,109 @@ impl NativeResourceWorkbench {
             });
         })
         .detach();
+    }
+
+    /// 执行 query 页面的命名操作(job 或 invoke)。
+    fn execute_query(&mut self, cx: &mut Context<Self>) {
+        if self.query_running {
+            return;
+        }
+        let Some(page) = self.current_page() else {
+            return;
+        };
+        let Some(action) = page.execute.clone() else {
+            return;
+        };
+        if !self.descriptor.operations.contains_key(&action.operation) {
+            self.query_result = Some(Err("unknown operation".into()));
+            cx.notify();
+            return;
+        };
+        let is_job = self
+            .descriptor
+            .operations
+            .get(&action.operation)
+            .is_some_and(|operation| {
+                matches!(
+                    operation.mode,
+                    extension_runtime::extension::manifest::ResourceWorkbenchOperationMode::Job
+                )
+            });
+        // 组装 input 值:从输入 state 读取声明字段的当前值。
+        let mut input = serde_json::Map::new();
+        let input_state = match self.query_inputs.get(&self.selected_page) {
+            Some(state) => state.clone(),
+            None => {
+                self.query_result = Some(Err("query inputs are not initialized".into()));
+                cx.notify();
+                return;
+            }
+        };
+        let values = input_state.read(cx).values(cx);
+        for field in &page.inputs {
+            let value = values.get(&field.id).cloned().unwrap_or_default();
+            if field.required && value.is_empty() {
+                self.query_result = Some(Err(format!("`{}` is required", field.id)));
+                cx.notify();
+                return;
+            }
+            input.insert(field.id.clone(), serde_json::Value::String(value));
+        }
+
+        self.query_running = true;
+        self.query_result = None;
+        cx.notify();
+
+        self.load_revision += 1;
+        let revision = self.load_revision;
+        let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let scope = self.session.scope(self.selected_page.clone(), mount_id);
+        let workbench = self.descriptor.clone();
+        let context = BindingContext {
+            input: serde_json::Value::Object(input),
+            route: self.route.clone(),
+            selection: serde_json::Value::Null,
+        };
+        let operation = action.operation;
+        let tokio = self.tokio.clone();
+        cx.spawn(async move |this, cx| {
+            let result = tokio
+                .spawn(async move {
+                    if is_job {
+                        dispatch_job(&scope, &workbench, &operation, &context).await
+                    } else {
+                        dispatch_invoke(&scope, &workbench, &operation, &context).await
+                    }
+                })
+                .await
+                .unwrap_or_else(|join_error| {
+                    Err(WorkbenchDispatchError::Provider(join_error.to_string()))
+                });
+            let _ = this.update(cx, |this, cx| {
+                if this.load_revision != revision {
+                    return;
+                }
+                this.query_running = false;
+                this.query_result = Some(match result {
+                    Ok(value) => Ok(value),
+                    Err(error) => Err(error.to_string()),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// collection 行点击:按 open 声明构造目标页 route 并导航。
+    fn open_collection_row(&mut self, row: serde_json::Value, cx: &mut Context<Self>) {
+        let Some(page) = self.current_page() else {
+            return;
+        };
+        let Some(open) = page.collection.as_ref().and_then(|c| c.open.as_ref()) else {
+            return;
+        };
+        let route = route_binding::build_route(&open.route, &self.route, &row);
+        self.navigate(open.page_id.clone(), route, cx);
     }
 
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -208,19 +337,57 @@ impl NativeResourceWorkbench {
             }))
     }
 
-    fn render_page(&self) -> impl IntoElement + use<> {
-        let Some(page) = self.current_page() else {
-            return div().p_4().child("Unknown page");
+    fn render_page(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let Some(page) = self.current_page().cloned() else {
+            return div().p_4().child("Unknown page").into_any_element();
         };
-        let header = div()
+        if page.template == ResourceWorkbenchTemplate::Query {
+            return self.render_query_page(&page, window, cx).into_any_element();
+        }
+
+        let mut header = div()
             .px_4()
             .py_3()
             .child(div().text_xl().child(page.title.clone()));
-        let body = match &self.page_state {
-            PageState::Idle => div().p_4().child("Ready"),
-            PageState::Loading => div().p_4().child("Loading..."),
-            PageState::Failed(error) => div().p_4().child(format!("Error: {error}")),
-            PageState::Loaded(value) => render_value(page, value),
+        // detail 页 links(如 Index → Mapping)。
+        for (link_index, link) in page.links.iter().enumerate() {
+            let target = link.page_id.clone();
+            let route =
+                route_binding::build_route(&link.route, &self.route, &serde_json::Value::Null);
+            let title = link.title.clone();
+            header = header.child(
+                div()
+                    .id(("link", link_index))
+                    .mt_1()
+                    .cursor_pointer()
+                    .text_color(gpui::rgb(0x6cb6ff))
+                    .child(title)
+                    .on_click(cx.listener(
+                        move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.navigate(target.clone(), route.clone(), cx);
+                        },
+                    )),
+            );
+        }
+        let state = self.page_state_snapshot();
+        let body = match state {
+            PageStateSnapshot::Idle => div().p_4().child("Ready").into_any_element(),
+            PageStateSnapshot::Loading => div().p_4().child("Loading...").into_any_element(),
+            PageStateSnapshot::Failed(error) => div()
+                .p_4()
+                .child(format!("Error: {error}"))
+                .into_any_element(),
+            PageStateSnapshot::Loaded(value) => {
+                if page.template == ResourceWorkbenchTemplate::Collection {
+                    self.render_collection(&page, &value, cx).into_any_element()
+                } else {
+                    render_json(&value).into_any_element()
+                }
+            }
         };
         div()
             .flex_1()
@@ -237,59 +404,171 @@ impl NativeResourceWorkbench {
                     .overflow_y_scroll()
                     .child(body),
             )
+            .into_any_element()
+    }
+
+    fn render_query_page(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        // 懒初始化输入 state(保留已输入草稿)。
+        let input_state = self
+            .query_inputs
+            .entry(self.selected_page.clone())
+            .or_insert_with(|| cx.new(|cx| query_page::QueryInputState::new(page, window, cx)))
+            .clone();
+        let execute_label = if self.query_running {
+            "Running..."
+        } else {
+            "Execute"
+        };
+        let result_view = match &self.query_result {
+            None => div().p_4().child("Enter parameters and run"),
+            Some(Ok(value)) => render_json(value),
+            Some(Err(error)) => div().p_4().child(format!("Error: {error}")),
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px_4()
+                    .py_3()
+                    .child(div().text_xl().child(page.title.clone())),
+            )
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(input_state)
+                    .child(
+                        div()
+                            .id("query-execute")
+                            .px_3()
+                            .py_1()
+                            .cursor_pointer()
+                            .bg(gpui::rgb(0x2d5a2d))
+                            .child(execute_label)
+                            .on_click(cx.listener(
+                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                    this.execute_query(cx);
+                                },
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .id("query-result")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(result_view),
+            )
     }
 }
 
-/// 按模板渲染已加载结果:collection 渲染声明列,json 原样输出。
-fn render_value(page: &ResourceWorkbenchPage, value: &serde_json::Value) -> gpui::Div {
-    if page.template == ResourceWorkbenchTemplate::Collection {
-        if let Some(collection) = &page.collection {
-            return render_collection(collection, value);
-        }
-    }
+/// JSON pretty 渲染(通用,任何模板的加载结果都可用)。
+fn render_json(value: &serde_json::Value) -> gpui::Div {
     let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".into());
     div().p_4().child(text)
 }
 
-fn render_collection(
-    collection: &ResourceWorkbenchCollection,
-    value: &serde_json::Value,
-) -> gpui::Div {
-    let items = value
-        .pointer(normalize_pointer(&collection.items_path))
-        .cloned()
-        .and_then(|items| items.as_array().cloned())
-        .unwrap_or_default();
-    let mut table = div().flex().flex_col();
-    let mut header_row = div().flex().py_1();
-    for column in &collection.columns {
-        header_row = header_row.child(div().w(px(240.)).px_2().child(column.title.clone()));
+/// 把 manifest 声明的 `/name` 路径归一为 serde_json pointer 形式。
+fn pointer_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
     }
-    table = table.child(header_row);
-    for item in items {
-        let mut row = div().flex().py_1();
+}
+
+impl NativeResourceWorkbench {
+    /// collection 渲染:声明列 + 行点击导航(按 open 声明)。
+    fn render_collection(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        value: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let Some(collection) = &page.collection else {
+            return render_json(value);
+        };
+        let items = value
+            .pointer(&pointer_path(&collection.items_path))
+            .cloned()
+            .and_then(|items| items.as_array().cloned())
+            .unwrap_or_default();
+        let column_count = collection.columns.len().max(1);
+        let mut table = div().flex().flex_col();
+        let mut header_row = div().flex().py_1();
         for column in &collection.columns {
-            let cell = item
-                .pointer(normalize_pointer(&column.path))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let text = match cell {
-                serde_json::Value::String(text) => text,
-                serde_json::Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            row = row.child(div().w(px(240.)).px_2().child(text));
+            header_row = header_row.child(
+                div()
+                    .w(px(720.0 / column_count as f32))
+                    .px_2()
+                    .child(column.title.clone()),
+            );
         }
-        table = table.child(row);
+        table = table.child(header_row);
+        for (row_index, item) in items.into_iter().enumerate() {
+            let mut row = div().flex().py_1();
+            for column in &collection.columns {
+                let cell = item
+                    .pointer(&pointer_path(&column.path))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let text = match cell {
+                    serde_json::Value::String(text) => text,
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                };
+                row = row.child(div().w(px(720.0 / column_count as f32)).px_2().child(text));
+            }
+            if collection.open.is_some() {
+                let clicked = item.clone();
+                let clickable = div()
+                    .id(("row", row_index))
+                    .flex()
+                    .py_1()
+                    .cursor_pointer()
+                    .on_click(cx.listener(
+                        move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.open_collection_row(clicked.clone(), cx);
+                        },
+                    ));
+                // 重建行(带 id)保持类型一致。
+                let mut stateful_row = clickable;
+                for column in &collection.columns {
+                    let cell = item
+                        .pointer(&pointer_path(&column.path))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let text = match cell {
+                        serde_json::Value::String(text) => text,
+                        serde_json::Value::Null => String::new(),
+                        other => other.to_string(),
+                    };
+                    stateful_row = stateful_row
+                        .child(div().w(px(720.0 / column_count as f32)).px_2().child(text));
+                }
+                table = table.child(stateful_row);
+            } else {
+                table = table.child(row);
+            }
+        }
+        table
     }
-    table
 }
 
-fn normalize_pointer(path: &str) -> &str {
-    path.strip_prefix('/').unwrap_or(path)
-}
-
-impl EventEmitter<WorkbenchEvent> for NativeResourceWorkbench {}
+impl EventEmitter<()> for NativeResourceWorkbench {}
 
 impl Focusable for NativeResourceWorkbench {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -298,7 +577,7 @@ impl Focusable for NativeResourceWorkbench {
 }
 
 impl Render for NativeResourceWorkbench {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("resource-workbench")
             .track_focus(&self.focus_handle)
@@ -308,6 +587,6 @@ impl Render for NativeResourceWorkbench {
             .overflow_hidden()
             .flex()
             .child(self.render_nav(cx))
-            .child(self.render_page())
+            .child(self.render_page(window, cx))
     }
 }

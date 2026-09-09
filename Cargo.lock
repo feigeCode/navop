@@ -11633,6 +11633,7 @@ dependencies = [
  "extension-plugin-adapter",
  "extension-runtime",
  "gpui-ce",
+ "gpui_ce_components",
  "one-core",
  "serde_json",
  "thiserror 2.0.20",

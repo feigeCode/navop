@@ -128,6 +128,142 @@ fn manifest_parses_connection_importers() {
 }
 
 #[test]
+fn manifest_loads_resource_workbench_with_route_and_navigation() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.search",
+            "name": "Search",
+            "version": "1.0.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "permissions": ["spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{
+                    "id": "main",
+                    "entry": { "command": "./bin/provider" },
+                    "transport": { "kind": "local_socket" }
+                }]
+            },
+            "contributes": {
+                "connections": [{
+                    "id": "search9",
+                    "label": "Search 9",
+                    "runtimeId": "main",
+                    "resourceType": "search"
+                }],
+                "resourceWorkbenches": [{
+                    "schemaVersion": 1,
+                    "id": "search",
+                    "title": "Search",
+                    "connectionIds": ["search9"],
+                    "runtimeId": "main",
+                    "resourceType": "search",
+                    "defaultPage": "overview",
+                    "operations": {
+                        "list": {
+                            "mode": "invoke",
+                            "method": "search/list",
+                            "requires": ["search/list"],
+                            "effect": "read"
+                        },
+                        "query": {
+                            "mode": "job",
+                            "method": "search/async",
+                            "requires": ["search/async"],
+                            "effect": "read",
+                            "params": {
+                                "q": {"source": "input", "path": "/q", "type": "string"}
+                            }
+                        }
+                    },
+                    "pages": [
+                        {
+                            "id": "overview",
+                            "title": "Overview",
+                            "template": "collection",
+                            "renderer": {"kind": "native"},
+                            "load": {"operation": "list"},
+                            "collection": {
+                                "itemsPath": "/items",
+                                "keyPaths": ["/name"],
+                                "pagination": {"kind": "none"},
+                                "columns": [
+                                    {"id": "name", "title": "Name", "path": "/name", "type": "string"}
+                                ],
+                                "open": {
+                                    "pageId": "detail",
+                                    "route": {
+                                        "name": {"source": "selection", "path": "/name", "type": "string"}
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "id": "detail",
+                            "title": "Detail",
+                            "template": "json",
+                            "renderer": {"kind": "native"},
+                            "route": {"name": {"type": "string", "required": true}},
+                            "load": {"operation": "list"},
+                            "links": [{
+                                "title": "Mapping",
+                                "pageId": "mapping",
+                                "route": {
+                                    "name": {"source": "route", "path": "/name", "type": "string"}
+                                }
+                            }]
+                        },
+                        {
+                            "id": "mapping",
+                            "title": "Mapping",
+                            "template": "json",
+                            "renderer": {"kind": "native"},
+                            "route": {"name": {"type": "string", "required": true}},
+                            "load": {"operation": "list"}
+                        },
+                        {
+                            "id": "search",
+                            "title": "Search",
+                            "template": "query",
+                            "renderer": {"kind": "native"},
+                            "inputs": [{"id": "q", "type": "string", "editor": "text", "default": "*", "required": true}],
+                            "execute": {"operation": "query"}
+                        }
+                    ]
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let workbench = &manifest.contributes.resource_workbenches[0];
+
+    assert_eq!("search", workbench.id);
+    assert_eq!(1, workbench.connection_ids.len());
+    // collection open 声明。
+    let overview = workbench.pages.iter().find(|p| p.id == "overview").unwrap();
+    let open = overview.collection.as_ref().unwrap().open.as_ref().unwrap();
+    assert_eq!("detail", open.page_id);
+    assert!(open.route.contains_key("name"));
+    // detail route 参数与 links。
+    let detail = workbench.pages.iter().find(|p| p.id == "detail").unwrap();
+    assert!(detail.route.as_ref().unwrap().contains_key("name"));
+    assert_eq!(1, detail.links.len());
+    assert_eq!("mapping", detail.links[0].page_id);
+    // query 页面输入与 job 操作。
+    let search = workbench.pages.iter().find(|p| p.id == "search").unwrap();
+    assert_eq!(1, search.inputs.len());
+    assert_eq!("query", search.execute.as_ref().unwrap().operation);
+    let query_op = workbench.operations.get("query").unwrap();
+    assert!(matches!(
+        query_op.mode,
+        crate::extension::manifest::ResourceWorkbenchOperationMode::Job
+    ));
+}
+
+#[test]
 fn manifest_loads_remote_file_editor_contributions() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_manifest(

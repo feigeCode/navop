@@ -34,4 +34,9 @@ impl RegisteredResourceWorkbenchContribution {
             pages: workbench.pages.clone(),
         }
     }
+
+    /// 按 id 查找页面。
+    pub fn page(&self, page_id: &str) -> Option<&ResourceWorkbenchPage> {
+        self.pages.iter().find(|page| page.id == page_id)
+    }
 }

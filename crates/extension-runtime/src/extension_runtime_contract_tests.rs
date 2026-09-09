@@ -458,6 +458,8 @@ fn resource_workbench() -> ResourceWorkbenchContrib {
             collection: None,
             inputs: vec![],
             scope: None,
+            route: None,
+            links: vec![],
         }],
     }
 }

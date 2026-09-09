@@ -62,7 +62,8 @@ pub use resource_session::{
 pub use universal_host::{MapSecretResolver, SecretResolver, UniversalProviderHost};
 pub use workbench_dispatch::{
     BindingContext, WorkbenchDispatchError, WorkbenchRequest, build_request, decode_result,
-    dispatch_invoke, dispatch_invoke_scoped, ensure_capabilities,
+    dispatch_invoke, dispatch_invoke_scoped, dispatch_job, dispatch_job_scoped,
+    ensure_capabilities,
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
