@@ -16,6 +16,7 @@ use one_core::{
     connection_notifier::emit_connection_event,
     storage::{ConnectionRepository, GlobalStorageState, StoredConnection, Workspace},
 };
+use rust_i18n::t;
 
 use self::{
     fields::{create_input, create_name_input, create_workspace_select, optional_input_text},
@@ -60,6 +61,8 @@ pub(crate) struct ExtensionConnectionForm {
     pub(super) sync_enabled: Entity<bool>,
     pub(super) test_result: Entity<Option<Result<(), String>>>,
     pub(super) is_testing: Entity<bool>,
+    /// 当前激活页签:0=常规,1=备注(对齐数据库新建连接窗口的页签布局)
+    pub(super) active_tab: usize,
     pub(super) focus_handle: FocusHandle,
 }
 
@@ -105,7 +108,7 @@ impl ExtensionConnectionForm {
                 .as_ref()
                 .and_then(|connection| connection.remark.clone())
                 .unwrap_or_default(),
-            "Optional note",
+            t!("ConnectionForm.remark_placeholder"),
             window,
             cx,
         );
@@ -125,6 +128,7 @@ impl ExtensionConnectionForm {
             sync_enabled: cx.new(|_| sync_enabled),
             test_result: cx.new(|_| None),
             is_testing: cx.new(|_| false),
+            active_tab: 0,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -223,7 +227,7 @@ impl ExtensionConnectionForm {
     pub(super) fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.name.read(cx).text().to_string().trim().to_string();
         if name.is_empty() {
-            self.set_error("Connection name is required", cx);
+            self.set_error(t!("ConnectionForm.name_required").to_string(), cx);
             return;
         }
         let (config, updates) = match self.draft(cx) {
@@ -275,7 +279,7 @@ impl ExtensionConnectionForm {
         };
         let storage = cx.global::<GlobalStorageState>().storage.clone();
         let Some(repository) = storage.get::<ConnectionRepository>() else {
-            self.set_error("Connection repository is unavailable", cx);
+            self.set_error(t!("ConnectionForm.repository_unavailable").to_string(), cx);
             return;
         };
         let outcome = persist_connection(&repository, &mut connection);

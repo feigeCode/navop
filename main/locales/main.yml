@@ -1992,6 +1992,43 @@ ConnectionForm:
     en: Sync this connection across devices
     zh-CN: 在多设备间同步此连接
     zh-HK: 在多設備間同步此連線
+  # 扩展连接表单(composite 扩展贡献的连接,布局对齐数据库新建连接)
+  name_placeholder:
+    en: Connection name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  general:
+    en: General
+    zh-CN: 常规
+    zh-HK: 常規
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  workspace:
+    en: Workspace
+    zh-CN: 工作空间
+    zh-HK: 工作空間
+  remark_placeholder:
+    en: Optional note
+    zh-CN: 可选备注
+    zh-HK: 可選備註
+  test_success:
+    en: Connection successful
+    zh-CN: 连接成功
+    zh-HK: 連線成功
+  name_required:
+    en: Connection name is required
+    zh-CN: 连接名称不能为空
+    zh-HK: 連線名稱不能為空
+  repository_unavailable:
+    en: Connection repository is unavailable
+    zh-CN: 连接仓库不可用
+    zh-HK: 連線儲存庫不可用
 
 # 设置页面
 Settings:
