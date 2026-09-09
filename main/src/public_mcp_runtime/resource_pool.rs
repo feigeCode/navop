@@ -179,8 +179,6 @@ fn connection_kind(connection: &StoredConnection) -> ResourceKind {
         ConnectionType::SshSftp => ResourceKind::Ssh,
         ConnectionType::Redis => ResourceKind::Redis,
         ConnectionType::MongoDB => ResourceKind::Mongo,
-        ConnectionType::Mqtt => ResourceKind::Other("mqtt".into()),
-        ConnectionType::Rocketmq => ResourceKind::Other("rocketmq".into()),
         ConnectionType::Serial => ResourceKind::Terminal,
         ConnectionType::Telnet => ResourceKind::Terminal,
         ConnectionType::PortForwarding => ResourceKind::Other("port-forwarding".into()),
@@ -195,6 +193,9 @@ fn connection_kind(connection: &StoredConnection) -> ResourceKind {
                 ))
             })
             .unwrap_or_else(|_| ResourceKind::Other("extension".into())),
+        // Mqtt/Rocketmq 变体仅用于旧数据识别,历史连接已迁移为 Extension;
+        // 万一旧类型行漏迁移,按中间件资源归类兜底
+        ConnectionType::Mqtt | ConnectionType::Rocketmq => ResourceKind::Other("middleware".into()),
         ConnectionType::All => ResourceKind::Other("all".into()),
     }
 }

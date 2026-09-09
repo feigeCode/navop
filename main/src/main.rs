@@ -64,7 +64,7 @@ struct AppAssets {
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
 
-/// Navop 自带品牌图标(TDengine/MQTT/RocketMQ)。
+/// Navop 自带品牌图标(TDengine)。
 ///
 /// 外部 gpui-component 的 `IconName` 无法在本仓库扩展变体,这些 SVG
 /// 以 include_bytes 内嵌并按路径对外提供(路径常量定义在 one-core)。
@@ -75,18 +75,6 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
         }
         one_core::storage::NAVOP_TDENGINE_LINE_COLOR_ICON => {
             include_bytes!("../../resources/icons/tdengine-line-color.svg")
-        }
-        one_core::storage::NAVOP_MQTT_COLOR_ICON => {
-            include_bytes!("../../resources/icons/mqtt-color.svg")
-        }
-        one_core::storage::NAVOP_MQTT_LINE_ICON => {
-            include_bytes!("../../resources/icons/mqtt-line.svg")
-        }
-        one_core::storage::NAVOP_ROCKETMQ_COLOR_ICON => {
-            include_bytes!("../../resources/icons/rocketmq-color.svg")
-        }
-        one_core::storage::NAVOP_ROCKETMQ_LINE_ICON => {
-            include_bytes!("../../resources/icons/rocketmq-line.svg")
         }
         _ => return None,
     };

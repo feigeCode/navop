@@ -2,8 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::storage::traits::Repository;
 use crate::storage::{
-    ConnectionRepository, ConnectionType, MongoDBParams, MqttParams, RedisParams, RocketmqParams,
-    StoredConnection,
+    ConnectionRepository, ConnectionType, MongoDBParams, RedisParams, StoredConnection,
 };
 
 impl ConnectionRepository {
@@ -22,8 +21,7 @@ impl ConnectionRepository {
             ConnectionType::Database => self.resolve_database_tunnel(resolved),
             ConnectionType::Redis => self.resolve_redis_tunnel(resolved),
             ConnectionType::MongoDB => self.resolve_mongodb_tunnel(resolved),
-            ConnectionType::Mqtt => self.resolve_mqtt_tunnel(resolved),
-            ConnectionType::Rocketmq => self.resolve_rocketmq_tunnel(resolved),
+            // 旧 Mqtt/Rocketmq 类型经存储迁移后不再出现;扩展连接不支持隧道。
             _ => Ok(resolved),
         }
     }
@@ -73,35 +71,6 @@ impl ConnectionRepository {
         Ok(connection)
     }
 
-    fn resolve_mqtt_tunnel(&self, mut connection: StoredConnection) -> Result<StoredConnection> {
-        let mut params = connection.to_mqtt_params()?;
-        let Some(id) = enabled_mqtt_tunnel_id(&params) else {
-            return Ok(connection);
-        };
-        let ssh = self.resolve_referenced_ssh(id)?;
-        params
-            .apply_referenced_ssh_tunnel(&ssh)
-            .context("failed to apply referenced SSH tunnel")?;
-        connection.params = serde_json::to_string(&params)?;
-        Ok(connection)
-    }
-
-    fn resolve_rocketmq_tunnel(
-        &self,
-        mut connection: StoredConnection,
-    ) -> Result<StoredConnection> {
-        let mut params = connection.to_rocketmq_params()?;
-        let Some(id) = enabled_rocketmq_tunnel_id(&params) else {
-            return Ok(connection);
-        };
-        let ssh = self.resolve_referenced_ssh(id)?;
-        params
-            .apply_referenced_ssh_tunnel(&ssh)
-            .context("failed to apply referenced SSH tunnel")?;
-        connection.params = serde_json::to_string(&params)?;
-        Ok(connection)
-    }
-
     fn resolve_referenced_ssh(&self, id: i64) -> Result<StoredConnection> {
         let connection = self
             .get(id)?
@@ -136,22 +105,6 @@ fn enabled_tunnel_id(params: &RedisParams) -> Option<i64> {
 }
 
 fn enabled_mongodb_tunnel_id(params: &MongoDBParams) -> Option<i64> {
-    params
-        .ssh_tunnel
-        .as_ref()
-        .filter(|tunnel| tunnel.enabled)
-        .and_then(|tunnel| tunnel.connection_id)
-}
-
-fn enabled_mqtt_tunnel_id(params: &MqttParams) -> Option<i64> {
-    params
-        .ssh_tunnel
-        .as_ref()
-        .filter(|tunnel| tunnel.enabled)
-        .and_then(|tunnel| tunnel.connection_id)
-}
-
-fn enabled_rocketmq_tunnel_id(params: &RocketmqParams) -> Option<i64> {
     params
         .ssh_tunnel
         .as_ref()

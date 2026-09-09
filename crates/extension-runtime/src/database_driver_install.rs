@@ -21,6 +21,8 @@ use crate::extension_downloader::{
     fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
 };
 const DUCKDB_DRIVER_ID: &str = "duckdb";
+/// TDengine 主仓已移除原生插件,统一走 tdengine IPC 外部驱动。
+const TDENGINE_DRIVER_ID: &str = "tdengine";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverRequirement {
@@ -152,6 +154,11 @@ pub fn required_driver_for_config(config: &DbConnectionConfig) -> DriverRequirem
     match &config.database_type {
         DatabaseType::DuckDB => DriverRequirement::Required {
             driver_id: DUCKDB_DRIVER_ID.to_string(),
+        },
+        // TDengine 连接(历史存储的 DatabaseType::TDengine)按外部驱动守卫:
+        // 未安装 tdengine 驱动时引导用户从扩展市场安装,与 DuckDB 同策略。
+        DatabaseType::TDengine => DriverRequirement::Required {
+            driver_id: TDENGINE_DRIVER_ID.to_string(),
         },
         DatabaseType::External { .. } => required_external_driver(config),
         _ => DriverRequirement::NotRequired,

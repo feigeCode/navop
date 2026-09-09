@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="48" height="48">
-  <!-- RocketMQ 简洁火箭图标:鼻锥/舱体/舷窗/尾翼/尾焰 -->
-  <path d="M512 96 C 624 244 672 404 672 568 L 672 724 H 352 V 568 C 352 404 400 244 512 96 Z" fill="none" stroke="#FF6A00" stroke-width="56" stroke-linejoin="round"/>
-  <circle cx="512" cy="428" r="60" fill="#FF6A00"/>
-  <path d="M352 596 L 240 788 L 352 740 Z" fill="none" stroke="#FF6A00" stroke-width="52" stroke-linejoin="round"/>
-  <path d="M672 596 L 784 788 L 672 740 Z" fill="none" stroke="#FF6A00" stroke-width="52" stroke-linejoin="round"/>
-  <path d="M428 792 Q 512 940 596 792" fill="none" stroke="#FF6A00" stroke-width="48" stroke-linecap="round" opacity="0.65"/>
-</svg>

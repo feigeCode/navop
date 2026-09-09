@@ -51,10 +51,9 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
         ConnectionType::SshSftp => IconName::TerminalColor,
         ConnectionType::Redis => IconName::Redis,
         ConnectionType::MongoDB => IconName::MongoDB,
-        // 品牌 SVG 图标,见 connection_type_icon 的特判分支
-        ConnectionType::Mqtt => IconName::Network,
-        // 品牌 SVG 图标,见 connection_type_icon 的特判分支
-        ConnectionType::Rocketmq => IconName::Network,
+        // 旧 Mqtt/Rocketmq 变体仅用于历史数据识别(已迁移为 Extension),
+        // 品牌图标由扩展自带,此处保留通用网络图标兜底
+        ConnectionType::Mqtt | ConnectionType::Rocketmq => IconName::Network,
         ConnectionType::Serial => IconName::SerialPort,
         ConnectionType::Telnet => IconName::SquareTerminalColor,
         ConnectionType::PortForwarding => IconName::PortForwardingColor,
@@ -71,10 +70,9 @@ const fn connection_type_navigation_icon_name(kind: ConnectionType) -> IconName 
         ConnectionType::SshSftp => IconName::TerminalLine,
         ConnectionType::Redis => IconName::RedisLine,
         ConnectionType::MongoDB => IconName::MongoDBLine,
-        // 品牌 SVG 图标,见 connection_type_navigation_icon 的特判分支
-        ConnectionType::Mqtt => IconName::Network,
-        // 品牌 SVG 图标,见 connection_type_navigation_icon 的特判分支
-        ConnectionType::Rocketmq => IconName::Network,
+        // 旧 Mqtt/Rocketmq 变体仅用于历史数据识别(已迁移为 Extension),
+        // 品牌图标由扩展自带,此处保留通用网络图标兜底
+        ConnectionType::Mqtt | ConnectionType::Rocketmq => IconName::Network,
         ConnectionType::Serial => IconName::SerialLine,
         ConnectionType::Telnet => IconName::SquareTerminal,
         ConnectionType::PortForwarding => IconName::PortForwardingLine,
@@ -89,20 +87,6 @@ pub(crate) fn connection_type_navigation_icon(
     kind: ConnectionType,
     size: ConnectionVisualSize,
 ) -> Icon {
-    // MQTT 品牌线条图标经应用 AssetSource 提供
-    if kind == ConnectionType::Mqtt {
-        return Icon::default()
-            .path(one_core::storage::NAVOP_MQTT_LINE_ICON)
-            .mono()
-            .with_size(size.icon_size());
-    }
-    // RocketMQ 品牌线条图标经应用 AssetSource 提供
-    if kind == ConnectionType::Rocketmq {
-        return Icon::default()
-            .path(one_core::storage::NAVOP_ROCKETMQ_LINE_ICON)
-            .mono()
-            .with_size(size.icon_size());
-    }
     connection_type_navigation_icon_name(kind)
         .mono()
         .with_size(size.icon_size())
@@ -115,20 +99,6 @@ pub(crate) fn connection_type_rail_icon(kind: ConnectionType) -> Icon {
 
 /// Original-color protocol identity icon used by cards, lists, and connection pickers.
 pub(crate) fn connection_type_icon(kind: ConnectionType, size: ConnectionVisualSize) -> Icon {
-    // MQTT 品牌图标经应用 AssetSource 提供(外部 IconName 无此变体)
-    if kind == ConnectionType::Mqtt {
-        return Icon::default()
-            .path(one_core::storage::NAVOP_MQTT_COLOR_ICON)
-            .color()
-            .with_size(size.icon_size());
-    }
-    // RocketMQ 品牌图标经应用 AssetSource 提供(外部 IconName 无此变体)
-    if kind == ConnectionType::Rocketmq {
-        return Icon::default()
-            .path(one_core::storage::NAVOP_ROCKETMQ_COLOR_ICON)
-            .color()
-            .with_size(size.icon_size());
-    }
     connection_type_icon_name(kind)
         .color()
         .with_size(size.icon_size())

@@ -38,7 +38,6 @@ pub mod oracle;
 pub mod postgresql;
 pub mod sql_editor;
 pub mod sqlite;
-pub mod tdengine;
 
 // Re-exports
 pub use cache::*;

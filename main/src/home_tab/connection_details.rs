@@ -53,14 +53,6 @@ impl HomePage {
                     }
                 })
                 .unwrap_or_default(),
-            ConnectionType::Mqtt => conn
-                .to_mqtt_params()
-                .map(|params| format!("{}:{}", params.host, params.port))
-                .unwrap_or_default(),
-            ConnectionType::Rocketmq => conn
-                .to_rocketmq_params()
-                .map(|params| params.namesrv_addrs.join(";"))
-                .unwrap_or_default(),
             ConnectionType::Serial => conn
                 .to_serial_params()
                 .map(|params| {

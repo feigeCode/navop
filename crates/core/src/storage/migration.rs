@@ -110,6 +110,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260827000001",
         include_str!("../../migrations/20260827000001_redis_empty_username.sql"),
     ),
+    (
+        "20260828000001",
+        include_str!("../../migrations/20260828000001_middleware_extension_connections.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -489,6 +493,145 @@ mod tests {
                 |row| row.get::<_, String>(0),
             )
             .expect("read untouched mysql username")
+        );
+
+        run_migrations(&conn).expect("rerun migrations");
+    }
+
+    #[test]
+    fn middleware_extension_migration_rewrites_legacy_mqtt_and_rocketmq_rows() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                connection_type TEXT NOT NULL,
+                params TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO connections (name, connection_type, params, created_at, updated_at) VALUES
+                ('mqtt-full', 'Mqtt', '{\"host\":\"10.1.1.5\",\"port\":1883,\"client_id\":\"c1\",\"username\":\"u1\",\"password\":\"ENC:Q0lQSEVS\",\"keep_alive\":45,\"use_tls\":false}', 1, 1),
+                ('mqtt-anon', 'Mqtt', '{\"host\":\"127.0.0.1\",\"port\":1883}', 1, 1),
+                ('mqtt-tunnel', 'Mqtt', '{\"host\":\"10.2.2.2\",\"port\":1883,\"ssh_tunnel\":{\"enabled\":true,\"connection_id\":7,\"host\":\"10.9.9.9\",\"port\":22,\"auth_type\":\"password\",\"password\":\"ENC:SlVNUA\"}}', 1, 1),
+                ('mq-cluster', 'Rocketmq', '{\"namesrv_addrs\":[\"10.0.0.1:9876\",\"10.0.0.2:9876\"],\"access_key\":\"ak\",\"secret_key\":\"sk\",\"request_timeout\":3000}', 1, 1),
+                ('mq-noacl', 'Rocketmq', '{\"namesrv_addrs\":[]}', 1, 1),
+                ('redis', 'Redis', '{\"host\":\"h\",\"username\":null,\"password\":\"p\"}', 1, 1);",
+        )
+        .expect("create pre-migration schema");
+
+        mark_all_migrations_except(&conn, "20260828000001");
+        run_migrations(&conn).expect("run middleware extension migration");
+
+        // MQTT:类型与 params 均改写为 Extension 形态,密码密文原样搬入 secrets
+        let (kind, extension_id, contribution_id, host, port, keep_alive, secret) = conn
+            .query_row(
+                "SELECT connection_type,
+                        json_extract(params, '$.extension_id'),
+                        json_extract(params, '$.contribution_id'),
+                        json_extract(params, '$.config.host'),
+                        json_extract(params, '$.config.port'),
+                        json_extract(params, '$.config.keep_alive_secs'),
+                        json_extract(params, '$.secrets.password')
+                 FROM connections WHERE name = 'mqtt-full'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .expect("read migrated mqtt-full");
+        assert_eq!(kind, "Extension");
+        assert_eq!(extension_id, "com.navop.middleware.mqtt");
+        assert_eq!(contribution_id, "mqtt");
+        assert_eq!(host, "10.1.1.5");
+        assert_eq!(port, 1883);
+        assert_eq!(keep_alive, 45);
+        assert_eq!(secret, "ENC:Q0lQSEVS");
+
+        // MQTT 匿名连接:secrets 为空对象
+        let (kind, secrets_type) = conn
+            .query_row(
+                "SELECT connection_type, json_type(params, '$.secrets.password')
+                 FROM connections WHERE name = 'mqtt-anon'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("read migrated mqtt-anon");
+        assert_eq!(kind, "Extension");
+        assert!(secrets_type.is_none(), "无密码连接不应有 password secret");
+
+        // MQTT 隧道连接:ssh_tunnel 惰性保留在 config(扩展不支持隧道,provider 忽略)
+        let tunnel_id = conn
+            .query_row(
+                "SELECT json_extract(params, '$.config.ssh_tunnel.connection_id')
+                 FROM connections WHERE name = 'mqtt-tunnel'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("read lazy ssh tunnel");
+        assert_eq!(tunnel_id, 7);
+
+        // RocketMQ:地址列表合并为分号串,ACL 推断,secret_key 进 secrets
+        let (extension_id, namesrv, acl, timeout_ms, secret_key) = conn
+            .query_row(
+                "SELECT json_extract(params, '$.extension_id'),
+                        json_extract(params, '$.config.namesrv_addrs'),
+                        json_extract(params, '$.config.acl_enabled'),
+                        json_extract(params, '$.config.timeout_ms'),
+                        json_extract(params, '$.secrets.secret_key')
+                 FROM connections WHERE name = 'mq-cluster'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .expect("read migrated mq-cluster");
+        assert_eq!(extension_id, "com.navop.middleware.rocketmq");
+        assert_eq!(namesrv, "10.0.0.1:9876;10.0.0.2:9876");
+        assert_eq!(acl, "rocketmq");
+        assert_eq!(timeout_ms, 3000);
+        assert_eq!(secret_key, "sk");
+
+        // RocketMQ 无 ACL:回退默认地址 + acl=none
+        let (namesrv, acl) = conn
+            .query_row(
+                "SELECT json_extract(params, '$.config.namesrv_addrs'),
+                        json_extract(params, '$.config.acl_enabled')
+                 FROM connections WHERE name = 'mq-noacl'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("read migrated mq-noacl");
+        assert_eq!(namesrv, "127.0.0.1:9876");
+        assert_eq!(acl, "none");
+
+        // 其他类型连接不受影响
+        assert_eq!(
+            "Redis",
+            conn.query_row(
+                "SELECT connection_type FROM connections WHERE name = 'redis'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read untouched redis row")
         );
 
         run_migrations(&conn).expect("rerun migrations");

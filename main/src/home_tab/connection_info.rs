@@ -13,8 +13,6 @@ pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
             .map(|params| format!("{}@{}:{}", params.username, params.host, params.port)),
         ConnectionType::Redis => conn.to_redis_params().ok().map(redis_connection_info),
         ConnectionType::MongoDB => conn.to_mongodb_params().ok().map(mongodb_connection_info),
-        ConnectionType::Mqtt => conn.to_mqtt_params().ok().map(mqtt_connection_info),
-        ConnectionType::Rocketmq => conn.to_rocketmq_params().ok().map(rocketmq_connection_info),
         ConnectionType::Serial => conn.to_serial_params().ok().map(serial_connection_info),
         ConnectionType::Telnet => conn
             .to_telnet_params()
@@ -44,15 +42,14 @@ pub(super) fn screenshot_safe_connection_info(
         ConnectionType::SshSftp => Some("user@localhost:22"),
         ConnectionType::Redis => Some("localhost:6379/0"),
         ConnectionType::MongoDB => Some("localhost:27017"),
-        ConnectionType::Mqtt => Some("localhost:1883"),
-        ConnectionType::Rocketmq => Some("localhost:9876"),
         ConnectionType::Serial => Some("COM1 (115200, 8N1)"),
         ConnectionType::Telnet => Some("localhost:23"),
         ConnectionType::PortForwarding => Some("localhost:8080 -> localhost:80"),
         ConnectionType::Rdp => Some("user@localhost:3389"),
         ConnectionType::Vnc => Some("user@localhost:5900"),
         ConnectionType::Extension => Some("Local Extension"),
-        ConnectionType::All => None,
+        // Mqtt/Rocketmq 变体仅用于旧数据识别,历史连接已迁移为 Extension
+        ConnectionType::Mqtt | ConnectionType::Rocketmq | ConnectionType::All => None,
     }
 }
 
@@ -66,15 +63,14 @@ pub(super) fn connection_display_name(conn: &StoredConnection) -> String {
         ConnectionType::SshSftp => "Local SSH",
         ConnectionType::Redis => "Local Redis",
         ConnectionType::MongoDB => "Local MongoDB",
-        ConnectionType::Mqtt => "Local MQTT",
-        ConnectionType::Rocketmq => "Local RocketMQ",
         ConnectionType::Serial => "Local Serial",
         ConnectionType::Telnet => "Local Telnet",
         ConnectionType::PortForwarding => "Local Port Forwarding",
         ConnectionType::Rdp => "Local RDP",
         ConnectionType::Vnc => "Local VNC",
         ConnectionType::Extension => "Local Extension",
-        ConnectionType::All => "Local Connection",
+        // Mqtt/Rocketmq 变体仅用于旧数据识别,历史连接已迁移为 Extension
+        ConnectionType::Mqtt | ConnectionType::Rocketmq | ConnectionType::All => "Local Connection",
     }
     .to_owned()
 }
@@ -129,14 +125,6 @@ fn mongodb_connection_info(params: one_core::storage::MongoDBParams) -> String {
         return params.connection_string;
     }
     "MongoDB".to_string()
-}
-
-fn mqtt_connection_info(params: one_core::storage::MqttParams) -> String {
-    format!("{}:{}", params.host, params.port)
-}
-
-fn rocketmq_connection_info(params: one_core::storage::RocketmqParams) -> String {
-    params.namesrv_addrs.join(";")
 }
 
 fn serial_connection_info(params: one_core::storage::SerialParams) -> String {
