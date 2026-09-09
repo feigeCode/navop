@@ -22,6 +22,8 @@ pub struct ShellPageMountRequest {
     pub resource_type: String,
     /// Borrowed primary session. The Shell host must not close it.
     pub session: Option<ResourceSessionHandle>,
+    /// Installed workbench descriptor pinned to this connection session.
+    pub workbench: extension_runtime::RegisteredResourceWorkbenchContribution,
 }
 
 /// 挂载产物:可嵌入的视图。

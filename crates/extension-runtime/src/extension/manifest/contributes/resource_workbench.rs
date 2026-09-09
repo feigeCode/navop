@@ -174,7 +174,7 @@ pub enum ResourceWorkbenchTemplate {
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchRenderer {
     pub kind: ResourceWorkbenchRendererKind,
-    #[serde(default)]
+    #[serde(default, rename = "viewId")]
     pub view_id: Option<String>,
     #[serde(default)]
     pub fallback: Option<String>,

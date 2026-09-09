@@ -41,6 +41,28 @@ impl ShellPageHostAdapter {
         {
             return Err(ShellMountError::ModuleUnavailable("context".into()));
         }
+        if !view
+            .modules
+            .contains(&extension_runtime::extension::manifest::ShellHostModule::Workbench)
+        {
+            return Err(ShellMountError::ModuleUnavailable("workbench".into()));
+        }
+        if view.modules.iter().any(|module| {
+            matches!(
+                module,
+                extension_runtime::extension::manifest::ShellHostModule::Resource
+                    | extension_runtime::extension::manifest::ShellHostModule::Job
+                    | extension_runtime::extension::manifest::ShellHostModule::Event
+                    | extension_runtime::extension::manifest::ShellHostModule::Blob
+                    | extension_runtime::extension::manifest::ShellHostModule::Runtime
+                    | extension_runtime::extension::manifest::ShellHostModule::Dev
+            )
+        }) {
+            return Err(ShellMountError::ModuleUnavailable(
+                "raw resource/job/event/blob/runtime/dev modules are forbidden for embedded pages"
+                    .into(),
+            ));
+        }
         Ok(view)
     }
 }
@@ -56,6 +78,8 @@ impl CustomPageHost for ShellPageHostAdapter {
         let session_handle = request
             .session
             .ok_or_else(|| ShellMountError::MountFailed("borrowed session is required".into()))?;
+        let workbench = request.workbench;
+        let page_context = request.page_context;
         let snapshot = session_handle
             .resource_snapshot()
             .map_err(|error| ShellMountError::MountFailed(error.to_string()))?;
@@ -85,6 +109,9 @@ impl CustomPageHost for ShellPageHostAdapter {
             view,
             session,
             Some(connection),
+            workbench,
+            session_handle,
+            page_context,
             window,
             cx,
         )

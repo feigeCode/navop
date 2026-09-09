@@ -138,7 +138,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
             "name": "Search",
             "version": "1.0.0",
             "engines": { "onetcli": ">=0.1.0" },
-            "permissions": ["spawn:./bin/provider"],
+            "permissions": ["shell:exec", "spawn:./bin/provider"],
             "runtime": {
                 "ipc": [{
                     "id": "main",
@@ -147,6 +147,13 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                 }]
             },
             "contributes": {
+                "shellViews": [{
+                    "id": "search-editor",
+                    "title": "Search Editor",
+                    "entry": "ui/search-editor.js",
+                    "backends": {"search": "main"},
+                    "modules": ["context", "workbench"]
+                }],
                 "connections": [{
                     "id": "search9",
                     "label": "Search 9",
@@ -227,7 +234,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                             "id": "search",
                             "title": "Search",
                             "template": "query",
-                            "renderer": {"kind": "native"},
+                            "renderer": {"kind": "shell", "viewId": "search-editor", "fallback": "native"},
                             "inputs": [{"id": "q", "type": "string", "editor": "text", "default": "*", "required": true}],
                             "execute": {"operation": "query"}
                         }
@@ -254,6 +261,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
     assert_eq!("mapping", detail.links[0].page_id);
     // query 页面输入与 job 操作。
     let search = workbench.pages.iter().find(|p| p.id == "search").unwrap();
+    assert_eq!(Some("search-editor"), search.renderer.view_id.as_deref());
     assert_eq!(1, search.inputs.len());
     assert_eq!("query", search.execute.as_ref().unwrap().operation);
     let query_op = workbench.operations.get("query").unwrap();

@@ -23,6 +23,7 @@ mod resource;
 mod runtime;
 pub(crate) mod session;
 mod value;
+mod workbench;
 
 pub(crate) use context::ShellConnectionContext;
 pub(crate) use policy::LoadedShellView;

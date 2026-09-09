@@ -419,6 +419,37 @@ fn runtime_catalog_rejects_workbench_with_unknown_connection() {
     assert!(error.to_string().contains("unknown connection"), "{error}");
 }
 
+#[test]
+fn runtime_catalog_rejects_embedded_shell_with_raw_provider_modules() {
+    let mut manifest = shell_manifest();
+    let mut connection = resource_connection();
+    connection.shell_view_id = None;
+    manifest.contributes.connections.push(connection);
+
+    let mut view = shell_view("ui/search-editor.js");
+    view.modules = vec![
+        ShellHostModule::Context,
+        ShellHostModule::Workbench,
+        ShellHostModule::Resource,
+    ];
+    manifest.contributes.shell_views.push(view);
+
+    let mut workbench = resource_workbench();
+    workbench.pages[0].renderer.kind = ResourceWorkbenchRendererKind::Shell;
+    workbench.pages[0].renderer.view_id = Some("explorer".into());
+    workbench.pages[0].renderer.fallback = Some("native".into());
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot request raw resource/job/event/blob/runtime/dev"),
+        "{error}"
+    );
+}
+
 fn resource_workbench() -> ResourceWorkbenchContrib {
     ResourceWorkbenchContrib {
         schema_version: 1,

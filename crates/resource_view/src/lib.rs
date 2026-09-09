@@ -192,6 +192,7 @@ impl NativeResourceWorkbench {
             }),
             resource_type: self.descriptor.resource_type.clone(),
             session: Some(self.session.clone()),
+            workbench: self.descriptor.clone(),
         };
         match host.mount(request, window, cx) {
             Ok(mount) => {

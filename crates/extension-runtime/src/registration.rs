@@ -775,6 +775,45 @@ fn validate_resource_workbench(
                 return Err(invalid("page link references an unknown page"));
             }
         }
+        if matches!(
+            page.renderer.kind,
+            crate::extension::manifest::ResourceWorkbenchRendererKind::Shell
+        ) {
+            let Some(view_id) = page.renderer.view_id.as_deref() else {
+                return Err(invalid("shell renderer requires viewId"));
+            };
+            let Some(view) = manifest
+                .contributes
+                .shell_views
+                .iter()
+                .find(|view| view.id == view_id)
+            else {
+                return Err(invalid("shell renderer references an unknown shell view"));
+            };
+            let modules = &view.modules;
+            if !modules.contains(&crate::extension::manifest::ShellHostModule::Context)
+                || !modules.contains(&crate::extension::manifest::ShellHostModule::Workbench)
+            {
+                return Err(invalid(
+                    "embedded shell renderer requires context and workbench modules",
+                ));
+            }
+            if modules.iter().any(|module| {
+                matches!(
+                    module,
+                    crate::extension::manifest::ShellHostModule::Resource
+                        | crate::extension::manifest::ShellHostModule::Job
+                        | crate::extension::manifest::ShellHostModule::Event
+                        | crate::extension::manifest::ShellHostModule::Blob
+                        | crate::extension::manifest::ShellHostModule::Runtime
+                        | crate::extension::manifest::ShellHostModule::Dev
+                )
+            }) {
+                return Err(invalid(
+                    "embedded shell renderer cannot request raw resource/job/event/blob/runtime/dev modules",
+                ));
+            }
+        }
     }
     for navigation in &workbench.navigation {
         if !workbench
