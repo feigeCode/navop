@@ -3,8 +3,9 @@ use gpui::{
     AnyElement, App, Context, IntoElement, ParentElement, Styled, WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, DialogHandle, StyledExt, WindowExt,
+    ActiveTheme, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
+    dialog::DialogFooter,
     h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -142,7 +143,7 @@ impl SftpView {
         let identity = request.identity.to_string();
         let presentation = host_key_prompt_presentation(&request.reason);
 
-        window.open_dialog_with_handle(cx, move |dialog_handle, dialog, _window, cx| {
+        window.open_dialog(cx, move |dialog, _window, cx| {
             let reject_view = view.clone();
             let accept_once_view = view.clone();
             let accept_save_view = view.clone();
@@ -150,6 +151,40 @@ impl SftpView {
             let reject_request = request.clone();
             let accept_once_request = request.clone();
             let accept_save_request = request.clone();
+
+            let footer = DialogFooter::new().children(vec![
+                host_key_prompt_button(
+                    "sftp-host-key-reject",
+                    t!("HostKey.reject").to_string(),
+                    true,
+                    target,
+                    reject_request,
+                    reject_view,
+                    HostKeyPromptDecision::Reject,
+                )
+                .into_any_element(),
+                host_key_prompt_button(
+                    "sftp-host-key-accept-once",
+                    t!("HostKey.accept_once").to_string(),
+                    false,
+                    target,
+                    accept_once_request,
+                    accept_once_view,
+                    HostKeyPromptDecision::AcceptOnce,
+                )
+                .into_any_element(),
+                host_key_prompt_button(
+                    "sftp-host-key-accept-save",
+                    t!(presentation.save_label_key).to_string(),
+                    false,
+                    target,
+                    accept_save_request,
+                    accept_save_view,
+                    HostKeyPromptDecision::AcceptAndSave,
+                )
+                .primary()
+                .into_any_element(),
+            ]);
 
             dialog
                 .title(t!(presentation.title_key).to_string())
@@ -165,44 +200,7 @@ impl SftpView {
                             cx,
                         )),
                 )
-                .footer(move |_, _, _window, _cx| {
-                    vec![
-                        host_key_prompt_button(
-                            "sftp-host-key-reject",
-                            t!("HostKey.reject").to_string(),
-                            true,
-                            dialog_handle,
-                            target,
-                            reject_request.clone(),
-                            reject_view.clone(),
-                            HostKeyPromptDecision::Reject,
-                        ),
-                        host_key_prompt_button(
-                            "sftp-host-key-accept-once",
-                            t!("HostKey.accept_once").to_string(),
-                            false,
-                            dialog_handle,
-                            target,
-                            accept_once_request.clone(),
-                            accept_once_view.clone(),
-                            HostKeyPromptDecision::AcceptOnce,
-                        ),
-                        host_key_prompt_button(
-                            "sftp-host-key-accept-save",
-                            t!(presentation.save_label_key).to_string(),
-                            false,
-                            dialog_handle,
-                            target,
-                            accept_save_request.clone(),
-                            accept_save_view.clone(),
-                            HostKeyPromptDecision::AcceptAndSave,
-                        )
-                        .primary(),
-                    ]
-                    .into_iter()
-                    .map(IntoElement::into_any_element)
-                    .collect()
-                })
+                .footer(footer)
                 .overlay_closable(false)
                 .close_button(false)
                 .keyboard(false)
@@ -272,19 +270,17 @@ impl SftpView {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn host_key_prompt_button(
     id: &'static str,
     label: String,
     danger: bool,
-    dialog_handle: DialogHandle,
     target: HostKeyPromptTarget,
     request: HostKeyPromptRequest,
     view: WeakEntity<SftpView>,
     decision: HostKeyPromptDecision,
 ) -> Button {
     let button = Button::new(id).label(label).on_click(move |_, window, cx| {
-        window.close_dialog_by_handle(dialog_handle, cx);
+        window.close_dialog(cx);
         let request = request.clone();
         let _ = view.update(cx, |this, cx| {
             this.respond_to_host_key_prompt(target, request, decision, cx);

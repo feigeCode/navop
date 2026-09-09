@@ -4,6 +4,8 @@ pub const DEFAULT_SCHEMA_PARAM: &str = "default_schema";
 pub const SCHEMA_FILTER_MODE_PARAM: &str = "schema_filter_mode";
 pub const SCHEMA_FILTER_INCLUDE_PARAM: &str = "schema_filter_include";
 pub const SCHEMA_FILTER_EXCLUDE_PARAM: &str = "schema_filter_exclude";
+/// Oracle 连接角色（default / sysdba / sysoper），映射到连接时 `AS SYSDBA` 等特权模式。
+pub const ORACLE_ROLE_PARAM: &str = "role";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SchemaFilterProfile {

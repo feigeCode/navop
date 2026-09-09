@@ -502,7 +502,7 @@ impl DefaultAgentChatPanel {
             tracing::warn!(%error, "Failed to build ACP agent configs");
             Vec::new()
         });
-        let window_handle = self.window_handle.clone();
+        let window_handle = self.window_handle;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let provider_configs = load_enabled_provider_configs(&storage);

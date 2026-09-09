@@ -18,8 +18,9 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
+    dialog::DialogFooter,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     notification::Notification,
     radio::Radio,
     scroll::ScrollableElement,
@@ -189,7 +190,7 @@ pub struct SshFormWindow {
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
     key_path_input: Entity<InputState>,
-    private_key_content_input: Entity<InputState>,
+    private_key_content_input: Entity<TextareaState>,
     passphrase_input: Entity<InputState>,
     credential_picker: Entity<CredentialReferencePicker>,
 
@@ -210,7 +211,7 @@ pub struct SshFormWindow {
     jump_username_input: Entity<InputState>,
     jump_password_input: Entity<InputState>,
     jump_key_path_input: Entity<InputState>,
-    jump_private_key_content_input: Entity<InputState>,
+    jump_private_key_content_input: Entity<TextareaState>,
     jump_passphrase_input: Entity<InputState>,
     jump_credential_picker: Entity<CredentialReferencePicker>,
     jump_mfa_request: Option<FormMfaRequest>,
@@ -238,12 +239,12 @@ pub struct SshFormWindow {
     allow_legacy_algorithms: bool,
 
     // 初始化
-    init_script_input: Entity<InputState>,
+    init_script_input: Entity<TextareaState>,
     default_directory_input: Entity<InputState>,
     sftp_default_directory_input: Entity<InputState>,
 
     // 其他设置
-    remark_input: Entity<InputState>,
+    remark_input: Entity<TextareaState>,
 
     last_tested_signature: Option<String>,
     /// 测试连接成功时探测到的远端操作系统 ID（/etc/os-release 的 ID 字段）
@@ -482,7 +483,7 @@ fn load_jump_server_into_form(
     jump_username_input: &Entity<InputState>,
     jump_password_input: &Entity<InputState>,
     jump_key_path_input: &Entity<InputState>,
-    jump_private_key_content_input: &Entity<InputState>,
+    jump_private_key_content_input: &Entity<TextareaState>,
     jump_passphrase_input: &Entity<InputState>,
     window: &mut Window,
     cx: &mut App,
@@ -605,7 +606,7 @@ impl SshFormWindow {
         let key_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.key_path_placeholder")));
         let private_key_content_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("SSH.private_key_content_placeholder"))
                 .auto_grow(6, 12)
         });
@@ -633,7 +634,7 @@ impl SshFormWindow {
         let jump_key_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.key_path_placeholder")));
         let jump_private_key_content_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("SSH.private_key_content_placeholder"))
                 .auto_grow(6, 12)
         });
@@ -687,7 +688,7 @@ impl SshFormWindow {
 
         // 初始化
         let init_script_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("SSH.init_script_placeholder"))
                 .auto_grow(3, 8)
         });
@@ -700,7 +701,7 @@ impl SshFormWindow {
 
         // 其他设置
         let remark_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("SSH.remark_placeholder"))
                 .auto_grow(3, 10)
         });
@@ -1647,7 +1648,7 @@ impl SshFormWindow {
                             cx,
                         )),
                 )
-                .footer(move |_, _, _window, _cx| {
+                .footer(DialogFooter::new().children({
                     let reject_form = reject_form.clone();
                     let accept_once_form = accept_once_form.clone();
                     let accept_save_form = accept_save_form.clone();
@@ -1723,7 +1724,7 @@ impl SshFormWindow {
                             })
                             .into_any_element(),
                     ]
-                })
+                }))
                 .overlay_closable(false)
                 .close_button(false)
                 .keyboard(false)
@@ -1932,6 +1933,10 @@ impl SshFormWindow {
 
     fn render_form_input(&self, input: &Entity<InputState>) -> Input {
         Input::new(input).w_full()
+    }
+
+    fn render_form_textarea(&self, input: &Entity<TextareaState>) -> Textarea {
+        Textarea::new(input).w_full()
     }
 
     fn prompt_for_custom_icon(&mut self, cx: &mut Context<Self>) {
@@ -2307,7 +2312,7 @@ impl SshFormWindow {
                 |this| {
                     this.child(self.render_form_row(
                         &t!("SSH.private_key_content"),
-                        self.render_form_input(&self.private_key_content_input),
+                        self.render_form_textarea(&self.private_key_content_input),
                     ))
                     .child(self.render_form_row(
                         &t!("SSH.passphrase"),
@@ -2432,7 +2437,7 @@ impl SshFormWindow {
             .child(
                 self.render_form_row(
                     &t!("SSH.init_script"),
-                    self.render_form_input(&self.init_script_input),
+                    self.render_form_textarea(&self.init_script_input),
                 )
                 .debug_selector(|| "ssh-init-script-row".to_string()),
             )
@@ -2701,7 +2706,7 @@ impl SshFormWindow {
                     |this| {
                         this.child(self.render_form_row(
                             &t!("SSH.private_key_content"),
-                            self.render_form_input(&self.jump_private_key_content_input),
+                            self.render_form_textarea(&self.jump_private_key_content_input),
                         ))
                         .child(
                             self.render_form_row(
@@ -2959,7 +2964,7 @@ impl SshFormWindow {
     fn render_other_tab(&self) -> impl IntoElement {
         v_flex().w_full().gap_2().child(self.render_form_row(
             &t!("SSH.remark"),
-            self.render_form_input(&self.remark_input),
+            self.render_form_textarea(&self.remark_input),
         ))
     }
 }
@@ -3606,7 +3611,7 @@ mod tests {
             gpui_component::init(cx);
         });
         let (form, cx) = cx.add_window_view(|window, cx| {
-            let mut form = super::SshFormWindow::new(
+            let form = super::SshFormWindow::new(
                 super::SshFormWindowConfig {
                     editing_connection: None,
                     initial_connection: None,

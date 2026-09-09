@@ -5,13 +5,9 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
-    ActiveTheme,
-    button::{IconButton, IconButtonRole, ButtonVariants as _},
-    h_flex,
-    panel_header::{PanelHeader, PanelHeaderVariant},
-    scroll::ScrollableElement,
-    v_flex,
+    ActiveTheme, button::ButtonVariants as _, h_flex, scroll::ScrollableElement, v_flex,
 };
+use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 
 const QUICK_GROUP_SIDEBAR_WIDTH: f32 = 160.0;

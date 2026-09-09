@@ -8,8 +8,7 @@ use gpui_component::{
     ActiveTheme,
     button::{Button, ButtonVariants},
     h_flex,
-    highlighter::Language,
-    input::{Input, InputState},
+    input::{Editor, EditorState},
     v_flex,
 };
 use one_core::storage::DatabaseType;
@@ -18,7 +17,7 @@ use rust_i18n::t;
 pub struct SchemaEditorView {
     focus_handle: FocusHandle,
     form: AnyView,
-    sql_preview: Entity<InputState>,
+    sql_preview: Entity<EditorState>,
     current_tab: EditorTab,
     error_message: Entity<Option<String>>,
     database_type: DatabaseType,
@@ -42,10 +41,9 @@ impl SchemaEditorView {
         F: Render + EventEmitter<SchemaFormEvent> + 'static,
     {
         let sql_preview = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(Language::from_str("sql"))
+            EditorState::new(window, cx)
+                .language("sql")
                 .line_number(false)
-                .multi_line(true)
         });
         let focus_handle = cx.focus_handle();
         let error_message = cx.new(|_| None);
@@ -156,7 +154,7 @@ impl Render for SchemaEditorView {
                 .flex_1()
                 .w_full()
                 .min_h_48()
-                .child(Input::new(&self.sql_preview).size_full().disabled(true))
+                .child(Editor::new(&self.sql_preview).size_full().readonly(true))
         };
 
         let error_msg = self.error_message.read(cx).clone();

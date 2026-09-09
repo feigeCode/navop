@@ -15,7 +15,7 @@ use gpui_component::{
     Disableable as _, Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, InputEvent, InputState, LocalInputStyle},
+    input::{Input, InputEvent, InputState},
     menu::{PopupMenu, PopupMenuItem},
     notification::Notification,
     v_flex,
@@ -231,7 +231,13 @@ impl WorkspaceExplorer {
         self.file_action_subscription =
             Some(
                 cx.subscribe_in(&input, window, |this, _, event, window, cx| {
-                    if matches!(event, InputEvent::PressEnter { secondary: false }) {
+                    if matches!(
+                        event,
+                        InputEvent::PressEnter {
+                            secondary: false,
+                            ..
+                        }
+                    ) {
                         this.submit_file_editor(window, cx);
                     }
                 }),
@@ -511,12 +517,6 @@ impl WorkspaceExplorer {
     pub(super) fn render_file_action_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let editor = self.file_action_editor.clone();
         let confirmation = self.file_confirmation.clone();
-        let input_style = LocalInputStyle {
-            background: self.theme.background,
-            foreground: self.theme.foreground,
-            muted_foreground: self.theme.muted_foreground,
-            border: self.theme.border,
-        };
         v_flex()
             .w_full()
             .gap_2()
@@ -544,7 +544,9 @@ impl WorkspaceExplorer {
                             Input::new(&editor.input)
                                 .w_full()
                                 .small()
-                                .local_style(input_style),
+                                .bg(self.theme.background)
+                                .text_color(self.theme.foreground)
+                                .border_color(self.theme.border),
                         )
                         .child(self.render_file_action_buttons(false, cx)),
                 )
@@ -632,9 +634,7 @@ pub(super) fn build_files_context_menu(
     let explorer_state = explorer.read(cx);
     let paste_disabled =
         !explorer_state.has_file_clipboard() || explorer_state.file_operation_running;
-    let theme = explorer_state.theme.menu_style();
-    menu.local_style(theme)
-        .min_w(px(190.0))
+    menu.min_w(px(190.0))
         .item(
             PopupMenuItem::new(t!("WorkspaceExplorer.file_action.new_file").to_string())
                 .icon(IconName::File)
@@ -702,10 +702,7 @@ pub(super) fn build_file_context_menu(
     let explorer_state = explorer.read(cx);
     let operation_running = explorer_state.file_operation_running;
     let paste_disabled = !explorer_state.has_file_clipboard() || operation_running;
-    let theme = explorer_state.theme.menu_style();
-
-    menu.local_style(theme)
-        .min_w(px(200.0))
+    menu.min_w(px(200.0))
         .when(!is_dir, |menu| {
             menu.item(
                 PopupMenuItem::new(t!("WorkspaceExplorer.file_action.open").to_string())
@@ -805,7 +802,7 @@ pub(super) fn build_git_change_context_menu(
     explorer: Entity<WorkspaceExplorer>,
     change: GitChange,
     _window: &mut Window,
-    cx: &mut Context<PopupMenu>,
+    _cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let open_explorer = explorer.clone();
     let state_explorer = explorer.clone();
@@ -814,10 +811,7 @@ pub(super) fn build_git_change_context_menu(
     let state_change = change.clone();
     let discard_change = change.clone();
     let staged = change.staged;
-    let theme = explorer.read(cx).theme.menu_style();
-
-    menu.local_style(theme)
-        .min_w(px(210.0))
+    menu.min_w(px(210.0))
         .item(
             PopupMenuItem::new(t!("WorkspaceExplorer.git_action.open_changes").to_string())
                 .icon(IconName::Eye)

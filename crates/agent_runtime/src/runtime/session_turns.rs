@@ -12,7 +12,8 @@ pub(super) struct TurnState {
 }
 
 pub(crate) enum PendingToolResolution {
-    Ready(PendingToolApproval),
+    /// 就绪的待审批工具(装箱以平衡枚举变体大小)
+    Ready(Box<PendingToolApproval>),
     Busy,
     Missing,
     Mismatch,
@@ -163,6 +164,6 @@ impl Session {
             .take()
             .expect("pending approval checked above");
         turns.active = Some(ActiveTurn::new(pending.turn_id.clone(), cancellation, None));
-        PendingToolResolution::Ready(pending)
+        PendingToolResolution::Ready(Box::new(pending))
     }
 }

@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use extension_component::{
-    ActionContext, DbSessionResource, ExtensionDbHost, FieldValue, ViewActionEvent, ViewSpec,
-};
+use extension_component::{ActionContext, DbSessionResource, ExtensionDbHost};
 use wasmtime::{
     Config, Engine, Store,
     component::{Component, HasSelf, Linker, ResourceTable},
@@ -117,7 +115,7 @@ impl ComponentRuntime {
         &self,
         mut state: ComponentHostState<H>,
         context: ActionContext,
-    ) -> WasmResult<Vec<ViewSpec>>
+    ) -> WasmResult<()>
     where
         H: ExtensionDbHost + Send + Sync + 'static,
     {
@@ -125,25 +123,6 @@ impl ComponentRuntime {
         let (mut store, extension) = self.instantiate_with_db(state).await?;
         extension
             .call_run_action(&mut store)
-            .await
-            .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
-        Ok(store.data().opened_views().to_vec())
-    }
-
-    pub async fn handle_view_action_with_db<H>(
-        &self,
-        mut state: ComponentHostState<H>,
-        context: ActionContext,
-        event: ViewActionEvent,
-    ) -> WasmResult<()>
-    where
-        H: ExtensionDbHost + Send + Sync + 'static,
-    {
-        state.set_action_context(context);
-        let (mut store, extension) = self.instantiate_with_db(state).await?;
-        let event = wit_view_action_event(event);
-        extension
-            .call_handle_view_action(&mut store, &event)
             .await
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
         Ok(())
@@ -159,7 +138,6 @@ where
     extension_id: String,
     pub(crate) db_host: H,
     action_context: Option<ActionContext>,
-    opened_views: Vec<ViewSpec>,
     wasi_ctx: WasiCtx,
     pub(crate) table: ResourceTable,
 }
@@ -173,7 +151,6 @@ where
             extension_id: extension_id.into(),
             db_host,
             action_context: None,
-            opened_views: Vec::new(),
             wasi_ctx: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
         }
@@ -197,14 +174,6 @@ where
 
     pub fn action_context(&self) -> Option<&ActionContext> {
         self.action_context.as_ref()
-    }
-
-    pub fn opened_views(&self) -> &[ViewSpec] {
-        &self.opened_views
-    }
-
-    pub(crate) fn push_opened_view(&mut self, view: ViewSpec) {
-        self.opened_views.push(view);
     }
 
     pub fn table(&self) -> &ResourceTable {
@@ -257,19 +226,4 @@ fn component_engine() -> WasmResult<Engine> {
     config.async_support(true);
     config.consume_fuel(true);
     Engine::new(&config).map_err(|error| WasmError::ComponentLoad(error.to_string()))
-}
-
-fn wit_view_action_event(event: ViewActionEvent) -> Ui::ViewActionEvent {
-    Ui::ViewActionEvent {
-        view_id: event.view_id,
-        action_id: event.action_id,
-        fields: event.fields.into_iter().map(wit_field_value).collect(),
-    }
-}
-
-fn wit_field_value(value: FieldValue) -> Ui::FieldValue {
-    Ui::FieldValue {
-        id: value.id,
-        value: value.value,
-    }
 }

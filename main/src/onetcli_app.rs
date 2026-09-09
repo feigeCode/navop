@@ -258,6 +258,22 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
             );
         }
 
+        let plugin_shutdown_task = cx.update(|cx| crate::universal_plugins::spawn_shutdown(cx));
+        if let Some(shutdown_task) = plugin_shutdown_task {
+            if let Err(error) = shutdown_task.await {
+                tracing::warn!(
+                    reason,
+                    %error,
+                    "Universal plugin shutdown did not complete"
+                );
+            }
+        } else {
+            tracing::error!(
+                reason,
+                "Universal plugin service global is missing; quitting after remaining application teardown"
+            );
+        }
+
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();
@@ -888,17 +904,22 @@ fn spawn_onetcli_model_refresh(cx: &mut App) {
     .detach();
 }
 
-pub fn init(cx: &mut App) {
+pub fn init(cx: &mut App) -> anyhow::Result<()> {
     gpui_component::init(cx);
     one_core::themes::load_bundled(cx);
     one_core::themes::load_imported(cx);
     setting_tab::init_settings(cx);
-    one_core::init(cx);
+    one_core::init(cx)?;
     init_ssh_session_service(cx);
     ai_chat_view::init(cx);
     crate::public_mcp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
-    one_ui::init(cx);
+    one_ui::init_table_display_settings(
+        cx,
+        one_ui::TableDisplaySettings::new(AppSettings::global(cx).table_row_height),
+    );
+    let table_keybindings = table_keybindings(cx);
+    one_ui::init(cx, table_keybindings);
     db_view::search_shortcut::init(cx);
     db_view::sql_editor_view::init(cx);
     crate::auth::init(cx);
@@ -921,6 +942,8 @@ pub fn init(cx: &mut App) {
     redis_view::init(cx);
     crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
+    mqtt_view::init(cx);
+    rocketmq_view::init(cx);
     #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
     init_native_data_driver_factories(cx);
     crate::public_mcp_runtime::init(cx);
@@ -939,6 +962,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(db_state);
     db_view::init_ask_ai_notifier(cx);
     cx.activate(true);
+    Ok(())
 }
 
 #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
@@ -967,9 +991,41 @@ pub fn refresh_keybindings(cx: &mut App) {
     terminal_view::refresh_keybindings(cx);
     redis_view::refresh_keybindings(cx);
     remote_desktop_view::refresh_keybindings(cx);
-    one_ui::refresh_keybindings(cx);
+    let table_keybindings = table_keybindings(cx);
+    one_ui::refresh_keybindings(cx, table_keybindings);
     remote_file_editor::refresh_keybindings(cx);
     notes::refresh_keybindings(cx);
+}
+
+fn table_keybindings(cx: &App) -> one_ui::TableKeybindings {
+    use one_core::keybindings::{action_id, shortcuts_for};
+
+    one_ui::TableKeybindings::new(
+        shortcuts_for(cx, action_id::TABLE_CANCEL, &["escape"]),
+        shortcuts_for(
+            cx,
+            action_id::TABLE_COPY,
+            &[table_shortcut("cmd-c", "ctrl-c")],
+        ),
+        shortcuts_for(
+            cx,
+            action_id::TABLE_PASTE,
+            &[table_shortcut("cmd-v", "ctrl-v")],
+        ),
+        shortcuts_for(
+            cx,
+            action_id::TABLE_SELECT_ALL,
+            &[table_shortcut("cmd-a", "ctrl-a")],
+        ),
+    )
+}
+
+fn table_shortcut(macos: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        macos
+    } else {
+        other
+    }
 }
 
 fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
@@ -1817,7 +1873,7 @@ impl OnetCliApp {
                         .ok_text(t!("Quit.confirm_action").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let _ = app_for_ok.update(cx, |app, cx| {
                         app.confirm_quit(window, cx);
                     });

@@ -16,9 +16,7 @@ use gpui::{
     InteractiveElement, IntoElement, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, BrandIcon, ElementExt as _, Icon, IconName, IconSize, Sizable, h_flex,
-};
+use gpui_component::{ActiveTheme, ElementExt as _, Icon, IconName, IconSize, Sizable, h_flex};
 use one_core::gpui_tokio::Tokio;
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
@@ -452,11 +450,7 @@ impl TabContent for RedisTabView {
                     .color(),
             )
         } else {
-            Some(
-                BrandIcon::new(IconName::Redis)
-                    .with_size(IconSize::Medium)
-                    .into_icon(),
-            )
+            Some(Icon::new(IconName::Redis).with_size(IconSize::Medium))
         }
     }
 

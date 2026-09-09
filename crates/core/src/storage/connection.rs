@@ -60,11 +60,18 @@ fn create_connection(path: &Path) -> Result<Connection> {
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
 
-    conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;",
-    )?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")?;
+
+    // WAL 需要创建并写入 -wal/-shm 文件。在杀毒软件实时防护、同步盘或不支持
+    // 共享内存的文件系统上，这一步可能返回 "disk I/O error"（SQLITE_IOERR）。
+    // 此处按尽力而为处理：失败时回退到 SQLite 默认的 DELETE journal mode，
+    // 连接仍然可用，避免整个存储初始化失败。
+    if let Err(error) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
+        tracing::warn!(
+            %error,
+            "failed to enable SQLite WAL journal mode; falling back to the default journal mode"
+        );
+    }
 
     Ok(conn)
 }
@@ -119,5 +126,71 @@ impl SqliteConnection {
     {
         let mut conn = self.get_connection()?;
         f(&mut conn)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pooled_connection_opens_and_persists_writes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pooled.db");
+        let pool = SqliteConnection::open(&path).expect("open pooled connection");
+
+        pool.with_connection(|conn| {
+            conn.execute_batch("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('ok');")?;
+            let value: String = conn.query_row("SELECT v FROM t", [], |row| row.get(0))?;
+            assert_eq!("ok", value);
+            Ok(())
+        })
+        .expect("write and read through the pool");
+    }
+
+    #[test]
+    fn journal_mode_is_wal_or_falls_back_to_delete() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let pool = SqliteConnection::open(&path).expect("open connection");
+
+        pool.with_connection(|conn| {
+            let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+            assert!(
+                mode.eq_ignore_ascii_case("wal") || mode.eq_ignore_ascii_case("delete"),
+                "journal mode must be WAL or a supported fallback, got {mode:?}"
+            );
+            Ok(())
+        })
+        .expect("query journal mode");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_unavailable_falls_back_without_failing_the_connection() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("readonly-dir.db");
+        std::fs::write(&path, b"").expect("pre-create db file");
+        let original = std::fs::metadata(&path).expect("db metadata").permissions();
+        let writable = original.mode() & 0o200 != 0;
+        if !writable {
+            return;
+        }
+
+        // 让目录只读：数据库文件可以打开，但 WAL 需要在目录里创建 -wal/-shm 文件，
+        // 这一步会失败并返回 SQLITE_IOERR（正是线上 "disk I/O error" 的来源）。
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
+            .expect("make directory read-only");
+
+        let pool = SqliteConnection::open(&path).expect("open must fall back instead of failing");
+
+        pool.with_connection(|conn| {
+            let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+            assert_eq!("delete", mode.to_ascii_lowercase());
+            Ok(())
+        })
+        .expect("connection usable without WAL");
     }
 }

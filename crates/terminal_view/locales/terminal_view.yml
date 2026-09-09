@@ -1050,21 +1050,24 @@ TerminalView:
     zh-CN: "cell_width 变化: %{old} -> %{new}, font=%{font}, size=%{size}"
     zh-HK: "cell_width 變化: %{old} -> %{new}, font=%{font}, size=%{size}"
   ask_ai_selection_template:
-    en: "Here is the text I selected in the terminal. Please analyze:
+    en: |-
+      Here is the text I selected in the terminal. Please analyze:
 
-```
-%{content}
-```"
-    zh-CN: "以下是我在终端中选中的内容，请帮我分析：
+      ```
+      %{content}
+      ```
+    zh-CN: |-
+      以下是我在终端中选中的内容，请帮我分析：
 
-```
-%{content}
-```"
-    zh-HK: "以下是我在終端中選中的內容，請幫我分析：
+      ```
+      %{content}
+      ```
+    zh-HK: |-
+      以下是我在終端中選中的內容，請幫我分析：
 
-```
-%{content}
-```"
+      ```
+      %{content}
+      ```
   vi_mode_enabled:
     en: "Vi mode enabled. Press %{shortcut} again or Esc to exit."
     zh-CN: "已进入 Vi 模式。再次按 %{shortcut} 或按 Esc 退出。"
@@ -1113,12 +1116,60 @@ TerminalView:
     en: Paste preview
     zh-CN: 粘贴预览
     zh-HK: 貼上預覽
+  paste_summary:
+    en: "%{lines} lines · %{chars} chars"
+    zh-CN: 共 %{lines} 行 · %{chars} 字符
+    zh-HK: 共 %{lines} 行 · %{chars} 字元
+  paste_as_single_line:
+    en: Paste as single line
+    zh-CN: 合并为单行粘贴
+    zh-HK: 合併為單行貼上
+  large_paste_title:
+    en: Confirm Large Paste
+    zh-CN: 确认大段粘贴
+    zh-HK: 確認大段貼上
+  large_paste_message:
+    en: The pasted content is large (over 200 lines or 32 KB). Please confirm before pasting.
+    zh-CN: 粘贴内容较大（超过 200 行或 32 KB），请确认后再粘贴。
+    zh-HK: 貼上內容較大（超過 200 行或 32 KB），請確認後再貼上。
 
 TerminalSidebar:
   paste_to_terminal:
     en: "Paste to terminal"
     zh-CN: "粘贴到终端"
     zh-HK: "貼上到終端"
+  file_explorer:
+    en: File Explorer
+    zh-CN: 文件浏览器
+    zh-HK: 檔案瀏覽器
+  settings:
+    en: Settings
+    zh-CN: 设置
+    zh-HK: 設定
+  quick_commands:
+    en: Quick Commands
+    zh-CN: 快捷命令
+    zh-HK: 快捷命令
+  history_commands:
+    en: History Commands
+    zh-CN: 历史命令
+    zh-HK: 歷史命令
+  ai_chat:
+    en: AI Chat
+    zh-CN: AI 对话
+    zh-HK: AI 對話
+  broadcast_input:
+    en: Broadcast Input
+    zh-CN: 广播输入
+    zh-HK: 廣播輸入
+  file_manager:
+    en: File Manager
+    zh-CN: 文件管理器
+    zh-HK: 檔案管理器
+  server_monitor:
+    en: Server Monitor
+    zh-CN: 服务器监控
+    zh-HK: 伺服器監控
 
 LocalTerminalClose:
   title:
@@ -1537,40 +1588,6 @@ TerminalCommandBar:
     en: Serial Terminal
     zh-CN: 串口终端
     zh-HK: 串口終端
-
-TerminalSidebar:
-  file_explorer:
-    en: File Explorer
-    zh-CN: 文件浏览器
-    zh-HK: 檔案瀏覽器
-  settings:
-    en: Settings
-    zh-CN: 设置
-    zh-HK: 設定
-  quick_commands:
-    en: Quick Commands
-    zh-CN: 快捷命令
-    zh-HK: 快捷命令
-  history_commands:
-    en: History Commands
-    zh-CN: 历史命令
-    zh-HK: 歷史命令
-  ai_chat:
-    en: AI Chat
-    zh-CN: AI 对话
-    zh-HK: AI 對話
-  broadcast_input:
-    en: Broadcast Input
-    zh-CN: 广播输入
-    zh-HK: 廣播輸入
-  file_manager:
-    en: File Manager
-    zh-CN: 文件管理器
-    zh-HK: 檔案管理器
-  server_monitor:
-    en: Server Monitor
-    zh-CN: 服务器监控
-    zh-HK: 伺服器監控
 
 Sidebar:
   panel_options:

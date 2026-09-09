@@ -1,5 +1,4 @@
 pub mod db;
-pub mod ui;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {

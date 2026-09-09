@@ -92,7 +92,7 @@ fn render_opacity(
         let state = state.clone();
         Button::new(SharedString::from(format!("opacity-preset-{value}")))
             .label(format!("{value:.0}%"))
-            .with_size(options.size)
+            .with_size(options.size())
             .on_click(move |_, window, cx| {
                 state.update(cx, |state, cx| state.set_opacity(*value, true, window, cx));
             })

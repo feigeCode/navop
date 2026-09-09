@@ -7,10 +7,10 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, FunctionalIcon, Icon, IconName, Selectable, Sizable, Size,
+    ActiveTheme, Icon, IconName, Selectable, Sizable,
     button::{Button, ButtonCustomVariant, ButtonVariants},
     h_flex,
-    input::{Input, LocalInputStyle},
+    input::Textarea,
 };
 use rust_i18n::t;
 
@@ -168,7 +168,7 @@ impl TerminalCommandBar {
 
     fn render_quick_command_button(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("terminal-command-quick")
-            .icon(FunctionalIcon::new(IconName::SquareTerminal))
+            .icon(IconName::SquareTerminal)
             .label(format!(
                 "{} · {}",
                 t!("TerminalCommandBar.quick_commands"),
@@ -217,20 +217,11 @@ impl TerminalCommandBar {
             )
             .child(
                 div().flex_1().min_w_0().h(px(self.input_height)).child(
-                    Input::new(&self.input_state)
+                    Textarea::new(&self.input_state)
                         .appearance(false)
-                        .vertical_navigation(false)
-                        .local_style(LocalInputStyle {
-                            background: self.colors.background,
-                            foreground: self.colors.foreground,
-                            muted_foreground: self.colors.muted_foreground,
-                            border: self.colors.border,
-                        })
                         .h(px(self.input_height))
                         .w_full()
-                        .text_color(self.colors.foreground)
-                        .caret_color(self.colors.foreground)
-                        .with_size(Size::Medium),
+                        .text_color(self.colors.foreground),
                 ),
             )
             .child(

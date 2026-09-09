@@ -5,8 +5,7 @@ use crate::{
     bindings::onet::extension::{db as Db, task as Task, ui as Ui},
     component::{ComponentCursorResource, ComponentHostState, table_error},
     host_conversions::{
-        host_exec_options, host_view_spec, wit_action_context, wit_connection_info, wit_db_error,
-        wit_row_batch,
+        host_exec_options, wit_action_context, wit_connection_info, wit_db_error, wit_row_batch,
     },
 };
 
@@ -142,15 +141,6 @@ where
 
     async fn current_action_context(&mut self) -> wasmtime::Result<Option<Ui::ActionContext>> {
         Ok(self.action_context().cloned().map(wit_action_context))
-    }
-
-    async fn open_view(&mut self, view: Ui::ViewSpec) -> wasmtime::Result<()> {
-        self.push_opened_view(host_view_spec(view));
-        Ok(())
-    }
-
-    async fn open_result_view(&mut self, _title: String, _payload: String) -> wasmtime::Result<()> {
-        Ok(())
     }
 
     async fn refresh_tree(&mut self, _connection_id: String) -> wasmtime::Result<()> {

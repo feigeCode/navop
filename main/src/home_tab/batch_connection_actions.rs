@@ -86,7 +86,7 @@ fn show_batch_delete_confirmation(
                     .into_any_element(),
             )
             .confirm()
-            .on_ok(move |_, _, cx| {
+            .on_ok(move |_, _, cx: &mut App| {
                 _ = view.update(cx, |this, cx| {
                     for connection_id in connection_ids.iter().copied() {
                         this.delete_connection(connection_id, cx);

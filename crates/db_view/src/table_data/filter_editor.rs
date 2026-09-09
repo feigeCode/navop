@@ -6,8 +6,7 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, Render, Styled as _, Subscription,
     Task, Window,
 };
-use gpui_component::highlighter::Language;
-use gpui_component::input::{CompletionProvider, Input, InputEvent, InputState};
+use gpui_component::input::{CompletionProvider, Editor, EditorState, InputEvent};
 use gpui_component::{ActiveTheme, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -714,7 +713,7 @@ impl CompletionProvider for WhereCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope = rope.clone();
         let schema = self.schema.clone();
@@ -743,12 +742,7 @@ impl CompletionProvider for WhereCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         // 触发自动完成的条件：
         // 1. 空格、点、操作符后
         // 2. 输入字母、数字、下划线时
@@ -779,7 +773,7 @@ impl CompletionProvider for OrderByCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope = rope.clone();
         let schema = self.schema.clone();
@@ -853,12 +847,7 @@ impl CompletionProvider for OrderByCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         // Trigger completion on space, dot, comma, or when typing letters/numbers/underscore
         matches!(new_text, " " | "." | ",")
             || new_text
@@ -873,12 +862,12 @@ pub enum FilterEditorEvent {
 }
 
 pub struct SimpleCodeEditor {
-    editor: Entity<InputState>,
+    editor: Entity<EditorState>,
     _sub: Subscription,
 }
 
 impl SimpleCodeEditor {
-    pub fn new(editor: Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(editor: Entity<EditorState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let _sub = cx.subscribe_in(&editor, window, |_, _, event: &InputEvent, _, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 cx.emit(FilterEditorEvent::QueryApply);
@@ -896,7 +885,7 @@ impl EventEmitter<FilterEditorEvent> for SimpleCodeEditor {}
 
 impl Render for SimpleCodeEditor {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        Input::new(&self.editor).cleanable(true).size_full()
+        Editor::new(&self.editor).size_full()
     }
 }
 
@@ -905,9 +894,8 @@ pub fn create_simple_editor(
     cx: &mut Context<SimpleCodeEditor>,
 ) -> SimpleCodeEditor {
     let editor = cx.new(|cx| {
-        let editor = InputState::new(window, cx)
-            .code_editor(Language::from_str("sql"))
-            .multi_line(false)
+        let editor = EditorState::new(window, cx)
+            .language("sql")
             .clean_on_escape();
 
         editor
@@ -980,14 +968,14 @@ impl TableFilterEditor {
 
         self.where_editor.update(cx, |editor, cx| {
             editor.editor.update(cx, |input_state, _cx| {
-                input_state.lsp.completion_provider =
+                input_state.lsp_mut().completion_provider =
                     Some(Rc::new(WhereCompletionProvider::new(schema.clone())));
             });
         });
 
         self.order_by_editor.update(cx, |editor, cx| {
             editor.editor.update(cx, |input_state, _cx| {
-                input_state.lsp.completion_provider =
+                input_state.lsp_mut().completion_provider =
                     Some(Rc::new(OrderByCompletionProvider::new(schema_clone)));
             });
         });

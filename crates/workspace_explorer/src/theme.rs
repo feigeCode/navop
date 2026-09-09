@@ -1,8 +1,5 @@
 use gpui::{App, ColorExt as _, Hsla};
-use gpui_component::menu::LocalMenuStyle;
-use gpui_component::{
-    button::ButtonCustomVariant, highlighter::HighlightTheme, tab::LocalTabStyle,
-};
+use gpui_component::{button::ButtonCustomVariant, highlighter::HighlightTheme};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
@@ -63,33 +60,6 @@ impl WorkspaceTheme {
             .hover(self.danger.opacity(0.85))
             .active(self.danger.opacity(0.75))
     }
-
-    pub(crate) fn tab_style(&self) -> LocalTabStyle {
-        LocalTabStyle {
-            bar_background: self.muted,
-            background: self.muted,
-            foreground: self.muted_foreground,
-            hover_background: self.border,
-            hover_foreground: self.foreground,
-            selected_background: self.background,
-            selected_foreground: self.foreground,
-            disabled_foreground: self.muted_foreground,
-            border: self.border,
-            accent: self.accent,
-        }
-    }
-
-    pub(crate) fn menu_style(&self) -> LocalMenuStyle {
-        LocalMenuStyle {
-            background: self.background,
-            foreground: self.foreground,
-            muted_foreground: self.muted_foreground,
-            border: self.border,
-            accent: self.muted,
-            accent_foreground: self.foreground,
-            radius: gpui::px(8.0),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -116,11 +86,6 @@ mod tests {
 
         assert!(dark.highlight_theme().appearance.is_dark());
         assert!(!light.highlight_theme().appearance.is_dark());
-        assert_eq!(dark.tab_style().selected_background, dark.background);
-        assert_eq!(dark.tab_style().bar_background, dark.muted);
-        assert_eq!(dark.menu_style().background, dark.background);
-        assert_eq!(dark.menu_style().accent, dark.muted);
-        assert_eq!(dark.menu_style().foreground, dark.foreground);
         assert_eq!(dark.selection_background(), dark.accent.opacity(0.24));
         assert_eq!(dark.selection_hover_background(), dark.accent.opacity(0.32));
     }

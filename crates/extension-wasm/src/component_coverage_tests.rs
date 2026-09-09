@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use extension_component::{ActionContext, ExtensionDbHost, ViewActionEvent, protocol};
+use extension_component::{ExtensionDbHost, protocol};
 
 use crate::{ComponentHostState, ComponentRuntime, WasmRuntimeConfig};
 
@@ -31,33 +31,6 @@ fn coverage_plugin_declares_manifest_and_exercises_component_runtime() {
     futures::executor::block_on(extension.call_deactivate(&mut store)).unwrap();
 
     assert_eq!(2, calls.load(Ordering::SeqCst));
-}
-
-#[test]
-fn coverage_plugin_accepts_view_action_callback() {
-    let runtime = ComponentRuntime::from_file(
-        "coverage",
-        &coverage_wat_path(),
-        WasmRuntimeConfig::default(),
-    )
-    .unwrap();
-    let state = ComponentHostState::new(
-        "com.onetcli.coverage-wasm",
-        CoverageDbHost {
-            list_connections_calls: Arc::new(AtomicUsize::new(0)),
-        },
-    );
-
-    futures::executor::block_on(runtime.handle_view_action_with_db(
-        state,
-        action_context(),
-        ViewActionEvent {
-            view_id: "coverage".to_string(),
-            action_id: "run".to_string(),
-            fields: Vec::new(),
-        },
-    ))
-    .unwrap();
 }
 
 fn coverage_wat_path() -> std::path::PathBuf {
@@ -126,17 +99,5 @@ impl ExtensionDbHost for CoverageDbHost {
     ) -> Result<(), protocol::DbError> {
         session.close();
         Ok(())
-    }
-}
-
-fn action_context() -> ActionContext {
-    ActionContext {
-        extension_id: "com.onetcli.coverage-wasm".to_string(),
-        command_id: "coverage.run".to_string(),
-        node_id: "table-1".to_string(),
-        node_name: "users".to_string(),
-        node_type: "table".to_string(),
-        database_type: "PostgreSQL".to_string(),
-        connection_id: "conn1".to_string(),
     }
 }

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "com.navop.docker",
+  "name": "Navop Docker Resource Provider",
+  "version": "0.1.0",
+  "description": "Reference IPC provider for Docker containers, images and logs.",
+  "engines": {
+    "onetcli": ">=0.1.0"
+  },
+  "permissions": [
+    "fs:read:/var/run/docker.sock",
+    "fs:write:/var/run/docker.sock",
+    "spawn:./bin/docker-provider"
+  ],
+  "runtime": {
+    "ipc": [
+      {
+        "id": "main",
+        "entry": {
+          "command": "./bin/docker-provider"
+        },
+        "transport": {
+          "kind": "local_socket",
+          "connect_timeout_ms": 5000
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "connections": [
+      {
+        "id": "docker",
+        "label": "Docker",
+        "runtimeId": "main",
+        "resourceType": "docker",
+        "form": { "tabs": [{ "id": "general", "label": "General", "fields": [
+          { "id": "socket", "label": "Socket", "fieldType": "Text", "required": true, "defaultValue": "/var/run/docker.sock" }
+        ] }] }
+      }
+    ]
+  }
+}

@@ -1,0 +1,519 @@
+_version: 2
+
+# 中间件通用管理视图
+Middleware:
+  # 通用
+  refresh:
+    en: "Refresh"
+    zh-CN: "刷新"
+    zh-HK: "刷新"
+  loading:
+    en: "Loading..."
+    zh-CN: "加载中..."
+    zh-HK: "載入中..."
+  empty_title:
+    en: "No data"
+    zh-CN: "暂无数据"
+    zh-HK: "暫無資料"
+  load_failed:
+    en: "Load failed: %{error}"
+    zh-CN: "加载失败: %{error}"
+    zh-HK: "載入失敗: %{error}"
+  not_supported:
+    en: "Not supported"
+    zh-CN: "不支持"
+    zh-HK: "不支援"
+  cancel:
+    en: "Cancel"
+    zh-CN: "取消"
+    zh-HK: "取消"
+  confirm:
+    en: "Confirm"
+    zh-CN: "确认"
+    zh-HK: "確認"
+  create:
+    en: "Create"
+    zh-CN: "创建"
+    zh-HK: "建立"
+  save:
+    en: "Save"
+    zh-CN: "保存"
+    zh-HK: "儲存"
+  send:
+    en: "Send"
+    zh-CN: "发送"
+    zh-HK: "傳送"
+  total_pages:
+    en: "%{total} items · page %{page}/%{pages}"
+    zh-CN: "共 %{total} 条 · 第 %{page}/%{pages} 页"
+    zh-HK: "共 %{total} 條 · 第 %{page}/%{pages} 頁"
+  prev_page:
+    en: "Prev"
+    zh-CN: "上一页"
+    zh-HK: "上一頁"
+  next_page:
+    en: "Next"
+    zh-CN: "下一页"
+    zh-HK: "下一頁"
+
+  # 概览页
+  overview_tab:
+    en: "Overview"
+    zh-CN: "概览"
+    zh-HK: "概覽"
+  metrics_title:
+    en: "Metrics"
+    zh-CN: "运行指标"
+    zh-HK: "執行指標"
+  metrics_unsupported:
+    en: "Metrics not supported"
+    zh-CN: "不支持指标查询"
+    zh-HK: "不支援指標查詢"
+  metrics_unsupported_hint:
+    en: "The current middleware backend does not provide metrics"
+    zh-CN: "当前中间件后端未提供指标能力"
+    zh-HK: "當前中介軟體後端未提供指標能力"
+  tps_in:
+    en: "TPS In"
+    zh-CN: "流入 TPS"
+    zh-HK: "流入 TPS"
+  tps_out:
+    en: "TPS Out"
+    zh-CN: "流出 TPS"
+    zh-HK: "流出 TPS"
+  topic_count:
+    en: "Topics"
+    zh-CN: "Topic 总数"
+    zh-HK: "Topic 總數"
+  connection_count:
+    en: "Connections"
+    zh-CN: "连接数"
+    zh-HK: "連線數"
+  message_today:
+    en: "Messages today"
+    zh-CN: "今日消息量"
+    zh-HK: "今日訊息量"
+  cluster_title:
+    en: "Cluster"
+    zh-CN: "集群"
+    zh-HK: "叢集"
+  cluster_unsupported:
+    en: "Cluster overview not supported"
+    zh-CN: "不支持集群概览"
+    zh-HK: "不支援叢集概覽"
+  cluster_unsupported_hint:
+    en: "The current middleware backend does not provide cluster information"
+    zh-CN: "当前中间件后端未提供集群信息"
+    zh-HK: "當前中介軟體後端未提供叢集資訊"
+  no_cluster_data:
+    en: "No cluster data"
+    zh-CN: "暂无集群数据"
+    zh-HK: "暫無叢集資料"
+  cluster_label:
+    en: "Cluster"
+    zh-CN: "集群"
+    zh-HK: "叢集"
+  address:
+    en: "Address"
+    zh-CN: "地址"
+    zh-HK: "位址"
+  version:
+    en: "Version"
+    zh-CN: "版本"
+    zh-HK: "版本"
+  topics_label:
+    en: "Topics"
+    zh-CN: "Topic 数"
+    zh-HK: "Topic 數"
+  queues_label:
+    en: "Queues"
+    zh-CN: "队列数"
+    zh-HK: "佇列數"
+
+  # Topic 页
+  topics_tab:
+    en: "Topic"
+    zh-CN: "Topic"
+    zh-HK: "Topic"
+  filter_name_placeholder:
+    en: "Filter by topic name"
+    zh-CN: "按 Topic 名称过滤"
+    zh-HK: "按 Topic 名稱過濾"
+  filter_type_label:
+    en: "Type:"
+    zh-CN: "类型:"
+    zh-HK: "類型:"
+  clear_type_filter:
+    en: "All"
+    zh-CN: "全部类型"
+    zh-HK: "全部類型"
+  topics_empty_detail:
+    en: "No topics match the current filters"
+    zh-CN: "没有符合当前过滤条件的 Topic"
+    zh-HK: "沒有符合當前過濾條件的 Topic"
+  col_topic:
+    en: "Topic"
+    zh-CN: "Topic"
+    zh-HK: "Topic"
+  col_type:
+    en: "Type"
+    zh-CN: "类型"
+    zh-HK: "類型"
+  col_queues:
+    en: "Queues"
+    zh-CN: "队列数"
+    zh-HK: "佇列數"
+  col_perm:
+    en: "Perm"
+    zh-CN: "权限"
+    zh-HK: "權限"
+  col_messages:
+    en: "Messages"
+    zh-CN: "消息数"
+    zh-HK: "訊息數"
+  col_created:
+    en: "Created At"
+    zh-CN: "创建时间"
+    zh-HK: "建立時間"
+  col_actions:
+    en: "Actions"
+    zh-CN: "操作"
+    zh-HK: "操作"
+  action_status:
+    en: "Status"
+    zh-CN: "状态"
+    zh-HK: "狀態"
+  action_edit:
+    en: "Edit"
+    zh-CN: "编辑"
+    zh-HK: "編輯"
+  action_send:
+    en: "Send"
+    zh-CN: "发送"
+    zh-HK: "傳送"
+  action_delete:
+    en: "Delete"
+    zh-CN: "删除"
+    zh-HK: "刪除"
+  status_title:
+    en: "%{topic} · Queue Status"
+    zh-CN: "%{topic} · 队列状态"
+    zh-HK: "%{topic} · 佇列狀態"
+  stat_min:
+    en: "Min"
+    zh-CN: "最小位点"
+    zh-HK: "最小位點"
+  stat_max:
+    en: "Max"
+    zh-CN: "最大位点"
+    zh-HK: "最大位點"
+  no_stats:
+    en: "No queue stats (middleware has no broker-side offsets)"
+    zh-CN: "暂无队列统计数据(该中间件无服务端位点)"
+    zh-HK: "暫無佇列統計資料(該中介軟體無服務端位點)"
+  editor_new_title:
+    en: "Create Topic"
+    zh-CN: "新建 Topic"
+    zh-HK: "建立 Topic"
+  editor_edit_title:
+    en: "Edit Topic"
+    zh-CN: "编辑 Topic"
+    zh-HK: "編輯 Topic"
+  field_topic:
+    en: "Topic"
+    zh-CN: "Topic 名称"
+    zh-HK: "Topic 名稱"
+  field_type:
+    en: "Type"
+    zh-CN: "类型"
+    zh-HK: "類型"
+  field_queues:
+    en: "Queues"
+    zh-CN: "队列数"
+    zh-HK: "佇列數"
+  field_perm:
+    en: "Perm"
+    zh-CN: "权限"
+    zh-HK: "權限"
+  perm_6:
+    en: "Read/Write (6)"
+    zh-CN: "读写 (6)"
+    zh-HK: "讀寫 (6)"
+  perm_4:
+    en: "Read only (4)"
+    zh-CN: "只读 (4)"
+    zh-HK: "唯讀 (4)"
+  perm_2:
+    en: "Write only (2)"
+    zh-CN: "只写 (2)"
+    zh-HK: "唯寫 (2)"
+  queues_invalid:
+    en: "Queues must be a non-negative integer"
+    zh-CN: "队列数必须是非负整数"
+    zh-HK: "佇列數必須是非負整數"
+  topic_required:
+    en: "Topic is required"
+    zh-CN: "请输入 Topic"
+    zh-HK: "請輸入 Topic"
+  create_ok:
+    en: "Topic created"
+    zh-CN: "Topic 创建成功"
+    zh-HK: "Topic 建立成功"
+  update_ok:
+    en: "Topic updated"
+    zh-CN: "Topic 更新成功"
+    zh-HK: "Topic 更新成功"
+  save_failed:
+    en: "Save failed: %{error}"
+    zh-CN: "保存失败: %{error}"
+    zh-HK: "儲存失敗: %{error}"
+  delete_title:
+    en: "Delete Topic"
+    zh-CN: "删除 Topic"
+    zh-HK: "刪除 Topic"
+  delete_warning:
+    en: "Are you sure to delete topic \"%{topic}\"? This cannot be undone."
+    zh-CN: "确定删除 Topic \"%{topic}\" 吗?该操作不可恢复。"
+    zh-HK: "確定刪除 Topic \"%{topic}\" 嗎?該操作不可復原。"
+  delete_ok:
+    en: "Topic deleted"
+    zh-CN: "Topic 已删除"
+    zh-HK: "Topic 已刪除"
+  delete_failed:
+    en: "Delete failed: %{error}"
+    zh-CN: "删除失败: %{error}"
+    zh-HK: "刪除失敗: %{error}"
+
+  # 发送消息弹窗
+  send_title:
+    en: "Send Message"
+    zh-CN: "发送消息"
+    zh-HK: "傳送訊息"
+  field_tag:
+    en: "Tag"
+    zh-CN: "Tag"
+    zh-HK: "Tag"
+  field_key:
+    en: "Key"
+    zh-CN: "Key"
+    zh-HK: "Key"
+  body_placeholder:
+    en: "Message body..."
+    zh-CN: "输入消息体..."
+    zh-HK: "輸入訊息內容..."
+  send_ok:
+    en: "Message sent: %{id}"
+    zh-CN: "消息已发送: %{id}"
+    zh-HK: "訊息已傳送: %{id}"
+  send_failed:
+    en: "Send failed: %{error}"
+    zh-CN: "发送失败: %{error}"
+    zh-HK: "傳送失敗: %{error}"
+
+  # 订阅组页
+  groups_tab:
+    en: "Groups"
+    zh-CN: "订阅组"
+    zh-HK: "訂閱組"
+  groups_empty_detail:
+    en: "No consumer groups"
+    zh-CN: "暂无订阅组"
+    zh-HK: "暫無訂閱組"
+  col_group:
+    en: "Group"
+    zh-CN: "订阅组"
+    zh-HK: "訂閱組"
+  col_count:
+    en: "Clients"
+    zh-CN: "数量"
+    zh-HK: "數量"
+  col_model:
+    en: "Model"
+    zh-CN: "模式"
+    zh-HK: "模式"
+  col_tps:
+    en: "TPS"
+    zh-CN: "TPS"
+    zh-HK: "TPS"
+  col_diff:
+    en: "Diff"
+    zh-CN: "堆积"
+    zh-HK: "堆積"
+  col_updated:
+    en: "Updated At"
+    zh-CN: "更新时间"
+    zh-HK: "更新時間"
+  action_clients:
+    en: "Clients"
+    zh-CN: "客户端"
+    zh-HK: "用戶端"
+  action_consume:
+    en: "Consume Detail"
+    zh-CN: "消费详情"
+    zh-HK: "消費詳情"
+  clients_title:
+    en: "%{group} · Clients"
+    zh-CN: "%{group} · 客户端"
+    zh-HK: "%{group} · 用戶端"
+  col_client_id:
+    en: "Client ID"
+    zh-CN: "客户端 ID"
+    zh-HK: "用戶端 ID"
+  col_client_addr:
+    en: "Address"
+    zh-CN: "地址"
+    zh-HK: "位址"
+  col_language:
+    en: "Language"
+    zh-CN: "语言"
+    zh-HK: "語言"
+  col_subscriptions:
+    en: "Subscriptions"
+    zh-CN: "订阅"
+    zh-HK: "訂閱"
+  no_clients:
+    en: "No clients"
+    zh-CN: "暂无客户端数据"
+    zh-HK: "暫無用戶端資料"
+  consume_title:
+    en: "%{group} · Consume Detail"
+    zh-CN: "%{group} · 消费详情"
+    zh-HK: "%{group} · 消費詳情"
+  col_boffset:
+    en: "Broker Offset"
+    zh-CN: "Broker 位点"
+    zh-HK: "Broker 位點"
+  col_coffset:
+    en: "Consumer Offset"
+    zh-CN: "消费位点"
+    zh-HK: "消費位點"
+  col_cdiff:
+    en: "Diff"
+    zh-CN: "堆积"
+    zh-HK: "堆積"
+  no_consume:
+    en: "No consume offset data"
+    zh-CN: "暂无消费位点数据"
+    zh-HK: "暫無消費位點資料"
+
+  # 消息查询页
+  messages_tab:
+    en: "Messages"
+    zh-CN: "消息查询"
+    zh-HK: "訊息查詢"
+  mode_time:
+    en: "By Time"
+    zh-CN: "按时间"
+    zh-HK: "按時間"
+  mode_key:
+    en: "By Key"
+    zh-CN: "按 Key"
+    zh-HK: "按 Key"
+  mode_id:
+    en: "By MsgId"
+    zh-CN: "按 MsgId"
+    zh-HK: "按 MsgId"
+  time_hint:
+    en: "YYYY-MM-DD HH:MM"
+    zh-CN: "格式: YYYY-MM-DD HH:MM"
+    zh-HK: "格式: YYYY-MM-DD HH:MM"
+  field_msgid:
+    en: "MsgId"
+    zh-CN: "MsgId"
+    zh-HK: "MsgId"
+  key_required:
+    en: "Key is required"
+    zh-CN: "请输入 Key"
+    zh-HK: "請輸入 Key"
+  msgid_required:
+    en: "MsgId is required"
+    zh-CN: "请输入 MsgId"
+    zh-HK: "請輸入 MsgId"
+  invalid_time:
+    en: "Invalid time format (expected YYYY-MM-DD HH:MM)"
+    zh-CN: "时间格式无效(需要 YYYY-MM-DD HH:MM)"
+    zh-HK: "時間格式無效(需要 YYYY-MM-DD HH:MM)"
+  query_btn:
+    en: "Query"
+    zh-CN: "查询"
+    zh-HK: "查詢"
+  query_failed:
+    en: "Query failed: %{error}"
+    zh-CN: "查询失败: %{error}"
+    zh-HK: "查詢失敗: %{error}"
+  no_results:
+    en: "Run a query to see messages"
+    zh-CN: "执行查询后展示消息"
+    zh-HK: "執行查詢後展示訊息"
+  more_results:
+    en: "More results available"
+    zh-CN: "还有更多结果"
+    zh-HK: "還有更多結果"
+  col_msgid:
+    en: "MsgId"
+    zh-CN: "MsgId"
+    zh-HK: "MsgId"
+  col_tag:
+    en: "Tag"
+    zh-CN: "Tag"
+    zh-HK: "Tag"
+  col_key:
+    en: "Key"
+    zh-CN: "Key"
+    zh-HK: "Key"
+  col_store_time:
+    en: "Store Time"
+    zh-CN: "存储时间"
+    zh-HK: "儲存時間"
+  action_detail:
+    en: "Detail"
+    zh-CN: "详情"
+    zh-HK: "詳情"
+  action_resend:
+    en: "Resend"
+    zh-CN: "重发"
+    zh-HK: "重發"
+  resend_title:
+    en: "Resend Message"
+    zh-CN: "重发消息"
+    zh-HK: "重發訊息"
+  detail_title:
+    en: "Message Detail"
+    zh-CN: "消息详情"
+    zh-HK: "訊息詳情"
+  d_store_host:
+    en: "Store Host"
+    zh-CN: "存储 Host"
+    zh-HK: "儲存 Host"
+  d_born_host:
+    en: "Born Host"
+    zh-CN: "产生 Host"
+    zh-HK: "產生 Host"
+  d_born_time:
+    en: "Born Time"
+    zh-CN: "产生时间"
+    zh-HK: "產生時間"
+  d_retry:
+    en: "Retry Times"
+    zh-CN: "重试次数"
+    zh-HK: "重試次數"
+  d_props:
+    en: "Properties"
+    zh-CN: "属性"
+    zh-HK: "屬性"
+  no_props:
+    en: "No properties"
+    zh-CN: "无属性"
+    zh-HK: "無屬性"
+  d_body:
+    en: "Body"
+    zh-CN: "消息体"
+    zh-HK: "訊息內容"
+  body_text:
+    en: "Text"
+    zh-CN: "文本"
+    zh-HK: "文字"
+  body_hex:
+    en: "Hex"
+    zh-CN: "Hex"
+    zh-HK: "Hex"

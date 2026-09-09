@@ -1,18 +1,17 @@
 use super::{DiffEditors, DocumentPolicy, WorkspaceEditor, format_size};
 use gpui::{
-    AnyElement, ColorExt as _, Context, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    Disableable as _, IconName, IconSize, Selectable as _, Sizable as _, Size,
-    button::{Button, ButtonVariants as _, IconButton},
-    content_state::ContentState,
+    Disableable as _, IconName, Selectable as _, Sizable as _, Size,
+    button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, LocalInputStyle},
-    status_bar::{StatusBar, StatusPresentation},
+    input::Editor,
     tab::{Tab, TabBar},
     v_flex,
 };
+use one_ui::{ContentState, IconButton, IconSize, StatusBar, StatusPresentation};
 use rust_i18n::t;
 
 #[derive(Clone, Copy)]
@@ -28,7 +27,6 @@ impl WorkspaceEditor {
         let mut tabs = TabBar::new("workspace-editor-tabs")
             .menu(true)
             .with_size(Size::Small)
-            .local_style(self.theme.tab_style())
             .selected_index(self.active_tab)
             .on_click({
                 let entity = cx.entity().downgrade();
@@ -220,16 +218,12 @@ impl WorkspaceEditor {
                 .size_full()
                 .min_h_0()
                 .child(
-                    Input::new(editor)
+                    Editor::new(editor)
                         .size_full()
-                        .read_only(tab.read_only)
-                        .highlight_theme(self.theme.highlight_theme())
-                        .local_style(LocalInputStyle {
-                            background: self.theme.background,
-                            foreground: self.theme.foreground,
-                            muted_foreground: self.theme.muted_foreground,
-                            border: self.theme.border,
-                        }),
+                        .readonly(tab.read_only)
+                        .bg(self.theme.background)
+                        .text_color(self.theme.foreground)
+                        .border_color(self.theme.border),
                 )
                 .into_any_element(),
             None => v_flex().size_full().into_any_element(),
@@ -238,13 +232,6 @@ impl WorkspaceEditor {
 
     fn render_diff_view(&self, editors: &DiffEditors) -> AnyElement {
         let theme = self.theme;
-        let input_style = LocalInputStyle {
-            background: theme.background,
-            foreground: theme.foreground,
-            muted_foreground: theme.muted_foreground,
-            border: theme.border,
-        };
-
         v_flex()
             .size_full()
             .min_h_0()
@@ -285,27 +272,23 @@ impl WorkspaceEditor {
                     .overflow_hidden()
                     .child(
                         div().flex_1().min_w_0().h_full().overflow_hidden().child(
-                            Input::new(&editors.left)
+                            Editor::new(&editors.left)
                                 .size_full()
-                                .read_only(true)
+                                .readonly(true)
                                 .bordered(false)
-                                .focus_bordered(false)
-                                .highlight_theme(theme.highlight_theme())
-                                .indent_guide_color(theme.border.opacity(0.28))
-                                .local_style(input_style),
+                                .bg(theme.background)
+                                .text_color(theme.foreground),
                         ),
                     )
                     .child(div().w(px(1.0)).h_full().flex_none().bg(theme.border))
                     .child(
                         div().flex_1().min_w_0().h_full().overflow_hidden().child(
-                            Input::new(&editors.right)
+                            Editor::new(&editors.right)
                                 .size_full()
-                                .read_only(true)
+                                .readonly(true)
                                 .bordered(false)
-                                .focus_bordered(false)
-                                .highlight_theme(theme.highlight_theme())
-                                .indent_guide_color(theme.border.opacity(0.28))
-                                .local_style(input_style),
+                                .bg(theme.background)
+                                .text_color(theme.foreground),
                         ),
                     ),
             )

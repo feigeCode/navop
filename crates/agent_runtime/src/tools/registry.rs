@@ -135,7 +135,7 @@ impl ToolRegistry {
     /// 收集所有工具在当前资源上下文下的规格。
     pub fn specs(&self, resources: &ResourceContext) -> Vec<ToolSpec> {
         let mut tools = self.tools.iter().collect::<Vec<_>>();
-        tools.sort_by(|(left, _), (right, _)| left.cmp(right));
+        tools.sort_by_key(|(name, _)| (**name).clone());
         tools
             .into_iter()
             .map(|(name, tool)| {

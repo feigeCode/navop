@@ -1,4 +1,5 @@
 pub const BUNDLED_THEMES: &[&str] = &[
+    include_str!("../../../themes/navop.json"),
     include_str!("../../../themes/adventure.json"),
     include_str!("../../../themes/alduin.json"),
     include_str!("../../../themes/asciinema.json"),

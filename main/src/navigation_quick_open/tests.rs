@@ -18,6 +18,8 @@ fn connection_navigation_partition_is_complete_and_stable() {
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
+            ConnectionType::Mqtt,
+            ConnectionType::Rocketmq,
             ConnectionType::Serial,
             ConnectionType::Telnet,
         ]
@@ -28,6 +30,7 @@ fn connection_navigation_partition_is_complete_and_stable() {
             ConnectionType::PortForwarding,
             ConnectionType::Rdp,
             ConnectionType::Vnc,
+            ConnectionType::Extension,
         ]
     );
     assert_eq!(combined, ConnectionType::all());

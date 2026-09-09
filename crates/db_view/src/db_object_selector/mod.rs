@@ -1,14 +1,12 @@
 mod loader;
 mod parts;
+mod selector;
 mod state;
 mod view;
 
+pub use selector::{DbSelectorKind, DbSelectorQuery, DbSelectorSource};
+
 pub(crate) use loader::{clear_string_select, load_databases_then, load_schemas_then};
-#[cfg(test)]
-pub(crate) use parts::selector_parts;
-pub(crate) use parts::{
-    selector_parts_for_source_with_policy, selector_source_part, selector_suffix,
-};
 pub use state::DbObjectSelectorPolicy;
 pub(crate) use state::{
     DbObjectSelectorControls, StringSelect, TargetConnectionControls, TargetStringControls,

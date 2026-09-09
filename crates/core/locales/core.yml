@@ -117,10 +117,6 @@ BackgroundTasks:
     en: "In progress"
     zh-CN: "进行中"
     zh-HK: "進行中"
-  auto_popup_hint:
-    en: "Background task started. Click to view it."
-    zh-CN: "后台任务已开始，点击查看。"
-    zh-HK: "後台任務已開始，點擊查看。"
 
 Window:
   always_on_top:
@@ -157,6 +153,14 @@ TabContextMenu:
     en: "Rename Tab"
     zh-CN: "重命名标签页"
     zh-HK: "重命名標籤頁"
+  copy_label:
+    en: "Copy \"{{label}}\""
+    zh-CN: "复制 \"{{label}}\""
+    zh-HK: "複製 \"{{label}}\""
+  copy_label_success:
+    en: "Copied to clipboard"
+    zh-CN: "已复制到剪贴板"
+    zh-HK: "已複製到剪貼簿"
   duplicate_tab:
     en: "Duplicate Tab"
     zh-CN: "复制标签页"
@@ -368,15 +372,9 @@ AiChat:
     zh-CN: "操作已取消"
     zh-HK: "操作已取消"
   operation_cancelled_markdown:
-    en: "
-
-*Operation cancelled*"
-    zh-CN: "
-
-*操作已取消*"
-    zh-HK: "
-
-*操作已取消*"
+    en: "\n\n*Operation cancelled*"
+    zh-CN: "\n\n*操作已取消*"
+    zh-HK: "\n\n*操作已取消*"
   stream_provider_not_found:
     en: "AI model not found."
     zh-CN: "AI 模型未找到"
@@ -426,59 +424,47 @@ AiChat:
     zh-CN: "未知时间"
     zh-HK: "未知時間"
   ask_ai_template:
-    en: "I encountered an error while running the following SQL:
+    en: |-
+      I encountered an error while running the following SQL:
 
-```sql
-%{sql}
-```
+      ```sql
+      %{sql}
+      ```
 
-Error message:
-```
-%{error}
-```"
-    zh-CN: "我在执行以下SQL时遇到了错误：
+      Error message:
+      ```
+      %{error}
+      ```
+    zh-CN: |-
+      我在执行以下SQL时遇到了错误：
 
-```sql
-%{sql}
-```
+      ```sql
+      %{sql}
+      ```
 
-错误信息：
-```
-%{error}
-```"
-    zh-HK: "我在執行以下SQL時遇到了錯誤：
+      错误信息：
+      ```
+      %{error}
+      ```
+    zh-HK: |-
+      我在執行以下SQL時遇到了錯誤：
 
-```sql
-%{sql}
-```
+      ```sql
+      %{sql}
+      ```
 
-錯誤信息：
-```
-%{error}
-```"
+      錯誤信息：
+      ```
+      %{error}
+      ```
   ask_ai_context:
-    en: "
-
-Context:
-%{context}"
-    zh-CN: "
-
-上下文信息：
-%{context}"
-    zh-HK: "
-
-上下文資訊：
-%{context}"
+    en: "\n\nContext:\n%{context}"
+    zh-CN: "\n\n上下文信息：\n%{context}"
+    zh-HK: "\n\n上下文資訊：\n%{context}"
   ask_ai_request_help:
-    en: "
-
-Please help me analyze this error and provide a solution."
-    zh-CN: "
-
-请帮我分析这个错误并提供解决方案。"
-    zh-HK: "
-
-請幫我分析這個錯誤並提供解決方案。"
+    en: "\n\nPlease help me analyze this error and provide a solution."
+    zh-CN: "\n\n请帮我分析这个错误并提供解决方案。"
+    zh-HK: "\n\n請幫我分析這個錯誤並提供解決方案。"
   ask_ai_button:
     en: "Ask AI"
     zh-CN: "询问AI"

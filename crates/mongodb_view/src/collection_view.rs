@@ -9,13 +9,11 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, BrandIcon, Disableable, Icon, IconName, IconSize, ObjectIcon, Sizable, Size,
-    StyledExt, WindowExt as _,
-    button::{Button, ButtonVariants as _, IconButton},
-    content_state::ContentState,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, StyledExt, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState},
     notification::Notification,
     spinner::Spinner,
     tab::{Tab, TabBar},
@@ -24,7 +22,10 @@ use gpui_component::{
 use mongodb_runtime::MongoFindOptions as FindOptions;
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};
-use one_ui::edit_table::{EditTable, EditTableEvent, EditTableState};
+use one_ui::{
+    ContentState, IconButton, IconSize as OneIconSize,
+    edit_table::{EditTable, EditTableEvent, EditTableState},
+};
 use rust_i18n::t;
 use tracing::{error, info, warn};
 
@@ -318,16 +319,16 @@ pub struct CollectionView {
     projection_input: Entity<InputState>,
     page_size_input: Entity<InputState>,
     skip_input: Entity<InputState>,
-    editor_input: Entity<InputState>,
-    explain_input: Entity<InputState>,
-    aggregation_input: Entity<InputState>,
-    aggregation_output: Entity<InputState>,
-    schema_output: Entity<InputState>,
+    editor_input: Entity<EditorState>,
+    explain_input: Entity<EditorState>,
+    aggregation_input: Entity<EditorState>,
+    aggregation_output: Entity<EditorState>,
+    schema_output: Entity<EditorState>,
     index_name_input: Entity<InputState>,
-    index_keys_input: Entity<InputState>,
+    index_keys_input: Entity<EditorState>,
     index_drop_input: Entity<InputState>,
-    indexes_output: Entity<InputState>,
-    validation_input: Entity<InputState>,
+    indexes_output: Entity<EditorState>,
+    validation_input: Entity<EditorState>,
     document_table: Entity<EditTableState<MongoDocumentTableDelegate>>,
     documents: Vec<DocumentItem>,
     selected_index: Option<usize>,
@@ -392,44 +393,39 @@ impl CollectionView {
             state
         });
         let editor_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(16)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.document_placeholder").to_string())
         });
         let explain_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(16)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.explain_placeholder").to_string())
         });
         let aggregation_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .code_editor("json")
+            let mut state = EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(10)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.pipeline_placeholder").to_string());
             state.set_value("[]".to_string(), window, cx);
             state
         });
         let aggregation_output = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(16)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.aggregation_output_placeholder").to_string())
         });
         let schema_output = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(16)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.schema_placeholder").to_string())
         });
@@ -438,10 +434,9 @@ impl CollectionView {
                 .placeholder(t!("MongoCollection.index_name_optional").to_string())
         });
         let index_keys_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(6)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.index_keys_placeholder").to_string())
         });
@@ -450,18 +445,16 @@ impl CollectionView {
                 .placeholder(t!("MongoCollection.index_name_placeholder").to_string())
         });
         let indexes_output = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(16)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.indexes_placeholder").to_string())
         });
         let validation_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(16)
                 .soft_wrap(false)
                 .placeholder(t!("MongoCollection.validation_placeholder").to_string())
         });
@@ -1317,10 +1310,9 @@ impl CollectionView {
     ) {
         let language = language.to_string();
         let editor = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .code_editor(language.clone())
+            let mut state = EditorState::new(window, cx)
+                .language(language.clone())
                 .line_number(false)
-                .rows(18)
                 .soft_wrap(false);
             state.set_value(content.clone(), window, cx);
             state
@@ -1339,15 +1331,15 @@ impl CollectionView {
                 .child(
                     v_flex()
                         .size_full()
-                        .child(Input::new(&editor).size_full().disabled(true)),
+                        .child(Editor::new(&editor).size_full().disabled(true)),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.copy").to_string())
-                        .cancel_text(t!("Common.close").to_string()),
+                        .cancel_text(t!("Common.close").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
                     window.push_notification(
                         Notification::success(
@@ -2125,9 +2117,9 @@ impl CollectionView {
             .items_center()
             .gap(geometry.spacing.space_2)
             .child(
-                BrandIcon::new(IconName::MongoDB)
+                Icon::new(IconName::MongoDB)
                     .with_size(IconSize::Medium)
-                    .into_icon(),
+                    .color(),
             )
             .child(
                 div()
@@ -2405,7 +2397,11 @@ impl CollectionView {
         } else {
             div()
                 .size_full()
-                .child(Input::new(&self.aggregation_output).h_full().disabled(true))
+                .child(
+                    Editor::new(&self.aggregation_output)
+                        .h_full()
+                        .disabled(true),
+                )
                 .into_any_element()
         };
 
@@ -2467,7 +2463,7 @@ impl CollectionView {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(t!("MongoCollection.pipeline_label").to_string()),
                             )
-                            .child(Input::new(&self.aggregation_input).h_full()),
+                            .child(Editor::new(&self.aggregation_input).h_full()),
                     )
                     .child(
                         v_flex()
@@ -2514,7 +2510,7 @@ impl CollectionView {
         } else {
             div()
                 .size_full()
-                .child(Input::new(&self.schema_output).h_full().disabled(true))
+                .child(Editor::new(&self.schema_output).h_full().disabled(true))
                 .into_any_element()
         };
 
@@ -2582,7 +2578,7 @@ impl CollectionView {
         } else {
             div()
                 .size_full()
-                .child(Input::new(&self.indexes_output).h_full().disabled(true))
+                .child(Editor::new(&self.indexes_output).h_full().disabled(true))
                 .into_any_element()
         };
 
@@ -2641,7 +2637,7 @@ impl CollectionView {
                                             })),
                                     ),
                             )
-                            .child(Input::new(&self.index_keys_input).w_full()),
+                            .child(Editor::new(&self.index_keys_input).w_full()),
                     )
                     .child(
                         v_flex()
@@ -2695,7 +2691,7 @@ impl CollectionView {
         } else {
             div()
                 .size_full()
-                .child(Input::new(&self.validation_input).h_full())
+                .child(Editor::new(&self.validation_input).h_full())
                 .into_any_element()
         };
 
@@ -2798,7 +2794,7 @@ impl CollectionView {
             .child(
                 IconButton::new("mongo-expand-preview", IconName::ChevronLeft)
                     .hit_size(Size::XSmall)
-                    .glyph_size(IconSize::Small)
+                    .glyph_size(OneIconSize::Small)
                     .tooltip(t!("MongoCollection.expand_preview").to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_detail_panel(cx);
@@ -2837,21 +2833,21 @@ impl CollectionView {
             div()
                 .flex_1()
                 .min_h_0()
-                .child(Input::new(&self.explain_input).h_full().disabled(true))
+                .child(Editor::new(&self.explain_input).h_full().disabled(true))
                 .into_any_element()
         } else if is_editing || self.selected_index.is_some() {
             div()
                 .flex_1()
                 .min_h_0()
                 .child(
-                    Input::new(&self.editor_input)
+                    Editor::new(&self.editor_input)
                         .h_full()
                         .disabled(!is_editing),
                 )
                 .into_any_element()
         } else {
             ContentState::empty(t!("MongoCollection.select_document").to_string())
-                .icon(ObjectIcon::new(IconName::File).with_size(IconSize::Large))
+                .icon(Icon::new(IconName::File).with_size(IconSize::Large))
                 .compact()
                 .into_any_element()
         };
@@ -2876,7 +2872,7 @@ impl CollectionView {
                     .child(
                         IconButton::new("mongo-collapse-preview", IconName::ChevronRight)
                             .hit_size(Size::XSmall)
-                            .glyph_size(IconSize::Small)
+                            .glyph_size(OneIconSize::Small)
                             .tooltip(t!("MongoCollection.collapse_preview").to_string())
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.toggle_detail_panel(cx);
@@ -3012,7 +3008,7 @@ impl CollectionView {
                     .child(
                         IconButton::new("mongo-prev", IconName::ChevronLeft)
                             .hit_size(Size::XSmall)
-                            .glyph_size(IconSize::Small)
+                            .glyph_size(OneIconSize::Small)
                             .outline()
                             .tooltip(t!("MongoCollection.previous_page").to_string())
                             .disabled(!can_prev)
@@ -3043,7 +3039,7 @@ impl CollectionView {
                     .child(
                         IconButton::new("mongo-next", IconName::ChevronRight)
                             .hit_size(Size::XSmall)
-                            .glyph_size(IconSize::Small)
+                            .glyph_size(OneIconSize::Small)
                             .outline()
                             .tooltip(t!("MongoCollection.next_page").to_string())
                             .disabled(!can_next)
@@ -3169,7 +3165,11 @@ impl Render for CollectionView {
 
         let body = if self.collection_name.is_none() {
             ContentState::empty(t!("MongoCollection.select_collection_prompt").to_string())
-                .icon(BrandIcon::new(IconName::MongoDB).with_size(IconSize::Large))
+                .icon(
+                    Icon::new(IconName::MongoDB)
+                        .with_size(IconSize::Large)
+                        .color(),
+                )
                 .into_any_element()
         } else {
             match self.active_tab {

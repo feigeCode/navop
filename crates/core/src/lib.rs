@@ -51,14 +51,15 @@ mod tab_container_layout_contract_tests;
 #[cfg(test)]
 mod tab_content_contract_tests;
 
-pub fn init(cx: &mut App) {
+pub fn init(cx: &mut App) -> anyhow::Result<()> {
     background_tasks::init(cx);
     gpui_tokio::init(cx);
     themes::init(cx);
-    storage::init(cx);
+    storage::init(cx)?;
     llm::init(cx);
     connection_notifier::init(cx);
     window_close::init(cx);
     popup_window::init(cx);
     tab_container::init(cx);
+    Ok(())
 }

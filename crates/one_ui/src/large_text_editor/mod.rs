@@ -2,7 +2,7 @@ mod logic;
 mod render;
 
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Subscription, Window};
-use gpui_component::input::{InputEvent, InputState, TabSize};
+use gpui_component::input::{EditorState, InputEvent, TabSize};
 use logic::{
     JsonEditorSyncMode, active_editor_text, editor_values_for_text, normalize_commit_text,
 };
@@ -19,8 +19,8 @@ impl EventEmitter<LargeTextEditorEvent> for LargeTextEditor {}
 
 pub struct LargeTextEditor {
     active_tab: LargeTextEditorTab,
-    text_editor: Entity<InputState>,
-    json_editor: Entity<InputState>,
+    text_editor: Entity<EditorState>,
+    json_editor: Entity<EditorState>,
     has_user_edits: bool,
     suppress_edit_tracking: bool,
     _subs: Vec<Subscription>,
@@ -35,7 +35,10 @@ impl LargeTextEditor {
         this
     }
 
-    fn new_with_editors(text_editor: Entity<InputState>, json_editor: Entity<InputState>) -> Self {
+    fn new_with_editors(
+        text_editor: Entity<EditorState>,
+        json_editor: Entity<EditorState>,
+    ) -> Self {
         Self {
             active_tab: LargeTextEditorTab::Text,
             text_editor,
@@ -55,7 +58,7 @@ impl LargeTextEditor {
 
     fn on_text_event(
         &mut self,
-        _: &Entity<InputState>,
+        _: &Entity<EditorState>,
         event: &InputEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
@@ -65,7 +68,7 @@ impl LargeTextEditor {
 
     fn on_json_event(
         &mut self,
-        _: &Entity<InputState>,
+        _: &Entity<EditorState>,
         event: &InputEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
@@ -250,10 +253,10 @@ impl LargeTextEditor {
 fn build_editor(
     window: &mut Window,
     tab: LargeTextEditorTab,
-    cx: &mut Context<InputState>,
-) -> InputState {
-    InputState::new(window, cx)
-        .code_editor(tab.language())
+    cx: &mut Context<EditorState>,
+) -> EditorState {
+    EditorState::new(window, cx)
+        .language(tab.language())
         .line_number(true)
         .searchable(true)
         .indent_guides(true)

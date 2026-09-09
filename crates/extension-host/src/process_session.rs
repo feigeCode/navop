@@ -5,6 +5,7 @@
 //! `NegotiationConfig` 组装好，再通过 [`ProcessRpcSession`] 发送 typed/raw
 //! request。
 
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use tracing::warn;
 
 use crate::client::{JsonRpcClient, JsonRpcClientHandle, RequestOptions};
 use crate::error::{HostError, HostResult};
+use crate::host_api::HostApiHandler;
 use crate::negotiation::{ExtensionSession, NegotiationConfig, negotiate, shutdown};
 use crate::process::ProcessHandle;
 use crate::transport::FramedTransport;
@@ -38,6 +40,10 @@ pub struct ProcessRpcSessionConfig {
     pub shutdown_grace_ms: u32,
     /// 仅用于日志和错误上下文，不会发送给扩展进程。
     pub label: String,
+    /// Optional reverse Host API dispatcher used by native resource providers.
+    ///
+    /// This value is not sent to the process. It is retained only by the host.
+    pub host_api: Option<Arc<HostApiHandler>>,
 }
 
 impl ProcessRpcSessionConfig {
@@ -49,6 +55,7 @@ impl ProcessRpcSessionConfig {
             request_timeout: DEFAULT_SESSION_REQUEST_TIMEOUT,
             shutdown_grace_ms: DEFAULT_SESSION_SHUTDOWN_GRACE,
             label,
+            host_api: None,
         }
     }
 
@@ -66,11 +73,25 @@ impl ProcessRpcSessionConfig {
         self.label = label.into();
         self
     }
+
+    pub fn with_host_api(mut self, host_api: Arc<HostApiHandler>) -> Self {
+        self.host_api = Some(host_api);
+        self
+    }
 }
 
 struct ProcessRpcSessionOwner {
-    client: JsonRpcClient,
-    process: Option<ProcessHandle>,
+    client: Option<Arc<StdMutex<Option<JsonRpcClient>>>>,
+    process: Option<Arc<StdMutex<Option<ProcessHandle>>>>,
+}
+
+impl Clone for ProcessRpcSessionOwner {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            process: self.process.clone(),
+        }
+    }
 }
 
 /// 一个与业务无关的 native child process JSON-RPC session。
@@ -87,8 +108,10 @@ pub struct ProcessRpcSession {
 impl ProcessRpcSession {
     /// 启动子进程、建立 transport、执行 init 握手并返回 session。
     pub async fn start(config: ProcessRpcSessionConfig) -> HostResult<Self> {
-        let mut process = crate::process::spawn(config.spawn.clone()).await?;
-        let stream = process.take_stream().ok_or_else(|| {
+        let mut spawned = crate::process::spawn(config.spawn.clone()).await?;
+        let stream = spawned.take_stream();
+        let process = Some(Arc::new(StdMutex::new(Some(spawned))));
+        let stream = stream.ok_or_else(|| {
             HostError::Config(format!(
                 "process `{}` did not return a connected transport",
                 config.label
@@ -97,17 +120,28 @@ impl ProcessRpcSession {
 
         let (reader, writer) = tokio::io::split(stream);
         let transport = FramedTransport::new(reader, writer);
-        let client = JsonRpcClient::start(transport);
-        Self::start_with_client(client, Some(process), config).await
+        let client = if let Some(host_api) = config.host_api.clone() {
+            JsonRpcClient::start_with_host_api(transport, host_api)
+        } else {
+            JsonRpcClient::start(transport)
+        };
+        Self::start_with_client(client, process, config).await
     }
 
-    async fn start_with_client(
+    pub async fn start_with_client(
         mut client: JsonRpcClient,
-        process: Option<ProcessHandle>,
+        process: Option<Arc<StdMutex<Option<ProcessHandle>>>>,
         config: ProcessRpcSessionConfig,
     ) -> HostResult<Self> {
         let notifications = client.take_notifications();
-        let handle = client.handle();
+        let client = Some(Arc::new(StdMutex::new(Some(client))));
+        let handle = client
+            .as_ref()
+            .and_then(|client| {
+                let guard = client.lock().expect("client owner mutex poisoned");
+                guard.as_ref().map(JsonRpcClient::handle)
+            })
+            .expect("client owner is present during construction");
         let session = negotiate(&handle, config.negotiation).await?;
 
         Ok(Self {
@@ -154,6 +188,23 @@ impl ProcessRpcSession {
         &self.session
     }
 
+    /// Clone this session without transferring ownership.
+    ///
+    /// All clones share the same JSON-RPC transport. Only one owner should
+    /// invoke `shutdown`; activation managers therefore retain their original
+    /// managed session and use clones only for typed request facades.
+    pub fn clone_session(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            session: self.session.clone(),
+            owner: StdMutex::new(None),
+            notifications: StdMutex::new(None),
+            request_timeout: self.request_timeout,
+            shutdown_grace_ms: self.shutdown_grace_ms,
+            label: self.label.clone(),
+        }
+    }
+
     pub fn supports(&self, capability: &str) -> bool {
         self.session.has_feature(capability)
     }
@@ -189,15 +240,34 @@ impl ProcessRpcSession {
             .expect("process owner mutex poisoned")
             .take();
         if let Some(ProcessRpcSessionOwner { client, process }) = owner {
-            client.shutdown().await;
-            drop(process);
+            if let Some(client) =
+                client.and_then(|client| client.lock().expect("client owner mutex poisoned").take())
+            {
+                client.shutdown().await;
+            }
+            if let Some(process) = process {
+                let _ = process
+                    .lock()
+                    .expect("process handle mutex poisoned")
+                    .take();
+            }
         }
     }
 }
 
 impl Drop for ProcessRpcSession {
     fn drop(&mut self) {
-        self.handle.close();
+        // A request facade is a non-owning clone. Dropping it must not tear
+        // down the transport still retained by the activation manager.
+        if self
+            .owner
+            .lock()
+            .expect("process owner mutex poisoned")
+            .take()
+            .is_some()
+        {
+            self.handle.close();
+        }
     }
 }
 

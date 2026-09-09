@@ -114,10 +114,11 @@ impl SymbolTable {
 impl SymbolTable {
     /// Build a symbol table from a token stream.
     ///
-    /// Parses FROM and JOIN clauses to extract table aliases:
+    /// Parses FROM, JOIN, and UPDATE clauses to extract table aliases:
     /// - `FROM table_name alias` -> maps alias to table_name
     /// - `FROM table_name AS alias` -> maps alias to table_name
     /// - `JOIN table_name alias ON ...` -> maps alias to table_name
+    /// - `UPDATE table_name alias SET ...` -> maps alias to table_name
     /// - `FROM table_name` (no alias) -> maps table_name to itself
     ///
     /// Handles subqueries by tracking parenthesis depth.
@@ -169,8 +170,9 @@ impl SymbolTable {
                 continue;
             }
 
-            // Look for FROM or JOIN keywords
+            // Look for FROM, JOIN, or UPDATE keywords
             let is_from = token.is_keyword_of(SqlKeyword::From);
+            let is_update = token.is_keyword_of(SqlKeyword::Update);
             let is_join = matches!(
                 &token.kind,
                 SqlTokenKind::Keyword(SqlKeyword::Join)
@@ -181,7 +183,7 @@ impl SymbolTable {
                     | SqlTokenKind::Keyword(SqlKeyword::Cross)
             );
 
-            if is_from || is_join {
+            if is_from || is_join || is_update {
                 // For JOIN variants (INNER, LEFT, etc.), skip to the actual JOIN keyword
                 let mut j = i + 1;
                 if is_join && !token.is_keyword_of(SqlKeyword::Join) {

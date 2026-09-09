@@ -311,3 +311,382 @@ fn manifest_parses_document_exporters() {
     assert_eq!("export-document", exporter.function);
     assert_eq!(vec!["html", "pdf", "docx"], exporter.formats);
 }
+
+#[test]
+fn manifest_parses_typed_shell_view() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_entry(tmp.path(), "ui/explorer.js");
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "ui/explorer.js",
+            "surface": "tab",
+            "backends": { "main": "provider" },
+            "modules": ["context", "resource"]
+        }),
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let view = &manifest.contributes.shell_views[0];
+
+    assert_eq!("explorer", view.id);
+    assert_eq!("ui/explorer.js", view.entry);
+    assert_eq!(
+        Some("provider"),
+        view.backends.get("main").map(String::as_str)
+    );
+}
+
+#[test]
+fn manifest_rejects_shell_view_entry_escape() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "../escape.js",
+            "surface": "tab",
+            "backends": { "main": "provider" },
+            "modules": ["resource"]
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/contributes/shellViews/explorer/entry", field);
+            assert!(reason.contains("escape"), "{reason}");
+        }
+        other => panic!("expected invalid shell entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_missing_shell_view_entry() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "ui/missing.js",
+            "surface": "tab",
+            "backends": { "main": "provider" },
+            "modules": ["resource"]
+        }),
+    );
+
+    let error = load_from_dir(tmp.path()).unwrap_err();
+
+    assert!(error.to_string().contains("does not exist"), "{error}");
+}
+
+#[test]
+fn manifest_rejects_unknown_shell_view_field() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_entry(tmp.path(), "ui/explorer.js");
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "ui/explorer.js",
+            "surface": "tab",
+            "backends": { "main": "provider" },
+            "modules": ["resource"],
+            "unexpected": true
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::Parse { message, .. } => {
+            assert!(message.contains("unknown field"), "{message}")
+        }
+        other => panic!("expected shell view parse failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_removed_ui_host_module() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_entry(tmp.path(), "ui/explorer.js");
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "ui/explorer.js",
+            "surface": "tab",
+            "modules": ["ui"]
+        }),
+    );
+
+    let error = load_from_dir(tmp.path()).unwrap_err();
+    assert!(
+        error.to_string().contains("unknown variant `ui`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn manifest_accepts_registered_shell_lifecycle_modules() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_shell_entry(tmp.path(), "ui/explorer.js");
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "ui/explorer.js",
+            "surface": "tab",
+            "backends": { "main": "provider" },
+            "modules": ["job", "event", "blob", "runtime", "log"]
+        }),
+    );
+
+    let manifest = load_from_dir(tmp.path()).expect("registered shell modules");
+    assert_eq!(5, manifest.contributes.shell_views[0].modules.len());
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_rejects_shell_entry_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("outside.js"), "export default class {}").unwrap();
+    std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
+    symlink(
+        outside.path().join("outside.js"),
+        tmp.path().join("ui/explorer.js"),
+    )
+    .unwrap();
+    write_shell_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "explorer",
+            "title": "Resources",
+            "entry": "ui/explorer.js",
+            "surface": "tab",
+            "backends": { "main": "provider" },
+            "modules": ["context", "resource"]
+        }),
+    );
+
+    let error = load_from_dir(tmp.path()).unwrap_err();
+
+    assert!(error.to_string().contains("符号链接"), "{error}");
+}
+
+#[test]
+fn manifest_rejects_auto_restart_without_restart_budget() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_ipc_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "main",
+            "entry": { "command": "bin/provider" },
+            "auto_restart": true,
+            "max_restart_attempts": 0
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/runtime/ipc/main/max_restart_attempts", field);
+            assert!(reason.contains("1"), "{reason}");
+        }
+        other => panic!("expected invalid restart policy, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_unsupported_ipc_transport() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_ipc_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "main",
+            "entry": { "command": "bin/provider" },
+            "transport": { "kind": "stdio" }
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/runtime/ipc/main/transport/kind", field);
+            assert!(reason.contains("local_socket"), "{reason}");
+        }
+        other => panic!("expected invalid IPC transport, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_ipc_working_directory_escape() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_ipc_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "main",
+            "entry": {
+                "command": "bin/provider",
+                "working_dir": "../outside"
+            }
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/runtime/ipc/main/entry/working_dir", field);
+            assert!(reason.contains("逃逸"), "{reason}");
+        }
+        other => panic!("expected invalid IPC working directory, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_absolute_ipc_working_directory() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_ipc_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "main",
+            "entry": {
+                "command": "bin/provider",
+                "working_dir": "/tmp/runtime"
+            }
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/runtime/ipc/main/entry/working_dir", field);
+            assert!(reason.contains("绝对路径"), "{reason}");
+        }
+        other => panic!("expected invalid IPC working directory, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_requires_spawn_permission_for_resolved_ipc_command() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "id": "com.example.resources",
+        "name": "Resources",
+        "version": "0.1.0",
+        "engines": { "onetcli": ">=0.1.0" },
+        "permissions": ["spawn:./bin/provider"],
+        "runtime": {
+            "ipc": [{
+                "id": "main",
+                "entry": {
+                    "command": "./bin/provider",
+                    "working_dir": "runtime"
+                }
+            }]
+        }
+    });
+    write_manifest(
+        tmp.path(),
+        &serde_json::to_string_pretty(&manifest).unwrap(),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/runtime/ipc/main/entry/command", field);
+            assert!(reason.contains("spawn:./runtime/bin/provider"), "{reason}");
+        }
+        other => panic!("expected missing spawn permission, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_ipc_command_that_relies_on_path_lookup() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_ipc_manifest(
+        tmp.path(),
+        serde_json::json!({
+            "id": "main",
+            "entry": { "command": "provider" }
+        }),
+    );
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/runtime/ipc/main/entry/command", field);
+            assert!(reason.contains("PATH"), "{reason}");
+        }
+        other => panic!("expected PATH lookup rejection, got {other:?}"),
+    }
+}
+
+fn write_shell_manifest(dir: &std::path::Path, view: serde_json::Value) {
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "id": "com.example.resources",
+        "name": "Resources",
+        "version": "0.1.0",
+        "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.2.0" },
+        "api": { "shell": "1.0" },
+        "permissions": ["shell:exec", "spawn:./bin/provider"],
+        "runtime": {
+            "ipc": [{
+                "id": "provider",
+                "entry": { "command": "./bin/provider" }
+            }]
+        },
+        "contributes": { "shellViews": [view] }
+    });
+    write_manifest(dir, &serde_json::to_string_pretty(&manifest).unwrap());
+}
+
+fn write_shell_entry(dir: &std::path::Path, entry: &str) {
+    let path = dir.join(entry);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "export default class View {}").unwrap();
+}
+
+#[cfg(unix)]
+fn write_ipc_manifest(dir: &std::path::Path, runtime: serde_json::Value) {
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "id": "com.example.resources",
+        "name": "Resources",
+        "version": "0.1.0",
+        "engines": { "onetcli": ">=0.1.0" },
+        "permissions": ["spawn:./bin/provider"],
+        "runtime": { "ipc": [runtime] }
+    });
+    write_manifest(dir, &serde_json::to_string_pretty(&manifest).unwrap());
+}
+
+#[test]
+fn reference_resource_plugin_manifests_are_parser_valid() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let examples = [
+        ("nacos", "com.navop.nacos"),
+        ("elasticsearch", "com.navop.elasticsearch"),
+        ("rocketmq", "com.navop.rocketmq"),
+        ("kafka", "com.navop.kafka"),
+        ("docker", "com.navop.docker"),
+        ("kubernetes", "com.navop.kubernetes"),
+        ("api-test", "com.navop.api-test"),
+    ];
+
+    for (name, expected_id) in examples {
+        let directory = repo_root
+            .join("docs/extension-resource-plugins/examples")
+            .join(name);
+        let manifest = load_from_dir(&directory)
+            .unwrap_or_else(|error| panic!("{}: {error}", directory.display()));
+
+        assert_eq!(expected_id, manifest.id);
+        assert_eq!(1, manifest.runtime.ipc.len());
+        assert_eq!("main", manifest.runtime.ipc[0].id);
+        assert!(!manifest.contributes.connections.is_empty());
+    }
+}

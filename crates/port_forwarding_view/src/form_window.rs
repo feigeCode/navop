@@ -2,14 +2,18 @@ use connection_form::team::{
     TeamSelectItem, create_team_select, resolve_team_assignment, selected_team_id,
 };
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Window};
-use gpui_component::{IndexPath, input::InputState, select::SelectState};
+use gpui_component::{
+    IndexPath,
+    input::{InputState, TextareaState},
+    select::SelectState,
+};
 use one_core::cloud_sync::TeamOption;
 use one_core::storage::{
     ConnectionType, PortForwardingKind, PortForwardingParams, StoredConnection, Workspace,
 };
 use rust_i18n::t;
 
-use crate::input_values::{non_empty_text, parse_port, trimmed_text};
+use crate::input_values::{parse_port, trimmed_text};
 use crate::persistence::save_connection;
 use crate::selects::{ForwardingKindSelectItem, SshConnectionSelectItem, WorkspaceSelectItem};
 
@@ -32,7 +36,7 @@ pub struct PortForwardingFormWindow {
     pub(super) bind_port_input: Entity<InputState>,
     pub(super) target_host_input: Entity<InputState>,
     pub(super) target_port_input: Entity<InputState>,
-    pub(super) remark_input: Entity<InputState>,
+    pub(super) remark_input: Entity<TextareaState>,
     pub(super) ssh_select: Entity<SelectState<Vec<SshConnectionSelectItem>>>,
     pub(super) kind_select: Entity<SelectState<Vec<ForwardingKindSelectItem>>>,
     pub(super) workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
@@ -56,7 +60,7 @@ impl PortForwardingFormWindow {
         let target_host_input = cx.new(|cx| InputState::new(window, cx).placeholder("127.0.0.1"));
         let target_port_input = cx.new(|cx| InputState::new(window, cx).placeholder("3306"));
         let remark_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("PortForwarding.remark_placeholder"))
                 .auto_grow(3, 10)
         });
@@ -250,7 +254,16 @@ impl PortForwardingFormWindow {
         };
         conn.team_id = assignment.team_id;
         conn.owner_id = assignment.owner_id;
-        conn.remark = non_empty_text(&self.remark_input, cx);
+        conn.remark = {
+            let text = self
+                .remark_input
+                .read(cx)
+                .text()
+                .to_string()
+                .trim()
+                .to_string();
+            (!text.is_empty()).then_some(text)
+        };
         if self.is_editing {
             conn.id = self.editing_id;
             conn.cloud_id = self.editing_cloud_id.clone();

@@ -8,6 +8,7 @@ edition.workspace = true
 anyhow = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+one-ui.workspace = true
 palette = { workspace = true }
 ignore = "0.4"
 notes = { workspace = true }

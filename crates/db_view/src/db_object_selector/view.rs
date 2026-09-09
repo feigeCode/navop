@@ -1,4 +1,4 @@
-use extension_component::DbSelectorKind;
+use crate::db_object_selector::DbSelectorKind;
 use gpui::{Context, Div, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder, px};
 use gpui_component::{ActiveTheme, Sizable, select::Select, v_flex};
 use rust_i18n::t;

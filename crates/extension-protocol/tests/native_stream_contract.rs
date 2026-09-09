@@ -5,6 +5,9 @@ use extension_protocol::blob::{
 use extension_protocol::event_stream::{
     DEFAULT_EVENT_MAX_EVENTS, EventReadParams, EventReadResult, MAX_EVENT_MAX_EVENTS,
 };
+use extension_protocol::host_blob::{
+    HostBlobBeginParams, HostBlobFinishResult, HostBlobWriteParams,
+};
 use extension_protocol::method;
 
 #[test]
@@ -27,6 +30,56 @@ fn blob_and_event_stream_methods_are_public_protocol_constants() {
     assert_eq!("event/read", method::EVENT_READ);
     assert!(method::is_known(method::BLOB_CLOSE));
     assert!(method::is_known(method::EVENT_CLOSE));
+}
+
+#[test]
+fn host_blob_methods_are_public_protocol_constants() {
+    assert_eq!("host/blob/begin", method::HOST_BLOB_BEGIN);
+    assert_eq!("host/blob/write", method::HOST_BLOB_WRITE);
+    assert_eq!("host/blob/finish", method::HOST_BLOB_FINISH);
+    assert_eq!("host/blob/abort", method::HOST_BLOB_ABORT);
+    assert!(method::is_known(method::HOST_BLOB_BEGIN));
+    assert!(method::is_known(method::HOST_BLOB_WRITE));
+    assert!(method::is_known(method::HOST_BLOB_FINISH));
+    assert!(method::is_known(method::HOST_BLOB_ABORT));
+}
+
+#[test]
+fn host_blob_upload_contract_round_trips() {
+    let begin = HostBlobBeginParams {
+        content_type: Some("application/json".into()),
+        metadata: Some(serde_json::json!({"source": "provider"})),
+        expected_bytes: Some(42),
+        ttl_ms: Some(30_000),
+    };
+    let begin_value = serde_json::to_value(&begin).unwrap();
+    assert_eq!(
+        begin,
+        serde_json::from_value::<HostBlobBeginParams>(begin_value).unwrap()
+    );
+
+    let write = HostBlobWriteParams {
+        upload_id: "upload-1".into(),
+        sequence: 7,
+        data: "AAE=".into(),
+        bytes_written: 2,
+    };
+    let write_value = serde_json::to_value(&write).unwrap();
+    assert_eq!(
+        write,
+        serde_json::from_value::<HostBlobWriteParams>(write_value).unwrap()
+    );
+
+    let finish = HostBlobFinishResult {
+        blob_id: "host-blob-1".into(),
+        total_bytes: 42,
+        content_type: Some("application/json".into()),
+    };
+    let finish_value = serde_json::to_value(&finish).unwrap();
+    assert_eq!(
+        finish,
+        serde_json::from_value::<HostBlobFinishResult>(finish_value).unwrap()
+    );
 }
 
 #[test]

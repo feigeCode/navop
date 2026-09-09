@@ -3,10 +3,10 @@ use gpui::{Anchor, AnyElement, IntoElement, ParentElement, Radians, Styled, div}
 use gpui_component::{
     Disableable, Icon, IconName, IconSize, Sizable,
     button::Toggle,
-    button::{IconButton, IconButtonRole},
     h_flex,
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
 };
+use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
 use super::tree_model::ConnectionTreeRow;

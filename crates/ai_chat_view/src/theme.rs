@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 
-use gpui::{App, ColorExt, ElementId, Hsla, SharedString};
+use gpui::{App, ColorExt, ElementId, HighlightStyle, Hsla, SharedString, StyleRefinement};
 use gpui_component::{
     ActiveTheme,
-    text::{MarkdownPalette, TextView, TextViewStyle},
+    text::{TextView, TextViewStyle},
 };
 
 #[derive(Clone, Debug)]
@@ -52,19 +52,25 @@ impl AgentChatTheme {
     }
 
     pub fn markdown_style(&self) -> TextViewStyle {
-        TextViewStyle::default().markdown_palette(MarkdownPalette {
-            is_dark: self.is_dark,
-            foreground: self.foreground,
-            muted_foreground: self.muted_foreground,
-            border: self.border,
-            code_background: self.code_background,
-            code_foreground: self.code_foreground,
-            table_header: self.table_header,
-            table_row: self.table_row,
-            table_row_alt: self.table_row_alt,
-            quote_border: self.quote_border,
-            link: self.link,
-        })
+        let mut code_block = StyleRefinement::default();
+        code_block.background = Some(self.code_background.into());
+        code_block.text.color = Some(self.code_foreground);
+        let mut table_head = StyleRefinement::default();
+        table_head.background = Some(self.table_header.into());
+        table_head.text.color = Some(self.foreground);
+        let mut table_cell = StyleRefinement::default();
+        table_cell.background = Some(self.table_row.into());
+        let mut style = TextViewStyle::default()
+            .code_block(code_block)
+            .inline_code(HighlightStyle {
+                color: Some(self.code_foreground),
+                background_color: Some(self.code_background),
+                ..Default::default()
+            })
+            .table_head(table_head)
+            .table_cell(table_cell);
+        style.is_dark = self.is_dark;
+        style
     }
 
     pub fn hover_background(&self) -> Hsla {
@@ -152,15 +158,17 @@ mod tests {
         let style = theme.markdown_style();
 
         assert!(style.is_dark);
-        assert_eq!(Some(theme.foreground), style.foreground);
-        assert_eq!(Some(theme.muted_foreground), style.muted_foreground);
-        assert_eq!(Some(theme.border), style.border);
-        assert_eq!(Some(theme.code_background), style.code_background);
-        assert_eq!(Some(theme.code_foreground), style.code_foreground);
-        assert_eq!(Some(theme.table_header), style.table_header);
-        assert_eq!(Some(theme.table_row), style.table_row);
-        assert_eq!(Some(theme.table_row_alt), style.table_row_alt);
-        assert_eq!(Some(theme.quote_border), style.quote_border);
-        assert_eq!(Some(theme.link), style.link);
+        assert_eq!(
+            Some(theme.code_background.into()),
+            style.code_block.background
+        );
+        assert_eq!(Some(theme.code_foreground), style.code_block.text.color);
+        assert_eq!(
+            Some(theme.code_background),
+            style.inline_code.background_color
+        );
+        assert_eq!(Some(theme.code_foreground), style.inline_code.color);
+        assert_eq!(Some(theme.table_header.into()), style.table_head.background);
+        assert_eq!(Some(theme.table_row.into()), style.table_cell.background);
     }
 }

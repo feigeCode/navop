@@ -28,7 +28,7 @@ impl HomePage {
                 this.child(
                     IconButton::new(
                         SharedString::from(format!("sftp-conn-{}", conn.id.unwrap_or(0))),
-                        ObjectIcon::new(IconName::FolderOpen),
+                        Icon::new(IconName::FolderOpen),
                     )
                     .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.open_sftp"))
@@ -42,7 +42,7 @@ impl HomePage {
                 this.child(
                     IconButton::new(
                         SharedString::from(format!("duplicate-conn-{}", conn.id.unwrap_or(0))),
-                        FunctionalIcon::new(IconName::Copy),
+                        Icon::new(IconName::Copy),
                     )
                     .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.duplicate_connection"))
@@ -54,7 +54,7 @@ impl HomePage {
                 .child(
                     IconButton::new(
                         SharedString::from(format!("edit-conn-{}", conn.id.unwrap_or(0))),
-                        FunctionalIcon::new(IconName::Edit),
+                        Icon::new(IconName::Edit),
                     )
                     .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.edit_connection"))
@@ -66,7 +66,7 @@ impl HomePage {
                 .child(
                     IconButton::new(
                         SharedString::from(format!("delete-conn-{}", conn.id.unwrap_or(0))),
-                        FunctionalIcon::new(IconName::Remove),
+                        Icon::new(IconName::Remove),
                     )
                     .role(IconButtonRole::Compact)
                     .text_color(cx.theme().danger)

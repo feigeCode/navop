@@ -170,7 +170,7 @@ impl LlmProvidersView {
                 } else {
                     t!("LlmProviders.dialog_add_action")
                 }))
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let config_opt = form_clone.update(cx, |form, cx| form.get_config(cx));
 
                     let Some(mut config) = config_opt else {
@@ -268,7 +268,7 @@ impl LlmProvidersView {
                         .ok_variant(ButtonVariant::Danger)
                         .cancel_text(t!("Common.cancel")),
                 )
-                .on_ok(move |_, _, cx| {
+                .on_ok(move |_, _, cx: &mut App| {
                     _ = view_clone.update(cx, |view, cx| {
                         view.delete_provider(provider_id, cx);
                     });

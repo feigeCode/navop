@@ -114,8 +114,7 @@ fn open_location_dialog(state: LocationDialogState, window: &mut Window, cx: &mu
         dialog
             .title(t!("Notes.location_dialog_title").to_string())
             .w(px(560.0))
-            .confirm()
-            .on_ok(move |_, window, cx| {
+            .on_ok(move |_, window, cx: &mut gpui::App| {
                 view_for_ok.update(cx, |view, cx| view.confirm_location(window, cx))
             })
             .child(location_dialog_body(state.input.clone()))

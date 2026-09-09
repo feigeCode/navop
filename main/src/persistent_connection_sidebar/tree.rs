@@ -1,11 +1,12 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
+use gpui::{
+    AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
+    uniform_list,
+};
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, IconSize, Sizable, StyledExt, h_flex,
-    input::{Input, LocalInputStyle},
-    v_flex,
+    ActiveTheme as _, Icon, IconName, IconSize, Sizable, StyledExt, h_flex, input::Input, v_flex,
 };
 use one_core::settings::{AppSettings, ConnectionSortOrder};
 use rust_i18n::t;
@@ -173,14 +174,7 @@ impl PersistentConnectionSidebar {
                         .xsmall()
                         .appearance(false)
                         .cleanable(has_query)
-                        .local_style(LocalInputStyle {
-                            background: palette.background,
-                            foreground: palette.foreground,
-                            muted_foreground: palette.muted_foreground,
-                            border: palette.border,
-                        })
-                        .text_color(palette.foreground)
-                        .caret_color(palette.foreground),
+                        .text_color(palette.foreground),
                 ),
             )
             .child(self.render_tree_filter_button(palette, cx))

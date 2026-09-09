@@ -1,5 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
+use crate::geometry;
 use gpui::{
     AnyElement, App, Axis, Element, ElementId, Empty, Entity, GlobalElementId, InteractiveElement,
     IntoElement, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
@@ -121,7 +122,7 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
 
         window.with_element_state(id.unwrap(), |state, window| {
             let state = state.unwrap_or(ResizeHandleState::default());
-            let resize = cx.theme().geometry.resize;
+            let resize = geometry::resize();
             let handle_padding = resize.edge_padding;
             let handle_size = resize.visible_line;
             let neg_offset = -handle_padding;

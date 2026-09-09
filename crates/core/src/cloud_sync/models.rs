@@ -126,7 +126,7 @@ impl std::fmt::Display for SyncStatus {
 }
 
 /// 同步操作结果
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SyncResult {
     /// 上传成功的数量
     pub uploaded: usize,
@@ -138,18 +138,6 @@ pub struct SyncResult {
     pub conflicts: Vec<SyncConflict>,
     /// 错误列表
     pub errors: Vec<String>,
-}
-
-impl Default for SyncResult {
-    fn default() -> Self {
-        Self {
-            uploaded: 0,
-            downloaded: 0,
-            deleted: 0,
-            conflicts: Vec::new(),
-            errors: Vec::new(),
-        }
-    }
 }
 
 /// 同步计划

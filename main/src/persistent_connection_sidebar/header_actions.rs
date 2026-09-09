@@ -1,9 +1,9 @@
 use gpui::{Anchor, AnyElement, Entity, IntoElement};
 use gpui_component::{
     IconName,
-    button::{IconButton, IconButtonRole},
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
 };
+use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
 use super::{PersistentConnectionSidebar, SidebarPalette};

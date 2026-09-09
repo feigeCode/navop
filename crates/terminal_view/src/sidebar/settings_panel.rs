@@ -15,9 +15,7 @@ use gpui_component::{
     color_picker::{ColorPicker, ColorPickerState},
     dialog::DialogButtonProps,
     h_flex,
-    input::{
-        Input, InputEvent, InputState, LocalInputStyle, NumberInput, NumberInputEvent, StepAction,
-    },
+    input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
     notification::Notification,
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectItem, SelectState},
@@ -278,7 +276,7 @@ impl SettingsPanel {
                     let value = input_entity.read(cx).value().to_string();
                     cx.emit(SettingsPanelEvent::SearchPatternChanged(value));
                 }
-                InputEvent::PressEnter { secondary } => {
+                InputEvent::PressEnter { secondary, .. } => {
                     if *secondary {
                         cx.emit(SettingsPanelEvent::SearchPrevious);
                     } else {
@@ -676,9 +674,7 @@ impl SettingsPanel {
                                                     .on_click(window.listener_for(
                                                         &foreground_clear,
                                                         move |state, _, window, cx| {
-                                                            state.set_optional_value(
-                                                                None, window, cx,
-                                                            );
+                                                            state.clear_value(window, cx);
                                                         },
                                                     )),
                                                 ),
@@ -708,9 +704,7 @@ impl SettingsPanel {
                                                     .on_click(window.listener_for(
                                                         &background_clear,
                                                         move |state, _, window, cx| {
-                                                            state.set_optional_value(
-                                                                None, window, cx,
-                                                            );
+                                                            state.clear_value(window, cx);
                                                         },
                                                     )),
                                                 ),
@@ -825,21 +819,10 @@ impl SettingsPanel {
         self.current_theme.colors()
     }
 
-    fn local_input_style(&self) -> LocalInputStyle {
-        let colors = self.colors();
-        LocalInputStyle {
-            background: colors.muted,
-            foreground: colors.foreground,
-            muted_foreground: colors.muted_foreground,
-            border: colors.border,
-        }
-    }
-
     /// 渲染搜索区域
     fn render_search_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors();
         let muted_fg = colors.muted_foreground;
-        let input_style = self.local_input_style();
 
         v_flex().gap_3().p_3().child(
             v_flex()
@@ -854,13 +837,7 @@ impl SettingsPanel {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(
-                            Input::new(&self.search_input_state)
-                                .small()
-                                .w_full()
-                                .local_style(input_style)
-                                .caret_color(colors.foreground),
-                        )
+                        .child(Input::new(&self.search_input_state).small().w_full())
                         .child(
                             Button::new("search-prev")
                                 .icon(IconName::ChevronUp)
@@ -952,11 +929,7 @@ impl SettingsPanel {
         let colors = self.colors();
         let border = colors.border;
         let fg = colors.foreground;
-        let muted = colors.muted;
         let muted_fg = colors.muted_foreground;
-        let accent = colors.accent;
-        let accent_fg = colors.accent_foreground;
-        let input_style = self.local_input_style();
 
         v_flex()
             .gap_3()
@@ -977,7 +950,6 @@ impl SettingsPanel {
                     .child(
                         NumberInput::new(&self.font_size_input_state)
                             .small()
-                            .local_style(input_style)
                             .suffix(div().text_xs().text_color(muted_fg).child("px")),
                     ),
             )
@@ -995,8 +967,6 @@ impl SettingsPanel {
                     .child(
                         Select::new(&self.font_select_state)
                             .small()
-                            .local_style(input_style)
-                            .local_menu_item_style(fg, muted, accent, accent_fg)
                             .text_color(fg)
                             .placeholder(t!("Settings.font_family_placeholder")),
                     ),
@@ -1007,7 +977,6 @@ impl SettingsPanel {
         let colors = self.colors();
         let border = colors.border;
         let muted_fg = colors.muted_foreground;
-        let input_style = self.local_input_style();
 
         v_flex()
             .gap_3()
@@ -1027,7 +996,6 @@ impl SettingsPanel {
                     .child(
                         NumberInput::new(&self.scrollback_lines_input_state)
                             .small()
-                            .local_style(input_style)
                             .suffix(
                                 div()
                                     .text_xs()
@@ -1279,9 +1247,7 @@ impl SettingsPanel {
                         h_flex()
                             .items_center()
                             .justify_between()
-                            .child(
-                                div().text_sm().child(t!("Settings.selection_highlight")),
-                            )
+                            .child(div().text_sm().child(t!("Settings.selection_highlight")))
                             .child(
                                 Switch::new("selection-highlight-switch")
                                     .checked(selection_highlight)

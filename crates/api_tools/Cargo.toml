@@ -15,6 +15,7 @@ futures-util.workspace = true
 flate2 = "1"
 gpui.workspace = true
 gpui-component.workspace = true
+one-ui.workspace = true
 one-core.workspace = true
 reqwest_client.workspace = true
 regex.workspace = true

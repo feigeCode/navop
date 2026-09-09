@@ -267,10 +267,12 @@ mod tests {
         let mut addon = SelectionHighlightAddon::new();
         addon.on_frame(&frame_context(&term));
 
-        assert!(addon
-            .provide_decorations(0..term.screen_lines(), term.grid().display_offset())
-            .iter()
-            .all(|span| span.decoration.priority() <= 90));
+        assert!(
+            addon
+                .provide_decorations(0..term.screen_lines(), term.grid().display_offset())
+                .iter()
+                .all(|span| span.decoration.priority() <= 90)
+        );
     }
 
     #[test]
@@ -367,10 +369,7 @@ mod tests {
             Point::new(Line(0), Column(2)),
         );
         addon.on_frame(&frame_context(&term));
-        assert_eq!(
-            vec![(0, 0..3), (1, 4..7)],
-            column_ranges(&addon, &term)
-        );
+        assert_eq!(vec![(0, 0..3), (1, 4..7)], column_ranges(&addon, &term));
 
         select(
             &mut term,
@@ -378,16 +377,16 @@ mod tests {
             Point::new(Line(0), Column(6)),
         );
         addon.on_frame(&frame_context(&term));
-        assert_eq!(
-            vec![(0, 4..7), (1, 0..3)],
-            column_ranges(&addon, &term)
-        );
+        assert_eq!(vec![(0, 4..7), (1, 0..3)], column_ranges(&addon, &term));
     }
 
     #[test]
     fn match_columns_supports_multibyte_needles() {
         assert_eq!(vec![0..2, 3..5], match_columns("中文 中文", "中文"));
-        assert_eq!(Vec::<std::ops::Range<usize>>::new(), match_columns("abc", "中文"));
+        assert_eq!(
+            Vec::<std::ops::Range<usize>>::new(),
+            match_columns("abc", "中文")
+        );
     }
 
     #[test]

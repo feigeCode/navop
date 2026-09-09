@@ -269,7 +269,7 @@ async fn download_asset_to_staging(
         .await
         .with_context(|| format!("download asset {asset_url}"))?;
     if let Some(expected) = expected_sha256 {
-        gpui_component::highlighter::verify_sha256(&tarball, expected)
+        crate::language_extensions::verify_sha256(&tarball, expected)
             .with_context(|| format!("verify sha256 for {asset_url}"))?;
     }
     let staging = super::make_staging_dir()?;

@@ -153,7 +153,7 @@ pub fn resolve_app_paths(
         return Ok(portable_paths(executable_root, data_root));
     }
 
-    Ok(installed_paths()?)
+    installed_paths()
 }
 
 pub fn initialize_app_paths(

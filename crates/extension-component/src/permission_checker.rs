@@ -37,19 +37,6 @@ impl PermissionChecker {
         }
     }
 
-    /// 检查 UI 权限。
-    pub fn check_ui(&self, permission: &str) -> Result<()> {
-        if self.permissions.allows_ui(permission) {
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "extension '{}' lacks ui permission: {}",
-                self.extension_id,
-                permission
-            ))
-        }
-    }
-
     /// 检查连接列表权限。
     pub fn check_connection_list(&self) -> Result<()> {
         if self.permissions.allows_connection_list() {
@@ -103,11 +90,6 @@ impl PermissionChecker {
             ))
         }
     }
-
-    /// 检查对话框权限。
-    pub fn check_dialog(&self) -> Result<()> {
-        self.check_ui("ui:dialog")
-    }
 }
 
 #[cfg(test)]
@@ -134,26 +116,25 @@ mod tests {
     }
 
     #[test]
-    fn checker_allows_granted_ui_permission() {
-        let permissions = PermissionSet::new(["ui:notify", "ui:dialog"]);
-        let checker = PermissionChecker::new("test-ext".into(), permissions);
-
-        assert!(checker.check_notify().is_ok());
-        assert!(checker.check_dialog().is_ok());
-    }
-
-    #[test]
-    fn checker_denies_missing_ui_permission() {
+    fn checker_allows_granted_notify_permission() {
         let permissions = PermissionSet::new(["ui:notify"]);
         let checker = PermissionChecker::new("test-ext".into(), permissions);
 
-        let result = checker.check_dialog();
+        assert!(checker.check_notify().is_ok());
+    }
+
+    #[test]
+    fn checker_denies_missing_notify_permission() {
+        let permissions = PermissionSet::new([] as [&str; 0]);
+        let checker = PermissionChecker::new("test-ext".into(), permissions);
+
+        let result = checker.check_notify();
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("lacks ui permission")
+                .contains("lacks notifications")
         );
     }
 

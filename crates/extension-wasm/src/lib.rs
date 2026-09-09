@@ -39,9 +39,6 @@ mod component_import_shape_tests;
 #[path = "component_runtime_tests.rs"]
 mod component_runtime_tests;
 #[cfg(test)]
-#[path = "component_ui_import_tests.rs"]
-mod component_ui_import_tests;
-#[cfg(test)]
 #[path = "connection_import_tests.rs"]
 mod connection_import_tests;
 #[cfg(test)]

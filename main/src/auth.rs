@@ -488,7 +488,7 @@ pub fn show_auth_dialog<V: 'static>(
             .width(px(400.))
             .confirm()
             .button_props(DialogButtonProps::default().ok_text(t!("Auth.login")))
-            .on_ok(move |_, _window, cx| {
+            .on_ok(move |_, _window, cx: &mut App| {
                 let email = email_ok.read(cx).text().to_string();
                 let otp = otp_ok.read(cx).text().to_string();
 

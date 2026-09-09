@@ -25,7 +25,7 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            theme: "Default Light".into(),
+            theme: "Navop Light".into(),
             scrollbar_show: Some(ScrollbarShow::Hover),
         }
     }
@@ -153,6 +153,9 @@ pub fn apply_appearance(settings: &AppSettings, cx: &mut App) {
         theme.dark_theme = dark_theme;
     }
     Theme::change(mode, None, cx);
+    // Navop's dense desktop layouts use the focused border without an
+    // additional ring outside the control bounds.
+    Theme::global_mut(cx).focus_ring = false;
     apply_custom_accent(settings, cx);
     cx.refresh_windows();
 }
@@ -160,8 +163,10 @@ pub fn apply_appearance(settings: &AppSettings, cx: &mut App) {
 fn resolve_theme_pair(settings: &AppSettings, cx: &App) -> (Rc<ThemeConfig>, Rc<ThemeConfig>) {
     let registry = ThemeRegistry::global(cx);
     let light = find_theme(&settings.light_theme, ThemeMode::Light, registry)
+        .or_else(|| find_theme("Navop Light", ThemeMode::Light, registry))
         .unwrap_or_else(|| registry.default_light_theme().clone());
     let dark = find_theme(&settings.dark_theme, ThemeMode::Dark, registry)
+        .or_else(|| find_theme("Navop Dark", ThemeMode::Dark, registry))
         .unwrap_or_else(|| registry.default_dark_theme().clone());
     (light, dark)
 }
@@ -228,11 +233,20 @@ mod tests {
             .flat_map(|source| serde_json::from_str::<ThemeSet>(source).unwrap().themes)
             .collect::<Vec<_>>();
 
-        assert!(themes.iter().any(|theme| theme.name == "Ayu Light"));
+        assert!(themes.iter().any(|theme| theme.name == "Navop Light"));
+        assert!(themes.iter().any(|theme| theme.name == "Navop Dark"));
         assert!(themes.iter().any(|theme| theme.name == "Tokyo Night"));
         assert!(themes.iter().any(|theme| theme.name == "Matrix"));
         assert!(themes.iter().any(|theme| theme.mode == ThemeMode::Light));
         assert!(themes.iter().any(|theme| theme.mode == ThemeMode::Dark));
+    }
+
+    #[test]
+    fn navop_theme_is_the_application_default() {
+        let settings = crate::settings::AppSettings::default();
+
+        assert_eq!(settings.light_theme, "Navop Light");
+        assert_eq!(settings.dark_theme, "Navop Dark");
     }
 
     #[test]
@@ -269,6 +283,18 @@ mod tests {
     }
 
     #[gpui::test]
+    fn navop_appearance_uses_a_single_focused_border(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            super::load_bundled(cx);
+
+            super::apply_appearance(&crate::settings::AppSettings::default(), cx);
+
+            assert!(!gpui_component::Theme::global(cx).focus_ring);
+        });
+    }
+
+    #[gpui::test]
     fn unknown_saved_theme_names_fall_back_to_defaults(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
@@ -283,11 +309,11 @@ mod tests {
 
             assert_eq!(
                 gpui_component::Theme::global(cx).light_theme.name,
-                "Default Light"
+                "Navop Light"
             );
             assert_eq!(
                 gpui_component::Theme::global(cx).dark_theme.name,
-                "Default Dark"
+                "Navop Dark"
             );
             assert!(
                 gpui_component::ThemeRegistry::global(cx)

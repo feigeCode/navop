@@ -97,7 +97,6 @@ impl HomePage {
 
         // 使用持久化身份预载本地团队权限，不等待在线会话恢复。
         page.load_team_options(cx);
-
         // 异步加载工作区
         page.load_workspaces(cx);
 

@@ -756,26 +756,22 @@ impl Render for Editor {
                 + scroll_beyond_bottom))
             .children(block_rows);
         let scroll_editor = editor_entity.clone();
-        let scroll_content = scroll_content
-            .context_menu(move |menu, window, cx| {
-                let target = scroll_editor.read(cx).context_menu_target_for_popup();
-                Editor::build_popup_context_menu(
-                    scroll_editor.clone(),
-                    target.block_target,
-                    target.insert_target.or_else(|| {
-                        (target.block_target.is_none()
-                            && scroll_editor.read(cx).view_mode == super::ViewMode::Rendered)
-                            .then_some(super::context_menu::TableInsertTarget::Append)
-                    }),
-                    target.table_target,
-                    menu,
-                    window,
-                    cx,
-                )
-            })
-            // Table commands depend on the active cell's edit state. The menu
-            // remains mouse-interactive without taking focus from that cell.
-            .preserve_focus();
+        let scroll_content = scroll_content.context_menu(move |menu, window, cx| {
+            let target = scroll_editor.read(cx).context_menu_target_for_popup();
+            Editor::build_popup_context_menu(
+                scroll_editor.clone(),
+                target.block_target,
+                target.insert_target.or_else(|| {
+                    (target.block_target.is_none()
+                        && scroll_editor.read(cx).view_mode == super::ViewMode::Rendered)
+                        .then_some(super::context_menu::TableInsertTarget::Append)
+                }),
+                target.table_target,
+                menu,
+                window,
+                cx,
+            )
+        });
 
         let content_area = div()
             .id("editor-scroll")

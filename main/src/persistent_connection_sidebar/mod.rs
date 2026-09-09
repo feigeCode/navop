@@ -1,7 +1,6 @@
 use gpui::{
-    AnyElement, AppContext, ColorExt as _, Context, Entity, EventEmitter, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle,
-    Window, div, px,
+    AnyElement, AppContext, ColorExt as _, Context, Entity, EventEmitter, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _,
@@ -109,7 +108,8 @@ fn shade(color: Hsla, dark_mode: bool) -> Hsla {
 const FLOATING_CARD_MARGIN: f32 = 6.0;
 
 pub(crate) struct PersistentConnectionSidebar {
-    pub(super) home_page: Entity<HomePage>,    connection_selection: ConnectionSelection,
+    pub(super) home_page: Entity<HomePage>,
+    connection_selection: ConnectionSelection,
     pub(super) tree_expanded: bool,
     pub(super) hide_empty_workspaces: bool,
     pub(super) auto_hide_tree: bool,
@@ -264,7 +264,10 @@ mod tests {
     fn floating_tree_renders_as_card_overlay_and_keeps_auto_collapse_paths() {
         // mod.rs 顶部声明了 #[cfg(test)] 子模块，不能按该标记截断实现部分
         let implementation = include_str!("mod.rs");
-        let state = include_str!("state.rs").split("#[cfg(test)]").next().unwrap();
+        let state = include_str!("state.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
 
         // 浮动模式保留：overlay 覆盖 + occlude 阻断事件穿透
         assert!(implementation.contains("fn render_floating_tree"));

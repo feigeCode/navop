@@ -4,12 +4,13 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, IconSize, Sizable, StyledExt,
-    button::{Button, ButtonVariants as _, IconButton, IconButtonRole},
+    button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
     v_flex,
 };
 use one_core::storage::StoredConnection;
+use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
 use super::{

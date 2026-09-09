@@ -3,16 +3,15 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize, ObjectIcon, Sizable,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable,
     button::{Button, ButtonVariants},
-    content_state::ContentState,
     h_flex,
     input::Input,
-    panel_header::{PanelHeader, PanelHeaderVariant},
     progress::Progress,
     scroll::ScrollableElement,
     v_flex,
 };
+use one_ui::{ContentState, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 
 use crate::{
@@ -57,7 +56,7 @@ impl ExtensionManagerView {
                     .child(
                         Button::new("extension-manager-local")
                             .small()
-                            .icon(ObjectIcon::new(IconName::File))
+                            .icon(IconName::File)
                             .label(t!("Extension.local_install").to_string())
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.select_local_tarball(cx);
@@ -310,6 +309,26 @@ impl ExtensionManagerView {
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
         let action_busy = self.busy.is_some();
+        let mut actions = summary
+            .shell_views
+            .iter()
+            .cloned()
+            .map(|shell_view| {
+                let extension_id = summary.name.clone();
+                let view_id = shell_view.id.clone();
+                Button::new(format!(
+                    "extension-manager-open-{}-{}",
+                    extension_id, view_id
+                ))
+                .small()
+                .primary()
+                .label(shell_view.title)
+                .disabled(action_busy)
+                .on_click(move |_, window, cx| {
+                    crate::shell::open_shell_view(&extension_id, &view_id, window, cx);
+                })
+            })
+            .collect::<Vec<_>>();
         let summary_for_reload = summary.clone();
         let reload = Button::new(format!("extension-manager-reload-{}", summary.name))
             .small()
@@ -328,12 +347,13 @@ impl ExtensionManagerView {
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.uninstall_extension(summary_for_uninstall.clone(), window, cx);
             }));
+        actions.extend([reload, uninstall]);
         extension_card(
             kind_label(summary.kind),
             summary.name,
             summary.version,
             summary.description,
-            vec![reload, uninstall],
+            actions,
             cx,
         )
     }

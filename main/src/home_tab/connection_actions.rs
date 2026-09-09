@@ -48,6 +48,14 @@ impl HomePage {
                 self.editing_connection_id = Some(connection_id);
                 self.show_mongodb_form(window, cx);
             }
+            ConnectionType::Mqtt => {
+                self.editing_connection_id = Some(connection_id);
+                self.show_mqtt_form(window, cx);
+            }
+            ConnectionType::Rocketmq => {
+                self.editing_connection_id = Some(connection_id);
+                self.show_rocketmq_form(window, cx);
+            }
             ConnectionType::Serial => {
                 self.editing_connection_id = Some(connection_id);
                 self.show_serial_form(window, cx);
@@ -68,6 +76,24 @@ impl HomePage {
                 };
                 self.editing_connection_id = Some(connection_id);
                 self.show_remote_desktop_form(protocol, window, cx);
+            }
+            ConnectionType::Extension => {
+                if cx.global::<ActiveConnections>().is_active(connection_id) {
+                    let name = connection.name;
+                    window.open_dialog(cx, move |dialog, _window, _cx| {
+                        dialog
+                            .title(t!("Connection.in_use_title").to_string().into_any_element())
+                            .child(
+                                t!("Connection.in_use_cannot_edit", conn_name = name)
+                                    .to_string()
+                                    .into_any_element(),
+                            )
+                            .alert()
+                    });
+                } else {
+                    self.editing_connection_id = Some(connection_id);
+                    self.show_extension_form(window, cx);
+                }
             }
             _ => {}
         }
@@ -193,7 +219,7 @@ impl HomePage {
                             .into_any_element(),
                     )
                     .confirm()
-                    .on_ok(move |_, _, cx| {
+                    .on_ok(move |_, _, cx: &mut App| {
                         let _ = view_clone.update(cx, |this, cx| {
                             this.delete_connection(conn_id, cx);
                         });
@@ -238,7 +264,7 @@ impl HomePage {
                         .ok_text(t!("Connection.copy_full_info_confirm_action").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let _ = view.update(cx, |this, cx| {
                         this.copy_full_connection_info(connection_id, window, cx);
                     });

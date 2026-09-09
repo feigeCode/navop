@@ -1,5 +1,3 @@
-use gpui_component::highlighter::Language;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LargeTextEditorTab {
     Text,
@@ -7,10 +5,10 @@ pub enum LargeTextEditorTab {
 }
 
 impl LargeTextEditorTab {
-    pub fn language(&self) -> Language {
+    pub fn language(&self) -> &'static str {
         match self {
-            LargeTextEditorTab::Text => Language::Plain,
-            LargeTextEditorTab::Json => Language::Json,
+            LargeTextEditorTab::Text => "text",
+            LargeTextEditorTab::Json => "json",
         }
     }
 }

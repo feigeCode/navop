@@ -4,8 +4,8 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div,
 };
 use gpui_component::{
-    ActiveTheme, FunctionalIcon, IconName, IconSize, InteractiveElementExt, ObjectIcon, Sizable,
-    h_flex, menu::ContextMenuExt,
+    ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable, h_flex,
+    menu::ContextMenuExt,
 };
 
 use super::drag::DragConnection;
@@ -103,7 +103,7 @@ impl PersistentConnectionSidebar {
                 Self::build_workspace_context_menu(menu, &view_for_menu, id, expanded, window, cx)
             })
             .child(tree_chevron(has_children, expanded, cx))
-            .child(ObjectIcon::new(IconName::FolderOpen).with_size(IconSize::Default))
+            .child(Icon::new(IconName::FolderOpen).with_size(IconSize::Default))
             .child(tree_label(name))
             .child(tree_count(direct_connection_count, palette))
             .child(self.render_workspace_actions(id, group, cx))
@@ -195,11 +195,7 @@ impl PersistentConnectionSidebar {
                 home.read(cx)
                     .connection_icon(connection, ConnectionVisualSize::Tree)
             })
-            .unwrap_or_else(|| {
-                FunctionalIcon::new(IconName::Apps)
-                    .with_size(IconSize::Default)
-                    .into_icon()
-            });
+            .unwrap_or_else(|| Icon::new(IconName::Apps).with_size(IconSize::Default));
         let drag = DragConnection {
             connection_id: id,
             name: name.clone(),

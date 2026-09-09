@@ -19,12 +19,10 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, IconName, IconSize, ObjectIcon, Selectable, Size, button::IconButton, h_flex,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IconName, Selectable, Size, h_flex, v_flex};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
+use one_ui::{IconButton, IconSize as OneIconSize};
 use rust_i18n::t;
 
 use self::ai_context::{
@@ -249,17 +247,14 @@ impl DatabaseSidebar {
             ),
         };
 
-        IconButton::new(
-            format!("database-sidebar-btn-{panel:?}"),
-            ObjectIcon::new(icon),
-        )
-        .hit_size(item_size)
-        .glyph_size(IconSize::Medium)
-        .selected(is_active)
-        .tooltip(tooltip)
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.toggle_panel(panel, cx);
-        }))
+        IconButton::new(format!("database-sidebar-btn-{panel:?}"), Icon::new(icon))
+            .hit_size(item_size)
+            .glyph_size(OneIconSize::Medium)
+            .selected(is_active)
+            .tooltip(tooltip)
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.toggle_panel(panel, cx);
+            }))
     }
 
     pub fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

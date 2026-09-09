@@ -4,13 +4,14 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants, IconButton},
+    button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
     popover::Popover,
     scroll::ScrollableElement,
     v_flex,
 };
+use one_ui::IconButton;
 use rust_i18n::t;
 
 use super::execution_history::{ExecutionRecord, ExecutionStatus};

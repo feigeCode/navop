@@ -73,6 +73,24 @@ async fn git_store_maps_merge_conflict() {
     assert_eq!(SyncStoreError::GitMergeConflict, err);
 }
 
+#[test]
+fn git_commands_run_as_hidden_background_children() {
+    let source = include_str!("git_store.rs");
+    let run_git = source
+        .split("fn run_git(")
+        .nth(1)
+        .expect("run_git body must exist");
+
+    assert!(
+        run_git.contains("process_util::configure_background_child(&mut command)"),
+        "run_git must hide the console window on Windows (issue #145)"
+    );
+    assert!(
+        run_git.find("configure_background_child") < run_git.find(".output()"),
+        "background-child console hiding must be applied before git is spawned"
+    );
+}
+
 #[derive(Clone, Default)]
 struct FakeGitRunner {
     commands: Arc<Mutex<Vec<String>>>,

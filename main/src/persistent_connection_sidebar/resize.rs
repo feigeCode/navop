@@ -50,9 +50,12 @@ impl PersistentConnectionSidebar {
             .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // 拖拽结束（手柄跟随宽度重渲染，通常仍命中光标）时落盘最终宽度。
-            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.persist_tree_width(cx);
-            }))
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.persist_tree_width(cx);
+                }),
+            )
             .on_drag_move(cx.listener(Self::resize_connection_tree))
             .on_drag(
                 ConnectionTreeResize {

@@ -84,7 +84,7 @@ impl CredentialVaultView {
                         .cancel_text(t!("CredentialForm.cancel").to_string())
                         .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     delete_credential(id, &storage_manager, &view, window, cx)
                 })
         });

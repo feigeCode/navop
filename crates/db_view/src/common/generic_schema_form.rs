@@ -150,9 +150,7 @@ fn build_input_state(
         .unwrap_or_default();
     let mut input = InputState::new(window, cx).placeholder(placeholder);
     if matches!(field.field_type, DatabaseFormFieldType::TextArea) {
-        input = input
-            .multi_line(true)
-            .rows(field.rows.unwrap_or(3) as usize);
+        let _ = field.rows;
     }
     input.set_value(value.to_string(), window, cx);
     input
@@ -168,6 +166,5 @@ fn render_schema_field(
         .required(field_info.required)
         .when(!is_textarea, |f| f.items_center())
         .when(is_textarea, |f| f.items_start())
-        .label_justify_end()
         .child(Input::new(input_state).w_full())
 }

@@ -1,4 +1,8 @@
-use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use crate::{
     CodeHighlightProvider, CodeHighlightRequest, CodeHighlightResult, CodeHighlightService,
@@ -48,7 +52,8 @@ fn resolve_language(language: Option<&str>) -> String {
         .unwrap_or("text");
 
     LanguageRegistry::singleton()
-        .resolve_language_name(identifier)
+        .language(identifier)
+        .map(|language| language.name.to_string())
         .unwrap_or_else(|| "text".to_owned())
 }
 
@@ -62,7 +67,11 @@ fn valid_range(range: std::ops::Range<usize>, source: &str) -> Option<std::ops::
 
 #[cfg(not(target_family = "wasm"))]
 fn registry_revision() -> u64 {
-    LanguageRegistry::singleton().revision()
+    let mut languages = LanguageRegistry::singleton().languages();
+    languages.sort();
+    let mut hasher = DefaultHasher::new();
+    languages.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(target_family = "wasm")]

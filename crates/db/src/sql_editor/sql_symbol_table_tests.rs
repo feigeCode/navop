@@ -331,4 +331,17 @@ mod tests {
                 "Expected '{}' to resolve to '{}' for SQL: {}", expected_alias, expected_table, sql);
         }
     }
+
+    #[test]
+    fn update_target_alias_resolves_to_table() {
+        for sql in [
+            "UPDATE ai_tool_info ati SET ati.status = 1",
+            "UPDATE ai_tool_info AS ati SET ati.status = 1",
+        ] {
+            let tokens = SqlTokenizer::new(sql).tokenize();
+            let symbols = SymbolTable::build_from_tokens(&tokens);
+
+            assert_eq!(Some("ai_tool_info"), symbols.resolve("ati"));
+        }
+    }
 }

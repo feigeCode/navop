@@ -1,5 +1,4 @@
 use gpui::AnyWindowHandle;
-use gpui_component::DialogHandle;
 use sftp::{DirectCopyApproval, DirectCopyDecision, DirectCopyPreview};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -23,7 +22,6 @@ pub(crate) struct DirectCopyPromptRequest {
 
 pub(crate) struct ActiveDirectCopyPrompt {
     pub(crate) task_id: usize,
-    pub(crate) dialog_handle: DialogHandle,
     pub(crate) window_handle: AnyWindowHandle,
     pub(crate) response: Weak<PromptDecisionState>,
 }

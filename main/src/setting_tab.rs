@@ -732,28 +732,6 @@ impl SettingsPanel {
                                 )
                                 .to_string(),
                             ),
-                        )
-                        .item(
-                            SettingItem::new(
-                                t!("Settings.General.FileTransfer.background_tasks_no_auto_popup"),
-                                SettingField::checkbox(
-                                    |cx: &App| {
-                                        !AppSettings::global(cx).background_tasks_auto_popup
-                                    },
-                                    |value: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.background_tasks_auto_popup = !value;
-                                        });
-                                    },
-                                )
-                                .default_value(!default_settings.background_tasks_auto_popup),
-                            )
-                            .description(
-                                t!(
-                                    "Settings.General.FileTransfer.background_tasks_no_auto_popup_desc"
-                                )
-                                .to_string(),
-                            ),
                         ),
                     notes_setting_group(),
                     SettingGroup::new()
@@ -908,7 +886,7 @@ impl SettingsPanel {
                                     Button::new("settings-import-custom-fonts")
                                         .icon(IconName::File)
                                         .label(t!("Settings.General.Font.import_custom_fonts"))
-                                        .with_size(options.size)
+                                        .with_size(options.size())
                                         .on_click(|_, window, cx| {
                                             let target_window = window.window_handle();
                                             let future = cx.prompt_for_paths(PathPromptOptions {
@@ -1135,6 +1113,7 @@ impl SettingsPanel {
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.table_row_height = height;
                                         });
+                                        one_ui::set_table_row_height(height, cx);
                                     },
                                 )
                                 .default_value(default_settings.table_row_height as f64),
@@ -1177,7 +1156,7 @@ impl SettingsPanel {
                             SettingItem::render(move |_options, _window, cx| {
                                 render_global_proxy_settings_item(cx)
                             })
-                            .search_texts([
+                            .keywords([
                                 t!("Settings.General.Proxy.group_title").to_string(),
                                 t!("Settings.General.Proxy.title").to_string(),
                                 t!("Settings.General.Proxy.description").to_string(),
@@ -1201,19 +1180,19 @@ impl SettingsPanel {
                     SettingItem::render(move |_options, window, cx| {
                         render_shortcuts_section(default_system_hotkey.clone(), window, cx)
                     })
-                    .search_texts(shortcut_search_texts()),
+                    .keywords(shortcut_search_texts()),
                 ),
             ),
             SettingPage::new(t!("LlmProviders.title")).group(SettingGroup::new().item(
                 SettingItem::render(move |_options, _window, _cx| {
                     llm_view.clone().into_any_element()
                 })
-                .search_text(t!("LlmProviders.title").to_string()),
+                .keywords([t!("LlmProviders.title").to_string()]),
             )),
             // 账户设置页
             SettingPage::new(t!("Settings.Account.title")).group(SettingGroup::new().item(
                 SettingItem::render(move |_options, window, cx| render_account_section(window, cx))
-                    .search_texts([
+                    .keywords([
                         t!("Settings.Account.title").to_string(),
                         t!("Settings.Account.username").to_string(),
                         t!("Settings.Account.email").to_string(),
@@ -1251,7 +1230,7 @@ fn local_terminal_setting_group(defaults: &LocalTerminalProfileSettings) -> Sett
             SettingItem::render(move |_options, window, cx| {
                 crate::settings::local_terminal_settings::render(window, cx)
             })
-            .search_texts([
+            .keywords([
                 t!("Settings.General.LocalTerminal.custom_profiles").to_string(),
                 t!("Settings.General.LocalTerminal.custom_command").to_string(),
             ]),
@@ -1301,7 +1280,7 @@ fn sync_setting_group(
             SettingItem::render(move |_options, window, cx| {
                 render_personal_sync_actions(window, cx)
             })
-            .search_texts([
+            .keywords([
                 t!("Settings.Sync.status").to_string(),
                 t!("Settings.Sync.test_connection").to_string(),
                 t!("Settings.Sync.sync_now").to_string(),
@@ -1398,7 +1377,9 @@ fn render_personal_sync_path_field(
         .use_keyed_state(
             SharedString::from(format!(
                 "personal-sync-path-{}-{}-{}",
-                options.page_ix, options.group_ix, options.item_ix
+                options.page_ix(),
+                options.group_ix(),
+                options.item_ix()
             )),
             cx,
             |window, cx| {
@@ -1425,8 +1406,8 @@ fn render_personal_sync_path_field(
     let input = state.input.clone();
     h_flex()
         .gap_2()
-        .child(Input::new(&input).with_size(options.size).map(|this| {
-            if options.layout.is_horizontal() {
+        .child(Input::new(&input).with_size(options.size()).map(|this| {
+            if options.layout().is_horizontal() {
                 this.w_64()
             } else {
                 this.w_full()
@@ -1435,7 +1416,7 @@ fn render_personal_sync_path_field(
         .child(
             Button::new("personal-sync-select-directory")
                 .icon(IconName::Folder)
-                .with_size(options.size)
+                .with_size(options.size())
                 .tooltip(t!("Settings.Sync.select_directory").to_string())
                 .on_click(move |_, window, cx| {
                     prompt_for_personal_sync_directory(input.clone(), window, cx);
@@ -1677,7 +1658,7 @@ fn team_key_setting_group() -> SettingGroup {
         SettingItem::render(move |_options, window, cx| {
             render_team_key_management_section(window, cx)
         })
-        .search_text(t!("TeamSync.manage_keys").to_string()),
+        .keywords([t!("TeamSync.manage_keys").to_string()]),
     )
 }
 
@@ -1891,7 +1872,7 @@ fn show_team_key_entry_dialog(team: TeamOption, window: &mut Window, cx: &mut Ap
             .title(format!("{} - {}", t!("TeamSync.save_local_key"), team_name))
             .width(gpui::px(460.))
             .confirm()
-            .on_ok(move |_, window, cx| {
+            .on_ok(move |_, window, cx: &mut App| {
                 let team_key = key_input_ok.read(cx).text().to_string();
                 if team_key.is_empty() {
                     set_team_key_dialog_error(&error_ok, t!("TeamSync.key_empty").to_string(), cx);
@@ -1960,7 +1941,7 @@ fn show_team_key_rotation_dialog(team: TeamOption, window: &mut Window, cx: &mut
             .title(format!("{} - {}", t!("TeamSync.rotate_key"), team_name))
             .width(gpui::px(500.))
             .confirm()
-            .on_ok(move |_, window, cx| {
+            .on_ok(move |_, window, cx: &mut App| {
                 let old_key = old_ok.read(cx).text().to_string();
                 let new_key = new_ok.read(cx).text().to_string();
                 if !team_key_rotation_inputs_valid(&old_key, &new_key) {
@@ -2013,7 +1994,13 @@ fn set_team_key_dialog_error(error: &Entity<Option<String>>, message: String, cx
 }
 
 fn team_key_change_completed(window: &mut Window, cx: &mut App) {
-    window.refresh();
+    if !cfg!(test) {
+        window.refresh();
+    }
+    emit_team_key_change_event(cx);
+}
+
+fn emit_team_key_change_event(cx: &mut App) {
     let Some(notifier) = get_notifier(cx) else {
         tracing::warn!("团队密钥状态变化后无法通知首页同步：GlobalConnectionNotifier 未初始化");
         return;
@@ -3785,8 +3772,7 @@ fn render_shortcuts_section(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, EmptyView, TestAppContext, http_client::HttpClient};
-    use gpui_component::{Root, Theme};
+    use gpui::{TestAppContext, http_client::HttpClient};
     use one_core::cloud_sync::personal::SyncStoreHealth;
     use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
     use rust_i18n::t;
@@ -3794,9 +3780,9 @@ mod tests {
     use super::{
         AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, LocalTerminalProfileKind,
         ProxyType, WINDOW_SHORTCUTS, build_app_http_client, builtin_monospace_font_options,
-        is_supported_font_file, local_terminal_profile_options, master_key_setting_enabled,
-        merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
-        personal_sync_status_label, personal_sync_status_view_model, team_key_change_completed,
+        emit_team_key_change_event, is_supported_font_file, local_terminal_profile_options,
+        master_key_setting_enabled, merge_font_options_with_custom_fonts, parse_font_families,
+        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
         team_key_refresh_success_message, team_key_rotation_inputs_valid,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
@@ -4031,8 +4017,7 @@ mod tests {
     fn team_key_change_emits_cloud_sync_request(cx: &mut TestAppContext) {
         let events = Arc::new(Mutex::new(Vec::<ConnectionDataEvent>::new()));
         let events_for_subscription = events.clone();
-        let (window, _subscription) = cx.update(|cx| {
-            cx.set_global(Theme::default());
+        let _subscription = cx.update(|cx| {
             one_core::connection_notifier::init(cx);
             let notifier = get_notifier(cx).expect("connection notifier initialized");
             let subscription = cx.subscribe(&notifier, move |_, event, _| {
@@ -4041,22 +4026,10 @@ mod tests {
                     .expect("events lock")
                     .push(event.clone());
             });
-            let window = cx
-                .open_window(Default::default(), |window, cx| {
-                    let content = cx.new(|_| EmptyView);
-                    cx.new(|cx| Root::new(content, window, cx))
-                })
-                .expect("test window opens");
-            (window, subscription)
+            subscription
         });
 
-        cx.update(|cx| {
-            window
-                .update(cx, |_, window, cx| {
-                    team_key_change_completed(window, cx);
-                })
-                .expect("team key completion updates window");
-        });
+        cx.update(|cx| emit_team_key_change_event(cx));
 
         assert!(
             events

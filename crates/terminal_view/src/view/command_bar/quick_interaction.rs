@@ -32,7 +32,7 @@ impl TerminalCommandBar {
                     this.quick_scroll_handle = VirtualListScrollHandle::new();
                     cx.notify();
                 }
-                InputEvent::PressEnter { secondary } if !secondary => {
+                InputEvent::PressEnter { secondary, .. } if !secondary => {
                     this.choose_selected_quick_command(window, cx);
                 }
                 _ => {}

@@ -46,7 +46,7 @@ impl Render for HomePage {
                         .title(t!("Auth.auth_error_title").to_string())
                         .child(error_msg.clone().into_any_element())
                         .alert()
-                        .on_ok(move |_, window, cx| {
+                        .on_ok(move |_, window, cx: &mut App| {
                             // 关闭错误对话框后重新弹出登录对话框
                             view_clone.update(cx, |this, cx| {
                                 this.show_login_dialog(window, cx);

@@ -3,7 +3,7 @@ use crate::theme::TerminalColors;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
 };
-use gpui_component::input::InputState;
+use gpui_component::input::{InputState, TextareaState};
 use gpui_component::{RopeExt as _, VirtualListScrollHandle};
 use one_core::storage::QuickCommand;
 use terminal::terminal::Terminal;
@@ -47,7 +47,7 @@ enum QuickGroupFilter {
 pub(super) struct TerminalCommandBar {
     terminal: Entity<Terminal>,
     connection_id: Option<i64>,
-    input_state: Entity<InputState>,
+    input_state: Entity<TextareaState>,
     quick_search_state: Entity<InputState>,
     quick_group_scroll_handle: ScrollHandle,
     quick_scroll_handle: VirtualListScrollHandle,
@@ -80,10 +80,10 @@ impl Focusable for TerminalCommandBar {
 }
 
 fn set_command_input_value(
-    state: &mut InputState,
+    state: &mut TextareaState,
     command: String,
     window: &mut Window,
-    cx: &mut Context<InputState>,
+    cx: &mut Context<TextareaState>,
 ) {
     let end_offset = command.len();
     state.set_value(command, window, cx);

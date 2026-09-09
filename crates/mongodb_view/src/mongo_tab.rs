@@ -8,9 +8,7 @@ use gpui::{
     InteractiveElement, IntoElement, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, BrandIcon, ElementExt as _, Icon, IconName, IconSize, Sizable, h_flex,
-};
+use gpui_component::{ActiveTheme, ElementExt as _, Icon, IconName, IconSize, Sizable, h_flex};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
@@ -303,9 +301,9 @@ impl TabContent for MongoTabView {
             )
         } else {
             Some(
-                BrandIcon::new(IconName::MongoDB)
+                Icon::new(IconName::MongoDB)
                     .with_size(IconSize::Medium)
-                    .into_icon(),
+                    .color(),
             )
         }
     }

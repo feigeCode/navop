@@ -7,7 +7,6 @@ use std::any::{Any, TypeId};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::error;
 
 pub struct StorageManager {
     conn: SqliteConnection,
@@ -113,13 +112,8 @@ pub fn now() -> i64 {
         .as_secs() as i64
 }
 
-pub fn init(cx: &mut App) {
-    let global_storage_state = match StorageManager::new() {
-        Ok(manager) => GlobalStorageState { storage: manager },
-        Err(err) => {
-            error!("Failed to initialize storage manager: {}", err);
-            panic!("Failed to initialize storage manager: {}", err);
-        }
-    };
-    cx.set_global(global_storage_state)
+pub fn init(cx: &mut App) -> Result<()> {
+    let storage = StorageManager::new()?;
+    cx.set_global(GlobalStorageState { storage });
+    Ok(())
 }

@@ -34,7 +34,7 @@ impl TerminalView {
                             cx,
                         )),
                 )
-                .footer(move |_, _, _window, _cx| {
+                .footer(DialogFooter::new().children({
                     let reject_view = reject_view.clone();
                     let accept_once_view = accept_once_view.clone();
                     let accept_save_view = accept_save_view.clone();
@@ -90,7 +90,7 @@ impl TerminalView {
                             })
                             .into_any_element(),
                     ]
-                })
+                }))
                 .overlay_closable(false)
                 .close_button(false)
                 .keyboard(false)

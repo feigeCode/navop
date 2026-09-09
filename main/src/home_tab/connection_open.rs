@@ -120,6 +120,13 @@ impl HomePage {
         #[cfg(target_os = "windows")]
         {
             if connection.connection_type == ConnectionType::Rdp {
+                if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
+                    return;
+                }
+                let Some(connection) = resolve_connection_credentials(connection, window, cx)
+                else {
+                    return;
+                };
                 let params = match connection.to_remote_desktop_params() {
                     Ok(params) => params,
                     Err(error) => {
@@ -142,10 +149,7 @@ impl HomePage {
                     }
                 };
 
-                match crate::home::remote_desktop_window::launch_mstsc_fullscreen(
-                    &params.host,
-                    params.port,
-                ) {
+                match crate::home::remote_desktop_window::launch_mstsc_fullscreen(&params) {
                     Ok(()) => {
                         self.selected_connection_id = connection.id;
                         self.touch_connection_last_used(connection.id, cx);

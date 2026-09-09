@@ -15,11 +15,11 @@ use anyhow::Result;
 use db::sql_editor::signature::{SqlRoutineSignature, SqlSignatureHelp, signature_help};
 use gpui::{App, AppContext, Task, Window};
 use gpui_component::Rope;
-use gpui_component::input::SignatureHelpProvider;
 use lsp_types::{
     Documentation, ParameterInformation, ParameterLabel, SignatureHelp as LspSignatureHelp,
     SignatureInformation,
 };
+use one_ui::SignatureHelpProvider;
 
 use crate::sql_editor::SqlSchema;
 

@@ -281,7 +281,7 @@ impl EditTableDelegate for MongoDocumentTableDelegate {
             .unwrap_or_default();
 
         let input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).multi_line(true).rows(1);
+            let mut state = InputState::new(window, cx);
             state.set_value(value, window, cx);
             state.focus(window, cx);
             state

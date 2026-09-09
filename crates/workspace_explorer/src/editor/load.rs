@@ -1,20 +1,19 @@
 use super::{
     DiffEditors, DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest, LoadRequest,
-    LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, diff_line_decorations,
-    display_name,
+    LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, display_name,
 };
 use crate::diff::{aligned_side_by_side, parse_side_by_side};
 use crate::editor::markdown::create_markdown_editor;
 use crate::file_system::load_file;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
-use gpui::{AppContext as _, AsyncApp, ColorExt as _, Context, Task, WeakEntity, Window};
+use gpui::{AppContext as _, AsyncApp, Context, Task, WeakEntity, Window};
 use gpui_component::{
     WindowExt as _,
-    input::{InputEvent, InputState},
+    input::{EditorState, InputEvent},
     notification::Notification,
-    status_bar::StatusPresentation,
 };
+use one_ui::StatusPresentation;
 use rust_i18n::t;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -209,8 +208,8 @@ impl WorkspaceEditor {
         };
         let editor = markdown_path.is_none().then(|| {
             cx.new(|cx| {
-                let mut state = InputState::new(window, cx)
-                    .code_editor(document.language)
+                let mut state = EditorState::new(window, cx)
+                    .language(document.language)
                     .line_number(true)
                     .searchable(true)
                     .soft_wrap(tab.soft_wrap);
@@ -250,42 +249,24 @@ impl WorkspaceEditor {
         tab.diff_editors = match (&tab.diff, diff_language) {
             (Some(diff), Some(language)) => {
                 let (left_side, right_side) = aligned_side_by_side(diff);
-                let left_decorations = diff_line_decorations(
-                    &left_side,
-                    self.theme.danger,
-                    self.theme.muted.opacity(0.35),
-                );
-                let right_decorations = diff_line_decorations(
-                    &right_side,
-                    self.theme.success,
-                    self.theme.muted.opacity(0.35),
-                );
-                let scroll_handle = tab.diff_scroll.clone();
-                let left_scroll_handle = scroll_handle.clone();
                 let left_language = language.clone();
                 let left = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx)
-                        .code_editor(left_language)
+                    let mut state = EditorState::new(window, cx)
+                        .language(left_language)
                         .folding(false)
                         .line_number(true)
                         .searchable(true)
-                        .soft_wrap(false)
-                        .read_only(true)
-                        .shared_scroll_handle(left_scroll_handle)
-                        .line_decorations(left_decorations);
+                        .soft_wrap(false);
                     state.set_value(left_side.text, window, cx);
                     state
                 });
                 let right = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx)
-                        .code_editor(language)
+                    let mut state = EditorState::new(window, cx)
+                        .language(language)
                         .folding(false)
                         .line_number(true)
                         .searchable(true)
-                        .soft_wrap(false)
-                        .read_only(true)
-                        .shared_scroll_handle(scroll_handle)
-                        .line_decorations(right_decorations);
+                        .soft_wrap(false);
                     state.set_value(right_side.text, window, cx);
                     state
                 });

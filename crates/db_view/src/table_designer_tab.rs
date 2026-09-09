@@ -8,21 +8,21 @@ use gpui::{
     Task, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants, IconButton},
+    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants},
     checkbox::Checkbox,
     clipboard::Clipboard,
-    dialog::DialogButtonProps,
+    dialog::{DialogButtonProps, DialogFooter},
     form::{field, h_form},
     h_flex,
-    highlighter::Language,
-    input::{Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState},
     scroll::Scrollbar,
     select::{Select, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
     tab::{Tab, TabBar},
     v_flex,
 };
+use one_ui::{IconButton, IconSize as OneIconSize};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -307,8 +307,8 @@ pub struct TableDesigner {
     columns_editor: Entity<ColumnsEditor>,
     indexes_editor: Entity<IndexesEditor>,
     _charsets: Vec<CharsetInfo>,
-    sql_preview_input: Entity<InputState>,
-    ddl_preview_input: Entity<InputState>,
+    sql_preview_input: Entity<EditorState>,
+    ddl_preview_input: Entity<EditorState>,
     preview_refresh_state: PreviewRefreshScheduleState,
     metadata_load_seq: usize,
     preview_generation: usize,
@@ -451,16 +451,14 @@ impl TableDesigner {
         let indexes_editor = cx.new(|cx| IndexesEditor::new(window, cx));
 
         let sql_preview_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(Language::from_str("sql"))
+            EditorState::new(window, cx)
+                .language("sql")
                 .line_number(false)
-                .multi_line(true)
         });
         let ddl_preview_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(Language::from_str("sql"))
+            EditorState::new(window, cx)
+                .language("sql")
                 .line_number(false)
-                .multi_line(true)
         });
 
         let name_sub = cx.subscribe_in(
@@ -1479,7 +1477,7 @@ impl TableDesigner {
                 )
             })
             .child(
-                Input::new(&self.sql_preview_input)
+                Editor::new(&self.sql_preview_input)
                     .size_full()
                     .disabled(true),
             )
@@ -1500,7 +1498,7 @@ impl TableDesigner {
                     .child(Clipboard::new("table-designer-copy-ddl").value(ddl_sql)),
             )
             .child(
-                Input::new(&self.ddl_preview_input)
+                Editor::new(&self.ddl_preview_input)
                     .size_full()
                     .disabled(true),
             )
@@ -1574,51 +1572,43 @@ impl TabContent for TableDesigner {
             let tx_cancel = tx.clone();
             let designer_entity = designer_entity.clone();
 
+            let footer = DialogFooter::new().children(vec![
+                Button::new("cancel")
+                    .label(t!("Common.cancel").to_string())
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        if let Some(tx) = tx_cancel.lock().ok().and_then(|mut g| g.take()) {
+                            let _ = tx.send(false);
+                        }
+                    })
+                    .into_any_element(),
+                Button::new("discard")
+                    .label(t!("Common.discard").to_string())
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        if let Some(tx) = tx_discard.lock().ok().and_then(|mut g| g.take()) {
+                            let _ = tx.send(true);
+                        }
+                    })
+                    .into_any_element(),
+                Button::new("save")
+                    .label(t!("Common.save").to_string())
+                    .primary()
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        designer_entity.update(cx, |designer, cx| designer.save(window, cx));
+                        if let Some(tx) = tx_save.lock().ok().and_then(|mut g| g.take()) {
+                            let _ = tx.send(true);
+                        }
+                    })
+                    .into_any_element(),
+            ]);
+
             dialog
                 .title(format!("{} {}", t!("Common.close"), title))
                 .overlay_closable(false)
                 .close_button(false)
-                .footer(move |_ok, _cancel, _window, _cx| {
-                    let tx_save = tx_save.clone();
-                    let tx_discard = tx_discard.clone();
-                    let tx_cancel = tx_cancel.clone();
-                    let designer_entity = designer_entity.clone();
-
-                    vec![
-                        Button::new("cancel")
-                            .label(t!("Common.cancel").to_string())
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                if let Some(tx) = tx_cancel.lock().ok().and_then(|mut g| g.take()) {
-                                    let _ = tx.send(false);
-                                }
-                            })
-                            .into_any_element(),
-                        Button::new("discard")
-                            .label(t!("Common.discard").to_string())
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                if let Some(tx) = tx_discard.lock().ok().and_then(|mut g| g.take())
-                                {
-                                    let _ = tx.send(true);
-                                }
-                            })
-                            .into_any_element(),
-                        Button::new("save")
-                            .label(t!("Common.save").to_string())
-                            .primary()
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                designer_entity.update(cx, |designer, cx| {
-                                    designer.save(window, cx);
-                                });
-                                if let Some(tx) = tx_save.lock().ok().and_then(|mut g| g.take()) {
-                                    let _ = tx.send(true);
-                                }
-                            })
-                            .into_any_element(),
-                    ]
-                })
+                .footer(footer)
                 .child(t!("Table.unsaved_changes_prompt").to_string())
         });
 
@@ -2576,14 +2566,14 @@ impl ColumnsEditor {
             .child(
                 IconButton::new("add-col", IconName::Plus)
                     .hit_size(Size::Small)
-                    .glyph_size(IconSize::Default)
+                    .glyph_size(OneIconSize::Default)
                     .tooltip(t!("Table.add_column").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.add_column(window, cx))),
             )
             .child(
                 IconButton::new("remove-col", IconName::Minus)
                     .hit_size(Size::Small)
-                    .glyph_size(IconSize::Default)
+                    .glyph_size(OneIconSize::Default)
                     .tooltip(t!("Table.delete_column").to_string())
                     .on_click(cx.listener(|this, _, _window, cx| this.remove_column(cx))),
             )
@@ -3203,7 +3193,7 @@ impl Render for IndexesEditor {
                     .child(
                         IconButton::new("add-idx", IconName::Plus)
                             .hit_size(Size::Small)
-                            .glyph_size(IconSize::Default)
+                            .glyph_size(OneIconSize::Default)
                             .tooltip(t!("Table.add_index").to_string())
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.add_index(window, cx)),
@@ -3212,7 +3202,7 @@ impl Render for IndexesEditor {
                     .child(
                         IconButton::new("remove-idx", IconName::Minus)
                             .hit_size(Size::Small)
-                            .glyph_size(IconSize::Default)
+                            .glyph_size(OneIconSize::Default)
                             .tooltip(t!("Table.delete_index").to_string())
                             .on_click(cx.listener(|this, _, _window, cx| this.remove_index(cx))),
                     ),
@@ -3548,28 +3538,24 @@ impl Render for TableOptionsEditor {
                     field()
                         .label(t!("Table.engine").to_string())
                         .items_center()
-                        .label_justify_end()
                         .child(Select::new(&self.engine_select).w(px(200.))),
                 )
                 .child(
                     field()
                         .label(t!("Table.charset").to_string())
                         .items_center()
-                        .label_justify_end()
                         .child(Select::new(&self.charset_select).w(px(200.))),
                 )
                 .child(
                     field()
                         .label(t!("Table.collation").to_string())
                         .items_center()
-                        .label_justify_end()
                         .child(Select::new(&self.collation_select).w(px(200.))),
                 )
                 .child(
                     field()
                         .label(t!("Table.table_comment").to_string())
                         .items_center()
-                        .label_justify_end()
                         .child(Input::new(&self.comment_input).w(px(300.))),
                 ),
         )
@@ -3582,6 +3568,7 @@ mod tests {
     use db::{
         clickhouse::ClickHousePlugin, mssql::MsSqlPlugin, mysql::MySqlPlugin, oracle::OraclePlugin,
         plugin::DatabasePlugin, postgresql::PostgresPlugin, sqlite::SqlitePlugin,
+        tdengine::TdenginePlugin,
     };
 
     #[test]
@@ -3661,6 +3648,7 @@ mod tests {
             DatabaseType::MSSQL => Box::new(MsSqlPlugin::new()),
             DatabaseType::Oracle => Box::new(OraclePlugin::new()),
             DatabaseType::ClickHouse => Box::new(ClickHousePlugin::new()),
+            DatabaseType::TDengine => Box::new(TdenginePlugin::new()),
             DatabaseType::External { .. } => Box::new(MySqlPlugin::new()),
         }
     }
@@ -4404,6 +4392,10 @@ mod tests {
         let current = build_design(vec![build_col("a"), build_col("b")], vec!["a"]);
 
         for database_type in DatabaseType::all().iter().cloned() {
+            if matches!(database_type, DatabaseType::TDengine) {
+                // TDengine 无二级索引概念(supports_indexes = false),不参与索引 DDL 断言
+                continue;
+            }
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // 应包含 INDEX 相关关键字
@@ -4422,6 +4414,10 @@ mod tests {
         let current = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
         for database_type in DatabaseType::all().iter().cloned() {
+            if matches!(database_type, DatabaseType::TDengine) {
+                // TDengine 无二级索引概念,不参与索引 DDL 断言
+                continue;
+            }
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
@@ -4728,6 +4724,10 @@ mod tests {
         current.indexes[0].name = "idx_new".to_string();
 
         for database_type in DatabaseType::all().iter().cloned() {
+            if matches!(database_type, DatabaseType::TDengine) {
+                // TDengine 无二级索引概念,不参与索引 DDL 断言
+                continue;
+            }
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let upper = sql.to_uppercase();

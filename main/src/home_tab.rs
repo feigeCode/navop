@@ -12,9 +12,8 @@ use gpui::{
     Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, FunctionalIcon, Icon, IconName, IconSize, InteractiveElementExt,
-    ObjectIcon, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _, DropdownButton, IconButton, IconButtonRole},
+    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _, DropdownButton},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
     h_flex,
@@ -27,6 +26,7 @@ use gpui_component::{
     v_flex,
 };
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
+use mqtt_view::{MqttFormConfig, MqttFormWindow};
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict,
     SyncEngine, TeamOption, UserInfo, get_cached_team_display_options_for_scope,
@@ -49,12 +49,14 @@ use one_core::storage::{
     StoredConnection, TeamMembershipState, TelnetLoginStep, Workspace, WorkspaceRepository,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
+use one_ui::{IconButton, IconButtonRole};
 use port_forwarding::PortForwardingRuntime;
 use port_forwarding_view::{
     PortForwardingFormWindow, PortForwardingFormWindowConfig, PortForwardingTab,
     PortForwardingTabConfig,
 };
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
+use rocketmq_view::{RocketmqFormConfig, RocketmqFormWindow};
 use rust_i18n::t;
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
@@ -265,6 +267,5 @@ pub(crate) use team_permissions::TeamPermissionSnapshot;
 use connection_info::remote_desktop_connection_info;
 #[cfg(test)]
 use sync_route::sync_route_for_provider;
-
 #[cfg(test)]
 mod tests;

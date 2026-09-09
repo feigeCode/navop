@@ -6,14 +6,14 @@ use gpui::{
 };
 use gpui_component::{
     IconName, IconSize, Sizable,
-    button::{IconButton, ButtonVariants as _},
+    button::ButtonVariants as _,
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    panel_header::PanelHeader,
     v_flex,
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
+use one_ui::{IconButton, PanelHeader};
 use rust_i18n::t;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -125,7 +125,7 @@ fn render_internal_tool_panel_header(
     .leading(
         panel
             .icon()
-            .with_size(IconSize::Small)
+            .with_size(IconSize::Micro)
             .flex_shrink_0()
             .text_color(colors.foreground),
     )

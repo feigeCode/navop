@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "id": "com.navop.elasticsearch",
+  "name": "Navop Elasticsearch Resource Provider",
+  "version": "0.1.0",
+  "description": "Reference IPC provider for Elasticsearch indices, mappings, search and documents.",
+  "engines": {
+    "onetcli": ">=0.15.1",
+    "gpui_shell": "0.2.0"
+  },
+  "api": {
+    "extension": "1.0",
+    "shell": "1.0"
+  },
+  "permissions": [
+    "shell:exec",
+    "net:tcp:elasticsearch.example.com:9200",
+    "secrets:read:self.*",
+    "spawn:./bin/elasticsearch-provider"
+  ],
+  "runtime": {
+    "ipc": [
+      {
+        "id": "main",
+        "entry": {
+          "command": "./bin/elasticsearch-provider"
+        },
+        "transport": {
+          "kind": "local_socket",
+          "connect_timeout_ms": 5000
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "connections": [
+      {
+        "id": "elasticsearch",
+        "label": "Elasticsearch",
+        "runtimeId": "main",
+        "resourceType": "elasticsearch",
+        "shellViewId": "explorer",
+        "form": {
+          "tabs": [{
+            "id": "general",
+            "label": "General",
+            "fields": [{ "id": "url", "label": "URL", "fieldType": "Text", "required": true }]
+          }]
+        }
+      }
+    ],
+    "shellViews": [
+      {
+        "id": "explorer",
+        "title": "Open Elasticsearch Explorer",
+        "entry": "ui/explorer.js",
+        "surface": "tab",
+        "singleton": false,
+        "backends": {
+          "search": "main"
+        },
+        "modules": ["context", "resource"]
+      }
+    ]
+  }
+}

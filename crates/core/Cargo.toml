@@ -25,6 +25,7 @@ dirs.workspace = true
 notify.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+one-ui.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
@@ -38,6 +39,7 @@ sha2.workspace = true
 ed25519-dalek = "2.2.0"
 parking_lot.workspace = true
 util.workspace = true
+process-util.workspace = true
 rust-i18n.workspace = true
 sys-locale.workspace = true
 
@@ -54,3 +56,6 @@ windows = { workspace = true, features = [
 
 [build-dependencies]
 dotenvy = "0.15"
+
+[lints]
+workspace = true

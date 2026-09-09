@@ -94,6 +94,19 @@ pub const EVENT_OPEN: &str = "event/open";
 pub const EVENT_READ: &str = "event/read";
 pub const EVENT_CLOSE: &str = "event/close";
 
+// -- 通用资源 --
+pub const RESOURCE_OPEN: &str = "resource/open";
+pub const RESOURCE_CLOSE: &str = "resource/close";
+pub const RESOURCE_PING: &str = "resource/ping";
+pub const RESOURCE_INVOKE: &str = "resource/invoke";
+
+// -- 可取消长任务 --
+pub const JOB_START: &str = "job/start";
+pub const JOB_STATUS: &str = "job/status";
+pub const JOB_CANCEL: &str = "job/cancel";
+pub const JOB_RESULT: &str = "job/result";
+pub const JOB_CLOSE: &str = "job/close";
+
 // -- Redis --
 pub const REDIS_COMMAND: &str = "redis/command";
 pub const REDIS_PIPELINE: &str = "redis/pipeline";
@@ -108,14 +121,16 @@ pub const MONGODB_CURSOR_CLOSE: &str = "mongodb/cursor_close";
 
 // -- Host API(扩展 → 宿主) --
 pub const HOST_REQUEST_CREDENTIAL: &str = "host/request_credential";
+pub const HOST_RESOLVE_SECRET: &str = "host/secret/resolve";
 pub const HOST_NOTIFY: &str = "host/notify";
-pub const HOST_QUICK_PICK: &str = "host/quick_pick";
-pub const HOST_CONFIRM: &str = "host/confirm";
-pub const HOST_OPEN_VIEW: &str = "host/open_view";
 pub const HOST_SSH_OPEN_TUNNEL: &str = "host/ssh/open_tunnel";
 pub const HOST_STORAGE_GET: &str = "host/storage/get";
 pub const HOST_STORAGE_SET: &str = "host/storage/set";
 pub const HOST_LOG: &str = "host/log";
+pub const HOST_BLOB_BEGIN: &str = "host/blob/begin";
+pub const HOST_BLOB_WRITE: &str = "host/blob/write";
+pub const HOST_BLOB_FINISH: &str = "host/blob/finish";
+pub const HOST_BLOB_ABORT: &str = "host/blob/abort";
 
 // -- 事件通知(扩展 → 宿主,无 id) --
 pub const EVENT_CONN_LOST: &str = "conn/lost";
@@ -192,6 +207,19 @@ pub const ALL_METHODS: &[&str] = &[
     EVENT_OPEN,
     EVENT_READ,
     EVENT_CLOSE,
+    RESOURCE_OPEN,
+    RESOURCE_CLOSE,
+    RESOURCE_PING,
+    RESOURCE_INVOKE,
+    JOB_START,
+    JOB_STATUS,
+    JOB_CANCEL,
+    JOB_RESULT,
+    JOB_CLOSE,
+    HOST_BLOB_BEGIN,
+    HOST_BLOB_WRITE,
+    HOST_BLOB_FINISH,
+    HOST_BLOB_ABORT,
     REDIS_COMMAND,
     REDIS_PIPELINE,
     REDIS_PUBSUB_OPEN,
@@ -293,9 +321,6 @@ mod tests {
         for m in [
             HOST_REQUEST_CREDENTIAL,
             HOST_NOTIFY,
-            HOST_QUICK_PICK,
-            HOST_CONFIRM,
-            HOST_OPEN_VIEW,
             HOST_STORAGE_GET,
             HOST_STORAGE_SET,
             HOST_LOG,

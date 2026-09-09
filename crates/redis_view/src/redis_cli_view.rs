@@ -17,7 +17,7 @@ use gpui::{
     UTF16Selection, Window, actions, canvas, div, px, size,
 };
 use gpui_component::{
-    ActiveTheme, BlinkCursor, Icon, IconName, Sizable, Size,
+    ActiveTheme, Icon, IconName, Sizable, Size,
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow},
 };
@@ -29,7 +29,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 actions!(
     redis_cli,
@@ -63,6 +63,76 @@ const DOUBLE_CLICK_THRESHOLD_MS: u128 = 500;
 const REDIS_CLI_CONTENT_PADDING: Pixels = px(12.0);
 const REDIS_CLI_SCROLLBAR_WIDTH: Pixels = px(12.0);
 const REDIS_CLI_SCROLLBAR_RIGHT: Pixels = px(4.0);
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+const CURSOR_BLINK_PAUSE: Duration = Duration::from_millis(300);
+
+struct BlinkCursor {
+    visible: bool,
+    paused: bool,
+    epoch: usize,
+    _task: Task<()>,
+}
+
+impl BlinkCursor {
+    fn new() -> Self {
+        Self {
+            visible: false,
+            paused: false,
+            epoch: 0,
+            _task: Task::ready(()),
+        }
+    }
+
+    fn start(&mut self, cx: &mut Context<Self>) {
+        if self.epoch == 0 {
+            self.epoch = 1;
+            self.blink(self.epoch, cx);
+        }
+    }
+
+    fn stop(&mut self, cx: &mut Context<Self>) {
+        self.epoch = 0;
+        self.visible = false;
+        cx.notify();
+    }
+
+    fn blink(&mut self, epoch: usize, cx: &mut Context<Self>) {
+        if self.paused || epoch != self.epoch {
+            self.visible = true;
+            return;
+        }
+
+        self.visible = !self.visible;
+        cx.notify();
+        self._task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| this.blink(epoch, cx));
+            }
+        });
+    }
+
+    fn visible(&self) -> bool {
+        self.paused || self.visible
+    }
+
+    fn pause(&mut self, cx: &mut Context<Self>) {
+        self.paused = true;
+        self.visible = true;
+        self.epoch = self.epoch.max(1).wrapping_add(1);
+        let epoch = self.epoch;
+        cx.notify();
+        self._task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(CURSOR_BLINK_PAUSE).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| {
+                    this.paused = false;
+                    this.blink(epoch, cx);
+                });
+            }
+        });
+    }
+}
 
 struct CommandHint {
     name: &'static str,
@@ -195,7 +265,7 @@ struct MouseState {
 
 #[derive(Debug, Clone)]
 struct RedisCliScrollbarMetrics {
-    viewport_size: gpui::Size<Pixels>,
+    viewport_bounds: Bounds<Pixels>,
     line_height: Pixels,
     total_lines: usize,
     scroll_offset: f32,
@@ -204,7 +274,7 @@ struct RedisCliScrollbarMetrics {
 impl Default for RedisCliScrollbarMetrics {
     fn default() -> Self {
         Self {
-            viewport_size: size(px(0.0), px(0.0)),
+            viewport_bounds: Bounds::default(),
             line_height: px(1.0),
             total_lines: 0,
             scroll_offset: 0.0,
@@ -232,6 +302,10 @@ impl RedisCliScrollbarHandle {
 }
 
 impl ScrollbarHandle for RedisCliScrollbarHandle {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.metrics.borrow().viewport_bounds
+    }
+
     fn offset(&self) -> Point<Pixels> {
         let metrics = self.metrics.borrow();
         let line_height = metrics.line_height.max(px(1.0));
@@ -243,7 +317,7 @@ impl ScrollbarHandle for RedisCliScrollbarHandle {
             let metrics = self.metrics.borrow();
             (
                 metrics.line_height.max(px(1.0)),
-                metrics.viewport_size.height,
+                metrics.viewport_bounds.size.height,
                 metrics.total_lines,
             )
         };
@@ -268,7 +342,7 @@ impl ScrollbarHandle for RedisCliScrollbarHandle {
         let line_height = metrics.line_height.max(px(1.0));
         let total_lines = metrics.total_lines.max(1);
         size(
-            metrics.viewport_size.width.max(px(1.0)),
+            metrics.viewport_bounds.size.width.max(px(1.0)),
             line_height * total_lines as f32,
         )
     }
@@ -614,7 +688,7 @@ impl RedisCliView {
 
     fn sync_scrollbar_metrics(&mut self, total_lines: usize, line_height: Pixels) {
         let mut metrics = self.scrollbar_metrics.borrow_mut();
-        metrics.viewport_size = self.terminal_bounds.size;
+        metrics.viewport_bounds = self.terminal_bounds;
         metrics.line_height = line_height;
         metrics.total_lines = total_lines;
         metrics.scroll_offset = self.scroll_offset;

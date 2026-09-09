@@ -14,6 +14,8 @@ mod connection_sort;
 mod connection_visuals;
 mod credential_vault;
 mod env_file;
+mod extension_connection_form;
+mod extension_connection_tab;
 mod extension_update;
 mod file_association;
 mod file_open;
@@ -35,8 +37,11 @@ mod public_mcp_runtime;
 mod session_logs;
 mod setting_tab;
 mod settings;
+mod shell_plugin_host;
+mod shell_plugin_tab;
 mod sync_conflict_dialog;
 mod team_management;
+mod universal_plugins;
 mod update;
 mod user_avatar;
 #[cfg(any(target_os = "windows", test))]
@@ -58,6 +63,35 @@ struct AppAssets {
 }
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
+
+/// Navop 自带品牌图标(TDengine/MQTT/RocketMQ)。
+///
+/// 外部 gpui-component 的 `IconName` 无法在本仓库扩展变体,这些 SVG
+/// 以 include_bytes 内嵌并按路径对外提供(路径常量定义在 one-core)。
+fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
+    let bytes: &'static [u8] = match path {
+        one_core::storage::NAVOP_TDENGINE_COLOR_ICON => {
+            include_bytes!("../../resources/icons/tdengine-color.svg")
+        }
+        one_core::storage::NAVOP_TDENGINE_LINE_COLOR_ICON => {
+            include_bytes!("../../resources/icons/tdengine-line-color.svg")
+        }
+        one_core::storage::NAVOP_MQTT_COLOR_ICON => {
+            include_bytes!("../../resources/icons/mqtt-color.svg")
+        }
+        one_core::storage::NAVOP_MQTT_LINE_ICON => {
+            include_bytes!("../../resources/icons/mqtt-line.svg")
+        }
+        one_core::storage::NAVOP_ROCKETMQ_COLOR_ICON => {
+            include_bytes!("../../resources/icons/rocketmq-color.svg")
+        }
+        one_core::storage::NAVOP_ROCKETMQ_LINE_ICON => {
+            include_bytes!("../../resources/icons/rocketmq-line.svg")
+        }
+        _ => return None,
+    };
+    Some(std::borrow::Cow::Borrowed(bytes))
+}
 
 const NAVOP_APP_ID: &str = "navop";
 const NAVOP_WINDOW_TITLE: &str = "Navop";
@@ -215,6 +249,10 @@ impl AssetSource for AppAssets {
             return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
                 "../../resources/navop-icon.png"
             ))));
+        }
+
+        if let Some(asset) = navop_brand_icon(path) {
+            return Ok(Some(asset));
         }
 
         match self.driver.load(path) {
@@ -380,7 +418,12 @@ fn main() {
             .expect("main package version must be valid semver");
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");
-        onetcli_app::init(cx);
+        if let Err(error) = onetcli_app::init(cx) {
+            tracing::error!(error = %error, "failed to initialize Navop application state");
+            eprintln!("Failed to initialize Navop application state: {error:#}");
+            cx.quit();
+            return;
+        }
         if !one_core::app_paths::is_portable() {
             file_association::schedule_registration(cx);
         }
@@ -388,6 +431,7 @@ fn main() {
         #[cfg(feature = "api-testing")]
         api_tools::init(cx);
         extension_runtime::init(cx);
+        universal_plugins::init(cx);
 
         let settings = AppSettings::current(cx);
         let saved_state = settings.main_window_state.as_ref();
@@ -577,9 +621,8 @@ mod embedded_cli_removal_tests {
     #[test]
     fn main_window_dialog_state_obscures_active_native_presentation() {
         let source = include_str!("main.rs").replace("\r\n", "\n");
-        let root_export = include_str!("../../crates/ui/src/lib.rs");
 
-        assert!(root_export.contains("DialogStateChanged"));
+        let _ = std::any::TypeId::of::<gpui_component::DialogStateChanged>();
         assert!(source.contains("use gpui_component::{DialogStateChanged, Root};"));
         assert!(source.contains("let root = cx.new(|cx| Root::new(view, window, cx));"));
         assert!(source.contains("cx.subscribe(&root,"));
@@ -832,9 +875,9 @@ mod native_driver_feature_contract_tests {
         );
         assert!(
             remote_desktop_view_features.contains(
-                "windows-native-rdp = [\"dep:raw-window-handle\", \"dep:windows_rdp_host\"]"
+                "windows-native-rdp = [\n    \"dep:raw-window-handle\",\n    \"dep:windows_rdp_host\",\n    \"remote_desktop/windows-native-rdp\",\n]"
             ),
-            "the feature must enable only the optional native presentation dependencies"
+            "the feature must enable native presentation dependencies and the shared capability marker"
         );
         assert_eq!("default = []", remote_desktop_view_default.trim());
         assert!(dependency_is_optional_or_absent(

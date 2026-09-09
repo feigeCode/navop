@@ -123,6 +123,19 @@ pub(super) enum CaptureOutcome {
     Rejected,
 }
 
+/// 可打印按键在凭据捕获中对应的实际输入字符。
+///
+/// `Keystroke.key` 是不含 Shift 效果的键帽字符（如 shift+a 的 key 仍是
+/// "a"），直接当作密码输入会把大写改成小写；`key_char` 是平台应用修饰键
+/// 后的实际字符（shift+a -> "A"），凭据输入必须优先使用。
+pub(super) fn keystroke_capture_text(keystroke: &Keystroke) -> &str {
+    keystroke
+        .key_char
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .unwrap_or(&keystroke.key)
+}
+
 /// 终端内联凭据/MFA 输入捕获状态机。
 ///
 /// 捕获期间按键不透传 PTY，由 View 将回显注入终端网格；提交仍复用
@@ -307,8 +320,9 @@ impl CredentialCapture {
 mod tests {
     use super::{
         CaptureCredentials, CaptureOutcome, CaptureRequest, CredentialCapture,
-        connection_notice_text,
+        connection_notice_text, keystroke_capture_text,
     };
+    use gpui::{Keystroke, Modifiers};
     use terminal::terminal::{ConnectionState, TerminalMfaPrompt, TerminalMfaRequest};
 
     fn creds(
@@ -495,6 +509,92 @@ mod tests {
         let connecting = connection_notice_text(&ConnectionState::Connecting);
         assert!(connecting.lines().count() >= 2);
         assert_eq!("", connection_notice_text(&ConnectionState::Connected));
+    }
+
+    #[test]
+    fn keystroke_capture_text_uses_platform_character_for_shifted_letters() {
+        // issue #147：shift+a 的 key 仍是键帽小写 "a"，密码输入必须取
+        // 平台换算后的 key_char "A"，否则手动输入的含大写密码永远错误。
+        let shifted_letter = Keystroke {
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            key: "a".to_string(),
+            key_char: Some("A".to_string()),
+        };
+        assert_eq!("A", keystroke_capture_text(&shifted_letter));
+
+        // shift+2（US 布局）：平台层已把 key 换算为 "@"，key_char 一致。
+        let shifted_digit = Keystroke {
+            modifiers: Modifiers::default(),
+            key: "@".to_string(),
+            key_char: Some("@".to_string()),
+        };
+        assert_eq!("@", keystroke_capture_text(&shifted_digit));
+
+        // 无修饰普通按键：key 与 key_char 相同。
+        let plain_letter = Keystroke {
+            modifiers: Modifiers::default(),
+            key: "a".to_string(),
+            key_char: Some("a".to_string()),
+        };
+        assert_eq!("a", keystroke_capture_text(&plain_letter));
+    }
+
+    #[test]
+    fn keystroke_capture_text_falls_back_to_key_when_platform_has_no_text() {
+        // 例如 fn 组合键平台不提供输入字符，回退到键帽字符。
+        let no_text = Keystroke {
+            modifiers: Modifiers {
+                function: true,
+                ..Default::default()
+            },
+            key: "b".to_string(),
+            key_char: None,
+        };
+        assert_eq!("b", keystroke_capture_text(&no_text));
+
+        let empty_text = Keystroke {
+            key_char: Some(String::new()),
+            ..no_text
+        };
+        assert_eq!("b", keystroke_capture_text(&empty_text));
+    }
+
+    #[test]
+    fn typed_password_matches_pasted_password_for_mixed_case_and_symbols() {
+        // issue #147 回归：手动敲击与粘贴必须产生完全一致的密码。
+        // 模拟真实 keystroke 序列（shift 字母的 key 是小写、key_char 是大写）。
+        let password = "aB3!dE#9";
+        let keystrokes = [
+            ("a", Some("a")),
+            ("b", Some("B")),
+            ("3", Some("3")),
+            ("!", Some("!")),
+            ("d", Some("d")),
+            ("e", Some("E")),
+            ("#", Some("#")),
+            ("9", Some("9")),
+        ];
+
+        let fields = creds(1, false, false, true);
+        let mut typed = CredentialCapture::for_request(credentials_request(fields.clone()));
+        for (key, key_char) in keystrokes {
+            let keystroke = Keystroke {
+                modifiers: Modifiers::default(),
+                key: key.to_string(),
+                key_char: key_char.map(str::to_string),
+            };
+            typed.append(keystroke_capture_text(&keystroke));
+        }
+
+        let mut pasted = CredentialCapture::for_request(credentials_request(fields.clone()));
+        pasted.append(password);
+
+        let expected = submitted(fields, None, Some(password));
+        assert_eq!(expected, typed.submit_current());
+        assert_eq!(expected, pasted.submit_current());
     }
 
     #[test]

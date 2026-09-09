@@ -90,7 +90,7 @@ pub struct DataCompareWindow {
     pub(super) failure_details_list: CompareIssueListState,
     pub(super) failure_details_expanded: Entity<bool>,
     pub(super) sync_warnings_expanded: Entity<bool>,
-    pub(super) sync_sql_editor: Entity<InputState>,
+    pub(super) sync_sql_editor: Entity<gpui_component::input::EditorState>,
     sync_sql_dirty: bool,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     pub(super) execution_log_scroll: ScrollHandle,

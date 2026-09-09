@@ -156,6 +156,19 @@ impl TerminalView {
             return;
         }
 
+        // 大体量粘贴无论是否 bracketed 都确认：bracketed 只防意外执行，
+        // 不防贴错内容；超阈值内容直接写入 PTY 也会造成前端卡顿。
+        if is_large_paste(text) {
+            self.show_paste_confirm_dialog(
+                text.to_string(),
+                t!("TerminalView.large_paste_title").to_string(),
+                t!("TerminalView.large_paste_message").to_string(),
+                window,
+                cx,
+            );
+            return;
+        }
+
         self.paste_text_unchecked(text, window, cx);
     }
 

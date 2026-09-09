@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "com.navop.kafka",
+  "name": "Navop Kafka Resource Provider",
+  "version": "0.1.0",
+  "description": "Reference IPC provider for Kafka topics, messages and consumer groups.",
+  "engines": {
+    "onetcli": ">=0.1.0"
+  },
+  "permissions": [
+    "net:tcp:kafka.example.com:9092",
+    "secrets:read:self.*",
+    "spawn:./bin/kafka-provider"
+  ],
+  "runtime": {
+    "ipc": [
+      {
+        "id": "main",
+        "entry": {
+          "command": "./bin/kafka-provider"
+        },
+        "transport": {
+          "kind": "local_socket",
+          "connect_timeout_ms": 5000
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "connections": [
+      {
+        "id": "kafka",
+        "label": "Kafka",
+        "runtimeId": "main",
+        "resourceType": "kafka",
+        "form": { "tabs": [{ "id": "general", "label": "General", "fields": [
+          { "id": "bootstrap_servers", "label": "Bootstrap servers", "fieldType": "Text", "required": true }
+        ] }] }
+      }
+    ]
+  }
+}

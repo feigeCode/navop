@@ -21,15 +21,17 @@ use std::time::Duration;
 use extension_protocol::envelope::{Notification, Request, RequestId, ResponseBody, RpcMessage};
 use extension_protocol::error::{ProtocolError, error_codes};
 use extension_protocol::method;
+use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 use crate::error::{HostError, HostResult};
+use crate::host_api::HostApiHandler;
 use crate::transport::{FramedTransport, ReadFramed, WriteFramed, recv_async, send_async};
 
 /// 单次请求的可选项。
@@ -54,10 +56,20 @@ impl RequestOptions {
     }
 }
 
-/// 简易取消令牌——多份 clone 共享同一个 `AtomicBool`。
-#[derive(Debug, Clone, Default)]
+/// 可等待的取消令牌——多份 clone 共享状态并立即唤醒等待者。
+#[derive(Debug, Clone)]
 pub struct CancellationToken {
     flag: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
 }
 
 impl CancellationToken {
@@ -67,11 +79,25 @@ impl CancellationToken {
 
     /// 触发取消;所有 clone 立即可见。
     pub fn cancel(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+        if !self.flag.swap(true, Ordering::SeqCst) {
+            self.notify.notify_waiters();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
+    }
+
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -140,12 +166,12 @@ impl JsonRpcClientHandle {
         let resp = if let Some(token) = options.cancel.clone() {
             tokio::select! {
                 biased;
-                _ = wait_cancelled(token.clone()) => {
+                r = timeout(to, recv_fut) => r,
+                _ = token.cancelled() => {
                     drop(guard);
                     let _ = self.send_cancel(id).await;
                     return Err(HostError::Cancelled { method: method.to_string() });
                 }
-                r = timeout(to, recv_fut) => r,
             }
         } else {
             timeout(to, recv_fut).await
@@ -218,6 +244,22 @@ impl JsonRpcClient {
         Self::start_with_notif_channel(transport, true)
     }
 
+    /// Starts a client that can also answer reverse `host/*` requests.
+    ///
+    /// Inbound requests are handled in separate tasks. This is important for
+    /// composability: a host implementation may eventually issue another RPC to
+    /// the same extension, which requires the reader loop to keep routing.
+    pub fn start_with_host_api<R, W>(
+        transport: FramedTransport<R, W>,
+        host_api: Arc<HostApiHandler>,
+    ) -> Self
+    where
+        R: ReadFramed + 'static,
+        W: WriteFramed + 'static,
+    {
+        Self::start_with_options(transport, true, Some(host_api))
+    }
+
     /// 进阶:不创建 notification channel(notification 直接丢弃)。
     pub fn start_without_notifications<R, W>(transport: FramedTransport<R, W>) -> Self
     where
@@ -228,6 +270,18 @@ impl JsonRpcClient {
     }
 
     fn start_with_notif_channel<R, W>(transport: FramedTransport<R, W>, with_sink: bool) -> Self
+    where
+        R: ReadFramed + 'static,
+        W: WriteFramed + 'static,
+    {
+        Self::start_with_options(transport, with_sink, None)
+    }
+
+    fn start_with_options<R, W>(
+        transport: FramedTransport<R, W>,
+        with_sink: bool,
+        host_api: Option<Arc<HostApiHandler>>,
+    ) -> Self
     where
         R: ReadFramed + 'static,
         W: WriteFramed + 'static,
@@ -247,6 +301,17 @@ impl JsonRpcClient {
             pending: StdMutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             closed: AtomicBool::new(false),
+            inbound_handler: host_api.map(|handler| {
+                Arc::new(move |request: Request| {
+                    let handler = Arc::clone(&handler);
+                    Box::pin(async move {
+                        handler
+                            .handle(&request.method, request.params)
+                            .await
+                            .map_err(host_error_to_protocol)
+                    }) as BoxFuture<'static, Result<Value, ProtocolError>>
+                }) as InboundHandler
+            }),
             notif_tx,
         });
 
@@ -294,8 +359,12 @@ struct ClientShared {
     pending: StdMutex<HashMap<i64, oneshot::Sender<ResponseBody>>>,
     next_id: AtomicI64,
     closed: AtomicBool,
+    inbound_handler: Option<InboundHandler>,
     notif_tx: Option<mpsc::UnboundedSender<Notification>>,
 }
+
+type InboundHandler =
+    Arc<dyn Fn(Request) -> BoxFuture<'static, Result<Value, ProtocolError>> + Send + Sync>;
 
 /// pending 表的 RAII Guard:Drop 时把自己从 HashMap 摘出,避免泄漏。
 struct PendingGuard {
@@ -361,18 +430,31 @@ where
                 }
             }
             Ok(RpcMessage::Request(req)) => {
-                // 反向请求(扩展 → 宿主):当前层简化处理——立即回 MethodNotFound。
-                // 完整的反向 host/* 路由由上层(extension-host 之外的业务层)负责
-                // 注册;这里先保证 wire 不被卡死。
-                warn!(method = %req.method, "received inbound request; replying MethodNotFound");
-                let resp = extension_protocol::envelope::Response::err(
-                    req.id,
-                    ProtocolError::new(error_codes::METHOD_NOT_FOUND, "host: no inbound handler"),
-                );
-                let mut w = shared.writer.lock().await;
-                if let Err(e) = send_async(&mut *w, &RpcMessage::Response(resp)).await {
-                    warn!(error = %e, "failed to send MethodNotFound reply");
-                    break;
+                if let Some(handler) = shared.inbound_handler.clone() {
+                    trace!(method = %req.method, "received inbound request");
+                    let request_id = req.id.clone();
+                    let response_shared = Arc::clone(&shared);
+                    tokio::spawn(async move {
+                        let response = match handler(req).await {
+                            Ok(result) => {
+                                extension_protocol::envelope::Response::ok(request_id, result)
+                            }
+                            Err(error) => {
+                                extension_protocol::envelope::Response::err(request_id, error)
+                            }
+                        };
+                        send_response(response_shared, response).await;
+                    });
+                } else {
+                    warn!(method = %req.method, "received inbound request; replying MethodNotFound");
+                    let response = extension_protocol::envelope::Response::err(
+                        req.id,
+                        ProtocolError::new(
+                            error_codes::METHOD_NOT_FOUND,
+                            "host: no inbound handler",
+                        ),
+                    );
+                    send_response(Arc::clone(&shared), response).await;
                 }
             }
             Err(e) => {
@@ -389,6 +471,29 @@ where
     wake_all_pending(&shared);
 }
 
+async fn send_response(
+    shared: Arc<ClientShared>,
+    response: extension_protocol::envelope::Response,
+) {
+    let mut writer = shared.writer.lock().await;
+    if let Err(error) = send_async(&mut *writer, &RpcMessage::Response(response)).await {
+        warn!(error = %error, "failed to send inbound host response");
+    }
+}
+
+fn host_error_to_protocol(error: HostError) -> ProtocolError {
+    match error {
+        HostError::Protocol(error) => *error,
+        HostError::InvalidParams { message, .. } => {
+            ProtocolError::new(error_codes::INVALID_PARAMS, message)
+        }
+        other => ProtocolError::new(
+            error_codes::INTERNAL_ERROR,
+            format!("host API failed: {other}"),
+        ),
+    }
+}
+
 fn wake_all_pending(shared: &Arc<ClientShared>) {
     let mut pending = shared.pending.lock().unwrap();
     for (_id, tx) in pending.drain() {
@@ -397,17 +502,54 @@ fn wake_all_pending(shared: &Arc<ClientShared>) {
     }
 }
 
-async fn wait_cancelled(token: CancellationToken) {
-    while !token.is_cancelled() {
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use extension_protocol::envelope::{Notification, Response, RpcMessage};
+    use extension_protocol::host::{ResolveSecretParams, ResolveSecretResult};
+    use extension_protocol::{conn::SecretRef, host};
     use tokio::io::duplex;
+    use tokio::sync::mpsc;
+
+    async fn fake_extension_with_reverse_request(
+        mut reader: tokio::io::ReadHalf<tokio::io::DuplexStream>,
+        mut writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        ready: mpsc::Sender<()>,
+    ) {
+        let request = Request::new(
+            99,
+            method::HOST_RESOLVE_SECRET,
+            serde_json::to_value(ResolveSecretParams {
+                secret_ref: SecretRef::new("secret://elasticsearch/api_key"),
+            })
+            .unwrap(),
+        );
+        send_async(&mut writer, &RpcMessage::Request(request))
+            .await
+            .unwrap();
+
+        ready.send(()).await.unwrap();
+
+        let inbound: RpcMessage = recv_async(&mut reader).await.unwrap();
+        let RpcMessage::Response(response) = inbound else {
+            panic!("expected reverse response, received {inbound:?}");
+        };
+        assert_eq!(RequestId::Number(99), response.id);
+        assert_eq!(
+            Some(&serde_json::json!({ "value": "dG9rZW4tdmFsdWU=" })),
+            response.result()
+        );
+
+        let outbound = recv_async(&mut reader).await.unwrap();
+        let RpcMessage::Request(request) = outbound else {
+            panic!("expected outbound request");
+        };
+        let response = Response::ok(request.id, request.params);
+        ready.send(()).await.unwrap();
+        send_async(&mut writer, &RpcMessage::Response(response))
+            .await
+            .unwrap();
+    }
 
     /// 启动一个「假扩展」:把读到的 Request 按规则回 Response,
     /// 收到的 Notification 落到 `notifications` 通道里方便断言。
@@ -474,6 +616,109 @@ mod tests {
         let server = tokio::spawn(async move { fake_extension(sr, sw, n_tx).await });
         let client = JsonRpcClient::start(FramedTransport::new(cr, cw));
         (client, server, n_rx)
+    }
+
+    #[tokio::test]
+    async fn inbound_host_request_is_dispatched_without_stalling_outbound_calls() {
+        struct SecretHost;
+
+        #[async_trait::async_trait]
+        impl crate::HostApiProvider for SecretHost {
+            async fn request_credential(
+                &self,
+                _params: host::RequestCredentialParams,
+            ) -> HostResult<host::RequestCredentialResult> {
+                unimplemented!()
+            }
+
+            async fn resolve_secret(
+                &self,
+                params: host::ResolveSecretParams,
+            ) -> HostResult<host::ResolveSecretResult> {
+                assert_eq!(
+                    "secret://elasticsearch/api_key",
+                    params.secret_ref.secret_ref
+                );
+                Ok(ResolveSecretResult {
+                    value: b"token-value".to_vec(),
+                })
+            }
+
+            async fn notify(&self, _params: host::NotifyParams) -> HostResult<host::NotifyResult> {
+                unimplemented!()
+            }
+
+            async fn storage_get(
+                &self,
+                _params: host::StorageGetParams,
+            ) -> HostResult<host::StorageGetResult> {
+                unimplemented!()
+            }
+
+            async fn storage_set(&self, _params: host::StorageSetParams) -> HostResult<()> {
+                unimplemented!()
+            }
+
+            async fn log(&self, _params: host::LogParams) -> HostResult<()> {
+                unimplemented!()
+            }
+        }
+
+        let (client_side, server_side) = duplex(8192);
+        let (client_reader, client_writer) = tokio::io::split(client_side);
+        let client = JsonRpcClient::start_with_host_api(
+            FramedTransport::new(client_reader, client_writer),
+            Arc::new(crate::HostApiHandler::new(Arc::new(SecretHost))),
+        );
+        let handle = client.handle();
+
+        let (ready_tx, mut ready_rx) = mpsc::channel(2);
+        let (server_reader, server_writer) = tokio::io::split(server_side);
+        let server = tokio::spawn(async move {
+            fake_extension_with_reverse_request(server_reader, server_writer, ready_tx).await
+        });
+
+        let (call_started_tx, call_started_rx) = tokio::sync::oneshot::channel();
+        let call = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                call_started_tx.send(()).unwrap();
+                tokio::task::yield_now().await;
+                handle
+                    .call_raw("echo", serde_json::json!({}), RequestOptions::default())
+                    .await
+            }
+        });
+        call_started_rx.await.unwrap();
+        call.await.unwrap().unwrap();
+        ready_rx.recv().await.unwrap();
+        server.await.unwrap();
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn inbound_request_without_host_api_returns_method_not_found() {
+        let (client_side, mut server_side) = duplex(8192);
+        let (client_reader, client_writer) = tokio::io::split(client_side);
+        let client = JsonRpcClient::start(FramedTransport::new(client_reader, client_writer));
+        let request = Request::new(7, "host/unknown", Value::Null);
+        send_async(&mut server_side, &RpcMessage::Request(request))
+            .await
+            .unwrap();
+        let response = timeout(Duration::from_secs(2), recv_async(&mut server_side))
+            .await
+            .unwrap()
+            .unwrap();
+        let RpcMessage::Response(response) = response else {
+            panic!("expected response");
+        };
+        match response.body {
+            ResponseBody::Err { error } => {
+                assert_eq!(error_codes::METHOD_NOT_FOUND, error.code)
+            }
+            ResponseBody::Ok { result } => panic!("unexpected success: {result}"),
+        }
+        client.shutdown().await;
     }
 
     #[tokio::test]

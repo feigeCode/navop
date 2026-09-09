@@ -58,7 +58,22 @@ impl NewConnectionWindow {
 
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
-        let connection_kinds = NewConnectionKind::all_with_registry(&external_driver_registry);
+        let mut connection_kinds = NewConnectionKind::all_with_registry(&external_driver_registry);
+        let more_connections = connection_kinds.pop();
+        if let Some(catalog) = cx
+            .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
+            .and_then(|catalog| catalog.get())
+        {
+            connection_kinds.extend(
+                catalog
+                    .resource_connections()
+                    .cloned()
+                    .map(NewConnectionKind::Extension),
+            );
+        }
+        if let Some(more_connections) = more_connections {
+            connection_kinds.push(more_connections);
+        }
         let selected_kind =
             Self::first_visible_item_in(&connection_kinds, NewConnectionCategory::All);
 
@@ -80,8 +95,8 @@ impl NewConnectionWindow {
     ) -> Option<NewConnectionKind> {
         kinds
             .iter()
-            .cloned()
             .find(|kind| category == NewConnectionCategory::All || kind.category() == category)
+            .cloned()
     }
 
     fn first_visible_item(&self, category: NewConnectionCategory) -> Option<NewConnectionKind> {
@@ -91,11 +106,11 @@ impl NewConnectionWindow {
     fn visible_items(&self) -> Vec<NewConnectionKind> {
         self.connection_kinds
             .iter()
-            .cloned()
             .filter(|kind| {
                 self.selected_category == NewConnectionCategory::All
                     || kind.category() == self.selected_category
             })
+            .cloned()
             .collect()
     }
 
@@ -494,7 +509,7 @@ mod tests {
             .expect("render impl has an end marker");
 
         assert!(source.contains("connection_kinds: Vec<NewConnectionKind>"));
-        assert!(new_fn.contains("let connection_kinds = NewConnectionKind::all_with_registry"));
+        assert!(new_fn.contains("let mut connection_kinds = NewConnectionKind::all_with_registry"));
         assert!(visible_items.contains("self.connection_kinds"));
         assert!(!visible_items.contains("NewConnectionKind::all()"));
         assert!(!render.contains("NewConnectionKind::all()"));

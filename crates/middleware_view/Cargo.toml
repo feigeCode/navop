@@ -1,0 +1,18 @@
+[package]
+name = "middleware_view"
+version = "0.15.2"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+middleware-runtime.workspace = true
+one-core.workspace = true
+rust-i18n.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

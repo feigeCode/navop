@@ -7,7 +7,7 @@ use gpui_component::{
     checkbox::Checkbox,
     form::{field, v_form},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     radio::Radio,
     select::{Select, SelectItem, SelectState},
 };
@@ -111,7 +111,7 @@ pub struct SshTunnelForm {
     auth_type: String,
     password_input: Entity<InputState>,
     private_key_path_input: Entity<InputState>,
-    private_key_content_input: Entity<InputState>,
+    private_key_content_input: Entity<TextareaState>,
     private_key_passphrase_input: Entity<InputState>,
     target_host_input: Entity<InputState>,
     target_port_input: Entity<InputState>,
@@ -166,7 +166,7 @@ impl SshTunnelForm {
             initial.private_key_path.unwrap_or_default(),
         );
         let private_key_content_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
+            let mut state = TextareaState::new(window, cx)
                 .placeholder(t!("ConnectionForm.ssh_private_key_content_placeholder"))
                 .auto_grow(5, 14);
             if let Some(value) = initial.private_key_content.clone() {
@@ -234,7 +234,7 @@ impl SshTunnelForm {
             auth_type: self.auth_type.clone(),
             password: optional_text(&self.password_input, cx),
             private_key_path: optional_text(&self.private_key_path_input, cx),
-            private_key_content: optional_text(&self.private_key_content_input, cx),
+            private_key_content: optional_textarea_text(&self.private_key_content_input, cx),
             private_key_passphrase: optional_text(&self.private_key_passphrase_input, cx),
             target_host: optional_text(&self.target_host_input, cx),
             target_port: optional_u16(&self.target_port_input, cx),
@@ -289,7 +289,7 @@ impl SshTunnelForm {
         field()
             .label(label.into())
             .items_center()
-            .label_justify_end()
+            .justify_end()
             .child(h_flex().w_full().gap_2().child(child))
     }
 }
@@ -376,7 +376,7 @@ impl Render for SshTunnelForm {
                         |form| {
                             form.child(self.render_row(
                                 t!("ConnectionForm.ssh_private_key_content"),
-                                Input::new(&self.private_key_content_input),
+                                Textarea::new(&self.private_key_content_input),
                             ))
                             .child(self.render_row(
                                 t!("ConnectionForm.ssh_private_key_passphrase"),
@@ -439,6 +439,11 @@ fn text(input: &Entity<InputState>, cx: &App) -> String {
 
 fn optional_text(input: &Entity<InputState>, cx: &App) -> Option<String> {
     let value = text(input, cx);
+    (!value.is_empty()).then_some(value)
+}
+
+fn optional_textarea_text(input: &Entity<TextareaState>, cx: &App) -> Option<String> {
+    let value = input.read(cx).text().to_string().trim().to_string();
     (!value.is_empty()).then_some(value)
 }
 

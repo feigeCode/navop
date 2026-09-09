@@ -20,7 +20,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputState},
+    input::{Editor, EditorState},
     menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
@@ -37,7 +37,7 @@ const TOOL_JSON_LINE_HEIGHT_PX: f32 = 18.0;
 const TOOL_JSON_VERTICAL_PADDING_PX: f32 = 20.0;
 
 struct ToolJsonInputState {
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     value: String,
 }
 
@@ -1022,14 +1022,14 @@ fn tool_card_json_block(
                         .self_stretch()
                         .h_full()
                         .child(
-                            Input::new(&input)
-                                .bare()
+                            Editor::new(&input)
                                 .flex_1()
                                 .w_full()
                                 .min_w_0()
                                 .h_full()
                                 .appearance(false)
-                                .disabled(true)
+                                .bordered(false)
+                                .readonly(true)
                                 .text_xs()
                                 .text_color(theme.code_foreground),
                         ),
@@ -1070,13 +1070,13 @@ fn tool_card_text_block(
                 .bg(theme.code_background)
                 .overflow_hidden()
                 .child(
-                    Input::new(&input)
-                        .bare()
+                    Editor::new(&input)
                         .w_full()
                         .min_w_0()
                         .h_full()
                         .appearance(false)
-                        .disabled(true)
+                        .bordered(false)
+                        .readonly(true)
                         .text_xs()
                         .text_color(theme.code_foreground),
                 ),
@@ -1097,16 +1097,15 @@ fn tool_text_input(
     content: String,
     window: &mut Window,
     cx: &mut App,
-) -> Entity<InputState> {
+) -> Entity<EditorState> {
     let state = window.use_keyed_state(
         SharedString::from(format!("{}-text-input", id)),
         cx,
         |window, cx| {
             let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("text")
+                EditorState::new(window, cx)
+                    .language("text")
                     .line_number(false)
-                    .rows(TOOL_JSON_MAX_ROWS)
                     .soft_wrap(false)
                     .default_value(content.clone())
             });
@@ -1132,16 +1131,15 @@ fn tool_json_input(
     content: String,
     window: &mut Window,
     cx: &mut App,
-) -> Entity<InputState> {
+) -> Entity<EditorState> {
     let state = window.use_keyed_state(
         SharedString::from(format!("{}-json-input", id)),
         cx,
         |window, cx| {
             let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("json")
+                EditorState::new(window, cx)
+                    .language("json")
                     .line_number(false)
-                    .rows(TOOL_JSON_MAX_ROWS)
                     .soft_wrap(false)
                     .default_value(content.clone())
             });

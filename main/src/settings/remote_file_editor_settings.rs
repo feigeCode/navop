@@ -140,7 +140,7 @@ fn editor_override_item(editor: RegisteredRemoteFileEditorContribution) -> Setti
             h_flex().child(
                 Button::new(format!("remote-editor-program-{editor_key}"))
                     .label(button_label)
-                    .with_size(options.size)
+                    .with_size(options.size())
                     .on_click(move |_, window, cx| {
                         prompt_editor_program(editor_key.clone(), window, cx);
                     }),

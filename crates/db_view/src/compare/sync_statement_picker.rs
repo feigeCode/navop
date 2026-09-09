@@ -6,7 +6,7 @@ use gpui::{
     Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt,
+    ActiveTheme, IconName, IndexPath, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
@@ -15,6 +15,7 @@ use gpui_component::{
     tag::Tag,
     v_flex,
 };
+use one_ui::ContentState;
 use rust_i18n::t;
 
 pub(super) type SyncStatementListState = Entity<ListState<SyncStatementListDelegate>>;

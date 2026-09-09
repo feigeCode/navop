@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 async-trait = { workspace = true }
 extension-protocol = { workspace = true }
+futures = { workspace = true }
 interprocess = { workspace = true, features = ["tokio"] }
 process-util = { workspace = true }
 serde = { workspace = true }

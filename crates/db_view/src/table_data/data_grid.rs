@@ -1995,58 +1995,55 @@ impl DataGrid {
                 .child(v_flex().w_full().h_full().child(editor.clone()))
                 .close_button(true)
                 .overlay(false)
-                .content_center();
+                .content_center()
+                .button_props(DialogButtonProps::default().show_cancel(true));
 
             if request.editable {
-                d = d
-                    .on_ok(move |_, window, cx| {
-                        if !editor.read(cx).has_pending_writeback() {
-                            return true;
-                        }
-                        let content = editor.read(cx).get_writeback_text(cx);
-                        return match content {
-                            Ok(val) => {
-                                if large_text_values_equivalent(&original_text, &val) {
-                                    editor.update(cx, |editor, _| {
-                                        editor.mark_writeback_clean();
-                                    });
-                                    return true;
-                                }
+                d = d.on_ok(move |_, window, cx| {
+                    if !editor.read(cx).has_pending_writeback() {
+                        return true;
+                    }
+                    let content = editor.read(cx).get_writeback_text(cx);
+                    return match content {
+                        Ok(val) => {
+                            if large_text_values_equivalent(&original_text, &val) {
                                 editor.update(cx, |editor, _| {
                                     editor.mark_writeback_clean();
                                 });
-                                data_grid.table.update(cx, |state, cx| {
-                                    let delegate = state.delegate_mut();
-                                    let Some(actual_row_ix) =
-                                        delegate.resolve_display_row(request.row_ix)
-                                    else {
-                                        return false;
-                                    };
-
-                                    let col_index = request.col_ix.saturating_sub(1);
-                                    let changed =
-                                        delegate.record_cell_change(actual_row_ix, col_index, val);
-
-                                    if changed {
-                                        state.refresh(cx);
-                                    }
-
-                                    changed
-                                });
-                                true
+                                return true;
                             }
-                            Err(err) => {
-                                window.push_notification(
-                                    t!("TableDataGrid.error_message", error = err).to_string(),
-                                    cx,
-                                );
-                                false
-                            }
-                        };
-                    })
-                    .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)]);
-            } else {
-                d = d.footer(|_ok, cancel, window, cx| vec![cancel(window, cx)]);
+                            editor.update(cx, |editor, _| {
+                                editor.mark_writeback_clean();
+                            });
+                            data_grid.table.update(cx, |state, cx| {
+                                let delegate = state.delegate_mut();
+                                let Some(actual_row_ix) =
+                                    delegate.resolve_display_row(request.row_ix)
+                                else {
+                                    return false;
+                                };
+
+                                let col_index = request.col_ix.saturating_sub(1);
+                                let changed =
+                                    delegate.record_cell_change(actual_row_ix, col_index, val);
+
+                                if changed {
+                                    state.refresh(cx);
+                                }
+
+                                changed
+                            });
+                            true
+                        }
+                        Err(err) => {
+                            window.push_notification(
+                                t!("TableDataGrid.error_message", error = err).to_string(),
+                                cx,
+                            );
+                            false
+                        }
+                    };
+                });
             }
 
             d
@@ -2756,7 +2753,8 @@ impl DataGrid {
                 .content_center()
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t!("TableDataGrid.execute_sql").to_string()),
+                        .ok_text(t!("TableDataGrid.execute_sql").to_string())
+                        .show_cancel(true),
                 )
                 .on_ok(move |_, window, cx| {
                     let sql_text = editor.read(cx).get_text(cx);
@@ -2774,7 +2772,6 @@ impl DataGrid {
                     );
                     false
                 })
-                .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)])
         });
     }
 
@@ -3721,24 +3718,22 @@ mod tests {
     }
 
     #[test]
-    fn dialog_custom_footers_capture_latest_callbacks() {
+    fn dialogs_bind_callbacks_and_button_props() {
         let source = include_str!("data_grid.rs");
-        assert_dialog_footer_after_callback(source, "fn show_text_editor_dialog(");
-        assert_dialog_footer_after_callback(source, "fn show_sql_editor_dialog(");
+        assert_dialog_callback_and_buttons(source, "fn show_text_editor_dialog(");
+        assert_dialog_callback_and_buttons(source, "fn show_sql_editor_dialog(");
     }
 
-    fn assert_dialog_footer_after_callback(source: &str, marker: &str) {
+    fn assert_dialog_callback_and_buttons(source: &str, marker: &str) {
         let start = source.find(marker).expect("function exists");
         let rest = &source[start..];
         let end = rest.find("\n    fn ").unwrap_or(rest.len());
         let body = &rest[..end];
         let on_ok = body.find(".on_ok(").expect("function binds ok callback");
-        let footer = body.find(".footer(").expect("function uses custom footer");
-
-        assert!(
-            on_ok < footer,
-            "{marker} must bind dialog callbacks before building custom footer buttons"
-        );
+        let buttons = body
+            .find(".button_props(")
+            .expect("function configures dialog buttons");
+        assert_ne!(on_ok, buttons);
     }
 
     #[test]

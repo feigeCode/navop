@@ -10,7 +10,6 @@
   "permissions": [
     "db:connections:list",
     "db:schema:*",
-    "ui:dialog",
     "ui:notify",
     "ui:progress"
   ],

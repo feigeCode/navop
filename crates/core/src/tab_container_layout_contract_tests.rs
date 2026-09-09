@@ -319,7 +319,7 @@ fn sidebar_shell_uses_shared_header_geometry_and_resize_tokens() {
 
     assert!(source.contains("PanelHeader::new(header_id)"));
     assert!(source.contains(".variant(PanelHeaderVariant::Sidebar)"));
-    assert!(source.contains(".with_size(IconSize::Default)"));
+    assert!(source.contains(".with_size(IconSize::Small)"));
 
     assert!(source.contains("layout.utility_panel_default"));
     assert!(source.contains("layout.utility_panel_min"));

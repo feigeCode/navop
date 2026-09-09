@@ -50,15 +50,6 @@ mod tests {
         SymbolTable::build_from_tokens(&tokens)
     }
 
-    /// Helper to infer context from SQL at given offset
-    #[allow(dead_code)]
-    fn infer_context(sql: &str, offset: usize) -> SqlContext {
-        let mut tokenizer = SqlTokenizer::new(sql);
-        let tokens = tokenizer.tokenize();
-        let symbol_table = SymbolTable::build_from_tokens(&tokens);
-        ContextInferrer::infer(&tokens, offset, &symbol_table)
-    }
-
     fn tokenize(sql: &str) -> Vec<db::sql_editor::sql_tokenizer::SqlToken> {
         SqlTokenizer::new(sql).tokenize()
     }

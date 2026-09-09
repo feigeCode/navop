@@ -6,9 +6,10 @@ pub(crate) mod loading;
 pub mod selection;
 mod state;
 
-use gpui::{App, KeyBinding};
+use std::collections::HashSet;
+
+use gpui::{Action, App, KeyBinding, Keystroke, NoAction};
 use gpui_component::Size;
-use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 
 pub(crate) use column::{ColGroup, DragColumn, DragSelectCell, ResizeColumn};
 pub use column::{Column, ColumnFixed, ColumnSort};
@@ -27,19 +28,55 @@ const CONTEXT: &str = "EditTable";
 gpui::actions!(edit_table, [SelectPrevColumn, SelectNextColumn]);
 
 /// 初始化 EditTable 的键盘绑定
-pub fn init(cx: &mut App) {
-    cx.bind_keys(init_keybindings(cx));
+pub fn init(cx: &mut App, keybindings: &TableKeybindings) {
+    cx.bind_keys(init_keybindings(keybindings));
 }
 
-pub fn refresh_keybindings(cx: &mut App) {
-    cx.bind_keys(refreshable_keybindings(cx));
+pub fn refresh_keybindings(cx: &mut App, keybindings: TableKeybindings) {
+    cx.bind_keys(refreshable_keybindings(cx, &keybindings));
 }
 
-fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
+#[derive(Clone, Debug)]
+pub struct TableKeybindings {
+    cancel: Vec<String>,
+    copy: Vec<String>,
+    paste: Vec<String>,
+    select_all: Vec<String>,
+}
+
+impl TableKeybindings {
+    pub fn new(
+        cancel: Vec<String>,
+        copy: Vec<String>,
+        paste: Vec<String>,
+        select_all: Vec<String>,
+    ) -> Self {
+        Self {
+            cancel,
+            copy,
+            paste,
+            select_all,
+        }
+    }
+}
+
+impl Default for TableKeybindings {
+    fn default() -> Self {
+        Self::new(
+            vec!["escape".to_string()],
+            vec![table_platform_shortcut("cmd-c", "ctrl-c").to_string()],
+            vec![table_platform_shortcut("cmd-v", "ctrl-v").to_string()],
+            vec![table_platform_shortcut("cmd-a", "ctrl-a").to_string()],
+        )
+    }
+}
+
+fn init_keybindings(bindings: &TableKeybindings) -> Vec<KeyBinding> {
     let mut keybindings = Vec::new();
     keybindings.extend(
-        shortcuts_for(cx, action_id::TABLE_CANCEL, &["escape"])
-            .into_iter()
+        bindings
+            .cancel
+            .iter()
             .map(|key| KeyBinding::new(&key, Cancel, Some(CONTEXT))),
     );
     keybindings.extend([
@@ -53,31 +90,22 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         KeyBinding::new("pagedown", SelectPageDown, Some(CONTEXT)),
     ]);
     keybindings.extend(
-        shortcuts_for(
-            cx,
-            action_id::TABLE_COPY,
-            &[table_platform_shortcut("cmd-c", "ctrl-c")],
-        )
-        .into_iter()
-        .map(|key| KeyBinding::new(&key, Copy, Some(CONTEXT))),
+        bindings
+            .copy
+            .iter()
+            .map(|key| KeyBinding::new(&key, Copy, Some(CONTEXT))),
     );
     keybindings.extend(
-        shortcuts_for(
-            cx,
-            action_id::TABLE_PASTE,
-            &[table_platform_shortcut("cmd-v", "ctrl-v")],
-        )
-        .into_iter()
-        .map(|key| KeyBinding::new(&key, Paste, Some(CONTEXT))),
+        bindings
+            .paste
+            .iter()
+            .map(|key| KeyBinding::new(&key, Paste, Some(CONTEXT))),
     );
     keybindings.extend(
-        shortcuts_for(
-            cx,
-            action_id::TABLE_SELECT_ALL,
-            &[table_platform_shortcut("cmd-a", "ctrl-a")],
-        )
-        .into_iter()
-        .map(|key| KeyBinding::new(&key, SelectAll, Some(CONTEXT))),
+        bindings
+            .select_all
+            .iter()
+            .map(|key| KeyBinding::new(&key, SelectAll, Some(CONTEXT))),
     );
     keybindings.extend([
         KeyBinding::new("tab", SelectNextColumn, Some(CONTEXT)),
@@ -86,37 +114,89 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings
 }
 
-fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
+fn refreshable_keybindings(cx: &App, bindings: &TableKeybindings) -> Vec<KeyBinding> {
     let mut keybindings = Vec::new();
     keybindings.extend(rebind_keybindings(
         cx,
-        action_id::TABLE_CANCEL,
         &["escape"],
+        &bindings.cancel,
         Some(CONTEXT),
         Cancel,
     ));
     keybindings.extend(rebind_keybindings(
         cx,
-        action_id::TABLE_COPY,
         &[table_platform_shortcut("cmd-c", "ctrl-c")],
+        &bindings.copy,
         Some(CONTEXT),
         Copy,
     ));
     keybindings.extend(rebind_keybindings(
         cx,
-        action_id::TABLE_PASTE,
         &[table_platform_shortcut("cmd-v", "ctrl-v")],
+        &bindings.paste,
         Some(CONTEXT),
         Paste,
     ));
     keybindings.extend(rebind_keybindings(
         cx,
-        action_id::TABLE_SELECT_ALL,
         &[table_platform_shortcut("cmd-a", "ctrl-a")],
+        &bindings.select_all,
         Some(CONTEXT),
         SelectAll,
     ));
     keybindings
+}
+
+fn rebind_keybindings<A>(
+    cx: &App,
+    defaults: &[&str],
+    current: &[String],
+    context: Option<&str>,
+    action: A,
+) -> Vec<KeyBinding>
+where
+    A: Action + Clone,
+{
+    let active = cx
+        .key_bindings()
+        .borrow()
+        .bindings_for_action(&action)
+        .map(binding_shortcut)
+        .collect::<Vec<_>>();
+    let mut keybindings = shadow_shortcuts(defaults, current, active)
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, NoAction, context))
+        .collect::<Vec<_>>();
+    keybindings.extend(
+        current
+            .iter()
+            .map(|key| KeyBinding::new(key, action.clone(), context)),
+    );
+    keybindings
+}
+
+fn shadow_shortcuts(
+    defaults: &[&str],
+    current: &[String],
+    active: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    defaults
+        .iter()
+        .map(|key| key.to_string())
+        .chain(active)
+        .chain(current.iter().cloned())
+        .filter(|key| Keystroke::parse(key).is_ok() && seen.insert(key.clone()))
+        .collect()
+}
+
+fn binding_shortcut(binding: &KeyBinding) -> String {
+    binding
+        .keystrokes()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn table_platform_shortcut(macos: &'static str, other: &'static str) -> &'static str {

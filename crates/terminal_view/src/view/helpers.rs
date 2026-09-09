@@ -106,6 +106,8 @@ pub(super) fn terminal_paste_bytes(text: &str, mode: TermMode) -> Vec<u8> {
     if mode.contains(TermMode::BRACKETED_PASTE) {
         format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")).into_bytes()
     } else {
+        // 非 bracketed 程序按字面解释控制字符，粘贴路径过滤掉它们。
+        let text = strip_dangerous_control_chars(text.as_ref());
         match text {
             Cow::Borrowed(text) => text.as_bytes().to_vec(),
             Cow::Owned(text) => text.into_bytes(),

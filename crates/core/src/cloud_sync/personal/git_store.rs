@@ -205,9 +205,10 @@ impl From<GitRunnerError> for SyncStoreError {
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, GitRunnerError> {
-    let output = Command::new("git")
-        .current_dir(repo)
-        .args(args)
+    let mut command = Command::new("git");
+    command.current_dir(repo).args(args);
+    process_util::configure_background_child(&mut command);
+    let output = command
         .output()
         .map_err(|error| GitRunnerError::CommandFailed(error.to_string()))?;
 

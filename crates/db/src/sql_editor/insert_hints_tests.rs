@@ -63,7 +63,27 @@ fn offset_points_before_each_value() {
     let result = hints(sql, &[]);
     assert_eq!(2, result.len());
     let first_value = sql.find("(1,").unwrap() + 1;
+    let second_value = sql.find(", 2").unwrap() + 1;
     assert_eq!(first_value, result[0].offset);
+    assert_eq!(second_value, result[1].offset);
+}
+
+#[test]
+fn mismatched_column_count_keeps_value_hints_at_distinct_slots() {
+    let sql = "INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 3, 4)";
+    let result = hints(sql, &[]);
+
+    assert_eq!(4, result.len());
+    let offsets: Vec<usize> = result.iter().map(|hint| hint.offset).collect();
+    assert_eq!(
+        vec![
+            sql.find("(1,").unwrap() + 1,
+            sql.find(", 2").unwrap() + 1,
+            sql.find(", 3").unwrap() + 1,
+            sql.find(", 4").unwrap() + 1,
+        ],
+        offsets
+    );
 }
 
 #[test]

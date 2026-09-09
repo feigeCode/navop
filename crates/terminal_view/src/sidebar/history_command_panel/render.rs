@@ -4,14 +4,15 @@ use gpui::{
     Render, SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants, IconButton, IconButtonRole},
+    ActiveTheme, Icon, IconName, Sizable, Size,
+    button::{Button, ButtonVariants},
     h_flex,
     input::Input,
     tooltip::Tooltip,
     v_flex,
 };
 use one_core::storage::{TerminalCommandHistory, TerminalCommandHistorySort};
+use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 use std::ops::Range;
 
@@ -76,10 +77,7 @@ impl HistoryCommandPanel {
             .when(self.sort == sort, |button| button.primary())
             .when(self.sort != sort, |button| {
                 // ghost 变体文字色读全局主题，在终端配色下不可见，改用终端配色 variant
-                button.custom(
-                    self.colors
-                        .icon_button_variant(self.colors.foreground, cx),
-                )
+                button.custom(self.colors.icon_button_variant(self.colors.foreground, cx))
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_sort(sort, cx);
@@ -222,11 +220,11 @@ impl HistoryCommandPanel {
     ) -> impl IntoElement {
         IconButton::new(
             SharedString::from(format!("history-favorite-{index}")),
-            FunctionalIcon::new(if favorite {
+            if favorite {
                 IconName::StarOff
             } else {
                 IconName::Star
-            }),
+            },
         )
         .role(IconButtonRole::Compact)
         .tooltip(if favorite {
@@ -248,7 +246,7 @@ impl HistoryCommandPanel {
     ) -> impl IntoElement {
         IconButton::new(
             SharedString::from(format!("history-paste-{index}")),
-            FunctionalIcon::new(IconName::Paste),
+            IconName::Paste,
         )
         .role(IconButtonRole::Compact)
         .tooltip(t!("HistoryCommand.paste").to_string())
@@ -265,7 +263,7 @@ impl HistoryCommandPanel {
     ) -> impl IntoElement {
         IconButton::new(
             SharedString::from(format!("history-delete-{index}")),
-            FunctionalIcon::new(IconName::Delete),
+            IconName::Delete,
         )
         .role(IconButtonRole::Compact)
         .text_color(cx.theme().danger)

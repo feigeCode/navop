@@ -13,7 +13,7 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, IconSize, Sizable, Size, WindowExt as _,
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     notification::Notification,
     scroll::Scrollbar,
@@ -704,13 +704,13 @@ impl MongoTreeView {
                         .child(div().text_sm().child(t!("MongoTree.collection_name_label")))
                         .child(Input::new(&collection_input).w_full()),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.create").to_string())
-                        .cancel_text(t!("Common.cancel").to_string()),
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let name = input_for_ok.read(cx).text().to_string();
                     let name = name.trim().to_string();
                     if name.is_empty() {
@@ -780,13 +780,13 @@ impl MongoTreeView {
                         )
                         .child(Input::new(&collection_input).w_full()),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.create").to_string())
-                        .cancel_text(t!("Common.cancel").to_string()),
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let database_name = db_input_for_ok.read(cx).text().to_string();
                     let database_name = database_name.trim().to_string();
                     let collection_name = collection_input_for_ok.read(cx).text().to_string();
@@ -840,7 +840,6 @@ impl MongoTreeView {
 
             dialog
                 .title(t!("MongoTree.delete_database_title").to_string())
-                .confirm()
                 .child(
                     v_flex()
                         .gap_2()
@@ -853,9 +852,10 @@ impl MongoTreeView {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.delete").to_string())
-                        .cancel_text(t!("Common.cancel").to_string()),
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     view_for_ok.update(cx, |view, cx| {
                         view.submit_drop_database(
                             connection_id_for_ok.clone(),
@@ -905,15 +905,14 @@ impl MongoTreeView {
         let connection_name = stored.name.clone();
         let connection_string = config.connection_string.clone();
         let connection_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).multi_line(true).auto_grow(2, 4);
+            let mut state = TextareaState::new(window, cx).auto_grow(2, 4);
             state.set_value(connection_string.clone(), window, cx);
             state
         });
         let params_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .code_editor("json")
+            let mut state = EditorState::new(window, cx)
+                .language("json")
                 .line_number(false)
-                .rows(10)
                 .soft_wrap(true);
             state.set_value(params_json.clone(), window, cx);
             state
@@ -944,7 +943,7 @@ impl MongoTreeView {
                                         .text_sm()
                                         .child(t!("MongoTree.connection_string_label")),
                                 )
-                                .child(Input::new(&connection_input).w_full().disabled(true)),
+                                .child(Textarea::new(&connection_input).w_full().disabled(true)),
                         )
                         .child(
                             v_flex()
@@ -954,16 +953,16 @@ impl MongoTreeView {
                                         .text_sm()
                                         .child(t!("MongoTree.connection_params_label")),
                                 )
-                                .child(Input::new(&params_input).w_full().disabled(true)),
+                                .child(Editor::new(&params_input).w_full().disabled(true)),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("MongoTree.copy_connection_string").to_string())
-                        .cancel_text(t!("Common.close").to_string()),
+                        .cancel_text(t!("Common.close").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     cx.write_to_clipboard(ClipboardItem::new_string(connection_string.clone()));
                     window.push_notification(
                         Notification::success(t!("MongoTree.connection_string_copied").to_string())

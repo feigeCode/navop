@@ -18,6 +18,17 @@ pub struct GlobalExtensionRuntimeCatalog {
 impl gpui::Global for GlobalExtensionRuntimeCatalog {}
 
 impl GlobalExtensionRuntimeCatalog {
+    pub fn snapshot(&self) -> (u64, Option<Arc<ExtensionRuntimeCatalog>>) {
+        loop {
+            let before = self.revision.load(Ordering::Acquire);
+            let catalog = self.catalog.read().ok().and_then(|catalog| catalog.clone());
+            let after = self.revision.load(Ordering::Acquire);
+            if before == after {
+                return (after, catalog);
+            }
+        }
+    }
+
     pub fn get(&self) -> Option<Arc<ExtensionRuntimeCatalog>> {
         self.catalog.read().ok()?.clone()
     }
@@ -29,19 +40,19 @@ impl GlobalExtensionRuntimeCatalog {
     pub fn replace_arc(&self, catalog: Arc<ExtensionRuntimeCatalog>) {
         if let Ok(mut guard) = self.catalog.write() {
             *guard = Some(catalog);
-            self.revision.fetch_add(1, Ordering::Relaxed);
+            self.revision.fetch_add(1, Ordering::Release);
         }
     }
 
     pub fn clear(&self) {
         if let Ok(mut guard) = self.catalog.write() {
             *guard = None;
-            self.revision.fetch_add(1, Ordering::Relaxed);
+            self.revision.fetch_add(1, Ordering::Release);
         }
     }
 
     pub fn revision(&self) -> u64 {
-        self.revision.load(Ordering::Relaxed)
+        self.revision.load(Ordering::Acquire)
     }
 }
 

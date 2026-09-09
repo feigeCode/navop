@@ -28,50 +28,25 @@ pub fn action_context() -> extension_component::ActionContext {
 
 pub const MINIMAL_EXTENSION_COMPONENT: &str = r#"
 (component
-    (type $ui-instance
-        (instance
-            (type (;0;) (record (field "id" string) (field "value" string)))
-            (export (;1;) "field-value" (type (eq 0)))
-            (type (;2;) (list 1))
-            (type (;3;) (record (field "view-id" string) (field "action-id" string) (field "fields" 2)))
-            (export (;4;) "view-action-event" (type (eq 3)))
-        )
-    )
-    (import "onet:extension/ui" (instance $ui (type $ui-instance)))
-    (alias export $ui "view-action-event" (type $view-action-event))
-    (type $handle-view-action-ty (func (param "event" $view-action-event)))
     (core module $m
         (type (;0;) (func))
-        (type (;1;) (func (param i32 i32 i32 i32 i32 i32)))
         (memory 1)
-        (func (;0;) (param i32 i32 i32 i32) (result i32) (i32.const 2048))
+        (func (;0;) (param i32 i32) (result i32) (i32.const 2048))
         (func (;1;) (type 0))
         (func (;2;) (type 0))
-        (func (;3;) (type 1) (param i32 i32 i32 i32 i32 i32))
-        (func (;4;) (type 0))
+        (func (;3;) (type 0))
         (export "memory" (memory 0))
         (export "realloc" (func 0))
         (export "activate" (func 1))
         (export "run-action" (func 2))
-        (export "handle-view-action" (func 3))
-        (export "deactivate" (func 4))
+        (export "deactivate" (func 3))
     )
     (core instance $i (instantiate $m))
-    (alias core export $i "memory" (core memory $memory))
-    (alias core export $i "realloc" (core func $realloc))
     (func $activate (canon lift (core func $i "activate")))
     (func $run-action (canon lift (core func $i "run-action")))
-    (func $handle-view-action (type $handle-view-action-ty)
-        (canon lift
-            (core func $i "handle-view-action")
-            (memory $memory)
-            (realloc $realloc)
-            string-encoding=utf8
-        ))
     (func $deactivate (canon lift (core func $i "deactivate")))
     (export "activate" (func $activate))
     (export "run-action" (func $run-action))
-    (export "handle-view-action" (func $handle-view-action) (func (type $handle-view-action-ty)))
     (export "deactivate" (func $deactivate))
 )
 "#;

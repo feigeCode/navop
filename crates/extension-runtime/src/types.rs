@@ -1,6 +1,4 @@
-#[cfg(feature = "wasm-components")]
-use std::path::PathBuf;
-#[cfg(not(feature = "wasm-components"))]
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use db_view::extension_menu::DbTreeExtensionMenuItem;
@@ -11,6 +9,13 @@ use one_core::{
 use serde_json::Value;
 
 use crate::extension::manifest::{CommandContrib, RemoteFileEditorLaunchMode, WasmRuntimeKind};
+
+#[path = "types/shell.rs"]
+mod shell;
+pub use shell::RegisteredShellViewContribution;
+#[path = "types/resource_connection.rs"]
+mod resource_connection;
+pub use resource_connection::RegisteredResourceConnectionContribution;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRemoteFileEditorContribution {
@@ -82,6 +87,24 @@ pub struct RegisteredDocumentExporter {
     pub priority: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredIpcRuntimeBinding {
+    pub extension_id: String,
+    pub runtime_key: String,
+    pub extension_root: PathBuf,
+    pub command: PathBuf,
+    pub required_spawn_permission: String,
+    pub args: Vec<String>,
+    pub working_dir: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+    pub transport_kind: String,
+    pub connect_timeout_ms: Option<u64>,
+    pub auto_restart: bool,
+    pub max_restart_attempts: u32,
+    pub shutdown_grace_ms: u64,
+    pub permissions: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WasmRuntimeBinding {
     #[cfg(feature = "wasm-components")]
@@ -120,6 +143,14 @@ pub enum ExtensionRuntimeError {
     UnsupportedCommand { command_id: String },
     #[error("invalid remote file editor `{editor_id}`: {reason}")]
     InvalidRemoteFileEditor { editor_id: String, reason: String },
+    #[error("invalid shell view manifest field {field}: {reason}")]
+    InvalidShellView { field: String, reason: String },
+    #[error("duplicate shell view key: {view_key}")]
+    DuplicateShellView { view_key: String },
+    #[error("invalid resource connection: {0}")]
+    InvalidResourceConnection(String),
+    #[error("invalid declarative layout: {reason}")]
+    InvalidLayout { reason: String },
 }
 
 pub(super) fn runtime_key(extension_id: &str, runtime_id: &str) -> String {

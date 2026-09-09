@@ -8,8 +8,7 @@ use gpui_component::{
     ActiveTheme,
     button::{Button, ButtonVariants},
     h_flex,
-    highlighter::Language,
-    input::{Input, InputState},
+    input::{Editor, EditorState},
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
@@ -19,7 +18,7 @@ use rust_i18n::t;
 pub struct DatabaseEditorView {
     focus_handle: FocusHandle,
     form: AnyView,
-    sql_preview: Entity<InputState>,
+    sql_preview: Entity<EditorState>,
     current_tab: EditorTab,
     is_edit_mode: bool,
     error_message: Entity<Option<String>>,
@@ -45,10 +44,9 @@ impl DatabaseEditorView {
         F: Render + EventEmitter<DatabaseFormEvent> + 'static,
     {
         let sql_preview = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(Language::from_str("sql"))
+            EditorState::new(window, cx)
+                .language("sql")
                 .line_number(false)
-                .multi_line(true)
         });
         let focus_handle = cx.focus_handle();
         let error_message = cx.new(|_| None);
@@ -194,7 +192,7 @@ impl Render for DatabaseEditorView {
                 .flex_1()
                 .w_full()
                 .min_h_48()
-                .child(Input::new(&self.sql_preview).size_full().disabled(true))
+                .child(Editor::new(&self.sql_preview).size_full().readonly(true))
         };
 
         let error_msg = self.error_message.read(cx).clone();

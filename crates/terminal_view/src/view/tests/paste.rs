@@ -48,3 +48,55 @@ fn detect_unbracketed_paste_hazard_ignores_plain_text() {
     );
     assert!(!has_unterminated_shell_quote("printf '%s\\n' hello"));
 }
+
+#[test]
+fn is_large_paste_triggers_on_line_count_or_bytes() {
+    let two_hundred_lines = (0..200)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!is_large_paste(&two_hundred_lines));
+
+    let over_lines = (0..201)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(is_large_paste(&over_lines));
+
+    let over_bytes = "a".repeat(32 * 1024 + 1);
+    assert!(is_large_paste(&over_bytes));
+
+    assert!(!is_large_paste("echo hello"));
+}
+
+#[test]
+fn strip_dangerous_control_chars_keeps_newline_and_tab() {
+    assert_eq!(
+        strip_dangerous_control_chars("echo\x07 hi\nworld\t!"),
+        "echo hi\nworld\t!"
+    );
+    // ESC 单字符被移除；其后的序列字面不属于控制字符，由远端程序自行处理。
+    assert_eq!(strip_dangerous_control_chars("echo\x1b[A hi"), "echo[A hi");
+    assert_eq!(strip_dangerous_control_chars("plain text"), "plain text");
+}
+
+#[test]
+fn terminal_paste_bytes_filters_control_chars_when_unbracketed() {
+    let bytes = terminal_paste_bytes("echo\x07 bell\r\nline", TermMode::empty());
+    assert_eq!(b"echo bell\nline".to_vec(), bytes);
+}
+
+#[test]
+fn terminal_paste_bytes_keeps_bracketed_wrap_untouched() {
+    let bytes = terminal_paste_bytes("echo hi", TermMode::BRACKETED_PASTE);
+    assert_eq!(b"\x1b[200~echo hi\x1b[201~".to_vec(), bytes);
+}
+
+#[test]
+fn join_paste_as_single_line_collapses_blank_lines() {
+    assert_eq!(
+        join_paste_as_single_line("  echo 1 \n\n  echo 2  \n"),
+        "echo 1 echo 2"
+    );
+    assert_eq!(join_paste_as_single_line("single"), "single");
+}

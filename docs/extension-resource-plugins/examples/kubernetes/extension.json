@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "com.navop.kubernetes",
+  "name": "Navop Kubernetes Resource Provider",
+  "version": "0.1.0",
+  "description": "Reference IPC provider for Kubernetes resources, pod logs and events.",
+  "engines": {
+    "onetcli": ">=0.1.0"
+  },
+  "permissions": [
+    "fs:read:~/.kube/config",
+    "spawn:./bin/kubernetes-provider"
+  ],
+  "runtime": {
+    "ipc": [
+      {
+        "id": "main",
+        "entry": {
+          "command": "./bin/kubernetes-provider"
+        },
+        "transport": {
+          "kind": "local_socket",
+          "connect_timeout_ms": 5000
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "connections": [
+      {
+        "id": "kubernetes",
+        "label": "Kubernetes",
+        "runtimeId": "main",
+        "resourceType": "kubernetes",
+        "form": { "tabs": [{ "id": "general", "label": "General", "fields": [
+          { "id": "kubeconfig", "label": "Kubeconfig", "fieldType": "Text", "required": true, "defaultValue": "~/.kube/config" }
+        ] }] }
+      }
+    ]
+  }
+}

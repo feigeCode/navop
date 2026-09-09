@@ -9,9 +9,11 @@ anyhow = { workspace = true }
 futures = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+one-ui.workspace = true
 one-core = { workspace = true }
 rust-i18n = { workspace = true }
 semver = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

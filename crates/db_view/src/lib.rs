@@ -13,9 +13,6 @@ mod database_users_list;
 mod database_users_tab;
 mod database_users_toolbar;
 pub mod database_view_plugin;
-mod db_filter_list;
-mod db_filter_popover;
-mod db_filter_popover_render;
 pub mod db_object_selector;
 mod db_tree_event;
 pub mod db_tree_view;
@@ -24,12 +21,6 @@ pub mod er_diagram;
 pub mod extension_menu;
 #[cfg(test)]
 mod extension_menu_contract_tests;
-pub mod extension_selector;
-pub mod extension_widget;
-#[cfg(test)]
-mod extension_widget_tests;
-pub mod extension_widget_view;
-mod extension_widget_view_controls;
 mod import_export;
 pub mod search_shortcut;
 pub mod settings;
@@ -48,7 +39,6 @@ mod table_copy_menu;
 mod table_data;
 pub mod table_data_tab;
 pub mod table_designer_tab;
-mod window_positioned_popover;
 
 pub use ai_chat_view::{AskAiButton, emit_ask_ai_event, init_ask_ai_notifier};
 pub use common::DatabaseFormEvent;

@@ -88,7 +88,7 @@ pub(crate) fn show_workspace_dialog(
                     .child(Input::new(&sort_input_for_render).w_full()),
             )
             .confirm()
-            .on_ok(move |_, _, cx| {
+            .on_ok(move |_, _, cx: &mut App| {
                 let name = input_for_ok.read(cx).text().to_string().trim().to_string();
                 if name.is_empty() {
                     return false;

@@ -9,7 +9,7 @@
 //!   socket 命名空间依赖,便于 dev/debug。
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -41,6 +41,12 @@ pub struct SpawnConfig {
     pub args: Vec<String>,
     /// 工作目录;None 时继承宿主当前目录。
     pub cwd: Option<PathBuf>,
+    /// If set, the executable must resolve below this directory immediately
+    /// before spawning. The resolved executable path is then used for spawn.
+    pub program_root: Option<PathBuf>,
+    /// If set, the working directory must resolve below this directory
+    /// immediately before spawning. The resolved directory is then used.
+    pub cwd_root: Option<PathBuf>,
     /// 额外环境变量(会覆盖同名继承变量)。
     pub env: HashMap<String, String>,
     /// transport 配置。
@@ -57,6 +63,8 @@ impl SpawnConfig {
             program: program.into(),
             args: Vec::new(),
             cwd: None,
+            program_root: None,
+            cwd_root: None,
             env: HashMap::new(),
             transport: SpawnTransport::LocalSocket {
                 name: default_socket_name(),
@@ -77,6 +85,16 @@ impl SpawnConfig {
 
     pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = Some(cwd.into());
+        self
+    }
+
+    pub fn with_program_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.program_root = Some(root.into());
+        self
+    }
+
+    pub fn with_cwd_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.cwd_root = Some(root.into());
         self
     }
 
@@ -199,6 +217,7 @@ async fn spawn_local_socket(config: SpawnConfig, socket_name: String) -> HostRes
         .create_tokio()
         .map_err(HostError::Io)?;
 
+    let config = validate_spawn_paths(config)?;
     let mut command = Command::new(&config.program);
     process_util::configure_tokio_background_child(&mut command);
     command.args(&config.args).env(SOCKET_ENV_VAR, &socket_name);
@@ -269,6 +288,36 @@ async fn spawn_local_socket(config: SpawnConfig, socket_name: String) -> HostRes
     })
 }
 
+/// Re-check policy-controlled paths at the last host-side boundary before
+/// constructing `tokio::process::Command`. Canonical paths are used for the
+/// resulting command/cwd so the normal spawn path does not perform a second
+/// manifest-relative lookup.
+fn validate_spawn_paths(mut config: SpawnConfig) -> HostResult<SpawnConfig> {
+    if let Some(root) = &config.program_root {
+        config.program = canonicalize_within(root, &config.program)?;
+    }
+    if let Some(root) = &config.cwd_root {
+        if let Some(cwd) = &config.cwd {
+            config.cwd = Some(canonicalize_within(root, cwd)?);
+        }
+    }
+    Ok(config)
+}
+
+fn canonicalize_within(root: &Path, candidate: &Path) -> HostResult<PathBuf> {
+    let canonical_root = root.canonicalize().map_err(HostError::Io)?;
+    let canonical_candidate = candidate.canonicalize().map_err(HostError::Io)?;
+    if canonical_candidate.starts_with(&canonical_root) {
+        Ok(canonical_candidate)
+    } else {
+        Err(HostError::Config(format!(
+            "spawn path `{}` escapes allowed root `{}`",
+            candidate.display(),
+            root.display()
+        )))
+    }
+}
+
 fn new_stderr_tail() -> StderrTail {
     Arc::new(StdMutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)))
 }
@@ -321,6 +370,8 @@ mod tests {
         assert_eq!(c.program, PathBuf::from("/bin/echo"));
         assert!(c.args.is_empty());
         assert!(c.cwd.is_none());
+        assert!(c.program_root.is_none());
+        assert!(c.cwd_root.is_none());
         assert!(c.env.is_empty());
         assert!(c.capture_stderr);
         assert_eq!(c.ready_timeout, Duration::from_secs(10));
@@ -334,14 +385,39 @@ mod tests {
         let c = SpawnConfig::new("/bin/x")
             .with_args(["--driver", "cassandra"])
             .with_cwd("/tmp")
+            .with_program_root("/bin")
+            .with_cwd_root("/")
             .with_env("FOO", "bar")
             .with_ready_timeout(Duration::from_secs(3))
             .without_stderr_capture();
         assert_eq!(c.args, vec!["--driver", "cassandra"]);
         assert_eq!(c.cwd, Some(PathBuf::from("/tmp")));
+        assert_eq!(c.program_root, Some(PathBuf::from("/bin")));
+        assert_eq!(c.cwd_root, Some(PathBuf::from("/")));
         assert_eq!(c.env.get("FOO").map(String::as_str), Some("bar"));
         assert_eq!(c.ready_timeout, Duration::from_secs(3));
         assert!(!c.capture_stderr);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_path_policy_rejects_program_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let extension = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let outside_program = outside.path().join("provider");
+        std::fs::write(&outside_program, b"provider").unwrap();
+        let extension_bin = extension.path().join("bin");
+        std::fs::create_dir_all(&extension_bin).unwrap();
+        let linked_program = extension_bin.join("provider");
+        symlink(&outside_program, &linked_program).unwrap();
+
+        let error = validate_spawn_paths(
+            SpawnConfig::new(linked_program).with_program_root(extension.path()),
+        )
+        .expect_err("symlink escape must be rejected at the spawn boundary");
+        assert!(matches!(error, HostError::Config(_)));
     }
 
     #[test]

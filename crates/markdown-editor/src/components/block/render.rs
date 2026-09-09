@@ -14,7 +14,7 @@ use gpui_component::{
     menu::{DropdownMenu as _, PopupMenuItem},
     popover::Popover,
     spinner::Spinner,
-    text::{MarkdownPalette, TextView, TextViewStyle},
+    text::{TextView, TextViewStyle},
     tooltip::Tooltip,
 };
 use palette::IntoColor;
@@ -421,12 +421,7 @@ fn render_loading_placeholder(
         .into_any_element()
 }
 
-fn render_host_block_loading_placeholder(
-    raw: &str,
-    theme: &Theme,
-    animation_id: impl Into<SharedString>,
-    font_size: f32,
-) -> AnyElement {
+fn render_host_block_loading_placeholder(raw: &str, theme: &Theme, font_size: f32) -> AnyElement {
     let c = &theme.colors;
     let d = &theme.dimensions;
     let t = &theme.typography;
@@ -447,12 +442,7 @@ fn render_host_block_loading_placeholder(
                 .flex_none()
                 .pt(px(2.0))
                 .text_color(c.dialog_muted)
-                .child(
-                    Spinner::new()
-                        .with_size(Size::Small)
-                        .animation_id(animation_id)
-                        .color(c.dialog_muted),
-                ),
+                .child(Spinner::new().with_size(Size::Small).color(c.dialog_muted)),
         )
         .child(
             div()
@@ -756,22 +746,26 @@ fn html_text_view_style(theme: &Theme) -> TextViewStyle {
     let c = &theme.colors;
     let t = &theme.typography;
 
+    let mut code_block = StyleRefinement::default();
+    code_block.background = Some(c.code_bg.into());
+    code_block.text.color = Some(c.code_text);
+    let mut table_head = StyleRefinement::default();
+    table_head.background = Some(c.table_header_bg.into());
+    table_head.text.color = Some(c.text_default);
+    let mut table_cell = StyleRefinement::default();
+    table_cell.background = Some(c.table_cell_bg.into());
     let mut style = TextViewStyle::default()
         .paragraph_gap(rems(theme.dimensions.block_gap / t.text_size.max(1.0)))
-        .markdown_palette(MarkdownPalette {
-            is_dark: c.editor_background.lightness < 0.5,
-            foreground: c.text_default,
-            muted_foreground: c.text_placeholder,
-            border: c.table_border,
-            code_background: c.code_bg,
-            code_foreground: c.code_text,
-            table_header: c.table_header_bg,
-            table_row: c.table_cell_bg,
-            table_row_alt: c.table_border.opacity(0.08),
-            quote_border: c.border_quote,
-            link: c.text_link,
-        });
+        .code_block(code_block)
+        .inline_code(HighlightStyle {
+            color: Some(c.code_text),
+            background_color: Some(c.code_bg),
+            ..Default::default()
+        })
+        .table_head(table_head)
+        .table_cell(table_cell);
     style.heading_base_font_size = px(t.text_size);
+    style.is_dark = c.editor_background.lightness < 0.5;
     style
 }
 
@@ -992,12 +986,7 @@ impl Block {
         }
 
         if self.host_render_is_pending(&request) {
-            return render_host_block_loading_placeholder(
-                raw,
-                theme,
-                format!("math-render-{}", self.record.id),
-                t.text_size,
-            );
+            return render_host_block_loading_placeholder(raw, theme, t.text_size);
         }
 
         // Navop's host renderer is backed by the extension WASM runtime. While
@@ -1121,12 +1110,7 @@ impl Block {
         }
 
         if self.host_render_is_pending(&request) {
-            return render_host_block_loading_placeholder(
-                raw,
-                theme,
-                format!("mermaid-render-{}", self.record.id),
-                t.code_size,
-            );
+            return render_host_block_loading_placeholder(raw, theme, t.code_size);
         }
 
         // Mermaid rendering belongs exclusively to Navop's host/WASM document
@@ -1518,10 +1502,6 @@ impl Block {
                 .child(
                     Spinner::new()
                         .with_size(Size::Small)
-                        .animation_id(format!(
-                            "inline-math-render-{}-{}",
-                            self.record.id, span.range.start
-                        ))
                         .color(theme.colors.dialog_muted),
                 )
                 .child(self.render_inline_text_segment(
@@ -2916,7 +2896,8 @@ impl Render for Block {
                     .unwrap_or_else(|| self.code_language_text())
                     .to_owned();
                 let selected_language = LanguageRegistry::singleton()
-                    .resolve_language_name(&current_language)
+                    .language(&current_language)
+                    .map(|language| language.name.to_string())
                     .unwrap_or_else(|| current_language.clone());
                 let mut language_options = LanguageRegistry::singleton().languages();
                 if !language_options
@@ -3139,7 +3120,7 @@ impl Render for Block {
                                         left_button_block,
                                         TableToolbarButton {
                                             id: format!("table-toolbar-align-left-{table_id}"),
-                                            icon: IconName::AlignLeft,
+                                            icon: crate::icons::alignment::LEFT,
                                             tooltip: SharedString::from(
                                                 t!("MarkdownEditor.table_toolbar_align_left")
                                                     .to_string(),
@@ -3161,7 +3142,7 @@ impl Render for Block {
                                         center_button_block,
                                         TableToolbarButton {
                                             id: format!("table-toolbar-align-center-{table_id}"),
-                                            icon: IconName::AlignCenter,
+                                            icon: crate::icons::alignment::CENTER,
                                             tooltip: SharedString::from(
                                                 t!("MarkdownEditor.table_toolbar_align_center")
                                                     .to_string(),
@@ -3179,7 +3160,7 @@ impl Render for Block {
                                         right_button_block,
                                         TableToolbarButton {
                                             id: format!("table-toolbar-align-right-{table_id}"),
-                                            icon: IconName::AlignRight,
+                                            icon: crate::icons::alignment::RIGHT,
                                             tooltip: SharedString::from(
                                                 t!("MarkdownEditor.table_toolbar_align_right")
                                                     .to_string(),

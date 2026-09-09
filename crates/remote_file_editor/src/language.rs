@@ -1,8 +1,4 @@
-use std::{path::Path, sync::Once};
-
-use gpui_component::highlighter::{LanguageRegistry, register_extension_manifests_dir};
-
-static LANGUAGE_MANIFEST_SCAN: Once = Once::new();
+use std::path::Path;
 
 pub fn language_for_path(path: &str, plain_text_mode: bool) -> String {
     if plain_text_mode {
@@ -19,23 +15,20 @@ pub fn language_for_path(path: &str, plain_text_mode: bool) -> String {
 }
 
 fn language_name_for_extension(extension: &str) -> Option<String> {
-    let registry = LanguageRegistry::singleton();
-    registry.language_name_for_extension(extension).or_else(|| {
-        scan_language_extension_manifests(registry);
-        registry.language_name_for_extension(extension)
-    })
+    extension_runtime::language_extensions::registered_language_name(extension)
+        .or_else(|| local_language_name(extension).map(str::to_string))
 }
 
-fn scan_language_extension_manifests(registry: &LanguageRegistry) {
-    LANGUAGE_MANIFEST_SCAN.call_once(|| {
-        let Ok(config_dir) = one_core::storage::get_config_dir() else {
-            return;
-        };
-        let root = config_dir.join("extensions").join("languages");
-        if let Err(error) = register_extension_manifests_dir(&root, registry) {
-            tracing::warn!("failed to scan language extension manifests: {error:?}");
-        }
-    });
+fn local_language_name(extension: &str) -> Option<&'static str> {
+    match extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "json" | "jsonc" => Some("json"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -58,30 +51,15 @@ mod tests {
     }
 
     #[test]
-    fn language_for_path_uses_registry_extension_lookup() {
+    fn language_for_path_maps_local_aliases() {
         assert_eq!(language_for_path("/tmp/settings.jsonc", false), "json");
     }
 
     #[test]
     fn language_for_path_ignores_query_string() {
-        let registry = gpui_component::highlighter::LanguageRegistry::singleton();
-        registry.register_wasm_manifest(
-            gpui_component::highlighter::LanguageManifest {
-                name: "__remote_html__".to_string(),
-                version: "0.1.0".to_string(),
-                file_extensions: vec!["html".to_string()],
-                injection_languages: Vec::new(),
-                requires: Vec::new(),
-                sha256_wasm: None,
-            },
-            std::path::PathBuf::new(),
-        );
-
         assert_eq!(
-            language_for_path("/tmp/index.html?token=Nwiw70H2Gs", false),
-            "__remote_html__"
+            language_for_path("/tmp/settings.jsonc?token=Nwiw70H2Gs", false),
+            "json"
         );
-
-        registry.unregister("__remote_html__");
     }
 }

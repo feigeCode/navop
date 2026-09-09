@@ -3,7 +3,7 @@
 //! 布局参考 `agent-composer-design.html`:
 //! - **顶部能力区**:计划 / Agent / 上下文;
 //! - **附件条**:编辑器顶部的附件入口 + 图片缩略图(粘贴 / 附加);
-//! - **编辑器**:基于 [`InputState`] 的多行自增高输入,注入 [`MentionCompletionProvider`] 实现 `@` 提及;
+//! - **编辑器**:基于 [`EditorState`] 的多行输入,注入 [`MentionCompletionProvider`] 实现 `@` 提及;
 //! - **底部发送栏**:模型▾ / 发送。
 //!
 //! 设计原则:输入框是"哑组件",只接收 [`AgentComposerContext`] 做展示并在交互时 emit
@@ -16,12 +16,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, Modifiers, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, img, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, Modifiers, ParentElement, PathPromptOptions, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div, img,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
 use rust_i18n::t;
@@ -131,6 +132,23 @@ impl QueuedPromptPreview {
 const CONTEXT_POPOVER_WIDTH: f32 = 400.0;
 const CONTEXT_TARGET_LIST_MAX_HEIGHT: f32 = 320.0;
 const CONTEXT_KIND_MAX_WIDTH: f32 = 92.0;
+const COMPOSER_EDITOR_MIN_ROWS: usize = 3;
+const COMPOSER_EDITOR_MAX_ROWS: usize = 10;
+const COMPOSER_EDITOR_FALLBACK_LINE_HEIGHT: f32 = 20.0;
+const COMPOSER_EDITOR_VERTICAL_PADDING: f32 = 12.0;
+
+fn composer_editor_height(state: &EditorState) -> Pixels {
+    let rows = state
+        .text()
+        .to_string()
+        .split('\n')
+        .count()
+        .clamp(COMPOSER_EDITOR_MIN_ROWS, COMPOSER_EDITOR_MAX_ROWS);
+    let line_height = state
+        .line_height()
+        .unwrap_or(px(COMPOSER_EDITOR_FALLBACK_LINE_HEIGHT));
+    line_height * rows as f32 + px(COMPOSER_EDITOR_VERTICAL_PADDING)
+}
 
 fn toolbar_button_label(label: SharedString) -> impl IntoElement {
     h_flex()
@@ -160,7 +178,7 @@ fn current_execution_mode_label(label: &SharedString) -> SharedString {
 /// Agent 输入框组件。
 pub struct AgentInput {
     focus_handle: FocusHandle,
-    input_state: Entity<InputState>,
+    input_state: Entity<EditorState>,
     /// 可被 `@` 引用的条目(同时用于补全 provider 与提交时解析)。
     mentions: Arc<Vec<MentionItem>>,
     /// 当前图片附件。
@@ -221,18 +239,22 @@ impl AgentInput {
         let placeholder = placeholder.into();
         let provider_items = (*mentions).clone();
         let input_state = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .multi_line(true)
-                .auto_grow(3, 10)
+            let mut state = EditorState::new(window, cx)
+                .line_number(false)
+                .soft_wrap(true)
+                .submit_on_enter(true)
                 .placeholder(placeholder);
-            state.lsp.completion_provider =
+            state.lsp_mut().completion_provider =
                 Some(Rc::new(MentionCompletionProvider::new(provider_items)));
             state
         });
 
         let enter_sub = cx.subscribe_in(&input_state, window, |this, _state, event, window, cx| {
-            if let InputEvent::PressEnter { secondary } = event
+            if let InputEvent::PressEnter {
+                secondary, shift, ..
+            } = event
                 && !secondary
+                && !shift
             {
                 this.submit(window, cx);
             }
@@ -272,18 +294,15 @@ impl AgentInput {
                 return;
             };
             let input_state = this.read(cx).input_state.clone();
-            let can_navigate = {
-                let state = input_state.read(cx);
+            let can_navigate = input_state.update(cx, |state, cx| {
+                let text = state.text().to_string();
                 state.focus_handle(cx).is_focused(window)
                     && state.selected_range().is_empty()
-                    && !state.has_ime_marked_text()
-                    && !state.is_context_menu_open(cx)
-                    && cursor_is_at_history_boundary(
-                        direction,
-                        &state.text().to_string(),
-                        state.cursor(),
-                    )
-            };
+                    && state.marked_text_range(window, cx).is_none()
+                    && MentionCompletionProvider::extract_mention_query(&text, state.cursor())
+                        .is_none()
+                    && cursor_is_at_history_boundary(direction, &text, state.cursor())
+            });
             if !can_navigate {
                 return;
             }
@@ -362,7 +381,8 @@ impl AgentInput {
         self.mentions = Arc::new(mentions);
         let items = (*self.mentions).clone();
         self.input_state.update(cx, |state, _| {
-            state.lsp.completion_provider = Some(Rc::new(MentionCompletionProvider::new(items)));
+            state.lsp_mut().completion_provider =
+                Some(Rc::new(MentionCompletionProvider::new(items)));
         });
     }
 
@@ -469,10 +489,9 @@ impl AgentInput {
         };
 
         self.input_state.update(cx, |state, cx| {
-            let old_len = state.text().len();
-            state.replace_text_range(0..old_len, &replacement, window, cx);
+            state.replace_all(replacement, window, cx);
             let new_len = state.text().len();
-            state.set_selected_range(new_len..new_len, false, window, cx);
+            state.set_selected_range(new_len..new_len, cx);
         });
         true
     }
@@ -808,7 +827,7 @@ impl AgentInput {
                 .debug_selector(|| "agent-execution-mode".to_string())
                 .small()
                 .w_full()
-                .h_full()
+                .h(px(32.0))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
@@ -857,7 +876,7 @@ impl AgentInput {
             Button::new("agent-model")
                 .small()
                 .w_full()
-                .h_full()
+                .h(px(32.0))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
@@ -1165,6 +1184,7 @@ impl AgentInput {
                                 .icon(IconName::ArrowUp)
                                 .primary()
                                 .small()
+                                .h(px(32.0))
                                 .tooltip(t!("AgentUi.queue_for_next_turn").to_string())
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.submit(window, cx)),
@@ -1182,6 +1202,7 @@ impl AgentInput {
                                 .icon(IconName::Close)
                                 .danger()
                                 .small()
+                                .h(px(32.0))
                                 .tooltip(t!("AgentUi.stop").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
                         ),
@@ -1198,6 +1219,7 @@ impl AgentInput {
                             .icon(IconName::ArrowUp)
                             .primary()
                             .small()
+                            .h(px(32.0))
                             .tooltip(t!("AgentUi.send").to_string())
                             .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     ),
@@ -1416,6 +1438,8 @@ fn is_running_plan_status(status: &str) -> bool {
     matches!(status, "running" | "in_progress")
 }
 
+// 渲染辅助函数:参数对应计划项行的展示要素
+#[allow(clippy::too_many_arguments)]
 fn plan_item_row(
     view: Entity<AgentInput>,
     item: ComposerPlanItem,
@@ -1677,6 +1701,8 @@ fn subagent_item_status_style(
     }
 }
 
+// 渲染辅助函数:参数对应上下文模式面板的完整状态
+#[allow(clippy::too_many_arguments)]
 fn render_context_mode_content(
     view: Entity<AgentInput>,
     options: Vec<ComposerTarget>,
@@ -2339,11 +2365,9 @@ impl Render for AgentInput {
         let queued_submissions = self.render_queued_submissions(cx);
         let toolbar = self.render_toolbar(cx);
         let theme = self.local_theme(cx);
-        let input_focused = self
-            .input_state
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(_window);
+        let input_state = self.input_state.read(cx);
+        let input_focused = input_state.focus_handle(cx).is_focused(_window);
+        let editor_height = composer_editor_height(input_state);
 
         v_flex()
             .id("agent-input-root")
@@ -2389,11 +2413,12 @@ impl Render for AgentInput {
                             })
                             .bg(theme.background)
                             .child(
-                                Input::new(&self.input_state)
-                                    .size_full()
+                                Editor::new(&self.input_state)
+                                    .w_full()
+                                    .h(editor_height)
                                     .appearance(false)
-                                    .text_color(theme.foreground)
-                                    .caret_color(theme.foreground),
+                                    .bordered(false)
+                                    .text_color(theme.foreground),
                             ),
                     ),
             )

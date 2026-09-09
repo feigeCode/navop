@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, Textarea, TextareaState},
     setting::{SettingField, SettingGroup, SettingItem},
     v_flex,
 };
@@ -21,7 +21,7 @@ pub fn sql_format_setting_group() -> SettingGroup {
         .item(keyword_case_item())
         .item(indent_item())
         .item(
-            SettingItem::render(|_options, window, cx| render_preview(window, cx)).search_texts([
+            SettingItem::render(|_options, window, cx| render_preview(window, cx)).keywords([
                 t!("Settings.General.SqlFormat.preview").to_string(),
                 t!("Settings.General.SqlFormat.preview_desc").to_string(),
             ]),
@@ -91,7 +91,7 @@ fn indent_item() -> SettingItem {
 }
 
 struct SqlFormatPreview {
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -105,8 +105,7 @@ fn render_preview(window: &mut Window, cx: &mut App) -> gpui::AnyElement {
 impl SqlFormatPreview {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(3, 8)
                 .default_value(SAMPLE_SQL.to_string())
         });
@@ -137,7 +136,7 @@ impl Render for SqlFormatPreview {
                     .text_color(cx.theme().muted_foreground)
                     .child(t!("Settings.General.SqlFormat.preview_desc")),
             )
-            .child(div().max_w(px(640.)).child(Input::new(&self.input)))
+            .child(div().max_w(px(640.)).child(Textarea::new(&self.input)))
             .child(
                 div()
                     .max_w(px(640.))

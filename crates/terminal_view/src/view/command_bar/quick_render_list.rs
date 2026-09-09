@@ -6,9 +6,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex,
-    input::{Input, LocalInputStyle},
-    scroll::ScrollableElement,
+    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, input::Input, scroll::ScrollableElement,
     v_flex, v_virtual_list,
 };
 use rust_i18n::t;
@@ -119,15 +117,8 @@ impl TerminalCommandBar {
             .child(
                 Input::new(&self.quick_search_state)
                     .appearance(false)
-                    .local_style(LocalInputStyle {
-                        background: self.colors.background,
-                        foreground: self.colors.foreground,
-                        muted_foreground: self.colors.muted_foreground,
-                        border: self.colors.border,
-                    })
                     .w_full()
                     .text_color(self.colors.foreground)
-                    .caret_color(self.colors.accent)
                     .with_size(Size::Small),
             )
             .into_any_element()

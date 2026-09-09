@@ -323,6 +323,10 @@ impl TerminalScrollbarHandle {
 }
 
 impl ScrollbarHandle for TerminalScrollbarHandle {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        Bounds::new(Point::default(), self.metrics.borrow().viewport_size)
+    }
+
     fn offset(&self) -> Point<Pixels> {
         let metrics = self.metrics.borrow();
         let line_height = metrics.line_height.max(px(1.0));

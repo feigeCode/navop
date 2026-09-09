@@ -7,12 +7,10 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, IconName, IconSize, ObjectIcon, Selectable, Size, button::IconButton, h_flex,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IconName, Selectable, Size, h_flex, v_flex};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
+use one_ui::{IconButton, IconSize};
 use rust_i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +148,7 @@ impl MongoSidebar {
 
         IconButton::new(
             format!("mongodb-sidebar-btn-{panel:?}"),
-            ObjectIcon::new(IconName::AILine),
+            Icon::new(IconName::AILine),
         )
         .hit_size(item_size)
         .glyph_size(IconSize::Medium)

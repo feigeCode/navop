@@ -60,31 +60,5 @@ fn component_runtime_runs_action_with_action_context() {
         },
     );
 
-    let views =
-        futures::executor::block_on(runtime.run_action_with_db(state, action_context())).unwrap();
-
-    assert!(views.is_empty());
-}
-
-#[test]
-fn component_runtime_handles_view_action_with_form_values() {
-    let runtime =
-        ComponentRuntime::from_wat_for_tests("component", MINIMAL_EXTENSION_COMPONENT).unwrap();
-    let state = ComponentHostState::new(
-        "ext",
-        NoopDbHost {
-            connections: Vec::new(),
-        },
-    );
-    let event = extension_component::ViewActionEvent {
-        view_id: "full-search".to_string(),
-        action_id: "run".to_string(),
-        fields: vec![extension_component::FieldValue {
-            id: "database".to_string(),
-            value: "app".to_string(),
-        }],
-    };
-
-    futures::executor::block_on(runtime.handle_view_action_with_db(state, action_context(), event))
-        .unwrap();
+    futures::executor::block_on(runtime.run_action_with_db(state, action_context())).unwrap();
 }

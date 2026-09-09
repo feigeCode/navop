@@ -7,8 +7,9 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, DialogHandle, WindowExt,
+    ActiveTheme, WindowExt,
     button::{Button, ButtonVariants},
+    dialog::DialogFooter,
     h_flex,
     scroll::ScrollableElement,
     v_flex,
@@ -59,10 +60,9 @@ impl SftpView {
         let response = Arc::downgrade(&request.response);
         let view = cx.entity().downgrade();
         let window_handle = window.window_handle();
-        let dialog_handle = open_prompt_dialog(view, request, window, cx);
+        open_prompt_dialog(view, request, window, cx);
         self.direct_copy_prompt = Some(ActiveDirectCopyPrompt {
             task_id,
-            dialog_handle,
             window_handle,
             response,
         });
@@ -73,12 +73,12 @@ impl SftpView {
         task_id: usize,
         cx: &mut Context<Self>,
     ) {
-        let Some((dialog_handle, window_handle)) =
+        let Some(window_handle) =
             self.resolve_direct_copy_prompt(task_id, DirectCopyDecision::UseRelay)
         else {
             return;
         };
-        close_direct_copy_dialog(dialog_handle, window_handle, cx);
+        close_direct_copy_dialog(window_handle, cx);
     }
 
     pub(crate) fn close_active_direct_copy_prompt(&mut self, cx: &mut Context<Self>) {
@@ -96,7 +96,7 @@ impl SftpView {
         &mut self,
         task_id: usize,
         decision: DirectCopyDecision,
-    ) -> Option<(DialogHandle, AnyWindowHandle)> {
+    ) -> Option<AnyWindowHandle> {
         let Some(prompt) = self.direct_copy_prompt.take() else {
             return None;
         };
@@ -107,7 +107,7 @@ impl SftpView {
         if let Some(response) = prompt.response.upgrade() {
             send_prompt_decision(&response, decision);
         }
-        Some((prompt.dialog_handle, prompt.window_handle))
+        Some(prompt.window_handle)
     }
 
     fn drop_stale_direct_copy_prompt(&mut self) {
@@ -121,14 +121,8 @@ impl SftpView {
     }
 }
 
-fn close_direct_copy_dialog(
-    dialog_handle: DialogHandle,
-    window_handle: AnyWindowHandle,
-    cx: &mut Context<SftpView>,
-) {
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-        window.close_dialog_by_handle(dialog_handle, cx)
-    });
+fn close_direct_copy_dialog(window_handle: AnyWindowHandle, cx: &mut Context<SftpView>) {
+    let _ = cx.update_window(window_handle, |_, window, cx| window.close_dialog(cx));
 }
 
 fn open_prompt_dialog(
@@ -136,12 +130,12 @@ fn open_prompt_dialog(
     request: DirectCopyPromptRequest,
     window: &mut Window,
     cx: &mut Context<SftpView>,
-) -> DialogHandle {
+) {
     let task_id = request.task_id;
     let preview = request.preview;
     let response = request.response;
 
-    window.open_dialog_with_handle(cx, move |dialog_handle, dialog, _window, cx| {
+    window.open_dialog(cx, move |dialog, _window, cx| {
         let direct_response = response.clone();
         let relay_response = response.clone();
         let cancel_response = response.clone();
@@ -151,6 +145,33 @@ fn open_prompt_dialog(
         let cancel_view = view.clone();
         let escape_view = view.clone();
 
+        let footer = DialogFooter::new().children(vec![
+            prompt_button(
+                "sftp-direct-copy-cancel",
+                t!("Transfer.direct_copy_cancel").to_string(),
+                PromptAction::Cancel,
+                task_id,
+                cancel_view,
+                cancel_response,
+            ),
+            prompt_button(
+                "sftp-direct-copy-relay",
+                t!("Transfer.direct_copy_use_relay").to_string(),
+                PromptAction::UseRelay,
+                task_id,
+                relay_view,
+                relay_response,
+            ),
+            prompt_button(
+                "sftp-direct-copy-confirm",
+                t!("Transfer.direct_copy_use_direct").to_string(),
+                PromptAction::UseDirect,
+                task_id,
+                direct_view,
+                direct_response,
+            ),
+        ]);
+
         dialog
             .title(t!("Transfer.direct_copy_title").to_string())
             .w(px(600.))
@@ -159,7 +180,6 @@ fn open_prompt_dialog(
                 finish_prompt(
                     &escape_view,
                     task_id,
-                    dialog_handle,
                     &escape_response,
                     PromptAction::Cancel.decision(),
                     window,
@@ -167,86 +187,34 @@ fn open_prompt_dialog(
                 );
                 false
             })
-            .footer(move |_, _, window, cx| {
-                vec![
-                    prompt_button(
-                        "sftp-direct-copy-cancel",
-                        t!("Transfer.direct_copy_cancel").to_string(),
-                        PromptAction::Cancel,
-                        task_id,
-                        dialog_handle,
-                        cancel_view.clone(),
-                        cancel_response.clone(),
-                    ),
-                    prompt_button(
-                        "sftp-direct-copy-relay",
-                        t!("Transfer.direct_copy_use_relay").to_string(),
-                        PromptAction::UseRelay,
-                        task_id,
-                        dialog_handle,
-                        relay_view.clone(),
-                        relay_response.clone(),
-                    ),
-                    prompt_button(
-                        "sftp-direct-copy-confirm",
-                        t!("Transfer.direct_copy_use_direct").to_string(),
-                        PromptAction::UseDirect,
-                        task_id,
-                        dialog_handle,
-                        direct_view.clone(),
-                        direct_response.clone(),
-                    ),
-                ]
-                .into_iter()
-                .map(|button| button(window, cx))
-                .collect()
-            })
+            .footer(footer)
             .overlay_closable(false)
             .close_button(false)
     })
 }
 
-type PromptButton = Box<dyn Fn(&mut Window, &mut gpui::App) -> AnyElement>;
-
-#[allow(clippy::too_many_arguments)]
 fn prompt_button(
     id: &'static str,
     label: String,
     action: PromptAction,
     task_id: usize,
-    dialog_handle: DialogHandle,
     view: WeakEntity<SftpView>,
     response: PromptDecisionSender,
-) -> PromptButton {
-    Box::new(move |_window, _cx| {
-        let view = view.clone();
-        let response = response.clone();
-        let decision = action.decision();
-        let button = Button::new(id)
-            .label(label.clone())
-            .on_click(move |_, window, cx| {
-                finish_prompt(
-                    &view,
-                    task_id,
-                    dialog_handle,
-                    &response,
-                    decision,
-                    window,
-                    cx,
-                );
-            });
-        if action.is_primary() {
-            button.primary().into_any_element()
-        } else {
-            button.ghost().into_any_element()
-        }
-    })
+) -> AnyElement {
+    let decision = action.decision();
+    let button = Button::new(id).label(label).on_click(move |_, window, cx| {
+        finish_prompt(&view, task_id, &response, decision, window, cx);
+    });
+    if action.is_primary() {
+        button.primary().into_any_element()
+    } else {
+        button.ghost().into_any_element()
+    }
 }
 
 fn finish_prompt(
     view: &WeakEntity<SftpView>,
     task_id: usize,
-    dialog_handle: DialogHandle,
     response: &PromptDecisionSender,
     decision: DirectCopyDecision,
     window: &mut Window,
@@ -259,7 +227,7 @@ fn finish_prompt(
     let _ = view.update(cx, |this, _cx| {
         let _ = this.resolve_direct_copy_prompt(task_id, decision);
     });
-    window.close_dialog_by_handle(dialog_handle, cx);
+    window.close_dialog(cx);
 }
 
 impl SftpView {

@@ -24,7 +24,10 @@ pub fn apply_query_max_rows(db_type: &DatabaseType, sql: &str, max_rows: usize) 
         }
         // Returned before tokenization; keep this arm for exhaustive matching.
         DatabaseType::Oracle => sql.to_string(),
-        DatabaseType::MySQL | DatabaseType::SQLite | DatabaseType::ClickHouse => {
+        DatabaseType::MySQL
+        | DatabaseType::SQLite
+        | DatabaseType::ClickHouse
+        | DatabaseType::TDengine => {
             if has_top_level_keyword(&query.tokens, &["LIMIT"]) {
                 sql.to_string()
             } else {
@@ -331,6 +334,8 @@ fn tokenizer_dialect(db_type: &DatabaseType) -> Box<dyn sqlparser::dialect::Dial
         DatabaseType::MSSQL => Box::new(MsSqlDialect {}),
         DatabaseType::Oracle => Box::new(OracleDialect {}),
         DatabaseType::ClickHouse => Box::new(ClickHouseDialect {}),
+        // TDengine 方言与 MySQL 一致(反引号引用、LIMIT)。
+        DatabaseType::TDengine => Box::new(MySqlDialect {}),
         DatabaseType::External { .. } => Box::new(GenericDialect {}),
     }
 }

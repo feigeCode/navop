@@ -2078,7 +2078,6 @@ impl DatabaseEventHandler {
                     false
                 })
                 .on_cancel(|_, _window, _cx| true)
-                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
         });
     }
 
@@ -2198,7 +2197,6 @@ impl DatabaseEventHandler {
                     false
                 })
                 .on_cancel(|_, _window, _cx| true)
-                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
         });
     }
 
@@ -2485,7 +2483,6 @@ impl DatabaseEventHandler {
                     false
                 })
                 .on_cancel(|_, _window, _cx| true)
-                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
         });
     }
 
@@ -4619,14 +4616,14 @@ mod tests {
     }
 
     #[test]
-    fn database_dialog_custom_footers_capture_latest_callbacks() {
+    fn database_dialogs_bind_callbacks_and_button_props() {
         let source = include_str!("db_tree_event.rs");
-        assert_dialog_footer_after_callbacks(source, "fn handle_create_database(");
-        assert_dialog_footer_after_callbacks(source, "fn handle_edit_database(");
-        assert_dialog_footer_after_callbacks(source, "fn handle_create_schema(");
+        assert_dialog_callbacks_and_buttons(source, "fn handle_create_database(");
+        assert_dialog_callbacks_and_buttons(source, "fn handle_edit_database(");
+        assert_dialog_callbacks_and_buttons(source, "fn handle_create_schema(");
     }
 
-    fn assert_dialog_footer_after_callbacks(source: &str, marker: &str) {
+    fn assert_dialog_callbacks_and_buttons(source: &str, marker: &str) {
         let start = source.find(marker).expect("handler exists");
         let rest = &source[start..];
         let end = rest
@@ -4638,11 +4635,10 @@ mod tests {
         let on_cancel = body
             .find(".on_cancel(")
             .expect("handler binds cancel callback");
-        let footer = body.find(".footer(").expect("handler uses custom footer");
-
-        assert!(
-            on_ok < footer && on_cancel < footer,
-            "{marker} must bind dialog callbacks before building custom footer buttons"
-        );
+        let buttons = body
+            .find(".button_props(")
+            .expect("handler configures dialog buttons");
+        assert_ne!(on_ok, on_cancel);
+        assert_ne!(on_ok, buttons);
     }
 }

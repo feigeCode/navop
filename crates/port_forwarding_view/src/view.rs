@@ -11,7 +11,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::Input,
+    input::{Input, Textarea},
     select::Select,
     v_flex,
 };
@@ -121,7 +121,7 @@ impl PortForwardingFormWindow {
                     })
                     .child(self.render_row(
                         t!("PortForwarding.remark").to_string(),
-                        Input::new(&self.remark_input),
+                        Textarea::new(&self.remark_input),
                     )),
             )
     }

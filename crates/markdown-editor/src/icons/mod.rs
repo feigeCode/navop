@@ -28,3 +28,11 @@ pub(crate) mod indicators {
 
     pub(crate) const CHECKED: IconName = IconName::Check;
 }
+
+pub(crate) mod alignment {
+    use super::IconName;
+
+    pub(crate) const LEFT: IconName = IconName::PanelLeft;
+    pub(crate) const CENTER: IconName = IconName::Menu;
+    pub(crate) const RIGHT: IconName = IconName::PanelRight;
+}

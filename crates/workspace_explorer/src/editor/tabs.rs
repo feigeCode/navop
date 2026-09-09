@@ -1,8 +1,7 @@
 use super::WorkspaceEditor;
 use crate::diff::change_starts;
 use crate::model::active_index_after_close;
-use gpui::{AppContext as _, Context, PromptLevel, Window};
-use gpui_component::input::Search;
+use gpui::{AppContext as _, Context, Focusable as _, PromptLevel, Window, point};
 use rust_i18n::t;
 
 #[derive(Clone, Copy)]
@@ -171,8 +170,14 @@ impl WorkspaceEditor {
         if let Some(tab) = self.active_tab_mut() {
             tab.diff_change_cursor = Some(next_index);
         }
-        left.update(cx, |state, cx| state.scroll_to_line(row, cx));
-        right.update(cx, |state, cx| state.scroll_to_line(row, cx));
+        left.update(cx, |state, cx| {
+            let y = -state.line_height().unwrap_or(gpui::px(20.0)) * row;
+            state.set_scroll_offset(point(state.scroll_offset().x, y), cx);
+        });
+        right.update(cx, |state, cx| {
+            let y = -state.line_height().unwrap_or(gpui::px(20.0)) * row;
+            state.set_scroll_offset(point(state.scroll_offset().x, y), cx);
+        });
         cx.notify();
     }
 
@@ -182,7 +187,7 @@ impl WorkspaceEditor {
         };
         let editor = if tab.diff_side_by_side {
             tab.diff_editors.as_ref().map(|editors| {
-                if editors.right.read(cx).is_focused(window) {
+                if editors.right.read(cx).focus_handle(cx).is_focused(window) {
                     editors.right.clone()
                 } else {
                     editors.left.clone()
@@ -194,8 +199,10 @@ impl WorkspaceEditor {
         let Some(editor) = editor else {
             return;
         };
-        editor.update(cx, |state, cx| state.focus(window, cx));
-        window.dispatch_action(Box::new(Search), cx);
+        editor.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.open_search(false, cx);
+        });
     }
 
     pub(super) fn trigger_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -203,7 +210,10 @@ impl WorkspaceEditor {
             return;
         };
         if let Some(editor) = tab.editor.as_ref() {
-            editor.update(cx, |state, cx| state.open_search_and_replace(window, cx));
+            editor.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.open_search(true, cx);
+            });
         }
     }
 }

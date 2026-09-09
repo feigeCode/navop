@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use gpui::{Context, IntoElement, ParentElement, Task, Window};
 use gpui_component::WindowExt;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::dialog::DialogFooter;
 use rust_i18n::t;
 use tokio::sync::oneshot;
 
@@ -28,12 +29,11 @@ pub(crate) fn try_close(
             .title(t!("PortForwardingTab.close_title").to_string())
             .overlay_closable(false)
             .close_button(false)
-            .footer(move |_, _, _, _| {
-                vec![
-                    cancel_button(cancel.clone()),
-                    confirm_button(confirm.clone(), view.clone()),
-                ]
-            })
+            .footer(
+                DialogFooter::new()
+                    .child(cancel_button(cancel.clone()))
+                    .child(confirm_button(confirm.clone(), view.clone())),
+            )
             .child(t!("PortForwardingTab.close_warning").to_string())
     });
     cx.spawn(async move |_this, _cx| rx.await.unwrap_or(false))

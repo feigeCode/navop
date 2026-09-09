@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::db_object_selector::DbSelectorKind;
 use db::{DbNode, DbNodeType, GlobalDbState};
-use extension_component::DbSelectorKind;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled,
@@ -102,7 +102,7 @@ pub struct SchemaCompareWindow {
     pub(super) failure_details_list: CompareIssueListState,
     pub(super) failure_details_expanded: Entity<bool>,
     pub(super) sync_warnings_expanded: Entity<bool>,
-    pub(super) sync_sql_editor: Entity<InputState>,
+    pub(super) sync_sql_editor: Entity<gpui_component::input::EditorState>,
     sync_sql_dirty: bool,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     pub(super) execution_log_scroll: ScrollHandle,

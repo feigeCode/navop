@@ -6,13 +6,14 @@ use gpui::{
     Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt,
+    ActiveTheme, IconName, IndexPath, Sizable, StyledExt,
     checkbox::Checkbox,
     h_flex,
     list::{List, ListDelegate, ListItem, ListState},
     tag::Tag,
     v_flex,
 };
+use one_ui::ContentState;
 use rust_i18n::t;
 use serde_json::{Map, Value};
 use std::{

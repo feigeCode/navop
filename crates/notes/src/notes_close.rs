@@ -1,10 +1,11 @@
 use crate::NotesView;
 use crate::markdown_session::{MarkdownSessionState, MarkdownSyncState};
 use futures::channel::oneshot;
-use gpui::{App, AppContext, Context, IntoElement, ParentElement, SharedString, Task, Window};
+use gpui::{App, AppContext, Context, ParentElement, SharedString, Task, Window};
 use gpui_component::{
     Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants},
+    dialog::DialogFooter,
 };
 use one_core::tab_container::TabContent;
 use rust_i18n::t;
@@ -283,36 +284,34 @@ fn confirm_markdown_close(
             .title(title.clone())
             .overlay_closable(false)
             .close_button(false)
-            .footer(move |_ok, _cancel, _window, _cx| {
-                let tx_cancel = tx_cancel.clone();
-                let tx_discard = tx_discard.clone();
-                let tx_save = tx_save.clone();
-
-                vec![
-                    Button::new("notes-close-cancel")
-                        .label(t!("Notes.markdown_conflict_cancel").to_string())
-                        .on_click(move |_, window: &mut Window, cx| {
-                            window.close_dialog(cx);
-                            send_close_choice(&tx_cancel, MarkdownCloseChoice::Cancel);
-                        })
-                        .into_any_element(),
-                    Button::new("notes-close-discard")
-                        .label(discard_label.clone())
-                        .on_click(move |_, window: &mut Window, cx| {
-                            window.close_dialog(cx);
-                            send_close_choice(&tx_discard, MarkdownCloseChoice::Discard);
-                        })
-                        .into_any_element(),
-                    Button::new("notes-close-save")
-                        .label(save_label.clone())
-                        .primary()
-                        .on_click(move |_, window: &mut Window, cx| {
-                            window.close_dialog(cx);
-                            send_close_choice(&tx_save, MarkdownCloseChoice::Save);
-                        })
-                        .into_any_element(),
-                ]
-            })
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("notes-close-cancel")
+                            .label(t!("Notes.markdown_conflict_cancel").to_string())
+                            .on_click(move |_, window: &mut Window, cx| {
+                                window.close_dialog(cx);
+                                send_close_choice(&tx_cancel, MarkdownCloseChoice::Cancel);
+                            }),
+                    )
+                    .child(
+                        Button::new("notes-close-discard")
+                            .label(discard_label.clone())
+                            .on_click(move |_, window: &mut Window, cx| {
+                                window.close_dialog(cx);
+                                send_close_choice(&tx_discard, MarkdownCloseChoice::Discard);
+                            }),
+                    )
+                    .child(
+                        Button::new("notes-close-save")
+                            .label(save_label.clone())
+                            .primary()
+                            .on_click(move |_, window: &mut Window, cx| {
+                                window.close_dialog(cx);
+                                send_close_choice(&tx_save, MarkdownCloseChoice::Save);
+                            }),
+                    ),
+            )
             .child(message.clone())
     });
 

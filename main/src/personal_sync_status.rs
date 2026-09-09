@@ -1,7 +1,8 @@
 use one_core::cloud_sync::personal::{SyncStoreError, SyncStoreHealth};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum PersonalSyncRuntimeStatus {
+    #[default]
     Disabled,
     Ready {
         health: SyncStoreHealth,
@@ -12,12 +13,6 @@ pub enum PersonalSyncRuntimeStatus {
         health: SyncStoreHealth,
         message: String,
     },
-}
-
-impl Default for PersonalSyncRuntimeStatus {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 impl PersonalSyncRuntimeStatus {

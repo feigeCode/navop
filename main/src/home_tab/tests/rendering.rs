@@ -168,10 +168,10 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     // (PopupMenuItem callbacks do not go through window.listener_for).
     assert!(
         !modern_home.replace(
-            "open_view.update(cx, |home, cx| {\n                                    home.open_connection_from_quick(&open_conn, window, cx);\n                                });",
+            "open_view.update(cx, |home, cx| {\n                                        home.open_connection_from_quick(&open_conn, window, cx);\n                                    });",
             ""
         ).replace(
-            "edit_view.update(cx, |home, cx| {\n                                    home.edit_connection(edit_conn.clone(), window, cx);\n                                });",
+            "edit_view.update(cx, |home, cx| {\n                                        home.edit_connection(edit_conn.clone(), window, cx);\n                                    });",
             ""
         ).replace("new_tab_view.update", "")
         .replace("remove_view.update", "")
@@ -358,8 +358,7 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(modern_home.contains("all_navigation_applications("));
     assert!(quick_open.contains("fn overflow_connection_types()"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
-    assert!(sidebar_navigation.contains("FunctionalIcon::new(IconName::User)"));
-    assert!(!sidebar_navigation.contains("ObjectIcon::new(IconName::User)"));
+    assert!(sidebar_navigation.contains("Icon::new(IconName::User)"));
     assert!(sidebar_navigation.contains("\"legacy-more-connection-types\""));
     assert!(sidebar_navigation.contains("\"legacy-more-applications\""));
     assert_eq!(

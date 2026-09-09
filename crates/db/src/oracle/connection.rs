@@ -47,6 +47,20 @@ impl OracleDbConnection {
         }
     }
 
+    /// 解析连接表单的 Oracle 角色（default / sysdba / sysoper）为特权模式。
+    fn connect_privilege(config: &DbConnectionConfig) -> Option<oracle::Privilege> {
+        match config
+            .get_param(crate::ORACLE_ROLE_PARAM)?
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "sysdba" => Some(oracle::Privilege::Sysdba),
+            "sysoper" => Some(oracle::Privilege::Sysoper),
+            _ => None,
+        }
+    }
+
     fn format_binary(bytes: &[u8]) -> String {
         if bytes.is_empty() {
             return String::new();
@@ -440,10 +454,15 @@ impl DbConnection for OracleDbConnection {
         );
 
         // 使用 tokio::timeout 包装 spawn_blocking
+        let privilege = Self::connect_privilege(&config);
         let conn_result = timeout(
             Duration::from_secs(connect_timeout_secs),
             tokio::task::spawn_blocking(move || {
-                oracle::Connection::connect(&username, &password, &connect_string).map_err(|e| {
+                let mut connector = oracle::Connector::new(&username, &password, &connect_string);
+                if let Some(privilege) = privilege {
+                    connector.privilege(privilege);
+                }
+                connector.connect().map_err(|e| {
                     error!("[Oracle] Connection failed: {}", e);
                     DbError::connection_with_source("failed to connect", e)
                 })
@@ -882,6 +901,30 @@ mod tests {
         let connection = OracleDbConnection::new(test_config());
 
         assert_eq!("SELECT 1 FROM DUAL", connection.ping_query());
+    }
+
+    #[test]
+    fn oracle_connect_privilege_maps_form_role() {
+        let mut config = test_config();
+
+        assert_eq!(None, OracleDbConnection::connect_privilege(&config));
+
+        for (role, expected) in [
+            ("sysdba", Some(oracle::Privilege::Sysdba)),
+            ("SYSDBA", Some(oracle::Privilege::Sysdba)),
+            (" sysoper ", Some(oracle::Privilege::Sysoper)),
+            ("default", None),
+            ("unknown", None),
+        ] {
+            config
+                .extra_params
+                .insert(crate::ORACLE_ROLE_PARAM.to_string(), role.to_string());
+            assert_eq!(
+                expected,
+                OracleDbConnection::connect_privilege(&config),
+                "role {role:?} should map to {expected:?}"
+            );
+        }
     }
 
     #[test]

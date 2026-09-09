@@ -39,14 +39,29 @@ pub enum DocumentFormat {
     Markdown,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkdownViewMode {
     #[default]
     Wysiwyg,
     Source,
-    /// 左侧源码编辑、右侧只读预览分栏；可编辑侧使用 Source 模式。
-    Split,
+}
+
+impl<'de> Deserialize<'de> for MarkdownViewMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as Deserialize>::deserialize(deserializer)?;
+        match value.as_str() {
+            "wysiwyg" => Ok(Self::Wysiwyg),
+            "source" | "split" => Ok(Self::Source),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["wysiwyg", "source"],
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +133,23 @@ mod tests {
         assert_eq!(
             r#""markdown""#,
             serde_json::to_string(&state.last_created_format).unwrap()
+        );
+    }
+
+    #[test]
+    fn legacy_split_mode_migrates_to_source() {
+        let state: NotebookUiState = serde_json::from_str(
+            r#"{"selected_document":null,"expanded_directories":[],"markdown_view_modes":{"doc-1":"split"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            MarkdownViewMode::Source,
+            state.markdown_view_modes.get("doc-1").copied().unwrap()
+        );
+        assert_eq!(
+            r#""source""#,
+            serde_json::to_string(&MarkdownViewMode::Source).unwrap()
         );
     }
 }

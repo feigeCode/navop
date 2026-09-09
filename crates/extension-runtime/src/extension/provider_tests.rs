@@ -491,16 +491,13 @@ fn register_language_extension_manifests_from_root_does_not_load_wasm() {
     .unwrap();
     fs::write(language_dir.join("parser.wasm"), [0u8; 4]).unwrap();
 
-    let registry = gpui_component::highlighter::LanguageRegistry::singleton();
     let report = register_language_extension_manifests_from_root(&root).unwrap();
 
     assert_eq!(vec!["__runtime_lazy_manifest__".to_string()], report.loaded);
     assert!(report.failed.is_empty());
     assert_eq!(
-        registry
-            .language_name_for_extension("lazy_manifest")
-            .as_deref(),
+        crate::language_extensions::registered_language_name("lazy_manifest").as_deref(),
         Some("__runtime_lazy_manifest__")
     );
-    assert!(registry.unregister("__runtime_lazy_manifest__"));
+    crate::language_extensions::forget_language("__runtime_lazy_manifest__");
 }

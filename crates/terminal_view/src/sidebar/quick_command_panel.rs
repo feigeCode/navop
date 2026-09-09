@@ -10,12 +10,12 @@ use gpui::{
     uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariant, IconButton, IconButtonRole},
+    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
+    button::{Button, ButtonCustomVariant, ButtonVariant},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputEvent, InputState, LocalInputStyle},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     notification::Notification,
     radio::{Radio, RadioGroup},
@@ -27,6 +27,7 @@ use one_core::keybindings::shortcut_spec_from_keystroke;
 use one_core::storage::{
     GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,
 };
+use one_ui::{IconButton, IconButtonRole};
 use palette::IntoColor;
 use rust_i18n::t;
 use std::{ops::Range, sync::Arc};
@@ -326,15 +327,6 @@ fn normalize_group_fields(
         .map(|color| color.trim().to_string())
         .filter(|color| !color.is_empty());
     (Some(group_name), group_color)
-}
-
-fn quick_command_dialog_input_style(colors: &TerminalColors) -> LocalInputStyle {
-    LocalInputStyle {
-        background: colors.muted,
-        foreground: colors.foreground,
-        muted_foreground: colors.muted_foreground,
-        border: colors.border,
-    }
 }
 
 fn quick_command_dialog_button_variants(
@@ -775,9 +767,8 @@ impl QuickCommandPanel {
                 .default_value(&initial_name)
         });
         let description_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("QuickCommand.description_placeholder").to_string())
-                .multi_line(true)
                 .rows(2)
                 .default_value(&initial_description)
         });
@@ -800,9 +791,8 @@ impl QuickCommandPanel {
             )
         });
         let command_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("QuickCommand.command_placeholder").to_string())
-                .multi_line(true)
                 .rows(4)
                 .default_value(&initial_command)
         });
@@ -828,7 +818,6 @@ impl QuickCommandPanel {
             t!("QuickCommand.add_action").to_string()
         };
         let colors = self.colors.clone();
-        let input_style = quick_command_dialog_input_style(&colors);
         let view = cx.entity().clone();
         window.open_dialog(cx, move |dialog, _window, dialog_cx| {
             let view_ok = view.clone();
@@ -847,7 +836,6 @@ impl QuickCommandPanel {
                 .text_color(colors.foreground)
                 .border_color(colors.border)
                 .title(title.clone())
-                .confirm()
                 .child(
                     v_flex()
                         .gap_2()
@@ -867,13 +855,9 @@ impl QuickCommandPanel {
                                         .child(t!("QuickCommand.name").to_string()),
                                 )
                                 .child(
-                                    div().flex_1().child(
-                                        Input::new(&name_state)
-                                            .small()
-                                            .w_full()
-                                            .local_style(input_style)
-                                            .caret_color(colors.foreground),
-                                    ),
+                                    div()
+                                        .flex_1()
+                                        .child(Input::new(&name_state).small().w_full()),
                                 ),
                         )
                         .child(
@@ -890,14 +874,10 @@ impl QuickCommandPanel {
                                         .child(t!("QuickCommand.description").to_string()),
                                 )
                                 .child(
-                                    div().flex_1().h(gpui::px(64.0)).child(
-                                        Input::new(&description_state)
-                                            .small()
-                                            .w_full()
-                                            .h_full()
-                                            .local_style(input_style)
-                                            .caret_color(colors.foreground),
-                                    ),
+                                    div()
+                                        .flex_1()
+                                        .h(gpui::px(64.0))
+                                        .child(Textarea::new(&description_state).w_full().h_full()),
                                 ),
                         )
                         .child(
@@ -914,13 +894,9 @@ impl QuickCommandPanel {
                                         .child(t!("QuickCommand.group").to_string()),
                                 )
                                 .child(
-                                    div().flex_1().child(
-                                        Input::new(&group_state)
-                                            .small()
-                                            .w_full()
-                                            .local_style(input_style)
-                                            .caret_color(colors.foreground),
-                                    ),
+                                    div()
+                                        .flex_1()
+                                        .child(Input::new(&group_state).small().w_full()),
                                 )
                                 .child(
                                     div()
@@ -931,18 +907,10 @@ impl QuickCommandPanel {
                                         .child(t!("QuickCommand.group_color").to_string()),
                                 )
                                 .child(
-                                    div().w(gpui::px(144.0)).flex_shrink_0().child(
-                                        Select::new(&color_state)
-                                            .small()
-                                            .w_full()
-                                            .local_style(input_style)
-                                            .local_menu_item_style(
-                                                colors.foreground,
-                                                colors.muted,
-                                                colors.accent,
-                                                colors.accent_foreground,
-                                            ),
-                                    ),
+                                    div()
+                                        .w(gpui::px(144.0))
+                                        .flex_shrink_0()
+                                        .child(Select::new(&color_state).small().w_full()),
                                 ),
                         )
                         .child(
@@ -959,14 +927,10 @@ impl QuickCommandPanel {
                                         .child(t!("QuickCommand.command").to_string()),
                                 )
                                 .child(
-                                    div().flex_1().h(gpui::px(108.0)).child(
-                                        Input::new(&command_state)
-                                            .small()
-                                            .w_full()
-                                            .h_full()
-                                            .local_style(input_style)
-                                            .caret_color(colors.foreground),
-                                    ),
+                                    div()
+                                        .flex_1()
+                                        .h(gpui::px(108.0))
+                                        .child(Textarea::new(&command_state).w_full().h_full()),
                                 ),
                         )
                         .child(editor_state.clone())
@@ -974,6 +938,7 @@ impl QuickCommandPanel {
                 )
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(ok_text.clone())
                         .ok_variant(ok_variant)
                         .cancel_text(t!("QuickCommand.cancel").to_string())
@@ -1196,7 +1161,6 @@ impl QuickCommandPanel {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let input_style = quick_command_dialog_input_style(&colors);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("QuickCommand.rename_group_placeholder").to_string())
@@ -1213,18 +1177,14 @@ impl QuickCommandPanel {
                 .text_color(colors.foreground)
                 .border_color(colors.border)
                 .title(t!("QuickCommand.rename_group").to_string())
-                .confirm()
                 .child(
-                    div().bg(colors.background).child(
-                        Input::new(&input)
-                            .small()
-                            .w_full()
-                            .local_style(input_style)
-                            .caret_color(colors.foreground),
-                    ),
+                    div()
+                        .bg(colors.background)
+                        .child(Input::new(&input).small().w_full()),
                 )
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("QuickCommand.save").to_string())
                         .ok_variant(ok_variant)
                         .cancel_text(t!("QuickCommand.cancel").to_string())
@@ -1261,7 +1221,6 @@ impl QuickCommandPanel {
                 .text_color(colors.foreground)
                 .border_color(colors.border)
                 .title(t!("QuickCommand.delete_group").to_string())
-                .confirm()
                 .child(
                     div()
                         .bg(colors.background)
@@ -1272,6 +1231,7 @@ impl QuickCommandPanel {
                 )
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("QuickCommand.delete_group").to_string())
                         .ok_variant(ok_variant)
                         .cancel_text(t!("QuickCommand.cancel").to_string())
@@ -1463,7 +1423,7 @@ impl QuickCommandPanel {
                 ),
             )
             .child(
-                IconButton::new("add-command", FunctionalIcon::new(IconName::Plus))
+                IconButton::new("add-command", IconName::Plus)
                     .role(IconButtonRole::Compact)
                     .tooltip(t!("QuickCommand.add_tooltip").to_string())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1652,11 +1612,11 @@ impl QuickCommandPanel {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!("pin-{index}")),
-                                    FunctionalIcon::new(if is_pinned {
+                                    if is_pinned {
                                         IconName::StarOff
                                     } else {
                                         IconName::Star
-                                    }),
+                                    },
                                 )
                                 .role(IconButtonRole::Compact)
                                 .tooltip(if is_pinned {
@@ -1674,7 +1634,7 @@ impl QuickCommandPanel {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!("edit-{index}")),
-                                    FunctionalIcon::new(IconName::Edit),
+                                    IconName::Edit,
                                 )
                                 .role(IconButtonRole::Compact)
                                 .tooltip(t!("QuickCommand.edit_tooltip").to_string())
@@ -1692,7 +1652,7 @@ impl QuickCommandPanel {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!("copy-{index}")),
-                                    FunctionalIcon::new(IconName::Copy),
+                                    IconName::Copy,
                                 )
                                 .role(IconButtonRole::Compact)
                                 .tooltip(t!("QuickCommand.copy_tooltip").to_string())
@@ -1705,7 +1665,7 @@ impl QuickCommandPanel {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!("delete-{index}")),
-                                    FunctionalIcon::new(IconName::Remove),
+                                    IconName::Remove,
                                 )
                                 .role(IconButtonRole::Compact)
                                 .text_color(cx.theme().danger)
@@ -1724,7 +1684,7 @@ impl QuickCommandPanel {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!("paste-{index}")),
-                                    FunctionalIcon::new(IconName::Paste),
+                                    IconName::Paste,
                                 )
                                 .role(IconButtonRole::Compact)
                                 .tooltip(t!("QuickCommand.paste_tooltip").to_string())
@@ -1861,14 +1821,12 @@ mod tests {
         QuickCommandGroupFilter, QuickCommandScope, ShortcutCapture, ShortcutCaptureLabel,
         apply_auto_run_marker, capture_quick_command_shortcut, command_matches_group_filter,
         connection_id_for_scope, new_command_group_defaults, normalize_group_fields,
-        normalize_quick_command_value, quick_command_dialog_input_style,
-        quick_command_group_chip_label, quick_command_group_color_items, quick_command_groups,
-        shortcut_capture_label, validated_quick_command_shortcut,
+        normalize_quick_command_value, quick_command_group_chip_label,
+        quick_command_group_color_items, quick_command_groups, shortcut_capture_label,
+        validated_quick_command_shortcut,
     };
-    use crate::theme::TerminalColors;
-    use gpui::{Keystroke, rgb};
+    use gpui::Keystroke;
     use one_core::storage::QuickCommand;
-    use palette::IntoColor as _;
 
     fn command_in_group(group_name: Option<&str>) -> QuickCommand {
         let mut command = QuickCommand::new("echo test".to_string());
@@ -2063,26 +2021,6 @@ mod tests {
             normalize_group_fields(" deploy ".to_string(), Some("green".to_string())),
             (Some("deploy".to_string()), Some("green".to_string()))
         );
-    }
-
-    #[test]
-    fn quick_command_dialog_input_style_uses_terminal_palette() {
-        let colors = TerminalColors {
-            background: rgb(0x101010).into_color(),
-            foreground: rgb(0xf0f0f0).into_color(),
-            muted: rgb(0x202020).into_color(),
-            muted_foreground: rgb(0x909090).into_color(),
-            border: rgb(0x303030).into_color(),
-            accent: rgb(0x3366ff).into_color(),
-            accent_foreground: rgb(0xffffff).into_color(),
-        };
-
-        let style = quick_command_dialog_input_style(&colors);
-
-        assert_eq!(colors.muted, style.background);
-        assert_eq!(colors.foreground, style.foreground);
-        assert_eq!(colors.muted_foreground, style.muted_foreground);
-        assert_eq!(colors.border, style.border);
     }
 
     #[test]

@@ -168,6 +168,7 @@ pub struct EditTableState<D: EditTableDelegate> {
     selected_row: Option<usize>,
     selection_state: SelectionState,
     right_clicked_row: Option<usize>,
+    right_clicked_col: Option<usize>,
     selected_col: Option<usize>,
     selected_cell: Option<(usize, usize)>,
     resizing_col: Option<usize>,
@@ -212,6 +213,7 @@ where
             selection_state: SelectionState::Row,
             selected_row: None,
             right_clicked_row: None,
+            right_clicked_col: None,
             selected_col: None,
             selected_cell: None,
             resizing_col: None,
@@ -1109,6 +1111,7 @@ where
         _: &mut Context<Self>,
     ) {
         self.right_clicked_row = Some(row_ix);
+        self.right_clicked_col = None;
     }
 
     fn on_row_left_click(
@@ -1229,9 +1232,8 @@ where
         let input = self
             .delegate
             .build_input(row_ix, delegate_col_ix, window, cx);
-        if input.is_some() {
+        if let Some((input, subscriptions)) = input {
             self.editing_cell = Some((row_ix, col_ix));
-            let (input, subscriptions) = input.unwrap();
             self.editing_input = Some(input);
             self._subscriptions = subscriptions;
             cx.emit(EditTableEvent::CellEditing(row_ix, col_ix));
@@ -2054,12 +2056,13 @@ where
     }
 
     fn render_cell(
-        &self,
+        &mut self,
         col_ix: usize,
         row_ix: Option<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let cell_font = self.delegate.cell_font(cx);
         let Some(col_group) = self.col_groups.get(col_ix) else {
             return div().id("empty-cell");
         };
@@ -2083,17 +2086,17 @@ where
                 || self.selection.ranges.iter().any(|r| !r.is_single()));
 
         // 计算选区边框（只在选区边界显示，且仅限单元格选择模式）
-        let (border_top, border_bottom, border_left, border_right) =
-            if is_in_selection && row_ix.is_some() {
-                let r = row_ix.unwrap();
+        let (border_top, border_bottom, border_left, border_right) = match (is_in_selection, row_ix)
+        {
+            (true, Some(r)) => {
                 let top = r == 0 || !self.selection.contains(r - 1, col_ix);
                 let bottom = !self.selection.contains(r + 1, col_ix);
                 let left = col_ix == 0 || !self.selection.contains(r, col_ix - 1);
                 let right = !self.selection.contains(r, col_ix + 1);
                 (top, bottom, left, right)
-            } else {
-                (false, false, false, false)
-            };
+            }
+            _ => (false, false, false, false),
+        };
 
         // 旧的单选逻辑（向后兼容）
         let is_select_cell = match self.selected_cell {
@@ -2140,6 +2143,7 @@ where
             .flex_shrink_0()
             .overflow_hidden()
             .whitespace_nowrap()
+            .when_some(cell_font, |this, font| this.font(font))
             .when(show_column_separator, |this| {
                 this.child(
                     div()
@@ -2514,7 +2518,7 @@ where
             Popover::new(("filter-popover", col_ix))
                 .trigger(
                     Button::new(("filter-btn", col_ix))
-                        .icon(IconName::Filter)
+                        .icon(IconName::Search)
                         .ghost()
                         .with_size(Size::XSmall)
                         .when(is_filtered, |this| this.primary()),
@@ -2630,7 +2634,11 @@ where
 
     fn render_th(&mut self, col_ix: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let entity_id = cx.entity_id();
-        let col_group = self.col_groups.get(col_ix).expect("BUG: invalid col index");
+        let col_group = self
+            .col_groups
+            .get(col_ix)
+            .expect("BUG: invalid col index")
+            .clone();
 
         let is_row_number_col = self.delegate.row_number_enabled(cx) && col_ix == 0;
         let movable = self.col_movable && col_group.column.movable && !is_row_number_col;
@@ -2641,6 +2649,7 @@ where
         } else {
             col_ix
         };
+        let delegate_col_ix_menu = delegate_col_ix;
 
         h_flex()
             .h_full()
@@ -2650,6 +2659,14 @@ where
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.on_col_head_click(col_ix, window, cx);
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _, _| {
+                            this.right_clicked_col =
+                                (!is_row_number_col).then_some(delegate_col_ix_menu);
+                            this.right_clicked_row = None;
+                        }),
+                    )
                     .child(
                         h_flex()
                             .size_full()
@@ -3220,12 +3237,19 @@ where
             .context_menu({
                 let view = cx.entity().clone();
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
-                    if let Some(row_ix) = view.read(cx).right_clicked_row {
-                        view.update(cx, |menu, cx| {
+                    let (right_clicked_row, right_clicked_col) = {
+                        let state = view.read(cx);
+                        (state.right_clicked_row, state.right_clicked_col)
+                    };
+                    match (right_clicked_row, right_clicked_col) {
+                        (Some(row_ix), _) => view.update(cx, |menu, cx| {
                             menu.delegate_mut().context_menu(row_ix, this, window, cx)
-                        })
-                    } else {
-                        this
+                        }),
+                        (None, Some(col_ix)) => view.update(cx, |menu, cx| {
+                            menu.delegate_mut()
+                                .header_context_menu(col_ix, this, window, cx)
+                        }),
+                        (None, None) => this,
                     }
                 }
             })

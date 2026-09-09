@@ -125,7 +125,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
     ) -> anyhow::Result<Vec<extension_view::ExtensionSummary>> {
         ensure_extension_path_still_installed(summary)?;
         if summary.kind == extension_view::ExtensionKind::Language {
-            gpui_component::highlighter::LanguageRegistry::singleton().unregister(&summary.name);
+            crate::language_extensions::forget_language(&summary.name);
         }
         reload_extension_runtime(summary.kind, cx);
         let installed = self.list_installed()?;
@@ -210,6 +210,11 @@ fn review_downloaded_extension(
     kind: host_extension::ExtensionKind,
     entry: extension_view::MarketplaceEntry,
 ) -> anyhow::Result<extension_view::MarketplaceInstallOutcome> {
+    let target_extension_id = if kind == host_extension::ExtensionKind::Composite {
+        load_from_dir(&package_root(&staging)?)?.id
+    } else {
+        entry.id.clone()
+    };
     let review = match permission_review_for_staging(&staging, kind) {
         Ok(review) => review,
         Err(err) => {
@@ -221,6 +226,7 @@ fn review_downloaded_extension(
         return Ok(extension_view::MarketplaceInstallOutcome::NeedsPermission(
             extension_view::DownloadedMarketplaceExtension {
                 entry,
+                target_extension_id,
                 staging,
                 review,
             },
@@ -284,6 +290,20 @@ fn install_staging_with_permission(
 }
 
 fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view::ExtensionSummary {
+    let shell_views = if summary.kind == host_extension::ExtensionKind::Composite {
+        load_from_dir(&summary.path)
+            .map(|manifest| {
+                manifest
+                    .contributes
+                    .shell_views
+                    .into_iter()
+                    .map(|view| extension_view::ShellViewSummary::new(view.id, view.title))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     extension_view::ExtensionSummary::new(
         to_view_kind(summary.kind),
         summary.name,
@@ -295,6 +315,7 @@ fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view:
     .with_icon(summary.icon)
     .with_driver_id(summary.driver_id)
     .with_default_port(summary.default_port)
+    .with_shell_views(shell_views)
 }
 
 fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::MarketplaceEntry {

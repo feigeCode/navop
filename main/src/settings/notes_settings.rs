@@ -46,7 +46,7 @@ fn render_notes_path_field(
             Button::new("notes-select-directory")
                 .icon(IconName::FolderOpenColor)
                 .label(t!("Settings.General.Notes.select_directory").to_string())
-                .with_size(options.size)
+                .with_size(options.size())
                 .on_click(prompt_for_notes_directory),
         )
         .into_any_element()

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "com.navop.rocketmq",
+  "name": "Navop RocketMQ Resource Provider",
+  "version": "0.1.0",
+  "description": "Reference IPC provider for RocketMQ topics, routes, messages and groups.",
+  "engines": {
+    "onetcli": ">=0.1.0"
+  },
+  "permissions": [
+    "net:tcp:rocketmq.example.com:9876",
+    "secrets:read:self.*",
+    "spawn:./bin/rocketmq-provider"
+  ],
+  "runtime": {
+    "ipc": [
+      {
+        "id": "main",
+        "entry": {
+          "command": "./bin/rocketmq-provider"
+        },
+        "transport": {
+          "kind": "local_socket",
+          "connect_timeout_ms": 5000
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "connections": [
+      {
+        "id": "rocketmq",
+        "label": "RocketMQ",
+        "runtimeId": "main",
+        "resourceType": "rocketmq",
+        "form": { "tabs": [{ "id": "general", "label": "General", "fields": [
+          { "id": "name_server", "label": "Name server", "fieldType": "Text", "required": true }
+        ] }] }
+      }
+    ]
+  }
+}

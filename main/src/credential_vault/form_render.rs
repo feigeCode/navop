@@ -3,7 +3,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Sizable, Size, h_flex,
-    input::Input,
+    input::{Input, Textarea},
     scroll::ScrollableElement,
     switch::Switch,
     tab::{Tab, TabBar},
@@ -100,7 +100,7 @@ impl CredentialForm {
             .child(form_field(
                 t!("CredentialForm.private_key_content").to_string(),
                 div().w_full().h(px(150.0)).child(
-                    Input::new(&self.private_key_content_input)
+                    Textarea::new(&self.private_key_content_input)
                         .w_full()
                         .h_full(),
                 ),

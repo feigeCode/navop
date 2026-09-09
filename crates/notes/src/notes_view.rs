@@ -481,12 +481,7 @@ mod external_markdown_tests {
         });
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.set_markdown_mode(
-                    &document_id,
-                    crate::MarkdownViewMode::Source,
-                    window,
-                    cx,
-                );
+                view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Source, window, cx);
             });
         });
         cx.run_until_parked();
@@ -531,7 +526,7 @@ mod external_markdown_tests {
             .size
             .height;
         let source_toggle = cx
-            .debug_bounds("markdown-mode-source")
+            .debug_bounds("markdown-mode-toggle")
             .expect("source toggle must be visible in preview");
         cx.simulate_click(source_toggle.center(), gpui::Modifiers::default());
         cx.run_until_parked();
@@ -554,8 +549,8 @@ mod external_markdown_tests {
                 .height
         );
         let preview_toggle = cx
-            .debug_bounds("markdown-mode-wysiwyg")
-            .expect("wysiwyg toggle must be visible in source mode");
+            .debug_bounds("markdown-mode-toggle")
+            .expect("preview toggle must be visible in source mode");
         cx.simulate_click(preview_toggle.center(), gpui::Modifiers::default());
         cx.run_until_parked();
 
@@ -820,7 +815,7 @@ mod external_markdown_tests {
         assert_eq!("wysiwyg edit", std::fs::read_to_string(&path).unwrap());
 
         let source_toggle = cx
-            .debug_bounds("markdown-mode-source")
+            .debug_bounds("markdown-mode-toggle")
             .expect("the clean document must be able to switch to source mode");
         cx.simulate_click(source_toggle.center(), gpui::Modifiers::default());
         cx.run_until_parked();
@@ -855,139 +850,6 @@ mod external_markdown_tests {
         cx.simulate_keystrokes("secondary-s");
         cx.run_until_parked();
         assert_eq!("source edit", std::fs::read_to_string(&path).unwrap());
-    }
-
-    #[gpui::test]
-    fn split_mode_renders_preview_pane_and_mirrors_editor_changes(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::init(cx);
-        });
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("split.md");
-        std::fs::write(&path, "# Title\n\nBody\n").unwrap();
-        let (window, view) = cx.update(|cx| {
-            let mut view = None;
-            let window = cx
-                .open_window(WindowOptions::default(), |window, cx| {
-                    let entity =
-                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
-                    view = Some(entity.clone());
-                    cx.new(|cx| Root::new(entity, window, cx))
-                })
-                .unwrap();
-            (window, view.unwrap())
-        });
-        let mut cx = VisualTestContext::from_window(window.into(), cx);
-        cx.run_until_parked();
-
-        let (document_id, editor) = view.read_with(&cx, |view, _| {
-            let id = view.active_document_id.as_ref().unwrap();
-            (
-                id.clone(),
-                view.markdown_sessions.get(id).unwrap().editor.clone(),
-            )
-        });
-        view.update_in(&mut cx, |view, window, cx| {
-            view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Split, window, cx);
-        });
-        cx.run_until_parked();
-
-        cx.debug_bounds("markdown-editor")
-            .expect("the editable side must stay mounted in split mode");
-        cx.debug_bounds("markdown-preview")
-            .expect("the preview pane must be mounted in split mode");
-        view.read_with(&cx, |view, cx| {
-            let session = view.markdown_sessions.get(&document_id).unwrap();
-            assert_eq!(crate::MarkdownViewMode::Split, session.state.mode);
-            assert_eq!(
-                markdown_editor::ViewMode::Source,
-                session.editor.read(cx).view_mode()
-            );
-        });
-
-        editor.update_in(&mut cx, |editor, window, cx| {
-            assert!(editor.focus(window, cx));
-            assert!(editor.replace_markdown("# Title\n\nBodyChanged\n".to_owned(), cx));
-        });
-        cx.run_until_parked();
-        view.read_with(&cx, |view, cx| {
-            let session = view.markdown_sessions.get(&document_id).unwrap();
-            let preview = session.preview.as_ref().expect("preview stays mounted");
-            assert_eq!(
-                "# Title\n\nBodyChanged",
-                preview.editor.read(cx).markdown(cx),
-                "preview must mirror the editable side after each change"
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn leaving_split_mode_unmounts_preview_and_reverts_preview_edits(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::init(cx);
-        });
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("split-exit.md");
-        std::fs::write(&path, "# Title\n\nBody\n").unwrap();
-        let (window, view) = cx.update(|cx| {
-            let mut view = None;
-            let window = cx
-                .open_window(WindowOptions::default(), |window, cx| {
-                    let entity =
-                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
-                    view = Some(entity.clone());
-                    cx.new(|cx| Root::new(entity, window, cx))
-                })
-                .unwrap();
-            (window, view.unwrap())
-        });
-        let mut cx = VisualTestContext::from_window(window.into(), cx);
-        cx.run_until_parked();
-
-        let document_id = view.read_with(&cx, |view, _| {
-            view.active_document_id.as_ref().unwrap().clone()
-        });
-        view.update_in(&mut cx, |view, window, cx| {
-            view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Split, window, cx);
-        });
-        cx.run_until_parked();
-
-        // 预览侧的瞬时编辑会被主编辑器内容覆盖，不进入持久化。
-        let preview_editor = view.read_with(&cx, |view, _| {
-            let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.as_ref().unwrap().editor.clone()
-        });
-        preview_editor.update_in(&mut cx, |preview_editor, window, cx| {
-            assert!(preview_editor.focus(window, cx));
-            assert!(preview_editor.replace_markdown("tampered".to_owned(), cx));
-        });
-        cx.run_until_parked();
-        view.read_with(&cx, |view, cx| {
-            let session = view.markdown_sessions.get(&document_id).unwrap();
-            let preview = session.preview.as_ref().unwrap();
-            assert_eq!(
-                "# Title\n\nBody",
-                preview.editor.read(cx).markdown(cx),
-                "preview edits must be reverted to the mirrored content"
-            );
-        });
-
-        view.update_in(&mut cx, |view, window, cx| {
-            view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Wysiwyg, window, cx);
-        });
-        cx.run_until_parked();
-        assert!(
-            cx.debug_bounds("markdown-preview").is_none(),
-            "preview pane must be unmounted after leaving split mode"
-        );
-        view.read_with(&cx, |view, _| {
-            let session = view.markdown_sessions.get(&document_id).unwrap();
-            assert!(session.preview.is_none());
-            assert_eq!(crate::MarkdownViewMode::Wysiwyg, session.state.mode);
-        });
-        assert_eq!("# Title\n\nBody\n", std::fs::read_to_string(&path).unwrap());
     }
 
     #[gpui::test]
@@ -1050,12 +912,7 @@ mod external_markdown_tests {
         cx.run_until_parked();
         assert_eq!("# Title\n\nBodyX", std::fs::read_to_string(&path).unwrap());
         view.update_in(&mut cx, |view, window, cx| {
-            view.set_markdown_mode(
-                &document_id,
-                crate::MarkdownViewMode::Source,
-                window,
-                cx,
-            );
+            view.set_markdown_mode(&document_id, crate::MarkdownViewMode::Source, window, cx);
         });
         cx.run_until_parked();
         view.read_with(&cx, |view, cx| {

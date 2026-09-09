@@ -4,7 +4,7 @@ use gpui::{
     UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, Icon, IconName, IconSize, InteractiveElementExt, Sizable,
+    ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -13,6 +13,7 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use one_ui::ContentState;
 use remote_file_editor::{external_editor_menu_label, external_editors_for_file};
 use rust_i18n::t;
 use std::collections::{BTreeSet, HashSet};

@@ -11,7 +11,6 @@ use crate::background_tasks::{
     BackgroundTask, BackgroundTaskCounts, BackgroundTaskFilter, BackgroundTaskManager,
     BackgroundTaskStatus, global,
 };
-use crate::settings::AppSettings;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
@@ -23,7 +22,6 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
-use gpui_component::notification::Notification;
 use rust_i18n::t;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -133,30 +131,6 @@ pub fn open_background_task_dialog(
                 move |content, _window, _cx| content.p_0().child(panel_content.clone())
             })
     });
-}
-
-/// 任务开始后统一的展示入口：根据设置决定自动弹出面板，或弹提示通知。
-///
-/// 设置 [`AppSettings::background_tasks_auto_popup`] 为 true（默认）时打开任务面板
-/// Dialog；为 false 时推送一条可点击跳转面板的提示通知。
-pub fn show_background_tasks_or_notify(
-    manager: Entity<BackgroundTaskManager>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    if AppSettings::global(cx).background_tasks_auto_popup {
-        open_background_task_dialog(manager, window, cx);
-        return;
-    }
-    window.push_notification(
-        Notification::info(t!("BackgroundTasks.auto_popup_hint").to_string()).on_click({
-            let manager = manager.clone();
-            move |_, window, cx| {
-                open_background_task_dialog(manager.clone(), window, cx);
-            }
-        }),
-        cx,
-    );
 }
 
 /// Dialog 弹窗内容实体：订阅任务管理器，任务变化时刷新内容。
@@ -640,31 +614,5 @@ mod tests {
 
         assert_eq!(groups["SFTP A"].len(), 2);
         assert_eq!(groups["SFTP B"].len(), 1);
-    }
-
-    fn show_or_notify_source() -> &'static str {
-        let source = include_str!("background_task_panel.rs");
-        let start = source
-            .find("pub fn show_background_tasks_or_notify")
-            .expect("background task notify opener");
-        source[start..].into()
-    }
-
-    #[test]
-    fn notify_entry_opens_dialog_when_auto_popup_enabled() {
-        let source = show_or_notify_source();
-
-        assert!(source.contains("AppSettings::global(cx).background_tasks_auto_popup"));
-        assert!(source.contains("open_background_task_dialog(manager, window, cx)"));
-    }
-
-    #[test]
-    fn notify_entry_pushes_clickable_hint_when_auto_popup_disabled() {
-        let source = show_or_notify_source();
-
-        assert!(source.contains("window.push_notification("));
-        assert!(source.contains("Notification::info("));
-        assert!(source.contains("BackgroundTasks.auto_popup_hint"));
-        assert!(source.contains(".on_click("));
     }
 }

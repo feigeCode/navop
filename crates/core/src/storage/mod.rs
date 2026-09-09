@@ -33,6 +33,7 @@ mod rdp_settings_tests;
 #[path = "master_key_rotation_tests.rs"]
 mod master_key_rotation_tests;
 
+use anyhow::Result;
 pub use credential_vault::*;
 use gpui::App;
 pub use manager::*;
@@ -48,9 +49,9 @@ pub use team_key_cache::*;
 pub use team_membership_cache::*;
 pub use terminal_command_history::*;
 
-pub fn init(cx: &mut App) {
+pub fn init(cx: &mut App) -> Result<()> {
     cx.set_global(ActiveConnections::new());
-    manager::init(cx);
+    manager::init(cx)?;
     repository::init(cx);
 
     // 首次启动时创建演示数据库
@@ -58,4 +59,5 @@ pub fn init(cx: &mut App) {
     if let Some(conn_repo) = storage.get::<ConnectionRepository>() {
         demo_database::try_init_demo(&conn_repo);
     }
+    Ok(())
 }

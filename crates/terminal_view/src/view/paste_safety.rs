@@ -4,6 +4,8 @@ pub(super) enum UnbracketedPasteHazard {
     UnterminatedQuote,
 }
 
+use std::borrow::Cow;
+
 pub(super) fn multiline_non_empty_line_count(text: &str) -> usize {
     text.lines().filter(|line| !line.trim().is_empty()).count()
 }
@@ -54,4 +56,30 @@ pub(super) fn detect_unbracketed_paste_hazard(text: &str) -> Option<UnbracketedP
     }
 
     None
+}
+
+/// 大体量粘贴确认阈值：非空行数或字节数任一超限即弹确认。
+const LARGE_PASTE_MAX_LINES: usize = 200;
+const LARGE_PASTE_MAX_BYTES: usize = 32 * 1024;
+
+pub(super) fn is_large_paste(text: &str) -> bool {
+    multiline_non_empty_line_count(text) > LARGE_PASTE_MAX_LINES
+        || text.len() > LARGE_PASTE_MAX_BYTES
+}
+
+/// 非 bracketed 粘贴前过滤危险控制字符（保留换行与制表符），
+/// 与 bracketed 路径移除 ESC 的做法保持一致的防护语义。
+pub(super) fn strip_dangerous_control_chars(text: &str) -> Cow<'_, str> {
+    if !text
+        .chars()
+        .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
+    {
+        return Cow::Borrowed(text);
+    }
+
+    Cow::Owned(
+        text.chars()
+            .filter(|ch| !ch.is_control() || *ch == '\n' || *ch == '\t')
+            .collect(),
+    )
 }

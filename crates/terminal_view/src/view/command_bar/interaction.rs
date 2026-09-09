@@ -53,17 +53,16 @@ impl TerminalCommandBar {
         this
     }
 
-    fn create_input_state(window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+    fn create_input_state(window: &mut Window, cx: &mut Context<Self>) -> Entity<TextareaState> {
         cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(4, 12)
                 .placeholder(rust_i18n::t!("TerminalCommandBar.placeholder").to_string())
         })
     }
 
     fn subscribe_input(
-        input: &Entity<InputState>,
+        input: &Entity<TextareaState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription {
@@ -76,7 +75,7 @@ impl TerminalCommandBar {
                     this.load_quick_commands(cx);
                     this.refresh_suggestions(cx);
                 }
-                InputEvent::PressEnter { secondary } if !secondary => this.submit(window, cx),
+                InputEvent::PressEnter { secondary, .. } if !secondary => this.submit(window, cx),
                 _ => {}
             },
         )
@@ -151,10 +150,7 @@ impl TerminalCommandBar {
         self.suggestions = build_command_suggestions(&query, &self.quick_commands, &history);
         self.selected_suggestion = None;
         self.quick_commands_open = false;
-        let inline_suffix = command_inline_suffix(&query, &self.suggestions);
-        self.input_state.update(cx, |state, cx| {
-            state.set_inline_completion_text(inline_suffix, cx);
-        });
+        let _ = command_inline_suffix(&query, &self.suggestions);
         cx.notify();
     }
 
@@ -377,8 +373,6 @@ impl TerminalCommandBar {
     }
 
     pub(super) fn clear_inline_completion(&self, cx: &mut Context<Self>) {
-        self.input_state.update(cx, |state, cx| {
-            state.set_inline_completion_text(None, cx);
-        });
+        let _ = cx;
     }
 }

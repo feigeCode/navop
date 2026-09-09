@@ -1,16 +1,17 @@
+use crate::db_object_selector::DbSelectorKind;
 use db::{GlobalDbState, TableObjectType};
-use extension_component::DbSelectorKind;
 use gpui::{
     App, AppContext, AsyncApp, ColorExt, Context, Entity, IntoElement, ParentElement, Styled,
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, IconName, IndexPath, Sizable, StyledExt, h_flex,
+    ActiveTheme, IconName, IndexPath, Sizable, StyledExt, h_flex,
     scroll::ScrollableElement,
     select::{SearchableVec, Select},
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
+use one_ui::ContentState;
 use rust_i18n::t;
 use std::collections::HashSet;
 

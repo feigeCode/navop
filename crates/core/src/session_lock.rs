@@ -93,14 +93,13 @@ pub fn prompt_session_lock(window: &mut Window, cx: &mut App) -> Task<Option<Loc
         dialog
             .title(t!("SessionLock.title").to_string())
             .w(px(460.))
-            .confirm()
             .button_props(
                 DialogButtonProps::default()
                     .ok_text(t!("SessionLock.lock").to_string())
                     .cancel_text(t!("Common.cancel").to_string())
                     .show_cancel(true),
             )
-            .on_ok(move |_, _, cx| {
+            .on_ok(move |_, _, cx: &mut App| {
                 let password = password_for_ok.read(cx).text().to_string();
                 let confirm = confirm_for_ok.read(cx).text().to_string();
                 if password.is_empty() {
@@ -213,14 +212,13 @@ pub fn prompt_session_unlock(
         dialog
             .title(t!("SessionLock.unlock_title").to_string())
             .w(px(460.))
-            .confirm()
             .button_props(
                 DialogButtonProps::default()
                     .ok_text(t!("SessionLock.unlock").to_string())
                     .cancel_text(t!("Common.cancel").to_string())
                     .show_cancel(true),
             )
-            .on_ok(move |_, _, cx| {
+            .on_ok(move |_, _, cx: &mut App| {
                 let password = password_for_ok.read(cx).text().to_string();
                 if password.is_empty() {
                     error_for_ok.update(cx, |msg, cx| {

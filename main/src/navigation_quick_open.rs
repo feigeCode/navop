@@ -68,6 +68,8 @@ pub(crate) fn visible_connection_types() -> Vec<ConnectionType> {
         ConnectionType::Database,
         ConnectionType::Redis,
         ConnectionType::MongoDB,
+        ConnectionType::Mqtt,
+        ConnectionType::Rocketmq,
         ConnectionType::Serial,
         ConnectionType::Telnet,
     ]
@@ -83,7 +85,10 @@ pub(crate) fn overflow_connection_types() -> Vec<ConnectionType> {
 pub(crate) fn is_overflow_connection_type(connection_type: ConnectionType) -> bool {
     matches!(
         connection_type,
-        ConnectionType::PortForwarding | ConnectionType::Rdp | ConnectionType::Vnc
+        ConnectionType::PortForwarding
+            | ConnectionType::Rdp
+            | ConnectionType::Vnc
+            | ConnectionType::Extension
     )
 }
 

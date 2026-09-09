@@ -94,6 +94,7 @@ impl Render for CredentialVaultView {
                     .child(
                         div()
                             .id("credential-vault-content")
+                            .debug_selector(|| "credential-vault-content".to_string())
                             .w_full()
                             .min_h_0()
                             .flex_1()
@@ -172,9 +173,10 @@ fn credential_list(
     cx: &gpui::Context<CredentialVaultView>,
 ) -> impl IntoElement {
     v_flex()
+        .debug_selector(|| "credential-list-root".to_string())
         .w_full()
+        .h_full()
         .min_h_0()
-        .flex_1()
         .overflow_hidden()
         .child(
             div()
@@ -197,18 +199,24 @@ fn credential_list(
         .child(
             div()
                 .id("credential-vault-list")
+                .debug_selector(|| "credential-vault-list".to_string())
                 .w_full()
                 .min_h_0()
                 .flex_1()
-                .overflow_y_scrollbar()
-                .px_4()
-                .pb_4()
+                .overflow_hidden()
                 .child(
-                    v_flex().gap_2().children(
-                        summaries
-                            .into_iter()
-                            .map(|summary| credential_row(summary, cx)),
-                    ),
+                    v_flex()
+                        .size_full()
+                        .overflow_y_scrollbar()
+                        .px_4()
+                        .pb_4()
+                        .child(
+                            v_flex().gap_2().children(
+                                summaries
+                                    .into_iter()
+                                    .map(|summary| credential_row(summary, cx)),
+                            ),
+                        ),
                 ),
         )
 }
@@ -466,6 +474,56 @@ mod tests {
     }
 
     #[test]
+    fn credential_list_scroll_boundary_uses_outer_overflow_hidden_and_inner_scrollable() {
+        let source = include_str!("render.rs");
+        let list = source
+            .split("fn credential_list(")
+            .nth(1)
+            .and_then(|source| source.split("#[cfg(test)]").next())
+            .expect("credential_list source");
+
+        let boundary = list
+            .split_once(".id(\"credential-vault-list\")")
+            .expect("scroll boundary starts at the list id")
+            .1;
+        let boundary = boundary
+            .split_once(".child(")
+            .expect("boundary has a child scrollable")
+            .0;
+        assert!(
+            boundary.contains(".flex_1()"),
+            "outer boundary must own flex"
+        );
+        assert!(
+            boundary.contains(".min_h_0()"),
+            "outer boundary must allow shrink"
+        );
+        assert!(
+            boundary.contains(".overflow_hidden()"),
+            "outer boundary must clip"
+        );
+        assert!(
+            !boundary.contains(".overflow_y_scrollbar()"),
+            "overflow_y_scrollbar must not sit on the flex boundary element"
+        );
+
+        let inner = list
+            .split_once(".size_full()")
+            .expect("inner scrollable uses size_full")
+            .1;
+        assert!(
+            inner.contains(".overflow_y_scrollbar()"),
+            "inner scrollable must carry overflow_y_scrollbar"
+        );
+        assert!(
+            !inner
+                .split_once(".child(")
+                .map_or(true, |(prefix, _)| prefix.contains(".flex_1()")),
+            "inner scrollable must size from size_full, not flex_1"
+        );
+    }
+
+    #[test]
     fn credential_vault_has_distinct_empty_and_search_states() {
         let source = include_str!("render.rs");
 
@@ -473,5 +531,60 @@ mod tests {
         assert!(source.contains("CredentialVault.no_matches"));
         assert!(source.contains("Button::new(\"credential-vault-empty-add\")"));
         assert!(source.contains("Button::new(\"credential-vault-retry\")"));
+    }
+
+    #[gpui::test]
+    fn credential_vault_list_renders_non_empty_bounds_with_data(cx: &mut gpui::TestAppContext) {
+        use gpui::VisualTestContext;
+        use gpui_component::Theme;
+        use one_core::storage::connection::SqliteConnection;
+        use one_core::storage::migration::run_migrations;
+        use one_core::storage::traits::Repository as _;
+        use one_core::storage::{
+            CredentialEntry, CredentialRepository, GlobalStorageState, StorageManager,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let conn = SqliteConnection::open(temp.path().join("vault.db")).expect("sqlite");
+        conn.with_connection(|conn| run_migrations(conn))
+            .expect("migrations");
+        let storage = StorageManager::new_with_connection(conn);
+        let repo = CredentialRepository::new(storage.connection());
+        storage.register(repo.clone());
+        let mut entry = CredentialEntry::new("V8服务器用户名密码");
+        entry.username = Some("root".to_string());
+        repo.insert(&mut entry).expect("credential inserted");
+
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.set_global(GlobalStorageState { storage });
+            gpui_component::init(cx);
+        });
+
+        let (_vault, cx) =
+            cx.add_window_view(|window, cx| super::super::CredentialVaultView::new(window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let content = cx
+            .debug_bounds("credential-vault-content")
+            .expect("content area should render");
+        assert!(
+            content.size.height > gpui::px(0.0),
+            "content area must have height, got {content:?}"
+        );
+        let list = cx
+            .debug_bounds("credential-vault-list")
+            .expect("list area should render");
+        assert!(
+            list.size.height > gpui::px(0.0),
+            "list area must have height, got {list:?}"
+        );
+        let root = cx
+            .debug_bounds("credential-list-root")
+            .expect("list root should render");
+        assert!(
+            root.size.height >= list.size.height,
+            "list root must not collapse below the list, root={root:?}, list={list:?}"
+        );
     }
 }

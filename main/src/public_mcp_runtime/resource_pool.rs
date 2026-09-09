@@ -179,11 +179,22 @@ fn connection_kind(connection: &StoredConnection) -> ResourceKind {
         ConnectionType::SshSftp => ResourceKind::Ssh,
         ConnectionType::Redis => ResourceKind::Redis,
         ConnectionType::MongoDB => ResourceKind::Mongo,
+        ConnectionType::Mqtt => ResourceKind::Other("mqtt".into()),
+        ConnectionType::Rocketmq => ResourceKind::Other("rocketmq".into()),
         ConnectionType::Serial => ResourceKind::Terminal,
         ConnectionType::Telnet => ResourceKind::Terminal,
         ConnectionType::PortForwarding => ResourceKind::Other("port-forwarding".into()),
         ConnectionType::Rdp => ResourceKind::Other("rdp".into()),
         ConnectionType::Vnc => ResourceKind::Other("vnc".into()),
+        ConnectionType::Extension => connection
+            .to_extension_params()
+            .map(|params| {
+                ResourceKind::Other(format!(
+                    "extension:{}:{}",
+                    params.extension_id, params.contribution_id
+                ))
+            })
+            .unwrap_or_else(|_| ResourceKind::Other("extension".into())),
         ConnectionType::All => ResourceKind::Other("all".into()),
     }
 }

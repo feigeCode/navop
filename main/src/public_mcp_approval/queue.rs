@@ -17,13 +17,15 @@ pub(super) struct ApprovalQueueSnapshot {
 }
 
 impl ApprovalQueueState {
-    pub fn enqueue(&mut self, envelope: ApprovalEnvelope) -> Result<(), ApprovalEnvelope> {
+    /// Err 载荷为满载信封(约 136 字节),装箱以满足 result_large_err 约束;
+    /// 调用方拿到所有权后直接 deny 退回,无额外解包成本。
+    pub fn enqueue(&mut self, envelope: ApprovalEnvelope) -> Result<(), Box<ApprovalEnvelope>> {
         if self.active.is_none() {
             self.active = Some(envelope);
             return Ok(());
         }
         if self.pending.len() >= MAX_QUEUED_APPROVALS.saturating_sub(1) {
-            return Err(envelope);
+            return Err(Box::new(envelope));
         }
         self.pending.push_back(envelope);
         Ok(())

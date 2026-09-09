@@ -7,12 +7,12 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IconSize, Sizable as _, Size, StyledExt as _,
-    button::{Button, ButtonVariants as _, IconButton},
+    button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    panel_header::{PanelHeader, PanelHeaderVariant},
     popover::Popover,
 };
+use one_ui::{IconButton, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 
 const FRAME_PLACEMENTS: [ExplorerFramePlacement; 3] = [
@@ -214,9 +214,7 @@ fn build_frame_options_menu(
     let hidden_view = view.clone();
     let ignored_view = view.clone();
     let follows_terminal_cwd = view.read(cx).follows_terminal_cwd();
-    let theme = view.read(cx).theme.menu_style();
-    menu.local_style(theme)
-        .min_w(px(220.0))
+    menu.min_w(px(220.0))
         .item(
             PopupMenuItem::new(t!("WorkspaceExplorer.frame.choose_root").to_string())
                 .icon(IconName::FolderOpen)
@@ -262,7 +260,7 @@ fn build_frame_options_menu(
             move |submenu, _window, _cx| {
                 FRAME_PLACEMENTS
                     .into_iter()
-                    .fold(submenu.local_style(theme), |submenu, option| {
+                    .fold(submenu, |submenu, option| {
                         let view = view.clone();
                         let current = option == placement;
                         submenu.item(

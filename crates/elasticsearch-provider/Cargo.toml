@@ -1,0 +1,25 @@
+[package]
+name = "elasticsearch-provider"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+extension-protocol = { workspace = true }
+futures = { workspace = true }
+interprocess = { workspace = true, features = ["tokio"] }
+reqwest = { workspace = true, default-features = false, features = ["stream"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+extension-host = { workspace = true }
+extension-plugin-adapter = { workspace = true }
+extension-runtime = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

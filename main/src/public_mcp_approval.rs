@@ -186,7 +186,7 @@ fn show_approval_overlay(
             )
             .on_ok({
                 let queue = queue.clone();
-                move |_, window, cx| {
+                move |_, window, cx: &mut App| {
                     resolve_current_approval(
                         &queue,
                         PublicMcpApprovalOutcome::Approved,

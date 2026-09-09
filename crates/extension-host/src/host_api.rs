@@ -3,14 +3,17 @@
 //! 扩展可以通过 JSON-RPC 请求调用宿主提供的能力：
 //! - `host/request_credential`: 请求凭证
 //! - `host/notify`: 发送通知
-//! - `host/quick_pick`: 显示快速选择对话框
-//! - `host/open_view`: 打开视图
 //! - `host/storage/*`: 键值存储
+//! - `host/blob/*`: 上传宿主管理的 blob
 
 use std::sync::Arc;
 
 use extension_protocol::error::{ErrorData, ProtocolError, error_codes};
 use extension_protocol::host;
+use extension_protocol::host_blob::{
+    HostBlobAbortParams, HostBlobBeginParams, HostBlobBeginResult, HostBlobFinishParams,
+    HostBlobFinishResult, HostBlobWriteParams, HostBlobWriteResult,
+};
 use serde_json::Value;
 
 use crate::error::{HostError, HostResult};
@@ -28,14 +31,17 @@ pub trait HostApiProvider: Send + Sync {
         params: host::RequestCredentialParams,
     ) -> HostResult<host::RequestCredentialResult>;
 
+    /// Resolve a stored secret into a one-shot value.
+    ///
+    /// Implementations must authenticate and authorize the extension before
+    /// returning this value, and must never log or persist the resolved bytes.
+    async fn resolve_secret(
+        &self,
+        params: host::ResolveSecretParams,
+    ) -> HostResult<host::ResolveSecretResult>;
+
     /// 发送通知给用户，返回用户点击的 action id。
     async fn notify(&self, params: host::NotifyParams) -> HostResult<host::NotifyResult>;
-
-    /// 显示快速选择对话框。
-    async fn quick_pick(&self, params: host::QuickPickParams) -> HostResult<host::QuickPickResult>;
-
-    /// 打开视图（对话框、面板等）。
-    async fn open_view(&self, params: host::OpenViewParams) -> HostResult<()>;
 
     /// 从键值存储读取。
     async fn storage_get(
@@ -48,6 +54,43 @@ pub trait HostApiProvider: Send + Sync {
 
     /// 记录日志（扩展发送的日志）。
     async fn log(&self, params: host::LogParams) -> HostResult<()>;
+
+    /// Starts a provider upload into host-authoritative blob storage.
+    async fn host_blob_begin(
+        &self,
+        _params: HostBlobBeginParams,
+    ) -> HostResult<HostBlobBeginResult> {
+        Err(HostError::NotImplemented(
+            "host blob uploads are not configured".into(),
+        ))
+    }
+
+    /// Appends one strictly ordered base64 chunk to a pending host blob.
+    async fn host_blob_write(
+        &self,
+        _params: HostBlobWriteParams,
+    ) -> HostResult<HostBlobWriteResult> {
+        Err(HostError::NotImplemented(
+            "host blob uploads are not configured".into(),
+        ))
+    }
+
+    /// Seals a pending upload and publishes an opaque readable blob id.
+    async fn host_blob_finish(
+        &self,
+        _params: HostBlobFinishParams,
+    ) -> HostResult<HostBlobFinishResult> {
+        Err(HostError::NotImplemented(
+            "host blob uploads are not configured".into(),
+        ))
+    }
+
+    /// Aborts a pending upload. Implementations must make this idempotent.
+    async fn host_blob_abort(&self, _params: HostBlobAbortParams) -> HostResult<()> {
+        Err(HostError::NotImplemented(
+            "host blob uploads are not configured".into(),
+        ))
+    }
 }
 
 /// Host API 处理器。
@@ -55,6 +98,12 @@ pub trait HostApiProvider: Send + Sync {
 /// 持有 `HostApiProvider` 实现，路由方法调用到对应的处理函数。
 pub struct HostApiHandler {
     provider: Arc<dyn HostApiProvider>,
+}
+
+impl std::fmt::Debug for HostApiHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostApiHandler").finish_non_exhaustive()
+    }
 }
 
 impl HostApiHandler {
@@ -71,23 +120,17 @@ impl HostApiHandler {
                 let result = self.provider.request_credential(params).await?;
                 Ok(serde_json::to_value(result).expect("credential value must serialize"))
             }
+            extension_protocol::method::HOST_RESOLVE_SECRET => {
+                let params: host::ResolveSecretParams =
+                    serde_json::from_value(params).map_err(HostError::Serde)?;
+                let result = self.provider.resolve_secret(params).await?;
+                Ok(serde_json::to_value(result).expect("secret value must serialize"))
+            }
             extension_protocol::method::HOST_NOTIFY => {
                 let params: host::NotifyParams =
                     serde_json::from_value(params).map_err(|e| HostError::Serde(e))?;
                 let result = self.provider.notify(params).await?;
                 Ok(serde_json::to_value(result).expect("notify result must serialize"))
-            }
-            extension_protocol::method::HOST_QUICK_PICK => {
-                let params: host::QuickPickParams =
-                    serde_json::from_value(params).map_err(|e| HostError::Serde(e))?;
-                let result = self.provider.quick_pick(params).await?;
-                Ok(serde_json::to_value(result).expect("quick pick result must serialize"))
-            }
-            extension_protocol::method::HOST_OPEN_VIEW => {
-                let params: host::OpenViewParams =
-                    serde_json::from_value(params).map_err(|e| HostError::Serde(e))?;
-                self.provider.open_view(params).await?;
-                Ok(Value::Null)
             }
             extension_protocol::method::HOST_STORAGE_GET => {
                 let params: host::StorageGetParams =
@@ -105,6 +148,26 @@ impl HostApiHandler {
                 let params: host::LogParams =
                     serde_json::from_value(params).map_err(|e| HostError::Serde(e))?;
                 self.provider.log(params).await?;
+                Ok(Value::Null)
+            }
+            extension_protocol::method::HOST_BLOB_BEGIN => {
+                let params = serde_json::from_value(params).map_err(HostError::Serde)?;
+                let result = self.provider.host_blob_begin(params).await?;
+                Ok(serde_json::to_value(result).expect("host blob begin result must serialize"))
+            }
+            extension_protocol::method::HOST_BLOB_WRITE => {
+                let params = serde_json::from_value(params).map_err(HostError::Serde)?;
+                let result = self.provider.host_blob_write(params).await?;
+                Ok(serde_json::to_value(result).expect("host blob write result must serialize"))
+            }
+            extension_protocol::method::HOST_BLOB_FINISH => {
+                let params = serde_json::from_value(params).map_err(HostError::Serde)?;
+                let result = self.provider.host_blob_finish(params).await?;
+                Ok(serde_json::to_value(result).expect("host blob finish result must serialize"))
+            }
+            extension_protocol::method::HOST_BLOB_ABORT => {
+                let params = serde_json::from_value(params).map_err(HostError::Serde)?;
+                self.provider.host_blob_abort(params).await?;
                 Ok(Value::Null)
             }
             _ => {
@@ -140,22 +203,17 @@ mod tests {
             })
         }
 
-        async fn notify(&self, _params: host::NotifyParams) -> HostResult<host::NotifyResult> {
-            Ok(host::NotifyResult { clicked: None })
-        }
-
-        async fn quick_pick(
+        async fn resolve_secret(
             &self,
-            _params: host::QuickPickParams,
-        ) -> HostResult<host::QuickPickResult> {
-            Ok(host::QuickPickResult {
-                selected: vec!["option1".into()],
-                cancelled: false,
+            _params: host::ResolveSecretParams,
+        ) -> HostResult<host::ResolveSecretResult> {
+            Ok(host::ResolveSecretResult {
+                value: b"token-value".to_vec(),
             })
         }
 
-        async fn open_view(&self, _params: host::OpenViewParams) -> HostResult<()> {
-            Ok(())
+        async fn notify(&self, _params: host::NotifyParams) -> HostResult<host::NotifyResult> {
+            Ok(host::NotifyResult { clicked: None })
         }
 
         async fn storage_get(
@@ -170,6 +228,40 @@ mod tests {
         }
 
         async fn log(&self, _params: host::LogParams) -> HostResult<()> {
+            Ok(())
+        }
+
+        async fn host_blob_begin(
+            &self,
+            _params: HostBlobBeginParams,
+        ) -> HostResult<HostBlobBeginResult> {
+            Ok(HostBlobBeginResult {
+                upload_id: "upload-1".into(),
+                max_bytes: 1024,
+            })
+        }
+
+        async fn host_blob_write(
+            &self,
+            params: HostBlobWriteParams,
+        ) -> HostResult<HostBlobWriteResult> {
+            Ok(HostBlobWriteResult {
+                total_bytes: params.bytes_written.into(),
+            })
+        }
+
+        async fn host_blob_finish(
+            &self,
+            _params: HostBlobFinishParams,
+        ) -> HostResult<HostBlobFinishResult> {
+            Ok(HostBlobFinishResult {
+                blob_id: "host-blob-1".into(),
+                total_bytes: 3,
+                content_type: None,
+            })
+        }
+
+        async fn host_blob_abort(&self, _params: HostBlobAbortParams) -> HostResult<()> {
             Ok(())
         }
     }
@@ -203,5 +295,51 @@ mod tests {
         assert!(
             matches!(result, Err(HostError::Protocol(e)) if e.code == error_codes::METHOD_NOT_FOUND)
         );
+    }
+
+    #[tokio::test]
+    async fn handler_routes_host_blob_upload_lifecycle() {
+        let handler = HostApiHandler::new(Arc::new(MockProvider));
+
+        let begin = handler
+            .handle(
+                extension_protocol::method::HOST_BLOB_BEGIN,
+                serde_json::json!({"expected_bytes": 3}),
+            )
+            .await
+            .unwrap();
+        assert_eq!("upload-1", begin["upload_id"]);
+
+        let write = handler
+            .handle(
+                extension_protocol::method::HOST_BLOB_WRITE,
+                serde_json::json!({
+                    "upload_id": "upload-1",
+                    "sequence": 0,
+                    "data": "YWJj",
+                    "bytes_written": 3
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(3, write["total_bytes"]);
+
+        let finish = handler
+            .handle(
+                extension_protocol::method::HOST_BLOB_FINISH,
+                serde_json::json!({"upload_id": "upload-1"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!("host-blob-1", finish["blob_id"]);
+
+        let abort = handler
+            .handle(
+                extension_protocol::method::HOST_BLOB_ABORT,
+                serde_json::json!({"upload_id": "missing"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(Value::Null, abort);
     }
 }

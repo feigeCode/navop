@@ -39,3 +39,27 @@ EditTable:
     en: Clear
     zh-CN: 清除
     zh-HK: 清除
+
+TimePicker:
+  placeholder:
+    en: Select time
+    zh-CN: 选择时间
+    zh-HK: 選擇時間
+  now:
+    en: Now
+    zh-CN: 现在
+    zh-HK: 現在
+  ok:
+    en: OK
+    zh-CN: 确定
+    zh-HK: 確定
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+
+DateTimePicker:
+  placeholder:
+    en: Select date and time
+    zh-CN: 选择日期和时间
+    zh-HK: 選擇日期和時間

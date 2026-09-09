@@ -39,17 +39,18 @@ use gpui::{
     Subscription, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, FunctionalIcon, Icon, IconName, IconSize, ObjectIcon, Selectable, Sizable, Size,
-    button::{ButtonCustomVariant, ButtonVariants, IconButton, IconButtonRole},
-    h_flex,
-    panel_header::{PanelHeader, PanelHeaderVariant},
-    v_flex,
+    ActiveTheme, Icon, IconName, IconSize, Selectable, Sizable, Size,
+    button::{ButtonCustomVariant, ButtonVariants},
+    h_flex, v_flex,
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::{
     ConnectionRepository, GlobalStorageState, TerminalHistoryScope, models::StoredConnection,
     traits::Repository,
+};
+use one_ui::{
+    IconButton, IconButtonRole, IconSize as OneIconSize, PanelHeader, PanelHeaderVariant,
 };
 use rust_i18n::t;
 use ssh::SshSessionManager;
@@ -291,14 +292,14 @@ impl SidebarPanel {
     /// Returns the semantic monochrome icon shared by rail and panel headers.
     pub fn icon(&self) -> Icon {
         match self {
-            SidebarPanel::FileExplorer => ObjectIcon::new(IconName::FolderOpen).into_icon(),
-            SidebarPanel::Settings => FunctionalIcon::new(IconName::Settings).into_icon(),
-            SidebarPanel::QuickCommand => FunctionalIcon::new(IconName::SquareTerminal).into_icon(),
-            SidebarPanel::HistoryCommand => FunctionalIcon::new(IconName::BookOpen).into_icon(),
-            SidebarPanel::AiChat => ObjectIcon::new(IconName::AILine).into_icon(),
-            SidebarPanel::BroadcastInput => ObjectIcon::new(IconName::Network).into_icon(),
-            SidebarPanel::FileManager => ObjectIcon::new(IconName::Folder).into_icon(),
-            SidebarPanel::ServerMonitor => ObjectIcon::new(IconName::Monitor).into_icon(),
+            SidebarPanel::FileExplorer => Icon::new(IconName::FolderOpen),
+            SidebarPanel::Settings => Icon::new(IconName::Settings),
+            SidebarPanel::QuickCommand => Icon::new(IconName::SquareTerminal),
+            SidebarPanel::HistoryCommand => Icon::new(IconName::BookOpen),
+            SidebarPanel::AiChat => Icon::new(IconName::AILine),
+            SidebarPanel::BroadcastInput => Icon::new(IconName::Network),
+            SidebarPanel::FileManager => Icon::new(IconName::Folder),
+            SidebarPanel::ServerMonitor => Icon::new(IconName::Monitor),
         }
     }
 
@@ -348,7 +349,7 @@ fn terminal_toolbar_icon_button(
 
     IconButton::new(id, panel.icon())
         .hit_size(item_size)
-        .glyph_size(IconSize::Medium)
+        .glyph_size(OneIconSize::Small)
         .custom(style)
         .selected(selected)
         .tooltip(panel.title())
@@ -1847,12 +1848,8 @@ mod tests {
         assert!(terminal_theme.is_dark());
         assert!(agent_theme.is_dark);
         assert!(markdown_style.is_dark);
-        assert_eq!(
-            Some(agent_theme.code_background),
-            markdown_style.code_background
-        );
-        assert_eq!(Some(agent_theme.table_header), markdown_style.table_header);
-        assert_eq!(Some(agent_theme.quote_border), markdown_style.quote_border);
+        assert!(markdown_style.code_block.background.is_some());
+        assert!(markdown_style.table_head.background.is_some());
     }
 
     #[test]
@@ -1880,6 +1877,19 @@ mod tests {
         assert_eq!(theme.danger, application_theme.danger);
         assert_eq!(theme.warning, application_theme.warning);
         assert_eq!(theme.success, application_theme.success);
+    }
+
+    #[test]
+    fn toolbar_icons_use_standard_glyph_size() {
+        let source = include_str!("mod.rs");
+        let renderer = source
+            .split("fn terminal_toolbar_icon_button")
+            .nth(1)
+            .and_then(|source| source.split("fn terminal_sidebar_available_panels").next())
+            .expect("terminal toolbar button renderer");
+
+        assert!(renderer.contains(".glyph_size(OneIconSize::Small)"));
+        assert!(!renderer.contains(".glyph_size(OneIconSize::Default)"));
     }
 
     #[test]

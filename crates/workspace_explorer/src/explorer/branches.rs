@@ -13,7 +13,7 @@ use gpui_component::{
     Disableable as _, Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, InputEvent, InputState, LocalInputStyle},
+    input::{Input, InputEvent, InputState},
     notification::Notification,
     popover::{Popover, PopoverState},
     v_flex,
@@ -460,12 +460,6 @@ impl Render for BranchManager {
                 || t!("WorkspaceExplorer.branch.push")
                     .to_lowercase()
                     .contains(&self.query));
-        let input_style = LocalInputStyle {
-            background: self.theme.muted,
-            foreground: self.theme.foreground,
-            muted_foreground: self.theme.muted_foreground,
-            border: self.theme.border,
-        };
         v_flex()
             .w(px(420.0))
             .max_h(px(560.0))
@@ -485,7 +479,9 @@ impl Render for BranchManager {
                             Input::new(&self.search)
                                 .w_full()
                                 .prefix(Icon::new(IconName::Search))
-                                .local_style(input_style),
+                                .bg(self.theme.muted)
+                                .text_color(self.theme.foreground)
+                                .border_color(self.theme.border),
                         ),
                     )
                     .child(
@@ -535,12 +531,9 @@ impl Render for BranchManager {
                         .child(
                             Input::new(&editor.input)
                                 .w_full()
-                                .local_style(LocalInputStyle {
-                                    background: self.theme.background,
-                                    foreground: self.theme.foreground,
-                                    muted_foreground: self.theme.muted_foreground,
-                                    border: self.theme.border,
-                                }),
+                                .bg(self.theme.background)
+                                .text_color(self.theme.foreground)
+                                .border_color(self.theme.border),
                         )
                         .child(
                             h_flex()

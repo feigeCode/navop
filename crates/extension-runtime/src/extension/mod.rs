@@ -30,8 +30,10 @@ use std::{path::PathBuf, sync::Arc};
 
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use gpui::{App, BorrowAppContext};
-use gpui_component::highlighter::{
-    LanguageRegistry, LoadReport, load_extensions_dir, register_extension_manifests_dir,
+use gpui_component::highlighter::LanguageRegistry;
+
+use crate::language_extensions::{
+    LoadReport, load_extensions_dir, register_extension_manifests_dir,
 };
 
 pub fn init(cx: &mut App) {
@@ -79,10 +81,7 @@ pub fn load_language_extensions_from_root(root: &std::path::Path) -> anyhow::Res
 pub fn register_language_extension_manifests_from_root(
     root: &std::path::Path,
 ) -> anyhow::Result<LoadReport> {
-    register_extension_manifests_dir(
-        &root.join(ExtensionKind::Language.dir_name()),
-        LanguageRegistry::singleton(),
-    )
+    register_extension_manifests_dir(&root.join(ExtensionKind::Language.dir_name()))
 }
 
 fn register_language_extension_manifests(root: &std::path::Path) {

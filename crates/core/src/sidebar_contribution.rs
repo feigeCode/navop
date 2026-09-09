@@ -101,17 +101,12 @@ pub struct SidebarPanelSize {
     pub bottom_height: Option<Pixels>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SidebarPanelChrome {
+    #[default]
     Host,
     HostNoHeader,
     None,
-}
-
-impl Default for SidebarPanelChrome {
-    fn default() -> Self {
-        Self::Host
-    }
 }
 
 pub const fn sidebar_panel_renders_header(chrome: SidebarPanelChrome) -> bool {

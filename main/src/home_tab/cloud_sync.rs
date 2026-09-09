@@ -26,7 +26,7 @@ impl HomePage {
                         .ok_text(t!("Home.open_sync_settings").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     view.update(cx, |home, cx| {
                         home.add_sync_settings_tab(window, cx);
                     });

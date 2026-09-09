@@ -1,12 +1,11 @@
 use crate::markdown_session::MarkdownSyncState;
 use crate::{MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{
-    AnyElement, ColorExt, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    Styled, div, prelude::FluentBuilder, px,
+    AnyElement, ColorExt, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
+    prelude::FluentBuilder,
 };
 use gpui_component::{
-    Disableable, Icon, IconName, Sizable, button::Button, h_flex, resizable::h_resizable,
-    resizable::resizable_panel, switch::Switch, v_flex, Selectable,
+    Disableable, Icon, IconName, Sizable, button::Button, h_flex, switch::Switch, v_flex,
 };
 use rust_i18n::t;
 
@@ -27,11 +26,6 @@ impl NotesView {
             .min_w_0()
             .overflow_hidden()
             .child(session.editor.clone());
-        let content: AnyElement = if mode == MarkdownViewMode::Split {
-            self.render_markdown_split(session, editor_pane, cx)
-        } else {
-            editor_pane.into_any_element()
-        };
         v_flex()
             .key_context(crate::markdown_source::MARKDOWN_CONTEXT)
             .on_action(cx.listener(
@@ -48,45 +42,7 @@ impl NotesView {
                 matches!(session.state.sync_state, MarkdownSyncState::Conflict),
                 |this| this.child(self.render_conflict_banner(document_id, cx)),
             )
-            .child(div().flex_1().min_h_0().min_w_0().child(content))
-            .into_any_element()
-    }
-
-    /// Split 模式：左侧源码编辑、右侧只读预览的可拖拽分栏。
-    fn render_markdown_split(
-        &self,
-        session: &crate::markdown_session::MarkdownSession,
-        editor_pane: gpui::Stateful<gpui::Div>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Some(preview) = &session.preview else {
-            return editor_pane.into_any_element();
-        };
-        let theme = self.resolved_editor_theme(cx);
-        let preview_pane = div()
-            .id("markdown-preview")
-            .debug_selector(|| "markdown-preview".to_owned())
-            .size_full()
-            .min_h_0()
-            .min_w_0()
-            .overflow_hidden()
-            .border_l_1()
-            .border_color(theme.border)
-            .child(preview.editor.clone());
-        h_resizable("markdown-split")
-            .child(
-                resizable_panel()
-                    .size(px(420.))
-                    .size_range(px(240.)..px(4000.))
-                    .overflow_hidden()
-                    .child(editor_pane),
-            )
-            .child(
-                resizable_panel()
-                    .size_range(px(240.)..px(4000.))
-                    .overflow_hidden()
-                    .child(preview_pane),
-            )
+            .child(div().flex_1().min_h_0().min_w_0().child(editor_pane))
             .into_any_element()
     }
 
@@ -216,48 +172,30 @@ impl NotesView {
         mode: MarkdownViewMode,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let entries = [
-            (
-                "wysiwyg",
-                MarkdownViewMode::Wysiwyg,
-                "Notes.markdown_preview",
-                IconName::Edit,
-            ),
-            (
-                "source",
+        let (target, label_key, tooltip_key, icon) = match mode {
+            MarkdownViewMode::Wysiwyg => (
                 MarkdownViewMode::Source,
                 "Notes.markdown_source",
+                "Notes.markdown_source_tooltip",
                 IconName::File,
             ),
-            (
-                "split",
-                MarkdownViewMode::Split,
-                "Notes.markdown_split",
-                IconName::PanelRight,
+            MarkdownViewMode::Source => (
+                MarkdownViewMode::Wysiwyg,
+                "Notes.markdown_preview",
+                "Notes.markdown_preview_tooltip",
+                IconName::Edit,
             ),
-        ];
-        let mut buttons = Vec::with_capacity(entries.len());
-        for (key, target, label_key, icon) in entries {
-            let tooltip_key = match target {
-                MarkdownViewMode::Wysiwyg => "Notes.markdown_preview_tooltip",
-                MarkdownViewMode::Source => "Notes.markdown_source_tooltip",
-                MarkdownViewMode::Split => "Notes.markdown_split_tooltip",
-            };
-            let id = document_id.to_owned();
-            buttons.push(
-                Button::new(SharedString::from(format!("markdown-mode-{key}")))
-                    .debug_selector(|| format!("markdown-mode-{key}"))
-                    .icon(icon)
-                    .label(t!(label_key).to_string())
-                    .tooltip(t!(tooltip_key).to_string())
-                    .small()
-                    .selected(mode == target)
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.set_markdown_mode(&id, target, window, cx);
-                    })),
-            );
-        }
-        h_flex().gap_1().children(buttons)
+        };
+        let id = document_id.to_owned();
+        Button::new("markdown-mode-toggle")
+            .debug_selector(|| "markdown-mode-toggle".to_owned())
+            .icon(icon)
+            .label(t!(label_key).to_string())
+            .tooltip(t!(tooltip_key).to_string())
+            .small()
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.set_markdown_mode(&id, target, window, cx);
+            }))
     }
 }
 

@@ -97,7 +97,7 @@ impl PersonalSyncStore for DirectorySyncStore {
         for dir in record_type_dirs(&self.layout)? {
             read_matching_records(&mut records, &dir, data_type, since, self)?;
         }
-        records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        records.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
         Ok(records)
     }
 

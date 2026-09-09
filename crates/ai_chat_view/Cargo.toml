@@ -14,6 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+one-ui.workspace = true
 one-core.workspace = true
 agent_runtime = { path = "../agent_runtime" }
 html-preview.workspace = true
@@ -30,7 +31,7 @@ image.workspace = true
 uuid.workspace = true
 lsp-types.workspace = true
 sum-tree.workspace = true
-gpui-wry = { path = "../webview", optional = true }
+gpui-wry = { workspace = true, optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
 
 [dev-dependencies]

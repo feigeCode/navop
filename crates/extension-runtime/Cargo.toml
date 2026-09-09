@@ -17,7 +17,7 @@ extension_view = { workspace = true }
 flate2 = "1"
 futures = { workspace = true }
 gpui = { workspace = true }
-gpui-component = { workspace = true }
+gpui-component = { workspace = true, features = ["tree-sitter"] }
 html-preview.workspace = true
 one-core = { workspace = true }
 remote_desktop = { workspace = true }
@@ -29,6 +29,7 @@ sha2 = { workspace = true }
 tar = "0.4"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tree-sitter = { version = "0.26", features = ["wasm"] }
 
 [dev-dependencies]
 smol = { workspace = true }

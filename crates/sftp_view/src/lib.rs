@@ -31,8 +31,8 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants, IconButton, IconButtonRole},
-    dialog::DialogButtonProps,
+    button::{Button, ButtonVariants},
+    dialog::{DialogButtonProps, DialogFooter},
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
@@ -44,7 +44,6 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
-use one_core::background_task_panel::show_background_tasks_or_notify;
 use one_core::background_tasks::{
     BackgroundTaskCancellation, BackgroundTaskHandle, BackgroundTaskProgressUnit,
     BackgroundTaskSpec,
@@ -57,6 +56,7 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
+use one_ui::{IconButton, IconButtonRole};
 use remote_file_editor::{
     ExternalEditorOpenRequest, RemoteMutationCallback, open_remote_file_editor,
     open_remote_file_external_editor,
@@ -588,9 +588,6 @@ impl TransferQueue {
 
     fn bottom_visible_tasks(&self) -> Vec<TransferTask> {
         self.active_tasks()
-            .into_iter()
-            .filter(|task| task.external_transfer_id.is_none() && task.background_task.is_none())
-            .collect()
     }
 }
 
@@ -1672,7 +1669,13 @@ impl SftpView {
                     input,
                     window,
                     |this, _, event: &InputEvent, window, cx| {
-                        if matches!(event, InputEvent::PressEnter { secondary: false }) {
+                        if matches!(
+                            event,
+                            InputEvent::PressEnter {
+                                secondary: false,
+                                ..
+                            }
+                        ) {
                             this.submit_credentials(window, cx);
                         }
                     },
@@ -3033,7 +3036,6 @@ impl SftpView {
                     dialog
                         .title(t!("Dialog.error").to_string())
                         .child(error_msg.clone())
-                        .alert()
                 });
             }
         }
@@ -3382,7 +3384,7 @@ impl SftpView {
                         )
                         .child(t!("Conflict.choose_action").to_string()),
                 )
-                .footer(move |_, _, _window, _cx| {
+                .footer({
                     let mut buttons: Vec<gpui::AnyElement> = vec![
                         Button::new("skip")
                             .label(t!("Conflict.skip").to_string())
@@ -3503,7 +3505,7 @@ impl SftpView {
                             .into_any_element(),
                     );
 
-                    buttons
+                    DialogFooter::new().children(buttons)
                 })
                 .overlay_closable(false)
                 .close_button(true)
@@ -4105,7 +4107,6 @@ impl SftpView {
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
             task_group: self.background_task_group(),
         };
-        let mut submitted = false;
         for transfer in transfers {
             let prepared = prepare_global_upload(&transfer, conflict_policy, &upload_context);
             let reservation = self
@@ -4124,30 +4125,15 @@ impl SftpView {
             };
             let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
             self.refresh_transfer_target_if_visible(refresh_target, cx);
-            submitted = true;
         }
 
-        if submitted {
-            self.show_background_tasks(cx);
-        }
         self.start_progress_refresh(cx);
         cx.notify();
     }
-
-    fn show_background_tasks(&self, cx: &mut Context<Self>) {
-        let manager = one_core::background_tasks::global(cx);
-        if let Some(window) = cx.active_window() {
-            let _ = window.update(cx, |_, window, cx| {
-                show_background_tasks_or_notify(manager, window, cx);
-            });
-        }
-    }
-
     fn background_task_group(&self) -> SharedString {
         // 分组标题只保留「连接名称 - IP」，同一连接的多个面板合并到同一分组。
         format!("{} - {}", self.connection_name, self.sftp_config.host).into()
     }
-
     fn register_local_background_task(
         &self,
         kind: &'static str,
@@ -4429,7 +4415,6 @@ impl SftpView {
             connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
             task_group: self.background_task_group(),
         };
-        let mut submitted = false;
         for transfer in transfers {
             let prepared = prepare_global_download(&transfer, &download_context);
             let reservation = self.upload_executor.update(cx, |executor, _| {
@@ -4448,10 +4433,6 @@ impl SftpView {
             };
             let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
             self.refresh_transfer_target_if_visible(refresh_target, cx);
-            submitted = true;
-        }
-        if submitted {
-            self.show_background_tasks(cx);
         }
         self.start_progress_refresh(cx);
         cx.notify();
@@ -4520,13 +4501,13 @@ impl SftpView {
                             .child(file_list.clone()),
                     ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.delete").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     window.close_dialog(cx);
 
                     let _ = view_confirm.update(cx, |this, cx| {
@@ -4607,7 +4588,6 @@ impl SftpView {
             {
                 task.background_task = Some(handle);
             }
-            self.show_background_tasks(cx);
         }
 
         self.schedule_transfers(cx);
@@ -4680,13 +4660,13 @@ impl SftpView {
                             .child(file_list.clone()),
                     ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.delete").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     window.close_dialog(cx);
 
                     let _ = view_confirm.update(cx, |this, cx| {
@@ -4735,7 +4715,6 @@ impl SftpView {
         };
         let refresh_target = self.reconcile_transfer_snapshot_to_mirror(&snapshot);
         self.refresh_transfer_target_if_visible(refresh_target, cx);
-        self.show_background_tasks(cx);
         self.start_progress_refresh(cx);
         cx.notify();
     }
@@ -4767,13 +4746,13 @@ impl SftpView {
                 .title(t!("File.new_folder").to_string())
                 .w(px(360.))
                 .child(Input::new(&input))
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.create").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let folder_name = input_for_callback.read(cx).text().to_string();
                     if folder_name.is_empty() {
                         return false;
@@ -5361,7 +5340,6 @@ impl SftpView {
             {
                 task.background_task = Some(handle);
             }
-            self.show_background_tasks(cx);
         }
         self.schedule_transfers(cx);
     }
@@ -5416,7 +5394,7 @@ impl SftpView {
                 .title(t!("Dialog.file_conflict").to_string())
                 .w(px(450.))
                 .child(content)
-                .footer(move |_, _, _window, _cx| {
+                .footer({
                     let view_overwrite = view_overwrite.clone();
                     let view_skip = view_skip.clone();
                     let view_keep = view_keep.clone();
@@ -5539,7 +5517,7 @@ impl SftpView {
                                 .into_any_element(),
                         );
                     }
-                    buttons
+                    DialogFooter::new().children(buttons)
                 })
                 .overlay_closable(false)
                 .close_button(true)
@@ -7086,53 +7064,51 @@ fn open_close_strategy_dialog(
                 send_close_choice(&keyboard_cancel_sender, CloseChoice::Abort);
                 true
             })
-            .on_ok(move |_, _, _| {
+            .on_ok(move |_, _, _cx: &mut App| {
                 send_close_choice(
                     &keyboard_wait_sender,
                     CloseChoice::Close(CloseTransferStrategy::Wait),
                 );
                 true
             })
-            .footer(move |_, _, _window, _cx| {
-                vec![
-                    close_choice_button(
-                        CloseButtonSpec {
-                            id: "sftp-close-cancel",
-                            label: t!("Common.cancel").to_string(),
-                            choice: CloseChoice::Abort,
-                            style: CloseButtonStyle::Ghost,
-                        },
-                        footer_cancel_sender.clone(),
-                    ),
-                    close_choice_button(
-                        CloseButtonSpec {
-                            id: "sftp-close-wait",
-                            label: t!("Transfer.wait_and_close").to_string(),
-                            choice: CloseChoice::Close(CloseTransferStrategy::Wait),
-                            style: CloseButtonStyle::Primary,
-                        },
-                        footer_wait_sender.clone(),
-                    ),
-                    close_choice_button(
-                        CloseButtonSpec {
-                            id: "sftp-close-background",
-                            label: t!("Transfer.continue_in_background").to_string(),
-                            choice: CloseChoice::Close(CloseTransferStrategy::Background),
-                            style: CloseButtonStyle::Ghost,
-                        },
-                        background_sender.clone(),
-                    ),
-                    close_choice_button(
-                        CloseButtonSpec {
-                            id: "sftp-close-cancel-transfers",
-                            label: t!("Transfer.cancel_and_close").to_string(),
-                            choice: CloseChoice::Close(CloseTransferStrategy::CancelTransfers),
-                            style: CloseButtonStyle::Danger,
-                        },
-                        cancel_transfers_sender.clone(),
-                    ),
-                ]
-            })
+            .footer(DialogFooter::new().children(vec![
+                close_choice_button(
+                    CloseButtonSpec {
+                        id: "sftp-close-cancel",
+                        label: t!("Common.cancel").to_string(),
+                        choice: CloseChoice::Abort,
+                        style: CloseButtonStyle::Ghost,
+                    },
+                    footer_cancel_sender.clone(),
+                ),
+                close_choice_button(
+                    CloseButtonSpec {
+                        id: "sftp-close-wait",
+                        label: t!("Transfer.wait_and_close").to_string(),
+                        choice: CloseChoice::Close(CloseTransferStrategy::Wait),
+                        style: CloseButtonStyle::Primary,
+                    },
+                    footer_wait_sender.clone(),
+                ),
+                close_choice_button(
+                    CloseButtonSpec {
+                        id: "sftp-close-background",
+                        label: t!("Transfer.continue_in_background").to_string(),
+                        choice: CloseChoice::Close(CloseTransferStrategy::Background),
+                        style: CloseButtonStyle::Ghost,
+                    },
+                    background_sender.clone(),
+                ),
+                close_choice_button(
+                    CloseButtonSpec {
+                        id: "sftp-close-cancel-transfers",
+                        label: t!("Transfer.cancel_and_close").to_string(),
+                        choice: CloseChoice::Close(CloseTransferStrategy::CancelTransfers),
+                        style: CloseButtonStyle::Danger,
+                    },
+                    cancel_transfers_sender.clone(),
+                ),
+            ]))
             .overlay_closable(false)
             .close_button(false)
     });
@@ -8146,7 +8122,7 @@ mod tests {
     }
 
     #[test]
-    fn bottom_queue_hides_global_uploads_and_downloads() {
+    fn bottom_queue_shows_all_active_tasks_including_uploads_and_downloads() {
         let mut queue = TransferQueue::new(2);
         let mut upload = transfer_task(1);
         upload.external_transfer_id = Some(SftpTransferId::new(7));
@@ -8178,7 +8154,7 @@ mod tests {
         let visible = queue.bottom_visible_tasks();
 
         assert_eq!(
-            vec![3],
+            vec![1, 2, 3],
             visible.iter().map(|task| task.id).collect::<Vec<_>>()
         );
     }

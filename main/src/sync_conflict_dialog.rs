@@ -60,7 +60,7 @@ pub(crate) fn show_sync_conflict_dialog(
             .button_props(
                 gpui_component::dialog::DialogButtonProps::default().ok_text(ok_text.clone()),
             )
-            .on_ok(move |_event, window, cx| {
+            .on_ok(move |_event, window, cx: &mut App| {
                 let selected = strategies_for_ok.read(cx).clone().into_iter().collect();
                 on_apply(selected, window, cx);
                 window.refresh();

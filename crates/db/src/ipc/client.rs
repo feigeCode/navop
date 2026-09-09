@@ -294,6 +294,9 @@ pub(crate) fn host_error_to_db_error(error: HostError) -> DbError {
         HostError::Incompatible(reason) => {
             DbError::connection(format!("external driver compatibility error: {reason}"))
         }
+        HostError::InvalidParams { method, message } => DbError::query(format!(
+            "external driver request `{method}` invalid: {message}"
+        )),
         HostError::NotImplemented(msg) => DbError::NotSupported(msg),
     }
 }

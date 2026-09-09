@@ -1,10 +1,10 @@
 use gpui::{Anchor, AnyElement, IntoElement, Styled as _, prelude::FluentBuilder as _};
 use gpui_component::{
     Icon, IconName, IconSize, Selectable as _, Sizable as _,
-    button::{IconButton, IconButtonRole},
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
 };
 use one_core::storage::ConnectionType;
+use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
 use super::{PersistentConnectionSidebar, SidebarPalette};

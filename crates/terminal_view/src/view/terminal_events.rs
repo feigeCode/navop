@@ -1,6 +1,6 @@
 use super::credential_capture::{
-    CaptureOutcome, CredentialCapture, connection_notice_text, sanitize_notice_text,
-    should_emit_connecting_notice,
+    CaptureOutcome, CredentialCapture, connection_notice_text, keystroke_capture_text,
+    sanitize_notice_text, should_emit_connecting_notice,
 };
 use super::*;
 
@@ -263,7 +263,11 @@ impl TerminalView {
                     true
                 }
                 key if plain && key.len() == 1 => {
-                    self.capture_append_text(key, cx);
+                    // `key` 只是键帽字符（shift+a 仍是 "a"），直接追加会把
+                    // 大写密码输成小写；必须优先使用平台换算后的实际输入字符
+                    // （key_char，shift+a -> "A"）。按键被消费后 prevent_default
+                    // 会阻断文本系统，此分支是输入字符的唯一来源。
+                    self.capture_append_text(keystroke_capture_text(&event.keystroke), cx);
                     true
                 }
                 _ => false,

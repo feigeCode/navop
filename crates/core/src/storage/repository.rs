@@ -2,10 +2,11 @@ use anyhow::Result;
 use gpui::{App, SharedString};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+use crate::crypto;
 use crate::storage::connection::SqliteConnection;
 use crate::storage::credential_vault::CredentialRepository;
 use crate::storage::manager::{GlobalStorageState, now};
-use crate::storage::models::has_decrypt_failure_in_sensitive_fields;
+use crate::storage::models::{ExtensionConnectionParams, has_connection_decrypt_failure};
 use crate::storage::quick_command::QuickCommandRepository;
 use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::sftp_favorite_path::SftpFavoritePathRepository;
@@ -158,6 +159,48 @@ impl ConnectionRepository {
         CredentialRepository::new(self.conn.clone())
     }
 
+    pub fn resolve_extension_secret(&self, extension_id: &str, reference: &str) -> Result<Vec<u8>> {
+        let (connection_id, field_id) = reference
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("extension secret reference must be <id>:<field>"))?;
+        let connection_id = connection_id.parse::<i64>()?;
+        let raw = self.conn.with_connection(|conn| {
+            conn.query_row(
+                "SELECT connection_type, params FROM connections WHERE id = ?1",
+                [connection_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(Into::into)
+        })?;
+        let (connection_type, params) =
+            raw.ok_or_else(|| anyhow::anyhow!("extension connection was not found"))?;
+        anyhow::ensure!(
+            ConnectionType::from_str(&connection_type) == ConnectionType::Extension,
+            "connection is not an extension connection"
+        );
+        let params: ExtensionConnectionParams = serde_json::from_str(&params)?;
+        params.validate()?;
+        anyhow::ensure!(
+            params.extension_id == extension_id,
+            "extension does not own this connection"
+        );
+        let encrypted = params
+            .secrets
+            .get(field_id)
+            .ok_or_else(|| anyhow::anyhow!("extension connection secret was not found"))?;
+        anyhow::ensure!(
+            crypto::has_master_key() && crypto::is_encrypted(encrypted),
+            "extension connection secret cannot be decrypted safely"
+        );
+        let secret = crypto::decrypt_password(encrypted);
+        anyhow::ensure!(
+            !secret.is_empty(),
+            "extension connection secret decryption failed"
+        );
+        Ok(secret.into_bytes())
+    }
+
     pub fn get_for_sensitive_export(
         &self,
         id: i64,
@@ -179,9 +222,11 @@ impl ConnectionRepository {
             let row = ConnectionRow::from_row(row)?;
             let params_are_valid_json =
                 serde_json::from_str::<serde_json::Value>(&row.params).is_ok();
-            if !params_are_valid_json
-                || has_decrypt_failure_in_sensitive_fields(&row.params)
-            {
+            let decrypt_failure = has_connection_decrypt_failure(
+                ConnectionType::from_str(&row.connection_type),
+                &row.params,
+            );
+            if !params_are_valid_json || decrypt_failure {
                 anyhow::bail!("Sensitive connection information is unavailable");
             }
             Ok(Some(row.into()))
@@ -194,7 +239,7 @@ impl ConnectionRepository {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Cloud connection requires cloud_id"))?;
         let connection_type = item.connection_type.to_string();
-        let encrypted_params = item.encrypt_params();
+        let encrypted_params = item.try_encrypt_params()?;
         let sync_enabled = i64::from(item.sync_enabled);
         let ts = now();
         let (id, credential_revision) = self.conn.with_connection(|conn| {
@@ -264,7 +309,7 @@ impl Repository for ConnectionRepository {
     fn insert(&self, item: &mut Self::Entity) -> Result<i64> {
         let name = item.name.clone();
         let connection_type = item.connection_type.to_string();
-        let params_str = item.encrypt_params();
+        let params_str = item.try_encrypt_params()?;
         let workspace_id = item.workspace_id;
         let selected_databases = item.selected_databases.clone();
         let remark = item.remark.clone();
@@ -298,7 +343,7 @@ impl Repository for ConnectionRepository {
             .ok_or_else(|| anyhow::anyhow!("Cannot update without ID"))?;
         let name = item.name.clone();
         let connection_type = item.connection_type.to_string();
-        let params_str = item.encrypt_params();
+        let params_str = item.try_encrypt_params()?;
         let workspace_id = item.workspace_id;
         let selected_databases = item.selected_databases.clone();
         let remark = item.remark.clone();
@@ -514,19 +559,23 @@ impl ConnectionRepository {
     pub fn list_sync_decrypt_failures(&self) -> Result<Vec<(i64, String)>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, params FROM connections WHERE sync_enabled = 1 ORDER BY updated_at DESC",
+                "SELECT id, name, connection_type, params FROM connections WHERE sync_enabled = 1 ORDER BY updated_at DESC",
             )?;
             let rows = stmt.query_map([], |row| {
                 let id: i64 = row.get("id")?;
                 let name: String = row.get("name")?;
+                let connection_type: String = row.get("connection_type")?;
                 let params: String = row.get("params")?;
-                Ok((id, name, params))
+                Ok((id, name, connection_type, params))
             })?;
 
             let mut failures = Vec::new();
             for row in rows {
-                let (id, name, params) = row?;
-                if has_decrypt_failure_in_sensitive_fields(&params) {
+                let (id, name, connection_type, params) = row?;
+                if has_connection_decrypt_failure(
+                    ConnectionType::from_str(&connection_type),
+                    &params,
+                ) {
                     failures.push((id, name));
                 }
             }
@@ -892,12 +941,59 @@ mod tests {
     use super::{ConnectionRepository, WorkspaceRepository};
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
-    use crate::storage::models::{SshAuthMethod, SshParams};
+    use crate::storage::models::{ExtensionConnectionParams, SshAuthMethod, SshParams};
     use crate::storage::traits::Repository;
     use crate::storage::{StoredConnection, Workspace};
     use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn extension_connections_use_standard_repository_and_scoped_secrets() {
+        crate::crypto::set_master_key_for_session("extension-connection-test-key").unwrap();
+        let (conn, repo) = test_repository();
+        let params = ExtensionConnectionParams::new(
+            "com.example.search",
+            "search",
+            serde_json::Map::from_iter([(
+                "url".into(),
+                serde_json::Value::String("https://example.test".into()),
+            )]),
+            std::collections::BTreeMap::from([("api_key".into(), "secret-value".into())]),
+        )
+        .unwrap();
+        let mut connection = StoredConnection::new_extension("Search".into(), params, None);
+
+        repo.insert(&mut connection).unwrap();
+
+        let raw: String = conn
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT params FROM connections WHERE id = ?1",
+                    [connection.id.unwrap()],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert!(!raw.contains("secret-value"));
+        assert_eq!(
+            b"secret-value",
+            repo.resolve_extension_secret(
+                "com.example.search",
+                &format!("{}:api_key", connection.id.unwrap()),
+            )
+            .unwrap()
+            .as_slice()
+        );
+        assert!(
+            repo.resolve_extension_secret(
+                "com.example.other",
+                &format!("{}:api_key", connection.id.unwrap()),
+            )
+            .is_err()
+        );
+    }
 
     static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 

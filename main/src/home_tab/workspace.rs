@@ -160,7 +160,7 @@ impl HomePage {
                         .into_any_element(),
                 )
                 .confirm()
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, _window, cx: &mut App| {
                     let _ = view_clone.update(cx, |this, cx| {
                         this.handle_delete_workspace(workspace_id, cx);
                     });

@@ -1206,12 +1206,16 @@ DELIMITER ;
         assert!(statements[1].contains("SELECT 'value;inside';"));
         assert!(statements[1].contains("BEGIN\n    SELECT 2;\n  END;"));
         assert!(statements[1].ends_with("END"));
-        assert!(!statements
-            .iter()
-            .any(|statement| statement.contains("DELIMITER")));
-        assert!(!statements
-            .iter()
-            .any(|statement| statement.contains("CALL")));
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("DELIMITER"))
+        );
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("CALL"))
+        );
     }
 
     #[test]
@@ -1246,12 +1250,16 @@ DELIMITER ;
         assert!(statements[1].contains("RETURNS INT"));
         assert!(statements[1].contains("SET result_value = amount + 1;"));
         assert!(statements[1].ends_with("END"));
-        assert!(!statements
-            .iter()
-            .any(|statement| statement.contains("DELIMITER")));
-        assert!(!statements
-            .iter()
-            .any(|statement| statement.contains("-- SELECT")));
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("DELIMITER"))
+        );
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("-- SELECT"))
+        );
     }
 
     #[test]

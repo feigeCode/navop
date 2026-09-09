@@ -66,7 +66,7 @@ script/bootstrap
 
 ## Workspace Structure
 
-The workspace has four default members (`crates/ui`, `crates/story`, `crates/assets`, `main`) and 25+ total crates. Edition is 2024.
+The workspace uses an external `gpui-component` checkout plus `main` and the Navop application crates. Edition is 2024.
 
 ### Application Layer
 
@@ -77,10 +77,8 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 ### Core Infrastructure
 
 - **`crates/core` (one-core)** — Core logic: connection management, cloud sync, AI integration, configuration, encryption (AES-GCM, Ed25519), tab container/persistence.
-- **`crates/ui` (gpui-component)** — Reusable UI component library (60+ components). Published to crates.io.
-- **`crates/one_ui`** — Application-specific UI components extending gpui-component.
-- **`crates/macros` (gpui-component-macros)** — Procedural macros.
-- **`crates/assets` (gpui-component-assets)** — Bundled static assets (rust-embed).
+- **External `gpui-component` checkout** — Reusable UI components, macros, and bundled assets.
+- **`crates/one_ui`** — Navop-owned composite components and product-specific UI.
 
 ### Feature Crates (Backend + View Pairs)
 

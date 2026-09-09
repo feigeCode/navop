@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "com.navop.api-test",
+  "name": "Navop API Test Resource Provider",
+  "version": "0.1.0",
+  "description": "Reference IPC provider for API requests, environments and collections.",
+  "engines": {
+    "onetcli": ">=0.1.0"
+  },
+  "permissions": [
+    "net:tcp:api.example.com:443",
+    "secrets:read:self.*",
+    "spawn:./bin/api-test-provider"
+  ],
+  "runtime": {
+    "ipc": [
+      {
+        "id": "main",
+        "entry": {
+          "command": "./bin/api-test-provider"
+        },
+        "transport": {
+          "kind": "local_socket",
+          "connect_timeout_ms": 5000
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "connections": [
+      {
+        "id": "api-test",
+        "label": "API Test",
+        "runtimeId": "main",
+        "resourceType": "api-test",
+        "form": { "tabs": [{ "id": "general", "label": "General", "fields": [
+          { "id": "base_url", "label": "Base URL", "fieldType": "Text", "required": true }
+        ] }] }
+      }
+    ]
+  }
+}

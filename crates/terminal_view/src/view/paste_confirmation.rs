@@ -23,6 +23,7 @@ impl TerminalView {
         };
         let text = text.to_string();
         let preview_text = Self::paste_preview_text(&text);
+        let summary_text = Self::paste_summary_text(&text);
         let view = cx.entity().clone();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -31,18 +32,22 @@ impl TerminalView {
 
             dialog
                 .title(title.clone())
-                .alert()
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
+                    v_flex()
                         .gap_2()
+                        .min_h_0()
                         .child(div().text_sm().child(message.clone()))
-                        .child(div().text_xs().child(t!("TerminalView.paste_preview")))
                         .child(
-                            div()
-                                .max_h(px(180.0))
-                                .overflow_hidden()
+                            h_flex()
+                                .justify_between()
+                                .child(div().text_xs().child(t!("TerminalView.paste_preview")))
+                                .child(div().text_xs().child(summary_text.clone())),
+                        )
+                        .child(
+                            v_flex()
+                                .id("paste-preview")
+                                .max_h(px(160.0))
+                                .overflow_y_scroll()
                                 .text_xs()
                                 .child(preview_text.clone()),
                         )

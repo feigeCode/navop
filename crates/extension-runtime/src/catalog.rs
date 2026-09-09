@@ -1,6 +1,10 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "wasm-components")]
+use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(feature = "wasm-components")]
+use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use one_core::{
@@ -13,8 +17,9 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 use super::registration::load_installed_composite_manifests;
 use super::types::{
     ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentExporter,
-    RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
-    RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
+    RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
+    RegisteredKeybindingContribution, RegisteredRemoteFileEditorContribution,
+    RegisteredResourceConnectionContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -23,6 +28,7 @@ static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new()
 pub struct ExtensionRuntimeCatalog {
     pub(super) commands: CommandRegistry,
     pub(super) wasm_runtimes: BTreeMap<String, WasmRuntimeBinding>,
+    pub(super) ipc_runtimes: BTreeMap<String, RegisteredIpcRuntimeBinding>,
     pub(super) db_tree_menus: Vec<RegisteredDbTreeMenuContribution>,
     pub(super) toolbar_slots: SlotRegistry,
     pub(super) menu_slots: SlotRegistry,
@@ -37,6 +43,8 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) document_exporter_runtimes:
         Mutex<HashMap<String, Arc<extension_wasm::DocumentExporterRuntime>>>,
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
+    pub(super) shell_views: BTreeMap<String, RegisteredShellViewContribution>,
+    pub(super) resource_connections: BTreeMap<String, RegisteredResourceConnectionContribution>,
 }
 
 #[derive(Debug)]
@@ -59,6 +67,7 @@ impl ExtensionRuntimeCatalog {
         Self {
             commands: CommandRegistry::new(),
             wasm_runtimes: BTreeMap::new(),
+            ipc_runtimes: BTreeMap::new(),
             db_tree_menus: Vec::new(),
             toolbar_slots: SlotRegistry::default(),
             menu_slots: SlotRegistry::default(),
@@ -71,6 +80,8 @@ impl ExtensionRuntimeCatalog {
             #[cfg(feature = "wasm-components")]
             document_exporter_runtimes: Mutex::new(HashMap::new()),
             remote_file_editors: Vec::new(),
+            shell_views: BTreeMap::new(),
+            resource_connections: BTreeMap::new(),
         }
     }
 
@@ -146,6 +157,37 @@ impl ExtensionRuntimeCatalog {
 
     pub fn remote_file_editors(&self) -> &[RegisteredRemoteFileEditorContribution] {
         &self.remote_file_editors
+    }
+
+    pub fn ipc_runtime_bindings(&self) -> impl Iterator<Item = &RegisteredIpcRuntimeBinding> {
+        self.ipc_runtimes.values()
+    }
+
+    pub fn shell_views(&self) -> impl Iterator<Item = &RegisteredShellViewContribution> {
+        self.shell_views.values()
+    }
+
+    pub fn shell_view(
+        &self,
+        extension_id: &str,
+        view_id: &str,
+    ) -> Option<&RegisteredShellViewContribution> {
+        self.shell_views.get(&format!("{extension_id}::{view_id}"))
+    }
+
+    pub fn resource_connections(
+        &self,
+    ) -> impl Iterator<Item = &RegisteredResourceConnectionContribution> {
+        self.resource_connections.values()
+    }
+
+    pub fn resource_connection(
+        &self,
+        extension_id: &str,
+        connection_id: &str,
+    ) -> Option<&RegisteredResourceConnectionContribution> {
+        self.resource_connections
+            .get(&format!("{extension_id}::{connection_id}"))
     }
 
     pub fn document_renderer_for_kind(

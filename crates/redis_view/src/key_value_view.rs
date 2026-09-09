@@ -11,23 +11,24 @@ use gpui::{
     px, relative,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, Sizable, Size, WindowExt as _,
-    button::{Button, ButtonVariants as _, IconButton},
+    ActiveTheme, Icon, IconName, IconSize as GpuiIconSize, IndexPath, Sizable, Size,
+    WindowExt as _,
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    content_state::ContentState,
     dialog::DialogButtonProps,
     h_flex,
-    highlighter::Language,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     notification::Notification,
     radio::Radio,
     select::{Select, SelectEvent, SelectItem, SelectState},
-    status_bar::StatusBar,
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};
-use one_ui::{LargeTextEditor, create_large_text_editor_with_content};
+use one_ui::{
+    ContentState, IconButton, IconSize, LargeTextEditor, StatusBar,
+    create_large_text_editor_with_content,
+};
 use rust_i18n::t;
 
 /// 键值视图事件
@@ -250,7 +251,7 @@ pub struct KeyValueView {
     /// 查看格式选择器状态
     format_select: Entity<SelectState<Vec<ViewFormat>>>,
     /// String 值编辑器状态
-    string_editor: Entity<InputState>,
+    string_editor: Entity<TextareaState>,
     /// 待设置的编辑器值（异步加载完成后设置）
     pending_editor_value: Option<String>,
     /// 单调递增的加载代次，用于忽略晚到的旧请求。
@@ -296,12 +297,7 @@ impl KeyValueView {
         });
 
         let string_editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .code_editor(Language::from_str("text"))
-                .line_number(true)
-                .searchable(true)
-                .soft_wrap(true)
+            TextareaState::new(window, cx)
                 .placeholder(t!("KeyValueView.select_key_placeholder").to_string())
         });
 
@@ -354,7 +350,6 @@ impl KeyValueView {
         if let SelectEvent::Confirm(Some(format)) = event {
             self.view_format = *format.value();
             self.update_editor_content(window, cx);
-            self.update_editor_highlighter(cx);
             cx.notify();
         }
     }
@@ -362,7 +357,7 @@ impl KeyValueView {
     /// 编辑器内容变化处理
     fn on_editor_changed(
         &mut self,
-        _editor: &Entity<InputState>,
+        _editor: &Entity<TextareaState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -596,18 +591,6 @@ impl KeyValueView {
 
         self.string_editor.update(cx, |state, cx| {
             state.set_value(formatted, window, cx);
-        });
-    }
-
-    /// 更新编辑器高亮语言
-    fn update_editor_highlighter(&mut self, cx: &mut Context<Self>) {
-        let language = match self.view_format {
-            ViewFormat::Json => Language::Json,
-            _ => Language::from_str("text"),
-        };
-
-        self.string_editor.update(cx, |state, cx| {
-            state.set_highlighter(language, cx);
         });
     }
 
@@ -1075,13 +1058,13 @@ impl KeyValueView {
                                 .child(div().h(px(460.)).w_full().child(value_editor.clone())),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.add").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let Some(value) = Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
                         return false;
@@ -1134,13 +1117,13 @@ impl KeyValueView {
                                 .child(value_editor.clone()),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.save").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let Some(value) = Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
                         return false;
@@ -1283,13 +1266,13 @@ impl KeyValueView {
                                 .child(member_editor.clone()),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.add").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let Some(member) = Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
                         return false;
@@ -1343,13 +1326,13 @@ impl KeyValueView {
                                 .child(member_editor.clone()),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.save").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let Some(new_member) =
                         Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
@@ -1466,13 +1449,13 @@ impl KeyValueView {
                                 ),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.add").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let Some(member) = Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
                         return false;
@@ -1557,13 +1540,13 @@ impl KeyValueView {
                                 ),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.save").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let Some(new_member) =
                         Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
@@ -1734,13 +1717,13 @@ impl KeyValueView {
                                 ),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.add").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let field = field_for_ok.read(cx).text().to_string();
                     let Some(value) = Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
@@ -1819,13 +1802,13 @@ impl KeyValueView {
                                 ),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("KeyValueView.save").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let new_field = field_for_ok.read(cx).text().to_string();
                     let Some(value) = Self::large_text_editor_value(&editor_for_ok, window, cx)
                     else {
@@ -1963,14 +1946,14 @@ impl KeyValueView {
             dialog
                 .overlay(false)
                 .title(t!("RedisTree.confirm_delete_title").to_string())
-                .confirm()
+                .button_props(DialogButtonProps::default().show_cancel(true))
                 .child(
                     v_flex()
                         .gap_2()
                         .child(t!("RedisTree.confirm_delete_key", key = key).to_string())
                         .child(t!("RedisTree.irreversible").to_string()),
                 )
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, _window, cx: &mut App| {
                     let _ = view_for_ok.update(cx, |view, cx| {
                         view.delete_key(
                             connection_id_for_delete.clone(),
@@ -2104,13 +2087,13 @@ impl KeyValueView {
                                 .child(t!("KeyValueView.ttl_hint").to_string()),
                         ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.ok").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let ttl_str = ttl_for_ok.read(cx).text().to_string();
                     let ttl: Option<i64> = if ttl_str.is_empty() || ttl_str == "-1" {
                         None // 永久
@@ -2213,13 +2196,13 @@ impl KeyValueView {
                         )
                         .child(Input::new(&name_input).w_full()),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.ok").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let new_name = input_for_ok.read(cx).text().to_string();
                     if new_name.is_empty() || new_name == old_name {
                         return false;
@@ -2577,11 +2560,10 @@ impl KeyValueView {
         }
     }
 
-    /// 渲染 String 编辑器（使用 Input 组件）
+    /// 渲染 String 编辑器
     fn render_string_editor(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        Input::new(&self.string_editor)
+        Textarea::new(&self.string_editor)
             .size_full()
-            .cleanable(false)
             .disabled(!self.string_value_is_editable())
     }
 
@@ -3698,7 +3680,7 @@ impl KeyValueView {
         ContentState::empty(t!("KeyValueView.select_key_placeholder")).icon(
             Icon::new(IconName::Database)
                 .color()
-                .with_size(IconSize::Large),
+                .with_size(GpuiIconSize::Large),
         )
     }
 

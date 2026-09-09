@@ -26,12 +26,11 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
-    button::{Button, ButtonCustomVariant, ButtonVariants, IconButton, IconButtonRole},
+    button::{Button, ButtonCustomVariant, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputState},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    panel_header::{PanelHeader, PanelHeaderVariant},
     popover::Popover,
     spinner::Spinner,
     v_flex,
@@ -41,6 +40,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
 use one_core::settings::{AiChatToolExecutionMode, AppSettings};
 use one_core::sidebar_contribution::SidebarPlacement;
+use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
@@ -496,7 +496,7 @@ fn merge_live_session_summaries(
             .get(summary.id.as_str())
             .map_or(summary, |live| (*live).clone())
     }));
-    summaries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.updated_at));
     summaries
 }
 
@@ -3123,13 +3123,13 @@ impl AgentChatView {
             dialog
                 .title(t!("AgentUi.rename_session").to_string())
                 .w(px(360.0))
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("AgentUi.save").to_string())
-                        .cancel_text(t!("AgentUi.cancel").to_string()),
+                        .cancel_text(t!("AgentUi.cancel").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, _window, cx: &mut App| {
                     let new_name = input_for_ok.read(cx).value().trim().to_string();
                     if !new_name.is_empty() {
                         view_for_ok.update(cx, |this, cx| this.apply_rename(&uid, new_name, cx));
@@ -3183,13 +3183,13 @@ impl AgentChatView {
             dialog
                 .title(t!("AgentUi.delete_session").to_string())
                 .w(px(360.0))
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("AgentUi.delete").to_string())
-                        .cancel_text(t!("AgentUi.cancel").to_string()),
+                        .cancel_text(t!("AgentUi.cancel").to_string())
+                        .show_cancel(true),
                 )
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, _window, cx: &mut App| {
                     view_for_ok.update(cx, |this, cx| this.apply_delete(&uid, cx));
                     true
                 })
@@ -3935,6 +3935,8 @@ impl Render for AgentChatView {
     }
 }
 
+// 组合器上下文构建:参数与会话状态字段一一对应,装箱改签名收益低
+#[allow(clippy::too_many_arguments)]
 fn build_composer_context(
     resources: &ResourceContext,
     tool_execution_mode: ToolExecutionMode,

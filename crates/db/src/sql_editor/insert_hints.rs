@@ -65,7 +65,7 @@ pub fn insert_value_hints(statement: &str, ordinal_columns: &[String]) -> Vec<Sq
         for slot in 0..slot_count {
             let column = resolve_column(&columns, ordinal_columns, row_index, slot);
             hints.push(SqlInsertValueHint {
-                offset: value_slot_offset(statement, &tokens, open_token.end, slot),
+                offset: value_slot_offset(statement, &tokens, open_abs + 1, open_token.end, slot),
                 column,
                 row_index,
             });
@@ -164,12 +164,13 @@ fn scan_value_row(
 fn value_slot_offset(
     statement: &str,
     tokens: &[crate::sql_editor::sql_tokenizer::SqlToken],
+    row_content_index: usize,
     row_open_end: usize,
     slot: usize,
 ) -> usize {
     let mut depth = 0usize;
     let mut slot_count = 0usize;
-    let mut position = row_open_end;
+    let mut position = row_content_index;
     while position < tokens.len() {
         let token = &tokens[position];
         match token.kind {

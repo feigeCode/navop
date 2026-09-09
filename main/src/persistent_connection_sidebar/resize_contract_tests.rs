@@ -86,7 +86,8 @@ fn connection_tree_width_is_persisted_across_sessions() {
     let settings = include_str!("../../../crates/core/src/settings.rs");
 
     // 拖拽结束时落盘最终宽度，过程中按增量阈值兜底
-    assert!(resize.contains(".on_mouse_up(gpui::MouseButton::Left"));
+    assert!(resize.contains(".on_mouse_up("));
+    assert!(resize.contains("gpui::MouseButton::Left"));
     assert!(resize.contains("persist_tree_width"));
     assert!(resize.contains("persist_tree_width_if_moved_far"));
     // 宽度进入持久化树状态，旧配置缺省时回落到默认宽度

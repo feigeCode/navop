@@ -6,13 +6,8 @@ use gpui::{
     ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder,
 };
-use gpui_component::{
-    ActiveTheme, IconName,
-    button::{IconButton, IconButtonRole},
-    h_flex,
-    panel_header::{PanelHeader, PanelHeaderVariant},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, IconName, h_flex, v_flex};
+use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
 

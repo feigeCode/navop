@@ -1,4 +1,4 @@
-use gpui::{AppContext, Context, PathPromptOptions, Window};
+use gpui::{App, AppContext, Context, PathPromptOptions, Window};
 use gpui_component::{
     WindowExt, button::ButtonVariant, dialog::DialogButtonProps, notification::Notification,
 };
@@ -64,7 +64,7 @@ impl SessionLogsPage {
                         .cancel_text(t!("Common.cancel").to_string())
                         .show_cancel(true),
                 )
-                .on_ok(move |_, window, cx| {
+                .on_ok(move |_, window, cx: &mut App| {
                     let delete_request = request.clone();
                     // The on_ok callback runs inside this window's update;
                     // re-entering `update_window` for the same window would

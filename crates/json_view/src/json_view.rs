@@ -9,7 +9,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::Button;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::{ActiveTheme, Sizable as _, h_flex, v_flex};
 use rust_i18n::t;
@@ -60,7 +60,7 @@ enum ValueTy {
 }
 
 pub struct JsonFormatterView {
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     value: Option<serde_json::Value>,
     parsing: bool,
     error: Option<String>,
@@ -77,8 +77,7 @@ pub struct JsonFormatterView {
 impl JsonFormatterView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            let mut s = InputState::new(window, cx)
-                .multi_line(true)
+            let mut s = TextareaState::new(window, cx)
                 .placeholder(t!("JsonFormatter.input_placeholder").to_string());
             s.set_value(String::new(), window, cx);
             s
@@ -540,7 +539,7 @@ impl Render for JsonFormatterView {
                     .border_color(theme.border)
                     .rounded(px(4.))
                     .overflow_hidden()
-                    .child(Input::new(&self.input).small().h_full()),
+                    .child(Textarea::new(&self.input).h_full()),
             )
             .when_some(self.error.clone(), |flex, err| {
                 flex.child(div().text_sm().text_color(theme.danger).child(err))

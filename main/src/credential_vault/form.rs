@@ -1,5 +1,5 @@
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedString, Window};
-use gpui_component::input::InputState;
+use gpui_component::input::{InputState, TextareaState};
 use one_core::storage::{CredentialEntry, SshAccountExpect, TerminalExpectSend};
 use regex::Regex;
 use rust_i18n::t;
@@ -24,7 +24,7 @@ pub(crate) struct CredentialForm {
     pub(super) username_input: Entity<InputState>,
     pub(super) password_input: Entity<InputState>,
     pub(super) private_key_path_input: Entity<InputState>,
-    pub(super) private_key_content_input: Entity<InputState>,
+    pub(super) private_key_content_input: Entity<TextareaState>,
     pub(super) passphrase_input: Entity<InputState>,
     pub(super) username_expect_input: Entity<InputState>,
     pub(super) username_send_input: Entity<InputState>,
@@ -74,10 +74,9 @@ impl CredentialForm {
             cx,
         );
         let private_key_content_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
+            let mut state = TextareaState::new(window, cx)
                 .placeholder(t!("CredentialForm.private_key_content_placeholder").to_string())
-                .multi_line(true)
-                .rows(5);
+                .auto_grow(5, 5);
             if let Some(value) = existing
                 .as_ref()
                 .and_then(|entry| entry.private_key_content.as_deref())
@@ -161,7 +160,7 @@ impl CredentialForm {
             username: input_value(&self.username_input, cx),
             password: input_value(&self.password_input, cx),
             private_key_path: input_value(&self.private_key_path_input, cx),
-            private_key_content: input_value(&self.private_key_content_input, cx),
+            private_key_content: self.private_key_content_input.read(cx).value().to_string(),
             passphrase: input_value(&self.passphrase_input, cx),
             ssh_expect: SshAccountExpect {
                 username: TerminalExpectSend {
@@ -227,15 +226,11 @@ pub(super) fn build_entry(
 }
 
 fn normalize_ssh_expect(value: SshAccountExpect) -> Result<SshAccountExpect, String> {
+    let username_label = t!("CredentialForm.username");
+    let password_label = t!("CredentialForm.password");
     Ok(SshAccountExpect {
-        username: normalize_expect_step(
-            value.username,
-            &t!("CredentialForm.username").to_string(),
-        )?,
-        password: normalize_expect_step(
-            value.password,
-            &t!("CredentialForm.password").to_string(),
-        )?,
+        username: normalize_expect_step(value.username, username_label.as_ref())?,
+        password: normalize_expect_step(value.password, password_label.as_ref())?,
     })
 }
 

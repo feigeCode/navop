@@ -112,15 +112,31 @@ impl ExtensionManagerView {
         self.status = t!("Extension.uninstalling", name = name).to_string().into();
 
         let host = self.host.clone();
-        let task = cx.background_spawn(async move { host.uninstall(&summary) });
+        let refresh_host = host.clone();
+        let close_task = crate::shell::close_shell_extension(&name, window, cx);
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
+        let gate_id = name.clone();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let outcome = task.await;
-            let _ = cx.update_window(window_handle, |_, window, cx| {
+            if !close_task.await {
+                let _ = cx.update(|cx| {
+                    crate::shell::finish_shell_extension(&gate_id, cx);
+                    let _ = entity.update(cx, |view, cx| {
+                        view.busy = None;
+                        view.status = "Extension tabs could not be closed".into();
+                        cx.notify();
+                    });
+                });
+                return;
+            }
+            let uninstall_task = cx.background_spawn(async move { host.uninstall(&summary) });
+            let outcome = uninstall_task.await;
+            let mut view_alive = false;
+            let updated = cx.update_window(window_handle, |_, window, cx| {
                 let Some(entity) = entity.upgrade() else {
                     return;
                 };
+                view_alive = true;
                 entity.update(cx, |view, cx| {
                     match outcome {
                         Ok(name) => {
@@ -151,6 +167,19 @@ impl ExtensionManagerView {
                     cx.notify();
                 });
             });
+            if updated.is_err() {
+                let _ = cx.update(|cx| {
+                    refresh_host.refresh_after_extension_change(kind, cx);
+                    crate::shell::finish_shell_extension(&gate_id, cx);
+                });
+            } else {
+                let _ = cx.update(|cx| {
+                    if !view_alive {
+                        refresh_host.refresh_after_extension_change(kind, cx);
+                    }
+                    crate::shell::finish_shell_extension(&gate_id, cx);
+                });
+            }
         })
         .detach();
         cx.notify();
@@ -170,36 +199,87 @@ impl ExtensionManagerView {
         self.status = t!("Extension.reloading", name = name.clone())
             .to_string()
             .into();
-        match self.host.reload(&summary, cx) {
-            Ok(installed) => {
-                let reloaded_name = installed
-                    .iter()
-                    .find(|installed| installed.path == summary.path)
-                    .map(|installed| installed.name.clone())
-                    .unwrap_or(name);
-                apply_installed_reload_success(
-                    &mut self.installed,
-                    &mut self.busy,
-                    &mut self.status,
-                    &reloaded_name,
-                    installed,
-                );
-                window.push_notification(
-                    Notification::success(
-                        t!("Extension.reloaded", name = reloaded_name).to_string(),
-                    ),
-                    cx,
-                );
+        let close_task = crate::shell::close_shell_extension(&name, window, cx);
+        let host = self.host.clone();
+        let refresh_host = host.clone();
+        let entity = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        let gate_id = name.clone();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            if !close_task.await {
+                let _ = cx.update(|cx| {
+                    crate::shell::finish_shell_extension(&gate_id, cx);
+                    let _ = entity.update(cx, |view, cx| {
+                        view.busy = None;
+                        view.status = "Extension tabs could not be closed".into();
+                        cx.notify();
+                    });
+                });
+                return;
             }
-            Err(err) => {
-                self.busy = None;
-                self.status =
-                    format_status_error(&t!("Extension.reload_failed").to_string(), &err).into();
-                let message =
-                    format_notification_error(&t!("Extension.reload_failed").to_string(), &err);
-                window.push_notification(Notification::error(message).autohide(false), cx);
+            let mut view_alive = false;
+            let updated = cx.update_window(window_handle, |_, window, cx| {
+                let Some(entity) = entity.upgrade() else {
+                    return;
+                };
+                view_alive = true;
+                entity.update(cx, |view, cx| {
+                    match host.reload(&summary, cx) {
+                        Ok(installed) => {
+                            let reloaded_name = installed
+                                .iter()
+                                .find(|installed| installed.path == summary.path)
+                                .map(|installed| installed.name.clone())
+                                .unwrap_or(name);
+                            apply_installed_reload_success(
+                                &mut view.installed,
+                                &mut view.busy,
+                                &mut view.status,
+                                &reloaded_name,
+                                installed,
+                            );
+                            window.push_notification(
+                                Notification::success(
+                                    t!("Extension.reloaded", name = reloaded_name).to_string(),
+                                ),
+                                cx,
+                            );
+                        }
+                        Err(err) => {
+                            view.busy = None;
+                            view.status = format_status_error(
+                                &t!("Extension.reload_failed").to_string(),
+                                &err,
+                            )
+                            .into();
+                            let message = format_notification_error(
+                                &t!("Extension.reload_failed").to_string(),
+                                &err,
+                            );
+                            window.push_notification(
+                                Notification::error(message).autohide(false),
+                                cx,
+                            );
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+            if updated.is_err() {
+                let _ = cx.update(|cx| {
+                    refresh_host.refresh_after_extension_change(summary.kind, cx);
+                    crate::shell::finish_shell_extension(&gate_id, cx);
+                });
+            } else {
+                let _ = cx.update(|cx| {
+                    if !view_alive {
+                        refresh_host.refresh_after_extension_change(summary.kind, cx);
+                    }
+                    crate::shell::finish_shell_extension(&gate_id, cx);
+                });
             }
-        }
+        })
+        .detach();
         cx.notify();
     }
 

@@ -84,6 +84,30 @@ fn rotation_rolls_back_every_change_when_a_later_secret_is_invalid() {
     assert_credential_secrets(&first, OLD_KEY);
 }
 
+#[test]
+fn rotation_re_encrypts_extension_secret_map_without_touching_public_config() {
+    let (_temp, connection) = test_connection();
+    let params = json!({
+        "schema_version": 1,
+        "extension_id": "com.example.search",
+        "contribution_id": "search",
+        "config": {"url": "https://example.test"},
+        "secrets": {"api_key": crypto::encrypt_with_key("extension-secret", OLD_KEY)}
+    })
+    .to_string();
+    insert_extension_connection(&connection, &params);
+
+    let stats = re_encrypt_secrets(&connection, OLD_KEY, NEW_KEY).expect("rotate secrets");
+
+    assert_eq!(1, stats.connections);
+    let rotated: Value = serde_json::from_str(&raw_connection_params(&connection)).unwrap();
+    assert_eq!("https://example.test", rotated["config"]["url"]);
+    assert_decrypts_to(&rotated["secrets"]["api_key"], NEW_KEY, "extension-secret");
+    assert!(
+        crypto::decrypt_with_key(rotated["secrets"]["api_key"].as_str().unwrap(), OLD_KEY).is_err()
+    );
+}
+
 fn test_connection() -> (tempfile::TempDir, SqliteConnection) {
     let temp = tempfile::tempdir().expect("create temp directory");
     let connection = SqliteConnection::open_with_pool_size(temp.path().join("rotation.db"), 1)
@@ -137,6 +161,20 @@ fn insert_connection(connection: &SqliteConnection, params: &str) {
             Ok(())
         })
         .expect("insert connection");
+}
+
+fn insert_extension_connection(connection: &SqliteConnection, params: &str) {
+    connection
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO connections
+                 (name, connection_type, params, created_at, updated_at, credential_revision)
+                 VALUES ('rotation', 'Extension', ?1, ?2, ?3, ?4)",
+                rusqlite::params![params, CREATED_AT, UPDATED_AT, CREDENTIAL_REVISION],
+            )?;
+            Ok(())
+        })
+        .expect("insert extension connection");
 }
 
 fn insert_credential(connection: &SqliteConnection, name: &str, value: &RawCredential) {

@@ -422,10 +422,15 @@ fn analyze_statement_semantic(
                     quoted: meaningful[j].kind == SqlTokenKind::QuotedIdent,
                 });
                 j += 1;
-                // Optional alias (identifier that is not a keyword).
-                if j < meaningful.len() && matches!(meaningful[j].kind, SqlTokenKind::Ident) {
-                    j += 1;
-                }
+            }
+
+            // Optional alias is part of the table reference, not a column.
+            if j < meaningful.len() && meaningful[j].is_keyword_of(SqlKeyword::As) {
+                j += 1;
+            }
+            if j < meaningful.len() && matches!(meaningful[j].kind, SqlTokenKind::Ident) {
+                table_indices.insert(j);
+                j += 1;
             }
 
             if j < meaningful.len() && matches!(meaningful[j].kind, SqlTokenKind::Comma) {
@@ -850,6 +855,24 @@ mod tests {
         let metadata = SqlMetadataView::default().with_tables(["users"]);
         let diagnostics = analyze("UPDATE missing SET name = 'x';", metadata);
         assert!(semantic_codes(&diagnostics).contains(&"semantic.unknown_table"));
+    }
+
+    #[test]
+    fn update_target_alias_is_not_reported_as_unknown_column() {
+        let metadata = SqlMetadataView::default()
+            .with_tables(["ai_tool_info"])
+            .with_columns("ai_tool_info", ["status", "call_status"]);
+
+        for sql in [
+            "UPDATE ai_tool_info ati SET status = 1 WHERE ati.status = 0;",
+            "UPDATE ai_tool_info AS ati SET status = 1 WHERE ati.status = 0;",
+        ] {
+            let diagnostics = analyze(sql, metadata.clone());
+            assert!(
+                semantic_codes(&diagnostics).is_empty(),
+                "unexpected diagnostics for {sql}: {diagnostics:?}"
+            );
+        }
     }
 
     #[test]

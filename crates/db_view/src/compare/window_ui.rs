@@ -19,8 +19,7 @@ use gpui_component::{
     clipboard::Clipboard,
     dialog::DialogButtonProps,
     h_flex,
-    highlighter::Language,
-    input::{Input, InputState},
+    input::{Editor, EditorState, Input, InputState},
     progress::Progress,
     scroll::Scrollbar,
     select::{SearchableVec, Select, SelectItem, SelectState},
@@ -885,12 +884,11 @@ pub(crate) fn connection_select_row(
 }
 
 /// 创建用于「同步 SQL」的代码编辑器(SQL 语法高亮 + 行号,可编辑)
-pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity<InputState> {
+pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity<EditorState> {
     cx.new(|cx| {
-        InputState::new(window, cx)
-            .code_editor(Language::from_str("sql"))
+        EditorState::new(window, cx)
+            .language("sql")
             .line_number(true)
-            .multi_line(true)
             .soft_wrap(false)
             .placeholder(t!("Compare.sync_sql_placeholder").to_string())
     })
@@ -899,7 +897,7 @@ pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity
 /// 同步 SQL 编辑器面板:标题 + 复制按钮 + 可编辑代码编辑器(填满所在列并内部滚动)
 pub(super) fn sql_editor_panel(
     copy_id: &'static str,
-    editor: &Entity<InputState>,
+    editor: &Entity<EditorState>,
     copy_value: String,
     cx: &App,
 ) -> impl IntoElement {
@@ -925,7 +923,7 @@ pub(super) fn sql_editor_panel(
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_md()
-                .child(Input::new(editor).size_full()),
+                .child(Editor::new(editor).size_full()),
         )
 }
 

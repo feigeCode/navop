@@ -14,7 +14,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::{Input, InputState, MaskPattern},
+    input::{Input, InputState, MaskPattern, Textarea, TextareaState},
     select::{Select, SelectEvent, SelectItem, SelectState},
     v_flex,
 };
@@ -194,7 +194,7 @@ pub struct SerialFormWindow {
     flow_control_select: Entity<SelectState<Vec<FlowControlItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
-    remark_input: Entity<InputState>,
+    remark_input: Entity<TextareaState>,
     sync_enabled: bool,
 
     is_testing: bool,
@@ -242,7 +242,7 @@ impl SerialFormWindow {
         let port_name_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(t!("Serial.port_name_placeholder")));
         let remark_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("Serial.remark_placeholder"))
                 .auto_grow(3, 10)
         });
@@ -852,7 +852,7 @@ impl Render for SerialFormWindow {
                             })
                             .child(self.render_form_row(
                                 &t!("Serial.remark"),
-                                Input::new(&self.remark_input),
+                                Textarea::new(&self.remark_input),
                             )),
                     ),
             )

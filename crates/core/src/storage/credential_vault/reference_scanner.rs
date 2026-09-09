@@ -45,14 +45,14 @@ impl CredentialRepository {
                 rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
             let identity = load_credential_identity(&transaction, credential_id)?;
             if identity.cloud_id.is_none()
-                && !transaction
+                && transaction
                     .query_row(
                         "SELECT 1 FROM credential_entries WHERE id = ?1",
                         [credential_id],
                         |_| Ok(()),
                     )
                     .optional()?
-                    .is_some()
+                    .is_none()
             {
                 transaction.commit()?;
                 return Ok(DeleteCredentialOutcome::NotFound);
@@ -137,6 +137,8 @@ fn parse_connection_type(value: &str) -> Result<ConnectionType> {
         "SshSftp" => Ok(ConnectionType::SshSftp),
         "Redis" => Ok(ConnectionType::Redis),
         "MongoDB" => Ok(ConnectionType::MongoDB),
+        "Mqtt" => Ok(ConnectionType::Mqtt),
+        "Rocketmq" => Ok(ConnectionType::Rocketmq),
         "Serial" => Ok(ConnectionType::Serial),
         "Telnet" => Ok(ConnectionType::Telnet),
         "PortForwarding" => Ok(ConnectionType::PortForwarding),

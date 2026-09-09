@@ -19,7 +19,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     select::{Select, SelectItem, SelectState},
     v_flex,
 };
@@ -129,7 +129,7 @@ pub struct TelnetFormWindow {
     backspace_code_select: Entity<SelectState<Vec<TelnetBackspaceSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
-    remark_input: Entity<InputState>,
+    remark_input: Entity<TextareaState>,
     credential_picker: Entity<CredentialReferencePicker>,
     login_script_rows: Vec<TelnetLoginStepInput>,
     sync_enabled: bool,
@@ -191,7 +191,7 @@ impl TelnetFormWindow {
         let port_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("Telnet.port_placeholder")));
         let remark_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(t!("Telnet.remark_placeholder"))
                 .auto_grow(3, 10)
         });
@@ -902,7 +902,7 @@ impl Render for TelnetFormWindow {
                             )
                             .child(self.render_form_row(
                                 &t!("Telnet.remark"),
-                                Input::new(&self.remark_input),
+                                Textarea::new(&self.remark_input),
                             )),
                     ),
             )

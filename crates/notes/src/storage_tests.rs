@@ -179,10 +179,12 @@ fn user_selected_location_stores_content_directly_without_files_dir() -> Result<
     assert!(root.join("notebook.json").exists());
     assert!(root.join("README.md").exists());
     assert!(!root.join("files").exists());
-    assert!(storage
-        .scan_tree()?
-        .iter()
-        .any(|node| node.display_name == "README"));
+    assert!(
+        storage
+            .scan_tree()?
+            .iter()
+            .any(|node| node.display_name == "README")
+    );
     Ok(())
 }
 

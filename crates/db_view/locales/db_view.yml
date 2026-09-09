@@ -347,6 +347,22 @@ ConnectionForm:
     en: orcl (or use Service Name)
     zh-CN: orcl（或使用服务名称）
     zh-HK: orcl（或使用服務名稱）
+  oracle_role:
+    en: Role
+    zh-CN: 角色
+    zh-HK: 角色
+  oracle_role_default:
+    en: default
+    zh-CN: 默认
+    zh-HK: 預設
+  oracle_role_sysdba:
+    en: SYSDBA
+    zh-CN: SYSDBA
+    zh-HK: SYSDBA
+  oracle_role_sysoper:
+    en: SYSOPER
+    zh-CN: SYSOPER
+    zh-HK: SYSOPER
   proxy_enabled:
     en: Enable Proxy
     zh-CN: 启用代理
@@ -605,6 +621,14 @@ ConnectionForm:
     en: HTTPS
     zh-CN: HTTPS
     zh-HK: HTTPS
+  schema_ws:
+    en: WebSocket
+    zh-CN: WebSocket
+    zh-HK: WebSocket
+  schema_wss:
+    en: WebSocket (TLS)
+    zh-CN: WebSocket (TLS)
+    zh-HK: WebSocket (TLS)
 
   # SQLite 特定
   select_database_file:
@@ -2442,6 +2466,14 @@ TableData:
     en: Copy Column Name
     zh-CN: 复制字段名称
     zh-HK: 複製欄位名稱
+  copy_column_comment:
+    en: Copy Column Comment
+    zh-CN: 复制字段注释
+    zh-HK: 複製欄位註釋
+  copy_column_success:
+    en: Copied to clipboard
+    zh-CN: 已复制到剪贴板
+    zh-HK: 已複製到剪貼簿
   copy_as:
     en: Copy As
     zh-CN: 复制为

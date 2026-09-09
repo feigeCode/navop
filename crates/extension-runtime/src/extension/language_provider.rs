@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::extension::{ExtensionKind, ExtensionProvider, ExtensionSummary};
+use crate::language_extensions::{InstalledExtension, list_installed};
 
 pub struct LanguageExtensionProvider;
 
@@ -12,7 +13,7 @@ impl ExtensionProvider for LanguageExtensionProvider {
     }
 
     fn list_installed(&self, root: &Path) -> Result<Vec<ExtensionSummary>> {
-        let list = gpui_component::highlighter::list_installed(root)?;
+        let list = list_installed(root)?;
         Ok(list
             .into_iter()
             .map(|summary| {
@@ -30,7 +31,7 @@ impl ExtensionProvider for LanguageExtensionProvider {
     }
 
     fn install_from_dir(&self, dir: &Path) -> Result<ExtensionSummary> {
-        let extension = gpui_component::highlighter::InstalledExtension::load_from_dir(dir)?;
+        let extension = InstalledExtension::load_from_dir(dir)?;
         extension.register(gpui_component::highlighter::LanguageRegistry::singleton())?;
         let description = describe_language(
             &extension.manifest.name,
@@ -47,10 +48,7 @@ impl ExtensionProvider for LanguageExtensionProvider {
     }
 
     fn uninstall(&self, dir: &Path) -> Result<String> {
-        gpui_component::highlighter::InstalledExtension::uninstall(
-            dir,
-            gpui_component::highlighter::LanguageRegistry::singleton(),
-        )
+        InstalledExtension::uninstall(dir)
     }
 }
 

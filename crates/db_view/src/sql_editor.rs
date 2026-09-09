@@ -15,25 +15,37 @@ use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext as Inferr
 use db::sql_editor::sql_symbol_table::SymbolTable;
 use db::sql_editor::sql_tokenizer::{SqlKeyword, SqlToken, SqlTokenKind, SqlTokenizer};
 use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _, Subscription, Task,
-    Window,
+    App, AppContext, Context, Entity, Font, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
 };
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::{
-    CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
-    InputState, SignatureHelpProvider, TabSize,
+    CodeActionProvider, CompletionProvider, Copy, Cut, EditorState, GutterMarker, HoverProvider,
+    Paste, SelectAll, TabSize,
 };
-use gpui_component::scroll::ScrollbarShow;
-use gpui_component::{Rope, RopeExt};
+use gpui_component::native_menu::NativeMenu as PlatformNativeMenu;
+use gpui_component::spinner::Spinner;
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{Icon, IconName, Rope, RopeExt, Sizable as _, Size};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,
     InsertTextFormat, Range as LspRange,
 };
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
+use one_ui::{ExtendedEditor, ExtendedEditorState, SignatureHelpProvider};
 use rust_i18n::t;
 use sum_tree::Bias;
+
+gpui::actions!(sql_editor, [RunSelectedSql, RunCursorStatementSql]);
+
+pub(crate) const SQL_GUTTER_IDLE: &str = "idle";
+pub(crate) const SQL_GUTTER_RUNNING: &str = "running";
+pub(crate) const SQL_GUTTER_SUCCEEDED: &str = "succeeded";
+pub(crate) const SQL_GUTTER_FAILED: &str = "failed";
+pub(crate) const SQL_GUTTER_CANCELLED: &str = "cancelled";
 
 /// Kind of a table-like schema object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -1163,7 +1175,7 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope = rope.clone();
         let SqlCompletionSources {
@@ -2108,7 +2120,7 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
         offset: usize,
         _trigger: InlineCompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<InlineCompletionResponse>> {
         let rope = rope.clone();
         let SqlCompletionSources {
@@ -2136,12 +2148,7 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         self.is_completion_trigger_check(new_text)
     }
 }
@@ -2256,7 +2263,7 @@ impl CompletionProvider for TableMentionCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope = rope.clone();
         let schema = self.schema.clone();
@@ -2317,12 +2324,7 @@ impl CompletionProvider for TableMentionCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         let Some(last_char) = new_text.chars().last() else {
             return false;
         };
@@ -2417,11 +2419,11 @@ fn analyze_diagnostics_pure(
 
 /// A reusable SQL editor component built on top of `Input`.
 pub struct SqlEditor {
-    editor: Entity<InputState>,
+    editor: Entity<EditorState>,
+    extended_editor: Entity<ExtendedEditorState>,
     default_completion_provider: Rc<DefaultSqlCompletionProvider>,
     default_hover_provider: Option<Rc<DefaultSqlHoverProvider>>,
     default_signature_help_provider: Option<Rc<DefaultSqlSignatureHelpProvider>>,
-    _subscriptions: Vec<Subscription>,
     font_cache: Option<SqlEditorFontCache>,
 }
 
@@ -2442,10 +2444,9 @@ impl SqlEditor {
             Rc::new(DefaultSqlSignatureHelpProvider::new(SqlSchema::default()));
         let default_signature_help_provider_trait: Rc<dyn SignatureHelpProvider> =
             default_signature_help_provider.clone();
-
         let editor = cx.new(|cx| {
-            let mut editor = InputState::new(window, cx)
-                .code_editor("sql")
+            let mut editor = EditorState::new(window, cx)
+                .language("sql")
                 .line_number(true)
                 .searchable(true)
                 .indent_guides(true)
@@ -2456,26 +2457,24 @@ impl SqlEditor {
                 .soft_wrap(false)
                 .placeholder(t!("Query.editor_placeholder").to_string());
 
-            // Defaults: completion + hover + signature help + actions
-            editor.lsp.completion_provider = Some(default_provider_trait);
-            editor.lsp.hover_provider = Some(default_hover_provider_trait);
-            editor.lsp.signature_help_provider = Some(default_signature_help_provider_trait);
+            editor.lsp_mut().completion_provider = Some(default_provider_trait);
+            editor.lsp_mut().hover_provider = Some(default_hover_provider_trait);
+            editor.project_gutter_marker_renderer(Rc::new(render_sql_gutter_marker));
+            editor.on_context_menu(Rc::new(show_sql_editor_context_menu));
 
             editor
         });
-
-        let _subscriptions =
-            vec![
-                cx.subscribe_in(&editor, window, move |_, _, _: &InputEvent, _window, cx| {
-                    cx.notify()
-                }),
-            ];
+        let extended_editor = cx.new(|cx| {
+            let mut state = ExtendedEditorState::new(editor.clone(), window, cx);
+            state.set_signature_help_provider(Some(default_signature_help_provider_trait), cx);
+            state
+        });
         Self {
             editor,
+            extended_editor,
             default_completion_provider,
             default_hover_provider: Some(default_hover_provider),
             default_signature_help_provider: Some(default_signature_help_provider),
-            _subscriptions,
             font_cache: None,
         }
     }
@@ -2508,34 +2507,25 @@ impl SqlEditor {
     }
 
     /// Access underlying editor state.
-    pub fn input(&self) -> Entity<InputState> {
+    pub fn input(&self) -> Entity<EditorState> {
         self.editor.clone()
     }
 
     /// Invalidate active completion popup and inline completion requests.
     pub fn invalidate_completions(&self, cx: &mut Context<Self>) {
-        self.editor
-            .update(cx, |state, cx| state.invalidate_completions(cx));
+        self.editor.update(cx, |state, cx| {
+            state.dismiss_completion_overlay(cx);
+        });
     }
 
     /// Invalidate metadata-dependent completion and hover state.
     pub fn invalidate_metadata_context(&self, cx: &mut Context<Self>) {
         self.editor.update(cx, |state, cx| {
-            state.invalidate_completions(cx);
-            state.invalidate_hover(cx);
-            state.close_signature_help(cx);
+            state.dismiss_lsp_overlays(cx);
+            state.clear_hover_state(cx);
         });
-    }
-
-    /// 设置编辑器右键菜单的扩展项（支持一级和二级菜单）。
-    pub fn set_mouse_context_menu_items(
-        &mut self,
-        items: Vec<InputContextMenuItem>,
-        cx: &mut Context<Self>,
-    ) {
-        self.editor.update(cx, move |state, cx| {
-            state.set_mouse_context_menu_items(items, cx)
-        });
+        self.extended_editor
+            .update(cx, |state, cx| state.close_signature_help(cx));
     }
 
     /// Replace default completion provider.
@@ -2546,8 +2536,8 @@ impl SqlEditor {
         cx: &mut Context<Self>,
     ) {
         self.editor.update(cx, |state, cx| {
-            state.invalidate_completions(cx);
-            state.lsp.completion_provider = Some(provider);
+            state.dismiss_completion_overlay(cx);
+            state.lsp_mut().completion_provider = Some(provider);
         });
     }
 
@@ -2576,7 +2566,7 @@ impl SqlEditor {
         let default_provider_trait: Rc<dyn CompletionProvider> = default_provider.clone();
         self.editor.update(cx, |state, _| {
             let is_default_provider_installed = state
-                .lsp
+                .lsp()
                 .completion_provider
                 .as_ref()
                 .is_some_and(|provider| Rc::ptr_eq(provider, &default_provider_trait));
@@ -2595,7 +2585,7 @@ impl SqlEditor {
         let default_hover_provider_trait: Rc<dyn HoverProvider> = default_hover_provider.clone();
         self.editor.update(cx, |state, _| {
             let is_default_provider_installed = state
-                .lsp
+                .lsp()
                 .hover_provider
                 .as_ref()
                 .is_some_and(|provider| Rc::ptr_eq(provider, &default_hover_provider_trait));
@@ -2603,6 +2593,15 @@ impl SqlEditor {
                 default_hover_provider.set_schema(schema);
             }
         });
+    }
+
+    fn update_default_signature_sources(&self, schema: SqlSchema, cx: &mut Context<Self>) {
+        let Some(default_provider) = self.default_signature_help_provider.clone() else {
+            return;
+        };
+        default_provider.set_schema(schema);
+        self.extended_editor
+            .update(cx, |state, cx| state.close_signature_help(cx));
     }
 
     /// Replace hover provider.
@@ -2613,42 +2612,20 @@ impl SqlEditor {
         cx: &mut Context<Self>,
     ) {
         self.editor.update(cx, |state, cx| {
-            state.invalidate_hover(cx);
-            state.lsp.hover_provider = Some(provider);
+            state.clear_hover_state(cx);
+            state.lsp_mut().hover_provider = Some(provider);
         });
     }
 
-    /// Update the default signature help provider's schema without replacing
-    /// its trait object. A custom provider remains untouched (spec §25.1).
-    fn update_default_signature_sources(&self, schema: SqlSchema, cx: &mut Context<Self>) {
-        let Some(default_signature_provider) = self.default_signature_help_provider.clone() else {
-            return;
-        };
-        let default_signature_provider_trait: Rc<dyn SignatureHelpProvider> =
-            default_signature_provider.clone();
-        self.editor.update(cx, |state, cx| {
-            let is_default_provider_installed = state
-                .lsp
-                .signature_help_provider
-                .as_ref()
-                .is_some_and(|provider| Rc::ptr_eq(provider, &default_signature_provider_trait));
-            if is_default_provider_installed {
-                default_signature_provider.set_schema(schema);
-                state.close_signature_help(cx);
-            }
-        });
-    }
-
-    /// Replace signature help provider.
     pub fn set_signature_help_provider(
         &mut self,
         provider: Rc<dyn SignatureHelpProvider>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor.update(cx, |state, cx| {
-            state.close_signature_help(cx);
-            state.lsp.signature_help_provider = Some(provider);
+        self.default_signature_help_provider = None;
+        self.extended_editor.update(cx, |state, cx| {
+            state.set_signature_help_provider(Some(provider), cx)
         });
     }
 
@@ -2660,7 +2637,7 @@ impl SqlEditor {
         cx: &mut Context<Self>,
     ) {
         self.editor.update(cx, |state, _| {
-            state.lsp.code_action_providers.push(provider)
+            state.lsp_mut().code_action_providers.push(provider)
         });
     }
 
@@ -2690,6 +2667,8 @@ impl SqlEditor {
     pub fn set_value(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         self.editor
             .update(cx, |s, cx| s.set_value(text, window, cx));
+        self.extended_editor
+            .update(cx, |state, cx| state.refresh_signature_help(window, cx));
     }
 
     pub fn replace_range_and_select(
@@ -2701,14 +2680,14 @@ impl SqlEditor {
         cx: &mut Context<Self>,
     ) {
         self.editor.update(cx, |state, cx| {
-            state.set_selected_range(range, false, window, cx);
+            state.set_selected_range(range, cx);
             state.replace(replacement, window, cx);
-            state.set_selected_range(selection, false, window, cx);
+            state.set_selected_range(selection, cx);
         });
     }
 
     /// Get the current text content of the editor.
-    /// This is a convenience method that accesses the underlying InputState.
+    /// This is a convenience method that accesses the underlying EditorState.
     pub fn get_text(&self, cx: &App) -> String {
         self.editor.read(cx).text().to_string()
     }
@@ -2762,7 +2741,7 @@ impl SqlEditor {
     /// Get the currently selected text.
     /// Returns an empty string if no text is selected.
     pub fn get_selected_text(&self, cx: &App) -> String {
-        self.editor.read(cx).selected_text_string()
+        self.editor.read(cx).selected_text().to_string()
     }
 
     /// Get the current cursor byte offset.
@@ -2774,36 +2753,297 @@ impl SqlEditor {
     pub fn selected_range(&self, cx: &App) -> Range<usize> {
         self.editor.read(cx).selected_range()
     }
+
+    pub fn document_revision(&self, cx: &App) -> u64 {
+        self.editor.read(cx).document_revision()
+    }
 }
 
 impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = self.editor_font(cx);
         let font_size = AppSettings::global(cx).sql_editor_font_size as f32;
-        Input::new(&self.editor)
-            .editor_scrollbar_show(ScrollbarShow::Always)
-            .font(font)
-            .text_size(gpui::px(font_size))
-            .line_height(gpui::px(font_size * 1.5))
-            .size_full()
+        div().size_full().child(
+            ExtendedEditor::new(&self.extended_editor)
+                .gutter_marker_renderer(Rc::new(render_sql_gutter_marker))
+                .font(font)
+                .text_size(gpui::px(font_size))
+                .line_height(gpui::px(font_size * 1.5))
+                .size_full(),
+        )
     }
+}
+
+fn show_sql_editor_context_menu(
+    _: gpui_base::input::NativeMenu,
+    capabilities: gpui_base::input::InputContextMenuCapabilities,
+    position: gpui::Point<gpui::Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let model = sql_editor_context_menu(capabilities, cx.read_from_clipboard().is_some());
+    let menu = model
+        .items
+        .into_iter()
+        .fold(PlatformNativeMenu::new(), |menu, item| match item {
+            gpui_base::input::NativeMenuItem::Separator => menu.separator(),
+            gpui_base::input::NativeMenuItem::Action {
+                label,
+                disabled,
+                action,
+            } => menu.menu_with_disabled(label, disabled, action),
+        });
+    menu.show(position, window, cx);
+}
+
+fn sql_editor_context_menu(
+    capabilities: gpui_base::input::InputContextMenuCapabilities,
+    clipboard_available: bool,
+) -> gpui_base::input::NativeMenu {
+    let editable = capabilities.is_editable();
+    let copyable = capabilities.is_copyable();
+    gpui_base::input::NativeMenu::new()
+        .menu_with_disabled(
+            t!("Query.run_selected").to_string(),
+            !capabilities.has_selection(),
+            Box::new(RunSelectedSql),
+        )
+        .menu(
+            t!("Query.run_cursor_statement").to_string(),
+            Box::new(RunCursorStatementSql),
+        )
+        .separator()
+        .menu_with_disabled(t!("Input.Cut"), !(editable && copyable), Box::new(Cut))
+        .menu_with_disabled(t!("Input.Copy"), !copyable, Box::new(Copy))
+        .menu_with_disabled(
+            t!("Input.Paste"),
+            !(editable && clipboard_available),
+            Box::new(Paste),
+        )
+        .separator()
+        .menu(t!("Input.Select All"), Box::new(SelectAll))
+}
+
+fn render_sql_gutter_marker(marker: &GutterMarker) -> gpui::AnyElement {
+    let icon = match marker.icon().as_ref() {
+        SQL_GUTTER_RUNNING => Spinner::new()
+            .with_size(Size::Small)
+            .color(gpui::hsla(0.603, 0.91, 0.6, 1.0))
+            .animation_id(marker.id().clone())
+            .into_any_element(),
+        SQL_GUTTER_SUCCEEDED => Icon::new(IconName::CircleCheck)
+            .text_color(gpui::hsla(0.394, 0.71, 0.45, 1.0))
+            .into_any_element(),
+        SQL_GUTTER_FAILED => Icon::new(IconName::CircleX)
+            .text_color(gpui::hsla(0.0, 0.84, 0.6, 1.0))
+            .into_any_element(),
+        SQL_GUTTER_CANCELLED => Icon::new(IconName::Minus)
+            .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+            .into_any_element(),
+        _ => Icon::new(IconName::Play)
+            .text_color(gpui::hsla(0.306, 0.53, 0.4, 1.0))
+            .into_any_element(),
+    };
+    let tooltip = marker.tooltip().cloned();
+    div()
+        .id(marker.id().clone())
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(marker.is_enabled(), |this| this.cursor_pointer())
+        .when(!marker.is_enabled(), |this| this.opacity(0.5))
+        .child(icon)
+        .when_some(tooltip, |this, tooltip| {
+            this.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        })
+        .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        SqlContext, SqlSchema, analyze_diagnostics_pure, completion_priority,
-        identifier_match_rank, schema_to_metadata_view, sql_diagnostic_to_input,
+        RunCursorStatementSql, RunSelectedSql, SQL_GUTTER_IDLE, SqlContext, SqlEditor, SqlSchema,
+        analyze_diagnostics_pure, completion_priority, identifier_match_rank,
+        schema_to_metadata_view, sql_diagnostic_to_input, sql_editor_context_menu,
     };
     use db::sql_editor::diagnostics::{
         SqlDiagnosticSeverity, analyze_parser_diagnostics, analyze_semantic_diagnostics,
     };
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, ParentElement as _,
+        Render, Styled as _, Subscription, VisualTestContext, Window, div,
+    };
     use gpui_component::highlighter::DiagnosticSeverity;
+    use gpui_component::input::{
+        Copy, Cut, GutterMarker, InlineWidget, InputEvent, Paste, RangeDecoration, SelectAll,
+    };
     use gpui_component::{Rope, RopeExt};
     use lsp_types::CompletionItemKind;
+    use one_core::settings::AppSettings;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+    struct SqlEditorHarness {
+        editor: Entity<SqlEditor>,
+        _subscription: Option<Subscription>,
+    }
+
+    impl Render for SqlEditorHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.editor.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn sql_editor_installs_and_renders_host_hooks(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let mut sql_editor = None;
+        let clicked_marker = Rc::new(RefCell::new(None));
+        let (_, visual) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| SqlEditor::new(window, cx));
+            let input = editor.read(cx).input();
+            let clicked_marker_for_event = clicked_marker.clone();
+            let subscription = cx.subscribe(&input, move |_, _, event: &InputEvent, _| {
+                if let InputEvent::GutterMarkerMouseDown {
+                    marker_id,
+                    logical_row,
+                } = event
+                {
+                    *clicked_marker_for_event.borrow_mut() =
+                        Some((marker_id.to_string(), *logical_row));
+                }
+            });
+            sql_editor = Some(editor.clone());
+            SqlEditorHarness {
+                editor,
+                _subscription: Some(subscription),
+            }
+        });
+        let sql_editor = sql_editor.expect("SQL editor should be created");
+        let input = visual.read(|cx| sql_editor.read(cx).input());
+
+        VisualTestContext::update(visual, |window, cx| {
+            sql_editor.update(cx, |editor, cx| {
+                editor.set_value("select 1;".to_string(), window, cx)
+            });
+            let revision = input.read(cx).document_revision();
+            input.update(cx, |state, cx| {
+                state.set_gutter_markers(
+                    vec![GutterMarker::new("sql-hook-marker", 0, SQL_GUTTER_IDLE)],
+                    cx,
+                );
+                state.set_range_decorations(vec![RangeDecoration::new("sql-hook-frame", 0..8)], cx);
+                state
+                    .set_inline_widgets(vec![InlineWidget::new("sql-hook-widget", 7, "value")], cx);
+                assert_eq!(revision, state.document_revision());
+            });
+            window.draw(cx).clear(cx);
+        });
+        VisualTestContext::update(visual, |window, cx| window.draw(cx).clear(cx));
+
+        let marker_bounds = visual.read(|cx| {
+            input
+                .read(cx)
+                .gutter_marker_bounds("sql-hook-marker")
+                .expect("custom gutter marker should render")
+        });
+        visual.simulate_mouse_down(
+            marker_bounds.center(),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        assert_eq!(
+            Some(("sql-hook-marker".to_string(), 0)),
+            *clicked_marker.borrow()
+        );
+        visual.read(|cx| {
+            let state = input.read(cx);
+            assert_eq!(1, state.gutter_markers().len());
+            assert_eq!(1, state.range_decorations().len());
+            assert_eq!(1, state.inline_widgets().len());
+        });
+    }
+
+    #[gpui::test]
+    fn extended_editor_renders_sql_signature_help(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let mut sql_editor = None;
+        let (_, visual) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| SqlEditor::new(window, cx));
+            sql_editor = Some(editor.clone());
+            SqlEditorHarness {
+                editor,
+                _subscription: None,
+            }
+        });
+        let sql_editor = sql_editor.expect("SQL editor should be created");
+
+        VisualTestContext::update(visual, |window, cx| {
+            sql_editor.update(cx, |editor, cx| {
+                editor.set_schema(
+                    SqlSchema::default().with_functions([("coalesce(a, b)", "first value")]),
+                    window,
+                    cx,
+                );
+                editor.set_value("SELECT coalesce(".to_string(), window, cx);
+                let input = editor.input();
+                input.update(cx, |state, cx| {
+                    let cursor = "SELECT coalesce(".len();
+                    state.set_selected_range(cursor..cursor, cx);
+                });
+                editor
+                    .extended_editor
+                    .update(cx, |state, cx| state.refresh_signature_help(window, cx));
+            });
+        });
+        visual.run_until_parked();
+
+        visual.read(|cx| {
+            let extended = sql_editor.read(cx).extended_editor.read(cx);
+            let help = extended.help().expect("signature help should be visible");
+            assert_eq!("coalesce(a, b)", help.signatures[0].label);
+            assert_eq!(Some(0), help.active_parameter);
+        });
+    }
+
+    #[test]
+    fn sql_context_menu_keeps_run_and_default_editing_actions() {
+        let capabilities = gpui_base::input::InputContextMenuCapabilities::new()
+            .code_editor(true)
+            .selection(true);
+        let menu = sql_editor_context_menu(capabilities, true);
+        let actions = menu
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                gpui_base::input::NativeMenuItem::Action { action, .. } => Some(action.as_ref()),
+                gpui_base::input::NativeMenuItem::Separator => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.partial_eq(&RunSelectedSql))
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.partial_eq(&RunCursorStatementSql))
+        );
+        assert!(actions.iter().any(|action| action.partial_eq(&Cut)));
+        assert!(actions.iter().any(|action| action.partial_eq(&Copy)));
+        assert!(actions.iter().any(|action| action.partial_eq(&Paste)));
+        assert!(actions.iter().any(|action| action.partial_eq(&SelectAll)));
+    }
 
     #[test]
     fn identifier_match_rank_prefers_prefix_then_boundary_then_substring() {
@@ -2886,6 +3126,17 @@ mod tests {
         assert!(!render.contains("cx.text_system().all_font_names()"));
         assert!(render.contains("AppSettings::global(cx).sql_editor_font_size"));
         assert!(render.contains(".text_size(gpui::px(font_size))"));
+    }
+
+    #[test]
+    fn sql_editor_render_preserves_the_sql_gutter_renderer() {
+        let source = include_str!("sql_editor.rs");
+        let render = source
+            .split("impl Render for SqlEditor")
+            .nth(1)
+            .expect("SqlEditor render impl exists");
+
+        assert!(render.contains(".gutter_marker_renderer(Rc::new(render_sql_gutter_marker))"));
     }
 
     #[test]

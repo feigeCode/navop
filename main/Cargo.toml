@@ -1,6 +1,6 @@
 [package]
 name = "main"
-version = "0.15.2"
+version = "0.16.0"
 publish.workspace = true
 edition.workspace = true
 
@@ -13,7 +13,10 @@ gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql"] }
 gpui-component-assets = { workspace = true }
+gpui-shell = { workspace = true }
+gpui-component-shell = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,12 +31,15 @@ base64 = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 dirs = {workspace = true}
 futures = { workspace = true }
 smol = { workspace = true }
 db_view = { workspace = true }
 extension-runtime = { workspace = true, features = ["wasm-components"] }
 extension-host.workspace = true
+extension-plugin-adapter.workspace = true
+extension-protocol.workspace = true
 extension_view = { workspace = true }
 notes = { workspace = true }
 json_view = { workspace = true }
@@ -52,6 +58,10 @@ redis_view = { workspace = true }
 redis-runtime.workspace = true
 mongodb_view = { workspace = true }
 mongodb-runtime.workspace = true
+mqtt_view = { workspace = true }
+mqtt-runtime.workspace = true
+rocketmq_view = { workspace = true }
+rocketmq-runtime.workspace = true
 remote_desktop = { workspace = true }
 remote_desktop_view = { workspace = true }
 remote_file_editor = { workspace = true }
@@ -61,8 +71,10 @@ onetcli_runtime.workspace = true
 reqwest_client.workspace = true
 db.workspace = true
 connection-import-protocol.workspace = true
+connection-form.workspace = true
 global-hotkey.workspace = true
 sha2 = { workspace = true }
+zeroize = { workspace = true }
 flate2 = "1"
 tar = "0.4"
 raw-window-handle = { workspace = true }
@@ -71,22 +83,25 @@ font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "11052312
 [target.'cfg(target_os = "windows")'.dependencies]
 interprocess.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+async-trait = { workspace = true }
+extension-protocol = { workspace = true }
 tempfile = "3"
 
 [features]
-default = ["wasm-components", "embedded-webview", "windows-native-rdp"]
+default = ["wasm-components", "embedded-webview", "windows-native-rdp", "builtin-mqtt"]
 api-testing = ["dep:api_tools"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
-builtin-data-drivers = ["builtin-redis", "builtin-mongodb"]
+builtin-mqtt = ["mqtt_view/builtin-mqtt"]
+builtin-data-drivers = ["builtin-redis", "builtin-mongodb", "builtin-mqtt"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]

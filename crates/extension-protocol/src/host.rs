@@ -11,7 +11,6 @@
 //! secrets:read:<glob>        | host/request_credential(只读已存)
 //! secrets:write:<glob>       | host/request_credential(save_as)
 //! notifications:show         | host/notify
-//! ui:dialog                  | host/quick_pick / host/confirm / host/open_view
 //! host:ssh_tunnel            | host/ssh/open_tunnel
 //! storage:read/write         | host/storage/*
 //! logs:write                 | host/log
@@ -56,6 +55,50 @@ pub struct RequestCredentialResult {
 }
 
 // ============================================================================
+// host/secret/resolve
+// ============================================================================
+
+/// Resolve an already stored secret reference into a one-shot value.
+///
+/// This is deliberately separate from `host/request_credential`, which asks
+/// the user for a new or remembered credential and returns another reference.
+/// Providers call this when opening a connection; the host must enforce the
+/// extension's `secrets:read:<namespace>.<key|*>` permission before returning
+/// the value. Values must never be echoed into UI state or logged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveSecretParams {
+    pub secret_ref: SecretRef,
+}
+
+/// The resolved secret is intentionally represented as bytes so token, API
+/// key, password, certificate, and key formats can share the same contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveSecretResult {
+    #[serde(with = "serde_bytes_base64")]
+    pub value: Vec<u8>,
+}
+
+mod serde_bytes_base64 {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S>(value: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        STANDARD.encode(value).serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        STANDARD.decode(encoded).map_err(serde::de::Error::custom)
+    }
+}
+
+// ============================================================================
 // host/notify
 // ============================================================================
 
@@ -97,118 +140,6 @@ pub struct NotifyResult {
     /// 用户点击的 action id(若有);超时关闭则为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clicked: Option<String>,
-}
-
-// ============================================================================
-// host/quick_pick
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuickPickParams {
-    pub items: Vec<QuickPickItem>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub placeholder: Option<String>,
-    /// 是否允许多选(默认 false)。
-    #[serde(default)]
-    pub can_pick_many: bool,
-    /// 是否模糊匹配(默认 true)。
-    #[serde(default = "default_true_field")]
-    pub fuzzy_match: bool,
-    /// 用户按 Esc 是否允许(默认 true)。
-    #[serde(default = "default_true_field")]
-    pub cancellable: bool,
-}
-
-fn default_true_field() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct QuickPickItem {
-    /// 扩展自定义 id,host 回 `selected`。
-    pub id: String,
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    /// 图标资源标识(host 自有 icon set 中的名字)。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub icon: Option<String>,
-    /// 默认选中(can_pick_many 时多个可同时为 true)。
-    #[serde(default)]
-    pub picked: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct QuickPickResult {
-    /// 用户选中的 item id 列表。
-    #[serde(default)]
-    pub selected: Vec<String>,
-    /// 用户取消(按 Esc)。
-    #[serde(default)]
-    pub cancelled: bool,
-}
-
-// ============================================================================
-// host/confirm
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfirmParams {
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body: String,
-    /// 危险操作(确认按钮变红)。
-    #[serde(default)]
-    pub danger: bool,
-    /// 确认按钮文案,默认 "确认" / "OK"。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub confirm_label: Option<String>,
-    /// 取消按钮文案,默认 "取消" / "Cancel"。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cancel_label: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfirmResult {
-    pub confirmed: bool,
-}
-
-// ============================================================================
-// host/open_view
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenViewParams {
-    /// 由扩展 manifest 在 `contributes.views[]` 注册的 view id。
-    pub view_id: String,
-    /// 任意状态对象,host 转交给目标 view。
-    #[serde(default, skip_serializing_if = "Value::is_null")]
-    pub state: Value,
-    /// 是否在新 tab / 新 panel 打开。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<OpenViewTarget>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OpenViewTarget {
-    /// 当前 active tab 替换。
-    Current,
-    /// 新 tab。
-    NewTab,
-    /// 侧边面板。
-    SidePanel,
-    /// 弹窗。
-    Dialog,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OpenViewResult {
-    /// host 分配的 view 实例 id,扩展可用于发后续指令(广播事件等)。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<String>,
 }
 
 // ============================================================================
@@ -334,6 +265,28 @@ mod tests {
     }
 
     #[test]
+    fn resolve_secret_uses_base64_without_leaking_plaintext_in_json() {
+        let params = ResolveSecretParams {
+            secret_ref: SecretRef::new("secret://elasticsearch/api_key"),
+        };
+        let result = ResolveSecretResult {
+            value: b"token-value".to_vec(),
+        };
+
+        assert_eq!(
+            r#"{"secret_ref":{"secret_ref":"secret://elasticsearch/api_key"}}"#,
+            serde_json::to_string(&params).unwrap()
+        );
+        assert_eq!(
+            r#"{"value":"dG9rZW4tdmFsdWU="}"#,
+            serde_json::to_string(&result).unwrap()
+        );
+        let parsed: ResolveSecretResult =
+            serde_json::from_str(r#"{"value":"dG9rZW4tdmFsdWU="}"#).unwrap();
+        assert_eq!(b"token-value".to_vec(), parsed.value);
+    }
+
+    #[test]
     fn notify_level_serde_lowercase() {
         assert_eq!(
             serde_json::to_string(&NotifyLevel::Info).unwrap(),
@@ -392,94 +345,6 @@ mod tests {
         let r2 = NotifyResult::default();
         let j2 = serde_json::to_string(&r2).unwrap();
         assert!(!j2.contains("clicked"));
-    }
-
-    #[test]
-    fn quick_pick_params_default_flags() {
-        let p: QuickPickParams =
-            serde_json::from_str(r#"{"items":[{"id":"a","label":"A"}]}"#).unwrap();
-        assert_eq!(p.items.len(), 1);
-        assert!(!p.can_pick_many);
-        assert!(p.fuzzy_match);
-        assert!(p.cancellable);
-    }
-
-    #[test]
-    fn quick_pick_item_round_trip() {
-        let i = QuickPickItem {
-            id: "a".into(),
-            label: "Alice".into(),
-            description: Some("user".into()),
-            detail: Some("ID 1".into()),
-            icon: Some("user.svg".into()),
-            picked: true,
-        };
-        let j = serde_json::to_string(&i).unwrap();
-        let parsed: QuickPickItem = serde_json::from_str(&j).unwrap();
-        assert_eq!(parsed.label, "Alice");
-        assert!(parsed.picked);
-    }
-
-    #[test]
-    fn quick_pick_result_with_selection() {
-        let r = QuickPickResult {
-            selected: vec!["a".into(), "b".into()],
-            cancelled: false,
-        };
-        let j = serde_json::to_string(&r).unwrap();
-        let parsed: QuickPickResult = serde_json::from_str(&j).unwrap();
-        assert_eq!(parsed.selected.len(), 2);
-        assert!(!parsed.cancelled);
-    }
-
-    #[test]
-    fn confirm_params_with_danger() {
-        let p = ConfirmParams {
-            title: "Drop table?".into(),
-            body: "This action is irreversible".into(),
-            danger: true,
-            confirm_label: Some("Drop".into()),
-            cancel_label: Some("Cancel".into()),
-        };
-        let j = serde_json::to_string(&p).unwrap();
-        let parsed: ConfirmParams = serde_json::from_str(&j).unwrap();
-        assert!(parsed.danger);
-        assert_eq!(parsed.confirm_label.as_deref(), Some("Drop"));
-    }
-
-    #[test]
-    fn confirm_result_round_trip() {
-        let r = ConfirmResult { confirmed: true };
-        let j = serde_json::to_string(&r).unwrap();
-        let parsed: ConfirmResult = serde_json::from_str(&j).unwrap();
-        assert!(parsed.confirmed);
-    }
-
-    #[test]
-    fn open_view_target_serde() {
-        assert_eq!(
-            serde_json::to_string(&OpenViewTarget::NewTab).unwrap(),
-            r#""new_tab""#
-        );
-        assert_eq!(
-            serde_json::to_string(&OpenViewTarget::SidePanel).unwrap(),
-            r#""side_panel""#
-        );
-        let parsed: OpenViewTarget = serde_json::from_str(r#""dialog""#).unwrap();
-        assert_eq!(parsed, OpenViewTarget::Dialog);
-    }
-
-    #[test]
-    fn open_view_params_with_state() {
-        let p = OpenViewParams {
-            view_id: "ext.cassandra.backup".into(),
-            state: serde_json::json!({"keyspace": "ks1"}),
-            target: Some(OpenViewTarget::SidePanel),
-        };
-        let j = serde_json::to_string(&p).unwrap();
-        let parsed: OpenViewParams = serde_json::from_str(&j).unwrap();
-        assert_eq!(parsed.view_id, "ext.cassandra.backup");
-        assert_eq!(parsed.target, Some(OpenViewTarget::SidePanel));
     }
 
     #[test]

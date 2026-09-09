@@ -3,7 +3,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{Context, IntoElement, ParentElement, Render, Styled as _, Window};
 use gpui_component::button::Button;
 use gpui_component::h_flex;
-use gpui_component::input::Input;
+use gpui_component::input::Editor;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::v_flex;
 use gpui_component::{IconName, Sizable, Size};
@@ -23,8 +23,8 @@ impl Render for LargeTextEditor {
                     .min_h_0()
                     .w_full()
                     .child(match active_tab {
-                        LargeTextEditorTab::Text => Input::new(&self.text_editor).size_full(),
-                        LargeTextEditorTab::Json => Input::new(&self.json_editor).size_full(),
+                        LargeTextEditorTab::Text => Editor::new(&self.text_editor).size_full(),
+                        LargeTextEditorTab::Json => Editor::new(&self.json_editor).size_full(),
                     }),
             )
     }

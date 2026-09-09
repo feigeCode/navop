@@ -50,6 +50,10 @@ pub enum HostError {
     #[error("invalid host config: {0}")]
     Config(String),
 
+    /// typed facade 收到了不符合 wire contract 的请求参数。
+    #[error("invalid request for method `{method}`: {message}")]
+    InvalidParams { method: String, message: String },
+
     /// 子进程没在 deadline 内 ready(未建立 socket 连接)。
     #[error("extension process did not become ready within {deadline_ms}ms")]
     ProcessNotReady {
@@ -81,6 +85,14 @@ impl HostError {
                     || e.data.as_ref().and_then(|d| d.retryable).unwrap_or(false)
             }
             _ => false,
+        }
+    }
+
+    /// 记录 typed wire contract 的本地校验失败。
+    pub fn invalid_params(method: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::InvalidParams {
+            method: method.into(),
+            message: message.into(),
         }
     }
 }

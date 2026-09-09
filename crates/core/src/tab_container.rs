@@ -23,13 +23,13 @@ use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme, Colorize as _, Disableable, ElementExt as _, Icon, IconName, IconSize,
     InteractiveElementExt as _, LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _,
     h_flex, notification::Notification, v_flex,
 };
+use one_ui::{PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -456,6 +456,12 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         false
     }
 
+    /// Text offered by the tab bar context menu's copy action (for example a
+    /// table-qualified name for table data tabs). `None` hides the item.
+    fn copy_label(&self, cx: &App) -> Option<String> {
+        None
+    }
+
     /// Build a new content view for a duplicated tab.
     fn duplicate(
         &mut self,
@@ -557,6 +563,7 @@ pub trait TabContentView: 'static + Send + Sync {
     fn apply_title(&self, title: &str, window: &mut Window, cx: &mut App);
     fn can_duplicate(&self, cx: &App) -> bool;
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>>;
+    fn copy_label(&self, cx: &App) -> Option<String>;
     fn on_activate(&self, window: &mut Window, cx: &mut App);
     fn on_deactivate(&self, window: &mut Window, cx: &mut App);
     fn set_presentation_obscured(&self, obscured: bool, cx: &mut App);
@@ -636,6 +643,10 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn can_duplicate(&self, cx: &App) -> bool {
         self.read(cx).can_duplicate(cx)
+    }
+
+    fn copy_label(&self, cx: &App) -> Option<String> {
+        self.read(cx).copy_label(cx)
     }
 
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>> {
@@ -3306,8 +3317,8 @@ impl TabContainer {
             .background(header_background)
             .border_color(border)
             .leading(
-                Icon::new(contribution.icon.clone())
-                    .with_size(IconSize::Default)
+                Icon::new(contribution.icon)
+                    .with_size(IconSize::Small)
                     .text_color(text_color),
             )
             .title(
@@ -3464,7 +3475,7 @@ impl TabContainer {
                     "tab-sidebar-show-{}-{}",
                     id.owner, id.local_id
                 )))
-                .icon(Icon::new(contribution.icon.clone()).text_color(text_color))
+                .icon(Icon::new(contribution.icon).text_color(text_color))
                 .ghost()
                 .compact()
                 .tooltip(t!("Sidebar.show_panel").to_string())
@@ -3792,7 +3803,7 @@ impl TabContainer {
         let sidebar_panels = self.resolved_sidebar_panels(cx);
         let has_sidebar_layout = sidebar_panels
             .iter()
-            .any(|panel| panel.visible || (!panel.visible && panel.contribution.policy.hideable));
+            .any(|panel| panel.visible || panel.contribution.policy.hideable);
         let active_view = active_tab.map(|tab| tab.content().view());
 
         div()
@@ -4249,6 +4260,7 @@ impl TabContainer {
                                                     source.take_tab(from_idx, window, cx)
                                                 });
                                                 if let Some(tab) = moved {
+                                                    this.subscribe_tab_content(&tab, window, cx);
                                                     this.tabs.insert(to_idx, tab);
                                                     this.set_active_index(to_idx, window, cx);
                                                     cx.emit(TabContainerEvent::LayoutChanged);
@@ -4356,6 +4368,11 @@ impl TabContainer {
                                     .tabs
                                     .iter()
                                     .any(|tab| tab.content().is_disconnected(cx));
+                                let copy_label = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .and_then(|tab| tab.content().copy_label(cx));
 
                                 menu.item(
                                     PopupMenuItem::new(t!("TabContextMenu.rename_tab").to_string())
@@ -4381,6 +4398,23 @@ impl TabContainer {
                                         ),
                                     ),
                                 )
+                                .map(|menu| match copy_label {
+                                    Some(label) => menu.item(
+                                        PopupMenuItem::new(t!("TabContextMenu.copy_label", label = label.as_str()).to_string())
+                                            .icon(IconName::Copy)
+                                            .on_click(move |_, window, cx| {
+                                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(label.clone()));
+                                                window.push_notification(
+                                                    gpui_component::notification::Notification::success(
+                                                        t!("TabContextMenu.copy_label_success").to_string(),
+                                                    )
+                                                    .autohide(true),
+                                                    cx,
+                                                );
+                                            }),
+                                    ),
+                                    None => menu,
+                                })
                                 .map(|menu| {
                                     if !lockable {
                                         return menu;
@@ -4610,6 +4644,8 @@ impl TabContainer {
             ))
     }
 
+    // 渲染辅助函数:平台/关闭行为等参数来自同一调用点的拆解,装箱改签名收益低
+    #[allow(clippy::too_many_arguments)]
     fn render_control_button(
         &self,
         id: &'static str,
@@ -5262,6 +5298,18 @@ mod tests {
         // never take the macOS title-bar indent and drift right.
         assert!(implementation.contains("macos_titlebar_inset: false"));
         assert!(implementation.contains("&& macos_titlebar_inset"));
+    }
+
+    #[test]
+    fn tab_context_menu_offers_copy_label_when_content_provides_one() {
+        let source = include_str!("tab_container.rs");
+        let implementation = source.split("mod tests").next().unwrap();
+        // TabContent::copy_label drives the tab context menu copy item; the
+        // menu must consume it only when Some, keeping other tabs unchanged.
+        assert!(implementation.contains("fn copy_label(&self, cx: &App) -> Option<String>"));
+        assert!(implementation.contains("tab.content().copy_label(cx)"));
+        assert!(implementation.contains("TabContextMenu.copy_label"));
+        assert!(implementation.contains("None => menu"));
     }
 
     #[test]

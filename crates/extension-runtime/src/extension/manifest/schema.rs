@@ -48,6 +48,8 @@ pub struct Manifest {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Engines {
     pub onetcli: String,
+    #[serde(default)]
+    pub gpui_shell: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -62,6 +64,8 @@ pub struct ApiVersions {
     pub task: String,
     #[serde(default = "default_api_version")]
     pub connection: String,
+    #[serde(default = "default_api_version")]
+    pub shell: String,
 }
 
 impl Default for ApiVersions {
@@ -72,6 +76,7 @@ impl Default for ApiVersions {
             ui: default_api_version(),
             task: default_api_version(),
             connection: default_api_version(),
+            shell: default_api_version(),
         }
     }
 }
@@ -84,6 +89,7 @@ impl ApiVersions {
             ("ui", self.ui.as_str()),
             ("task", self.task.as_str()),
             ("connection", self.connection.as_str()),
+            ("shell", self.shell.as_str()),
         ]
         .into_iter()
     }

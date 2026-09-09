@@ -866,6 +866,8 @@ pub struct AppSettings {
     pub light_theme: String,
     #[serde(default = "default_dark_theme")]
     pub dark_theme: String,
+    #[serde(default)]
+    pub navop_theme_migrated: bool,
     #[serde(default = "default_window_opacity")]
     pub window_opacity: f32,
     #[serde(default)]
@@ -951,9 +953,6 @@ pub struct AppSettings {
     pub remote_file_editor: RemoteFileEditorUserSettings,
     #[serde(default = "default_true")]
     pub direct_server_transfer_enabled: bool,
-    /// 任务开始后是否自动弹出后台任务面板。关闭后改为弹提示通知。
-    #[serde(default = "default_true")]
-    pub background_tasks_auto_popup: bool,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -1018,11 +1017,11 @@ fn default_theme_mode() -> String {
 }
 
 fn default_light_theme() -> String {
-    "Default Light".to_string()
+    "Navop Light".to_string()
 }
 
 fn default_dark_theme() -> String {
-    "Default Dark".to_string()
+    "Navop Dark".to_string()
 }
 
 fn default_window_opacity() -> f32 {
@@ -1265,6 +1264,7 @@ impl Default for AppSettings {
             auto_switch_theme: false,
             light_theme: default_light_theme(),
             dark_theme: default_dark_theme(),
+            navop_theme_migrated: true,
             window_opacity: default_window_opacity(),
             custom_accent_enabled: false,
             custom_accent_color: default_custom_accent_color(),
@@ -1304,7 +1304,6 @@ impl Default for AppSettings {
             personal_sync: PersonalSyncSettings::default(),
             remote_file_editor: RemoteFileEditorUserSettings::default(),
             direct_server_transfer_enabled: true,
-            background_tasks_auto_popup: true,
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -1409,6 +1408,13 @@ impl AppSettings {
     }
 
     pub fn normalize_appearance_settings(&mut self) {
+        if !self.navop_theme_migrated {
+            if self.light_theme == "Default Light" && self.dark_theme == "Default Dark" {
+                self.light_theme = default_light_theme();
+                self.dark_theme = default_dark_theme();
+            }
+            self.navop_theme_migrated = true;
+        }
         if self.auto_switch_theme {
             self.theme_mode = "system".to_string();
         } else if !matches!(self.theme_mode.as_str(), "light" | "system" | "dark") {
@@ -1615,7 +1621,6 @@ mod tests {
         let settings = SqlFormatSettings {
             keyword_case: SqlKeywordCase::Upper,
             indent: SqlIndentStyle::Tabs,
-            ..SqlFormatSettings::default()
         };
         let json = serde_json::to_string(&settings).expect("serialize sql format settings");
         assert_eq!(r#"{"keyword_case":"upper","indent":"tabs"}"#, json.as_str());
@@ -1627,7 +1632,6 @@ mod tests {
             SqlFormatSettings {
                 keyword_case: SqlKeywordCase::Lower,
                 indent: SqlIndentStyle::TwoSpaces,
-                ..SqlFormatSettings::default()
             },
             partial
         );
@@ -1694,29 +1698,6 @@ mod tests {
         .expect("服务器间直接传输设置应能反序列化");
 
         assert!(!settings.direct_server_transfer_enabled);
-    }
-
-    #[test]
-    fn app_settings_auto_popup_background_tasks_by_default() {
-        assert!(AppSettings::default().background_tasks_auto_popup);
-    }
-
-    #[test]
-    fn legacy_app_settings_keep_background_tasks_auto_popup() {
-        let settings: AppSettings =
-            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
-
-        assert!(settings.background_tasks_auto_popup);
-    }
-
-    #[test]
-    fn app_settings_deserializes_background_tasks_auto_popup_choice() {
-        let settings: AppSettings = serde_json::from_value(serde_json::json!({
-            "background_tasks_auto_popup": false
-        }))
-        .expect("后台任务自动弹出设置应能反序列化");
-
-        assert!(!settings.background_tasks_auto_popup);
     }
 
     #[test]
@@ -1790,8 +1771,8 @@ mod tests {
         .expect("legacy appearance settings should deserialize");
 
         assert_eq!("light", settings.theme_mode);
-        assert_eq!("Default Light", settings.light_theme);
-        assert_eq!("Default Dark", settings.dark_theme);
+        assert_eq!("Navop Light", settings.light_theme);
+        assert_eq!("Navop Dark", settings.dark_theme);
         assert_eq!(1.0, settings.window_opacity);
         assert!(!settings.custom_accent_enabled);
         assert_eq!("#3b82f6", settings.custom_accent_color);
@@ -1819,6 +1800,26 @@ mod tests {
         settings.auto_switch_theme = true;
         settings.normalize_appearance_settings();
         assert_eq!("system", settings.theme_mode);
+    }
+
+    #[test]
+    fn legacy_default_theme_pair_migrates_to_navop_once() {
+        let mut settings = AppSettings {
+            light_theme: "Default Light".to_string(),
+            dark_theme: "Default Dark".to_string(),
+            navop_theme_migrated: false,
+            ..AppSettings::default()
+        };
+
+        settings.normalize_appearance_settings();
+        assert_eq!("Navop Light", settings.light_theme);
+        assert_eq!("Navop Dark", settings.dark_theme);
+
+        settings.light_theme = "Default Light".to_string();
+        settings.dark_theme = "Default Dark".to_string();
+        settings.normalize_appearance_settings();
+        assert_eq!("Default Light", settings.light_theme);
+        assert_eq!("Default Dark", settings.dark_theme);
     }
 
     #[test]

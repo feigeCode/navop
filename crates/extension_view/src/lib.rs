@@ -6,6 +6,7 @@ mod model;
 mod offline_package_dialog;
 mod permissions;
 mod render;
+mod shell;
 mod state;
 mod status_message;
 mod view;
@@ -13,10 +14,11 @@ mod view;
 pub use host::ExtensionViewHost;
 pub use model::{
     DownloadedMarketplaceExtension, ExtensionKind, ExtensionSummary, MarketplaceEntry,
-    MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, filter_installed,
-    filter_marketplace, filter_updatable_marketplace, marketplace_entry_install_id,
-    marketplace_install_state,
+    MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, ShellViewSummary,
+    filter_installed, filter_marketplace, filter_updatable_marketplace,
+    marketplace_entry_install_id, marketplace_install_state,
 };
+pub use shell::{ShellViewOpener, register_shell_view_opener};
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
 #[cfg(test)]
@@ -25,7 +27,7 @@ mod tests {
 
     use super::{
         ExtensionKind, ExtensionSummary, MarketplaceEntry, MarketplaceInstallState,
-        filter_installed, filter_marketplace, filter_updatable_marketplace,
+        ShellViewSummary, filter_installed, filter_marketplace, filter_updatable_marketplace,
         marketplace_install_state,
     };
 
@@ -41,6 +43,15 @@ mod tests {
         let state = marketplace_install_state(&installed, &entry);
 
         assert_eq!(MarketplaceInstallState::Installed, state);
+    }
+
+    #[test]
+    fn extension_summary_tracks_shell_views() {
+        let summary = summary(ExtensionKind::Composite, "search", "1.0.0")
+            .with_shell_views(vec![ShellViewSummary::new("explorer", "Explorer")]);
+
+        assert_eq!("explorer", summary.shell_views[0].id);
+        assert_eq!("Explorer", summary.shell_views[0].title);
     }
 
     #[test]

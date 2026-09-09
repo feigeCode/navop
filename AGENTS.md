@@ -506,6 +506,13 @@
 - **验证方式**：回归测试同时断言全局默认绑定不包含目标控制键、设置页元数据与运行时一致，并运行 `terminal_view` 键码测试确认目标按键仍编码为预期控制字节。
 - **适用范围**：`main/src/onetcli_app.rs`、`main/src/setting_tab.rs`、`crates/terminal_view/src/view/keybindings.rs` 与所有无 context 的 GPUI 全局快捷键。
 
+- **标题**：GPUI `Keystroke.key` 是键帽字符不是输入文本，凭据捕获必须用 `key_char`
+- **触发信号**：SSH/Telnet 连接时手动敲击输入密码一直提示认证失败，粘贴同样密码却正常；密码含大小写与特殊字符（issue #147）。
+- **根因 / 约束**：GPUI `Keystroke.key` 是不含 Shift 效果的键帽字符（macOS/Windows 上 shift+a 的 `key` 均为小写 `"a"`，shift 保留在 modifiers 里；shift+2 等平台才换算为 `"@"`），`key_char` 才是应用修饰键后的实际输入字符。凭据捕获的 keydown 分支曾把 `key` 当文本追加，且消费按键后 `prevent_default()` 阻断平台文本系统（insertText→commit_text），使错误字符成为唯一来源：大写被输成小写。
+- **正确做法**：keydown 里把按键当“文本输入”使用时（密码/MFA/内联捕获缓冲），优先取 `keystroke.key_char`，为空再回退 `key`；只当“命令键”匹配（enter/backspace/escape/快捷键）时才用 `key`。粘贴与 IME 提交天然带原文，无需处理。
+- **验证方式**：`cargo test -p terminal_view credential_capture`（覆盖 shift 字母/数字符号/无 key_char 回退、敲击与粘贴结果一致）；结构 contract 断言捕获分支使用 `keystroke_capture_text(&event.keystroke)` 且被消费按键仍 prevent_default。
+- **适用范围**：`crates/terminal_view/src/view/{terminal_events,credential_capture}.rs`，以及任何把 `KeyDownEvent` 直接转成文本缓冲的 GPUI 组件（搜索框、内联输入、自绘表单）。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

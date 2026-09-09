@@ -1344,15 +1344,18 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<Vec<String>> {
-        // 主查询：ALL_OBJECTS
-        let sql = r#"
-        SELECT DISTINCT owner AS schema_name
-        FROM all_objects
-        ORDER BY owner
-    "#;
+        // 与树视图 list_schemas_view 保持同一降级链：
+        // dba_users（高权限）→ all_users（普通权限，可列出全部用户即 schema）
+        // → SELECT USER FROM dual（极端权限兜底）。
+        // 不能只用 all_objects：普通权限下它只包含当前用户有授权对象的 owner，
+        // 会导致 SQL 编辑器 schema 下拉与补全 qualifier 丢失其他用户 schema。
+        let schema_queries = [
+            "SELECT username FROM dba_users WHERE oracle_maintained = 'N' ORDER BY username",
+            "SELECT username FROM all_users ORDER BY username",
+        ];
 
-        match connection.query(sql).await {
-            Ok(SqlResult::Query(qr)) => {
+        for sql in schema_queries {
+            if let Ok(SqlResult::Query(qr)) = connection.query(sql).await {
                 let schemas = qr
                     .rows
                     .iter()
@@ -1360,21 +1363,18 @@ impl DatabasePlugin for OraclePlugin {
                         row.first()
                             .and_then(|v| v.clone())
                             .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
                     })
                     .collect();
                 let schemas =
                     filter_schemas(connection.config(), SchemaFilterProfile::Oracle, schemas);
-
                 if !schemas.is_empty() {
                     return Ok(schemas);
                 }
             }
-            _ => {
-                // 忽略，走降级
-            }
         }
 
-        // 降级方案：仅当前用户
+        // 兜底：仅当前用户
         let fallback_sql = "SELECT USER FROM dual";
 
         let result = connection
@@ -3201,6 +3201,238 @@ mod tests {
 
     fn create_plugin() -> OraclePlugin {
         OraclePlugin::new()
+    }
+
+    /// 模拟普通权限 Oracle 连接：`all_objects` 只能看到自己的对象，
+    /// 但 `all_users` 能列出全部用户（schema）。
+    struct SchemasConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl SchemasConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "oracle-schemas".to_string(),
+                    name: "Oracle schemas".to_string(),
+                    database_type: DatabaseType::Oracle,
+                    host: "localhost".to_string(),
+                    port: 1521,
+                    username: "APP".to_string(),
+                    password: String::new(),
+                    credential_reference: None,
+                    database: Some("APP".to_string()),
+                    service_name: Some("FREEPDB1".to_string()),
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DbConnection for SchemasConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, _database: Option<String>) {}
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by schema tests"))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            let first_cell = |values: &[&str]| {
+                values
+                    .iter()
+                    .map(|value| Some(value.to_string()))
+                    .map(|cell| vec![cell])
+                    .collect::<Vec<_>>()
+            };
+            let rows = if query.contains("dba_users") {
+                return Err(DbError::query("ORA-00942: table or view does not exist"));
+            } else if query.contains("all_users") {
+                first_cell(&["APP", "OTHER_USER", "SYS"])
+            } else if query.contains("dual") {
+                first_cell(&["APP"])
+            } else {
+                return Err(DbError::query(format!(
+                    "unexpected Oracle schema query: {query}"
+                )));
+            };
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(Some("APP".to_string()))
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<crate::connection::StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn list_schemas_lists_all_users_for_normal_privilege() {
+        let connection = SchemasConnection::new();
+        let schemas = create_plugin()
+            .list_schemas(&connection, "")
+            .await
+            .expect("listing schemas should succeed");
+
+        assert_eq!(
+            schemas,
+            vec!["APP".to_string(), "OTHER_USER".to_string()],
+            "普通权限下应通过 all_users 列出全部用户 schema，并过滤系统 schema"
+        );
+        let queries = connection.queries();
+        assert!(
+            queries.iter().any(|query| query.contains("all_users")),
+            "降级链应包含 all_users 查询，实际 {queries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_schemas_falls_back_to_current_user() {
+        let connection = CurrentUserOnlyConnection::new();
+        let schemas = create_plugin()
+            .list_schemas(&connection, "")
+            .await
+            .expect("listing schemas should succeed");
+
+        assert_eq!(schemas, vec!["APP".to_string()]);
+    }
+
+    /// 极端权限：dba_users / all_users 都不可见，只剩 SELECT USER FROM dual。
+    struct CurrentUserOnlyConnection {
+        config: DbConnectionConfig,
+    }
+
+    impl CurrentUserOnlyConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "oracle-current-user".to_string(),
+                    name: "Oracle current user".to_string(),
+                    database_type: DatabaseType::Oracle,
+                    host: "localhost".to_string(),
+                    port: 1521,
+                    username: "APP".to_string(),
+                    password: String::new(),
+                    credential_reference: None,
+                    database: Some("APP".to_string()),
+                    service_name: Some("FREEPDB1".to_string()),
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    extra_params: Default::default(),
+                },
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DbConnection for CurrentUserOnlyConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, _database: Option<String>) {}
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by schema tests"))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            if query.contains("dba_users") || query.contains("all_users") {
+                return Err(DbError::query("ORA-00942: table or view does not exist"));
+            }
+            let rows = vec![vec![Some("APP".to_string())]];
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(Some("APP".to_string()))
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<crate::connection::StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
     }
 
     #[test]

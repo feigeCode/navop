@@ -178,7 +178,7 @@ impl HomePage {
         if collapsed {
             IconButton::new(id, Icon::new(icon).mono())
                 .hit_size(Size::Size(cx.theme().geometry.layout.global_rail_item))
-                .glyph_size(IconSize::Medium)
+                .glyph_size(one_ui::IconSize::Small)
                 .selected(selected)
                 .when(selected, |button| button.bg(cx.theme().list_active))
                 .tooltip(label)
@@ -217,9 +217,9 @@ impl HomePage {
             .border_color(cx.theme().border)
             .when(collapsed, |footer| {
                 footer.items_center().child(
-                    IconButton::new("legacy-home-user", FunctionalIcon::new(IconName::User))
+                    IconButton::new("legacy-home-user", Icon::new(IconName::User))
                         .hit_size(rail_item_size)
-                        .glyph_size(IconSize::Medium)
+                        .glyph_size(one_ui::IconSize::Small)
                         .tooltip(
                             user.map(UserInfo::resolved_display_name)
                                 .unwrap_or_else(|| t!("Auth.login").to_string()),

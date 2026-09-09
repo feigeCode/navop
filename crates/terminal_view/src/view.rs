@@ -7,14 +7,14 @@ use alacritty_terminal::vi_mode::ViMotion;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::dialog::DialogButtonProps;
+use gpui_component::dialog::{DialogButtonProps, DialogFooter};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_component::{
-    ActiveTheme, BlinkCursor, Disableable, ElementExt, Icon, IconName, IconSize, Selectable,
-    Sizable, WindowExt, h_flex, kbd::Kbd, v_flex,
+    ActiveTheme, Disableable, ElementExt, Icon, IconName, IconSize, Selectable, Sizable, WindowExt,
+    h_flex, kbd::Kbd, v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
@@ -32,12 +32,14 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod blink_cursor;
 pub(crate) mod block_selection;
 mod history_prompt_rules;
 mod mouse_input;
 mod paste_safety;
 mod workspace_support;
 
+use blink_cursor::BlinkCursor;
 use workspace_support::TerminalRenderMode;
 pub(crate) use workspace_support::{TerminalPaneEvent, TerminalWorkspaceSidebarSnapshot};
 
@@ -103,7 +105,8 @@ use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 #[cfg(test)]
 use paste_safety::has_unterminated_shell_quote;
 use paste_safety::{
-    UnbracketedPasteHazard, detect_unbracketed_paste_hazard, multiline_non_empty_line_count,
+    UnbracketedPasteHazard, detect_unbracketed_paste_hazard, is_large_paste,
+    multiline_non_empty_line_count, strip_dangerous_control_chars,
 };
 use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
@@ -173,6 +176,8 @@ mod vi_input;
 mod zmodem_picker;
 
 use actions::*;
+#[cfg(test)]
+use clipboard_image::join_paste_as_single_line;
 use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
 pub(crate) use command_bar_model::quick_command_executes_on_click;
 use helpers::*;

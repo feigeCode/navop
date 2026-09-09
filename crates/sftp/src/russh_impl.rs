@@ -3898,8 +3898,8 @@ mod tests {
             mtime: Some(1_700_000_001),
         };
 
-        let preserved = preserved_replace_attributes(original)
-            .expect("uid/gid/permissions must be preserved");
+        let preserved =
+            preserved_replace_attributes(original).expect("uid/gid/permissions must be preserved");
 
         assert_eq!(preserved.uid, Some(1000));
         assert_eq!(preserved.gid, Some(1000));

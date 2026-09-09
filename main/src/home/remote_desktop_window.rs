@@ -1,8 +1,16 @@
 use gpui::{AppContext, Focusable};
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+#[cfg(target_os = "windows")]
+use one_core::storage::RemoteDesktopParams;
 use remote_desktop::RemoteDesktopConnectionOptions;
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
 use rust_i18n::t;
+
+#[cfg(any(target_os = "windows", test))]
+mod mstsc_credentials;
+
+#[cfg(any(target_os = "windows", test))]
+use mstsc_credentials::{MstscCredentialInput, mstsc_credentials};
 
 const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
@@ -37,12 +45,26 @@ pub(crate) fn mstsc_launch_plan(host: &str, port: u16) -> MstscLaunchPlan {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn launch_mstsc_fullscreen(host: &str, port: u16) -> std::io::Result<()> {
-    let plan = mstsc_launch_plan(host, port);
-    std::process::Command::new(plan.program)
+pub(crate) fn launch_mstsc_fullscreen(params: &RemoteDesktopParams) -> anyhow::Result<()> {
+    let plan = mstsc_launch_plan(&params.host, params.port);
+    let credentials = mstsc_credentials(MstscCredentialInput {
+        host: &params.host,
+        port: params.port,
+        username: params.username.as_deref(),
+        password: params.password.as_deref(),
+        domain: params.domain.as_deref(),
+    });
+    let lease = credentials
+        .as_ref()
+        .map(mstsc_credentials::store_temporary)
+        .transpose()?;
+    let child = std::process::Command::new(plan.program)
         .args(&plan.args)
-        .spawn()
-        .map(|_| ())
+        .spawn()?;
+    if let Some(lease) = lease {
+        std::thread::spawn(move || lease.restore_after(child));
+    }
+    Ok(())
 }
 
 fn remote_desktop_window_options(title: String) -> PopupWindowOptions {
@@ -116,7 +138,36 @@ mod tests {
     }
 
     #[test]
-    fn mstsc_launch_plan_does_not_accept_credentials() {
+    fn mstsc_credentials_use_termsrv_target_and_domain_username() {
+        let credentials = super::mstsc_credentials(super::MstscCredentialInput {
+            host: "rdp.example.com",
+            port: 3390,
+            username: Some("operator"),
+            password: Some("secret"),
+            domain: Some("ACME"),
+        })
+        .expect("complete credentials should be prepared");
+
+        assert_eq!(credentials.target, "TERMSRV/rdp.example.com:3390");
+        assert_eq!(credentials.username, "ACME\\operator");
+        assert_eq!(credentials.password, "secret");
+    }
+
+    #[test]
+    fn mstsc_credentials_require_username_and_password() {
+        let input = |username, password| super::MstscCredentialInput {
+            host: "server",
+            port: 3389,
+            username,
+            password,
+            domain: None,
+        };
+        assert!(super::mstsc_credentials(input(None, Some("secret"))).is_none());
+        assert!(super::mstsc_credentials(input(Some("operator"), None)).is_none());
+    }
+
+    #[test]
+    fn mstsc_launch_plan_does_not_expose_credentials() {
         let plan = super::mstsc_launch_plan("rdp.example.com", 3389);
 
         assert_eq!(plan.args, vec!["/v:rdp.example.com:3389", "/f"]);

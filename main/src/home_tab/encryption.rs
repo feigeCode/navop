@@ -117,7 +117,7 @@ impl HomePage {
                 .overlay_closable(!startup_lock)
                 .close_button(!startup_lock)
                 .on_cancel(move |_, _, _| !startup_lock)
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, _window, cx: &mut App| {
                     let input_key = key_input_ok.read(cx).text().to_string();
 
                     if input_key.is_empty() {

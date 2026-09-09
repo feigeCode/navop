@@ -23,7 +23,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     radio::Radio,
     select::{Select, SelectItem, SelectState},
     tab::{Tab, TabBar},
@@ -158,12 +158,12 @@ pub struct RedisFormWindow {
 
     // 哨兵配置
     sentinel_master_name_input: Entity<InputState>,
-    sentinel_nodes_input: Entity<InputState>,
+    sentinel_nodes_input: Entity<TextareaState>,
     sentinel_password_input: Entity<InputState>,
     sentinel_credential_picker: Entity<CredentialReferencePicker>,
 
     // 集群配置
-    cluster_nodes_input: Entity<InputState>,
+    cluster_nodes_input: Entity<TextareaState>,
 
     // 高级设置
     use_tls: bool,
@@ -171,7 +171,7 @@ pub struct RedisFormWindow {
     ssh_tunnel_form: Entity<SshTunnelForm>,
 
     // 备注
-    remark_input: Entity<InputState>,
+    remark_input: Entity<TextareaState>,
 
     // 云同步开关
     sync_enabled: bool,
@@ -282,7 +282,7 @@ impl RedisFormWindow {
         });
 
         let sentinel_nodes_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
+            let mut state = TextareaState::new(window, cx)
                 .placeholder(t!("Redis.sentinel_nodes_placeholder"))
                 .auto_grow(3, 6);
             if let Some(ref p) = existing_params {
@@ -309,7 +309,7 @@ impl RedisFormWindow {
 
         // 集群配置
         let cluster_nodes_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
+            let mut state = TextareaState::new(window, cx)
                 .placeholder(t!("Redis.cluster_nodes_placeholder"))
                 .auto_grow(3, 6);
             if let Some(ref p) = existing_params {
@@ -361,7 +361,7 @@ impl RedisFormWindow {
         });
 
         let remark_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
+            let mut state = TextareaState::new(window, cx)
                 .placeholder(t!("Redis.remark_placeholder"))
                 .auto_grow(3, 10);
             if let Some(ref c) = connection_to_load {
@@ -915,7 +915,7 @@ impl RedisFormWindow {
                 ))
                 .child(self.render_form_row(
                     &t!("Redis.sentinel_nodes"),
-                    Input::new(&self.sentinel_nodes_input),
+                    Textarea::new(&self.sentinel_nodes_input),
                 ))
                 .child(self.render_form_row("钥匙串", self.sentinel_credential_picker.clone()))
                 .when(sentinel_credential_is_manual, |form| {
@@ -929,7 +929,7 @@ impl RedisFormWindow {
             .when(mode == ModeSelection::Cluster, |this| {
                 this.child(self.render_form_row(
                     &t!("Redis.cluster_nodes"),
-                    Input::new(&self.cluster_nodes_input),
+                    Textarea::new(&self.cluster_nodes_input),
                 ))
             })
     }
@@ -960,7 +960,7 @@ impl RedisFormWindow {
     fn render_other_tab(&self) -> impl IntoElement {
         v_flex()
             .gap_2()
-            .child(self.render_form_row(&t!("Redis.remark"), Input::new(&self.remark_input)))
+            .child(self.render_form_row(&t!("Redis.remark"), Textarea::new(&self.remark_input)))
     }
 }
 

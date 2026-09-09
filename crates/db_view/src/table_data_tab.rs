@@ -7,6 +7,7 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, Subscription, Task, Window,
 };
 use gpui_component::button::Button;
+use gpui_component::dialog::DialogFooter;
 use gpui_component::{Icon, IconName, WindowExt, button::ButtonVariants, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
@@ -36,6 +37,7 @@ pub struct TableDataTabContent {
     pub data_grid: Entity<DataGrid>,
     content: Entity<CellPreviewHost>,
     database_name: String,
+    schema_name: Option<String>,
     table_name: String,
     focus_handle: FocusHandle,
     _data_grid_sub: Option<Subscription>,
@@ -62,7 +64,7 @@ impl TableDataTabContent {
         .editable(params.editable)
         .show_toolbar(true);
 
-        if let Some(schema) = params.schema_name {
+        if let Some(schema) = params.schema_name.as_deref() {
             config = config.with_schema(schema);
         }
 
@@ -84,6 +86,10 @@ impl TableDataTabContent {
             data_grid,
             content,
             database_name: params.database_name,
+            schema_name: params
+                .schema_name
+                .map(|schema| schema.trim().to_string())
+                .filter(|schema| !schema.is_empty()),
             table_name: params.table_name,
             focus_handle,
             _data_grid_sub: Some(data_grid_sub),
@@ -111,6 +117,19 @@ fn table_data_tab_title(database_name: &str, table_name: &str) -> String {
     format!("{table_name} - Data ({database_name})")
 }
 
+/// tab 右键“复制表名”使用的名称：带 schema 时输出 `schema.table`，
+/// 否则输出裸表名；不含 database（多数方言中 `db.schema.table` 三段式不合法）。
+fn table_data_tab_copy_label(schema_name: Option<&str>, table_name: &str) -> Option<String> {
+    let table_name = table_name.trim();
+    if table_name.is_empty() {
+        return None;
+    }
+    match schema_name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(schema) => Some(format!("{schema}.{table_name}")),
+        None => Some(table_name.to_string()),
+    }
+}
+
 impl TabContent for TableDataTabContent {
     fn content_key(&self) -> &'static str {
         "TableData"
@@ -118,6 +137,10 @@ impl TabContent for TableDataTabContent {
 
     fn title(&self, _cx: &App) -> SharedString {
         table_data_tab_title(&self.database_name, &self.table_name).into()
+    }
+
+    fn copy_label(&self, _cx: &App) -> Option<String> {
+        table_data_tab_copy_label(self.schema_name.as_deref(), &self.table_name)
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
@@ -154,51 +177,43 @@ impl TabContent for TableDataTabContent {
             let tx_cancel = tx.clone();
             let data_grid = data_grid.clone();
 
+            let footer = DialogFooter::new().children(vec![
+                Button::new("cancel")
+                    .label(t!("Common.cancel"))
+                    .on_click(move |_, window: &mut Window, cx| {
+                        window.close_dialog(cx);
+                        if let Some(tx) = tx_cancel.lock().ok().and_then(|mut g| g.take()) {
+                            let _ = tx.send(false);
+                        }
+                    })
+                    .into_any_element(),
+                Button::new("discard")
+                    .label(t!("Common.discard"))
+                    .on_click(move |_, window: &mut Window, cx| {
+                        window.close_dialog(cx);
+                        if let Some(tx) = tx_discard.lock().ok().and_then(|mut g| g.take()) {
+                            let _ = tx.send(true);
+                        }
+                    })
+                    .into_any_element(),
+                Button::new("save")
+                    .label(t!("Common.save"))
+                    .primary()
+                    .on_click(move |_, window: &mut Window, cx| {
+                        window.close_dialog(cx);
+                        data_grid.update(cx, |grid, cx| grid.save_changes(window, cx));
+                        if let Some(tx) = tx_save.lock().ok().and_then(|mut g| g.take()) {
+                            let _ = tx.send(true);
+                        }
+                    })
+                    .into_any_element(),
+            ]);
+
             dialog
                 .title(format!("{} {}", t!("Common.close"), table_name))
                 .overlay_closable(false)
                 .close_button(false)
-                .footer(move |_ok, _cancel, _window, _cx| {
-                    let data_grid = data_grid.clone();
-                    let tx_save = tx_save.clone();
-                    let tx_discard = tx_discard.clone();
-                    let tx_cancel = tx_cancel.clone();
-
-                    vec![
-                        Button::new("cancel")
-                            .label(t!("Common.cancel"))
-                            .on_click(move |_, window: &mut Window, cx| {
-                                window.close_dialog(cx);
-                                if let Some(tx) = tx_cancel.lock().ok().and_then(|mut g| g.take()) {
-                                    let _ = tx.send(false);
-                                }
-                            })
-                            .into_any_element(),
-                        Button::new("discard")
-                            .label(t!("Common.discard"))
-                            .on_click(move |_, window: &mut Window, cx| {
-                                window.close_dialog(cx);
-                                if let Some(tx) = tx_discard.lock().ok().and_then(|mut g| g.take())
-                                {
-                                    let _ = tx.send(true);
-                                }
-                            })
-                            .into_any_element(),
-                        Button::new("save")
-                            .label(t!("Common.save"))
-                            .primary()
-                            .on_click(move |_, window: &mut Window, cx| {
-                                window.close_dialog(cx);
-                                data_grid.update(cx, |grid, cx| {
-                                    grid.save_changes(window, cx);
-                                });
-                                if let Some(tx) = tx_save.lock().ok().and_then(|mut g| g.take()) {
-                                    let _ = tx.send(true);
-                                }
-                            })
-                            .into_any_element(),
-                    ]
-                })
+                .footer(footer)
                 .child(t!("Table.unsaved_changes_prompt").to_string())
         });
 
@@ -212,6 +227,7 @@ impl Clone for TableDataTabContent {
             data_grid: self.data_grid.clone(),
             content: self.content.clone(),
             database_name: self.database_name.clone(),
+            schema_name: self.schema_name.clone(),
             table_name: self.table_name.clone(),
             focus_handle: self.focus_handle.clone(),
             _data_grid_sub: None,
@@ -229,6 +245,24 @@ mod tests {
             "orders - Data (analytics)",
             table_data_tab_title("analytics", "orders")
         );
+    }
+
+    #[test]
+    fn table_data_tab_copy_label_qualifies_schema_when_present() {
+        assert_eq!(
+            Some("app.orders".to_string()),
+            table_data_tab_copy_label(Some("app"), "orders")
+        );
+        assert_eq!(
+            Some("orders".to_string()),
+            table_data_tab_copy_label(None, "orders")
+        );
+        assert_eq!(
+            Some("orders".to_string()),
+            table_data_tab_copy_label(Some("  "), "orders")
+        );
+        assert_eq!(None, table_data_tab_copy_label(Some("app"), "  "));
+        assert_eq!(None, table_data_tab_copy_label(None, ""));
     }
 
     #[test]

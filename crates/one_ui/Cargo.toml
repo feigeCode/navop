@@ -5,13 +5,20 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 gpui = { workspace = true }
 gpui-component.workspace = true
-one-core.workspace = true
+lsp-types.workspace = true
+palette.workspace = true
+chrono.workspace = true
 json5.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 rust-i18n.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

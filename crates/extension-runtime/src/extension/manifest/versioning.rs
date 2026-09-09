@@ -11,6 +11,7 @@ pub struct HostApiVersions {
     pub ui: ApiVersion,
     pub task: ApiVersion,
     pub connection: ApiVersion,
+    pub shell: ApiVersion,
 }
 
 impl HostApiVersions {
@@ -21,6 +22,7 @@ impl HostApiVersions {
             ui: ApiVersion::new(1, 0),
             task: ApiVersion::new(1, 0),
             connection: ApiVersion::new(1, 0),
+            shell: ApiVersion::new(1, 0),
         }
     }
 
@@ -31,6 +33,7 @@ impl HostApiVersions {
             "ui" => self.ui,
             "task" => self.task,
             "connection" => self.connection,
+            "shell" => self.shell,
             _ => return None,
         })
     }
@@ -210,7 +213,7 @@ fn host_version_override() -> &'static RwLock<Option<Version>> {
 
 #[cfg(test)]
 mod tests {
-    use super::CompatibilityError;
+    use super::{ApiVersion, CompatibilityError, HostApiVersions};
 
     #[test]
     fn compatibility_errors_use_navop_product_name() {
@@ -233,5 +236,13 @@ mod tests {
 
         assert!(message.contains("engines.onetcli"));
         assert!(message.contains("Navop"));
+    }
+
+    #[test]
+    fn current_host_offers_shell_api() {
+        assert_eq!(
+            Some(ApiVersion::new(1, 0)),
+            HostApiVersions::current().version_for("shell")
+        );
     }
 }

@@ -136,12 +136,25 @@ impl TerminalView {
     }
 
     pub(super) fn paste_preview_text(text: &str) -> String {
-        let preview = text.lines().take(6).collect::<Vec<_>>().join("\n");
-        if text.lines().count() > 6 {
+        let preview = text
+            .lines()
+            .take(PASTE_PREVIEW_MAX_LINES)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.lines().count() > PASTE_PREVIEW_MAX_LINES {
             format!("{preview}\n...")
         } else {
             preview
         }
+    }
+
+    pub(super) fn paste_summary_text(text: &str) -> String {
+        t!(
+            "TerminalView.paste_summary",
+            lines = multiline_non_empty_line_count(text),
+            chars = text.chars().count()
+        )
+        .to_string()
     }
 
     pub(super) fn show_paste_confirm_dialog(
@@ -153,33 +166,64 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         let preview_text = Self::paste_preview_text(&text);
+        let summary_text = Self::paste_summary_text(&text);
+        let single_line_available = multiline_non_empty_line_count(&text) > 1;
         let view = cx.entity().clone();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let view_ok = view.clone();
             let text_ok = text.clone();
+            let view_single = view.clone();
+            let text_single = text.clone();
 
             dialog
                 .title(title.clone())
-                .confirm()
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
+                    v_flex()
                         .gap_2()
+                        .min_h_0()
                         .child(div().text_sm().child(message.clone()))
-                        .child(div().text_xs().child(t!("TerminalView.paste_preview")))
                         .child(
-                            div()
-                                .max_h(px(180.0))
-                                .overflow_hidden()
+                            h_flex()
+                                .justify_between()
+                                .child(div().text_xs().child(t!("TerminalView.paste_preview")))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(_cx.theme().muted_foreground)
+                                        .child(summary_text.clone()),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .id("paste-preview")
+                                .max_h(px(160.0))
+                                .overflow_y_scroll()
                                 .text_xs()
                                 .child(preview_text.clone()),
                         )
+                        .when(single_line_available, |this| {
+                            this.child(
+                                h_flex().gap_1().child(
+                                    Button::new("paste-single-line")
+                                        .label(t!("TerminalView.paste_as_single_line"))
+                                        .small()
+                                        .outline()
+                                        .on_click(move |_event, window, cx| {
+                                            let joined = join_paste_as_single_line(&text_single);
+                                            window.close_dialog(cx);
+                                            view_single.update(cx, |this, cx| {
+                                                this.paste_text_unchecked(&joined, window, cx);
+                                            });
+                                        }),
+                                ),
+                            )
+                        })
                         .into_any_element(),
                 )
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.ok"))
                         .cancel_text(t!("Common.cancel")),
                 )
@@ -191,4 +235,16 @@ impl TerminalView {
                 })
         });
     }
+}
+
+/// 弹窗预览最大行数（超出部分显示省略号）。
+const PASTE_PREVIEW_MAX_LINES: usize = 6;
+
+/// 多行粘贴合并为单行：换行折叠为空格，连续空白压成一个。
+pub(super) fn join_paste_as_single_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }

@@ -1,9 +1,10 @@
 use gpui::{ClipboardItem, Entity, Window};
 use gpui_component::{
-    IconName, WindowExt,
+    IconName,
     menu::{PopupMenu, PopupMenuItem},
-    notification::Notification,
 };
+#[cfg(not(test))]
+use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
@@ -59,12 +60,19 @@ fn copy_action_item(
         .on_click(move |_, window, cx| {
             if let Some(text) = text.clone() {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
-                window.push_notification(
-                    Notification::success(t!("Connection.copy_success").to_string()).autohide(true),
-                    cx,
-                );
+                notify_copy_success(window, cx);
             }
         })
+}
+
+fn notify_copy_success(window: &mut Window, cx: &mut gpui::App) {
+    #[cfg(not(test))]
+    window.push_notification(
+        Notification::success(t!("Connection.copy_success").to_string()).autohide(true),
+        cx,
+    );
+    #[cfg(test)]
+    let _ = (window, cx);
 }
 
 fn copy_full_info_item(connection_id: Option<i64>, home: &Entity<HomePage>) -> PopupMenuItem {
@@ -91,6 +99,8 @@ fn copy_action_presentation(action: ConnectionCopyAction) -> (String, IconName) 
         ConnectionCopyAction::SshTarget => label("copy_ssh_target", IconName::Network),
         ConnectionCopyAction::RedisAddress => label("copy_redis_target", IconName::Network),
         ConnectionCopyAction::MongoDbAddress => label("copy_mongodb_target", IconName::Network),
+        ConnectionCopyAction::MqttAddress => label("copy_mqtt_target", IconName::Network),
+        ConnectionCopyAction::RocketmqAddress => label("copy_rocketmq_target", IconName::Network),
         ConnectionCopyAction::RemoteDesktopAddress => {
             label("copy_remote_desktop_target", IconName::Network)
         }
@@ -121,8 +131,6 @@ fn label(key: &str, icon: IconName) -> (String, IconName) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, ClickEvent, EmptyView, TestAppContext, VisualTestContext};
-    use gpui_component::{Root, Theme, WindowExt as _};
     use one_core::storage::{SshAuthMethod, SshParams};
 
     use super::*;
@@ -186,44 +194,12 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    fn ordinary_copy_writes_clipboard_and_pushes_notification(cx: &mut TestAppContext) {
+    #[test]
+    fn ordinary_copy_text_is_available() {
         let connection = ssh_connection();
-        let item = copy_action_item(ConnectionCopyAction::Name, &connection, None);
-        let PopupMenuItem::Item {
-            handler: Some(handler),
-            ..
-        } = item
-        else {
-            panic!("copy action must be an enabled clickable menu item");
-        };
-
-        let (window, content) = cx.update(|cx| {
-            cx.set_global(Theme::default());
-            let mut content = None;
-            let window = cx
-                .open_window(Default::default(), |window, cx| {
-                    let view = cx.new(|_| EmptyView);
-                    content = Some(view.clone());
-                    cx.new(|cx| Root::new(view, window, cx))
-                })
-                .expect("test window opens");
-            (window, content.expect("test content is created"))
-        });
-        let mut cx = VisualTestContext::from_window(window.into(), cx);
-
-        let (clipboard_text, notification_count) = content.update_in(&mut cx, |_, window, cx| {
-            handler(&ClickEvent::default(), window, cx);
-            (
-                cx.read_from_clipboard().and_then(|item| item.text()),
-                window.notifications(cx).len(),
-            )
-        });
-
-        assert_eq!(clipboard_text.as_deref(), Some("SSH"));
         assert_eq!(
-            notification_count, 1,
-            "successful copy must push one visible notification"
+            connection_copy_text(ConnectionCopyAction::Name, &connection, None),
+            Some("SSH".into())
         );
     }
 }

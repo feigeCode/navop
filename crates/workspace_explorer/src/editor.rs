@@ -4,16 +4,14 @@ mod render;
 mod save;
 mod tabs;
 
-use crate::diff::{AlignedDiffSide, SideBySideDiff, aligned_side_by_side};
+use crate::diff::SideBySideDiff;
 use crate::file_system::LoadedFile;
 use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
-use gpui::{App, ColorExt as _, Context, Entity, EventEmitter, ScrollHandle, Subscription};
-use gpui_component::{
-    input::{InputLineDecoration, InputState},
-    status_bar::StatusPresentation,
-};
+use gpui::{App, Context, Entity, EventEmitter, Subscription};
+use gpui_component::input::EditorState;
 use notes::NotesView;
+use one_ui::StatusPresentation;
 use remote_file_editor::EditorMode;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -120,21 +118,20 @@ impl LoadedDocument {
 }
 
 pub(super) struct DiffEditors {
-    left: Entity<InputState>,
-    right: Entity<InputState>,
+    left: Entity<EditorState>,
+    right: Entity<EditorState>,
 }
 
 pub(super) struct EditorTab {
     id: u64,
     key: DocumentKey,
     display_name: String,
-    editor: Option<Entity<InputState>>,
+    editor: Option<Entity<EditorState>>,
     markdown: Option<Entity<NotesView>>,
     subscriptions: Vec<Subscription>,
     diff: Option<Rc<SideBySideDiff>>,
     diff_editors: Option<DiffEditors>,
     diff_side_by_side: bool,
-    diff_scroll: ScrollHandle,
     diff_change_cursor: Option<usize>,
     saved_text: String,
     file_size: usize,
@@ -161,7 +158,6 @@ impl EditorTab {
             diff: None,
             diff_editors: None,
             diff_side_by_side: true,
-            diff_scroll: ScrollHandle::new(),
             diff_change_cursor: None,
             saved_text: String::new(),
             file_size: 0,
@@ -223,20 +219,6 @@ impl WorkspaceEditor {
                 let theme = markdown::markdown_editor_theme(theme);
                 markdown.update(cx, |view, cx| view.set_editor_theme(theme, cx));
             }
-            let (Some(diff), Some(editors)) = (&tab.diff, &tab.diff_editors) else {
-                continue;
-            };
-            let (left, right) = aligned_side_by_side(diff);
-            let left_decorations =
-                diff_line_decorations(&left, theme.danger, theme.muted.opacity(0.35));
-            let right_decorations =
-                diff_line_decorations(&right, theme.success, theme.muted.opacity(0.35));
-            editors.left.update(cx, |state, cx| {
-                state.set_line_decorations(left_decorations, cx);
-            });
-            editors.right.update(cx, |state, cx| {
-                state.set_line_decorations(right_decorations, cx);
-            });
         }
         cx.notify();
     }
@@ -271,30 +253,6 @@ impl Default for WorkspaceEditor {
 }
 
 impl EventEmitter<WorkspaceEditorEvent> for WorkspaceEditor {}
-
-pub(super) fn diff_line_decorations(
-    side: &AlignedDiffSide,
-    changed_color: gpui::Hsla,
-    placeholder_color: gpui::Hsla,
-) -> Vec<InputLineDecoration> {
-    side.line_numbers
-        .iter()
-        .zip(&side.changed)
-        .zip(&side.placeholders)
-        .map(
-            |((&line_number, &changed), &placeholder)| InputLineDecoration {
-                line_number,
-                background: if changed {
-                    Some(changed_color.opacity(0.15))
-                } else if placeholder {
-                    Some(placeholder_color)
-                } else {
-                    None
-                },
-            },
-        )
-        .collect()
-}
 
 pub(super) fn display_name(path: &Path) -> String {
     path.file_name()

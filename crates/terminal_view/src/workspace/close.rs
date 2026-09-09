@@ -39,7 +39,6 @@ impl TerminalWorkspace {
                         t!("TerminalWorkspace.close_message", count = pane_count).to_string(),
                     ),
                 )
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.close").to_string())

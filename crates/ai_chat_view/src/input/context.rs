@@ -164,6 +164,8 @@ pub struct ComposerResourcePoolItem {
 }
 
 impl ComposerResourcePoolItem {
+    // 构造函数:参数与资源池条目字段一一对应
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: impl Into<SharedString>,
         label: impl Into<SharedString>,

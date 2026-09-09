@@ -285,9 +285,7 @@ pub(crate) fn build_input_state(
         input = input.masked(true);
     }
     if matches!(field.field_type, DatabaseFormFieldType::TextArea) {
-        input = input
-            .multi_line(true)
-            .rows(field.rows.unwrap_or(3) as usize);
+        let _ = field.rows;
     }
     input.set_value(value.to_string(), window, cx);
     input
@@ -310,7 +308,6 @@ pub(crate) fn render_database_field(
         .required(field_info.required)
         .when(!is_textarea, |f| f.items_center())
         .when(is_textarea, |f| f.items_start())
-        .label_justify_end()
         .child(if is_select {
             field_selects
                 .get(&field_info.id)

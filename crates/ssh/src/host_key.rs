@@ -500,6 +500,9 @@ impl HostKeyVerifier {
     }
 
     /// Verify a server key and, in `AcceptNew`, persist an unknown key.
+    // 错误类型为语义完整的 HostKeyRejection(含身份/指纹/原因),装箱会波及全部调用方;
+    // 该错误仅在主机密钥校验失败时构造,非热路径,维持值类型返回。
+    #[allow(clippy::result_large_err)]
     pub fn verify(
         &self,
         identity: &HostKeyIdentity,
@@ -611,6 +614,8 @@ impl HostKeyVerifier {
         })
     }
 
+    // 错误类型为语义完整的 HostKeyRejection,装箱会波及调用方;仅在确认持久化失败时构造,维持值类型。
+    #[allow(clippy::result_large_err)]
     fn accept_confirmation(
         &self,
         identity: &HostKeyIdentity,
