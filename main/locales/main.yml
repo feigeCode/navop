@@ -2017,6 +2017,15 @@ ConnectionForm:
     en: Remark
     zh-CN: 备注
     zh-HK: 備註
+  # 扩展连接 SSH 隧道页签(与数据库连接窗口的 SSH 页签一致)
+  ssh:
+    en: SSH
+    zh-CN: SSH
+    zh-HK: SSH
+  ssh_timeout:
+    en: SSH timeout (seconds)
+    zh-CN: SSH 超时（秒）
+    zh-HK: SSH 逾時（秒）
   name:
     en: Name
     zh-CN: 名称

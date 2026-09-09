@@ -43,6 +43,13 @@ impl HomePage {
             editing_connection: Some(connection.clone()),
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            // SSH 隧道引用选择需要工作区内的 SSH/SFTP 连接列表
+            ssh_connections: self
+                .connections
+                .iter()
+                .filter(|candidate| candidate.connection_type == ConnectionType::SshSftp)
+                .cloned()
+                .collect(),
         };
         self.editing_connection_id = None;
         open_popup_window(

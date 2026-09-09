@@ -218,6 +218,7 @@ impl UniversalPluginService {
         contribution: extension_runtime::RegisteredResourceConnectionContribution,
         mut config: serde_json::Map<String, serde_json::Value>,
         secrets: HashMap<String, String>,
+        repository: Option<Arc<ConnectionRepository>>,
     ) -> anyhow::Result<()> {
         let prefix = format!("test-{}", uuid::Uuid::new_v4());
         let _guard = TransientSecretGuard::new(
@@ -240,6 +241,14 @@ impl UniversalPluginService {
                     .collect(),
             ),
         );
+        // SSH 隧道:启用时宿主侧建隧道改写地址;守卫保持到测试结束(open→close→deactivate)后随作用域释放
+        let rewrite = crate::shell_plugin_host::ssh_tunnel::rewrite_config_with_tunnel(
+            config,
+            repository.as_deref(),
+        )
+        .await?;
+        let config = rewrite.config;
+        let _tunnels = rewrite.guards;
         let activation = self.activate_runtime(&contribution.runtime_id).await?;
         let client = match self.universal_plugin_client(&contribution.runtime_id) {
             Ok(client) => client,

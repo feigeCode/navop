@@ -31,7 +31,8 @@ impl ExtensionConnectionForm {
         self.fields.read(cx).tab_count()
     }
 
-    /// 统一页签栏:manifest 页签(来自扩展声明,已中文化)+ 宿主"备注"页签
+    /// 统一页签栏:manifest 页签(来自扩展声明,已中文化)
+    /// + 宿主"SSH"页签(清单声明可隧道地址字段时)+ 宿主"备注"页签
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_count = self.manifest_tab_count(cx);
         let mut bar = TabBar::new("extension-connection-tabs")
@@ -41,6 +42,7 @@ impl ExtensionConnectionForm {
             .on_click(cx.listener(move |this, index: &usize, _window, cx| {
                 this.active_tab = *index;
                 let tab_count = this.fields.read(cx).tab_count();
+                // SSH/备注页签激活时,内嵌声明式表单回退到最后一个清单页签(其内容不展示)
                 let fields_index = (*index).min(tab_count.saturating_sub(1));
                 this.fields
                     .update(cx, |form, _| form.set_active_tab(fields_index));
@@ -51,6 +53,9 @@ impl ExtensionConnectionForm {
                 bar = bar.child(Tab::new().label(label));
             }
         }
+        if self.ssh_tab_visible() {
+            bar = bar.child(Tab::new().label(t!("ConnectionForm.ssh").to_string()));
+        }
         div()
             .flex()
             .justify_center()
@@ -58,11 +63,22 @@ impl ExtensionConnectionForm {
     }
 
     fn render_tab_content(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.active_tab < self.manifest_tab_count(cx) {
+        let manifest_tab_count = self.manifest_tab_count(cx);
+        if self.active_tab < manifest_tab_count {
             self.render_manifest_tab(cx).into_any_element()
+        } else if Some(self.active_tab) == self.ssh_tab_index(cx) {
+            self.render_ssh_tab(cx).into_any_element()
         } else {
             self.render_remark_tab(cx).into_any_element()
         }
+    }
+
+    /// SSH 隧道页:复用共享 SshTunnelForm(与数据库/Redis 连接窗口一致体验)
+    fn render_ssh_tab(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .gap_4()
+            .min_h(px(250.))
+            .children(self.ssh_tunnel_form.clone())
     }
 
     /// manifest 页签内容:首页签附带名称/工作空间/团队,其余页签仅扩展声明字段

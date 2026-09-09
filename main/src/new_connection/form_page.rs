@@ -96,12 +96,20 @@ fn build_extension_form(
                 })
                 .cloned()
         });
+        // SSH 隧道引用选择需要工作区内的 SSH/SFTP 连接列表
+        let ssh_connections = home
+            .connections
+            .iter()
+            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
+            .cloned()
+            .collect();
         home.editing_connection_id = None;
         Some(ExtensionConnectionFormConfig {
             contribution,
             editing_connection,
             workspaces: home.workspaces.clone(),
             teams,
+            ssh_connections,
         })
     }) else {
         return NewConnectionFormResult::Blocked;

@@ -36,6 +36,9 @@ pub(crate) struct ShellMountSession {
     blobs: Mutex<HashMap<String, ProviderHandle>>,
     events: Mutex<HashMap<String, ProviderHandle>>,
     jobs: Mutex<HashMap<String, JobHandle>>,
+    /// 打开扩展连接资源时建立的 SSH 隧道守卫:
+    /// 随资源关闭/运行时停用(close_all 或会话 Drop)统一释放
+    tunnels: Mutex<Vec<connection_tunnel::TunnelGuard>>,
     pub(super) tokio: tokio::runtime::Handle,
 }
 
@@ -52,8 +55,20 @@ impl ShellMountSession {
             blobs: Mutex::new(HashMap::new()),
             events: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            tunnels: Mutex::new(Vec::new()),
             tokio,
         }
+    }
+
+    /// 登记随本会话存活的 SSH 隧道守卫(移入后由会话统一释放)
+    pub(super) fn register_tunnels(&self, tunnels: Vec<connection_tunnel::TunnelGuard>) {
+        if tunnels.is_empty() {
+            return;
+        }
+        self.tunnels
+            .lock()
+            .expect("shell tunnel registry poisoned")
+            .extend(tunnels);
     }
 
     pub(super) fn client(&self, alias: &str) -> Result<ManagedUniversalPluginClient, HostError> {

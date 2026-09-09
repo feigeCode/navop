@@ -6,6 +6,7 @@ mod storage;
 use std::collections::HashMap;
 
 use connection_form::declarative::DeclarativeForm;
+use connection_form::{SshTunnelForm, SshTunnelFormConfig};
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Window};
 use gpui_component::{
     input::InputState,
@@ -23,6 +24,7 @@ use self::{
     schema::declarative_config,
     storage::{ExtensionConnectionDraft, build_connection, persist_connection},
 };
+use crate::shell_plugin_host::ssh_tunnel;
 use crate::universal_plugins::GlobalUniversalPluginService;
 
 pub(crate) struct ExtensionConnectionFormConfig {
@@ -30,6 +32,7 @@ pub(crate) struct ExtensionConnectionFormConfig {
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
+    pub ssh_connections: Vec<StoredConnection>,
 }
 
 #[derive(Clone)]
@@ -61,7 +64,9 @@ pub(crate) struct ExtensionConnectionForm {
     pub(super) sync_enabled: Entity<bool>,
     pub(super) test_result: Entity<Option<Result<(), String>>>,
     pub(super) is_testing: Entity<bool>,
-    /// 当前激活页签:0=常规,1=备注(对齐数据库新建连接窗口的页签布局)
+    /// SSH 隧道表单(清单声明 host/port 或 namesrv_addrs 时展示)
+    pub(super) ssh_tunnel_form: Option<Entity<SshTunnelForm>>,
+    /// 当前激活页签:0..manifest 页签数=清单页签,其后依次为 SSH 页签(若有)与备注页签
     pub(super) active_tab: usize,
     pub(super) focus_handle: FocusHandle,
 }
@@ -88,8 +93,33 @@ impl ExtensionConnectionForm {
         let name = create_name_input(name_value, window, cx);
         let form_config = declarative_config(&config.contribution.form);
         let fields = cx.new(|cx| DeclarativeForm::new(form_config, &initial_config, window, cx));
-        // 嵌入模式:manifest 页签与宿主"备注"页签由本表单统一渲染切换
+        // 嵌入模式:manifest 页签与宿主"SSH/备注"页签由本表单统一渲染切换
         fields.update(cx, |form, _| form.set_embedded(true));
+        // SSH 隧道页签:仅清单声明可隧道地址字段(host/port 或 namesrv_addrs)时提供,
+        // 与数据库连接窗口的 SSH 页签保持一致体验
+        let ssh_tunnel_form =
+            ssh_tunnel::form_supports_tunnel(&config.contribution.form).then(|| {
+                let initial = initial_config
+                    .get("ssh_tunnel")
+                    .and_then(ssh_tunnel::form_value_from_stored_json);
+                let (target_host_placeholder, target_port_placeholder) =
+                    tunnel_placeholders(&initial_config, &config.contribution.form);
+                cx.new(|cx| {
+                    SshTunnelForm::new(
+                        SshTunnelFormConfig::new(
+                            "extension-ssh",
+                            target_host_placeholder,
+                            target_port_placeholder,
+                            t!("ConnectionForm.ssh_timeout"),
+                            "30",
+                        ),
+                        config.ssh_connections.clone(),
+                        initial,
+                        window,
+                        cx,
+                    )
+                })
+            });
         let selected_workspace = config
             .editing_connection
             .as_ref()
@@ -130,8 +160,39 @@ impl ExtensionConnectionForm {
             sync_enabled: cx.new(|_| sync_enabled),
             test_result: cx.new(|_| None),
             is_testing: cx.new(|_| false),
+            ssh_tunnel_form,
             active_tab: 0,
             focus_handle: cx.focus_handle(),
+        }
+    }
+
+    /// SSH 页签是否展示(清单声明可隧道地址字段时才有)
+    pub(super) fn ssh_tab_visible(&self) -> bool {
+        self.ssh_tunnel_form.is_some()
+    }
+
+    /// SSH 页签索引:紧跟 manifest 页签之后(无 SSH 页签时返回 None)
+    pub(super) fn ssh_tab_index(&self, cx: &App) -> Option<usize> {
+        self.ssh_tab_visible()
+            .then(|| self.fields.read(cx).tab_count())
+    }
+
+    /// 采集 SSH 隧道表单值并应用到 config:启用时写入存储形状,禁用时删除该键
+    fn apply_ssh_tunnel(&self, config: &mut serde_json::Map<String, serde_json::Value>, cx: &App) {
+        let Some(form) = &self.ssh_tunnel_form else {
+            return;
+        };
+        let value = form.read(cx).value(cx);
+        match ssh_tunnel::tunnel_from_form_value(&value) {
+            Some(tunnel) => {
+                config.insert(
+                    "ssh_tunnel".into(),
+                    ssh_tunnel::tunnel_to_stored_json(&tunnel),
+                );
+            }
+            None => {
+                config.remove("ssh_tunnel");
+            }
         }
     }
 
@@ -190,15 +251,21 @@ impl ExtensionConnectionForm {
     }
 
     pub(super) fn on_test(&mut self, cx: &mut Context<Self>) {
-        let (config, secrets) = match self.test_draft(cx) {
+        let (mut config, secrets) = match self.test_draft(cx) {
             Ok(draft) => draft,
             Err(error) => {
                 self.set_error(error, cx);
                 return;
             }
         };
+        // SSH 隧道随测试生效:启用时写入 config,测试链路据此建隧道改写地址
+        self.apply_ssh_tunnel(&mut config, cx);
         let contribution = self.contribution.clone();
         let service = cx.global::<GlobalUniversalPluginService>().service();
+        let repository = cx
+            .global::<GlobalStorageState>()
+            .storage
+            .get::<ConnectionRepository>();
         self.is_testing.update(cx, |testing, cx| {
             *testing = true;
             cx.notify();
@@ -207,7 +274,7 @@ impl ExtensionConnectionForm {
         let testing = self.is_testing.clone();
         let task = one_core::gpui_tokio::Tokio::spawn_result(cx, async move {
             service
-                .test_extension_connection(contribution, config, secrets)
+                .test_extension_connection(contribution, config, secrets, repository)
                 .await
         });
         cx.spawn(async move |_, cx| {
@@ -232,13 +299,15 @@ impl ExtensionConnectionForm {
             self.set_error(t!("ConnectionForm.name_required").to_string(), cx);
             return;
         }
-        let (config, updates) = match self.draft(cx) {
+        let (mut config, updates) = match self.draft(cx) {
             Ok(value) => value,
             Err(error) => {
                 self.set_error(error, cx);
                 return;
             }
         };
+        // SSH 隧道:启用时以迁移惰性形状存入 config.ssh_tunnel,禁用时删除该键
+        self.apply_ssh_tunnel(&mut config, cx);
         let declared = self.fields.read(cx).visible_secret_ids(cx);
         let cleared = self.fields.read(cx).cleared_secret_ids();
         let workspace_id = self.workspace.read(cx).selected_value().cloned().flatten();
@@ -300,4 +369,56 @@ impl ExtensionConnectionForm {
             cx.notify();
         });
     }
+}
+
+/// 隧道目标占位符:优先取当前 config 的地址字段作提示(MQTT host/port;
+/// RocketMQ 取首个 namesrv 地址的 host/port),新建连接回退 manifest 默认值,
+/// 仍无地址信息时回退 127.0.0.1
+fn tunnel_placeholders(
+    config: &serde_json::Map<String, serde_json::Value>,
+    form: &extension_runtime::extension::manifest::ResourceConnectionForm,
+) -> (String, String) {
+    if let Some(namesrv) = config
+        .get("namesrv_addrs")
+        .and_then(|value| value.as_str())
+        .or_else(|| manifest_field(form, "namesrv_addrs"))
+    {
+        if let Some(first) = ssh_tunnel::split_namesrv_addrs(namesrv).first() {
+            if let Ok((host, port)) = ssh_tunnel::parse_host_port(first) {
+                return (host, port.to_string());
+            }
+        }
+    }
+    let host = config
+        .get("host")
+        .and_then(|value| value.as_str())
+        .filter(|host| !host.trim().is_empty())
+        .or_else(|| manifest_field(form, "host"))
+        .unwrap_or("127.0.0.1")
+        .to_string();
+    let port = config
+        .get("port")
+        .and_then(|value| value.as_u64())
+        .map(|port| port.to_string())
+        .or_else(|| manifest_field(form, "port").map(str::to_string))
+        .unwrap_or_default();
+    (host, port)
+}
+
+/// 读取 manifest 字段声明的默认值/占位符文本(取默认值优先,无则占位符)
+fn manifest_field<'a>(
+    form: &'a extension_runtime::extension::manifest::ResourceConnectionForm,
+    id: &str,
+) -> Option<&'a str> {
+    let field = form
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.fields)
+        .find(|field| field.id == id)?;
+    field
+        .default_value
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or(field.placeholder.as_deref())
+        .filter(|value| !value.trim().is_empty())
 }

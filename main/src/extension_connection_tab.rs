@@ -49,7 +49,12 @@ impl ExtensionConnectionTab {
             .lease(connection_id);
         let runtime_id = contribution.runtime_id.clone();
         let title = connection.name.clone().into();
-        let launch = ExtensionResourceLaunch::new(&connection, &contribution);
+        // SSH 隧道引用模式需要在打开时解析已保存的 SSH 连接,此处捕获连接仓库
+        let repository = cx
+            .global::<one_core::storage::GlobalStorageState>()
+            .storage
+            .get::<one_core::storage::ConnectionRepository>();
+        let launch = ExtensionResourceLaunch::new(&connection, &contribution, repository);
         let view = cx.new(|cx| Self {
             connection_lease: Some(connection_lease),
             title,

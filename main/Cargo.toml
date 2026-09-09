@@ -64,6 +64,7 @@ remote_file_editor = { workspace = true }
 one-core.workspace = true
 one-ui.workspace = true
 onetcli_runtime.workspace = true
+connection_tunnel.workspace = true
 reqwest_client.workspace = true
 db.workspace = true
 connection-import-protocol.workspace = true

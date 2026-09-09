@@ -7870,6 +7870,7 @@ dependencies = [
  "chrono",
  "connection-form",
  "connection-import-protocol",
+ "connection_tunnel",
  "db",
  "db_view",
  "dirs 6.0.0",

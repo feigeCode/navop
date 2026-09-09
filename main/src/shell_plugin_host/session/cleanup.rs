@@ -38,6 +38,18 @@ impl ShellMountSession {
             take_jobs(&self.jobs),
         )
         .await;
+        // 资源关闭后释放 SSH 隧道(TunnelGuard Drop 即关闭本地端口转发)
+        self.release_tunnels();
+    }
+
+    /// 取出并丢弃全部隧道守卫,立即关闭对应 SSH 隧道
+    fn release_tunnels(&self) {
+        let tunnels = self
+            .tunnels
+            .lock()
+            .map(|mut tunnels| std::mem::take(&mut *tunnels))
+            .unwrap_or_default();
+        drop(tunnels);
     }
 }
 
@@ -47,6 +59,7 @@ impl Drop for ShellMountSession {
         let blobs = take_provider_handles(&self.blobs);
         let events = take_provider_handles(&self.events);
         let jobs = take_jobs(&self.jobs);
+        self.release_tunnels();
         if resources.is_empty() && blobs.is_empty() && events.is_empty() && jobs.is_empty() {
             return;
         }

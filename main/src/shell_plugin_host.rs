@@ -11,6 +11,7 @@ mod policy;
 mod resource;
 mod runtime;
 pub(crate) mod session;
+pub(crate) mod ssh_tunnel;
 mod value;
 
 pub(crate) use context::ShellConnectionContext;
@@ -129,7 +130,12 @@ impl ShellPluginHost {
         let view = self
             .contribution(&contribution.extension_id, shell_view_id)
             .ok_or_else(|| anyhow!("extension shell view was not found"))?;
-        let launch = ShellConnectionLaunch::new(&connection, &contribution, &view)?;
+        // SSH 隧道引用模式需要在打开时解析已保存的 SSH 连接,此处捕获连接仓库
+        let repository = cx
+            .global::<one_core::storage::GlobalStorageState>()
+            .storage
+            .get::<one_core::storage::ConnectionRepository>();
+        let launch = ShellConnectionLaunch::new(&connection, &contribution, &view, repository)?;
         let host = self.clone();
         let extension_id = contribution.extension_id;
         let view_key = view.view_key.clone();
