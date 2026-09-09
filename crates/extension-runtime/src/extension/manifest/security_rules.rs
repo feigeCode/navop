@@ -96,6 +96,19 @@ fn windows_env_path_prefix(path: &str) -> Option<&str> {
 }
 
 fn validate_net_permission(permission: &str) -> Result<ValidatedPermission, PermissionError> {
+    if let Some(path) = permission.strip_prefix("net:unix:") {
+        if path == "/" || path == "*" || path_has_escape(path) {
+            return invalid(permission, "Unix socket 路径不能是根目录、通配符或相对逃逸");
+        }
+        if !path.starts_with('/') && !path.starts_with("~/") {
+            return invalid(permission, "Unix socket 必须使用绝对路径或 ~/ 路径");
+        }
+        return Ok(valid(
+            permission,
+            PermissionKind::Network,
+            PermissionRisk::High,
+        ));
+    }
     let parts = permission.split(':').collect::<Vec<_>>();
     if parts.len() != 4 || !matches!(parts[1], "tcp" | "udp") {
         return invalid(permission, "网络权限必须是 net:tcp:<host>:<port-range>");
