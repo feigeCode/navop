@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use gpui::App;
+use gpui::{App, Window};
 
 use resource_view::{CustomPageHost, ShellMountError, ShellPageMount, ShellPageMountRequest};
 
@@ -49,18 +49,57 @@ impl CustomPageHost for ShellPageHostAdapter {
     fn mount(
         &self,
         request: ShellPageMountRequest,
-        _cx: &mut App,
+        window: &mut Window,
+        cx: &mut App,
     ) -> Result<ShellPageMount, ShellMountError> {
-        // 只做声明校验;真正的 JS view 装载在 P3 借用 mount 管线中接通。
-        let _view = self.ensure_embeddable(&request.extension_id, &request.view_id)?;
-        Err(ShellMountError::MountFailed(format!(
-            "shell page mount for `{}` requires the borrowed-mount pipeline",
-            request.view_id
-        )))
+        let view = self.ensure_embeddable(&request.extension_id, &request.view_id)?;
+        let session_handle = request
+            .session
+            .ok_or_else(|| ShellMountError::MountFailed("borrowed session is required".into()))?;
+        let snapshot = session_handle
+            .resource_snapshot()
+            .map_err(|error| ShellMountError::MountFailed(error.to_string()))?;
+        let alias = view
+            .backends
+            .iter()
+            .find(|(_, runtime_id)| *runtime_id == &session_handle.identity().runtime_id)
+            .map(|(alias, _)| alias.clone())
+            .ok_or_else(|| {
+                ShellMountError::MountFailed(
+                    "shell view has no backend for the borrowed session runtime".into(),
+                )
+            })?;
+        let session = self.host.new_mount_session(view.backends.clone());
+        let resource = session
+            .register_borrowed_resource(alias, session_handle.managed_client(), snapshot)
+            .map_err(|error| ShellMountError::MountFailed(error.to_string()))?;
+        let connection = crate::shell_plugin_host::ShellConnectionContext {
+            connection_id: 0,
+            name: "borrowed connection".into(),
+            contribution_id: request.view_id.clone(),
+            resource_type: request.resource_type.clone(),
+            resource,
+        };
+        let loaded = crate::shell_plugin_host::load_borrowed(
+            &self.host,
+            view,
+            session,
+            Some(connection),
+            window,
+            cx,
+        )
+        .map_err(|error| ShellMountError::MountFailed(error.error.to_string()))?;
+        let view = loaded.view().clone().into();
+        let mut loaded = Some(loaded);
+        Ok(ShellPageMount::new(view, move |cx| {
+            if let Some(mut loaded) = loaded.take() {
+                loaded.unload(cx);
+            }
+        }))
     }
 
-    fn dispose(&self, _mount: ShellPageMount, _cx: &mut App) {
-        // 借用 mount 尚无运行时资源;dispose 语义由 mount 管线补齐。
+    fn dispose(&self, mount: ShellPageMount, cx: &mut App) {
+        mount.dispose(cx);
     }
 }
 

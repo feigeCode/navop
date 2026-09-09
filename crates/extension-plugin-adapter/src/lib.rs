@@ -50,7 +50,8 @@ pub use event_supervisor::{
     EventStreamSubscriptionConfig,
 };
 pub use job_activation::{
-    JobActivationError, JobActivationHandle, JobActivationManager, RecoveredJob, RetiredJob,
+    JobActivationError, JobActivationHandle, JobActivationManager, JobSnapshot, RecoveredJob,
+    RetiredJob,
 };
 pub use provider_permissions::{
     NetworkEndpoint, ProviderPermissionError, ProviderPermissionSet, ResourceOpenAuthorizer,

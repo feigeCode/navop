@@ -21,8 +21,15 @@ use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::{ResourceWorkbenchPage, ResourceWorkbenchTemplate};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, px,
 };
+
+struct ActiveShellMount {
+    page_id: String,
+    host: std::rc::Rc<dyn CustomPageHost>,
+    mount: ShellPageMount,
+}
 
 /// 单个页面的加载状态。
 pub enum PageState {
@@ -49,6 +56,10 @@ pub struct NativeResourceWorkbench {
     /// query 页面执行状态。
     query_result: Option<Result<serde_json::Value, String>>,
     query_running: bool,
+    shell_mount: Option<ActiveShellMount>,
+    renderer_error: Option<String>,
+    task_error: Option<String>,
+    _subscriptions: Vec<Subscription>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,7 +104,13 @@ impl NativeResourceWorkbench {
             query_inputs: Default::default(),
             query_result: None,
             query_running: false,
+            shell_mount: None,
+            renderer_error: None,
+            task_error: None,
+            _subscriptions: Vec::new(),
         };
+        this._subscriptions
+            .push(cx.on_release(|this, cx| this.dispose_shell_mount(cx)));
         this.load_current_page(cx);
         this
     }
@@ -110,6 +127,7 @@ impl NativeResourceWorkbench {
         if !self.descriptor.pages.iter().any(|page| page.id == page_id) {
             return;
         }
+        self.dispose_shell_mount(cx);
         self.selected_page = page_id;
         self.route = serde_json::Value::Null;
         self.query_result = None;
@@ -126,6 +144,7 @@ impl NativeResourceWorkbench {
         if !self.descriptor.pages.iter().any(|page| page.id == page_id) {
             return;
         }
+        self.dispose_shell_mount(cx);
         self.selected_page = page_id;
         self.route = route;
         self.query_result = None;
@@ -137,6 +156,58 @@ impl NativeResourceWorkbench {
             .pages
             .iter()
             .find(|page| page.id == self.selected_page)
+    }
+
+    fn dispose_shell_mount(&mut self, cx: &mut App) {
+        if let Some(active) = self.shell_mount.take() {
+            active.host.dispose(active.mount, cx);
+        }
+        self.renderer_error = None;
+    }
+
+    fn mount_shell_page(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        view_id: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<gpui::AnyView> {
+        if let Some(active) = &self.shell_mount {
+            if active.page_id == page.id {
+                return Some(active.mount.view.clone());
+            }
+        }
+        self.dispose_shell_mount(cx);
+        let Some(host) = custom_page_host(cx) else {
+            self.renderer_error = Some("Shell renderer is unavailable in this build".into());
+            return None;
+        };
+        let request = ShellPageMountRequest {
+            extension_id: self.descriptor.extension_id.clone(),
+            view_id: view_id.to_string(),
+            page_context: serde_json::json!({
+                "pageId": page.id,
+                "route": self.route,
+                "capabilities": self.session.capabilities(),
+            }),
+            resource_type: self.descriptor.resource_type.clone(),
+            session: Some(self.session.clone()),
+        };
+        match host.mount(request, window, cx) {
+            Ok(mount) => {
+                let view = mount.view.clone();
+                self.shell_mount = Some(ActiveShellMount {
+                    page_id: page.id.clone(),
+                    host,
+                    mount,
+                });
+                Some(view)
+            }
+            Err(error) => {
+                self.renderer_error = Some(error.to_string());
+                None
+            }
+        }
     }
 
     /// 触发当前页面的 load 操作。tasks 页面读宿主任务,不发 provider 请求。
@@ -345,14 +416,38 @@ impl NativeResourceWorkbench {
         let Some(page) = self.current_page().cloned() else {
             return div().p_4().child("Unknown page").into_any_element();
         };
+        let renderer = resolve_renderer(&page.renderer, custom_page_host(cx).is_some());
+        if let PageRenderer::Shell { view_id } = renderer {
+            if let Some(view) = self.mount_shell_page(&page, &view_id, window, cx) {
+                return div().size_full().child(view).into_any_element();
+            }
+            if page.renderer.fallback.as_deref() != Some("native") {
+                let error = self
+                    .renderer_error
+                    .clone()
+                    .unwrap_or_else(|| "Shell renderer is unavailable".into());
+                return div().p_4().child(error).into_any_element();
+            }
+        }
         if page.template == ResourceWorkbenchTemplate::Query {
             return self.render_query_page(&page, window, cx).into_any_element();
+        }
+        if page.template == ResourceWorkbenchTemplate::Tasks {
+            return self.render_tasks_page(&page, cx).into_any_element();
         }
 
         let mut header = div()
             .px_4()
             .py_3()
             .child(div().text_xl().child(page.title.clone()));
+        if let Some(error) = &self.renderer_error {
+            header = header.child(
+                div()
+                    .mt_1()
+                    .text_color(gpui::rgb(0xd7a23a))
+                    .child(format!("Shell fallback: {error}")),
+            );
+        }
         // detail 页 links(如 Index → Mapping)。
         for (link_index, link) in page.links.iter().enumerate() {
             let target = link.page_id.clone();
@@ -472,6 +567,90 @@ impl NativeResourceWorkbench {
                     .overflow_y_scroll()
                     .child(result_view),
             )
+    }
+
+    fn cancel_task(&mut self, job_id: String, cx: &mut Context<Self>) {
+        let session = self.session.clone();
+        let tokio = self.tokio.clone();
+        cx.spawn(async move |this, cx| {
+            let result = tokio
+                .spawn(async move { session.cancel_task(&job_id).await })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.task_error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_tasks_page(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let tasks = self.session.task_snapshots();
+        let body = if tasks.is_empty() {
+            div().p_4().child("No tasks").into_any_element()
+        } else {
+            let mut list = div().flex().flex_col();
+            for (index, task) in tasks.into_iter().enumerate() {
+                let cancellable = matches!(
+                    task.state,
+                    extension_protocol::job::JobState::Queued
+                        | extension_protocol::job::JobState::Running
+                );
+                let job_id = task.job_id.clone();
+                let mut row = div()
+                    .py_2()
+                    .px_4()
+                    .child(format!("{}  ({:?})", task.job_id, task.state));
+                if cancellable {
+                    row = row.child(
+                        div()
+                            .id(("cancel-task", index))
+                            .ml_2()
+                            .cursor_pointer()
+                            .text_color(gpui::rgb(0xe06c75))
+                            .child("Cancel")
+                            .on_click(cx.listener(
+                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                    this.cancel_task(job_id.clone(), cx);
+                                },
+                            )),
+                    );
+                }
+                list = list.child(row);
+            }
+            list.into_any_element()
+        };
+        let mut view = div().flex_1().min_w_0().min_h_0().flex().flex_col().child(
+            div()
+                .px_4()
+                .py_3()
+                .child(div().text_xl().child(page.title.clone()))
+                .child(
+                    div()
+                        .id("refresh-tasks")
+                        .mt_1()
+                        .cursor_pointer()
+                        .text_color(gpui::rgb(0x6cb6ff))
+                        .child("Refresh")
+                        .on_click(cx.listener(
+                            |_this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                cx.notify();
+                            },
+                        )),
+                ),
+        );
+        if let Some(error) = self.task_error.clone() {
+            view = view.child(div().px_4().text_color(gpui::rgb(0xe06c75)).child(error));
+        }
+        view.child(div().flex_1().min_h_0().overflow_hidden().child(body))
     }
 }
 

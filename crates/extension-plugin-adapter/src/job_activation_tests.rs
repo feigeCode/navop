@@ -112,6 +112,45 @@ fn close_is_idempotent_and_returns_job_owned_blobs() {
 }
 
 #[test]
+fn snapshots_are_scoped_by_extension_runtime_and_generation() {
+    let manager = JobActivationManager::new();
+    manager.mark_runtime_active("runtime-a", 2);
+    manager.mark_runtime_active("runtime-b", 2);
+    manager
+        .register_start(
+            "extension-a",
+            "runtime-a",
+            2,
+            &started("visible", JobState::Running),
+        )
+        .unwrap();
+    manager
+        .register_start(
+            "extension-b",
+            "runtime-b",
+            2,
+            &started("other-runtime", JobState::Running),
+        )
+        .unwrap();
+    manager.retire_generation("runtime-a", 2);
+    manager.mark_runtime_active("runtime-a", 3);
+    manager
+        .register_start(
+            "extension-a",
+            "runtime-a",
+            3,
+            &started("new-generation", JobState::Queued),
+        )
+        .unwrap();
+
+    let snapshots = manager.snapshots("extension-a", "runtime-a", 3);
+
+    assert_eq!(1, snapshots.len());
+    assert_eq!("new-generation", snapshots[0].job_id);
+    assert_eq!(JobState::Queued, snapshots[0].state);
+}
+
+#[test]
 fn generation_cleanup_does_not_touch_replacement_or_other_runtime() {
     let manager = JobActivationManager::new();
     manager.mark_runtime_active("runtime", 0);

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use extension_protocol::resource::{ResourceCloseParams, ResourceOpenResult};
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
-use crate::{ManagedUniversalPluginClient, PluginAdapterError};
+use crate::{JobActivationHandle, JobSnapshot, ManagedUniversalPluginClient, PluginAdapterError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceSessionIdentity {
@@ -60,7 +60,12 @@ impl ResourceSessionOwner {
     }
 
     pub async fn close(&self) -> Result<(), PluginAdapterError> {
-        let resource = self.inner.resource.lock().await.take();
+        let resource = self
+            .inner
+            .resource
+            .lock()
+            .expect("resource session lock poisoned")
+            .take();
         let Some(resource) = resource else {
             return Ok(());
         };
@@ -89,6 +94,52 @@ impl ResourceSessionHandle {
         &self.inner.client
     }
 
+    pub fn resource_snapshot(&self) -> Result<ResourceOpenResult, PluginAdapterError> {
+        self.inner
+            .resource
+            .lock()
+            .expect("resource session lock poisoned")
+            .clone()
+            .ok_or(PluginAdapterError::SessionClosed)
+    }
+
+    pub fn managed_client(&self) -> &ManagedUniversalPluginClient {
+        &self.inner.client
+    }
+
+    pub fn task_snapshots(&self) -> Vec<JobSnapshot> {
+        self.inner
+            .client
+            .job_activation()
+            .map(|jobs| {
+                jobs.snapshots(
+                    &self.inner.identity.extension_id,
+                    &self.inner.identity.runtime_id,
+                    self.inner.identity.runtime_generation,
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    pub async fn cancel_task(&self, job_id: &str) -> Result<(), PluginAdapterError> {
+        let handle = JobActivationHandle {
+            extension_id: self.inner.identity.extension_id.clone(),
+            runtime_id: self.inner.identity.runtime_id.clone(),
+            generation: self.inner.identity.runtime_generation,
+            job_id: job_id.to_string(),
+        };
+        self.inner
+            .client
+            .cancel_job(&handle)
+            .await
+            .map_err(|error| PluginAdapterError::Session(error.to_string()))?;
+        self.inner
+            .client
+            .close_job(&handle)
+            .await
+            .map_err(|error| PluginAdapterError::Session(error.to_string()))
+    }
+
     /// 主资源 open 结果中的能力集快照。
     pub fn capabilities(&self) -> &[String] {
         self.inner
@@ -110,7 +161,7 @@ impl ResourceSessionHandle {
         self.inner
             .resource
             .lock()
-            .await
+            .expect("resource session lock poisoned")
             .as_ref()
             .map(|resource| resource.resource_id.clone())
             .ok_or(PluginAdapterError::SessionClosed)

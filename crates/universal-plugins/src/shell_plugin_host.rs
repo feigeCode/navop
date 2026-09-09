@@ -26,6 +26,7 @@ mod value;
 
 pub(crate) use context::ShellConnectionContext;
 pub(crate) use policy::LoadedShellView;
+pub(crate) use policy::load_borrowed;
 
 use std::{
     cell::RefCell,
@@ -77,6 +78,16 @@ enum TrackedPluginTab {
 impl gpui::Global for ShellPluginHost {}
 
 impl ShellPluginHost {
+    pub(crate) fn new_mount_session(
+        &self,
+        backends: std::collections::BTreeMap<String, String>,
+    ) -> std::sync::Arc<session::ShellMountSession> {
+        std::sync::Arc::new(session::ShellMountSession::new(
+            self.service.clone(),
+            backends,
+            self.tokio.clone(),
+        ))
+    }
     pub fn resource_workbench_for_connection(
         &self,
         extension_id: &str,

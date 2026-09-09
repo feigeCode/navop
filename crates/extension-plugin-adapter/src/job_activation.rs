@@ -25,6 +25,15 @@ pub struct RetiredJob {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobSnapshot {
+    pub extension_id: String,
+    pub runtime_id: String,
+    pub generation: u64,
+    pub job_id: String,
+    pub state: JobState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredJob {
     pub previous_handle: JobActivationHandle,
     pub recovered_handle: JobActivationHandle,
@@ -248,6 +257,31 @@ impl JobActivationManager {
             .keys()
             .filter(|handle| handle.runtime_id == runtime_id)
             .count()
+    }
+
+    pub fn snapshots(
+        &self,
+        extension_id: &str,
+        runtime_id: &str,
+        generation: u64,
+    ) -> Vec<JobSnapshot> {
+        self.state
+            .lock()
+            .jobs
+            .iter()
+            .filter(|(handle, _)| {
+                handle.extension_id == extension_id
+                    && handle.runtime_id == runtime_id
+                    && handle.generation == generation
+            })
+            .map(|(handle, record)| JobSnapshot {
+                extension_id: handle.extension_id.clone(),
+                runtime_id: handle.runtime_id.clone(),
+                generation: handle.generation,
+                job_id: handle.job_id.clone(),
+                state: record.state,
+            })
+            .collect()
     }
 }
 

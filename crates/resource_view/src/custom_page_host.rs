@@ -5,7 +5,8 @@
 //! `ShellPluginHost::open_connection` 路径;dispose 只回收本 mount 的
 //! 订阅与子资源。
 
-use gpui::{AnyView, App, WeakEntity};
+use extension_plugin_adapter::ResourceSessionHandle;
+use gpui::{AnyView, App, WeakEntity, Window};
 
 use crate::NativeResourceWorkbench;
 
@@ -17,11 +18,31 @@ pub struct ShellPageMountRequest {
     pub view_id: String,
     /// 页面 route/selection 快照,借给 Shell 页面做初始上下文。
     pub page_context: serde_json::Value,
+    /// Workbench resource type exposed in `navop.context`.
+    pub resource_type: String,
+    /// Borrowed primary session. The Shell host must not close it.
+    pub session: Option<ResourceSessionHandle>,
 }
 
 /// 挂载产物:可嵌入的视图。
 pub struct ShellPageMount {
     pub view: AnyView,
+    dispose: Option<Box<dyn FnOnce(&mut App)>>,
+}
+
+impl ShellPageMount {
+    pub fn new(view: AnyView, dispose: impl FnOnce(&mut App) + 'static) -> Self {
+        Self {
+            view,
+            dispose: Some(Box::new(dispose)),
+        }
+    }
+
+    pub fn dispose(mut self, cx: &mut App) {
+        if let Some(dispose) = self.dispose.take() {
+            dispose(cx);
+        }
+    }
 }
 
 /// Shell 借用挂载宿主。实现方持有真实 gpui-shell 运行时。
@@ -32,6 +53,7 @@ pub trait CustomPageHost {
     fn mount(
         &self,
         request: ShellPageMountRequest,
+        window: &mut Window,
         cx: &mut App,
     ) -> Result<ShellPageMount, ShellMountError>;
 

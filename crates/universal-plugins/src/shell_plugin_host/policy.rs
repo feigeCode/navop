@@ -32,6 +32,73 @@ impl LoadedShellView {
     }
 }
 
+/// Loads a Shell page using a caller-owned mount session and an already-open
+/// primary resource. No activation or resource/open is performed here.
+pub(crate) fn load_borrowed(
+    host: &ShellPluginHost,
+    contribution: extension_runtime::RegisteredShellViewContribution,
+    session: Arc<ShellMountSession>,
+    connection: Option<super::ShellConnectionContext>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<LoadedShellView, ShellLoadError> {
+    let prepared = PreparedShellView {
+        contribution,
+        activations: Vec::new(),
+        connection: None,
+    };
+    match load_with_session_and_connection(
+        host,
+        prepared,
+        Arc::clone(&session),
+        connection,
+        window,
+        cx,
+    ) {
+        Ok(loaded) => Ok(LoadedShellView { loaded, session }),
+        Err(error) => Err(ShellLoadError { error, session }),
+    }
+}
+
+fn load_with_session_and_connection(
+    host: &ShellPluginHost,
+    prepared: PreparedShellView,
+    session: Arc<ShellMountSession>,
+    connection: Option<super::ShellConnectionContext>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<LoadedScriptView> {
+    let mut policy = base_policy(&prepared.contribution)?;
+    let modules = &prepared.contribution.modules;
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Context) {
+        policy = policy.with_host_module(context_module(&prepared.contribution, connection))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Resource) {
+        policy = policy.with_host_module(resource_module(Arc::clone(&session)))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Blob) {
+        policy = policy.with_host_module(blob_module(Arc::clone(&session)))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Job) {
+        policy = policy.with_host_module(job_module(Arc::clone(&session)))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Event) {
+        policy = policy.with_host_module(event_module(Arc::clone(&session)))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Runtime) {
+        policy = policy.with_host_module(runtime_module(Arc::clone(&session)))?;
+    }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Log) {
+        policy = policy.with_host_module(log_module(&prepared.contribution))?;
+    }
+    let options = ViewLoadOptions::new(
+        &prepared.contribution.extension_root,
+        entry_relative_path(&prepared.contribution)?,
+        Rc::new(policy),
+    );
+    host.runtime.load_view(options, window, cx)
+}
+
 impl ShellPluginHost {
     pub(crate) fn load(
         &self,
