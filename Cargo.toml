@@ -119,8 +119,6 @@ db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
 redis-runtime = { path = "crates/redis-runtime" }
 mongodb-runtime = { path = "crates/mongodb-runtime" }
-mqtt_view = { path = "crates/mqtt_view" }
-mqtt-runtime = { path = "crates/mqtt-runtime" }
 one-ui = { path = "crates/one_ui" }
 ssh = { path = "crates/ssh" }
 x11_forwarding = { path = "crates/x11_forwarding" }
@@ -152,7 +150,9 @@ er_flow = { path = "crates/er_flow" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }
 extension-plugin-adapter = { path = "crates/extension-plugin-adapter" }
-resource_view = { path = "crates/resource_view" }
+ resource_view = { path = "crates/resource_view" }
+ mqtt_view = { path = "crates/mqtt_view" }
+ mqtt-runtime = { path = "crates/mqtt-runtime" }
 extension-driver = { path = "crates/extension-driver" }
 extension-runtime = { path = "crates/extension-runtime", default-features = false }
 extension_view = { path = "crates/extension_view" }
@@ -202,12 +202,10 @@ rust_xlsxwriter = "0.94.0"
 dashmap = "5.5.3"
 moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
+rumqttc = "0.25.1"
 llm-connector = { path = "crates/llm-connector", features = ["streaming"] }
 redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
-# TDengine 官方连接器:仅启用 ws-rustls(纯 Rust WebSocket/REST,经 taosAdapter :6041),排除 taos-optin 的 C 依赖
 taos = { version = "0.12.3", default-features = false, features = ["ws-rustls"] }
-# MQTT 客户端:Rust 生态标准,默认 rustls(MQTT 3.1.1/v4)
-rumqttc = "0.25.1"
 
 # SSH and SFTP
 # dsa feature enables verifying/offering the legacy ssh-dss host-key algorithm.
