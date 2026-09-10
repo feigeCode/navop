@@ -568,7 +568,7 @@ impl TerminalAddon for WebLinksAddon {
             action_hint: "⌘ + Click",
             action_text: "to open the link",
             display_text: link.url.clone(),
-            display_color: rgb(0x66ccff).into_color(),
+            display_color: rgb(0x66ccff).into(),
         })
     }
 
@@ -1303,7 +1303,7 @@ impl TerminalAddon for FilePathAddon {
             action_hint: "⌘ + Click",
             action_text: "to open the path",
             display_text: path.display.clone(),
-            display_color: rgb(0x9be58e).into_color(),
+            display_color: rgb(0x9be58e).into(),
         })
     }
 

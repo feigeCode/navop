@@ -2,7 +2,7 @@
 //! 表格已迁移至 [`crate::redis_tool_table`] 共享的 gpui-component Table。
 
 use crate::redis_tool_data::ToolRow;
-use gpui::{AnyElement, App, ColorExt, IntoElement, ParentElement, Styled, div, px};
+use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{ActiveTheme, Icon, Sizable, Size, h_flex, v_flex};
 use one_assets::IconName;
 

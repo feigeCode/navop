@@ -320,11 +320,11 @@ mod tests {
 
     fn host_theme() -> EditorHostTheme {
         EditorHostTheme {
-            background: rgba(0x112233ff).into_color(),
-            foreground: rgba(0x223344ff).into_color(),
-            border: rgba(0x334455ff).into_color(),
-            muted: rgba(0x445566ff).into_color(),
-            accent: rgba(0x556677ff).into_color(),
+            background: rgba(0x112233ff).into(),
+            foreground: rgba(0x223344ff).into(),
+            border: rgba(0x334455ff).into(),
+            muted: rgba(0x445566ff).into(),
+            accent: rgba(0x556677ff).into(),
         }
     }
 

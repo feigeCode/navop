@@ -24,7 +24,7 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, ColorExt, Context, Entity, EventEmitter,
+    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, Context, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement,
     Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };

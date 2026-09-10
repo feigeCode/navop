@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, App, ColorExt, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div,
+    AnyElement, App, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div,
     px,
 };
 use gpui_component::{ActiveTheme, Icon, Sizable, Size};

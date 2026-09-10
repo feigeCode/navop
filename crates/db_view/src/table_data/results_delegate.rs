@@ -10,7 +10,7 @@ use db::{
     query_result_normalization::QueryResultNormalizationError,
 };
 use gpui::{
-    App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
+    App, AppContext, ClipboardItem, Context, Font, ImageFormat, InteractiveElement,
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement, Styled,
     Subscription, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };

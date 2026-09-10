@@ -20,7 +20,7 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, ColorExt as _, Context, Entity, EventEmitter, FontWeight,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
@@ -8658,14 +8658,14 @@ mod tests {
 
     #[test]
     fn background_running_session_uses_readable_foreground_color() {
-        let foreground = gpui::rgb(0xf8fafc).into_color();
-        let selected_foreground = gpui::rgb(0xe2e8f0).into_color();
+        let foreground = gpui::rgb(0xf8fafc).into();
+        let selected_foreground = gpui::rgb(0xe2e8f0).into();
         let style = SessionRowStyle {
             foreground,
-            muted_foreground: gpui::rgb(0x64748b).into_color(),
-            selected_background: gpui::rgb(0x1e293b).into_color(),
+            muted_foreground: gpui::rgb(0x64748b).into(),
+            selected_background: gpui::rgb(0x1e293b).into(),
             selected_foreground,
-            hover_background: gpui::rgb(0x0f172a).into_color(),
+            hover_background: gpui::rgb(0x0f172a).into(),
         };
 
         assert_eq!(

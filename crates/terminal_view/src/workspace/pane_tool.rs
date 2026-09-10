@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Anchor, AnyElement, AppContext as _, ColorExt as _, Context, InteractiveElement as _,
+    Anchor, AnyElement, AppContext as _ as _, Context, InteractiveElement as _,
     IntoElement, MouseButton, ParentElement as _, SharedString, StatefulInteractiveElement as _,
     Styled as _, div, px, relative,
 };

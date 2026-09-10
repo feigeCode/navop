@@ -34,7 +34,7 @@ use ai_chat_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext, ColorExt as _, Context, Entity, EventEmitter,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
     Subscription, Window, div,
 };
@@ -1867,13 +1867,13 @@ mod tests {
     #[test]
     fn workspace_theme_maps_terminal_palette_and_application_semantic_colors() {
         let colors = TerminalColors {
-            background: rgb(0x101010).into_color(),
-            foreground: rgb(0xf0f0f0).into_color(),
-            muted: rgb(0x202020).into_color(),
-            muted_foreground: rgb(0x909090).into_color(),
-            border: rgb(0x303030).into_color(),
-            accent: rgb(0x3366ff).into_color(),
-            accent_foreground: rgb(0xffffff).into_color(),
+            background: rgb(0x101010).into(),
+            foreground: rgb(0xf0f0f0).into(),
+            muted: rgb(0x202020).into(),
+            muted_foreground: rgb(0x909090).into(),
+            border: rgb(0x303030).into(),
+            accent: rgb(0x3366ff).into(),
+            accent_foreground: rgb(0xffffff).into(),
         };
         let application_theme = Theme::from(ThemeColor::dark().as_ref());
 

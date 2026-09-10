@@ -26,7 +26,7 @@ use futures::channel::oneshot;
 use futures::stream::{self, StreamExt};
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, ColorExt, Context,
+    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context,
     Element, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding,
     MouseMoveEvent, MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, SharedString,
     Styled, Subscription, Task, WeakEntity, Window, div, px,

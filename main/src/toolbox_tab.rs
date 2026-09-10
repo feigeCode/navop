@@ -5,7 +5,7 @@
 use crate::{home_tab::HomePage, navigation_applications::NavigationApplication};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ColorExt as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    App, AppContext as _ as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
 };

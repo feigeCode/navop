@@ -2,7 +2,7 @@ use crate::search_shortcut::{DB_SEARCH_CONTEXT, FocusSearchInput, focus_search_i
 use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, AsyncApp, ColorExt, Context, DragMoveEvent, Entity, EntityId, EventEmitter,
+    AnyElement, App, AsyncApp, Context, DragMoveEvent, Entity, EntityId, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
     ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Task, UniformListScrollHandle, Window, div, px, uniform_list,

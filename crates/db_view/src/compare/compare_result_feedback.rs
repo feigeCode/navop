@@ -3,7 +3,7 @@ use db::compare::{
     data_compare_table_failure_warning, schema_compare_table_failure_warning,
 };
 use gpui::{
-    App, AppContext, ClipboardItem, ColorExt, Context, Entity, InteractiveElement, IntoElement,
+    App, AppContext, ClipboardItem, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, IndexPath, Sizable, StyledExt, WindowExt, button::{Button, ButtonVariants}, h_flex, list::{List, ListDelegate, ListItem, ListState}, notification::Notification, v_flex};

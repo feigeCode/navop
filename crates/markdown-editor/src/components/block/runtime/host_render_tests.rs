@@ -42,11 +42,11 @@ async fn host_request_uses_installed_theme_and_render_metrics(cx: &mut TestAppCo
     let cx = cx.add_empty_window();
     let block = cx.new(|cx| Block::with_record(cx, BlockRecord::paragraph("math")));
     let theme = EditorHostTheme {
-        background: rgba(0x112233ff).into_color(),
-        foreground: rgba(0x223344ff).into_color(),
-        border: rgba(0x334455ff).into_color(),
-        muted: rgba(0x445566ff).into_color(),
-        accent: rgba(0x556677ff).into_color(),
+        background: rgba(0x112233ff).into(),
+        foreground: rgba(0x223344ff).into(),
+        border: rgba(0x334455ff).into(),
+        muted: rgba(0x445566ff).into(),
+        accent: rgba(0x556677ff).into(),
     };
 
     block.update(cx, |block, _cx| {

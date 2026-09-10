@@ -2761,14 +2761,14 @@ async fn host_code_highlighter_wins_and_normalizes_overlapping_ranges(cx: &mut T
                 HostCodeHighlightSpan {
                     range: 2..5,
                     style: CodeHighlightStyle {
-                        color: Some(rgba(0x00ff00ff).into_color()),
+                        color: Some(rgba(0x00ff00ff).into()),
                         ..CodeHighlightStyle::default()
                     },
                 },
                 HostCodeHighlightSpan {
                     range: 0..4,
                     style: CodeHighlightStyle {
-                        color: Some(rgba(0xff0000ff).into_color()),
+                        color: Some(rgba(0xff0000ff).into()),
                         font_weight: Some(FontWeight::BOLD),
                         font_style: Some(FontStyle::Italic),
                     },

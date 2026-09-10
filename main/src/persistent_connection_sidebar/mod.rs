@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, AppContext, ColorExt as _, Context, Entity, EventEmitter, Hsla, InteractiveElement,
+    AnyElement, AppContext as _, Context, Entity, EventEmitter, Hsla, InteractiveElement,
     IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px,
 };
 use gpui_component::{
@@ -79,10 +79,10 @@ impl From<&TerminalColors> for SidebarPalette {
             foreground: colors.foreground,
             muted: colors.muted,
             hover: colors.muted,
-            selected: Hsla::new(
-                colors.accent.hue.into_degrees(),
-                colors.accent.saturation,
-                colors.accent.lightness,
+            selected: hsla(
+                colors.accent.h,
+                colors.accent.s,
+                colors.accent.l,
                 0.18,
             ),
             selected_border: colors.accent,
@@ -98,11 +98,11 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    Hsla::new(
-        color.hue.into_degrees(),
-        color.saturation,
-        (color.lightness + amount).clamp(0.0, 1.0),
-        color.alpha,
+    hsla(
+        color.h,
+        color.s,
+        (color.l + amount).clamp(0.0, 1.0),
+        color.a,
     )
 }
 

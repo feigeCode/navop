@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use gpui::{App, ColorExt, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyleRefinement};
+use gpui::{App, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyleRefinement};
 use gpui_base::{TextView, TextViewStyle};
 use gpui_component::ActiveTheme;
 
@@ -149,7 +149,7 @@ mod tests {
     use super::*;
 
     fn color(hex: u32) -> Hsla {
-        rgb(hex).into_color()
+        rgb(hex).into()
     }
 
     fn dark_theme() -> AgentChatTheme {

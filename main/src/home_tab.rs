@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use db::ipc::IpcDriverRegistry;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
-use gpui::ColorExt as _;
+use gpui:: as _;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,

@@ -8,7 +8,7 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
-    Anchor, App, ClipboardItem, ColorExt as _, Context, Entity, EventEmitter, ExternalPaths,
+    Anchor, App, ClipboardItem as _, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
     MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
     UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,

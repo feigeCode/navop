@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    App, AppContext, ColorExt, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, PathPromptOptions, Render, Styled, Task, Window, div,
     prelude::FluentBuilder, px,
 };

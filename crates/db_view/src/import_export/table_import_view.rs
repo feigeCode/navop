@@ -2,7 +2,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    App, AppContext, ColorExt, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };

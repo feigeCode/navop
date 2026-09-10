@@ -1,6 +1,6 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, ColorExt, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window, div, px,
 };
 use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};

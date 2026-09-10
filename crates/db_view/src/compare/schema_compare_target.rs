@@ -8,7 +8,7 @@ use db::{
     },
 };
 use gpui::{
-    App, AppContext, AsyncApp, ColorExt, Context, Entity, InteractiveElement, IntoElement,
+    App, AppContext, AsyncApp, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, IndexPath, StyledExt, h_flex, list::{List, ListDelegate, ListItem, ListState}, scroll::ScrollableElement, v_flex};

@@ -20,7 +20,7 @@ use db::{
     ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
 };
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, ColorExt, Context, Element, Entity,
+    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString,
     StatefulInteractiveElement as _, Style, Styled, Task, Window, div, prelude::FluentBuilder, px,

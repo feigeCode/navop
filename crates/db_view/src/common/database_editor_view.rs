@@ -1,7 +1,7 @@
 use super::DatabaseFormEvent;
 use db::{GlobalDbState, plugin::DatabaseOperationRequest};
 use gpui::{
-    AnyView, App, AppContext, AsyncApp, ColorExt, Context, Entity, EventEmitter, FocusHandle,
+    AnyView, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
 use gpui_component::{

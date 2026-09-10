@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, ColorExt, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Styled, Window, div, px,
 };
 use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};

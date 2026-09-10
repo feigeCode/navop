@@ -5,7 +5,7 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, ColorExt, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled,
+    App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled,
     div,
 };
 use gpui_component::{ActiveTheme, h_flex, v_flex};

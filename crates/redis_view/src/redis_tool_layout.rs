@@ -9,7 +9,7 @@ use crate::redis_tool_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ColorExt, Context, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconSize as GpuiIconSize, Sizable, Size, button::{Button, ButtonVariants as _}, h_flex, input::Input, switch::Switch, table::DataTable, tag::Tag, v_flex};
