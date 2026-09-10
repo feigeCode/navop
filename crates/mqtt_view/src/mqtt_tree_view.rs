@@ -14,7 +14,8 @@ use gpui::{
     IntoElement, MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement,
     Styled, UniformListScrollHandle, Window, div, prelude::FluentBuilder, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, IconSize, Sizable, Size, WindowExt, h_flex, notification::Notification, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, WindowExt, h_flex, notification::Notification, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use mqtt_runtime::{MqttQos, MqttSubscription};
 use one_core::gpui_tokio::Tokio;

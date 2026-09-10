@@ -10,9 +10,10 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::{DialogButtonProps, DialogFooter};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
-use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode};
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_component::{ActiveTheme, Disableable, ElementExt, Icon, IconSize, Selectable, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex};
+use gpui_component::{ActiveTheme, Disableable, ElementExt, Icon, Selectable, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{

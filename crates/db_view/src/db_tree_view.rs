@@ -12,7 +12,8 @@ use gpui::{
     RenderOnce, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, IconSize, IndexPath, Selectable, Sizable, Size as ComponentSize, button::{Button, ButtonVariants as _}, checkbox::Checkbox, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListDelegate, ListState}, menu::{ContextMenuExt, PopupMenuItem}, popover::Popover, scroll::Scrollbar, spinner::Spinner, tooltip::Tooltip, v_flex};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Selectable, Sizable, Size as ComponentSize, button::{Button, ButtonVariants as _}, checkbox::Checkbox, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListDelegate, ListState}, menu::{ContextMenuExt, PopupMenuItem}, popover::Popover, scroll::Scrollbar, spinner::Spinner, tooltip::Tooltip, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_ui::{ContentState, IconButton, IconSize as OneIconSize};
 use rust_i18n::t;

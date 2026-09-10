@@ -38,7 +38,8 @@ use gpui::{
     FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
     Subscription, Window, div,
 };
-use gpui_component::{ActiveTheme, Icon, IconSize, Selectable, Sizable, Size, button::{ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Icon, Selectable, Sizable, Size, button::{ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;

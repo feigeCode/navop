@@ -9,7 +9,8 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, IconSize as GpuiIconSize, Side, Sizable, Size, button::{Button, ButtonVariants as _}, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use gpui_component::{ActiveTheme, Disableable, Icon, Side, Sizable, Size, button::{Button, ButtonVariants as _}, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection};
@@ -1774,7 +1775,7 @@ impl RedisTreeView {
             RedisNodeType::Key(_) => IconName::Key,
             RedisNodeType::LoadMore => IconName::Ellipsis,
         };
-        let icon = Icon::new(name).with_size(GpuiIconSize::Default);
+        let icon = Icon::new(name).with_size(IconSize::Default);
         match node_type {
             RedisNodeType::Connection | RedisNodeType::Database(_) | RedisNodeType::Namespace => {
                 icon.color()
@@ -2210,7 +2211,7 @@ impl RedisTreeView {
             // 图标（非 Key 节点显示）
             .when(!is_key, |this| {
                 this.child(
-                    icon.with_size(GpuiIconSize::Medium)
+                    icon.with_size(IconSize::Medium)
                         .when(
                             is_connection && !is_connected && error_msg.is_none(),
                             |icon| icon.text_color(cx.theme().muted_foreground),
@@ -2320,7 +2321,7 @@ impl RedisTreeView {
             .when(is_loading, |this| {
                 this.child(
                     Spinner::new()
-                        .with_size(GpuiIconSize::Small)
+                        .with_size(IconSize::Small)
                         .color(cx.theme().muted_foreground),
                 )
             })
@@ -2707,7 +2708,7 @@ impl Render for RedisTreeView {
                                 .icon(
                                     Icon::new(IconName::Database)
                                         .color()
-                                        .with_size(GpuiIconSize::Large),
+                                        .with_size(IconSize::Large),
                                 )
                                 .compact(),
                         )

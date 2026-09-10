@@ -5,7 +5,8 @@ use gpui::{
     AnyElement as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
     uniform_list,
 };
-use gpui_component::{ActiveTheme as _, Icon, IconSize, Sizable, StyledExt, h_flex, input::Input, v_flex};
+use gpui_component::{ActiveTheme as _, Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
 use rust_i18n::t;

@@ -8,7 +8,8 @@ use gpui::{
     FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, IconSize, Sizable, Size, StyledExt, WindowExt as _, button::{Button, ButtonVariants as _}, dialog::DialogButtonProps, h_flex, input::{Editor, EditorState, Input, InputEvent, InputState}, notification::Notification, spinner::Spinner, tab::{Tab, TabBar}, v_flex};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt, WindowExt as _, button::{Button, ButtonVariants as _}, dialog::DialogButtonProps, h_flex, input::{Editor, EditorState, Input, InputEvent, InputState}, notification::Notification, spinner::Spinner, tab::{Tab, TabBar}, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use mongodb_runtime::MongoFindOptions as FindOptions;
 use one_core::gpui_tokio::Tokio;

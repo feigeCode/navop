@@ -6,7 +6,8 @@ use gpui::{
     App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconSize, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputState, MaskPattern}, list::{ListDelegate, ListItem, ListState}, tooltip::Tooltip, v_flex};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputState, MaskPattern}, list::{ListDelegate, ListItem, ListState}, tooltip::Tooltip, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::storage::{StoredConnection, Workspace};
 use rust_i18n::t;

@@ -164,7 +164,7 @@ impl ToolboxTab {
                     .justify_center()
                     .child(
                         gpui_component::Icon::new(tool.icon)
-                            .with_size(gpui_component::IconSize::Large)
+                            .with_size(one_ui::IconSize::Large)
                             .text_color(accent),
                     ),
             )
@@ -224,7 +224,7 @@ impl ToolboxTab {
                     .justify_center()
                     .child(
                         gpui_component::Icon::new(IconName::TableDesignTool)
-                            .with_size(gpui_component::IconSize::Large)
+                            .with_size(one_ui::IconSize::Large)
                             .text_color(accent),
                     ),
             )
@@ -282,7 +282,7 @@ impl ToolboxTab {
                     .justify_center()
                     .child(
                         gpui_component::Icon::new(IconName::Plus)
-                            .with_size(gpui_component::IconSize::Large)
+                            .with_size(one_ui::IconSize::Large)
                             .text_color(muted),
                     ),
             )

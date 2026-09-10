@@ -28,7 +28,8 @@ use gpui::{
     ExternalPaths, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement,
     Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, IconSize, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::{DialogButtonProps, DialogFooter}, h_flex, input::{Input, InputEvent, InputState}, menu::{DropdownMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::{DialogButtonProps, DialogFooter}, h_flex, input::{Input, InputEvent, InputState}, menu::{DropdownMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::background_tasks::{
     BackgroundTaskCancellation, BackgroundTaskHandle, BackgroundTaskProgressUnit,

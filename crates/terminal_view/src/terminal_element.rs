@@ -1463,7 +1463,6 @@ impl Element for TerminalElementImpl {
                         background_color: None,
                         underline,
                         strikethrough: None,
-                        letter_spacing: None,
                     }],
                     Some(tb.cell_width * run.cell_width_cols as f32),
                 );
@@ -1531,7 +1530,6 @@ impl Element for TerminalElementImpl {
                                         background_color: None,
                                         underline: None,
                                         strikethrough: None,
-                                        letter_spacing: None,
                                     }],
                                     Some(block_bounds.size.width),
                                 );

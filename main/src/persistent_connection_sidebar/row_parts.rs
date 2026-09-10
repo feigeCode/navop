@@ -112,7 +112,7 @@ pub(super) fn tree_connection_icon_slot(icon: Icon, palette: SidebarPalette) -> 
         .flex()
         .items_center()
         .justify_center()
-        .child(icon.with_size(gpui_component::IconSize::Default))
+        .child(icon.with_size(one_ui::IconSize::Default))
         .into_any_element()
 }
 

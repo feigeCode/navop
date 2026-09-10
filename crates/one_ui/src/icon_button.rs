@@ -8,7 +8,6 @@ use gpui_component::{
     button::{Button, ButtonRounded, ButtonVariant, ButtonVariants},
     menu::DropdownMenu,
 };
-use palette::IntoColor;
 
 /// Semantic sizing presets for icon-only actions.
 ///
@@ -109,8 +108,8 @@ impl IconButton {
     }
 
     /// Applies a semantic tint to the glyph and button text state.
-    pub fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
-        self.button = self.button.text_color(color.into_color());
+    pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.button = self.button.text_color(color);
         self
     }
 

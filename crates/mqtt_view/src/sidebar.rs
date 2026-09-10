@@ -9,7 +9,7 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
-use gpui_component::{ActiveTheme, ObjectIcon, Selectable, Size, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Selectable, Size, h_flex, v_flex};
 use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
@@ -154,7 +154,7 @@ impl MqttSidebar {
 
         IconButton::new(
             format!("mqtt-sidebar-btn-{panel:?}"),
-            ObjectIcon::new(IconName::AILine),
+            IconName::AILine.mono(),
         )
         .hit_size(item_size)
         .glyph_size(one_ui::IconSize::Medium)

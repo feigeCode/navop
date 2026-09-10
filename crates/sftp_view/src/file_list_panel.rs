@@ -3,7 +3,8 @@ use gpui::{
     ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
     UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, IconSize, InteractiveElementExt, Sizable, button::{Button, ButtonVariants}, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, scroll::ScrollableElement, tooltip::Tooltip, v_flex};
+use gpui_component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, button::{Button, ButtonVariants}, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, scroll::ScrollableElement, tooltip::Tooltip, v_flex};
+use one_ui::IconSize;
 use one_assets::IconName;
 use one_ui::ContentState;
 use remote_file_editor::{external_editor_menu_label, external_editors_for_file};
