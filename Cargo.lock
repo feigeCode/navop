@@ -9338,6 +9338,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "one-assets"
+version = "0.15.2"
+dependencies = [
+ "anyhow",
+ "gpui-ce",
+ "gpui_ce_components",
+ "rust-embed",
+]
+
+[[package]]
 name = "one-core"
 version = "0.15.2"
 dependencies = [

@@ -1,0 +1,17 @@
+[package]
+name = "one-assets"
+version = "0.15.2"
+publish.workspace = true
+edition.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+gpui = { workspace = true }
+gpui-component.workspace = true
+rust-embed = { version = "8.11.0", features = ["interpolate-folder-path", "include-exclude"] }
+
+[lints]
+workspace = true
