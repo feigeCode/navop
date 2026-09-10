@@ -51,23 +51,26 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-# Local development checkout. Canonical fork: https://github.com/feigeCode/gpui-component
-gpui-component = { package = "gpui_ce_components", git = "https://github.com/feigeCode/gpui-component.git", rev = "da83e229", version = "0.2.0" }
-gpui-component-assets = { package = "gpui_ce_components_assets", git = "https://github.com/feigeCode/gpui-component.git", rev = "da83e229", version = "0.2.0" }
-gpui-base = { package = "gpui_ce_components_base", git = "https://github.com/feigeCode/gpui-component.git", rev = "da83e229", version = "0.2.0" }
-gpui-shell = { package = "gpui_ce_components_shell", git = "https://github.com/feigeCode/gpui-component.git", rev = "da83e229", version = "0.2.0" }
-gpui-component-shell = { package = "gpui-component-shell", git = "https://github.com/feigeCode/gpui-component.git", rev = "da83e229", version = "0.1.0" }
-gpui-wry = { package = "gpui_ce_components_webview", git = "https://github.com/feigeCode/gpui-component.git", rev = "da83e229", version = "0.2.0" }
+# Local gpui-component checkout (repo to be renamed `gpui-kit`). During the
+# migration these are path dependencies into ../../../gpui-component; the
+# dependency keys keep the crate names navop already imports
+# (`gpui_component`, `gpui_base`, `gpui_shell`, ...).
+gpui-component = { path = "../../../gpui-component/crates/component" }
+gpui-component-assets = { package = "gpui-kit-assets", path = "../../../gpui-component/crates/assets" }
+gpui-base = { path = "../../../gpui-component/crates/base" }
+gpui-shell = { path = "../../../gpui-component/crates/shell" }
+gpui-component-shell = { path = "../../../gpui-component/crates/component-shell" }
+gpui-wry = { path = "../../../gpui-component/crates/webview" }
+gpui-kit = { path = "../../../gpui-component/crates/kit" }
 
-gpui = { package = "gpui-ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796", version = "=0.2.2" }
-gpui_tokio = { package = "gpui_ce_tokio", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796" }
-util = { package = "gpui_ce_zed_util", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796" }
+gpui = { package = "gpui-pre", version = "0.3.1" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_macros = { package = "gpui-pre-macros", version = "0.3.1" }
+util = { package = "gpui-pre-util", version = "0.3.1" }
 palette = { version = "0.7.7", features = ["serializing"] }
 
 
-sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
+sum-tree = { version = "0.3.1", package = "gpui-pre-sum-tree" }
 # reqwest = { version = "0.12.15-zed", package = "zed-reqwest" }
 reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662463bda39148ba154100dd44d3fba5873a4", default-features = false, features = [
     "charset",
@@ -252,11 +255,6 @@ async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd
 # Use stacker's psm version which may have better WASM support
 psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 
-[patch."https://github.com/zed-industries/zed"]
-gpui = { package = "gpui-ce", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796", version = "=0.2.2" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796" }
-gpui_macros = { package = "gpui_ce_macros", git = "https://github.com/feigeCode/gpui-ce.git", rev = "63f3a7cf74dbcd980420d44cc5660ebe637ff796" }
-
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
 version = "0.61.0"
@@ -310,10 +308,10 @@ rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
 smol = { opt-level = 3 }
-gpui-ce = { opt-level = 3 }
-gpui_ce_macros = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-macros = { opt-level = 3 }
 tree-sitter = { opt-level = 3 }
-zed-sum-tree = { opt-level = 3 }
+gpui-pre-sum-tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
 reqwest_client = { opt-level = 3 }
