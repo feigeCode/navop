@@ -67,6 +67,8 @@ impl NewConnectionWindow {
             );
         }
         if let Some(more_connections) = more_connections {
+            // 空类目「+」安装入口按约定插在 Extension 贡献项之后、MoreConnections 之前。
+            NewConnectionKind::append_empty_category_install_entries(&mut connection_kinds);
             connection_kinds.push(more_connections);
         }
         let selected_kind =

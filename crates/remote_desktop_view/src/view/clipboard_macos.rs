@@ -1,3 +1,10 @@
+// TODO(gpui-kit): migrate from the deprecated `cocoa` crate to `objc2` /
+// `objc2-app-kit` / `objc2-foundation`. The rewrite also touches the
+// pasteboard payload format (`NSFilenamesPboardType` plist vs. file-URL
+// arrays), so it needs manual Finder paste verification — until then the
+// deprecation warnings are scoped to this module only.
+#![allow(deprecated)]
+
 use std::ffi::c_void;
 use std::path::PathBuf;
 

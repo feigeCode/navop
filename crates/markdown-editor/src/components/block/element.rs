@@ -1092,7 +1092,7 @@ mod tests {
             window
                 .text_system()
                 .shape_text(
-                    text.to_string(),
+                    SharedString::from(text),
                     px(16.0),
                     &[TextRun {
                         len: text.len(),

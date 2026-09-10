@@ -141,6 +141,8 @@ impl NewConnectionKind {
     }
 
     /// 点击后是否直接跳转扩展管理页(MoreConnections 与空类目「+」安装入口)
+    /// form_page 对 InstallCategoryExtensions 直接 match 跳转,该方法目前仅供测试断言。
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn opens_extensions_tab_on_click(&self) -> bool {
         matches!(
             self,

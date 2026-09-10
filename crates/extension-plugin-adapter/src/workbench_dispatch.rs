@@ -467,6 +467,7 @@ mod tests {
             navigation: vec![],
             tree: vec![],
             pages: vec![],
+            status_bar: None,
         }
     }
 

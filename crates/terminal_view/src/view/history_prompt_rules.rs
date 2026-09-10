@@ -201,7 +201,7 @@ mod tests {
 
         let dropdown = history_prompt_dropdown_background(background);
 
-        assert_eq!(background.hue, dropdown.hue);
+        assert_eq!(background.h, dropdown.h);
         assert_eq!(background.s, dropdown.s);
         assert_eq!(background.l, dropdown.l);
         assert!((dropdown.a - 0.72).abs() < f32::EPSILON);
@@ -213,7 +213,7 @@ mod tests {
 
         let active = history_prompt_active_background(foreground);
 
-        assert_eq!(foreground.hue, active.hue);
+        assert_eq!(foreground.h, active.h);
         assert_eq!(foreground.s, active.s);
         assert_eq!(foreground.l, active.l);
         assert!((active.a - 0.32).abs() < f32::EPSILON);

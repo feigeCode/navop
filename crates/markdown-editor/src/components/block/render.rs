@@ -3380,9 +3380,9 @@ mod tests {
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
         let color: Rgba = color.into();
         let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as i16;
-        assert!((channel(color.red) - red as i16).abs() <= 1);
-        assert!((channel(color.green) - green as i16).abs() <= 1);
-        assert!((channel(color.blue) - blue as i16).abs() <= 1);
+        assert!((channel(color.r) - red as i16).abs() <= 1);
+        assert!((channel(color.g) - green as i16).abs() <= 1);
+        assert!((channel(color.b) - blue as i16).abs() <= 1);
         assert!((channel(color.a) - alpha as i16).abs() <= 1);
     }
 

@@ -487,8 +487,8 @@ impl Default for ResizeGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Size;
     use gpui::px;
+    use gpui_component::Size;
 
     #[test]
     fn spacing_scale_uses_four_pixel_grid() {

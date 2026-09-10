@@ -168,6 +168,8 @@ impl UniversalPluginService {
         self.manager.universal_plugin_client(runtime_id)
     }
 
+    // 以下方法仅 `shell-plugins` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) fn shell_view(
         &self,
         extension_id: &str,
@@ -206,6 +208,7 @@ impl UniversalPluginService {
             .cloned()
     }
 
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) async fn deactivate_extension(&self, extension_id: &str) {
         let _activation_guard = self.activation_lock.lock().await;
         self.sync_catalog();
@@ -282,12 +285,14 @@ impl UniversalPluginService {
         opened.map(|_| ()).map_err(Into::into)
     }
 
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) fn begin_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.insert(extension_id.to_string());
         }
     }
 
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) fn finish_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.remove(extension_id);

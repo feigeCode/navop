@@ -17859,13 +17859,3 @@ dependencies = [
  "syn 3.0.5",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "gpui-pre-http-client-tls"
-version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
-
-[[patch.unused]]
-name = "gpui-pre-reqwest-client"
-version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"

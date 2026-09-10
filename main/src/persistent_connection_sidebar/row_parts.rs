@@ -57,7 +57,7 @@ pub(super) fn delete_group_button(
         })
 }
 
-pub(super) fn tree_chevron(has_children: bool, expanded: bool, cx: &gpui::App) -> AnyElement {
+pub(super) fn tree_chevron(has_children: bool, expanded: bool, _cx: &gpui::App) -> AnyElement {
     let disclosure_size = one_ui::theme_geometry().tree.disclosure_size;
     div()
         .w(disclosure_size)

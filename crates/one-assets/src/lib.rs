@@ -98,11 +98,11 @@ mod tests {
     #[test]
     fn explicit_color_modes_override_the_generated_default() {
         assert_eq!(
-            IconName::RdpLine.color().color_mode,
+            IconName::RdpLine.color().resolved_color_mode(),
             gpui_component::IconColorMode::Color
         );
         assert_eq!(
-            IconName::MongoDB.mono().color_mode,
+            IconName::MongoDB.mono().resolved_color_mode(),
             gpui_component::IconColorMode::Mono
         );
     }
