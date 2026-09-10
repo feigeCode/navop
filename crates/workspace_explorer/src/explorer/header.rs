@@ -4,7 +4,7 @@ use gpui::{
     Anchor, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px};
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, button::{Button, ButtonVariants as _}, h_flex, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover};
+use gpui_component::{Icon, Sizable as _, Size, StyledExt as _, button::{Button, ButtonVariants as _}, h_flex, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover};
 use one_ui::IconSize;
 use one_assets::IconName;
 use one_ui::{IconButton, PanelHeader, PanelHeaderVariant};

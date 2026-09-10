@@ -3,7 +3,7 @@ use gpui::{
     AnyElement, AppContext, ElementId, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, div,
 };
-use gpui_component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, h_flex, menu::ContextMenuExt};
+use gpui_component::{Icon, InteractiveElementExt, Sizable, h_flex, menu::ContextMenuExt};
 use one_ui::IconSize;
 use one_assets::IconName;
 use rust_i18n::t;

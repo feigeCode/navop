@@ -2,7 +2,6 @@ use gpui::{
     AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement,
     IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px, hsla};
 use gpui_component::{
-    ActiveTheme as _,
     input::{InputEvent, InputState},
 };
 use terminal_view::TerminalColors;

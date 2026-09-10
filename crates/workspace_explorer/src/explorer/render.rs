@@ -6,7 +6,7 @@ use gpui::{
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
     div, prelude::FluentBuilder as _, px};
 use gpui_component::menu::ContextMenuExt as _;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
+use gpui_component::{Icon, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
 use one_assets::IconName;
 use rust_i18n::t;
 
