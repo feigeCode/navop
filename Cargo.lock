@@ -7805,8 +7805,6 @@ dependencies = [
  "known_hosts_view",
  "mongodb-runtime",
  "mongodb_view",
- "mqtt-runtime",
- "mqtt_view",
  "notes",
  "one-core",
  "one-ui",
@@ -8348,44 +8346,6 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "mqtt-runtime"
-version = "0.15.2"
-dependencies = [
- "async-trait",
- "chrono",
- "connection_tunnel",
- "one-core",
- "rumqttc",
- "rust-i18n",
- "serde",
- "ssh",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "mqtt_view"
-version = "0.15.2"
-dependencies = [
- "ai_chat_view",
- "anyhow",
- "chrono",
- "connection-form",
- "dashmap 5.5.3",
- "gpui-ce",
- "gpui_ce_components",
- "mqtt-runtime",
- "one-core",
- "one-ui",
- "rust-i18n",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -11961,27 +11921,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rumqttc"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0feff8d882bff0b2fddaf99355a10336d43dd3ed44204f85ece28cf9626ab519"
-dependencies = [
- "bytes",
- "fixedbitset",
- "flume",
- "futures-util",
- "log",
- "rustls-native-certs 0.8.4",
- "rustls-pemfile 2.2.0",
- "rustls-webpki 0.102.8",
- "thiserror 2.0.20",
- "tokio",
- "tokio-rustls 0.26.4",
- "tokio-stream",
- "tokio-util",
-]
-
-[[package]]
 name = "rusqlite"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12457,17 +12396,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b6275d1ee7a1cd780b64aca7726599a1dbc893b1e64144529e55c3c2f745765"
 dependencies = [
  "ring 0.17.14",
- "untrusted 0.9.0",
-]
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring 0.17.14",
- "rustls-pki-types",
  "untrusted 0.9.0",
 ]
 
@@ -14645,17 +14573,6 @@ dependencies = [
  "either",
  "futures-util",
  "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
-dependencies = [
- "futures-core",
- "pin-project-lite",
  "tokio",
 ]
 

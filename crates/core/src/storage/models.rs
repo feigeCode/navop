@@ -1225,6 +1225,70 @@ impl MqttParams {
     }
 }
 
+/// MQTT 扩展标识(navop-extensions 子模块 com.navop.middleware.mqtt)
+pub const MQTT_EXTENSION_ID: &str = "com.navop.middleware.mqtt";
+
+/// 旧 MQTT 连接参数 → 扩展连接参数(com.navop.middleware.mqtt,贡献点 mqtt)。
+///
+/// 字段名与 navop-extensions 的 mqtt extension.json 的 contributes.connections
+/// 表单声明一致;password 走 secrets。
+/// 丢弃字段(扩展表单未提供):use_tls、connect_timeout、mqtt_version、clean_session。
+fn mqtt_params_to_extension(params: MqttParams) -> Option<ExtensionConnectionParams> {
+    let mut config = serde_json::Map::new();
+    config.insert("host".into(), Value::String(params.host));
+    config.insert("port".into(), Value::from(params.port));
+    if let Some(username) = params.username.filter(|value| !value.is_empty()) {
+        config.insert("username".into(), Value::String(username));
+    }
+    if !params.client_id.is_empty() {
+        config.insert("client_id".into(), Value::String(params.client_id));
+    }
+    if let Some(keep_alive) = params.keep_alive {
+        config.insert("keep_alive_secs".into(), Value::from(keep_alive));
+    }
+    if let Some(reference) = params.credential_reference {
+        // 惰性保留:扩展路径不解析钥匙串引用,仅避免信息丢失
+        if let Ok(value) = serde_json::to_value(reference) {
+            config.insert("credential_reference".into(), value);
+        }
+    }
+    insert_lazy_ssh_tunnel(&mut config, params.ssh_tunnel);
+
+    let mut secrets = BTreeMap::new();
+    if let Some(password) = params.password.filter(|value| !value.is_empty()) {
+        // 历史 MqttParams.password 经 encrypt_json_passwords 加密(ENC: 前缀),
+        // 与 Extension secrets 的解密路径格式一致,原样搬运即可。
+        secrets.insert("password".to_string(), password);
+    }
+    ExtensionConnectionParams::new(MQTT_EXTENSION_ID, "mqtt", config, secrets).ok()
+}
+
+/// 把 SSH 隧道配置作为惰性字段保留进扩展 config。
+///
+/// 已知能力缺口:扩展连接当前不支持 SSH 隧道(connection_tunnel 无 Extension 分支),
+/// provider 忽略该字段;隧道内的敏感字段先经幂等加密(已是 ENC: 密文则原样),
+/// 避免明文随 config 落盘。
+fn insert_lazy_ssh_tunnel(
+    config: &mut serde_json::Map<String, Value>,
+    tunnel: Option<SshTunnelConfig>,
+) {
+    let Some(mut tunnel) = tunnel else {
+        return;
+    };
+    if let Some(password) = tunnel.password.take() {
+        tunnel.password = Some(crypto::encrypt_password(&password));
+    }
+    if let Some(content) = tunnel.private_key_content.take() {
+        tunnel.private_key_content = Some(crypto::encrypt_password(&content));
+    }
+    if let Some(passphrase) = tunnel.private_key_passphrase.take() {
+        tunnel.private_key_passphrase = Some(crypto::encrypt_password(&passphrase));
+    }
+    if let Ok(value) = serde_json::to_value(tunnel) {
+        config.insert("ssh_tunnel".into(), value);
+    }
+}
+
 /// 串口校验位
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SerialParity {
@@ -2122,6 +2186,41 @@ impl StoredConnection {
         Ok(params)
     }
 
+    /// 旧版内置 MQTT 连接一次性迁移为扩展连接。
+    ///
+    /// 背景:MQTT 内置实现已整体移植到 navop-extensions 扩展子模块
+    /// (`com.navop.middleware.mqtt`),历史连接需要转换成
+    /// `ConnectionType::Extension` 才能在扩展路径打开与编辑。
+    ///
+    /// 转换规则(字段名以扩展 extension.json 的 contributes.connections 为准):
+    /// - MQTT:config = {host, port, username, client_id, keep_alive_secs};
+    ///   password 进入 secrets(历史 ENC: 密文与 Extension 解密路径格式一致,原样搬运)。
+    /// - SSH 隧道:扩展连接暂不支持隧道(已知能力缺口),原样保留在 config 的
+    ///   `ssh_tunnel` 惰性字段,provider 忽略;敏感字段经幂等加密后落盘。
+    /// - credential_reference 同样惰性保留在 config,扩展路径不解析。
+    ///
+    /// 幂等:仅当 connection_type 为旧 Mqtt 时转换;解析失败时保留原始数据并
+    /// 返回 false(不丢数据,等待下次尝试)。
+    pub fn try_migrate_legacy_middleware_connection(&mut self) -> bool {
+        let extension_params = match self.connection_type {
+            ConnectionType::Mqtt => serde_json::from_str::<MqttParams>(&self.params)
+                .ok()
+                .and_then(mqtt_params_to_extension),
+            _ => return false,
+        };
+        let Some(extension_params) = extension_params else {
+            tracing::warn!(
+                "旧中间件连接 {} 参数解析失败,保留原始数据等待下次迁移",
+                self.name
+            );
+            return false;
+        };
+        self.params = serde_json::to_string(&extension_params)
+            .expect("ExtensionConnectionParams 序列化不应失败");
+        self.connection_type = ConnectionType::Extension;
+        true
+    }
+
     pub fn new_database(
         name: String,
         params: DbConnectionConfig,
@@ -2521,6 +2620,34 @@ mod tests {
         assert!(!encrypted.contains("secret-value"));
         let encrypted: ExtensionConnectionParams = serde_json::from_str(&encrypted).unwrap();
         assert!(crypto::is_encrypted(&encrypted.secrets["api_key"]));
+    }
+
+    #[test]
+    fn legacy_mqtt_connection_migrates_to_extension() {
+        let mut params = MqttParams::default();
+        params.host = "test.local".into();
+        params.port = 1883;
+        params.username = Some("user".into());
+        params.password = Some("pass".into());
+        params.client_id = "client-1".into();
+        params.keep_alive = Some(45);
+        let mut connection = StoredConnection::new_mqtt("旧 MQTT".into(), params, Some(1));
+
+        assert!(connection.try_migrate_legacy_middleware_connection());
+        assert_eq!(ConnectionType::Extension, connection.connection_type);
+
+        let migrated = connection.to_extension_params().unwrap();
+        assert_eq!(MQTT_EXTENSION_ID, migrated.extension_id);
+        assert_eq!("mqtt", migrated.contribution_id);
+        assert_eq!("test.local", migrated.config["host"].as_str().unwrap());
+        assert_eq!(1883, migrated.config["port"].as_u64().unwrap());
+        assert_eq!("user", migrated.config["username"].as_str().unwrap());
+        assert_eq!("client-1", migrated.config["client_id"].as_str().unwrap());
+        assert_eq!(Some("45"), migrated.config["keep_alive_secs"].as_u64().map(|v| v.to_string()).as_deref());
+        assert_eq!(Some("pass"), migrated.secrets.get("password").map(String::as_str));
+
+        // 幂等:迁移后不再是 Mqtt 类型,再次调用不再迁移
+        assert!(!connection.try_migrate_legacy_middleware_connection());
     }
 
     fn ssh_connection_with_id(id: i64, auth_method: SshAuthMethod) -> StoredConnection {

@@ -10,6 +10,12 @@ use std::path::PathBuf;
 
 const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb", "oracle-go"];
 
+/// 中间件扩展贡献的统一 id 前缀(如 com.navop.middleware.mqtt)
+const MIDDLEWARE_EXTENSION_ID_PREFIX: &str = "com.navop.middleware.";
+
+/// TDengine 无原生实现,统一经此 driver_id 的 IPC 外部驱动连接
+const TDENGINE_DRIVER_ID: &str = "tdengine";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NewConnectionCategory {
     All,
@@ -69,11 +75,12 @@ pub(super) enum NewConnectionKind {
     Vnc,
     Redis,
     MongoDB,
-    Mqtt,
     Serial,
     Telnet,
     PortForwarding,
     MoreConnections,
+    /// 空类目的「+」安装入口:对应类目下没有任何成员时展示,点击跳转扩展管理页
+    InstallCategoryExtensions(NewConnectionCategory),
     Database(DatabaseType),
     ExternalDatabase {
         driver_id: String,
@@ -94,7 +101,6 @@ impl NewConnectionKind {
             Self::Vnc,
             Self::Redis,
             Self::MongoDB,
-            Self::Mqtt,
             Self::Serial,
             Self::Telnet,
             Self::PortForwarding,
@@ -102,12 +108,43 @@ impl NewConnectionKind {
         items.extend(
             DatabaseType::builtin_all()
                 .iter()
+                // TDengine 无原生实现:仅当外部驱动已安装时才出现在新建入口清单
+                .filter(|db_type| {
+                    !matches!(db_type, DatabaseType::TDengine)
+                        || registry.find(TDENGINE_DRIVER_ID).is_some()
+                })
                 .cloned()
                 .map(Self::Database),
         );
         items.extend(external_database_kinds(registry));
         items.push(Self::MoreConnections);
         items
+    }
+
+    /// 为没有任何成员的类目追加「+」安装入口。
+    ///
+    /// 需在 Extension 贡献项全部追加之后调用(中间件类目依赖
+    /// com.navop.middleware. 前缀的扩展贡献分流),且需在 MoreConnections
+    /// 压回末尾之前调用,保证「+」项排在所属类目分组的末尾。
+    pub(super) fn append_empty_category_install_entries(items: &mut Vec<Self>) {
+        // 仅这两类依赖外部扩展/驱动填充,内置类目永远有成员,无需空态入口
+        for category in [
+            NewConnectionCategory::Middleware,
+            NewConnectionCategory::TimeSeries,
+        ] {
+            let has_member = items.iter().any(|kind| kind.category() == category);
+            if !has_member {
+                items.push(Self::InstallCategoryExtensions(category));
+            }
+        }
+    }
+
+    /// 点击后是否直接跳转扩展管理页(MoreConnections 与空类目「+」安装入口)
+    pub(super) fn opens_extensions_tab_on_click(&self) -> bool {
+        matches!(
+            self,
+            Self::MoreConnections | Self::InstallCategoryExtensions(_)
+        )
     }
 
     pub(super) fn label(&self) -> String {
@@ -117,11 +154,18 @@ impl NewConnectionKind {
             Self::Vnc => "VNC".to_string(),
             Self::Redis => "Redis".to_string(),
             Self::MongoDB => "MongoDB".to_string(),
-            Self::Mqtt => "MQTT".to_string(),
             Self::Serial => "Serial".to_string(),
             Self::Telnet => "Telnet".to_string(),
             Self::PortForwarding => t!("PortForwarding.new").to_string(),
             Self::MoreConnections => t!("NewConnection.more_connections").to_string(),
+            Self::InstallCategoryExtensions(NewConnectionCategory::Middleware) => {
+                t!("NewConnection.more_middleware").to_string()
+            }
+            Self::InstallCategoryExtensions(NewConnectionCategory::TimeSeries) => {
+                t!("NewConnection.more_time_series").to_string()
+            }
+            // 其余类目暂无专属文案,回退到通用的「更多连接」
+            Self::InstallCategoryExtensions(_) => t!("NewConnection.more_connections").to_string(),
             Self::Database(db_type) => db_type.as_str().to_string(),
             Self::ExternalDatabase { name, .. } => name.clone(),
             Self::Extension(connection) => connection.label.clone(),
@@ -135,11 +179,14 @@ impl NewConnectionKind {
             Self::Vnc => t!("NewConnection.description_vnc").to_string(),
             Self::Redis => t!("NewConnection.description_redis").to_string(),
             Self::MongoDB => t!("NewConnection.description_mongodb").to_string(),
-            Self::Mqtt => t!("NewConnection.description_mqtt").to_string(),
             Self::Serial => t!("NewConnection.description_serial").to_string(),
             Self::Telnet => t!("NewConnection.description_telnet").to_string(),
             Self::PortForwarding => t!("NewConnection.description_port_forwarding").to_string(),
             Self::MoreConnections => t!("NewConnection.description_more_connections").to_string(),
+            // 「+」安装入口与「更多连接」语义一致:引导前往扩展市场
+            Self::InstallCategoryExtensions(_) => {
+                t!("NewConnection.description_more_connections").to_string()
+            }
             Self::Database(_) => t!("NewConnection.description_database").to_string(),
             Self::ExternalDatabase { description, .. } => description.clone(),
             Self::Extension(connection) => connection.description.clone().unwrap_or_default(),
@@ -155,18 +202,32 @@ impl NewConnectionKind {
             | Self::Telnet
             | Self::PortForwarding => NewConnectionCategory::Terminal,
             Self::MoreConnections => NewConnectionCategory::All,
+            // 「+」安装入口归属于其目标类目,侧栏选中该类目时可见
+            Self::InstallCategoryExtensions(category) => *category,
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
-            Self::Mqtt => NewConnectionCategory::Middleware,
             Self::Database(DatabaseType::TDengine) => NewConnectionCategory::TimeSeries,
             Self::Database(_) => NewConnectionCategory::Database,
             Self::ExternalDatabase { category, .. } => {
                 if is_domestic_database_category(category.as_deref()) {
                     NewConnectionCategory::DomesticDatabase
                 } else {
+                    // TODO: 驱动 manifest 的 category 目前仅约定 "domestic_database" 一种取值,
+                    // 尚无时序类标识(如 "time_series");待驱动侧补充约定后再在此映射
+                    // NewConnectionCategory::TimeSeries,避免臆造字段值。
                     NewConnectionCategory::Database
                 }
             }
-            Self::Extension(_) => NewConnectionCategory::Extensions,
+            Self::Extension(contribution) => {
+                // 以 com.navop.middleware. 为前缀的扩展贡献归入中间件类目,其余留在扩展类目
+                if contribution
+                    .extension_id
+                    .starts_with(MIDDLEWARE_EXTENSION_ID_PREFIX)
+                {
+                    NewConnectionCategory::Middleware
+                } else {
+                    NewConnectionCategory::Extensions
+                }
+            }
         }
     }
 
@@ -179,7 +240,6 @@ impl NewConnectionKind {
             Self::MongoDB => {
                 connection_type_icon(ConnectionType::MongoDB, ConnectionVisualSize::Hero)
             }
-            Self::Mqtt => connection_type_icon(ConnectionType::Mqtt, ConnectionVisualSize::Hero),
             Self::Serial => {
                 connection_type_icon(ConnectionType::Serial, ConnectionVisualSize::Hero)
             }
@@ -190,6 +250,10 @@ impl NewConnectionKind {
                 connection_type_icon(ConnectionType::PortForwarding, ConnectionVisualSize::Hero)
             }
             Self::MoreConnections => IconName::Plus
+                .mono()
+                .with_size(ConnectionVisualSize::Hero.icon_size()),
+            // 「+」安装入口形态与「更多连接」一致:Plus 图标
+            Self::InstallCategoryExtensions(_) => IconName::Plus
                 .mono()
                 .with_size(ConnectionVisualSize::Hero.icon_size()),
             Self::Database(db_type) => database_type_icon(db_type, ConnectionVisualSize::Hero),
@@ -314,13 +378,15 @@ mod tests {
             t!("NewConnection.category_domestic_database").to_string(),
             NewConnectionCategory::DomesticDatabase.label()
         );
+        assert_eq!(
+            t!("NewConnection.category_middleware").to_string(),
+            NewConnectionCategory::Middleware.label()
+        );
     }
 
     #[test]
-    fn tdengine_and_mqtt_kinds_map_to_their_categories() {
-        let registry = IpcDriverRegistry::empty();
-        let kinds = NewConnectionKind::all_with_registry(&registry);
-
+    fn tdengine_kind_maps_to_time_series_category() {
+        // 类目映射本身与驱动是否安装无关
         assert_eq!(
             NewConnectionKind::Database(DatabaseType::TDengine).category(),
             NewConnectionCategory::TimeSeries
@@ -330,18 +396,43 @@ mod tests {
             NewConnectionCategory::Database
         );
         assert_eq!(
-            NewConnectionKind::Mqtt.category(),
-            NewConnectionCategory::Middleware
-        );
-        assert!(kinds.contains(&NewConnectionKind::Mqtt));
-        assert!(kinds.contains(&NewConnectionKind::Database(DatabaseType::TDengine)));
-        assert_eq!(
             t!("NewConnection.category_time_series").to_string(),
             NewConnectionCategory::TimeSeries.label()
         );
+    }
+
+    #[test]
+    fn tdengine_kind_hidden_without_driver_and_install_entry_shown() {
+        // 未安装 tdengine 外部驱动时:新建入口不出现 TDengine,时序类目展示「+」安装入口
+        let registry = IpcDriverRegistry::empty();
+        let mut kinds = NewConnectionKind::all_with_registry(&registry);
+        NewConnectionKind::append_empty_category_install_entries(&mut kinds);
+
+        assert!(!kinds.contains(&NewConnectionKind::Database(DatabaseType::TDengine)));
+        let install_entry =
+            NewConnectionKind::InstallCategoryExtensions(NewConnectionCategory::TimeSeries);
+        assert!(kinds.contains(&install_entry));
+        assert_eq!(install_entry.category(), NewConnectionCategory::TimeSeries);
+        assert!(install_entry.opens_extensions_tab_on_click());
         assert_eq!(
-            t!("NewConnection.category_middleware").to_string(),
-            NewConnectionCategory::Middleware.label()
+            t!("NewConnection.more_time_series").to_string(),
+            install_entry.label()
+        );
+    }
+
+    #[test]
+    fn tdengine_kind_shown_with_driver_and_install_entry_hidden() {
+        // 安装 tdengine 外部驱动后:新建入口出现 TDengine,时序类目不再展示「+」安装入口
+        let registry =
+            IpcDriverRegistry::from_drivers(vec![manifest(TDENGINE_DRIVER_ID, "TDengine")]);
+        let mut kinds = NewConnectionKind::all_with_registry(&registry);
+        NewConnectionKind::append_empty_category_install_entries(&mut kinds);
+
+        assert!(kinds.contains(&NewConnectionKind::Database(DatabaseType::TDengine)));
+        assert!(
+            !kinds.contains(&NewConnectionKind::InstallCategoryExtensions(
+                NewConnectionCategory::TimeSeries
+            ))
         );
     }
 
@@ -370,6 +461,65 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(!labels.iter().any(|label| label == "Terminal"));
+    }
+
+    #[test]
+    fn middleware_extension_contribution_routes_to_middleware_category() {
+        // com.navop.middleware. 前缀的贡献归入中间件类目,其余归入扩展类目
+        let mqtt = NewConnectionKind::Extension(contribution("com.navop.middleware.mqtt"));
+        let rocketmq = NewConnectionKind::Extension(contribution("com.navop.middleware.rocketmq"));
+        let other = NewConnectionKind::Extension(contribution("com.navop.other.tool"));
+
+        assert_eq!(mqtt.category(), NewConnectionCategory::Middleware);
+        assert_eq!(rocketmq.category(), NewConnectionCategory::Middleware);
+        assert_eq!(other.category(), NewConnectionCategory::Extensions);
+    }
+
+    #[test]
+    fn middleware_install_entry_follows_category_membership() {
+        // 空中间件类目:展示「+」安装入口
+        let mut kinds = NewConnectionKind::all_with_registry(&IpcDriverRegistry::empty());
+        NewConnectionKind::append_empty_category_install_entries(&mut kinds);
+
+        let install_entry =
+            NewConnectionKind::InstallCategoryExtensions(NewConnectionCategory::Middleware);
+        assert!(kinds.contains(&install_entry));
+        assert_eq!(install_entry.category(), NewConnectionCategory::Middleware);
+        assert!(install_entry.opens_extensions_tab_on_click());
+        assert_eq!(
+            t!("NewConnection.more_middleware").to_string(),
+            install_entry.label()
+        );
+
+        // 有中间件扩展贡献时不补「+」;模拟真实调用序列:
+        // MoreConnections 先 pop → 空类目补「+」 → MoreConnections 压回末尾
+        let mut kinds_with_middleware = vec![NewConnectionKind::Extension(contribution(
+            "com.navop.middleware.mqtt",
+        ))];
+        NewConnectionKind::append_empty_category_install_entries(&mut kinds_with_middleware);
+        kinds_with_middleware.push(NewConnectionKind::MoreConnections);
+
+        assert!(!kinds_with_middleware.contains(&install_entry));
+        assert!(matches!(
+            kinds_with_middleware.get(1),
+            Some(NewConnectionKind::InstallCategoryExtensions(
+                NewConnectionCategory::TimeSeries
+            ))
+        ));
+        assert!(matches!(
+            kinds_with_middleware.last(),
+            Some(NewConnectionKind::MoreConnections)
+        ));
+
+        // 中间件与时序类目均有成员时,不补任何「+」入口
+        let mut kinds_full = vec![
+            NewConnectionKind::Extension(contribution("com.navop.middleware.mqtt")),
+            NewConnectionKind::Database(DatabaseType::TDengine),
+            NewConnectionKind::MoreConnections,
+        ];
+        NewConnectionKind::append_empty_category_install_entries(&mut kinds_full);
+
+        assert_eq!(kinds_full.len(), 3);
     }
 
     #[test]
@@ -450,6 +600,24 @@ mod tests {
             )),
             icon_paths
         );
+    }
+
+    /// 构造扩展贡献项(仅 extension_id 参与类目分流,其余字段用空值)
+    fn contribution(
+        extension_id: &str,
+    ) -> extension_runtime::RegisteredResourceConnectionContribution {
+        extension_runtime::RegisteredResourceConnectionContribution {
+            extension_id: extension_id.to_string(),
+            extension_root: PathBuf::from("."),
+            id: format!("{extension_id}:connection"),
+            label: "Demo".to_string(),
+            description: None,
+            icon_path: None,
+            runtime_id: String::new(),
+            resource_type: String::new(),
+            shell_view_id: None,
+            form: Default::default(),
+        }
     }
 
     fn manifest(id: &str, name: &str) -> IpcDriverManifest {
