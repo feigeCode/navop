@@ -478,6 +478,13 @@
 - **验证方式**：纯 contract 覆盖搜索自动展开、显式折叠优先、非搜索态遵循普通展开状态；真实树测试确认搜索中箭头可反复收起/展开，修改搜索词后重新自动展示匹配路径，清空搜索后保留用户最后的普通展开选择。
 - **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及数据库树、文件树、资源树等同时支持过滤和层级展开的 GPUI 树视图。
 
+- **标题**：provider 自动重连必须先取新 activation lease 再释放旧 lease，判活依据是 generation 而不是事件类型
+- **触发信号**：provider 进程崩溃、宿主 supervisor 自动重启后，已打开的扩展连接 tab（Docker 这类 headless 原生工作台）一直停在 `Connecting` 或持续报错；或接上自动重连后 provider 被反复重启，或 tab 在重启窗口内反复重建连接。
+- **根因 / 约束**：`ActivationManager` 的 activation 是引用计数租约（`runtime.activations: BTreeSet<activation_id>`），而 supervisor 重启只替换 `session`、推进 `start_generation`，不会动租约集合。若先 `deactivate_activation(旧 handle)` 再 `activate_runtime`，当旧 handle 恰好是最后一个租约时会立刻拆除 runtime、shutdown 刚重启好的 session；两次异步任务并发时顺序不确定，因此“激活新 lease → 关闭旧 session → 释放旧 lease”必须放在同一个 Tokio 任务里顺序执行。另外 `RuntimeMonitorEvent` 只带 runtime id 时无法区分“瞬时 Degraded / 仍在退避的 Restarting”与“已换进程”，必须比对 `service.runtime_generation()` 与 activation 记录的 generation。
+- **正确做法**：宿主监视桥接转发完整 `RuntimeMonitorEvent`（不要降级成 `String`）。tab 侧把“事件 → 动作”抽成纯决策函数（`Ignore`/`Fail`/`Reconnect`）：仅当 generation 推进时重连；generation 未变且 `session_closed && state ∈ {Failed, CrashLoop}` 才判为不可自愈并置 `Failed`；`RuntimeRemoved` 或宿主已无该 runtime 直接 `Failed`；已 `closing`、未连接（`Connecting`/`Failed`）或事件属于其他 runtime 一律忽略。shell view 侧只做失效、不做自动重连（重建 `LoadedShellView`/`ShellMountSession` 风险更高）。
+- **验证方式**：`cargo test -p universal-plugins --features universal-plugins/shell-plugins`（纯决策 contract 覆盖瞬时抖动、generation 推进、CrashLoop/`RuntimeRemoved`、`closing` 短路、其他 runtime），`cargo clippy -p universal-plugins --features universal-plugins/shell-plugins --all-targets`，`cargo check -p main --features main/shell-plugins`。注意 monitor bridge 在测试构建下被 `cfg(not(test))` 移除，`runtime_changed` 及其私有辅助方法需要 `#[cfg_attr(test, allow(dead_code))]`。
+- **适用范围**：`crates/universal-plugins/src/extension_connection_tab.rs`、`crates/universal-plugins/src/shell_plugin_tab.rs`、`crates/universal-plugins/src/shell_plugin_host/monitor.rs`、`crates/extension-plugin-adapter/src/activation.rs`（restart/generation 语义与日志），以及任何“进程重启后自动恢复已挂载资源”的链路。
+
 - **标题**：旧 SSH 服务器的 DH 协商失败通常是超出 russh gex 位宽下限而非缺少算法
 - **触发信号**：legacy 兼容算法已开启且 `No common Key/Mac algorithm` 已消失，但连接仍失败；日志出现 `russh::client::kex: DH prime size (2048 bits) not within requested range` 或 `(1024 bits) not within requested range` 后跟 `Key exchange init failed`。用 `ssh -o KexAlgorithms=xxx` 探测可拿到服务器真实 offer 列表。
 - **根因 / 约束**：russh `GexParams` 默认 `min_group_size=3072`，客户端配置校验也强制不低于 2048。2048 位组（老 Cisco/网管）可用 `GexParams::new(2048, 2048, 8192)` 放行；但更旧设备只提供 1024 位组时，GEX 路径无论如何都过不了 2048 下限。这类设备通常除 `group-exchange-sha1` 外还声明**固定组** `diffie-hellman-group1-sha1`（固定 1024 位组不走 GEX 范围校验），而 russh 客户端按自身列表顺序选 kex，一旦 `DH_GEX_SHA1` 排在 `DH_G1_SHA1` 前就会优先走进 GEX 死路。`Key exchange init failed` 是 `Error::KexInit` 而非 `NoCommonAlgo`，`add_legacy_algorithm_hint` 不会附加提示。
@@ -581,6 +588,13 @@
 - **正确做法**：SVG 放入 `resources/icons/`，路径常量定义在 `one_core::storage`（如 `NAVOP_BACKGROUND_TASK_ICON`），`main::navop_brand_icon` 以 `include_bytes!` 注册；使用处 `Icon::default().path(常量)`。`Button::icon` / `Toggle::icon` 接受 `impl Into<Icon>`，可直接传 `Icon`。
 - **验证方式**：`cargo test -p one-core background_task`（入口与徽标契约）+ `cargo check -p main`。
 - **适用范围**：`crates/core/src/background_task_panel.rs`、`main/src/main.rs`、`crates/core/src/storage/models.rs`、`resources/icons/`。
+
+- **标题**：原生资源工作台渲染必须走 gpui-component 设计系统，禁止手搓 div 表 + 硬编码色值
+- **触发信号**：手写 `div().bg(rgb(0x...))` 拼表格 / 卡片 / 工具栏，界面与主题（Navop Light/Dark）不一致、无斑马纹、无 hover、无列宽拖拽、状态用裸文字；被要求“写出好看的界面”。
+- **根因 / 约束**：`gpui-component`（工作区既有依赖）已提供 `DataTable`/`TableDelegate`、`Tag`、`Button`、`Spinner`、`Icon` 及完整的 `ActiveTheme` 主题令牌（`background`/`foreground`/`border`/`sidebar*`/`table*`/`list_hover`/`radius*`/`mono_font_family` 等）。硬编码 `gpui::rgb(...)` 会绕过主题切换，且丢失组件自带的交互与可访问性。托盘/工作台类“公共页面”必须用 Rust 原生 + 该设计系统渲染；仅服务特定扩展的页面（如容器日志）才用 gpui-shell。
+- **正确做法**：集合类数据用 `TableState::new(delegate, window, cx).row_selectable(false).col_selectable(false).col_movable(false).sortable(true)` + `DataTable::new(&state).stripe(true).bordered(false).scrollbar_visible(true,true).with_size(Size::Small)`；委托实现 `TableDelegate`（`columns_count/rows_count/column/render_th/render_tr/render_td/perform_sort/render_empty/loading`）。列样式由 manifest `style` 字段驱动（badge/mono/muted）。状态/徽标用 `Tag`（`Tag::success/danger/warning/secondary` + 描边圆点），操作按钮用 `Button::new(id).with_size(Size::XSmall).ghost()/...icon(...).tooltip(...).loading(...)`，加载用 `Spinner`，图标用 `IconName`。颜色一律取 `cx.theme()`，禁止字面量。工具链细节：`font_medium`/`font_semibold` 需 `StyledExt`、`opacity` 需 `ColorExt`、`Stateful` 上的 `on_click` 需 `StatefulInteractiveElement`、`cx.new` 需 `AppContext`；`DataTable` 的 `loading_view` 优先生效（`loading()` 为真即显示骨架，即使行数为 0），`empty_view` 仅在 `rows_count==0 && !loading` 时渲染——为避免行操作时骨架闪烁，缓存重建条件应为 `!loading && revision changed`。
+- **验证方式**：`cargo check -p resource_view`、`cargo check -p main --features main/shell-plugins`；启动 app 肉眼核对浅/深色主题下的表头、斑马纹、hover、状态徽标、按钮 loading 与空/加载态。
+- **适用范围**：`crates/resource_view/src/{lib.rs,collection_table.rs}`、`navop-extensions/extensions/composite/*/extension.json` 的列 `style` 定义，以及任何用 Rust 原生渲染资源工作台/管理页面的场景。
 
 ### 执行原则
 
