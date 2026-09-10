@@ -35,8 +35,8 @@ Options:
     --patch-dir PATH   Where the staging script dropped the snapshot
                        (default: `<gpui-component>/../.gpui-pre`)
     --fork-url URL     Git URL of the fork. Anything `git push` accepts:
-                       `git@github.com:feigeCode/gpui-pre.git`,
-                       `https://github.com/feigeCode/gpui-pre.git`, etc.
+                       `https://github.com/feigeCode/gpui-pre.git` (the
+                       repo is public; pushes need a token), or SSH.
     --branch NAME      Branch to push the snapshot to (default: main)
     --tag NAME         Tag to apply. Default: `fork-<version>`, e.g.
                        `fork-0.3.99`. Bump this to publish a new snapshot.
@@ -56,14 +56,14 @@ Workflow:
 
     # One-time, on a fresh fork:
     script/publish-gpui-pre-fork.py \\
-        --fork-url git@github.com:feigeCode/gpui-pre.git \\
+        --fork-url https://github.com/feigeCode/gpui-pre.git \\
         --init-only            # commit only, inspect
     # (push manually, or drop --init-only once you trust the snapshot)
 
     # When the local Zed branch changes:
     script/patch-local-gpui-pre.py --no-stage       # refreshes the staging
     script/publish-gpui-pre-fork.py \\
-        --fork-url git@github.com:feigeCode/gpui-pre.git \\
+        --fork-url https://github.com/feigeCode/gpui-pre.git \\
         --tag fork-0.3.100       # bumped version
 
     # In Navop, switch the dependency:
