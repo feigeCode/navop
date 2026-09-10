@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
 use gpui::{AppContext, TestAppContext, rgba};
-use palette::IntoColor as _;
 
 use crate::components::{Block, BlockRecord};
 use crate::{

@@ -4,8 +4,7 @@ use crate::model::{ExplorerRow, visible_rows};
 use gpui::{
     AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, prelude::FluentBuilder as _, px,
-};
+    div, prelude::FluentBuilder as _, px};
 use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
 use one_assets::IconName;
@@ -13,8 +12,7 @@ use rust_i18n::t;
 
 use super::clipboard::WORKSPACE_EXPLORER_KEY_CONTEXT;
 use super::file_actions::{
-    build_file_context_menu, build_files_context_menu, build_git_change_context_menu,
-};
+    build_file_context_menu, build_files_context_menu, build_git_change_context_menu};
 use super::header::ExplorerSection;
 
 const EXPLORER_FILE_ROW_HEIGHT: gpui::Pixels = px(27.0);
@@ -74,8 +72,7 @@ impl WorkspaceExplorer {
         let badge_color = match change.kind {
             GitChangeKind::Added | GitChangeKind::Untracked => self.theme.success,
             GitChangeKind::Deleted | GitChangeKind::Conflicted => self.theme.danger,
-            GitChangeKind::Modified | GitChangeKind::Renamed => self.theme.warning,
-        };
+            GitChangeKind::Modified | GitChangeKind::Renamed => self.theme.warning};
         let path = change.path.display().to_string();
         let selected = self.selected_change_path.as_ref() == Some(&change.path);
         let change_for_click = change.clone();
@@ -234,8 +231,7 @@ impl WorkspaceExplorer {
             (_, _, true) => IconName::LoaderCircle,
             (true, true, false) => IconName::FolderOpen,
             (true, false, false) => IconName::FolderClosed,
-            (false, _, false) => IconName::File,
-        };
+            (false, _, false) => IconName::File};
         Icon::new(icon)
             .with_size(Size::Small)
             .text_color(if row.entry.is_dir {

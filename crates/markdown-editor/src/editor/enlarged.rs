@@ -295,8 +295,7 @@ mod tests {
     use std::sync::Arc;
 
     use gpui::{AppContext, Entity, Image, ImageFormat, Modifiers, TestAppContext, rgba};
-    use palette::IntoColor as _;
-
+    
     use super::{
         ENLARGED_ZOOM_DEFAULT, ENLARGED_ZOOM_STEP, Editor, EnlargedPreviewLimit,
         enlarged_artifact_size,

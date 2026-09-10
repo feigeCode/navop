@@ -11,7 +11,6 @@ use markdown_source::{
     SourceBlock, SourceBlockKind, SourceInlineKind, SourceInlineNode, SourceMarkdownDocument,
 };
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
-use palette::IntoColor;
 use rust_i18n::t;
 use std::collections::HashSet;
 use std::fs;

@@ -1,7 +1,6 @@
 use super::*;
 use gpui::{AppContext as _, TestAppContext, VisualTestContext, WindowOptions};
 use gpui_component::Root;
-use palette::IntoColor;
 
 #[test]
 fn file_and_diff_documents_use_distinct_identity_paths() {

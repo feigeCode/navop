@@ -1,6 +1,7 @@
 use ferrum_flow::FlowTheme;
 use gpui::Hsla;
-use gpui_component::{Colorize as _, Theme};
+use gpui_component::Theme;
+use one_ui::ColorMix as _;
 
 pub fn er_flow_theme() -> FlowTheme {
     let mut theme = FlowTheme::light();

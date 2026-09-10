@@ -17,7 +17,6 @@ use alacritty_terminal::term::{RenderableContent, Term, TermDamage};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::*;
 use one_core::settings::default_grid_font_fallback_families;
-use palette::IntoColor;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -1796,8 +1795,7 @@ mod tests {
     use alacritty_terminal::term::{Config as TermConfig, Term};
     use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, StdSyncHandler};
     use gpui::{FontWeight, rgb};
-    use palette::IntoColor as _;
-    use terminal::pty_backend::GpuiEventProxy;
+        use terminal::pty_backend::GpuiEventProxy;
     use tokio::sync::mpsc::unbounded_channel;
 
     struct TestTermDimensions {

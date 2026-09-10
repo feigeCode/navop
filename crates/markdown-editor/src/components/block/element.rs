@@ -3,7 +3,6 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::*;
-use palette::IntoColor;
 
 use super::{Block, CodeHighlightPaint, InlineFootnoteHit, InlineLinkHit};
 use crate::components::HtmlCssColor;
@@ -1082,8 +1081,7 @@ mod tests {
         SharedString, TestAppContext, TextAlign, TextRun, VisualTestContext, font, point, px, rgba,
         size,
     };
-    use palette::IntoColor;
-    use std::sync::Arc;
+        use std::sync::Arc;
 
     fn shaped_lines(
         text: &str,

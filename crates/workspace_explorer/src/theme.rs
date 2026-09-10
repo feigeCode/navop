@@ -65,8 +65,7 @@ impl WorkspaceTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use palette::IntoColor;
-
+    
     #[test]
     fn highlight_theme_follows_workspace_background() {
         let dark = WorkspaceTheme {

@@ -144,8 +144,7 @@ pub(crate) fn themed_html(
 #[cfg(test)]
 mod tests {
     use gpui::rgb;
-    use palette::IntoColor as _;
-
+    
     use super::*;
 
     fn color(hex: u32) -> Hsla {

@@ -22,7 +22,6 @@ use one_core::settings::{
     default_grid_monospace_font_family, is_supported_grid_monospace_font,
     normalize_grid_monospace_font_family,
 };
-use palette::IntoColor;
 use rust_i18n::t;
 
 /// 使用当前应用主题生成终端配色。

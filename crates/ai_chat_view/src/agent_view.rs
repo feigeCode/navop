@@ -4839,8 +4839,7 @@ mod tests {
         point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
-    use palette::IntoColor as _;
-    use serde_json::json;
+        use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct WriteTool;

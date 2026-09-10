@@ -3,6 +3,9 @@ rust_i18n::i18n!("locales", fallback = "en");
 pub mod content_state;
 pub mod edit_table;
 pub mod file_conflict_prompt;
+mod blend;
+pub use blend::ColorMix;
+
 mod geometry;
 pub mod theme_geometry;
 pub use theme_geometry::{LayoutSizeTokens, ThemeGeometry, theme_geometry};

@@ -6,10 +6,9 @@ use crate::{DateTimePicker, DateTimePickerState, TimePicker, TimePickerState};
 use gpui::{
     AnyElement, App, Context, Div, Entity, Font, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement, Styled as _,
-    Subscription, Window, div, px,
-};
+    Subscription, Window, div, px};
 use gpui_component::date_picker::{DatePicker, DatePickerState};
-use gpui_component::{ActiveTheme as _, Colorize as _, Icon, Size, h_flex, input::{Input, InputState}, menu::PopupMenu};
+use gpui_component::{ActiveTheme as _,  Icon, Size, h_flex, input::{Input, InputState}, menu::PopupMenu};
 use one_assets::IconName;
 
 pub enum CellEditor {
@@ -19,17 +18,13 @@ pub enum CellEditor {
     TimePicker(Entity<TimePickerState>),
     DatePickerInput {
         input: Entity<InputState>,
-        picker: Entity<DatePickerState>,
-    },
+        picker: Entity<DatePickerState>},
     DateTimePickerInput {
         input: Entity<InputState>,
-        picker: Entity<DateTimePickerState>,
-    },
+        picker: Entity<DateTimePickerState>},
     TimePickerInput {
         input: Entity<InputState>,
-        picker: Entity<TimePickerState>,
-    },
-}
+        picker: Entity<TimePickerState>}}
 
 impl CellEditor {
     pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -209,8 +204,7 @@ impl CellEditor {
                 .unwrap_or_default(),
             CellEditor::DatePickerInput { input, .. } => input.read(cx).text().to_string(),
             CellEditor::DateTimePickerInput { input, .. } => input.read(cx).text().to_string(),
-            CellEditor::TimePickerInput { input, .. } => input.read(cx).text().to_string(),
-        }
+            CellEditor::TimePickerInput { input, .. } => input.read(cx).text().to_string()}
     }
 }
 

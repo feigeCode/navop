@@ -3848,6 +3848,7 @@ dependencies = [
  "ferrum-flow",
  "gpui-component",
  "gpui-pre",
+ "one-ui",
  "palette",
  "serde",
  "serde_json",

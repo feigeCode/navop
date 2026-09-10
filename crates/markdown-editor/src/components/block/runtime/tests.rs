@@ -25,7 +25,6 @@ use gpui::{
     AppContext, EntityInputHandler, FontStyle, FontWeight, Modifiers, MouseButton, MouseMoveEvent,
     TestAppContext, point, px, rgba,
 };
-use palette::IntoColor as _;
 
 fn assert_only_code_range(block: &Block, expected: Range<usize>) {
     let code_ranges = block

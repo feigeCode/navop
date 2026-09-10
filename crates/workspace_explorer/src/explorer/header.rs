@@ -3,8 +3,7 @@ use super::frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 use gpui::{
     Anchor, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
-};
+    prelude::FluentBuilder as _, px};
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, button::{Button, ButtonVariants as _}, h_flex, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover};
 use one_ui::IconSize;
 use one_assets::IconName;
@@ -20,8 +19,7 @@ const FRAME_PLACEMENTS: [ExplorerFramePlacement; 3] = [
 #[derive(Clone, Copy)]
 pub(super) enum ExplorerSection {
     Changes,
-    Files,
-}
+    Files}
 
 impl WorkspaceExplorer {
     /// 合并后的单层面板头部：目录名 + 分支徽章 + 操作按钮 + 宿主框架控制。
@@ -182,15 +180,13 @@ impl WorkspaceExplorer {
                 "workspace-files-header",
                 t!("WorkspaceExplorer.section.files").to_string(),
                 self.files_expanded,
-            ),
-        }
+            )}
     }
 
     fn toggle_section(&mut self, section: ExplorerSection, cx: &mut Context<Self>) {
         match section {
             ExplorerSection::Changes => self.changes_expanded = !self.changes_expanded,
-            ExplorerSection::Files => self.files_expanded = !self.files_expanded,
-        }
+            ExplorerSection::Files => self.files_expanded = !self.files_expanded}
         cx.notify();
     }
 }
@@ -289,14 +285,12 @@ fn frame_placement_label(placement: ExplorerFramePlacement) -> String {
     match placement {
         ExplorerFramePlacement::Left => t!("WorkspaceExplorer.frame.left").to_string(),
         ExplorerFramePlacement::Right => t!("WorkspaceExplorer.frame.right").to_string(),
-        ExplorerFramePlacement::Bottom => t!("WorkspaceExplorer.frame.bottom").to_string(),
-    }
+        ExplorerFramePlacement::Bottom => t!("WorkspaceExplorer.frame.bottom").to_string()}
 }
 
 fn frame_placement_icon(placement: ExplorerFramePlacement) -> IconName {
     match placement {
         ExplorerFramePlacement::Left => IconName::PanelLeft,
         ExplorerFramePlacement::Right => IconName::PanelRight,
-        ExplorerFramePlacement::Bottom => IconName::PanelBottom,
-    }
+        ExplorerFramePlacement::Bottom => IconName::PanelBottom}
 }

@@ -4,7 +4,6 @@
 //! 参考 terminal_view/terminal_element.rs 的实现模式。
 
 use gpui::*;
-use palette::IntoColor;
 use std::sync::Arc;
 
 /// 文本位置（行号和字符索引）

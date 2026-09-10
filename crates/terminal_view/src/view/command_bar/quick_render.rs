@@ -2,7 +2,6 @@ use super::*;
 use crate::view::command_bar_model::{QuickCommandGroup, group_quick_commands};
 use gpui::{AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, px, rgb};
 use gpui_component::{ActiveTheme, h_flex, v_flex};
-use palette::IntoColor;
 use rust_i18n::t;
 
 const QUICK_POPOVER_WIDTH: f32 = 720.0;

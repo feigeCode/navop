@@ -1,9 +1,8 @@
 use ferrum_flow::{Node, NodeCardVariant, NodeRenderer, Port, RenderContext};
 use gpui::{
     AnyElement, Element as _, Hsla, ParentElement as _, Styled as _, div, prelude::FluentBuilder,
-    px, rgb,
-};
-use gpui_component::{Colorize as _, Theme};
+    px, rgb};
+use gpui_component::{ Theme};
 
 /// ER 实体卡片的主题色配置，映射自应用级 GPUI 主题。
 #[derive(Clone, Copy, PartialEq)]
@@ -23,8 +22,7 @@ pub struct ErCardTheme {
     pub null_text: Hsla,
     pub badge_primary: Hsla,
     pub badge_secondary: Hsla,
-    pub field_dot: Hsla,
-}
+    pub field_dot: Hsla}
 
 impl Default for ErCardTheme {
     fn default() -> Self {
@@ -44,8 +42,7 @@ impl Default for ErCardTheme {
             null_text: rgb(0x9ca3af).into(),
             badge_primary: rgb(0x3b82f6).into(),
             badge_secondary: rgb(0x22c55e).into(),
-            field_dot: rgb(0x9ca3af).into(),
-        }
+            field_dot: rgb(0x9ca3af).into()}
     }
 }
 
@@ -68,15 +65,13 @@ impl ErCardTheme {
             null_text: ui.muted_foreground,
             badge_primary: ui.primary,
             badge_secondary: ui.success,
-            field_dot: ui.muted_foreground,
-        }
+            field_dot: ui.muted_foreground}
     }
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct ErEntityRenderer {
-    pub card_theme: ErCardTheme,
-}
+    pub card_theme: ErCardTheme}
 
 impl ErEntityRenderer {
     pub fn new(theme: ErCardTheme) -> Self {
@@ -85,8 +80,7 @@ impl ErEntityRenderer {
 
     pub fn from_ui_theme(ui: &Theme) -> Self {
         Self {
-            card_theme: ErCardTheme::from_ui_theme(ui),
-        }
+            card_theme: ErCardTheme::from_ui_theme(ui)}
     }
 }
 

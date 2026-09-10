@@ -16,7 +16,6 @@ use one_core::storage::{
     GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,
 };
 use one_ui::{IconButton, IconButtonRole};
-use palette::IntoColor;
 use rust_i18n::t;
 use std::{ops::Range, sync::Arc};
 

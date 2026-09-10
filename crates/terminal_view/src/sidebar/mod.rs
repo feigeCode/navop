@@ -1698,8 +1698,7 @@ mod tests {
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
-    use palette::IntoColor as _;
-    use terminal::terminal::TerminalConnectionKind;
+        use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {

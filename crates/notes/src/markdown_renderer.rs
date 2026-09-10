@@ -1,4 +1,3 @@
-use palette::IntoColor;
 
 pub(crate) fn block_render_provider(
     cx: &gpui::App,

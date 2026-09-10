@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use gpui::{App, FontWeight, Global, Hsla, hsla, rgba};
-use palette::IntoColor;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -1992,8 +1991,7 @@ mod tests {
     use crate::config::VelotypeConfigDirs;
     use crate::host_services::EditorHostTheme;
     use gpui::rgba;
-    use palette::IntoColor;
-
+    
     #[test]
     fn host_palette_overrides_editor_semantic_colors() {
         let host = EditorHostTheme {

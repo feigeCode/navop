@@ -9,7 +9,6 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{RegexIter, RegexSearch};
 use gpui::*;
 use gpui_component::try_parse_color;
-use palette::IntoColor;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Range, RangeInclusive};

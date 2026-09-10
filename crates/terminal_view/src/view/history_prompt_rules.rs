@@ -194,8 +194,7 @@ pub(super) fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> 
 mod tests {
     use super::{history_prompt_active_background, history_prompt_dropdown_background};
     use gpui::{Hsla, rgb};
-    use palette::IntoColor;
-
+    
     #[test]
     fn history_prompt_dropdown_applies_translucent_background() {
         let background: Hsla = rgb(0x1E1E1E).into();

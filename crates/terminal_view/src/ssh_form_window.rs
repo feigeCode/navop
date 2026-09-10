@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px, relative,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img, px, relative,
 };
 use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogFooter, h_flex, input::{Input, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, tab::{Tab, TabBar}, tooltip::Tooltip, v_flex};
 use one_assets::IconName;
@@ -2032,11 +2032,12 @@ impl SshFormWindow {
 
     fn render_custom_icon_tile(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.custom_icon_file_path.is_some();
+        // gpui 没有 Icon::file_path，直接用 img 从文件系统渲染用户上传的图标
         let icon = self
             .custom_icon_file_path
             .as_ref()
-            .map(|path| Icon::default().file_path(path).color().with_size(px(22.0)))
-            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)));
+            .map(|path| img(path.clone()).size_5().into_any_element())
+            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)).into_any_element());
 
         div()
             .id("ssh-icon-local")

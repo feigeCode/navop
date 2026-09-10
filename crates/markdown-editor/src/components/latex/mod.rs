@@ -7,8 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, anyhow};
 use directories::ProjectDirs;
-use gpui::{Hsla, Rgba};
-use palette::IntoColor;
+use gpui::Hsla;
 
 const DISPLAY_MATH_SCALE: f32 = 1.25;
 const INLINE_MATH_SCALE: f32 = 1.12;
