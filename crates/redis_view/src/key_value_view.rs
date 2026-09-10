@@ -11,7 +11,6 @@ use gpui::{
     px, relative,
 };
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt as _, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, select::{Select, SelectEvent, SelectItem, SelectState}, v_flex};
-use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};

@@ -6,7 +6,7 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, AsyncApp as _, Context, Entity, ExternalPaths, InteractiveElement,
+    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement,
     IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};

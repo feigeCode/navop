@@ -1660,9 +1660,9 @@ fn linearize(value: f32) -> f32 {
 /// 计算相对亮度 (WCAG 定义)
 fn relative_luminance(color: Hsla) -> f32 {
     let rgba: Rgba = color.into();
-    let r = linearize(rgba.red);
-    let g = linearize(rgba.green);
-    let b = linearize(rgba.blue);
+    let r = linearize(rgba.r);
+    let g = linearize(rgba.g);
+    let b = linearize(rgba.b);
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 

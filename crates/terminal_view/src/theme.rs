@@ -14,7 +14,7 @@
 //! - 在 `muted` 上使用 `foreground` 或 `muted_foreground`
 //! - 在 `accent` 上使用 `accent_foreground`
 
-use gpui::{App, Hsla, Pixels, SharedString, rgb};
+use gpui::{App, Hsla, Pixels, SharedString, hsla, rgb};
 use gpui_component::Theme;
 use gpui_component::button::ButtonCustomVariant;
 use one_core::settings::{

@@ -871,7 +871,7 @@ impl SettingsPanel {
                 .group(
                     SettingGroup::new().title(t!("Settings.About.title")).item(
                         SettingItem::render(move |_options, _window, cx| render_about_section(cx))
-                            .search_texts([
+                            .keywords([
                                 t!("Settings.About.title").to_string(),
                                 t!("Settings.About.version").to_string(),
                                 t!("Settings.About.opensource_label").to_string(),
@@ -1941,7 +1941,7 @@ fn about_update_setting_group(auto_update_default: bool) -> SettingGroup {
             )
             .description(t!("Settings.About.Update.auto_update_desc").to_string()),
             SettingItem::render(move |_options, _window, cx| render_manual_update_check_item(cx))
-                .search_texts([
+                .keywords([
                     t!("Settings.About.Update.group_title").to_string(),
                     t!("Settings.About.Update.check_now").to_string(),
                     t!("Settings.About.Update.check_now_desc").to_string(),

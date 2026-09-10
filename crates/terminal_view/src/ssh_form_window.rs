@@ -10,7 +10,7 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp as _, Context, Div, Entity, FocusHandle, Focusable,
+    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px, relative,
 };

@@ -5,7 +5,30 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use gpui::{DevicePixels, DynamicTexture, DynamicTextureId, size};
+use gpui::{DevicePixels, RenderImage, size};
+
+/// Placeholder identifier for a framebuffer texture.
+///
+/// gpui-pre has no dynamic-texture API (a gpui-ce feature). The surface keeps
+/// its own texture bookkeeping so the machinery survives, but rendering falls
+/// back to a plain [`RenderImage`] built from the backing framebuffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct DynamicTextureId(u64);
+
+/// Placeholder texture handle.
+#[derive(Debug)]
+pub(super) struct DynamicTexture {
+    id: DynamicTextureId,
+}
+
+impl DynamicTexture {
+    fn new(_size: gpui::Size<DevicePixels>) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(1);
+        Self {
+            id: DynamicTextureId(NEXT.fetch_add(1, Ordering::Relaxed) as u64),
+        }
+    }
+}
 use remote_desktop::{RemoteDesktopFrameRect, RgbaFramebuffer};
 
 const MAX_TEXTURE_UPLOAD_RECTS: usize = 16;
@@ -334,6 +357,24 @@ impl RemoteDesktopSurface {
 
     pub(super) fn texture(&self) -> &Arc<DynamicTexture> {
         &self.texture
+    }
+
+    /// Builds a [`RenderImage`] from the current backing framebuffer.
+    ///
+    /// This is the normal-texture fallback for gpui's missing dynamic-texture
+    /// API: the whole frame is re-uploaded on every paint.
+    pub(super) fn render_image(&self) -> Arc<RenderImage> {
+        let state = self
+            .state
+            .lock()
+            .expect("remote desktop texture state is not poisoned");
+        let buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+            u32::from(self.width),
+            u32::from(self.height),
+            state.backing_bgra.as_ref().clone(),
+        )
+        .expect("framebuffer dimensions must match its byte length");
+        Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(buffer)]))
     }
 
     pub(super) fn pending_texture_uploads(

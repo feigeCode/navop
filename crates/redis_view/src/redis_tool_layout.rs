@@ -13,7 +13,6 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants as _}, h_flex, input::Input, switch::Switch, table::DataTable, tag::Tag, v_flex};
-use one_ui::IconSize;
 use one_assets::IconName;
 use one_ui::{ContentState, IconButton, IconSize};
 use rust_i18n::t;

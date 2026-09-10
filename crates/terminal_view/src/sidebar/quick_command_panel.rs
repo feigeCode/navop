@@ -4,7 +4,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, AppContext, ClipboardItem as _, Context, Entity, EventEmitter, FocusHandle,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, Keystroke, ListSizingBehavior, MouseButton,
     ParentElement, Render, SharedString, Styled, UniformListScrollHandle, Window, div,
     uniform_list,

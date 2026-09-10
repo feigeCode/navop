@@ -1,4 +1,4 @@
-use gpui::{App as _, Hsla};
+use gpui::{App, Hsla};
 use gpui_component::{button::ButtonCustomVariant, highlighter::HighlightTheme};
 use std::sync::Arc;
 

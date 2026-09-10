@@ -1,7 +1,6 @@
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px,
-};
+    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px, hsla};
 use gpui_component::{
     ActiveTheme as _,
     input::{InputEvent, InputState},
@@ -79,12 +78,7 @@ impl From<&TerminalColors> for SidebarPalette {
             foreground: colors.foreground,
             muted: colors.muted,
             hover: colors.muted,
-            selected: hsla(
-                colors.accent.h,
-                colors.accent.s,
-                colors.accent.l,
-                0.18,
-            ),
+            selected: hsla(colors.accent.h, colors.accent.s, colors.accent.l, 0.18),
             selected_border: colors.accent,
             muted_foreground: colors.muted_foreground,
             border: colors.border,
@@ -98,12 +92,7 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    hsla(
-        color.h,
-        color.s,
-        (color.l + amount).clamp(0.0, 1.0),
-        color.a,
-    )
+    hsla(color.h, color.s, (color.l + amount).clamp(0.0, 1.0), color.a)
 }
 
 /// 浮动连接树卡片与窗口边缘的间距（像素）。

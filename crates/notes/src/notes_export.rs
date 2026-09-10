@@ -521,7 +521,7 @@ fn export_theme(
 fn rgb24(color: Hsla) -> u32 {
     let color: Rgba = color.into();
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
-    (channel(color.red) << 16) | (channel(color.green) << 8) | channel(color.blue)
+    (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
 }
 
 fn collect_export_assets(

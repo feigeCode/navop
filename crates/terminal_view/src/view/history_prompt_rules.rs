@@ -1,5 +1,5 @@
 use alacritty_terminal::term::TermMode;
-use gpui::{Bounds as _, Hsla, Keystroke, MouseButton, Pixels, Point, px};
+use gpui::{Bounds, Hsla, Keystroke, MouseButton, Pixels, Point, px};
 use one_core::storage::TerminalHistoryScope;
 use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 

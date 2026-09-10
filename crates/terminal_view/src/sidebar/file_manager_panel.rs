@@ -8,7 +8,7 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
-    Anchor, App, ClipboardItem as _, Context, Entity, EventEmitter, ExternalPaths,
+    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
     MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
     UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
@@ -3933,7 +3933,7 @@ impl FileManagerPanel {
         let muted_foreground = self.colors.muted_foreground;
         let breadcrumb = self
             .render_path_breadcrumb(cx)
-            .colors(foreground, muted_foreground);
+            ;
         v_flex()
             .border_b_1()
             .border_color(border)
@@ -6432,7 +6432,7 @@ mod tests {
         assert!(toolbar.contains(r#".id("fm-open-sftp")"#));
         assert!(toolbar.contains("FileManagerPanelEvent::OpenSftp("));
         assert!(toolbar.contains(r#"t!("FileManager.open_sftp")"#));
-        assert!(toolbar.contains(".colors(foreground, muted_foreground)"));
+        
         assert!(toolbar.contains(".text_color(muted_foreground)"));
     }
 
