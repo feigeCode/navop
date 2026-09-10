@@ -56,6 +56,7 @@ impl ExtensionConnectionTab {
         )
         .unwrap_or(connection);
         let launch = ExtensionResourceLaunch::new(&resolved, &contribution);
+        let runtime_handle = one_core::gpui_tokio::Tokio::handle(cx);
         let view = cx.new(|cx| Self {
             connection_lease: Some(connection_lease),
             title,
@@ -69,7 +70,13 @@ impl ExtensionConnectionTab {
         });
         view.update(cx, |_, cx| {
             cx.spawn(async move |this, cx| {
-                let result = connect_resource(service, runtime_id, launch).await;
+                // 连接建立会创建 provider 进程与 local-socket listener,
+                // 必须落在应用 Tokio runtime 上执行,不能跑在 GPUI foreground executor。
+                let result = runtime_handle
+                    .spawn(async move { connect_resource(service, runtime_id, launch).await })
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))
+                    .and_then(|result| result);
                 let _ = this.update(cx, |this, cx| {
                     this.apply_connect_result(result, cx);
                 });
