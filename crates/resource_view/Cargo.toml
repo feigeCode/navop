@@ -10,6 +10,7 @@ extension-protocol.workspace = true
 extension-runtime.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+json_view.workspace = true
 one-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

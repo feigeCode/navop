@@ -16,9 +16,10 @@ pub use contributes::{
     ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchInput,
     ResourceWorkbenchNavigation, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
     ResourceWorkbenchPage, ResourceWorkbenchPagination, ResourceWorkbenchRenderer,
-    ResourceWorkbenchRendererKind, ResourceWorkbenchTemplate, ResourceWorkbenchTree,
-    ResourceWorkbenchTreeChildren, ResourceWorkbenchValueType, ShellHostModule, ShellSurface,
-    ShellViewContrib,
+    ResourceWorkbenchRendererKind, ResourceWorkbenchRowAction, ResourceWorkbenchStatusBar,
+    ResourceWorkbenchTab, ResourceWorkbenchTemplate, ResourceWorkbenchTerminal,
+    ResourceWorkbenchTree, ResourceWorkbenchTreeChildren, ResourceWorkbenchValueType,
+    ShellHostModule, ShellSurface, ShellViewContrib,
 };
 #[cfg(test)]
 pub use contributes::{CommandHandlerContrib, ContributesManifest, HtmlPreviewTransformContrib};

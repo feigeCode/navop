@@ -35,6 +35,7 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod public_mcp_approval;
 mod public_mcp_runtime;
+mod resource_workbench_terminal;
 mod session_logs;
 mod setting_tab;
 mod settings;
@@ -432,6 +433,9 @@ fn main() {
         notes::init(cx);
         extension_runtime::init(cx);
         universal_plugins::init(cx);
+        // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
+        // 工作台渲染「此构建不可用」而不是崩溃。
+        resource_workbench_terminal::install_terminal_host(cx);
         #[cfg(feature = "shell-plugins")]
         dev_extension_registry::install_dev_host_ops(cx);
 

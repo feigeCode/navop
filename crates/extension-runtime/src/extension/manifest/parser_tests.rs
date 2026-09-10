@@ -1,7 +1,8 @@
 use std::fs;
 
 use super::{
-    ManifestError, RemoteFileEditorLaunchMode, ShellHostModule, ShellSurface, load_from_dir,
+    ManifestError, RemoteFileEditorLaunchMode, ResourceWorkbenchTemplate, ShellHostModule,
+    ShellSurface, load_from_dir,
 };
 
 fn write_manifest(dir: &std::path::Path, body: &str) {
@@ -278,6 +279,134 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
         query_op.mode,
         crate::extension::manifest::ResourceWorkbenchOperationMode::Job
     ));
+}
+
+#[test]
+fn manifest_parses_terminal_pages_tabs_and_status_bar() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.docker",
+            "name": "Docker",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "permissions": ["spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{
+                    "id": "main",
+                    "entry": { "command": "./bin/provider" },
+                    "transport": { "kind": "local_socket" }
+                }]
+            },
+            "contributes": {
+                "connections": [{
+                    "id": "docker-local",
+                    "label": "Docker",
+                    "runtimeId": "main",
+                    "resourceType": "docker"
+                }],
+                "resourceWorkbenches": [{
+                    "schemaVersion": 1,
+                    "id": "docker",
+                    "title": "Docker",
+                    "connectionIds": ["docker-local"],
+                    "runtimeId": "main",
+                    "resourceType": "docker",
+                    "defaultPage": "container-inspect",
+                    "statusBar": { "operation": "systemUsage" },
+                    "operations": {
+                        "systemUsage": {
+                            "mode": "invoke",
+                            "method": "docker/system/usage",
+                            "requires": ["docker/system/usage"],
+                            "effect": "read"
+                        },
+                        "inspectContainer": {
+                            "mode": "invoke",
+                            "method": "docker/container/inspect",
+                            "requires": ["docker/container/inspect"],
+                            "effect": "read",
+                            "params": {
+                                "id": {"source": "route", "path": "/id", "type": "string"}
+                            }
+                        }
+                    },
+                    "pages": [
+                        {
+                            "id": "container-inspect",
+                            "title": "Inspect",
+                            "template": "json",
+                            "renderer": {"kind": "native"},
+                            "route": {"id": {"type": "string", "required": true}},
+                            "load": {"operation": "inspectContainer"},
+                            "tabs": [
+                                {
+                                    "id": "inspect",
+                                    "title": "Inspect",
+                                    "pageId": "container-inspect",
+                                    "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
+                                },
+                                {
+                                    "id": "exec",
+                                    "title": "Exec",
+                                    "pageId": "container-exec",
+                                    "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
+                                }
+                            ]
+                        },
+                        {
+                            "id": "container-exec",
+                            "title": "Container Exec",
+                            "template": "terminal",
+                            "renderer": {"kind": "native"},
+                            "route": {"id": {"type": "string", "required": true}},
+                            "terminal": {
+                                "command": "docker",
+                                "args": ["exec", "-it", "{{id}}", "sh"],
+                                "env": {"TERM": "xterm-256color"},
+                                "workingDir": "/"
+                            }
+                        }
+                    ]
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let workbench = &manifest.contributes.resource_workbenches[0];
+
+    assert_eq!(
+        "systemUsage",
+        workbench.status_bar.as_ref().unwrap().operation
+    );
+
+    let inspect = workbench
+        .pages
+        .iter()
+        .find(|page| page.id == "container-inspect")
+        .unwrap();
+    assert_eq!(2, inspect.tabs.len());
+    assert_eq!("exec", inspect.tabs[1].id);
+    assert_eq!("container-exec", inspect.tabs[1].page_id);
+    assert!(inspect.tabs[1].route.contains_key("id"));
+
+    let exec = workbench
+        .pages
+        .iter()
+        .find(|page| page.id == "container-exec")
+        .unwrap();
+    assert!(matches!(exec.template, ResourceWorkbenchTemplate::Terminal));
+    let terminal = exec.terminal.as_ref().unwrap();
+    assert_eq!("docker", terminal.command);
+    assert_eq!(terminal.args, ["exec", "-it", "{{id}}", "sh"]);
+    assert_eq!(
+        Some("xterm-256color"),
+        terminal.env.get("TERM").map(String::as_str)
+    );
+    assert_eq!(Some("/"), terminal.working_dir.as_deref());
 }
 
 #[test]

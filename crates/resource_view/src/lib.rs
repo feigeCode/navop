@@ -4,15 +4,22 @@
 //! 所有 provider I/O 经 `extension_plugin_adapter::workbench_dispatch`
 //! 的命名操作入口,连接主会话由宿主 tab 唯一持有。
 
+mod collection_table;
 pub mod custom_page_host;
 pub mod query_page;
 pub mod route_binding;
+pub mod terminal_host;
 
 pub use custom_page_host::{
     CustomPageHost, DirtyGuardDecision, GlobalCustomPageHost, MountHandle, PageRenderer,
     ShellMountError, ShellPageMount, ShellPageMountRequest, custom_page_host, resolve_renderer,
 };
+pub use terminal_host::{
+    GlobalTerminalHost, TerminalHost, TerminalMount, TerminalMountError, TerminalMountRequest,
+    interpolate_route, terminal_host,
+};
 
+use collection_table::{CollectionTableDelegate, RowActionView, build_table_state};
 use extension_plugin_adapter::{
     BindingContext, ResourceSessionHandle, WorkbenchDispatchError,
     dispatch_invoke_scoped as dispatch_invoke, dispatch_job_scoped as dispatch_job,
@@ -20,9 +27,15 @@ use extension_plugin_adapter::{
 use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::{ResourceWorkbenchPage, ResourceWorkbenchTemplate};
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Window,
-    div, px,
+    AnyElement, App, AppContext, ColorExt as _, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder as _, px,
+};
+use gpui_component::{
+    ActiveTheme, Icon, IconName, Sizable, Size, StyledExt as _, h_flex, spinner::Spinner,
+    tag::Tag, v_flex,
+    button::{Button, ButtonVariants as _},
+    table::{DataTable, TableState},
 };
 
 struct ActiveShellMount {
@@ -31,12 +44,46 @@ struct ActiveShellMount {
     mount: ShellPageMount,
 }
 
+/// 已挂载的终端页面:按 (页面, 路由) 定位,路由变化时重挂。
+struct ActiveTerminalMount {
+    page_id: String,
+    route_key: String,
+    host: std::rc::Rc<dyn TerminalHost>,
+    mount: TerminalMount,
+}
+
 /// 单个页面的加载状态。
 pub enum PageState {
     Idle,
     Loading,
     Loaded(serde_json::Value),
     Failed(String),
+}
+
+/// 待确认的写操作:query 页 execute 或 collection 行操作。
+#[derive(Debug, Clone)]
+enum PendingConfirm {
+    Query(String),
+    RowAction {
+        operation: String,
+        row: serde_json::Value,
+    },
+}
+
+/// 正在执行的行操作:定位到具体一行,只在该行的按钮上显示进行态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RunningRowAction {
+    pub operation: String,
+    pub row_key: String,
+}
+
+/// collection 页表格的缓存:按 (页面, 数据版本, 加载态) 重建,
+/// 避免每次重绘重建实体,同时保证 load 完成时确实刷新成新数据。
+struct CollectionTableView {
+    page_id: String,
+    revision: u64,
+    loading: bool,
+    table: Entity<TableState<CollectionTableDelegate>>,
 }
 
 /// 挂载计数器,用于丢弃迟到结果(旧页面/旧请求的返回不得覆盖新状态)。
@@ -56,9 +103,25 @@ pub struct NativeResourceWorkbench {
     /// query 页面执行状态。
     query_result: Option<Result<serde_json::Value, String>>,
     query_running: bool,
+    /// json 模板页面(overview/detail)的 JSON 值视图,按页面 id 保存。
+    json_views: std::collections::BTreeMap<String, Entity<json_view::JsonValueView>>,
     /// 待用户确认的危险操作 id(native 页面确认条)。
-    pending_confirm: Option<String>,
+    pending_confirm: Option<PendingConfirm>,
+    /// 行操作执行状态:正在执行的 operation 与行标识(渲染为该行按钮的进行态)。
+    row_action_running: Option<RunningRowAction>,
+    /// 行操作失败信息(渲染在页面头部下方)。
+    row_action_error: Option<String>,
+    /// collection 页表格缓存。
+    collection_table: Option<CollectionTableView>,
     shell_mount: Option<ActiveShellMount>,
+    /// terminal 模板页面已挂载的终端。
+    terminal_mount: Option<ActiveTerminalMount>,
+    terminal_error: Option<String>,
+    /// 进入终端页前的来源 (page_id, route),供终端控制台的返回按钮使用。
+    terminal_return: Option<(String, serde_json::Value)>,
+    /// 底部状态栏数据(由 `statusBar.operation` 提供)。
+    status_bar: Option<Result<serde_json::Value, String>>,
+    status_bar_loading: bool,
     renderer_error: Option<String>,
     task_error: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -106,15 +169,27 @@ impl NativeResourceWorkbench {
             query_inputs: Default::default(),
             query_result: None,
             query_running: false,
+            json_views: Default::default(),
             pending_confirm: None,
+            row_action_running: None,
+            row_action_error: None,
+            collection_table: None,
             shell_mount: None,
+            terminal_mount: None,
+            terminal_error: None,
+            terminal_return: None,
+            status_bar: None,
+            status_bar_loading: false,
             renderer_error: None,
             task_error: None,
             _subscriptions: Vec::new(),
         };
         this._subscriptions
             .push(cx.on_release(|this, cx| this.dispose_shell_mount(cx)));
+        this._subscriptions
+            .push(cx.on_release(|this, cx| this.dispose_terminal_mount(cx)));
         this.load_current_page(cx);
+        this.load_status_bar(cx);
         this
     }
 
@@ -125,15 +200,45 @@ impl NativeResourceWorkbench {
         }
     }
 
+    /// 进入终端页前记录来源页;离开终端页时清除。
+    /// 终端控制台隐藏了侧边栏,返回按钮是唯一的原路返回入口。
+    fn track_terminal_return(&mut self, target_page_id: &str) {
+        let target_is_terminal = self
+            .descriptor
+            .pages
+            .iter()
+            .any(|page| page.id == target_page_id && page.template == ResourceWorkbenchTemplate::Terminal);
+        if target_is_terminal {
+            let already_terminal = self
+                .current_page()
+                .map(|page| page.template == ResourceWorkbenchTemplate::Terminal)
+                .unwrap_or(false);
+            if !already_terminal {
+                self.terminal_return =
+                    Some((self.selected_page.clone(), self.route.clone()));
+            }
+        } else {
+            self.terminal_return = None;
+        }
+    }
+
     pub fn select_page(&mut self, page_id: impl Into<String>, cx: &mut Context<Self>) {
         let page_id = page_id.into();
         if !self.descriptor.pages.iter().any(|page| page.id == page_id) {
             return;
         }
+        self.track_terminal_return(&page_id);
         self.dispose_shell_mount(cx);
+        self.dispose_terminal_mount(cx);
         self.selected_page = page_id;
         self.route = serde_json::Value::Null;
         self.query_result = None;
+        self.json_views.clear();
+        self.collection_table = None;
+        self.pending_confirm = None;
+        self.row_action_running = None;
+        self.row_action_error = None;
+        self.terminal_error = None;
         self.load_current_page(cx);
     }
 
@@ -147,10 +252,18 @@ impl NativeResourceWorkbench {
         if !self.descriptor.pages.iter().any(|page| page.id == page_id) {
             return;
         }
+        self.track_terminal_return(&page_id);
         self.dispose_shell_mount(cx);
+        self.dispose_terminal_mount(cx);
         self.selected_page = page_id;
         self.route = route;
         self.query_result = None;
+        self.json_views.clear();
+        self.collection_table = None;
+        self.pending_confirm = None;
+        self.row_action_running = None;
+        self.row_action_error = None;
+        self.terminal_error = None;
         self.load_current_page(cx);
     }
 
@@ -166,6 +279,122 @@ impl NativeResourceWorkbench {
             active.host.dispose(active.mount, cx);
         }
         self.renderer_error = None;
+    }
+
+    /// 回收终端页面挂载:只释放终端实体,不触碰连接主会话。
+    fn dispose_terminal_mount(&mut self, cx: &mut App) {
+        if let Some(active) = self.terminal_mount.take() {
+            active.host.dispose(active.mount, cx);
+        }
+    }
+
+    /// 当前路由的稳定键,用于判断终端是否需按路由变化重挂。
+    fn route_key(&self) -> String {
+        serde_json::to_string(&self.route).unwrap_or_default()
+    }
+
+    /// 按 manifest 的 terminal 声明启动终端并挂载。
+    /// 已挂载且 (页面, 路由) 未变时复用现有终端,避免每次重绘重启进程。
+    fn mount_terminal_page(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<gpui::AnyView> {
+        let Some(declaration) = page.terminal.as_ref() else {
+            self.terminal_error = Some("page declares no terminal block".into());
+            return None;
+        };
+        let Some(host) = terminal_host(cx) else {
+            self.terminal_error = Some("terminal component is unavailable in this build".into());
+            return None;
+        };
+        let route_key = self.route_key();
+        if let Some(active) = &self.terminal_mount {
+            if active.page_id == page.id && active.route_key == route_key {
+                return Some(active.mount.view.clone());
+            }
+        }
+        self.dispose_terminal_mount(cx);
+        let request = TerminalMountRequest {
+            title: page.title.clone(),
+            command: declaration.command.clone(),
+            args: declaration
+                .args
+                .iter()
+                .map(|arg| interpolate_route(arg, &self.route))
+                .collect(),
+            env: declaration
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), interpolate_route(value, &self.route)))
+                .collect(),
+            working_dir: declaration
+                .working_dir
+                .as_deref()
+                .map(|dir| interpolate_route(dir, &self.route)),
+        };
+        match host.mount(request, window, cx) {
+            Ok(mount) => {
+                let view = mount.view.clone();
+                self.terminal_error = None;
+                self.terminal_mount = Some(ActiveTerminalMount {
+                    page_id: page.id.clone(),
+                    route_key,
+                    host,
+                    mount,
+                });
+                Some(view)
+            }
+            Err(error) => {
+                self.terminal_error = Some(error.to_string());
+                None
+            }
+        }
+    }
+
+    /// 拉取底部状态栏数据(statusBar.operation)。
+    fn load_status_bar(&mut self, cx: &mut Context<Self>) {
+        let Some(status_bar) = self.descriptor.status_bar.clone() else {
+            return;
+        };
+        if !self.descriptor.operations.contains_key(&status_bar.operation) {
+            self.status_bar = Some(Err(format!(
+                "unknown status operation `{}`",
+                status_bar.operation
+            )));
+            cx.notify();
+            return;
+        }
+        self.status_bar_loading = true;
+        cx.notify();
+
+        let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let scope = self.session.scope("__status_bar__".to_string(), mount_id);
+        let workbench = self.descriptor.clone();
+        let context = BindingContext {
+            input: serde_json::Value::Null,
+            route: serde_json::Value::Null,
+            selection: serde_json::Value::Null,
+        };
+        let operation = status_bar.operation;
+        let tokio = self.tokio.clone();
+        cx.spawn(async move |this, cx| {
+            let result = tokio
+                .spawn(async move {
+                    dispatch_invoke(&scope, &workbench, &operation, &context, false).await
+                })
+                .await
+                .unwrap_or_else(|join_error| {
+                    Err(WorkbenchDispatchError::Provider(join_error.to_string()))
+                });
+            let _ = this.update(cx, |this, cx| {
+                this.status_bar_loading = false;
+                this.status_bar = Some(result.map_err(|error| error.to_string()));
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn mount_shell_page(
@@ -291,7 +520,7 @@ impl NativeResourceWorkbench {
         // 危险操作先请求确认;确认通过后带 confirmed=true 重新执行。
         let effect = extension_plugin_adapter::operation_effect(&self.descriptor, &action.operation);
         if effect.is_some_and(extension_plugin_adapter::requires_confirmation) {
-            self.pending_confirm = Some(action.operation.clone());
+            self.pending_confirm = Some(PendingConfirm::Query(action.operation.clone()));
             cx.notify();
             return;
         }
@@ -300,21 +529,28 @@ impl NativeResourceWorkbench {
 
     /// 用户确认危险操作后执行。
     fn confirm_pending(&mut self, cx: &mut Context<Self>) {
-        let Some(operation) = self.pending_confirm.take() else {
+        let Some(pending) = self.pending_confirm.take() else {
             return;
         };
-        let Some(page) = self.current_page().cloned() else {
-            return;
-        };
-        if !page
-            .execute
-            .as_ref()
-            .is_some_and(|action| action.operation == operation)
-        {
-            cx.notify();
-            return;
+        match pending {
+            PendingConfirm::Query(operation) => {
+                let Some(page) = self.current_page().cloned() else {
+                    return;
+                };
+                if !page
+                    .execute
+                    .as_ref()
+                    .is_some_and(|action| action.operation == operation)
+                {
+                    cx.notify();
+                    return;
+                }
+                self.run_query(operation, &page, true, cx);
+            }
+            PendingConfirm::RowAction { operation, row } => {
+                self.run_row_action(operation, row, true, cx);
+            }
         }
-        self.run_query(operation, &page, true, cx);
     }
 
     fn cancel_pending(&mut self, cx: &mut Context<Self>) {
@@ -411,41 +647,150 @@ impl NativeResourceWorkbench {
         self.navigate(open.page_id.clone(), route, cx);
     }
 
+    /// collection 行操作:以该行为 selection 执行命名操作,成功后刷新列表。
+    /// 非 read effect 需要用户确认(与 query 页共用确认条)。
+    fn run_row_action(
+        &mut self,
+        operation: String,
+        row: serde_json::Value,
+        confirmed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.descriptor.operations.contains_key(&operation) {
+            self.row_action_error = Some(format!("unknown operation `{operation}`"));
+            cx.notify();
+            return;
+        }
+        if !confirmed {
+            let effect =
+                extension_plugin_adapter::operation_effect(&self.descriptor, &operation);
+            if effect.is_some_and(extension_plugin_adapter::requires_confirmation) {
+                self.pending_confirm = Some(PendingConfirm::RowAction {
+                    operation: operation.clone(),
+                    row,
+                });
+                cx.notify();
+                return;
+            }
+        }
+        self.row_action_running = Some(RunningRowAction {
+            operation: operation.clone(),
+            row_key: self
+                .current_page()
+                .and_then(|page| page.collection.as_ref())
+                .map(|collection| collection_table::row_key(&row, &collection.key_paths))
+                .unwrap_or_default(),
+        });
+        self.row_action_error = None;
+        cx.notify();
+
+        let revision = self.load_revision;
+        let page_id = self.selected_page.clone();
+        let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let scope = self.session.scope(page_id.clone(), mount_id);
+        let workbench = self.descriptor.clone();
+        let context = BindingContext {
+            input: serde_json::Value::Null,
+            route: self.route.clone(),
+            selection: row,
+        };
+        let tokio = self.tokio.clone();
+        cx.spawn(async move |this, cx| {
+            let result = tokio
+                .spawn(async move {
+                    dispatch_invoke(&scope, &workbench, &operation, &context, true).await
+                })
+                .await
+                .unwrap_or_else(|join_error| {
+                    Err(WorkbenchDispatchError::Provider(join_error.to_string()))
+                });
+            let _ = this.update(cx, |this, cx| {
+                // 页面已切换或已重新加载:丢弃迟到结果。
+                if this.load_revision != revision || this.selected_page != page_id {
+                    return;
+                }
+                this.row_action_running = None;
+                match &result {
+                    Ok(_) => {
+                        this.row_action_error = None;
+                        // 操作改变了 provider 状态,重新拉取列表。
+                        this.load_current_page(cx);
+                    }
+                    Err(error) => {
+                        this.row_action_error = Some(error.to_string());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// 左侧页面导航:主题化的侧栏 + 选中态。
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let selected = self.selected_page.clone();
-        div()
-            .w(px(200.))
+        let theme = cx.theme().clone();
+        let entries = self.descriptor.navigation.iter().filter_map(|item| {
+            self.descriptor
+                .pages
+                .iter()
+                .find(|page| page.id == item.page_id)
+                .map(|page| (page.id.clone(), page.title.clone()))
+        });
+        let mut list = v_flex().w_full().gap_0p5();
+        for (page_id, title) in entries {
+            let is_selected = page_id == selected;
+            let target = page_id.clone();
+            list = list.child(
+                h_flex()
+                    .id(page_id)
+                    .w_full()
+                    .min_w_0()
+                    .px_2()
+                    .py_1()
+                    .rounded(theme.radius)
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(if is_selected {
+                        theme.sidebar_accent_foreground
+                    } else {
+                        theme.sidebar_foreground
+                    })
+                    .when(is_selected, |this| {
+                        this.bg(theme.sidebar_accent).font_medium()
+                    })
+                    .when(!is_selected, |this| {
+                        let hover = theme.list_hover;
+                        this.hover(move |this| this.bg(hover))
+                    })
+                    .child(div().min_w_0().truncate().child(title))
+                    .on_click(cx.listener(
+                        move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.select_page(target.clone(), cx);
+                        },
+                    )),
+            );
+        }
+        v_flex()
+            .w(px(208.))
             .h_full()
             .flex_shrink_0()
-            .p_3()
-            .child(div().mb_2().child("Pages"))
-            .children(self.descriptor.navigation.iter().filter_map(|item| {
-                self.descriptor
-                    .pages
-                    .iter()
-                    .find(|page| page.id == item.page_id)
-                    .map(|page| {
-                        let page_id = page.id.clone();
-                        let title = page.title.clone();
-                        let is_selected = page.id == selected;
-                        let mut entry = div()
-                            .id(page.id.clone())
-                            .py_1()
-                            .px_2()
-                            .mb_1()
-                            .cursor_pointer()
-                            .child(title);
-                        if is_selected {
-                            entry = entry.bg(gpui::rgb(0x333333));
-                        }
-                        let handler = cx.listener(
-                            move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                                this.select_page(page_id.clone(), cx);
-                            },
-                        );
-                        entry.on_click(handler)
-                    })
-            }))
+            .gap_1()
+            .px_2()
+            .py_3()
+            .bg(theme.sidebar)
+            .border_r_1()
+            .border_color(theme.sidebar_border)
+            .child(
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(theme.muted_foreground)
+                    .child("Pages"),
+            )
+            .child(list)
     }
 
     fn render_page(
@@ -459,14 +804,22 @@ impl NativeResourceWorkbench {
         let renderer = resolve_renderer(&page.renderer, custom_page_host(cx).is_some());
         if let PageRenderer::Shell { view_id } = renderer {
             if let Some(view) = self.mount_shell_page(&page, &view_id, window, cx) {
-                return div().size_full().child(view).into_any_element();
+                let body = div()
+                    .id("shell-page-body")
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(view)
+                    .into_any_element();
+                return self.render_shell_page_frame(&page, body, cx).into_any_element();
             }
             if page.renderer.fallback.as_deref() != Some("native") {
                 let error = self
                     .renderer_error
                     .clone()
                     .unwrap_or_else(|| "Shell renderer is unavailable".into());
-                return div().p_4().child(error).into_any_element();
+                let body = div().p_4().child(error).into_any_element();
+                return self.render_shell_page_frame(&page, body, cx).into_any_element();
             }
         }
         if page.template == ResourceWorkbenchTemplate::Query {
@@ -475,32 +828,63 @@ impl NativeResourceWorkbench {
         if page.template == ResourceWorkbenchTemplate::Tasks {
             return self.render_tasks_page(&page, cx).into_any_element();
         }
+        // terminal 模板由 render() 直接接管,不进入工作台框架。
 
-        let mut header = div()
+        let theme = cx.theme().clone();
+        let state = self.page_state_snapshot();
+        let is_collection = page.template == ResourceWorkbenchTemplate::Collection;
+        let busy = self.row_action_running.is_some() || matches!(self.page_state, PageState::Loading);
+
+        // 工具栏:标题 + 行数徽章 + 路由上下文(右侧为页面动作)。
+        let mut toolbar = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
             .px_4()
-            .py_3()
-            .child(div().text_xl().child(page.title.clone()));
-        if let Some(error) = &self.renderer_error {
-            header = header.child(
+            .py_2p5()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
                 div()
-                    .mt_1()
-                    .text_color(gpui::rgb(0xd7a23a))
-                    .child(format!("Shell fallback: {error}")),
+                    .min_w_0()
+                    .truncate()
+                    .text_base()
+                    .font_semibold()
+                    .child(page.title.clone()),
+            );
+        if let (Some(collection), PageStateSnapshot::Loaded(value)) =
+            (page.collection.as_ref(), &state)
+        {
+            let count = collection_table::items_of(collection, value).len();
+            toolbar = toolbar.child(
+                Tag::secondary()
+                    .with_size(Size::Small)
+                    .child(count.to_string()),
             );
         }
+        if let Some(summary) = self.route_summary() {
+            toolbar = toolbar.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(summary),
+            );
+        }
+        toolbar = toolbar.child(div().flex_1());
         // detail 页 links(如 Index → Mapping)。
         for (link_index, link) in page.links.iter().enumerate() {
             let target = link.page_id.clone();
             let route =
                 route_binding::build_route(&link.route, &self.route, &serde_json::Value::Null);
-            let title = link.title.clone();
-            header = header.child(
-                div()
-                    .id(("link", link_index))
-                    .mt_1()
-                    .cursor_pointer()
-                    .text_color(gpui::rgb(0x6cb6ff))
-                    .child(title)
+            toolbar = toolbar.child(
+                Button::new(gpui::SharedString::from(format!("page-link-{link_index}")))
+                    .with_size(Size::Small)
+                    .ghost()
+                    .icon(IconName::ArrowRight)
+                    .label(link.title.clone())
                     .on_click(cx.listener(
                         move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
                             this.navigate(target.clone(), route.clone(), cx);
@@ -508,38 +892,417 @@ impl NativeResourceWorkbench {
                     )),
             );
         }
-        let state = self.page_state_snapshot();
-        let body = match state {
-            PageStateSnapshot::Idle => div().p_4().child("Ready").into_any_element(),
-            PageStateSnapshot::Loading => div().p_4().child("Loading...").into_any_element(),
-            PageStateSnapshot::Failed(error) => div()
-                .p_4()
-                .child(format!("Error: {error}"))
-                .into_any_element(),
+        // collection 页刷新:重新执行页面 load 操作。
+        if is_collection && page.load.is_some() {
+            toolbar = toolbar.child(
+                Button::new("page-refresh")
+                    .with_size(Size::Small)
+                    .ghost()
+                    .icon(IconName::Refresh)
+                    .tooltip("Refresh")
+                    .loading(busy)
+                    .on_click(cx.listener(
+                        |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.load_current_page(cx);
+                        },
+                    )),
+            );
+        }
+
+        // 提示条:shell 回退 / 行操作失败 / 危险操作确认。
+        let mut alerts: Vec<AnyElement> = Vec::new();
+        if let Some(error) = self.renderer_error.clone() {
+            alerts.push(alert_bar(
+                AlertTone::Warning,
+                IconName::TriangleAlert,
+                format!("Shell renderer fallback: {error}"),
+                &theme,
+            ));
+        }
+        if let Some(error) = self.row_action_error.clone() {
+            alerts.push(alert_bar(
+                AlertTone::Danger,
+                IconName::CircleX,
+                format!("Action failed: {error}"),
+                &theme,
+            ));
+        }
+        if matches!(self.pending_confirm, Some(PendingConfirm::RowAction { .. })) {
+            alerts.push(self.render_confirm_bar("row-action-confirm", cx));
+        }
+        // 主体:collection 走表格卡片,其余模板维持自带滚动的全幅视图。
+        let body: AnyElement = match state {
+            PageStateSnapshot::Loading if is_collection => {
+                self.render_collection(&page, &serde_json::Value::Null, window, cx)
+            }
+            PageStateSnapshot::Loading => loading_state(&theme),
+            PageStateSnapshot::Failed(error) => self.render_failure(error, cx),
+            PageStateSnapshot::Idle => empty_state(
+                IconName::Inbox,
+                "Nothing to show",
+                "This view has no data to load.",
+                &theme,
+            ),
             PageStateSnapshot::Loaded(value) => {
-                if page.template == ResourceWorkbenchTemplate::Collection {
-                    self.render_collection(&page, &value, cx).into_any_element()
+                if is_collection {
+                    self.render_collection(&page, &value, window, cx)
                 } else {
-                    render_json(&value).into_any_element()
+                    self.render_json_value(&page.id, value, window, cx)
                 }
             }
         };
-        div()
+        let body_container = if is_collection {
+            div()
+                .id("page-body")
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .mx_3()
+                .mb_3()
+                .rounded(theme.radius_lg)
+                .border_1()
+                .border_color(theme.border)
+                .overflow_hidden()
+                .child(body)
+        } else {
+            div()
+                .id("page-body")
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .child(body)
+        };
+        let mut page_view = v_flex()
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .flex()
-            .flex_col()
-            .child(header)
+            .bg(theme.background)
+            .child(toolbar);
+        if let Some(strip) = self.render_tab_strip(&page, cx) {
+            page_view = page_view.child(strip);
+        }
+        if !alerts.is_empty() {
+            page_view = page_view.child(v_flex().w_full().gap_2().px_4().py_2().children(alerts));
+        }
+        page_view.child(body_container).into_any_element()
+    }
+
+    /// shell 渲染器页面的外壳:页头 + tab 条 + 内容。
+    /// 覆盖页面与原生页面共用同一套导航骨架,否则 shell 页会丢掉 tab 条,
+    /// 用户在 tab 之间跳转时导航会突然消失。
+    fn render_shell_page_frame(
+        &self,
+        page: &ResourceWorkbenchPage,
+        body: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let mut header = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2p5()
+            .border_b_1()
+            .border_color(theme.border)
             .child(
                 div()
-                    .id("page-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(body),
-            )
+                    .min_w_0()
+                    .truncate()
+                    .text_base()
+                    .font_semibold()
+                    .child(page.title.clone()),
+            );
+        if let Some(summary) = self.route_summary() {
+            header = header.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(summary),
+            );
+        }
+        let mut view = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .bg(theme.background)
+            .child(header);
+        if let Some(strip) = self.render_tab_strip(page, cx) {
+            view = view.child(strip);
+        }
+        view.child(div().flex_1().min_h_0().min_w_0().overflow_hidden().child(body))
             .into_any_element()
+    }
+
+    /// 页面 tab 条:Docker Desktop 式下划线标签,当前页高亮。
+    /// 只有声明了 `tabs` 的页面才有;每个页面声明完整 tab 列表,
+    /// 渲染时按 `pageId == 当前页 id` 判定选中项。
+    fn render_tab_strip(
+        &self,
+        page: &ResourceWorkbenchPage,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if page.tabs.is_empty() {
+            return None;
+        }
+        let theme = cx.theme().clone();
+        let mut strip = h_flex()
+            .id("page-tabs")
+            .w_full()
+            .min_w_0()
+            .items_end()
+            .gap_5()
+            .px_4()
+            .border_b_1()
+            .border_color(theme.border);
+        for tab in &page.tabs {
+            let active = tab.page_id == page.id;
+            let target = tab.page_id.clone();
+            let route =
+                route_binding::build_route(&tab.route, &self.route, &serde_json::Value::Null);
+            let label_color = if active {
+                theme.foreground
+            } else {
+                theme.muted_foreground
+            };
+            // 未选中项用透明下划线占位,保证所有 tab 基线一致。
+            let underline = if active {
+                theme.primary
+            } else {
+                theme.border.opacity(0.0)
+            };
+            strip = strip.child(
+                v_flex()
+                    .id(gpui::SharedString::from(format!("page-tab-{}", tab.id)))
+                    .gap_1p5()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(label_color)
+                            .when(active, |this| this.font_medium())
+                            .child(tab.title.clone()),
+                    )
+                    .child(div().h(px(2.)).w_full().rounded_full().bg(underline))
+                    .on_click(cx.listener(
+                        move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.navigate(target.clone(), route.clone(), cx);
+                        },
+                    )),
+            );
+        }
+        Some(strip.into_any_element())
+    }
+
+    /// terminal 模板页面:独立的全区域「终端控制台」。
+    /// 不走工作台框架(无侧边栏、无底部状态栏),顶栏 = 返回 + 标题 + 命令,
+    /// 其下保留页面的 tab 条(如有),终端铺满剩余空间。
+    fn render_terminal_page(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let body: AnyElement = match self.mount_terminal_page(page, window, cx) {
+            Some(view) => div()
+                .id("terminal-body")
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .bg(theme.background)
+                .child(view)
+                .into_any_element(),
+            None => {
+                let error = self
+                    .terminal_error
+                    .clone()
+                    .unwrap_or_else(|| "terminal is unavailable".into());
+                empty_state(
+                    IconName::TriangleAlert,
+                    "Terminal unavailable",
+                    error,
+                    &theme,
+                )
+            }
+        };
+        let mut header = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.background);
+        // 返回来源页:终端页没有侧边栏,这是唯一的原路返回入口。
+        if let Some((return_page, return_route)) = self.terminal_return.clone() {
+            header = header.child(
+                Button::new("terminal-back")
+                    .with_size(Size::Small)
+                    .ghost()
+                    .icon(IconName::ArrowLeft)
+                    .tooltip("Back")
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        let page_id = return_page.clone();
+                        let route = return_route.clone();
+                        this.navigate(page_id, route, cx);
+                    })),
+            );
+        }
+        header = header.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_base()
+                .font_semibold()
+                .child(page.title.clone()),
+        );
+        if let Some(command) = page.terminal.as_ref().map(|terminal| {
+            let args = terminal
+                .args
+                .iter()
+                .map(|arg| interpolate_route(arg, &self.route))
+                .collect::<Vec<_>>();
+            std::iter::once(terminal.command.clone())
+                .chain(args)
+                .collect::<Vec<_>>()
+                .join(" ")
+        }) {
+            header = header.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(command),
+            );
+        } else {
+            header = header.child(div().flex_1());
+        }
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .bg(theme.background)
+            .child(header)
+            .children(self.render_tab_strip(page, cx))
+            .child(body)
+            .into_any_element()
+    }
+
+    /// 底部状态栏:engine 状态 + 资源计数 + 磁盘/容器占用。
+    /// 未声明 `statusBar` 的工作台不渲染。
+    fn render_status_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.descriptor.status_bar.as_ref()?;
+        let theme = cx.theme().clone();
+        let value = match &self.status_bar {
+            Some(Ok(value)) => Some(value),
+            _ => None,
+        };
+        let number = |key: &str| {
+            value
+                .and_then(|value| value.get(key))
+                .and_then(serde_json::Value::as_i64)
+        };
+        let engine_ok = value
+            .and_then(|value| value.get("engine"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+        let mut bar = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_3()
+            .px_4()
+            .py_1p5()
+            .border_t_1()
+            .border_color(theme.border)
+            .text_xs()
+            .text_color(theme.muted_foreground);
+
+        // 左:引擎状态指示点 + 文案。
+        let dot_color = if engine_ok { theme.success } else { theme.danger };
+        bar = bar
+            .child(div().size(px(8.)).rounded_full().bg(dot_color))
+            .child(div().text_color(theme.foreground).child(if engine_ok {
+                "Engine running"
+            } else {
+                "Engine unavailable"
+            }));
+        if let Some(version) = value
+            .and_then(|value| value.get("server_version"))
+            .and_then(serde_json::Value::as_str)
+        {
+            bar = bar.child(div().child(format!("v{version}")));
+        }
+
+        // 中:资源计数与占用。数据未就绪时只显示加载提示。
+        bar = bar.child(div().flex_1());
+        if let Some(error) = match &self.status_bar {
+            Some(Err(error)) => Some(error.clone()),
+            _ => None,
+        } {
+            bar = bar.child(div().text_color(theme.danger).child(error));
+        } else if let Some(value) = value {
+            let containers_running = number("containers_running").unwrap_or(0);
+            let containers_total = number("containers_total").unwrap_or(0);
+            let images = number("images").unwrap_or(0);
+            let volumes = number("volumes").unwrap_or(0);
+            let networks = number("networks").unwrap_or(0);
+            let disk = number("disk_used_bytes").unwrap_or(0);
+            let memory = number("containers_memory_bytes").unwrap_or(0);
+            let cpu = value
+                .get("containers_cpu_percent")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            for (label, text) in [
+                (
+                    "Containers",
+                    format!("{containers_running}/{containers_total}"),
+                ),
+                ("Images", images.to_string()),
+                ("Volumes", volumes.to_string()),
+                ("Networks", networks.to_string()),
+                ("Disk", format_bytes(disk)),
+                ("RAM", format_bytes(memory)),
+                ("CPU", format!("{cpu:.2}%")),
+            ] {
+                bar = bar.child(
+                    h_flex()
+                        .gap_1()
+                        .child(div().child(label))
+                        .child(div().text_color(theme.foreground).child(text)),
+                );
+            }
+        } else {
+            bar = bar.child(div().child("Loading usage…"));
+        }
+
+        // 右:手动刷新。
+        bar = bar.child(
+            Button::new("status-refresh")
+                .with_size(Size::XSmall)
+                .ghost()
+                .icon(IconName::Refresh)
+                .tooltip("Refresh usage")
+                .loading(self.status_bar_loading)
+                .on_click(cx.listener(
+                    |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                        this.load_status_bar(cx);
+                    },
+                )),
+        );
+        Some(bar.into_any_element())
     }
 
     fn render_query_page(
@@ -554,89 +1317,70 @@ impl NativeResourceWorkbench {
             .entry(self.selected_page.clone())
             .or_insert_with(|| cx.new(|cx| query_page::QueryInputState::new(page, window, cx)))
             .clone();
-        let execute_label = if self.query_running {
-            "Running..."
-        } else {
-            "Execute"
+        let theme = cx.theme().clone();
+        let result_view: AnyElement = match &self.query_result {
+            None => empty_state(
+                IconName::Info,
+                "No result yet",
+                "Run the operation to see its output here.",
+                &theme,
+            ),
+            Some(Ok(value)) => self.render_embedded_json(value.clone(), window, cx),
+            Some(Err(error)) => self.render_failure(error.clone(), cx),
         };
-        let result_view = match &self.query_result {
-            None => div().p_4().child("Enter parameters and run"),
-            Some(Ok(value)) => render_json(value),
-            Some(Err(error)) => div().p_4().child(format!("Error: {error}")),
-        };
-        let mut view = div()
+        let mut view = v_flex()
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .flex()
-            .flex_col()
+            .bg(theme.background)
             .child(
-                div()
-                    .px_4()
-                    .py_3()
-                    .child(div().text_xl().child(page.title.clone())),
-            )
-            .child(
-                div()
-                    .px_4()
-                    .py_2()
-                    .flex()
-                    .flex_col()
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
                     .gap_2()
-                    .child(input_state)
+                    .px_4()
+                    .py_2p5()
+                    .border_b_1()
+                    .border_color(theme.border)
                     .child(
                         div()
-                            .id("query-execute")
-                            .px_3()
-                            .py_1()
-                            .cursor_pointer()
-                            .bg(gpui::rgb(0x2d5a2d))
-                            .child(execute_label)
+                            .min_w_0()
+                            .truncate()
+                            .text_base()
+                            .font_semibold()
+                            .child(page.title.clone()),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .px_4()
+                    .py_3()
+                    .child(input_state)
+                    .child(h_flex().w_full().justify_end().child(
+                        Button::new("query-execute")
+                            .with_size(Size::Small)
+                            .primary()
+                            .icon(IconName::Play)
+                            .label("Run")
+                            .loading(self.query_running)
                             .on_click(cx.listener(
                                 move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
                                     this.execute_query(cx);
                                 },
                             )),
-                    ),
+                    )),
             );
         // 危险操作确认条:确认/取消后继续或放弃本次写操作。
         if self.pending_confirm.is_some() {
             view = view.child(
-                div()
-                    .id("query-confirm")
+                h_flex()
+                    .w_full()
                     .px_4()
-                    .py_2()
-                    .bg(gpui::rgb(0x3a2d1a))
-                    .flex()
-                    .gap_3()
-                    .child("This operation may change data. Confirm?")
-                    .child(
-                        div()
-                            .id("query-confirm-ok")
-                            .px_3()
-                            .py_1()
-                            .cursor_pointer()
-                            .bg(gpui::rgb(0x8a3a2a))
-                            .child("Confirm")
-                            .on_click(cx.listener(
-                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                                    this.confirm_pending(cx);
-                                },
-                            )),
-                    )
-                    .child(
-                        div()
-                            .id("query-confirm-cancel")
-                            .px_3()
-                            .py_1()
-                            .cursor_pointer()
-                            .child("Cancel")
-                            .on_click(cx.listener(
-                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                                    this.cancel_pending(cx);
-                                },
-                            )),
-                    ),
+                    .pb_2()
+                    .child(self.render_confirm_bar("query-confirm", cx)),
             );
         }
         view.child(
@@ -644,8 +1388,109 @@ impl NativeResourceWorkbench {
                 .id("query-result")
                 .flex_1()
                 .min_h_0()
+                .min_w_0()
                 .overflow_y_scroll()
                 .child(result_view),
+        )
+    }
+
+    /// 危险操作确认条:warning 提示 + Confirm/Cancel,query 与 collection 行操作共用。
+    fn render_confirm_bar(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.warning.opacity(0.45))
+            .bg(theme.warning.opacity(0.12))
+            .child(Icon::new(IconName::TriangleAlert).size_4().text_color(theme.warning))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child("This operation may change data. Continue?"),
+            )
+            .child(
+                Button::new(gpui::SharedString::from(format!("{id}-confirm")))
+                    .with_size(Size::Small)
+                    .danger()
+                    .label("Confirm")
+                    .on_click(cx.listener(
+                        |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.confirm_pending(cx);
+                        },
+                    )),
+            )
+            .child(
+                Button::new(gpui::SharedString::from(format!("{id}-cancel")))
+                    .with_size(Size::Small)
+                    .label("Cancel")
+                    .on_click(cx.listener(
+                        |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.cancel_pending(cx);
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// 加载失败态:图标 + 原因 + 重试。
+    fn render_failure(&self, error: String, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(Icon::new(IconName::TriangleAlert).size_6().text_color(theme.danger))
+            .child(
+                div()
+                    .text_sm()
+                    .font_medium()
+                    .child("Could not load this page"),
+            )
+            .child(
+                div()
+                    .max_w(px(520.))
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(error),
+            )
+            .child(
+                Button::new("page-retry")
+                    .with_size(Size::Small)
+                    .icon(IconName::Refresh)
+                    .label("Retry")
+                    .on_click(cx.listener(
+                        |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                            this.load_current_page(cx);
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// 当前路由的摘要(如 `id: abc123`),用于工具栏上下文。
+    fn route_summary(&self) -> Option<String> {
+        let serde_json::Value::Object(entries) = &self.route else {
+            return None;
+        };
+        if entries.is_empty() {
+            return None;
+        }
+        Some(
+            entries
+                .iter()
+                .map(|(key, value)| format!("{key}: {}", plain_text(value)))
+                .collect::<Vec<_>>()
+                .join("   "),
         )
     }
 
@@ -673,32 +1518,57 @@ impl NativeResourceWorkbench {
         page: &ResourceWorkbenchPage,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
         let tasks = self.session.task_snapshots();
-        let body = if tasks.is_empty() {
-            div().p_4().child("No tasks").into_any_element()
+        let body: AnyElement = if tasks.is_empty() {
+            empty_state(
+                IconName::ListChecks,
+                "No tasks",
+                "Long running operations started from this connection appear here.",
+                &theme,
+            )
         } else {
-            let mut list = div().flex().flex_col();
+            let mut list = v_flex().w_full();
             for (index, task) in tasks.into_iter().enumerate() {
                 let cancellable = matches!(
                     task.state,
                     extension_protocol::job::JobState::Queued
                         | extension_protocol::job::JobState::Running
                 );
+                let state_label = format!("{:?}", task.state);
                 let job_id = task.job_id.clone();
-                let mut row = div()
-                    .py_2()
+                let mut row = h_flex()
+                    .id(("task-row", index))
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_3()
                     .px_4()
-                    .child(format!("{}  ({:?})", task.job_id, task.state));
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme.table_row_border)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_sm()
+                            .child(task.job_id.clone()),
+                    )
+                    .child(Tag::secondary().with_size(Size::Small).child(state_label))
+                    .child(div().flex_1());
                 if cancellable {
                     row = row.child(
-                        div()
-                            .id(("cancel-task", index))
-                            .ml_2()
-                            .cursor_pointer()
-                            .text_color(gpui::rgb(0xe06c75))
-                            .child("Cancel")
+                        Button::new(gpui::SharedString::from(format!("cancel-task-{index}")))
+                            .with_size(Size::Small)
+                            .ghost()
+                            .icon(IconName::Close)
+                            .label("Cancel")
                             .on_click(cx.listener(
-                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                move |this: &mut Self,
+                                    _event: &gpui::ClickEvent,
+                                    _window,
+                                    cx| {
                                     this.cancel_task(job_id.clone(), cx);
                                 },
                             )),
@@ -708,122 +1578,291 @@ impl NativeResourceWorkbench {
             }
             list.into_any_element()
         };
-        let mut view = div().flex_1().min_w_0().min_h_0().flex().flex_col().child(
-            div()
-                .px_4()
-                .py_3()
-                .child(div().text_xl().child(page.title.clone()))
-                .child(
-                    div()
-                        .id("refresh-tasks")
-                        .mt_1()
-                        .cursor_pointer()
-                        .text_color(gpui::rgb(0x6cb6ff))
-                        .child("Refresh")
-                        .on_click(cx.listener(
-                            |_this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                                cx.notify();
-                            },
-                        )),
-                ),
-        );
+        let mut view = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .bg(theme.background)
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .px_4()
+                    .py_2p5()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_base()
+                            .font_semibold()
+                            .child(page.title.clone()),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("refresh-tasks")
+                            .with_size(Size::Small)
+                            .ghost()
+                            .icon(IconName::Refresh)
+                            .tooltip("Refresh")
+                            .on_click(cx.listener(
+                                |_this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                    cx.notify();
+                                },
+                            )),
+                    ),
+            );
         if let Some(error) = self.task_error.clone() {
-            view = view.child(div().px_4().text_color(gpui::rgb(0xe06c75)).child(error));
+            view = view.child(
+                h_flex()
+                    .w_full()
+                    .px_4()
+                    .py_2()
+                    .child(alert_bar(
+                        AlertTone::Danger,
+                        IconName::CircleX,
+                        error,
+                        &theme,
+                    )),
+            );
         }
-        view.child(div().flex_1().min_h_0().overflow_hidden().child(body))
+        view.child(div().flex_1().min_h_0().min_w_0().overflow_hidden().child(body))
     }
 }
 
-/// JSON pretty 渲染(通用,任何模板的加载结果都可用)。
-fn render_json(value: &serde_json::Value) -> gpui::Div {
-    let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".into());
-    div().p_4().child(text)
+/// 提示条语义色。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AlertTone {
+    Warning,
+    Danger,
 }
 
-/// 把 manifest 声明的 `/name` 路径归一为 serde_json pointer 形式。
-fn pointer_path(path: &str) -> String {
-    if path.starts_with('/') {
-        path.to_string()
+/// 页面内提示条:图标 + 文案,描边染色而不是实心色块。
+fn alert_bar(tone: AlertTone, icon: IconName, message: String, theme: &gpui_component::Theme) -> AnyElement {
+    let accent = match tone {
+        AlertTone::Warning => theme.warning,
+        AlertTone::Danger => theme.danger,
+    };
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(accent.opacity(0.45))
+        .bg(accent.opacity(0.1))
+        .child(Icon::new(icon).size_4().text_color(accent))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(message),
+        )
+        .into_any_element()
+}
+
+/// 加载态:转圈 + 说明。
+fn loading_state(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .child(
+            Spinner::new()
+                .with_size(Size::Medium)
+                .color(theme.muted_foreground),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Loading…"),
+        )
+        .into_any_element()
+}
+
+/// 空态:图标 + 标题 + 说明。
+fn empty_state(
+    icon: IconName,
+    title: impl Into<SharedString>,
+    hint: impl Into<SharedString>,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(
+            Icon::new(icon)
+                .size_8()
+                .text_color(theme.muted_foreground.opacity(0.6)),
+        )
+        .child(
+            div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.foreground)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .max_w(px(420.))
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(hint.into()),
+        )
+        .into_any_element()
+}
+
+/// 路由/表格值的纯文本形式。
+fn plain_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Null => "-".into(),
+        other => other.to_string(),
+    }
+}
+
+/// 人类可读的字节数:1.2 GB / 340.5 MB / 12.0 KB。
+fn format_bytes(bytes: i64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let value = bytes.max(0) as f64;
+    if value >= GB {
+        format!("{:.2} GB", value / GB)
+    } else if value >= MB {
+        format!("{:.1} MB", value / MB)
+    } else if value >= KB {
+        format!("{:.1} KB", value / KB)
     } else {
-        format!("/{path}")
+        format!("{} B", bytes.max(0))
     }
 }
 
 impl NativeResourceWorkbench {
-    /// collection 渲染:声明列 + 行点击导航(按 open 声明)。
+    /// query 结果等内嵌场景:复用页面级 JSON 值视图(独立于页面 load 状态)。
+    fn render_embedded_json(
+        &mut self,
+        value: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = format!("{}::result", self.selected_page);
+        self.render_json_value(&key, value, window, cx)
+    }
+
+    /// json 模板页面渲染:复用 json_view 的通用 JSON 值视图(树 / 原始编辑器)。
+    /// 惰性创建页面级实体;数据刷新时仅在树模式下同步新值,保留用户切换的
+    /// Raw 编辑内容不被打断。
+    fn render_json_value(
+        &mut self,
+        page_id: &str,
+        value: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let needs_reset = match self.json_views.get(page_id) {
+            Some(view) => {
+                let view = view.read(cx);
+                view.mode() == json_view::JsonDisplayMode::Tree
+                    && view.snapshot() != Some(&value)
+            }
+            None => true,
+        };
+        if needs_reset {
+            if let Some(existing) = self.json_views.get(page_id).cloned() {
+                existing.update(cx, |view, cx| view.set_value(value.clone(), window, cx));
+            } else {
+                let view =
+                    cx.new(|cx| json_view::JsonValueView::new(value.clone(), window, cx));
+                self.json_views.insert(page_id.to_string(), view);
+            }
+        }
+        let view = self.json_views[page_id].clone();
+        div()
+            .id("page-json-view")
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(view)
+            .into_any_element()
+    }
+
+    /// collection 渲染:交给 `gpui-component` 的 DataTable(主题化表头 / 斑马纹 /
+    /// 行悬停 / 列缩放 / 本地排序 / 骨架加载),行操作按钮在操作列内渲染。
     fn render_collection(
         &mut self,
         page: &ResourceWorkbenchPage,
         value: &serde_json::Value,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let Some(collection) = &page.collection else {
-            return render_json(value);
+    ) -> AnyElement {
+        let Some(collection) = page.collection.clone() else {
+            return self.render_json_value(&page.id, value.clone(), window, cx);
         };
-        let items = value
-            .pointer(&pointer_path(&collection.items_path))
-            .cloned()
-            .and_then(|items| items.as_array().cloned())
-            .unwrap_or_default();
-        let column_count = collection.columns.len().max(1);
-        let mut table = div().flex().flex_col();
-        let mut header_row = div().flex().py_1();
-        for column in &collection.columns {
-            header_row = header_row.child(
-                div()
-                    .w(px(720.0 / column_count as f32))
-                    .px_2()
-                    .child(column.title.clone()),
+        let loading = matches!(self.page_state, PageState::Loading);
+        let items = if loading {
+            Vec::new()
+        } else {
+            collection_table::items_of(&collection, value)
+        };
+        // 表格实体按 (页面, 数据版本) 缓存:首次加载给骨架屏,已有数据时
+        // 保留旧行(由工具栏刷新按钮表达进行中),避免每次操作都闪一次骨架。
+        let stale = self.collection_table.as_ref().is_none_or(|cached| {
+            cached.page_id != page.id
+                || (!loading && (cached.loading || cached.revision != self.load_revision))
+        });
+        if stale {
+            let actions = collection
+                .actions
+                .iter()
+                .map(|action| {
+                    let destructive = matches!(
+                        extension_plugin_adapter::operation_effect(
+                            &self.descriptor,
+                            &action.operation
+                        ),
+                        Some(
+                            extension_runtime::extension::manifest::ResourceWorkbenchEffect::Destructive
+                        )
+                    );
+                    RowActionView::from_manifest(action, destructive)
+                })
+                .collect();
+            let delegate = CollectionTableDelegate::new(
+                &collection,
+                items,
+                actions,
+                cx.entity().downgrade(),
+                loading,
             );
+            let table = build_table_state(delegate, window, cx);
+            self.collection_table = Some(CollectionTableView {
+                page_id: page.id.clone(),
+                revision: self.load_revision,
+                loading,
+                table,
+            });
         }
-        table = table.child(header_row);
-        for (row_index, item) in items.into_iter().enumerate() {
-            let mut row = div().flex().py_1();
-            for column in &collection.columns {
-                let cell = item
-                    .pointer(&pointer_path(&column.path))
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                let text = match cell {
-                    serde_json::Value::String(text) => text,
-                    serde_json::Value::Null => String::new(),
-                    other => other.to_string(),
-                };
-                row = row.child(div().w(px(720.0 / column_count as f32)).px_2().child(text));
-            }
-            if collection.open.is_some() {
-                let clicked = item.clone();
-                let clickable = div()
-                    .id(("row", row_index))
-                    .flex()
-                    .py_1()
-                    .cursor_pointer()
-                    .on_click(cx.listener(
-                        move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                            this.open_collection_row(clicked.clone(), cx);
-                        },
-                    ));
-                // 重建行(带 id)保持类型一致。
-                let mut stateful_row = clickable;
-                for column in &collection.columns {
-                    let cell = item
-                        .pointer(&pointer_path(&column.path))
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    let text = match cell {
-                        serde_json::Value::String(text) => text,
-                        serde_json::Value::Null => String::new(),
-                        other => other.to_string(),
-                    };
-                    stateful_row = stateful_row
-                        .child(div().w(px(720.0 / column_count as f32)).px_2().child(text));
-                }
-                table = table.child(stateful_row);
-            } else {
-                table = table.child(row);
-            }
-        }
-        table
+        let Some(cached) = self.collection_table.as_ref() else {
+            return div().into_any_element();
+        };
+        DataTable::new(&cached.table)
+            .stripe(true)
+            .bordered(false)
+            .scrollbar_visible(true, true)
+            .with_size(Size::Small)
+            .into_any_element()
     }
 }
 
@@ -837,6 +1876,34 @@ impl Focusable for NativeResourceWorkbench {
 
 impl Render for NativeResourceWorkbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // terminal 模板页:独立的全区域终端控制台,不带侧边栏与底部状态栏。
+        if self
+            .current_page()
+            .map(|page| page.template == ResourceWorkbenchTemplate::Terminal)
+            .unwrap_or(false)
+        {
+            let page = self.current_page().cloned().unwrap_or_else(|| {
+                self.descriptor
+                    .pages
+                    .first()
+                    .cloned()
+                    .expect("workbench has at least one page")
+            });
+            return div()
+                .id("resource-workbench")
+                .track_focus(&self.focus_handle)
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(self.render_terminal_page(&page, window, cx));
+        }
+        let page = self.render_page(window, cx);
+        let status_bar = self.render_status_bar(cx);
+        let mut main_column = v_flex().flex_1().min_w_0().min_h_0().child(page);
+        if let Some(status_bar) = status_bar {
+            main_column = main_column.child(status_bar);
+        }
         div()
             .id("resource-workbench")
             .track_focus(&self.focus_handle)
@@ -846,6 +1913,6 @@ impl Render for NativeResourceWorkbench {
             .overflow_hidden()
             .flex()
             .child(self.render_nav(cx))
-            .child(self.render_page(window, cx))
+            .child(main_column)
     }
 }

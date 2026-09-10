@@ -1,6 +1,6 @@
 use crate::extension::manifest::{
     ResourceWorkbenchContrib, ResourceWorkbenchOperation, ResourceWorkbenchPage,
-    ResourceWorkbenchTree,
+    ResourceWorkbenchStatusBar, ResourceWorkbenchTree,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,7 @@ pub struct RegisteredResourceWorkbenchContribution {
     pub navigation: Vec<crate::extension::manifest::ResourceWorkbenchNavigation>,
     pub tree: Vec<ResourceWorkbenchTree>,
     pub pages: Vec<ResourceWorkbenchPage>,
+    pub status_bar: Option<ResourceWorkbenchStatusBar>,
 }
 
 impl RegisteredResourceWorkbenchContribution {
@@ -32,6 +33,7 @@ impl RegisteredResourceWorkbenchContribution {
             navigation: workbench.navigation.clone(),
             tree: workbench.tree.clone(),
             pages: workbench.pages.clone(),
+            status_bar: workbench.status_bar.clone(),
         }
     }
 

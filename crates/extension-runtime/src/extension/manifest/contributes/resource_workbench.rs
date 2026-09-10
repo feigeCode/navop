@@ -24,6 +24,17 @@ pub struct ResourceWorkbenchContrib {
     #[serde(default)]
     pub tree: Vec<ResourceWorkbenchTree>,
     pub pages: Vec<ResourceWorkbenchPage>,
+    /// 工作台底部常驻状态栏声明(如 Engine 状态/资源占用)。
+    #[serde(default, rename = "statusBar")]
+    pub status_bar: Option<ResourceWorkbenchStatusBar>,
+}
+
+/// 工作台底部状态栏:由一个命名操作提供状态数据。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchStatusBar {
+    /// 提供状态 JSON 的命名操作。
+    pub operation: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -132,12 +143,51 @@ pub struct ResourceWorkbenchPage {
     pub inputs: Vec<ResourceWorkbenchInput>,
     #[serde(default)]
     pub scope: Option<String>,
+    /// terminal 模板页面的终端声明。
+    #[serde(default)]
+    pub terminal: Option<ResourceWorkbenchTerminal>,
+    /// 页面 tab 条声明:同一 tab 组的每个页面都声明完整列表,
+    /// 渲染时按 `pageId == 当前页 id` 高亮当前项。
+    #[serde(default)]
+    pub tabs: Vec<ResourceWorkbenchTab>,
     /// detail/query 页面的路由参数声明(如 {"name": {"type": "string", "required": true}})。
     #[serde(default)]
     pub route: Option<BTreeMap<String, ResourceWorkbenchRouteParam>>,
     /// 页面内跳转链接(如 Index → Mapping)。
     #[serde(default)]
     pub links: Vec<ResourceWorkbenchLink>,
+}
+
+/// terminal 页面要启动的终端进程声明。
+///
+/// 宿主按此启动一个可嵌入的原生终端组件;`args` 支持
+/// `{{route.xxx}}` 与 `{{xxx}}` 两种占位符,由宿主按当前路由插值。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTerminal {
+    /// 可执行程序(如 `docker`)。
+    pub command: String,
+    /// 参数列表。
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// 追加的环境变量。
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// 工作目录。
+    #[serde(default, rename = "workingDir")]
+    pub working_dir: Option<String>,
+}
+
+/// tab 条中的一项。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTab {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "pageId")]
+    pub page_id: String,
+    #[serde(default)]
+    pub route: BTreeMap<String, ResourceWorkbenchBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -168,6 +218,7 @@ pub enum ResourceWorkbenchTemplate {
     Json,
     Events,
     Tasks,
+    Terminal,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -205,6 +256,18 @@ pub struct ResourceWorkbenchCollection {
     /// 行点击跳转声明:按 selection 绑定构造目标页 route。
     #[serde(default)]
     pub open: Option<ResourceWorkbenchOpen>,
+    /// 行内操作按钮:点击后以该行为 selection 执行命名操作。
+    #[serde(default)]
+    pub actions: Vec<ResourceWorkbenchRowAction>,
+}
+
+/// collection 行内操作:operation 的 params 通常以 selection 来源绑定行字段。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchRowAction {
+    pub id: String,
+    pub label: String,
+    pub operation: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -229,6 +292,9 @@ pub struct ResourceWorkbenchColumn {
     pub path: String,
     #[serde(rename = "type")]
     pub value_type: String,
+    /// 可选渲染样式:`badge` 按值渲染状态徽章(如容器 state)。
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
