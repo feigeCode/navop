@@ -110,7 +110,7 @@ impl IconButton {
 
     /// Applies a semantic tint to the glyph and button text state.
     pub fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
-        self.button = self.button.text_color(color);
+        self.button = self.button.text_color(color.into_color());
         self
     }
 

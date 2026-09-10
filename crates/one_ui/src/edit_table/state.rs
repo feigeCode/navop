@@ -24,7 +24,7 @@ use gpui_component::{
     VirtualListScrollHandle, h_flex,
     input::{IndentInline, OutdentInline},
     menu::{ContextMenuExt, PopupMenu},
-    scroll::{ScrollableMask, Scrollbar, ScrollbarShow},
+    scroll::{ScrollableMask, Scrollbar, ScrollbarMode},
     v_flex,
 };
 use rust_i18n::t;
@@ -3092,7 +3092,7 @@ where
                 .w(SCROLLBAR_WIDTH)
                 .child(
                     Scrollbar::vertical(&self.vertical_scroll_handle)
-                        .scrollbar_show(ScrollbarShow::Always)
+                        .mode(ScrollbarMode::Always)
                         .viewport_from_layout(),
                 ),
         )
@@ -3112,7 +3112,7 @@ where
             .h(SCROLLBAR_WIDTH)
             .child(
                 Scrollbar::horizontal(&self.horizontal_scroll_handle)
-                    .scrollbar_show(ScrollbarShow::Always)
+                    .mode(ScrollbarMode::Always)
                     .viewport_from_layout(),
             )
     }
@@ -3220,10 +3220,10 @@ mod tests {
         let source = include_str!("state.rs");
 
         assert!(source.contains(
-            "Scrollbar::vertical(&self.vertical_scroll_handle)\n                        .scrollbar_show(ScrollbarShow::Always)\n                        .viewport_from_layout()"
+            "Scrollbar::vertical(&self.vertical_scroll_handle)\n                        .mode(ScrollbarMode::Always)\n                        .viewport_from_layout()"
         ));
         assert!(source.contains(
-            "Scrollbar::horizontal(&self.horizontal_scroll_handle)\n                    .scrollbar_show(ScrollbarShow::Always)\n                    .viewport_from_layout()"
+            "Scrollbar::horizontal(&self.horizontal_scroll_handle)\n                    .mode(ScrollbarMode::Always)\n                    .viewport_from_layout()"
         ));
     }
 }
