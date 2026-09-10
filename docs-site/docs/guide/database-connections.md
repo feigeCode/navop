@@ -1,6 +1,6 @@
 # 数据库连接
 
-Navop 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse 和 TDengine（官方 taos WebSocket 驱动，经 taosAdapter :6041 连接，纯 Rust 无需本地 C 依赖），并可通过扩展增加达梦、金仓、GBase 8s、OceanBase、openGauss、IoTDB 等数据库。具体字段和能力取决于驱动与服务器版本。
+Navop 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse；TDengine 改为通过扩展市场安装的驱动提供（官方 taos WebSocket 驱动，经 taosAdapter :6041 连接，纯 Rust 无需本地 C 依赖），并可通过扩展增加达梦、金仓、GBase 8s、OceanBase、openGauss、IoTDB 等数据库。历史内置 TDengine 连接在打开时会提示安装对应驱动扩展。具体字段和能力取决于驱动与服务器版本。
 
 内置 Oracle 驱动依赖 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)；若不希望安装 Instant Client，可从扩展市场安装纯 Go Oracle 驱动。连接 Oracle 时可按需选择 Native 或 Go 驱动。
 

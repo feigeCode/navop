@@ -6,6 +6,7 @@
 use extension_protocol::blob::BlobReadParams;
 use extension_protocol::resource::{ResourceInvokeParams, ResourceInvokeResult};
 use extension_protocol::result_ref::ResultRef;
+use extension_runtime::extension::manifest::ResourceWorkbenchEffect;
 
 use crate::{
     ManagedUniversalPluginClient,
@@ -35,6 +36,8 @@ pub enum WorkbenchDispatchError {
     ResultContract { operation: String, reason: String },
     #[error("provider call failed: {0}")]
     Provider(String),
+    #[error("operation `{0}` requires user confirmation before it can run")]
+    ConfirmationRequired(String),
 }
 
 /// 命名操作的执行输入:绑定的参数值已经过类型检查。
@@ -116,7 +119,12 @@ pub fn build_request(
                         param: name.clone(),
                     });
                 }
-                picked
+                coerce_binding(picked, binding.value_type).map_err(|expected| {
+                    WorkbenchDispatchError::BindingType {
+                        param: name.clone(),
+                        expected,
+                    }
+                })?
             }
         };
         params.insert(name.clone(), value);
@@ -125,6 +133,37 @@ pub fn build_request(
         operation_id: operation_id.to_string(),
         params: serde_json::Value::Object(params),
     })
+}
+
+/// 按声明类型强制转换绑定值:number/boolean 把字符串/数字转成目标标量。
+fn coerce_binding(
+    value: serde_json::Value,
+    value_type: extension_runtime::extension::manifest::ResourceWorkbenchValueType,
+) -> Result<serde_json::Value, &'static str> {
+    use extension_runtime::extension::manifest::ResourceWorkbenchValueType as T;
+    match value_type {
+        T::String => match value {
+            serde_json::Value::String(_) => Ok(value),
+            other => Ok(serde_json::Value::String(other.to_string())),
+        },
+        T::Number => match value {
+            serde_json::Value::Number(_) => Ok(value),
+            serde_json::Value::String(text) => text
+                .parse::<f64>()
+                .map(|number| serde_json::json!(number))
+                .map_err(|_| "number"),
+            _ => Err("number"),
+        },
+        T::Boolean => match value {
+            serde_json::Value::Bool(_) => Ok(value),
+            serde_json::Value::String(text) => text
+                .parse::<bool>()
+                .map(serde_json::Value::Bool)
+                .map_err(|_| "boolean"),
+            _ => Err("boolean"),
+        },
+        T::Json => Ok(value),
+    }
 }
 
 /// 校验 operation 的 requires 能力是否全部在会话能力集中。
@@ -208,13 +247,33 @@ fn base64_decode(data: &str) -> Vec<u8> {
     BASE64.decode(data).unwrap_or_default()
 }
 
+/// 判断 operation 的副作用等级是否需要宿主确认。
+/// read 直接放行;write/destructive/unknown 一律需确认。
+pub fn requires_confirmation(effect: ResourceWorkbenchEffect) -> bool {
+    !matches!(effect, ResourceWorkbenchEffect::Read)
+}
+
+/// 返回命名操作的 effect 等级;未知操作返回 None。
+pub fn operation_effect(
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+) -> Option<ResourceWorkbenchEffect> {
+    workbench
+        .operations
+        .get(operation_id)
+        .map(|operation| operation.effect)
+}
+
 /// 对指定会话执行一次命名 invoke 操作并解码结果。
+/// `confirmed` 为 true 时跳过副作用确认;非 read 操作未确认时返回 ConfirmationRequired。
 pub async fn dispatch_invoke(
     session: &ResourceSessionHandle,
     workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
     operation_id: &str,
     context: &BindingContext,
+    confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
+    guard_effect(workbench, operation_id, confirmed)?;
     let request = build_request(workbench, operation_id, context)?;
     let client = session.client();
     ensure_capabilities(workbench, operation_id, session.capabilities())?;
@@ -244,8 +303,28 @@ pub async fn dispatch_invoke_scoped(
     workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
     operation_id: &str,
     context: &BindingContext,
+    confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
-    dispatch_invoke(&scope.session(), workbench, operation_id, context).await
+    dispatch_invoke(&scope.session(), workbench, operation_id, context, confirmed).await
+}
+
+/// 副作用门控:非 read 操作未确认时 fail closed。
+fn guard_effect(
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+    confirmed: bool,
+) -> Result<(), WorkbenchDispatchError> {
+    let Some(operation) = workbench.operations.get(operation_id) else {
+        return Err(WorkbenchDispatchError::UnknownOperation(
+            operation_id.to_string(),
+        ));
+    };
+    if !confirmed && requires_confirmation(operation.effect) {
+        return Err(WorkbenchDispatchError::ConfirmationRequired(
+            operation_id.to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// job 模式:启动命名 job 操作,轮询到终态,读取结果并关闭。
@@ -255,12 +334,14 @@ pub async fn dispatch_job(
     workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
     operation_id: &str,
     context: &BindingContext,
+    confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
     use extension_protocol::job::JobState;
 
     const POLL_INTERVAL_MS: u64 = 150;
     const MAX_POLL_ATTEMPTS: u32 = 2000;
 
+    guard_effect(workbench, operation_id, confirmed)?;
     let request = build_request(workbench, operation_id, context)?;
     let client = session.client();
     ensure_capabilities(workbench, operation_id, session.capabilities())?;
@@ -337,8 +418,9 @@ pub async fn dispatch_job_scoped(
     workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
     operation_id: &str,
     context: &BindingContext,
+    confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
-    dispatch_job(&scope.session(), workbench, operation_id, context).await
+    dispatch_job(&scope.session(), workbench, operation_id, context, confirmed).await
 }
 
 #[cfg(test)]
@@ -426,5 +508,66 @@ mod tests {
             &["elasticsearch/index/get".to_string()],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn guard_effect_requires_confirmation_for_non_read() {
+        let mut wb = workbench();
+        wb.operations.insert(
+            "deleteIndex".to_string(),
+            ResourceWorkbenchOperation {
+                mode: ResourceWorkbenchOperationMode::Invoke,
+                method: "elasticsearch/index/delete".into(),
+                requires: vec!["elasticsearch/index/delete".into()],
+                effect: ResourceWorkbenchEffect::Destructive,
+                params: BTreeMap::new(),
+            },
+        );
+
+        assert!(!guard_effect(&wb, "indexInfo", false).is_err());
+        assert!(matches!(
+            guard_effect(&wb, "deleteIndex", false),
+            Err(WorkbenchDispatchError::ConfirmationRequired(_))
+        ));
+        assert!(guard_effect(&wb, "deleteIndex", true).is_ok());
+    }
+
+    #[test]
+    fn guard_effect_rejects_unknown_operation() {
+        assert!(matches!(
+            guard_effect(&workbench(), "missing", false),
+            Err(WorkbenchDispatchError::UnknownOperation(_))
+        ));
+    }
+
+    #[test]
+    fn build_request_coerces_number_from_string_input() {
+        let mut wb = workbench();
+        wb.operations.insert(
+            "createTopic".to_string(),
+            ResourceWorkbenchOperation {
+                mode: ResourceWorkbenchOperationMode::Invoke,
+                method: "middleware/topic/create".into(),
+                requires: vec!["middleware/topic/create".into()],
+                effect: ResourceWorkbenchEffect::Write,
+                params: [(
+                    "queueCount".to_string(),
+                    ResourceWorkbenchBinding {
+                        source: ResourceWorkbenchBindingSource::Input,
+                        path: "/queueCount".into(),
+                        value_type: ResourceWorkbenchValueType::Number,
+                        value: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let context = BindingContext {
+            input: serde_json::json!({"queueCount": "8"}),
+            ..Default::default()
+        };
+        let request = build_request(&wb, "createTopic", &context).unwrap();
+        assert_eq!(serde_json::json!({"queueCount": 8.0}), request.params);
     }
 }

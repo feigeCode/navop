@@ -19,7 +19,7 @@ pub(super) fn workbench_module(
         .declarations(
             r#"
             export function current(): unknown;
-            export function dispatch(operationId: string, input?: unknown): Promise<unknown>;
+            export function dispatch(operationId: string, input?: unknown, options?: { confirmed?: boolean }): Promise<unknown>;
             "#,
         )
         .function("current", move |_| json_to_host(&current_context))
@@ -30,6 +30,12 @@ pub(super) fn workbench_module(
                 .map(host_to_json)
                 .transpose()?
                 .unwrap_or(serde_json::Value::Null);
+            let confirmed = arguments
+                .get(2)
+                .map(host_to_json)
+                .transpose()?
+                .and_then(|value| value.get("confirmed").and_then(|v| v.as_bool()))
+                .unwrap_or(false);
             let route = page_context
                 .get("route")
                 .cloned()
@@ -57,9 +63,10 @@ pub(super) fn workbench_module(
                 &tokio,
                 async move {
                     let result = if is_job {
-                        dispatch_job(&session, &descriptor, &operation_id, &context).await
+                        dispatch_job(&session, &descriptor, &operation_id, &context, confirmed).await
                     } else {
-                        dispatch_invoke(&session, &descriptor, &operation_id, &context).await
+                        dispatch_invoke(&session, &descriptor, &operation_id, &context, confirmed)
+                            .await
                     }
                     .map_err(|error| HostError::new(error.to_string()))?;
                     json_to_host(&result)

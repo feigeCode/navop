@@ -15,7 +15,6 @@ use gpui_component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, Size, Wi
 use one_ui::IconSize;
 use one_assets::IconName;
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
-use mqtt_view::{MqttFormConfig, MqttFormWindow};
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, SyncConflict, SyncEngine, TeamOption,
     UserInfo, get_cached_team_display_options_for_scope, get_cached_team_options,

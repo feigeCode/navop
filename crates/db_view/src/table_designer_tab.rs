@@ -3555,8 +3555,19 @@ mod tests {
     use db::{
         clickhouse::ClickHousePlugin, mssql::MsSqlPlugin, mysql::MySqlPlugin, oracle::OraclePlugin,
         plugin::DatabasePlugin, postgresql::PostgresPlugin, sqlite::SqlitePlugin,
-        tdengine::TdenginePlugin,
     };
+
+    /// 表设计器 DDL 断言仅覆盖仍带原生插件的数据库类型。
+    ///
+    /// TDengine 原生插件已移除(改由 tdengine IPC 外部驱动提供,DDL 行为由扩展侧覆盖),
+    /// 因此 `DatabaseType::TDengine` 与 `External` 一同排除在本组测试之外。
+    fn design_test_database_types() -> Vec<DatabaseType> {
+        DatabaseType::all()
+            .into_iter()
+            .filter(|database_type| !matches!(database_type, DatabaseType::TDengine))
+            .cloned()
+            .collect()
+    }
 
     #[test]
     fn column_editor_resize_updates_width_with_bounds() {
@@ -3635,8 +3646,9 @@ mod tests {
             DatabaseType::MSSQL => Box::new(MsSqlPlugin::new()),
             DatabaseType::Oracle => Box::new(OraclePlugin::new()),
             DatabaseType::ClickHouse => Box::new(ClickHousePlugin::new()),
-            DatabaseType::TDengine => Box::new(TdenginePlugin::new()),
-            DatabaseType::External { .. } => Box::new(MySqlPlugin::new()),
+            DatabaseType::TDengine | DatabaseType::External { .. } => {
+                unreachable!("TDengine/External 无原生插件,表设计器 DDL 断言已过滤该类型",)
+            }
         }
     }
 
@@ -3951,7 +3963,7 @@ mod tests {
     fn test_build_alter_table_sql_with_renames_contains_rename_for_all_databases() {
         let (original, current, renames) = build_delete_and_rename_conflict_case();
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             assert_contains_rename_sql(&sql, database_type);
@@ -3962,7 +3974,7 @@ mod tests {
     fn test_build_alter_table_sql_with_renames_not_drop_source_for_all_databases() {
         let (original, current, renames) = build_delete_and_rename_conflict_case();
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             assert_not_drop_source_column(&sql, plugin.as_ref());
@@ -3992,7 +4004,7 @@ mod tests {
         );
         let renames = vec![("b".to_string(), "b2".to_string())];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 不应包含 DROP COLUMN
@@ -4097,7 +4109,7 @@ mod tests {
     fn test_no_changes_returns_no_changes_for_all_databases() {
         let design = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&design, &design);
             assert_eq!(
@@ -4114,7 +4126,7 @@ mod tests {
         let original = build_design(vec![build_col("a")], vec![]);
         let current = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let quoted_b = plugin.quote_identifier("b");
@@ -4137,7 +4149,7 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec![]);
         let current = build_design(vec![build_col("a")], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // SQLite 使用 table recreation 方式，不包含 DROP COLUMN 关键词
@@ -4164,7 +4176,7 @@ mod tests {
         modified_col.data_type = "BIGINT".to_string();
         let current = build_design(vec![modified_col], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
@@ -4188,7 +4200,7 @@ mod tests {
         nullable_col.is_nullable = true;
         let current = build_design(vec![nullable_col], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
@@ -4209,7 +4221,7 @@ mod tests {
         );
         let renames = vec![("a".to_string(), "a_new".to_string())];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
@@ -4242,7 +4254,7 @@ mod tests {
         let current = build_design(vec![build_col("a2"), build_col("b")], vec![]);
         let renames = vec![("a".to_string(), "a2".to_string())];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
@@ -4279,7 +4291,7 @@ mod tests {
         let current = build_design(vec![build_col("a_new"), modified_b], vec![]);
         let renames = vec![("a".to_string(), "a_new".to_string())];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
@@ -4306,7 +4318,7 @@ mod tests {
             ("b".to_string(), "y".to_string()),
         ];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 不应 DROP 源列
@@ -4355,7 +4367,7 @@ mod tests {
         current.indexes[0].name = "idx_test".to_string();
         let renames = vec![("b".to_string(), "b2".to_string())];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名语句
@@ -4378,7 +4390,7 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec![]);
         let current = build_design(vec![build_col("a"), build_col("b")], vec!["a"]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             if matches!(database_type, DatabaseType::TDengine) {
                 // TDengine 无二级索引概念(supports_indexes = false),不参与索引 DDL 断言
                 continue;
@@ -4400,7 +4412,7 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec!["a"]);
         let current = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             if matches!(database_type, DatabaseType::TDengine) {
                 // TDengine 无二级索引概念,不参与索引 DDL 断言
                 continue;
@@ -4630,7 +4642,7 @@ mod tests {
         let current = build_design(vec![renamed_and_modified, build_col("b")], vec![]);
         let renames = vec![("a".to_string(), "a_new".to_string())];
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
@@ -4663,7 +4675,7 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec![]);
         let current = build_design(vec![], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // 应生成非空 SQL（而非 no changes）
@@ -4681,7 +4693,7 @@ mod tests {
         let original = build_design(vec![], vec![]);
         let current = build_design(vec![build_col("a"), build_col("b"), build_col("c")], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let quoted_a = plugin.quote_identifier("a");
@@ -4710,7 +4722,7 @@ mod tests {
         );
         current.indexes[0].name = "idx_new".to_string();
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             if matches!(database_type, DatabaseType::TDengine) {
                 // TDengine 无二级索引概念,不参与索引 DDL 断言
                 continue;
@@ -4767,7 +4779,7 @@ mod tests {
         col_new.default_value = Some("1".to_string());
         let current = build_design(vec![col_new], vec![]);
 
-        for database_type in DatabaseType::all().iter().cloned() {
+        for database_type in design_test_database_types() {
             let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
