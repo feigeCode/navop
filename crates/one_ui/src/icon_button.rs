@@ -66,7 +66,7 @@ impl IconButton {
             .icon(icon)
             .ghost()
             .with_size(hit_size)
-            .glyph_size(glyph_size.into());
+            .glyph_size(glyph_size);
 
         Self {
             button,
@@ -94,7 +94,7 @@ impl IconButton {
     /// Sets the glyph size without changing the interactive hit target.
     pub fn glyph_size(mut self, size: IconSize) -> Self {
         self.glyph_size = size;
-        self.button = self.button.glyph_size(size.into());
+        self.button = self.button.glyph_size(size);
         self
     }
 
