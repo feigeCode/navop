@@ -119,7 +119,12 @@ pub fn build_request(
                         param: name.clone(),
                     });
                 }
-                picked
+                coerce_binding(picked, binding.value_type).map_err(|expected| {
+                    WorkbenchDispatchError::BindingType {
+                        param: name.clone(),
+                        expected,
+                    }
+                })?
             }
         };
         params.insert(name.clone(), value);
@@ -128,6 +133,37 @@ pub fn build_request(
         operation_id: operation_id.to_string(),
         params: serde_json::Value::Object(params),
     })
+}
+
+/// 按声明类型强制转换绑定值:number/boolean 把字符串/数字转成目标标量。
+fn coerce_binding(
+    value: serde_json::Value,
+    value_type: extension_runtime::extension::manifest::ResourceWorkbenchValueType,
+) -> Result<serde_json::Value, &'static str> {
+    use extension_runtime::extension::manifest::ResourceWorkbenchValueType as T;
+    match value_type {
+        T::String => match value {
+            serde_json::Value::String(_) => Ok(value),
+            other => Ok(serde_json::Value::String(other.to_string())),
+        },
+        T::Number => match value {
+            serde_json::Value::Number(_) => Ok(value),
+            serde_json::Value::String(text) => text
+                .parse::<f64>()
+                .map(|number| serde_json::json!(number))
+                .map_err(|_| "number"),
+            _ => Err("number"),
+        },
+        T::Boolean => match value {
+            serde_json::Value::Bool(_) => Ok(value),
+            serde_json::Value::String(text) => text
+                .parse::<bool>()
+                .map(serde_json::Value::Bool)
+                .map_err(|_| "boolean"),
+            _ => Err("boolean"),
+        },
+        T::Json => Ok(value),
+    }
 }
 
 /// 校验 operation 的 requires 能力是否全部在会话能力集中。
@@ -502,5 +538,36 @@ mod tests {
             guard_effect(&workbench(), "missing", false),
             Err(WorkbenchDispatchError::UnknownOperation(_))
         ));
+    }
+
+    #[test]
+    fn build_request_coerces_number_from_string_input() {
+        let mut wb = workbench();
+        wb.operations.insert(
+            "createTopic".to_string(),
+            ResourceWorkbenchOperation {
+                mode: ResourceWorkbenchOperationMode::Invoke,
+                method: "middleware/topic/create".into(),
+                requires: vec!["middleware/topic/create".into()],
+                effect: ResourceWorkbenchEffect::Write,
+                params: [(
+                    "queueCount".to_string(),
+                    ResourceWorkbenchBinding {
+                        source: ResourceWorkbenchBindingSource::Input,
+                        path: "/queueCount".into(),
+                        value_type: ResourceWorkbenchValueType::Number,
+                        value: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let context = BindingContext {
+            input: serde_json::json!({"queueCount": "8"}),
+            ..Default::default()
+        };
+        let request = build_request(&wb, "createTopic", &context).unwrap();
+        assert_eq!(serde_json::json!({"queueCount": 8.0}), request.params);
     }
 }
