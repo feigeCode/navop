@@ -1150,7 +1150,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.11.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1601,7 +1601,7 @@ dependencies = [
  "maybe-owned",
  "rustix 1.1.4",
  "rustix-linux-procfs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -3443,7 +3443,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3872,7 +3872,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5026,7 +5026,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.62.2",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -5180,9 +5180,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20199390dbd6cfbb7f0cb2ca57b46120cc1f434746a77367d2780657e0973725"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -5247,15 +5246,14 @@ dependencies = [
  "waker-fn",
  "web-time",
  "windows 0.62.2",
- "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
+ "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
  "zed-scap",
 ]
 
 [[package]]
 name = "gpui-pre-apple"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4506904f40d7f214d72d9a1603fc8dc00b9884bd9c80770f215b3d12cac771b8"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "block",
@@ -5277,9 +5275,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-collections"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3c8b0623a1a129d503d16dc38f8e51f5dd82e1e381dd19ea86054b983859cfc"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "gpui-pre-util",
  "indexmap 2.14.2",
@@ -5288,9 +5285,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-derive-refineable"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58e1b01bf92752443d78beae3b77d80896d1e7815078df3e3f50340c5ba96768"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5299,9 +5295,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-http-client"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9bfcb50ec19f2a2e814448e295e471647fa05f58fb211a270d84a77b9bf9fd8"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5320,9 +5315,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-linux"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd1d912c039641f0236b1701b7871bfddfb4926ffd1915b3958b73d03177250"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5367,9 +5361,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-macos"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15263eafcbe4e81aec7eb24a47d4c6c88f5e29ba2ba8ad86c430ab8e472883dc"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5409,14 +5402,13 @@ dependencies = [
  "smallvec",
  "strum 0.28.0",
  "uuid",
- "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
+ "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
 ]
 
 [[package]]
 name = "gpui-pre-macros"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e29384b3145f0143a17187b35339779398fe4c1d4534320d6a05594248a49965"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "heck 0.5.0",
  "proc-macro-crate 3.5.0",
@@ -5427,9 +5419,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-media"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e4010771de1c32efc395cc5edf64a8d43350437763764d4032cccf01639c23a"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -5442,9 +5433,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-perf"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9b8b89fd6fa5330477e46146a2fc2dc47d0bb1084763a9bd9b3da4173e8bfcf"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "gpui-pre-collections",
  "serde",
@@ -5453,9 +5443,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-platform"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e85fc9ec7ea5ff87ffb69edd0e23254e5627bc95758de232fb876d578ebd9e6d"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "console_error_panic_hook",
  "gpui-pre",
@@ -5467,9 +5456,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-refineable"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8dd11743345d7ee24768b47ad4bade35e05f68400b843e19f149f08fc99bf59"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "gpui-pre-derive-refineable",
 ]
@@ -5527,9 +5515,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-scheduler"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a28d65279f6eb7e74107457140ccd7aae3a3fcb12c4690568ac1748985b3b71e"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "async-task",
  "backtrace",
@@ -5544,9 +5531,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-shared-string"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d597ac929a6c0f5f99a5de81322a67c061c3d2a87a558f8e9c6689ecc61ca75d"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -5555,9 +5541,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-sum-tree"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3c48ce7d9baabc52be67165433a11874b5286125d8e19edf1a8415f5735f478"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "gpui-pre-ztracing",
  "heapless",
@@ -5568,9 +5553,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-util"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd91e2d2ac036e4bd496543cc4ae9b5108430a43a65bdaeecb79ef9e2e43e80b"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "log",
@@ -5579,9 +5563,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-util-macros"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402f0aef1b2874792bde32aec90a9b133153c62eeed7a7d55c4b622312096eb0"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "gpui-pre-perf",
  "quote",
@@ -5590,9 +5573,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-web"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e4d7b8867307c3b0599ae4759f86960c6eaa983021eb1a2a34a47815ca071a"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5615,9 +5597,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-wgpu"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567f1fb79e72c80001d9e358e9f552e2696d79ad71af76aab60da5684848fd98"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5637,14 +5618,13 @@ dependencies = [
  "unicode-segmentation",
  "web-sys",
  "wgpu",
- "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
+ "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
 ]
 
 [[package]]
 name = "gpui-pre-windows"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45918b16e62e89ef4952a6e140297f716934bf6f9b21206ad6ce54faa7316005"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5671,9 +5651,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-zlog"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24609786bd3dd9291b440a97ad700003827bbf55b69223038253ea0b401b3c36"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5683,9 +5662,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-ztracing"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b59bfae633cc76bd10488b931308f04e3b916b211d3cb76b0e401eca7cf4ea5"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 dependencies = [
  "gpui-pre-zlog",
  "gpui-pre-ztracing-macro",
@@ -5695,9 +5673,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pre-ztracing-macro"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70a09e0bf58aede45b8e7eed6e8d5d6552381c431014d62b349b0133008737bd"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
 
 [[package]]
 name = "gpui-rdp-smoke"
@@ -6272,7 +6249,7 @@ dependencies = [
  "hyper",
  "libc",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -6290,7 +6267,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -8217,7 +8194,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8765,7 +8742,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8914,7 +8891,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -10814,7 +10791,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls 0.23.44",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -10852,9 +10829,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -12151,7 +12128,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -12948,7 +12925,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
- "dirs 6.0.0",
+ "dirs 5.0.1",
 ]
 
 [[package]]
@@ -13154,7 +13131,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13367,7 +13344,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13874,7 +13851,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -14700,7 +14677,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -15291,8 +15268,7 @@ dependencies = [
 [[package]]
 name = "wasm_thread"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7516db7f32decdadb1c3b8deb1b7d78b9df7606c5cc2f6241737c2ab3a0258e"
+source = "git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937#0cf96c7708dfb97ccf3da50347e25edcf75d6937"
 dependencies = [
  "futures",
  "js-sys",
@@ -16222,7 +16198,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -17253,17 +17229,15 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ac61a7062c40f3c37b6e82eeeef835d5cc7824b632a72784a89b3963c33284c"
+source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
  "encoding_rs",
 ]
 
 [[package]]
 name = "xim-parser"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dcee45f89572d5a65180af3a84e7ddb24f5ea690a6d3aa9de231281544dd7b7"
+version = "0.2.1"
+source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -17464,8 +17438,7 @@ dependencies = [
 [[package]]
 name = "zed-font-kit"
 version = "0.14.1-zed"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3898e450f36f852edda72e3f985c34426042c4951790b23b107f93394f9bff5"
+source = "git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5#110523127440aefb11ce0cf280ae7c5071337ec5"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
@@ -17489,14 +17462,14 @@ dependencies = [
 [[package]]
 name = "zed-font-kit"
 version = "0.14.1-zed"
-source = "git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5#110523127440aefb11ce0cf280ae7c5071337ec5"
+source = "git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f28166665e8fd2f53ff6d268a14955c82269"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "core-text",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "dwrote",
  "float-ord",
  "freetype-sys",
@@ -17562,8 +17535,7 @@ dependencies = [
 [[package]]
 name = "zed-scap"
 version = "0.0.8-zed"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b338d705ae33a43ca00287c11129303a7a0aa57b101b72a1c08c863f698ac8"
+source = "git+https://github.com/zed-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac#4afea48c3b002197176fb19cd0f9b180dd36eaac"
 dependencies = [
  "anyhow",
  "cocoa 0.25.0",
@@ -17584,8 +17556,7 @@ dependencies = [
 [[package]]
 name = "zed-xim"
 version = "0.4.0-zed"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c0b46ed118eba34d9ba53d94ddc0b665e0e06a2cf874cfa2dd5dec278148642"
+source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
  "ahash",
  "hashbrown 0.14.5",
@@ -17885,3 +17856,13 @@ dependencies = [
  "syn 3.0.5",
  "winnow 1.0.4",
 ]
+
+[[patch.unused]]
+name = "gpui-pre-http-client-tls"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"
+
+[[patch.unused]]
+name = "gpui-pre-reqwest-client"
+version = "0.3.99"
+source = "git+ssh://git@github.com/feigeCode/gpui-pre.git?tag=fork-0.3.99#34b0c039f8888f1d9205934eb2dab6baca4fa19a"

@@ -1066,8 +1066,9 @@ impl RemoteDesktopView {
             let cursor_images = this.cursor.release_all_images();
             let _ = window_handle.update(cx, move |_, window, _| {
                 for texture in textures {
-                    // gpui-pre has no dynamic-texture handle to release.
-                    drop(texture);
+                    if let Err(error) = window.drop_dynamic_texture(texture) {
+                        tracing::warn!(?error, "failed to release remote desktop texture");
+                    }
                 }
                 for image in cursor_images {
                     if let Err(error) = window.drop_image(image) {

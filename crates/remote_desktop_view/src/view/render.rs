@@ -43,17 +43,78 @@ fn paint_remote_frame(
         return;
     };
 
-    // gpui-pre has no dynamic-texture API; paint the backing framebuffer as a
-    // plain RenderImage. Re-enable partial uploads once GPUI supports them.
-    if let Err(error) = window.paint_image(
-        bounds,
-        bounds,
-        Corners::default(),
-        frame.render_image(),
-        0,
-        false,
-    ) {
-        tracing::warn!(?error, "failed to paint remote desktop frame");
+    let renderer_resource_generation = window.renderer_resource_generation();
+    let uploads = frame.pending_texture_uploads(renderer_resource_generation);
+    let diagnostics_enabled = remote_desktop_diagnostics_enabled();
+    let upload_started_at = diagnostics_enabled.then(Instant::now);
+    let mut uploaded_count = 0;
+    let mut uploaded_bytes = 0usize;
+    let mut uploaded_pixels = 0u64;
+    let mut largest_upload_pixels = 0u64;
+    for upload in uploads.iter() {
+        let update_bounds = Bounds::new(
+            point(
+                DevicePixels(i32::from(upload.rect.x)),
+                DevicePixels(i32::from(upload.rect.y)),
+            ),
+            size(
+                DevicePixels(i32::from(upload.rect.width)),
+                DevicePixels(i32::from(upload.rect.height)),
+            ),
+        );
+        match window.update_dynamic_texture(
+            frame.texture().as_ref(),
+            update_bounds,
+            upload.bytes.as_slice(),
+        ) {
+            Ok(()) => {
+                uploaded_count += 1;
+                if diagnostics_enabled {
+                    let pixels =
+                        u64::from(upload.rect.width).saturating_mul(u64::from(upload.rect.height));
+                    uploaded_bytes = uploaded_bytes.saturating_add(upload.bytes.len());
+                    uploaded_pixels = uploaded_pixels.saturating_add(pixels);
+                    largest_upload_pixels = largest_upload_pixels.max(pixels);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(?error, "failed to update remote desktop texture");
+                break;
+            }
+        }
+    }
+    if uploaded_count > 0 {
+        frame.acknowledge_texture_uploads(&uploads[..uploaded_count]);
+    }
+    if let Some(upload_started_at) = upload_started_at
+        && uploaded_count > 0
+    {
+        let framebuffer_pixels = u64::from(frame.width()).saturating_mul(u64::from(frame.height()));
+        let ratio_per_mille = uploaded_pixels
+            .saturating_mul(1000)
+            .checked_div(framebuffer_pixels)
+            .unwrap_or_default();
+        let largest_ratio_per_mille = largest_upload_pixels
+            .saturating_mul(1000)
+            .checked_div(framebuffer_pixels)
+            .unwrap_or_default();
+        tracing::info!(
+            surface_width = frame.width(),
+            surface_height = frame.height(),
+            upload_count = uploaded_count,
+            upload_bytes = uploaded_bytes,
+            upload_pixels = uploaded_pixels,
+            upload_ratio_per_mille = ratio_per_mille,
+            largest_upload_ratio_per_mille = largest_ratio_per_mille,
+            upload_us = upload_started_at.elapsed().as_micros() as u64,
+            "remote desktop dynamic texture uploads"
+        );
+    }
+
+    if let Err(error) =
+        window.paint_dynamic_texture(bounds, Corners::default(), frame.texture().clone(), false)
+    {
+        tracing::warn!(?error, "failed to paint remote desktop texture");
     }
 }
 
@@ -283,9 +344,9 @@ impl Render for RemoteDesktopView {
         // frame owns them. This also retries retirement after an asynchronous
         // session reset releases its last surface.
         for texture in self.retired_textures.take_releasable() {
-            // gpui-pre has no dynamic-texture handle to release; dropping the
-            // placeholder texture is enough.
-            drop(texture);
+            if let Err(error) = window.drop_dynamic_texture(texture) {
+                tracing::warn!(?error, "failed to release remote desktop texture");
+            }
         }
         for cursor in self.cursor.take_pending_images() {
             if let Err(error) = window.drop_image(cursor) {
