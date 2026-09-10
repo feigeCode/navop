@@ -346,3 +346,12 @@ gpui-pre-zlog              = { git = "https://github.com/feigeCode/gpui-pre.git"
 gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.99" }
 gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.99" }
 # <<< local gpui-pre patch <<<
+
+# gpui-shell binds quickjs via the `quickjs-jit` fork directly, while
+# `quickjs-jit-stdlib` and the LLRT crates depend on the crates.io `rquickjs`
+# bindings. Without this patch both versions coexist in the graph and their
+# types (ModuleDef / Ctx / Error) never unify (E0277/E0308). The patch MUST
+# live in this root manifest: [patch] sections inside path dependencies such
+# as gpui-component/Cargo.toml are ignored by cargo. Mirrors the same entry
+# in gpui-component's workspace root.
+rquickjs = { path = "../gpui-component/crates/shell/rquickjs-compat" }

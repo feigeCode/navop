@@ -10716,6 +10716,8 @@ name = "quickjs-jit-core"
 version = "0.12.7"
 source = "git+https://github.com/longbridge/quickjs-jit?rev=9a83a7f9cdc178a0ab5d7b29c3c9227b0dcb8620#9a83a7f9cdc178a0ab5d7b29c3c9227b0dcb8620"
 dependencies = [
+ "async-lock",
+ "half",
  "hashbrown 0.17.1",
  "quickjs-jit-sys",
  "relative-path 2.0.1",
@@ -11516,7 +11518,6 @@ name = "remote_desktop_view"
 version = "0.15.2"
 dependencies = [
  "anyhow",
- "cocoa 0.26.0",
  "connection-form",
  "connection_tunnel",
  "dunce",
@@ -11524,6 +11525,9 @@ dependencies = [
  "gpui-component",
  "gpui-pre",
  "image",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "one-assets",
  "one-core",
  "one-ui",
@@ -11742,51 +11746,9 @@ dependencies = [
 
 [[package]]
 name = "rquickjs"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e04e4eedfb060b503b5f0a2644abb890b0b3620d3fb674f9455f230014964e4"
+version = "0.12.7"
 dependencies = [
- "rquickjs-core",
- "rquickjs-macro",
-]
-
-[[package]]
-name = "rquickjs-core"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16e4f499ac5b943d97ee6dbc44f23c2c10426f420f7d2f1793d6318911b6608c"
-dependencies = [
- "async-lock",
- "half",
- "hashbrown 0.17.1",
- "relative-path 2.0.1",
- "rquickjs-sys",
-]
-
-[[package]]
-name = "rquickjs-macro"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbcc8219b70ee2faa08d5339f47f15741cba2ce0cb9640e8495f2ab51293f50"
-dependencies = [
- "convert_case 0.11.0",
- "fnv",
- "ident_case",
- "indexmap 2.14.2",
- "proc-macro-crate 3.5.0",
- "proc-macro2",
- "quote",
- "rquickjs-core",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "rquickjs-sys"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a13ac243b86a74120814ef7e9e30ad5a2c1199b7b9963b1cf7c84e4cdc1cad99"
-dependencies = [
- "cc",
+ "quickjs-jit",
 ]
 
 [[package]]
@@ -13851,7 +13813,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.60.2",
