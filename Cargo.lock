@@ -3999,6 +3999,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -7868,6 +7869,7 @@ dependencies = [
  "remote_desktop_view",
  "remote_file_editor",
  "reqwest_client",
+ "resource_view",
  "rust-i18n",
  "semver",
  "serde",
@@ -11605,6 +11607,7 @@ dependencies = [
  "extension-runtime",
  "gpui-component",
  "gpui-pre",
+ "json_view",
  "one-core",
  "serde_json",
  "thiserror 2.0.20",

@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 
 use extension_runtime::extension::manifest::ResourceWorkbenchCollection;
 use gpui::{
-    AnyElement, App, AppContext as _, ClickEvent, ColorExt as _, Context, Edges, Entity,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Edges, Entity,
     InteractiveElement as _, IntoElement, ParentElement, Pixels, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _,
     px,
@@ -233,7 +233,7 @@ impl CollectionTableDelegate {
                 .with_size(Size::XSmall)
                 .loading(is_running)
                 .tooltip(action.label.clone());
-            button = match action.icon {
+            button = match action.icon.clone() {
                 Some(icon) => button.icon(icon),
                 None => button.label(action.label.clone()),
             };
@@ -505,7 +505,7 @@ impl RowActionView {
 fn action_icon(id: &str) -> Option<IconName> {
     let id = id.to_ascii_lowercase();
     if id.contains("restart") {
-        Some(IconName::Sync)
+        Some(IconName::RotateCw)
     } else if id.contains("start") || id.contains("run") || id.contains("play") {
         Some(IconName::Play)
     } else if id.contains("stop") || id.contains("pause") || id.contains("kill") {

@@ -52,16 +52,16 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local gpui-component checkout (repo to be renamed `gpui-kit`). During the
-# migration these are path dependencies into ../../../gpui-component; the
+# migration these are path dependencies into ../gpui-component; the
 # dependency keys keep the crate names navop already imports
 # (`gpui_component`, `gpui_base`, `gpui_shell`, ...).
-gpui-component = { path = "../../../gpui-component/crates/component" }
-gpui-component-assets = { package = "gpui-kit-assets", path = "../../../gpui-component/crates/assets" }
-gpui-base = { path = "../../../gpui-component/crates/base" }
-gpui-shell = { path = "../../../gpui-component/crates/shell" }
-gpui-component-shell = { path = "../../../gpui-component/crates/component-shell" }
-gpui-wry = { path = "../../../gpui-component/crates/webview" }
-gpui-kit = { path = "../../../gpui-component/crates/kit" }
+gpui-component = { path = "../gpui-component/crates/component" }
+gpui-component-assets = { package = "gpui-kit-assets", path = "../gpui-component/crates/assets" }
+gpui-base = { path = "../gpui-component/crates/base" }
+gpui-shell = { path = "../gpui-component/crates/shell" }
+gpui-component-shell = { path = "../gpui-component/crates/component-shell" }
+gpui-wry = { path = "../gpui-component/crates/webview" }
+gpui-kit = { path = "../gpui-component/crates/kit" }
 
 gpui = { package = "gpui-pre", version = "0.3.1" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }

@@ -27,7 +27,7 @@ use extension_plugin_adapter::{
 use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::{ResourceWorkbenchPage, ResourceWorkbenchTemplate};
 use gpui::{
-    AnyElement, App, AppContext, ColorExt as _, Context, Entity, EventEmitter, FocusHandle,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -898,7 +898,7 @@ impl NativeResourceWorkbench {
                 Button::new("page-refresh")
                     .with_size(Size::Small)
                     .ghost()
-                    .icon(IconName::Refresh)
+                    .icon(IconName::RotateCw)
                     .tooltip("Refresh")
                     .loading(busy)
                     .on_click(cx.listener(
@@ -1293,7 +1293,7 @@ impl NativeResourceWorkbench {
             Button::new("status-refresh")
                 .with_size(Size::XSmall)
                 .ghost()
-                .icon(IconName::Refresh)
+                .icon(IconName::RotateCw)
                 .tooltip("Refresh usage")
                 .loading(self.status_bar_loading)
                 .on_click(cx.listener(
@@ -1466,7 +1466,7 @@ impl NativeResourceWorkbench {
             .child(
                 Button::new("page-retry")
                     .with_size(Size::Small)
-                    .icon(IconName::Refresh)
+                    .icon(IconName::RotateCw)
                     .label("Retry")
                     .on_click(cx.listener(
                         |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
@@ -1522,7 +1522,7 @@ impl NativeResourceWorkbench {
         let tasks = self.session.task_snapshots();
         let body: AnyElement = if tasks.is_empty() {
             empty_state(
-                IconName::ListChecks,
+                IconName::Inbox,
                 "No tasks",
                 "Long running operations started from this connection appear here.",
                 &theme,
@@ -1605,7 +1605,7 @@ impl NativeResourceWorkbench {
                         Button::new("refresh-tasks")
                             .with_size(Size::Small)
                             .ghost()
-                            .icon(IconName::Refresh)
+                            .icon(IconName::RotateCw)
                             .tooltip("Refresh")
                             .on_click(cx.listener(
                                 |_this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
