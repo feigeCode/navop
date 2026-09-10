@@ -86,13 +86,6 @@ impl OpenedExtensionResource {
         }
     }
 
-    pub(crate) fn capabilities(&self) -> &[String] {
-        self.result
-            .as_ref()
-            .map(|result| result.capabilities.as_slice())
-            .unwrap_or_default()
-    }
-
     /// 打开资源时观察到的 provider 进程 generation。
     pub(crate) fn generation(&self) -> u64 {
         self.client.runtime_generation()

@@ -237,12 +237,27 @@ impl ShellPluginTab {
     }
 
     #[cfg(not(test))]
-    pub(crate) fn runtime_changed(&mut self, runtime_id: &str, cx: &mut Context<Self>) {
-        if !self
-            .runtime_ids
+    pub(crate) fn runtime_changed(
+        &mut self,
+        event: &extension_plugin_adapter::RuntimeMonitorEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let runtime_id = event.runtime_id();
+        let service = self.host.service();
+        // provider 已在宿主侧换成新进程(generation 推进),或已从宿主消失时,
+        // 已挂载的 shell view 仍然绑在旧进程上,必须失效。瞬时抖动
+        // (Degraded、仍在退避中的 Restarting)不打断视图。
+        let generations_stale = self
+            .activations
             .iter()
-            .any(|candidate| candidate == runtime_id)
-        {
+            .filter(|activation| activation.runtime_id == runtime_id)
+            .any(|activation| {
+                service
+                    .runtime_generation(&activation.runtime_id)
+                    .map(|generation| generation != activation.runtime_generation)
+                    .unwrap_or(true)
+            });
+        if !runtime_change_invalidates(event, &self.runtime_ids, generations_stale) {
             return;
         }
         let state = std::mem::replace(
@@ -290,4 +305,100 @@ impl ShellPluginTab {
     }
 }
 
+/// shell view 的失效判定:runtime 真的消失,或宿主 generation 已推进
+/// (provider 已被新进程替换)时才失效。
+///
+/// 抽成自由函数是为了让判定可被单元测试直接覆盖;真正的重连需要重建
+/// `LoadedShellView`/`ShellMountSession`,风险显著高于 headless 连接,因此
+/// 这里只做"失效",自动重连留作后续项。
+pub(crate) fn runtime_change_invalidates(
+    event: &extension_plugin_adapter::RuntimeMonitorEvent,
+    runtime_ids: &[String],
+    generations_stale: bool,
+) -> bool {
+    if !runtime_ids
+        .iter()
+        .any(|candidate| candidate == event.runtime_id())
+    {
+        return false;
+    }
+    match event {
+        extension_plugin_adapter::RuntimeMonitorEvent::RuntimeRemoved { .. } => true,
+        _ => generations_stale,
+    }
+}
+
 mod render;
+
+#[cfg(test)]
+mod tests {
+    use extension_plugin_adapter::{ActivationError, RuntimeHealth, RuntimeMonitorEvent};
+
+    use super::runtime_change_invalidates;
+
+    const BACKEND: &str = "com.example.elasticsearch::provider";
+
+    fn backend_ids() -> Vec<String> {
+        vec![BACKEND.to_owned()]
+    }
+
+    fn health_event(runtime_id: &str) -> RuntimeMonitorEvent {
+        RuntimeMonitorEvent::HealthChanged {
+            runtime_id: runtime_id.to_owned(),
+            health: RuntimeHealth {
+                state: extension_plugin_adapter::RuntimeActivationState::Active,
+                session_closed: false,
+                ping_error: None,
+                restart_attempts: 0,
+                restart_budget: 3,
+                restart_backoff_remaining: None,
+            },
+        }
+    }
+
+    #[test]
+    fn transient_health_event_keeps_the_mounted_view() {
+        assert!(!runtime_change_invalidates(
+            &health_event(BACKEND),
+            &backend_ids(),
+            false
+        ));
+    }
+
+    #[test]
+    fn advanced_generation_invalidates_the_mounted_view() {
+        assert!(runtime_change_invalidates(
+            &health_event(BACKEND),
+            &backend_ids(),
+            true
+        ));
+    }
+
+    #[test]
+    fn check_failure_follows_the_generation_rule() {
+        let event = RuntimeMonitorEvent::CheckFailed {
+            runtime_id: BACKEND.to_owned(),
+            error: ActivationError::RuntimeNotReady {
+                runtime_id: BACKEND.to_owned(),
+            },
+        };
+        assert!(!runtime_change_invalidates(&event, &backend_ids(), false));
+        assert!(runtime_change_invalidates(&event, &backend_ids(), true));
+    }
+
+    #[test]
+    fn removed_runtime_always_invalidates() {
+        let event = RuntimeMonitorEvent::RuntimeRemoved {
+            runtime_id: BACKEND.to_owned(),
+        };
+        assert!(runtime_change_invalidates(&event, &backend_ids(), false));
+    }
+
+    #[test]
+    fn unrelated_runtime_never_invalidates() {
+        let event = RuntimeMonitorEvent::RuntimeRemoved {
+            runtime_id: "com.example.other::provider".to_owned(),
+        };
+        assert!(!runtime_change_invalidates(&event, &backend_ids(), true));
+    }
+}

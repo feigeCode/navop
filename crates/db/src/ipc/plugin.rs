@@ -448,7 +448,7 @@ fn compatible_plugin_for(database_type: DatabaseType) -> Option<Box<dyn Database
         DatabaseType::Oracle => Some(Box::new(OraclePlugin::new())),
         DatabaseType::ClickHouse => Some(Box::new(ClickHousePlugin::new())),
         // TDengine 原生插件已移除(改由 tdengine IPC 驱动提供),无本地兼容实现。
-        DatabaseType::DuckDB | DatabaseType::TDengine => None,
+        DatabaseType::TDengine => None,
         DatabaseType::External { .. } => None,
     }
 }

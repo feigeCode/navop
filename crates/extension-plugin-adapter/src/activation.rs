@@ -1360,11 +1360,21 @@ impl ActivationManager {
             let budget = binding.max_restart_attempts;
 
             if !binding.auto_restart {
+                tracing::warn!(
+                    runtime_id = %runtime_id,
+                    "provider process closed; auto-restart is disabled for this runtime"
+                );
                 runtime.state = RuntimeActivationState::Failed;
                 let stale_session = runtime.session.take();
                 let health = self.health_locked(&mut state, runtime_id);
                 Ok(CheckDecision::Return(health, stale_session))
             } else if runtime.restart_attempts >= budget {
+                tracing::warn!(
+                    runtime_id = %runtime_id,
+                    attempts = runtime.restart_attempts,
+                    budget,
+                    "provider process keeps closing; restart budget exhausted (crash loop)"
+                );
                 runtime.state = RuntimeActivationState::CrashLoop;
                 let stale_session = runtime.session.take();
                 let health = self.health_locked(&mut state, runtime_id);
@@ -1401,6 +1411,13 @@ impl ActivationManager {
                 generation,
                 attempt,
             } => {
+                tracing::warn!(
+                    runtime_id = %runtime_id,
+                    attempt,
+                    generation,
+                    health = ?health,
+                    "provider process closed; restarting runtime"
+                );
                 let binding = *binding;
                 let stale_session = self
                     .restart_runtime(runtime_id, binding, generation, attempt)
@@ -1441,6 +1458,13 @@ impl ActivationManager {
                         runtime.start_generation += 1;
                         runtime.factory_claimed = false;
                         stale_session = runtime.session.replace(session);
+                        tracing::info!(
+                            runtime_id = %runtime_id,
+                            attempt,
+                            previous_generation = generation,
+                            generation = runtime.start_generation,
+                            "provider runtime restarted with a new process generation"
+                        );
                         if let Some(blobs) = &self.blobs {
                             blobs.remove_generation(runtime_id, generation);
                         }
@@ -1462,6 +1486,13 @@ impl ActivationManager {
                             RuntimeActivationState::Restarting
                         };
                         runtime.factory_claimed = false;
+                        tracing::warn!(
+                            runtime_id = %runtime_id,
+                            attempt,
+                            generation,
+                            state = ?runtime.state,
+                            "provider runtime restart attempt produced no session"
+                        );
                     }
                 }
             } else if let Some(session) = session {
@@ -1586,6 +1617,19 @@ pub enum RuntimeMonitorEvent {
         runtime_id: String,
         error: ActivationError,
     },
+}
+
+impl RuntimeMonitorEvent {
+    /// 事件指向的 runtime id。
+    ///
+    /// 宿主侧桥接只关心"哪个 runtime 变了",不需要拆开每个变体的载荷。
+    pub fn runtime_id(&self) -> &str {
+        match self {
+            Self::HealthChanged { runtime_id, .. }
+            | Self::RuntimeRemoved { runtime_id }
+            | Self::CheckFailed { runtime_id, .. } => runtime_id,
+        }
+    }
 }
 
 /// Error returned when a monitor operation cannot be started.
