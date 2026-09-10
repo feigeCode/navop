@@ -56,6 +56,8 @@ pub struct NativeResourceWorkbench {
     /// query 页面执行状态。
     query_result: Option<Result<serde_json::Value, String>>,
     query_running: bool,
+    /// 待用户确认的危险操作 id(native 页面确认条)。
+    pending_confirm: Option<String>,
     shell_mount: Option<ActiveShellMount>,
     renderer_error: Option<String>,
     task_error: Option<String>,
@@ -104,6 +106,7 @@ impl NativeResourceWorkbench {
             query_inputs: Default::default(),
             query_result: None,
             query_running: false,
+            pending_confirm: None,
             shell_mount: None,
             renderer_error: None,
             task_error: None,
@@ -249,7 +252,7 @@ impl NativeResourceWorkbench {
         cx.spawn(async move |this, cx| {
             let result = tokio
                 .spawn(
-                    async move { dispatch_invoke(&scope, &workbench, &operation, &context).await },
+                    async move { dispatch_invoke(&scope, &workbench, &operation, &context, false).await },
                 )
                 .await
                 .unwrap_or_else(|join_error| {
@@ -274,7 +277,7 @@ impl NativeResourceWorkbench {
         if self.query_running {
             return;
         }
-        let Some(page) = self.current_page() else {
+        let Some(page) = self.current_page().cloned() else {
             return;
         };
         let Some(action) = page.execute.clone() else {
@@ -285,16 +288,53 @@ impl NativeResourceWorkbench {
             cx.notify();
             return;
         };
-        let is_job = self
-            .descriptor
-            .operations
-            .get(&action.operation)
-            .is_some_and(|operation| {
-                matches!(
-                    operation.mode,
-                    extension_runtime::extension::manifest::ResourceWorkbenchOperationMode::Job
-                )
-            });
+        // 危险操作先请求确认;确认通过后带 confirmed=true 重新执行。
+        let effect = extension_plugin_adapter::operation_effect(&self.descriptor, &action.operation);
+        if effect.is_some_and(extension_plugin_adapter::requires_confirmation) {
+            self.pending_confirm = Some(action.operation.clone());
+            cx.notify();
+            return;
+        }
+        self.run_query(action.operation, &page, false, cx);
+    }
+
+    /// 用户确认危险操作后执行。
+    fn confirm_pending(&mut self, cx: &mut Context<Self>) {
+        let Some(operation) = self.pending_confirm.take() else {
+            return;
+        };
+        let Some(page) = self.current_page().cloned() else {
+            return;
+        };
+        if !page
+            .execute
+            .as_ref()
+            .is_some_and(|action| action.operation == operation)
+        {
+            cx.notify();
+            return;
+        }
+        self.run_query(operation, &page, true, cx);
+    }
+
+    fn cancel_pending(&mut self, cx: &mut Context<Self>) {
+        self.pending_confirm = None;
+        cx.notify();
+    }
+
+    fn run_query(
+        &mut self,
+        operation: String,
+        page: &extension_runtime::extension::manifest::ResourceWorkbenchPage,
+        confirmed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let is_job = self.descriptor.operations.get(&operation).is_some_and(|op| {
+            matches!(
+                op.mode,
+                extension_runtime::extension::manifest::ResourceWorkbenchOperationMode::Job
+            )
+        });
         // 组装 input 值:从输入 state 读取声明字段的当前值。
         let mut input = serde_json::Map::new();
         let input_state = match self.query_inputs.get(&self.selected_page) {
@@ -330,15 +370,14 @@ impl NativeResourceWorkbench {
             route: self.route.clone(),
             selection: serde_json::Value::Null,
         };
-        let operation = action.operation;
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
             let result = tokio
                 .spawn(async move {
                     if is_job {
-                        dispatch_job(&scope, &workbench, &operation, &context).await
+                        dispatch_job(&scope, &workbench, &operation, &context, confirmed).await
                     } else {
-                        dispatch_invoke(&scope, &workbench, &operation, &context).await
+                        dispatch_invoke(&scope, &workbench, &operation, &context, confirmed).await
                     }
                 })
                 .await
@@ -525,7 +564,7 @@ impl NativeResourceWorkbench {
             Some(Ok(value)) => render_json(value),
             Some(Err(error)) => div().p_4().child(format!("Error: {error}")),
         };
-        div()
+        let mut view = div()
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -559,15 +598,55 @@ impl NativeResourceWorkbench {
                                 },
                             )),
                     ),
-            )
-            .child(
+            );
+        // 危险操作确认条:确认/取消后继续或放弃本次写操作。
+        if self.pending_confirm.is_some() {
+            view = view.child(
                 div()
-                    .id("query-result")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(result_view),
-            )
+                    .id("query-confirm")
+                    .px_4()
+                    .py_2()
+                    .bg(gpui::rgb(0x3a2d1a))
+                    .flex()
+                    .gap_3()
+                    .child("This operation may change data. Confirm?")
+                    .child(
+                        div()
+                            .id("query-confirm-ok")
+                            .px_3()
+                            .py_1()
+                            .cursor_pointer()
+                            .bg(gpui::rgb(0x8a3a2a))
+                            .child("Confirm")
+                            .on_click(cx.listener(
+                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                    this.confirm_pending(cx);
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id("query-confirm-cancel")
+                            .px_3()
+                            .py_1()
+                            .cursor_pointer()
+                            .child("Cancel")
+                            .on_click(cx.listener(
+                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                    this.cancel_pending(cx);
+                                },
+                            )),
+                    ),
+            );
+        }
+        view.child(
+            div()
+                .id("query-result")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(result_view),
+        )
     }
 
     fn cancel_task(&mut self, job_id: String, cx: &mut Context<Self>) {
