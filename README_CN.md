@@ -57,7 +57,7 @@
 
 - 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse；TDengine 改为可安装的扩展驱动，与达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB 和神通 Oscar 驱动一同通过扩展市场安装。
 - 浏览数据库对象，编辑和执行 SQL 并查看执行计划，导入导出数据，比较 Schema/Data，并通过 ER 图查看关系。
-- 专用的 Redis 与 MongoDB 界面；MQTT 中间件连接提供订阅、消息、发布三个视图（MQTT 3.1.1 + rustls 加密，支持 SSH 隧道与断线自动重订阅）。
+- 专用的 Redis 与 MongoDB 界面；MQTT 等中间件连接改为通过扩展市场安装的扩展提供（MQTT 3.1.1 + rustls 加密，支持 SSH 隧道与断线自动重订阅），提供订阅、消息、发布三个视图。
 - 表数据页签支持批量编辑选中单元格，日期/时间/数值列使用对应的类型化编辑控件，支持右键复制表名与字段名。
 
 ### 远程连接与运维
