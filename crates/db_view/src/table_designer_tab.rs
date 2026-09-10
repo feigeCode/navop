@@ -7,21 +7,8 @@ use gpui::{
     ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Task, UniformListScrollHandle, Window, div, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants},
-    checkbox::Checkbox,
-    clipboard::Clipboard,
-    dialog::{DialogButtonProps, DialogFooter},
-    form::{field, h_form},
-    h_flex,
-    input::{Editor, EditorState, Input, InputEvent, InputState},
-    scroll::Scrollbar,
-    select::{Select, SelectEvent, SelectItem, SelectState},
-    spinner::Spinner,
-    tab::{Tab, TabBar},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants}, checkbox::Checkbox, clipboard::Clipboard, dialog::{DialogButtonProps, DialogFooter}, form::{field, h_form}, h_flex, input::{Editor, EditorState, Input, InputEvent, InputState}, scroll::Scrollbar, select::{Select, SelectEvent, SelectItem, SelectState}, spinner::Spinner, tab::{Tab, TabBar}, v_flex};
+use one_assets::IconName;
 use one_ui::{IconButton, IconSize as OneIconSize};
 use std::collections::HashSet;
 use std::ops::Range;

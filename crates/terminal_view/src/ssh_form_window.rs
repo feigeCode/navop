@@ -14,21 +14,8 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px, relative,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    dialog::DialogFooter,
-    h_flex,
-    input::{Input, InputState, Textarea, TextareaState},
-    notification::Notification,
-    radio::Radio,
-    scroll::ScrollableElement,
-    select::{Select, SelectItem, SelectState},
-    tab::{Tab, TabBar},
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogFooter, h_flex, input::{Input, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, tab::{Tab, TabBar}, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;

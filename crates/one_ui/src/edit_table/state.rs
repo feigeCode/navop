@@ -19,14 +19,8 @@ use gpui::{
 };
 use gpui_component::list::{List, ListState};
 use gpui_component::scroll::ScrollbarHandle;
-use gpui_component::{
-    ActiveTheme, Colorize as _, Icon, IconName, StyleSized as _, StyledExt,
-    VirtualListScrollHandle, h_flex,
-    input::{IndentInline, OutdentInline},
-    menu::{ContextMenuExt, PopupMenu},
-    scroll::{ScrollableMask, Scrollbar, ScrollbarMode},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Colorize as _, Icon, StyleSized as _, StyledExt, VirtualListScrollHandle, h_flex, input::{IndentInline, OutdentInline}, menu::{ContextMenuExt, PopupMenu}, scroll::{ScrollableMask, Scrollbar, ScrollbarMode}, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 fn data_column_selection_bounds(

@@ -9,20 +9,8 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, UniformListScrollHandle, Window, div,
     uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariant},
-    checkbox::Checkbox,
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    notification::Notification,
-    radio::{Radio, RadioGroup},
-    select::{Select, SelectItem, SelectState},
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, WindowExt, button::{Button, ButtonCustomVariant, ButtonVariant}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState, Textarea, TextareaState}, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, notification::Notification, radio::{Radio, RadioGroup}, select::{Select, SelectItem, SelectState}, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_core::keybindings::shortcut_spec_from_keystroke;
 use one_core::storage::{
     GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,

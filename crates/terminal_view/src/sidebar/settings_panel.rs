@@ -9,19 +9,8 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
     Styled, Subscription, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants},
-    color_picker::{ColorPicker, ColorPickerState},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
-    notification::Notification,
-    scroll::ScrollableElement,
-    select::{Select, SelectEvent, SelectItem, SelectState},
-    switch::Switch,
-    try_parse_color, v_flex,
-};
+use gpui_component::{ActiveTheme, Colorize, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants}, color_picker::{ColorPicker, ColorPickerState}, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction}, notification::Notification, scroll::ScrollableElement, select::{Select, SelectEvent, SelectItem, SelectState}, switch::Switch, try_parse_color, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
 

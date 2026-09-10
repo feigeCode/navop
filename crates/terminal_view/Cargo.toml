@@ -4,6 +4,7 @@ version = "0.15.2"
 edition = "2021"
 
 [dependencies]
+one-assets = { workspace = true }
 # Terminal core
 terminal = { workspace = true }
 public_mcp = { workspace = true }

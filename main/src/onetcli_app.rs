@@ -1375,7 +1375,7 @@ impl OnetCliApp {
             {
                 container = container
                     .with_macos_titlebar_inset(true)
-                    .with_left_padding(cx.theme().geometry.layout.macos_title_bar_content_padding)
+                    .with_left_padding(one_ui::theme_geometry().layout.macos_title_bar_content_padding)
                     .with_top_padding(px(4.0));
             }
 
@@ -2301,7 +2301,7 @@ impl Render for OnetCliApp {
         #[cfg(target_os = "macos")]
         if sidebar_expanded {
             let tab_bar_left_padding = if auto_hide_tree {
-                cx.theme().geometry.layout.macos_title_bar_content_padding
+                one_ui::theme_geometry().layout.macos_title_bar_content_padding
             } else {
                 px(0.0)
             };
@@ -2349,7 +2349,7 @@ impl Render for OnetCliApp {
                                             if !this.connection_sidebar.read(cx).is_expanded() {
                                                 return;
                                             }
-                                            let layout = cx.theme().geometry.layout;
+                                            let layout = one_ui::theme_geometry().layout;
                                             // The navigation rail is gone; everything below
                                             // the tab bar on the left now belongs to the
                                             // tree overlay itself, so any content click

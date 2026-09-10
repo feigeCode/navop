@@ -4,12 +4,8 @@ use gpui::{
     App, AppContext, AsyncApp, ColorExt, Context, Entity, IntoElement, ParentElement, Styled,
     Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, IconName, IndexPath, Sizable, StyledExt, h_flex,
-    scroll::ScrollableElement,
-    select::{SearchableVec, Select},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, IndexPath, Sizable, StyledExt, h_flex, scroll::ScrollableElement, select::{SearchableVec, Select}, v_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_ui::ContentState;
 use rust_i18n::t;

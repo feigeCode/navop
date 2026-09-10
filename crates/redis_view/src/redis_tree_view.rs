@@ -9,18 +9,8 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize as GpuiIconSize, Side, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    clipboard::Clipboard,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
-    popover::Popover,
-    scroll::ScrollableElement,
-    spinner::Spinner,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, IconSize as GpuiIconSize, Side, Sizable, Size, button::{Button, ButtonVariants as _}, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection};
 use one_ui::{ContentState, IconButton, IconSize};
@@ -2118,7 +2108,7 @@ impl RedisTreeView {
         } else {
             name
         };
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
 
         h_flex()
             .id(SharedString::from(format!("redis-node-{}", ix)))
@@ -2130,7 +2120,7 @@ impl RedisTreeView {
             .gap_1()
             .items_center()
             .cursor_pointer()
-            .rounded(cx.theme().geometry.radius.xs)
+            .rounded(one_ui::theme_geometry().radius.xs)
             .when(is_selected, |this| this.bg(cx.theme().list_active))
             .when(!is_selected, |this| {
                 this.hover(|style| style.bg(cx.theme().list_hover))

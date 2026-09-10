@@ -5,7 +5,8 @@ use gpui::{
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
 };
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::{ActiveTheme, Icon, IconName, IconSize, Sizable, v_flex};
+use gpui_component::{ActiveTheme, Icon, IconSize, Sizable, v_flex};
+use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 

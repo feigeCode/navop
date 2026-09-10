@@ -1,9 +1,8 @@
 use connection_import_protocol::{ImportRecordKind, ImporterAvailability};
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, button::Button, checkbox::Checkbox, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Sizable, button::Button, checkbox::Checkbox, h_flex, v_flex};
+use one_assets::IconName;
 use one_core::storage::ConnectionType;
 use rust_i18n::t;
 

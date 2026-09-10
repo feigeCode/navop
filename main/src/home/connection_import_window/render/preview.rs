@@ -1,11 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::super::{ConnectionImportWindow, is_save_candidate};

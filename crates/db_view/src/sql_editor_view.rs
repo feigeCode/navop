@@ -38,9 +38,8 @@ use gpui_component::input::{
 };
 use gpui_component::notification::Notification;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex};
+use one_assets::IconName;
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};

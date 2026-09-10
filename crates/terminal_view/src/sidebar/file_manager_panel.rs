@@ -13,23 +13,8 @@ use gpui::{
     MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
     UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize, InteractiveElementExt, Sizable, Size,
-    WindowExt,
-    breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
-    notification::Notification,
-    popover::{Popover, PopoverState},
-    progress::Progress,
-    scroll::ScrollableElement,
-    spinner::Spinner,
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, IconSize, InteractiveElementExt, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::SidebarPlacement;

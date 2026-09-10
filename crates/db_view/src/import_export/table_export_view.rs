@@ -8,17 +8,8 @@ use gpui::{
     IntoElement, ParentElement, PathPromptOptions, Render, Styled, Task, Window, div,
     prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, Sizable, VirtualListScrollHandle,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::{Input, InputState},
-    list::{List, ListDelegate, ListItem, ListState},
-    select::{Select, SelectItem, SelectState},
-    switch::Switch,
-    v_flex, v_virtual_list,
-};
+use gpui_component::{ActiveTheme, Disableable, IndexPath, Sizable, VirtualListScrollHandle, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputState}, list::{List, ListDelegate, ListItem, ListState}, select::{Select, SelectItem, SelectState}, switch::Switch, v_flex, v_virtual_list};
+use one_assets::IconName;
 use tokio::sync::mpsc;
 
 use db::{

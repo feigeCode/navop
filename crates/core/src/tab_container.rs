@@ -24,12 +24,9 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{
-    ActiveTheme, Colorize as _, Disableable, Icon, IconName, IconSize, InteractiveElementExt as _,
-    LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _, h_flex,
-    notification::Notification, v_flex,
-};
-use one_ui::{PanelHeader, PanelHeaderVariant};
+use gpui_component::{ActiveTheme, Colorize as _, Disableable, Icon, InteractiveElementExt as _, Selectable as _, Sizable, Size, WindowExt as _, h_flex, notification::Notification, v_flex};
+use one_assets::IconName;
+use one_ui::{IconSize, LayoutSizeTokens, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -3188,7 +3185,7 @@ impl TabContainer {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let contribution = panel.contribution;
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let side_width = self.sidebar_panel_side_width(&contribution, layout);
         let bottom_height = self.sidebar_panel_bottom_height(&contribution, layout);
         let can_resize = match placement {
@@ -3226,7 +3223,7 @@ impl TabContainer {
             "tab-sidebar-resize-{placement:?}-{}-{}",
             id.owner, id.local_id
         ));
-        let resize = cx.theme().geometry.resize;
+        let resize = one_ui::theme_geometry().resize;
         let hit_area = resize.hit_area();
         let line_size = resize.visible_line;
         let drag_border = cx.theme().drag_border;
@@ -3580,7 +3577,7 @@ impl TabContainer {
     }
 
     fn sidebar_resize_target_active(&self, target: &SidebarResizeTarget, cx: &App) -> bool {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         self.resolved_sidebar_panels(cx)
             .into_iter()
             .find(|panel| panel.visible && panel.contribution.id == target.id)
@@ -3612,7 +3609,7 @@ impl TabContainer {
         mouse_position: Point<Pixels>,
         cx: &App,
     ) {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let panel_min = layout.utility_panel_min;
         let panel_max = layout.utility_panel_max;
         let center_min = layout.sidebar_center_min;
@@ -3672,7 +3669,7 @@ impl TabContainer {
         mouse_position: Point<Pixels>,
         cx: &App,
     ) {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let panel_min = layout.sidebar_panel_min;
         let center_min = layout.sidebar_center_min;
         let max_height = (self.sidebar_bounds.size.height - center_min).max(panel_min);
@@ -3704,7 +3701,7 @@ impl TabContainer {
         content: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let panels = self.resolved_sidebar_panels(cx);
         let left = Self::sidebar_panels_for(&panels, SidebarPlacement::Left);
         let right = Self::sidebar_panels_for(&panels, SidebarPlacement::Right);
@@ -3940,7 +3937,7 @@ impl TabContainer {
         let home_active = self.home_active;
         let on_home = self.on_home.clone();
         let titlebar_platform = self.titlebar_platform();
-        let layout = theme.geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let tab_bar_height = layout.tab_bar;
         let tab_item_height = layout.tab_item;
 
@@ -4732,7 +4729,7 @@ impl TabContainer {
         } else {
             foreground
         };
-        let control_width = cx.theme().geometry.layout.window_control_width;
+        let control_width = one_ui::theme_geometry().layout.window_control_width;
 
         div()
             .id(id)
@@ -4795,13 +4792,13 @@ impl TabContainer {
         let background = if is_active {
             cx.theme()
                 .primary
-                .opacity(cx.theme().geometry.opacity.subtle)
+                .opacity(one_ui::theme_geometry().opacity.subtle)
         } else {
             gpui::transparent_black()
         };
         let hover_background = cx.theme().secondary_hover;
         let active_background = cx.theme().secondary_active;
-        let control_width = cx.theme().geometry.layout.window_control_width;
+        let control_width = one_ui::theme_geometry().layout.window_control_width;
 
         div()
             .id("always-on-top")
@@ -4938,7 +4935,7 @@ impl Focusable for TabContainer {
 impl Render for TabContainer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle(cx);
-        let tab_bar_height = cx.theme().geometry.layout.tab_bar;
+        let tab_bar_height = one_ui::theme_geometry().layout.tab_bar;
         let has_tabs = !self.pinned_tabs.is_empty() || !self.tabs.is_empty();
         let show_tab_bar = has_tabs || self.show_tab_bar_when_empty;
 

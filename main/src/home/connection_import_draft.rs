@@ -1,5 +1,6 @@
 use connection_import_protocol::{ImportRecord, ImportRecordKind, PasswordImportStatus};
-use gpui_component::{Icon, IconName, IconSize, Sizable};
+use gpui_component::{Icon, IconSize, Sizable};
+use one_assets::IconName;
 use one_core::storage::{ConnectionType, QuickCommand, StoredConnection};
 use rust_i18n::t;
 

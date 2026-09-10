@@ -3,13 +3,8 @@ use gpui::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
     Styled, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    scroll::ScrollableElement,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::ConnectionImportWindow;

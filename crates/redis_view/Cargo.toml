@@ -5,6 +5,7 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow.workspace = true
 agent_runtime.workspace = true
 async-trait.workspace = true

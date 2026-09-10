@@ -3,10 +3,8 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, StyledExt, h_flex, scroll::ScrollableElement,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, StyledExt, h_flex, scroll::ScrollableElement, v_flex};
+use one_assets::IconName;
 use one_core::storage::PortForwardingKind;
 use rust_i18n::t;
 

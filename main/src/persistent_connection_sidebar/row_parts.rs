@@ -1,9 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants as _}};
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::SidebarPalette;
@@ -60,7 +58,7 @@ pub(super) fn delete_group_button(
 }
 
 pub(super) fn tree_chevron(has_children: bool, expanded: bool, cx: &gpui::App) -> AnyElement {
-    let disclosure_size = cx.theme().geometry.tree.disclosure_size;
+    let disclosure_size = one_ui::theme_geometry().tree.disclosure_size;
     div()
         .w(disclosure_size)
         .h(disclosure_size)

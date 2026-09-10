@@ -3,10 +3,8 @@ pub mod time_picker;
 
 use gpui::{Action, actions};
 use gpui::{App, Styled as _};
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
-    button::{Button, ButtonVariants as _},
-};
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, button::{Button, ButtonVariants as _}};
+use one_assets::IconName;
 use serde::Deserialize;
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]

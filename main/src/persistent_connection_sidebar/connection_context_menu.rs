@@ -1,8 +1,6 @@
 use gpui::{Entity, Window};
-use gpui_component::{
-    IconName,
-    menu::{PopupMenu, PopupMenuItem},
-};
+use gpui_component::{menu::{PopupMenu, PopupMenuItem}};
+use one_assets::IconName;
 use one_core::{
     storage::{ConnectionType, StoredConnection},
     tab_container::TabOpenMode,

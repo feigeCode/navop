@@ -1,6 +1,7 @@
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use gpui::{Anchor, AnyElement, IntoElement};
-use gpui_component::{IconName, Selectable as _, menu::DropdownMenu as _};
+use gpui_component::{Selectable as _, menu::DropdownMenu as _};
+use one_assets::IconName;
 use one_core::storage::ConnectionType;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;

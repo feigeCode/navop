@@ -38,11 +38,8 @@ use gpui::{
     FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
     Subscription, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, Selectable, Sizable, Size,
-    button::{ButtonCustomVariant, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IconSize, Selectable, Sizable, Size, button::{ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
+use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::{
@@ -1450,7 +1447,7 @@ impl TerminalSidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_active = self.tool_dock.is_tool_open(panel);
-        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
 
         terminal_toolbar_icon_button(
             SharedString::from(format!("terminal-sidebar-toolbar-btn-{panel:?}")),
@@ -1610,7 +1607,7 @@ impl TerminalSidebarToolbar {
 impl Render for TerminalSidebarToolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = self.sidebar.read(cx).toolbar_snapshot();
-        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
 
         v_flex()
             .flex_shrink_0()

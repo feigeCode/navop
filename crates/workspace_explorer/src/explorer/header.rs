@@ -5,13 +5,8 @@ use gpui::{
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, IconSize, Sizable as _, Size, StyledExt as _,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    popover::Popover,
-};
+use gpui_component::{ActiveTheme as _, Icon, IconSize, Sizable as _, Size, StyledExt as _, button::{Button, ButtonVariants as _}, h_flex, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover};
+use one_assets::IconName;
 use one_ui::{IconButton, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 
@@ -145,7 +140,7 @@ impl WorkspaceExplorer {
             .id(id)
             .items_center()
             .gap_1()
-            .h(cx.theme().geometry.layout.list_header)
+            .h(one_ui::theme_geometry().layout.list_header)
             .px_2()
             .cursor_pointer()
             .bg(self.theme.muted.opacity(0.55))

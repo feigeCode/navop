@@ -16,17 +16,8 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
     UniformListScrollHandle, Window, div, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    notification::Notification,
-    scroll::ScrollableElement,
-    select::{Select, SelectItem, SelectState},
-    switch::Switch,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, h_flex, input::{Input, InputEvent, InputState, Textarea, TextareaState}, notification::Notification, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, switch::Switch, v_flex};
+use one_assets::IconName;
 use mqtt_runtime::{MqttMessage, MqttQos, MqttSubscription};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::StoredConnection;
@@ -510,7 +501,7 @@ impl MqttSubscribeView {
                     .px_2()
                     .gap_2()
                     .items_center()
-                    .rounded(cx.theme().geometry.radius.xs)
+                    .rounded(one_ui::theme_geometry().radius.xs)
                     .hover(|style| style.bg(cx.theme().list_hover))
                     .child(
                         Icon::new(IconName::Bell)

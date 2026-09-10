@@ -12,21 +12,8 @@ use gpui::{
     RenderOnce, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, Selectable, Sizable, Size as ComponentSize,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    clipboard::Clipboard,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    list::{List, ListDelegate, ListState},
-    menu::{ContextMenuExt, PopupMenuItem},
-    popover::Popover,
-    scroll::Scrollbar,
-    spinner::Spinner,
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IconSize, IndexPath, Selectable, Sizable, Size as ComponentSize, button::{Button, ButtonVariants as _}, checkbox::Checkbox, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListDelegate, ListState}, menu::{ContextMenuExt, PopupMenuItem}, popover::Popover, scroll::Scrollbar, spinner::Spinner, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_ui::{ContentState, IconButton, IconSize as OneIconSize};
 use rust_i18n::t;
 use tracing::log::{error, info, trace, warn};
@@ -2739,7 +2726,7 @@ impl DbTreeView {
         let hover_bg = cx.theme().secondary;
         let folder_text_color = cx.theme().muted_foreground;
         let foreground_color = cx.theme().sidebar_foreground;
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
         let indent = tree.base_padding + tree.indent * depth;
 
         // 箭头

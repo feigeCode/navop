@@ -6,7 +6,8 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div,
 };
-use gpui_component::{Icon, IconName, Sizable, h_flex, v_flex};
+use gpui_component::{Icon, Sizable, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};

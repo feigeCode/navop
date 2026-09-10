@@ -7,16 +7,8 @@
 use std::sync::Arc;
 
 use gpui::*;
-use gpui_component::{
-    Icon, IconName, Sizable as _, Size,
-    button::{Button as UiButton, ButtonVariants as _},
-    highlighter::LanguageRegistry,
-    menu::{DropdownMenu as _, PopupMenuItem},
-    popover::Popover,
-    spinner::Spinner,
-    text::{TextView, TextViewStyle},
-    tooltip::Tooltip,
-};
+use gpui_component::{Icon, Sizable as _, Size, button::{Button as UiButton, ButtonVariants as _}, highlighter::LanguageRegistry, menu::{DropdownMenu as _, PopupMenuItem}, popover::Popover, spinner::Spinner, text::{TextView, TextViewStyle}, tooltip::Tooltip};
+use one_assets::IconName;
 use palette::IntoColor;
 
 mod host_artifact;

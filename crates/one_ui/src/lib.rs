@@ -4,6 +4,8 @@ pub mod content_state;
 pub mod edit_table;
 pub mod file_conflict_prompt;
 mod geometry;
+pub mod theme_geometry;
+pub use theme_geometry::{LayoutSizeTokens, ThemeGeometry, theme_geometry};
 pub mod icon_button;
 mod icon_size;
 pub mod large_text_editor;

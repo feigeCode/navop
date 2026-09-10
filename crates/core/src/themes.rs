@@ -4,7 +4,7 @@ use crate::theme_import::normalize_theme_source;
 use crate::theme_sources::BUNDLED_THEMES;
 use gpui::{Action, App, SharedString, hsla};
 use gpui_component::{
-    ActiveTheme, Colorize, Theme, ThemeConfig, ThemeMode, ThemeRegistry, scroll::ScrollbarShow,
+    ActiveTheme, Colorize, Theme, ThemeConfig, ThemeMode, ThemeRegistry, scroll::ScrollbarMode,
     try_parse_color,
 };
 use serde::{Deserialize, Serialize};
@@ -19,14 +19,14 @@ const CUSTOM_SELECTION_ALPHA: f32 = 0.25;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct State {
     theme: SharedString,
-    scrollbar_show: Option<ScrollbarShow>,
+    scrollbar_show: Option<ScrollbarMode>,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
             theme: "Navop Light".into(),
-            scrollbar_show: Some(ScrollbarShow::Hover),
+            scrollbar_show: Some(ScrollbarMode::Hover),
         }
     }
 }
@@ -103,12 +103,12 @@ pub fn init(cx: &mut App) {
     let json = std::fs::read_to_string(STATE_FILE).unwrap_or_default();
     let state = serde_json::from_str::<State>(&json).unwrap_or_default();
     if let Some(scrollbar_show) = state.scrollbar_show {
-        Theme::global_mut(cx).scrollbar_show = scrollbar_show;
+        Theme::global_mut(cx).scrollbar_mode = scrollbar_show;
     }
     cx.observe_global::<Theme>(|cx| {
         let state = State {
             theme: cx.theme().theme_name().clone(),
-            scrollbar_show: Some(cx.theme().scrollbar_show),
+            scrollbar_show: Some(cx.theme().scrollbar_mode),
         };
         if let Ok(json) = serde_json::to_string_pretty(&state) {
             let _ = std::fs::write(STATE_FILE, json);
@@ -189,7 +189,7 @@ pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     let Ok(accent) = try_parse_color(&settings.custom_accent_color) else {
         return;
     };
-    let foreground = if accent.lightness > ACCENT_LIGHTNESS_THRESHOLD {
+    let foreground = if accent.l > ACCENT_LIGHTNESS_THRESHOLD {
         hsla(0., 0., 0.08, 1.0)
     } else {
         hsla(0., 0., 1.0, 1.0)
@@ -212,7 +212,7 @@ pub fn apply_custom_accent(settings: &AppSettings, cx: &mut App) {
     theme.sidebar_primary = accent;
     theme.sidebar_primary_foreground = foreground;
     theme.selection = accent;
-    theme.selection.alpha = CUSTOM_SELECTION_ALPHA;
+    theme.selection.a = CUSTOM_SELECTION_ALPHA;
 }
 
 #[derive(Action, Clone, PartialEq)]

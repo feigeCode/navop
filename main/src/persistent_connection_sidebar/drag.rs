@@ -2,7 +2,8 @@ use gpui::{
     Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
     div, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, h_flex};
+use one_assets::IconName;
 
 #[derive(Clone)]
 pub(super) struct DragConnection {

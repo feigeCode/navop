@@ -29,23 +29,11 @@ use gpui::{
     FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    clipboard::Clipboard,
-    group_box::GroupBoxVariant,
-    h_flex,
-    input::{Input, InputState},
-    kbd::Kbd,
-    scroll::ScrollableElement,
-    select::{Select, SelectItem, SelectState},
-    setting::{
+use gpui_component::{ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, clipboard::Clipboard, group_box::GroupBoxVariant, h_flex, input::{Input, InputState}, kbd::Kbd, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, setting::{
         NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
         Settings,
-    },
-    switch::Switch,
-    v_flex,
-};
+    }, switch::Switch, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
     get_cached_team_options, personal::SyncStoreHealth,

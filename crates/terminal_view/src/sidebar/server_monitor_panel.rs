@@ -8,17 +8,8 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Task, Window, div, linear_color_stop, linear_gradient, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, FunctionalIcon, IconName, Sizable, StyledExt,
-    button::Button,
-    chart::{AreaChart, LineChart, PieChart},
-    h_flex,
-    progress::Progress,
-    spinner::Spinner,
-    switch::Switch,
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, FunctionalIcon, Sizable, StyledExt, button::Button, chart::{AreaChart, LineChart, PieChart}, h_flex, progress::Progress, spinner::Spinner, switch::Switch, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::get_config_dir;
 use one_ui::{IconButton, IconButtonRole};

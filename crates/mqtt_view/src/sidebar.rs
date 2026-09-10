@@ -9,7 +9,8 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
-use gpui_component::{ActiveTheme, IconName, ObjectIcon, Selectable, Size, h_flex, v_flex};
+use gpui_component::{ActiveTheme, ObjectIcon, Selectable, Size, h_flex, v_flex};
+use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
 use one_ui::IconButton;
@@ -149,7 +150,7 @@ impl MqttSidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_active = self.active_panel == Some(panel);
-        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
 
         IconButton::new(
             format!("mqtt-sidebar-btn-{panel:?}"),

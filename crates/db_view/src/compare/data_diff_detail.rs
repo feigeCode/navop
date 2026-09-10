@@ -5,14 +5,8 @@ use gpui::{
     App, AppContext, ColorExt, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, IconName, IndexPath, Sizable, StyledExt,
-    checkbox::Checkbox,
-    h_flex,
-    list::{List, ListDelegate, ListItem, ListState},
-    tag::Tag,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, IndexPath, Sizable, StyledExt, checkbox::Checkbox, h_flex, list::{List, ListDelegate, ListItem, ListState}, tag::Tag, v_flex};
+use one_assets::IconName;
 use one_ui::ContentState;
 use rust_i18n::t;
 use serde_json::{Map, Value};

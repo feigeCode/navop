@@ -28,7 +28,8 @@ use gpui_component::input::{
 use gpui_component::native_menu::NativeMenu as PlatformNativeMenu;
 use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{Icon, IconName, Rope, RopeExt, Sizable as _, Size};
+use gpui_component::{Icon, Rope, RopeExt, Sizable as _, Size};
+use one_assets::IconName;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,

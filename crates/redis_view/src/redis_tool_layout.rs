@@ -12,16 +12,8 @@ use gpui::{
     AnyElement, App, ColorExt, Context, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize as GpuiIconSize, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::Input,
-    switch::Switch,
-    table::DataTable,
-    tag::Tag,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IconSize as GpuiIconSize, Sizable, Size, button::{Button, ButtonVariants as _}, h_flex, input::Input, switch::Switch, table::DataTable, tag::Tag, v_flex};
+use one_assets::IconName;
 use one_ui::{ContentState, IconButton, IconSize};
 use rust_i18n::t;
 
@@ -41,7 +33,7 @@ impl RedisToolView {
         let view = cx.entity().clone();
         let auto_view = cx.entity().clone();
         let reset_view = cx.entity().clone();
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         h_flex()
             .w_full()
             .h(geometry.layout.command_bar)

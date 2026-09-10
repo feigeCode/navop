@@ -3,7 +3,8 @@
 
 use crate::redis_tool_data::ToolRow;
 use gpui::{AnyElement, App, ColorExt, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, h_flex, v_flex};
+use one_assets::IconName;
 
 pub fn metric_cards(items: &[(&str, String, IconName)], cx: &App) -> AnyElement {
     h_flex()

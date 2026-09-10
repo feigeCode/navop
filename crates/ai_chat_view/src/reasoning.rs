@@ -4,11 +4,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ColorExt, IntoElement, ParentElement, SharedString, Styled, Window, div,
 };
-use gpui_component::{
-    Disableable, IconName, Sizable,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_component::{Disableable, Sizable, button::{Button, ButtonVariants}, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 pub fn render_reasoning_block<E: MessageExtension>(

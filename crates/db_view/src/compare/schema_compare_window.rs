@@ -8,16 +8,8 @@ use gpui::{
     IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled,
     Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    select::{SearchableVec, SelectEvent, SelectState},
-    switch::Switch,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputEvent, InputState}, select::{SearchableVec, SelectEvent, SelectState}, switch::Switch, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use tokio::sync::mpsc;
 

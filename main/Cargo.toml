@@ -9,6 +9,7 @@ name = "navop"
 path = "src/main.rs"
 
 [dependencies]
+one-assets = { workspace = true }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql"] }

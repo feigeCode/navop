@@ -634,9 +634,8 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{
     Delete, InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, StepAction,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyleSized, StyledExt, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, StyleSized, StyledExt, h_flex, v_flex};
+use one_assets::IconName;
 
 fn parse_time_unit(value: String, max: u32) -> Option<u32> {
     let trimmed = value.trim();

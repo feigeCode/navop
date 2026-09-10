@@ -11,13 +11,8 @@ use gpui::{
     App, AppContext, ColorExt, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Styled, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    scroll::ScrollableElement,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::StoredConnection;

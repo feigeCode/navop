@@ -9,11 +9,8 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, IconName, Sizable, h_flex,
-    input::{Input, InputEvent, InputState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Sizable, h_flex, input::{Input, InputEvent, InputState}, v_flex};
+use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 

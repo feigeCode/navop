@@ -9,9 +9,8 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Placement, Sizable as _, Size, h_flex,
-};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Placement, Sizable as _, Size, h_flex};
+use one_assets::IconName;
 use one_core::tab_container::DragTab;
 use rust_i18n::t;
 

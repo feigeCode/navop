@@ -5,14 +5,8 @@ use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    Disableable as _, IconName, Selectable as _, Sizable as _, Size,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::Editor,
-    tab::{Tab, TabBar},
-    v_flex,
-};
+use gpui_component::{Disableable as _, Selectable as _, Sizable as _, Size, button::{Button, ButtonVariants as _}, h_flex, input::Editor, tab::{Tab, TabBar}, v_flex};
+use one_assets::IconName;
 use one_ui::{ContentState, IconButton, IconSize, StatusBar, StatusPresentation};
 use rust_i18n::t;
 

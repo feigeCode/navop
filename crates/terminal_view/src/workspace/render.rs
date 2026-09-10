@@ -112,7 +112,7 @@ impl TerminalWorkspace {
                     placement,
                     content,
                     snapshot.colors.clone(),
-                    cx.theme().geometry.layout.panel_header,
+                    one_ui::theme_geometry().layout.panel_header,
                     cx,
                 ),
             ))

@@ -3,7 +3,8 @@ use crate::connection_visuals::{
     external_driver_icon_from_sources,
 };
 use db::ipc::IpcDriverRegistry;
-use gpui_component::{Icon, IconName, Sizable};
+use gpui_component::{Icon, Sizable};
+use one_assets::IconName;
 use one_core::storage::{ConnectionType, DatabaseType};
 use rust_i18n::t;
 use std::path::PathBuf;

@@ -8,7 +8,8 @@ use gpui::{
 };
 use gpui_component::button::Button;
 use gpui_component::dialog::DialogFooter;
-use gpui_component::{Icon, IconName, WindowExt, button::ButtonVariants, v_flex};
+use gpui_component::{Icon, WindowExt, button::ButtonVariants, v_flex};
+use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 use std::sync::{Arc, Mutex};

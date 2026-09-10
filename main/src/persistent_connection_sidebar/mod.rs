@@ -155,7 +155,7 @@ impl PersistentConnectionSidebar {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette(cx);
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let top = layout.tab_bar;
         let pad = px(FLOATING_CARD_MARGIN);
         div()
@@ -205,7 +205,7 @@ impl PersistentConnectionSidebar {
         })
         .detach();
         let tree_state = one_core::settings::AppSettings::current(cx).connection_sidebar_tree_state;
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let tree_width = px(tree_state.tree_width as f32)
             .clamp(layout.context_sidebar_min, layout.context_sidebar_max);
         Self {

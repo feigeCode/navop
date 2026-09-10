@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
-use gpui_component::{Icon, IconName, IconSize, Sizable};
+use gpui_component::{Icon, IconSize, Sizable};
+use one_assets::IconName;
 use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
 };

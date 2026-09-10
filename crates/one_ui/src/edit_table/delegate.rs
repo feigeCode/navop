@@ -9,11 +9,8 @@ use gpui::{
     Subscription, Window, div, px,
 };
 use gpui_component::date_picker::{DatePicker, DatePickerState};
-use gpui_component::{
-    ActiveTheme as _, Colorize as _, Icon, IconName, Size, h_flex,
-    input::{Input, InputState},
-    menu::PopupMenu,
-};
+use gpui_component::{ActiveTheme as _, Colorize as _, Icon, Size, h_flex, input::{Input, InputState}, menu::PopupMenu};
+use one_assets::IconName;
 
 pub enum CellEditor {
     Input(Entity<InputState>),

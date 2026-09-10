@@ -4,9 +4,8 @@ use gpui::{
     AnyElement, ColorExt, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder,
 };
-use gpui_component::{
-    Disableable, Icon, IconName, Sizable, button::Button, h_flex, switch::Switch, v_flex,
-};
+use gpui_component::{Disableable, Icon, Sizable, button::Button, h_flex, switch::Switch, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 impl NotesView {

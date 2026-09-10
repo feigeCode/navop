@@ -8,7 +8,8 @@ use gpui::{
     InteractiveElement, IntoElement, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{ActiveTheme, ElementExt as _, Icon, IconName, IconSize, Sizable, h_flex};
+use gpui_component::{ActiveTheme, ElementExt as _, Icon, IconSize, Sizable, h_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,

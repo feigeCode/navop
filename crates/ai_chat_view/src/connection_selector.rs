@@ -4,11 +4,8 @@ use gpui::{
     AnyElement, App, ColorExt, Context, EventEmitter, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, button::{Button, ButtonVariants}, h_flex, v_flex};
+use one_assets::IconName;
 use one_core::storage::{ConnectionType, StoredConnection};
 use rust_i18n::t;
 

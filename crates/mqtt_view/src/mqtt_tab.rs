@@ -12,7 +12,8 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, IconSize, Sizable, h_flex};
+use gpui_component::{ActiveTheme, Icon, IconSize, Sizable, h_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem};

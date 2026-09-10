@@ -1,5 +1,6 @@
 use crate::ipc::{IpcDriverManifest, IpcDriverRegistry};
-use gpui_component::{Icon, IconName, IconNamed, Sizable, Size};
+use gpui_component::{Icon, IconNamed, Sizable, Size};
+use one_assets::IconName;
 use one_core::storage::DbConnectionConfig;
 use std::path::{Path, PathBuf};
 

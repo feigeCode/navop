@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::*;
-use gpui_component::{ActiveTheme, Icon, IconName};
+use gpui_component::{ActiveTheme, Icon};
+use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 use remote_desktop::parse_destination;

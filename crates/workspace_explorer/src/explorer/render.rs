@@ -7,9 +7,8 @@ use gpui::{
     div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::menu::ContextMenuExt as _;
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, Size, StyledExt as _, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::clipboard::WORKSPACE_EXPLORER_KEY_CONTEXT;
@@ -175,7 +174,7 @@ impl WorkspaceExplorer {
         } else {
             self.theme.muted
         };
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
         h_flex()
             .id(SharedString::from(format!(
                 "workspace-file-row-{}",
