@@ -2,11 +2,8 @@ use crate::NotesView;
 use crate::markdown_session::{MarkdownSessionState, MarkdownSyncState};
 use futures::channel::oneshot;
 use gpui::{App, AppContext, Context, ParentElement, SharedString, Task, Window};
-use gpui_component::{
-    Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants},
-    dialog::DialogFooter,
-};
+use gpui_component::{Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants}, dialog::DialogFooter};
+use one_assets::IconName;
 use one_core::tab_container::TabContent;
 use rust_i18n::t;
 use std::{

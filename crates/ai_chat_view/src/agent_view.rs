@@ -20,21 +20,12 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, ColorExt as _, Context, Entity, EventEmitter, FontWeight,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputState},
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    popover::Popover,
-    spinner::Spinner,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _, button::{Button, ButtonCustomVariant, ButtonVariants}, dialog::DialogButtonProps, h_flex, input::{Input, InputState}, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, spinner::Spinner, v_flex};
+use one_assets::IconName;
 #[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
@@ -3482,7 +3473,7 @@ impl AgentChatView {
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.sidebar_collapsed {
             return v_flex()
-                .w(cx.theme().geometry.layout.compact_rail)
+                .w(one_ui::theme_geometry().layout.compact_rail)
                 .h_full()
                 .flex_shrink_0()
                 .border_r_1()
@@ -3536,7 +3527,7 @@ impl AgentChatView {
         };
 
         v_flex()
-            .w(cx.theme().geometry.layout.context_sidebar_default)
+            .w(one_ui::theme_geometry().layout.context_sidebar_default)
             .h_full()
             .min_h_0()
             .flex_shrink_0()
@@ -3708,7 +3699,7 @@ impl AgentChatView {
             .child(
                 PanelHeader::new("agent-history-header")
                     .variant(PanelHeaderVariant::Sidebar)
-                    .horizontal_padding(cx.theme().geometry.spacing.space_2)
+                    .horizontal_padding(one_ui::theme_geometry().spacing.space_2)
                     .background(theme.background)
                     .border_color(border)
                     .title(
@@ -3769,7 +3760,7 @@ impl AgentChatView {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         PanelHeader::new("agent-chat-toolbar")
             .variant(PanelHeaderVariant::Toolbar)
-            .horizontal_padding(cx.theme().geometry.spacing.space_4)
+            .horizontal_padding(one_ui::theme_geometry().spacing.space_4)
             .background(theme.background)
             .border_color(theme.border)
             .title(self.render_agent_switcher(cx))
@@ -4848,8 +4839,7 @@ mod tests {
         point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
-    use palette::IntoColor as _;
-    use serde_json::json;
+        use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct WriteTool;
@@ -8667,14 +8657,14 @@ mod tests {
 
     #[test]
     fn background_running_session_uses_readable_foreground_color() {
-        let foreground = gpui::rgb(0xf8fafc).into_color();
-        let selected_foreground = gpui::rgb(0xe2e8f0).into_color();
+        let foreground = gpui::rgb(0xf8fafc).into();
+        let selected_foreground = gpui::rgb(0xe2e8f0).into();
         let style = SessionRowStyle {
             foreground,
-            muted_foreground: gpui::rgb(0x64748b).into_color(),
-            selected_background: gpui::rgb(0x1e293b).into_color(),
+            muted_foreground: gpui::rgb(0x64748b).into(),
+            selected_background: gpui::rgb(0x1e293b).into(),
             selected_foreground,
-            hover_background: gpui::rgb(0x0f172a).into_color(),
+            hover_background: gpui::rgb(0x0f172a).into(),
         };
 
         assert_eq!(

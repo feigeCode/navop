@@ -7,17 +7,8 @@
 use std::sync::Arc;
 
 use gpui::*;
-use gpui_component::{
-    Icon, IconName, Sizable as _, Size,
-    button::{Button as UiButton, ButtonVariants as _},
-    highlighter::LanguageRegistry,
-    menu::{DropdownMenu as _, PopupMenuItem},
-    popover::Popover,
-    spinner::Spinner,
-    text::{TextView, TextViewStyle},
-    tooltip::Tooltip,
-};
-use palette::IntoColor;
+use gpui_component::{Icon, Sizable as _, Size, button::{Button as UiButton, ButtonVariants as _}, highlighter::LanguageRegistry, menu::{DropdownMenu as _, PopupMenuItem}, popover::Popover, spinner::Spinner, text::{TextView, TextViewStyle}, tooltip::Tooltip};
+use one_assets::IconName;
 
 mod host_artifact;
 
@@ -686,13 +677,12 @@ impl HtmlComputedStyle {
 fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     match color {
         HtmlCssColor::CurrentColor => current_color,
-        HtmlCssColor::Rgba(color) => Rgba::new(
-            color.red as f32 / 255.0,
-            color.green as f32 / 255.0,
-            color.blue as f32 / 255.0,
-            color.alpha.clamp(0.0, 1.0),
-        )
-        .into_color(),
+        HtmlCssColor::Rgba(color) => Hsla::from(Rgba {
+            r: color.red as f32 / 255.0,
+            g: color.green as f32 / 255.0,
+            b: color.blue as f32 / 255.0,
+            a: color.alpha.clamp(0.0, 1.0),
+        }),
     }
 }
 
@@ -765,7 +755,7 @@ fn html_text_view_style(theme: &Theme) -> TextViewStyle {
         .table_head(table_head)
         .table_cell(table_cell);
     style.heading_base_font_size = px(t.text_size);
-    style.is_dark = c.editor_background.lightness < 0.5;
+    style.is_dark = c.editor_background.l < 0.5;
     style
 }
 
@@ -3386,15 +3376,14 @@ mod tests {
     use crate::components::parse_html_document;
     use crate::theme::Theme;
     use gpui::{Hsla, Rgba};
-    use palette::IntoColor;
-
+    
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
-        let color: Rgba = color.into_color();
+        let color: Rgba = color.into();
         let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as i16;
         assert!((channel(color.red) - red as i16).abs() <= 1);
         assert!((channel(color.green) - green as i16).abs() <= 1);
         assert!((channel(color.blue) - blue as i16).abs() <= 1);
-        assert!((channel(color.alpha) - alpha as i16).abs() <= 1);
+        assert!((channel(color.a) - alpha as i16).abs() <= 1);
     }
 
     #[test]

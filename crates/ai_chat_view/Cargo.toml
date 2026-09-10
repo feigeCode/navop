@@ -9,6 +9,7 @@ default = ["embedded-webview"]
 embedded-webview = ["dep:gpui-wry", "dep:wry"]
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

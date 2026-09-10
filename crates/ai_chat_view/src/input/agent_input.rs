@@ -24,7 +24,8 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
-use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 use crate::input::PromptHistory;

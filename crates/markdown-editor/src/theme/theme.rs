@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use gpui::{App, FontWeight, Global, Hsla, hsla, rgba};
-use palette::IntoColor;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -630,14 +629,14 @@ impl<'de> Deserialize<'de> for ThemeColors {
             source_mode_block_bg: raw
                 .source_mode_block_bg
                 .or(raw.block_focused_bg)
-                .unwrap_or_else(|| rgba(0x313131ff).into_color()),
+                .unwrap_or_else(|| rgba(0x313131ff).into()),
             comment_bg: raw
                 .comment_bg
-                .unwrap_or_else(|| rgba(0xfbbf2426).into_color()),
+                .unwrap_or_else(|| rgba(0xfbbf2426).into()),
             text_default: raw.text_default,
             text_link: raw
                 .text_link
-                .unwrap_or_else(|| rgba(0x60a5faff).into_color()),
+                .unwrap_or_else(|| rgba(0x60a5faff).into()),
             text_placeholder: raw.text_placeholder,
             text_h1: raw.text_h1,
             text_h2: raw.text_h2,
@@ -648,155 +647,155 @@ impl<'de> Deserialize<'de> for ThemeColors {
             border_h1: raw.border_h1,
             border_h2: raw
                 .border_h2
-                .unwrap_or_else(|| rgba(0xe0e0e0cc).into_color()),
+                .unwrap_or_else(|| rgba(0xe0e0e0cc).into()),
             text_quote: raw.text_quote,
             border_quote: raw.border_quote,
             callout_note_bg: raw
                 .callout_note_bg
-                .unwrap_or_else(|| rgba(0x94a3b81f).into_color()),
+                .unwrap_or_else(|| rgba(0x94a3b81f).into()),
             callout_note_border: raw
                 .callout_note_border
-                .unwrap_or_else(|| rgba(0x94a3b4ff).into_color()),
+                .unwrap_or_else(|| rgba(0x94a3b4ff).into()),
             callout_tip_bg: raw
                 .callout_tip_bg
-                .unwrap_or_else(|| rgba(0x1d4ed81f).into_color()),
+                .unwrap_or_else(|| rgba(0x1d4ed81f).into()),
             callout_tip_border: raw
                 .callout_tip_border
-                .unwrap_or_else(|| rgba(0x60a5faff).into_color()),
+                .unwrap_or_else(|| rgba(0x60a5faff).into()),
             callout_important_bg: raw
                 .callout_important_bg
-                .unwrap_or_else(|| rgba(0xca8a041f).into_color()),
+                .unwrap_or_else(|| rgba(0xca8a041f).into()),
             callout_important_border: raw
                 .callout_important_border
-                .unwrap_or_else(|| rgba(0xfbbf24ff).into_color()),
+                .unwrap_or_else(|| rgba(0xfbbf24ff).into()),
             callout_warning_bg: raw
                 .callout_warning_bg
-                .unwrap_or_else(|| rgba(0xfb71851f).into_color()),
+                .unwrap_or_else(|| rgba(0xfb71851f).into()),
             callout_warning_border: raw
                 .callout_warning_border
-                .unwrap_or_else(|| rgba(0xfb7185ff).into_color()),
+                .unwrap_or_else(|| rgba(0xfb7185ff).into()),
             callout_caution_bg: raw
                 .callout_caution_bg
-                .unwrap_or_else(|| rgba(0xdc26261f).into_color()),
+                .unwrap_or_else(|| rgba(0xdc26261f).into()),
             callout_caution_border: raw
                 .callout_caution_border
-                .unwrap_or_else(|| rgba(0xf87171ff).into_color()),
+                .unwrap_or_else(|| rgba(0xf87171ff).into()),
             footnote_bg: raw
                 .footnote_bg
-                .unwrap_or_else(|| rgba(0x212124ff).into_color()),
+                .unwrap_or_else(|| rgba(0x212124ff).into()),
             footnote_border: raw
                 .footnote_border
-                .unwrap_or_else(|| rgba(0x71717a52).into_color()),
+                .unwrap_or_else(|| rgba(0x71717a52).into()),
             footnote_badge_bg: raw
                 .footnote_badge_bg
-                .unwrap_or_else(|| rgba(0xa1a1aa24).into_color()),
+                .unwrap_or_else(|| rgba(0xa1a1aa24).into()),
             footnote_badge_text: raw
                 .footnote_badge_text
-                .unwrap_or_else(|| rgba(0xd4d4d8cc).into_color()),
+                .unwrap_or_else(|| rgba(0xd4d4d8cc).into()),
             footnote_backref: raw
                 .footnote_backref
-                .unwrap_or_else(|| rgba(0xa1a1aaff).into_color()),
+                .unwrap_or_else(|| rgba(0xa1a1aaff).into()),
             task_checkbox_border: raw
                 .task_checkbox_border
-                .unwrap_or_else(|| rgba(0x71717aff).into_color()),
+                .unwrap_or_else(|| rgba(0x71717aff).into()),
             task_checkbox_bg: raw
                 .task_checkbox_bg
-                .unwrap_or_else(|| rgba(0x00000000).into_color()),
+                .unwrap_or_else(|| rgba(0x00000000).into()),
             task_checkbox_checked_bg: raw
                 .task_checkbox_checked_bg
-                .unwrap_or_else(|| rgba(0xf0efedff).into_color()),
+                .unwrap_or_else(|| rgba(0xf0efedff).into()),
             task_checkbox_check: raw
                 .task_checkbox_check
-                .unwrap_or_else(|| rgba(0x18181bff).into_color()),
+                .unwrap_or_else(|| rgba(0x18181bff).into()),
             separator_color: raw
                 .separator_color
-                .unwrap_or_else(|| rgba(0x71717aff).into_color()),
-            code_bg: raw.code_bg.unwrap_or_else(|| rgba(0x111827ff).into_color()),
+                .unwrap_or_else(|| rgba(0x71717aff).into()),
+            code_bg: raw.code_bg.unwrap_or_else(|| rgba(0x111827ff).into()),
             code_text: raw.code_text,
             code_language_input_bg: raw
                 .code_language_input_bg
-                .unwrap_or_else(|| rgba(0x343941ff).into_color()),
+                .unwrap_or_else(|| rgba(0x343941ff).into()),
             code_language_input_border: raw
                 .code_language_input_border
-                .unwrap_or_else(|| rgba(0x4b5563cc).into_color()),
+                .unwrap_or_else(|| rgba(0x4b5563cc).into()),
             code_language_input_text: raw
                 .code_language_input_text
-                .unwrap_or_else(|| rgba(0xe5e7ebff).into_color()),
+                .unwrap_or_else(|| rgba(0xe5e7ebff).into()),
             code_language_input_placeholder: raw
                 .code_language_input_placeholder
-                .unwrap_or_else(|| rgba(0x9ca3afcc).into_color()),
+                .unwrap_or_else(|| rgba(0x9ca3afcc).into()),
             code_syntax_comment: raw
                 .code_syntax_comment
-                .unwrap_or_else(|| rgba(0x565f89ff).into_color()),
+                .unwrap_or_else(|| rgba(0x565f89ff).into()),
             code_syntax_keyword: raw
                 .code_syntax_keyword
-                .unwrap_or_else(|| rgba(0xbb9af7ff).into_color()),
+                .unwrap_or_else(|| rgba(0xbb9af7ff).into()),
             code_syntax_string: raw
                 .code_syntax_string
-                .unwrap_or_else(|| rgba(0x9ece6aff).into_color()),
+                .unwrap_or_else(|| rgba(0x9ece6aff).into()),
             code_syntax_number: raw
                 .code_syntax_number
-                .unwrap_or_else(|| rgba(0xff9e64ff).into_color()),
+                .unwrap_or_else(|| rgba(0xff9e64ff).into()),
             code_syntax_type: raw
                 .code_syntax_type
-                .unwrap_or_else(|| rgba(0x2ac3deff).into_color()),
+                .unwrap_or_else(|| rgba(0x2ac3deff).into()),
             code_syntax_function: raw
                 .code_syntax_function
-                .unwrap_or_else(|| rgba(0x7aa2f7ff).into_color()),
+                .unwrap_or_else(|| rgba(0x7aa2f7ff).into()),
             code_syntax_constant: raw
                 .code_syntax_constant
-                .unwrap_or_else(|| rgba(0xffd166ff).into_color()),
+                .unwrap_or_else(|| rgba(0xffd166ff).into()),
             code_syntax_variable: raw
                 .code_syntax_variable
-                .unwrap_or_else(|| rgba(0xe5e9f0ff).into_color()),
+                .unwrap_or_else(|| rgba(0xe5e9f0ff).into()),
             code_syntax_property: raw
                 .code_syntax_property
-                .unwrap_or_else(|| rgba(0x7dcfffcc).into_color()),
+                .unwrap_or_else(|| rgba(0x7dcfffcc).into()),
             code_syntax_operator: raw
                 .code_syntax_operator
-                .unwrap_or_else(|| rgba(0x89ddffff).into_color()),
+                .unwrap_or_else(|| rgba(0x89ddffff).into()),
             code_syntax_punctuation: raw
                 .code_syntax_punctuation
-                .unwrap_or_else(|| rgba(0x9aa5ceff).into_color()),
+                .unwrap_or_else(|| rgba(0x9aa5ceff).into()),
             table_border: raw
                 .table_border
-                .unwrap_or_else(|| rgba(0x3f3f46ff).into_color()),
+                .unwrap_or_else(|| rgba(0x3f3f46ff).into()),
             table_header_bg: raw
                 .table_header_bg
-                .unwrap_or_else(|| rgba(0x232326ff).into_color()),
+                .unwrap_or_else(|| rgba(0x232326ff).into()),
             table_cell_bg: raw
                 .table_cell_bg
-                .unwrap_or_else(|| rgba(0x1d1d20ff).into_color()),
+                .unwrap_or_else(|| rgba(0x1d1d20ff).into()),
             table_cell_active_outline: raw
                 .table_cell_active_outline
-                .unwrap_or_else(|| rgba(0x60a5faff).into_color()),
+                .unwrap_or_else(|| rgba(0x60a5faff).into()),
             table_axis_preview_bg: raw
                 .table_axis_preview_bg
-                .unwrap_or_else(|| rgba(0xf4f4f51a).into_color()),
+                .unwrap_or_else(|| rgba(0xf4f4f51a).into()),
             table_axis_selected_bg: raw
                 .table_axis_selected_bg
-                .unwrap_or_else(|| rgba(0xf4f4f533).into_color()),
+                .unwrap_or_else(|| rgba(0xf4f4f533).into()),
             table_append_button_bg: raw
                 .table_append_button_bg
-                .unwrap_or_else(|| rgba(0x27272aff).into_color()),
+                .unwrap_or_else(|| rgba(0x27272aff).into()),
             table_append_button_hover: raw
                 .table_append_button_hover
-                .unwrap_or_else(|| rgba(0x3f3f46ff).into_color()),
+                .unwrap_or_else(|| rgba(0x3f3f46ff).into()),
             table_append_button_text: raw
                 .table_append_button_text
-                .unwrap_or_else(|| rgba(0xf4f4f5ff).into_color()),
+                .unwrap_or_else(|| rgba(0xf4f4f5ff).into()),
             image_placeholder_bg: raw
                 .image_placeholder_bg
-                .unwrap_or_else(|| rgba(0x202024ff).into_color()),
+                .unwrap_or_else(|| rgba(0x202024ff).into()),
             image_placeholder_border: raw
                 .image_placeholder_border
-                .unwrap_or_else(|| rgba(0x52525bff).into_color()),
+                .unwrap_or_else(|| rgba(0x52525bff).into()),
             image_placeholder_text: raw
                 .image_placeholder_text
-                .unwrap_or_else(|| rgba(0xd4d4d8ff).into_color()),
+                .unwrap_or_else(|| rgba(0xd4d4d8ff).into()),
             image_caption_text: raw
                 .image_caption_text
-                .unwrap_or_else(|| rgba(0xa1a1aaff).into_color()),
+                .unwrap_or_else(|| rgba(0xa1a1aaff).into()),
             scrollbar_thumb: raw.scrollbar_thumb,
             cursor: raw.cursor,
             selection: raw.selection,
@@ -817,16 +816,16 @@ impl<'de> Deserialize<'de> for ThemeColors {
             dialog_danger_button_text: raw.dialog_danger_button_text,
             status_bar_background: raw
                 .status_bar_background
-                .unwrap_or_else(|| rgba(0x1c1c1fff).into_color()),
+                .unwrap_or_else(|| rgba(0x1c1c1fff).into()),
             status_bar_text: raw
                 .status_bar_text
-                .unwrap_or_else(|| rgba(0xd4d4d8cc).into_color()),
+                .unwrap_or_else(|| rgba(0xd4d4d8cc).into()),
             status_bar_text_dim: raw
                 .status_bar_text_dim
-                .unwrap_or_else(|| rgba(0x71717aff).into_color()),
+                .unwrap_or_else(|| rgba(0x71717aff).into()),
             status_bar_button_hover: raw
                 .status_bar_button_hover
-                .unwrap_or_else(|| rgba(0x3f3f46ff).into_color()),
+                .unwrap_or_else(|| rgba(0x3f3f46ff).into()),
         })
     }
 }
@@ -1092,25 +1091,25 @@ pub struct Theme {
 }
 
 fn host_surface(background: Hsla, amount: f32) -> Hsla {
-    let direction = if background.lightness < 0.5 {
+    let direction = if background.l < 0.5 {
         1.0
     } else {
         -1.0
     };
-    Hsla::new(
-        background.hue.into_degrees(),
-        background.saturation,
-        (background.lightness + direction * amount).clamp(0.0, 1.0),
-        background.alpha,
+    hsla(
+        background.h,
+        background.s,
+        (background.l + direction * amount).clamp(0.0, 1.0),
+        background.a,
     )
 }
 
 fn host_translucent(color: Hsla, opacity: f32) -> Hsla {
-    Hsla::new(
-        color.hue.into_degrees(),
-        color.saturation,
-        color.lightness,
-        (color.alpha * opacity).clamp(0.0, 1.0),
+    hsla(
+        color.h,
+        color.s,
+        color.l,
+        (color.a * opacity).clamp(0.0, 1.0),
     )
 }
 
@@ -1138,7 +1137,7 @@ impl Theme {
         let surface_high = host_surface(background, 0.085);
         let accent_soft = host_translucent(accent, 0.14);
         let accent_selected = host_translucent(accent, 0.26);
-        let primary_text = if accent.lightness >= 0.58 {
+        let primary_text = if accent.l >= 0.58 {
             background
         } else {
             foreground
@@ -1232,97 +1231,97 @@ impl Theme {
         Self {
             name: "Velotype".into(),
             colors: ThemeColors {
-                editor_background: rgba(0x191919ff).into_color(),
-                source_mode_block_bg: rgba(0x313131ff).into_color(),
-                comment_bg: rgba(0xfbbf2426).into_color(),
-                text_default: rgba(0xf0efedff).into_color(),
-                text_link: rgba(0x60a5faff).into_color(),
+                editor_background: rgba(0x191919ff).into(),
+                source_mode_block_bg: rgba(0x313131ff).into(),
+                comment_bg: rgba(0xfbbf2426).into(),
+                text_default: rgba(0xf0efedff).into(),
+                text_link: rgba(0x60a5faff).into(),
                 text_placeholder: hsla(0., 0., 0.6, 1.0),
-                text_h1: rgba(0xf0efedff).into_color(),
-                text_h2: rgba(0xf0efedff).into_color(),
-                text_h3: rgba(0xf0efedff).into_color(),
-                text_h4: rgba(0xf0efedff).into_color(),
-                text_h5: rgba(0xf0efedff).into_color(),
-                text_h6: rgba(0xf0efedff).into_color(),
-                border_h1: rgba(0xe0e0e0ff).into_color(),
-                border_h2: rgba(0xe0e0e0cc).into_color(),
-                text_quote: rgba(0xd1d5dbff).into_color(),
-                border_quote: rgba(0x6b7280ff).into_color(),
-                callout_note_bg: rgba(0x94a3b81f).into_color(),
-                callout_note_border: rgba(0x94a3b4ff).into_color(),
-                callout_tip_bg: rgba(0x1d4ed81f).into_color(),
-                callout_tip_border: rgba(0x60a5faff).into_color(),
-                callout_important_bg: rgba(0xa78bfa1f).into_color(),
-                callout_important_border: rgba(0xa78bfaff).into_color(),
-                callout_warning_bg: rgba(0xfb71851f).into_color(),
-                callout_warning_border: rgba(0xfb7185ff).into_color(),
-                callout_caution_bg: rgba(0xdc26261f).into_color(),
-                callout_caution_border: rgba(0xf87171ff).into_color(),
-                footnote_bg: rgba(0x212124ff).into_color(),
-                footnote_border: rgba(0x71717a52).into_color(),
-                footnote_badge_bg: rgba(0xa1a1aa24).into_color(),
-                footnote_badge_text: rgba(0xd4d4d8cc).into_color(),
-                footnote_backref: rgba(0xa1a1aaff).into_color(),
-                task_checkbox_border: rgba(0x71717aff).into_color(),
-                task_checkbox_bg: rgba(0x00000000).into_color(),
-                task_checkbox_checked_bg: rgba(0xf0efedff).into_color(),
-                task_checkbox_check: rgba(0x18181bff).into_color(),
-                separator_color: rgba(0x71717aff).into_color(),
-                code_bg: rgba(0x23272eff).into_color(),
-                code_text: rgba(0xe5e7ebff).into_color(),
-                code_language_input_bg: rgba(0x343941ff).into_color(),
-                code_language_input_border: rgba(0x4b5563cc).into_color(),
-                code_language_input_text: rgba(0xe5e7ebff).into_color(),
-                code_language_input_placeholder: rgba(0x9ca3afcc).into_color(),
-                code_syntax_comment: rgba(0x565f89ff).into_color(),
-                code_syntax_keyword: rgba(0xbb9af7ff).into_color(),
-                code_syntax_string: rgba(0x9ece6aff).into_color(),
-                code_syntax_number: rgba(0xff9e64ff).into_color(),
-                code_syntax_type: rgba(0x2ac3deff).into_color(),
-                code_syntax_function: rgba(0x7aa2f7ff).into_color(),
-                code_syntax_constant: rgba(0xffd166ff).into_color(),
-                code_syntax_variable: rgba(0xe5e9f0ff).into_color(),
-                code_syntax_property: rgba(0x7dcfffcc).into_color(),
-                code_syntax_operator: rgba(0x89ddffff).into_color(),
-                code_syntax_punctuation: rgba(0x9aa5ceff).into_color(),
-                table_border: rgba(0x3f3f46ff).into_color(),
-                table_header_bg: rgba(0x232326ff).into_color(),
-                table_cell_bg: rgba(0x1d1d20ff).into_color(),
-                table_cell_active_outline: rgba(0x60a5faff).into_color(),
-                table_axis_preview_bg: rgba(0xf4f4f51a).into_color(),
-                table_axis_selected_bg: rgba(0xf4f4f533).into_color(),
-                table_append_button_bg: rgba(0x27272aff).into_color(),
-                table_append_button_hover: rgba(0x3f3f46ff).into_color(),
-                table_append_button_text: rgba(0xf4f4f5ff).into_color(),
-                image_placeholder_bg: rgba(0x202024ff).into_color(),
-                image_placeholder_border: rgba(0x52525bff).into_color(),
-                image_placeholder_text: rgba(0xd4d4d8ff).into_color(),
-                image_caption_text: rgba(0xa1a1aaff).into_color(),
-                scrollbar_thumb: rgba(0xd1d5dbd8).into_color(),
-                cursor: rgba(0xf0efedff).into_color(),
-                selection: rgba(0x1c3651ff).into_color(),
-                dialog_backdrop: rgba(0x09090bcc).into_color(),
-                dialog_surface: rgba(0x18181bff).into_color(),
-                dialog_border: rgba(0x27272aff).into_color(),
-                dialog_title: rgba(0xf4f4f5ff).into_color(),
-                dialog_body: rgba(0xd4d4d8ff).into_color(),
-                dialog_muted: rgba(0xa1a1aaff).into_color(),
-                dialog_primary_button_bg: rgba(0xf4f4f5ff).into_color(),
-                dialog_primary_button_hover: rgba(0xe4e4e7ff).into_color(),
-                dialog_primary_button_text: rgba(0x18181bff).into_color(),
-                dialog_secondary_button_bg: rgba(0x27272aff).into_color(),
-                dialog_secondary_button_hover: rgba(0x3f3f46ff).into_color(),
-                dialog_secondary_button_text: rgba(0xf4f4f5ff).into_color(),
+                text_h1: rgba(0xf0efedff).into(),
+                text_h2: rgba(0xf0efedff).into(),
+                text_h3: rgba(0xf0efedff).into(),
+                text_h4: rgba(0xf0efedff).into(),
+                text_h5: rgba(0xf0efedff).into(),
+                text_h6: rgba(0xf0efedff).into(),
+                border_h1: rgba(0xe0e0e0ff).into(),
+                border_h2: rgba(0xe0e0e0cc).into(),
+                text_quote: rgba(0xd1d5dbff).into(),
+                border_quote: rgba(0x6b7280ff).into(),
+                callout_note_bg: rgba(0x94a3b81f).into(),
+                callout_note_border: rgba(0x94a3b4ff).into(),
+                callout_tip_bg: rgba(0x1d4ed81f).into(),
+                callout_tip_border: rgba(0x60a5faff).into(),
+                callout_important_bg: rgba(0xa78bfa1f).into(),
+                callout_important_border: rgba(0xa78bfaff).into(),
+                callout_warning_bg: rgba(0xfb71851f).into(),
+                callout_warning_border: rgba(0xfb7185ff).into(),
+                callout_caution_bg: rgba(0xdc26261f).into(),
+                callout_caution_border: rgba(0xf87171ff).into(),
+                footnote_bg: rgba(0x212124ff).into(),
+                footnote_border: rgba(0x71717a52).into(),
+                footnote_badge_bg: rgba(0xa1a1aa24).into(),
+                footnote_badge_text: rgba(0xd4d4d8cc).into(),
+                footnote_backref: rgba(0xa1a1aaff).into(),
+                task_checkbox_border: rgba(0x71717aff).into(),
+                task_checkbox_bg: rgba(0x00000000).into(),
+                task_checkbox_checked_bg: rgba(0xf0efedff).into(),
+                task_checkbox_check: rgba(0x18181bff).into(),
+                separator_color: rgba(0x71717aff).into(),
+                code_bg: rgba(0x23272eff).into(),
+                code_text: rgba(0xe5e7ebff).into(),
+                code_language_input_bg: rgba(0x343941ff).into(),
+                code_language_input_border: rgba(0x4b5563cc).into(),
+                code_language_input_text: rgba(0xe5e7ebff).into(),
+                code_language_input_placeholder: rgba(0x9ca3afcc).into(),
+                code_syntax_comment: rgba(0x565f89ff).into(),
+                code_syntax_keyword: rgba(0xbb9af7ff).into(),
+                code_syntax_string: rgba(0x9ece6aff).into(),
+                code_syntax_number: rgba(0xff9e64ff).into(),
+                code_syntax_type: rgba(0x2ac3deff).into(),
+                code_syntax_function: rgba(0x7aa2f7ff).into(),
+                code_syntax_constant: rgba(0xffd166ff).into(),
+                code_syntax_variable: rgba(0xe5e9f0ff).into(),
+                code_syntax_property: rgba(0x7dcfffcc).into(),
+                code_syntax_operator: rgba(0x89ddffff).into(),
+                code_syntax_punctuation: rgba(0x9aa5ceff).into(),
+                table_border: rgba(0x3f3f46ff).into(),
+                table_header_bg: rgba(0x232326ff).into(),
+                table_cell_bg: rgba(0x1d1d20ff).into(),
+                table_cell_active_outline: rgba(0x60a5faff).into(),
+                table_axis_preview_bg: rgba(0xf4f4f51a).into(),
+                table_axis_selected_bg: rgba(0xf4f4f533).into(),
+                table_append_button_bg: rgba(0x27272aff).into(),
+                table_append_button_hover: rgba(0x3f3f46ff).into(),
+                table_append_button_text: rgba(0xf4f4f5ff).into(),
+                image_placeholder_bg: rgba(0x202024ff).into(),
+                image_placeholder_border: rgba(0x52525bff).into(),
+                image_placeholder_text: rgba(0xd4d4d8ff).into(),
+                image_caption_text: rgba(0xa1a1aaff).into(),
+                scrollbar_thumb: rgba(0xd1d5dbd8).into(),
+                cursor: rgba(0xf0efedff).into(),
+                selection: rgba(0x1c3651ff).into(),
+                dialog_backdrop: rgba(0x09090bcc).into(),
+                dialog_surface: rgba(0x18181bff).into(),
+                dialog_border: rgba(0x27272aff).into(),
+                dialog_title: rgba(0xf4f4f5ff).into(),
+                dialog_body: rgba(0xd4d4d8ff).into(),
+                dialog_muted: rgba(0xa1a1aaff).into(),
+                dialog_primary_button_bg: rgba(0xf4f4f5ff).into(),
+                dialog_primary_button_hover: rgba(0xe4e4e7ff).into(),
+                dialog_primary_button_text: rgba(0x18181bff).into(),
+                dialog_secondary_button_bg: rgba(0x27272aff).into(),
+                dialog_secondary_button_hover: rgba(0x3f3f46ff).into(),
+                dialog_secondary_button_text: rgba(0xf4f4f5ff).into(),
                 // Doubles as the destructive menu-item text color (e.g. Delete
                 // Row/Column), so it must stay legible on the dark menu surface
                 // rather than the muted red used previously.
-                dialog_danger_button_bg: rgba(0xef4444ff).into_color(),
-                dialog_danger_button_hover: rgba(0xdc2626ff).into_color(),
-                dialog_danger_button_text: rgba(0xfef2f2ff).into_color(),
-                status_bar_background: rgba(0x1c1c1fff).into_color(),
-                status_bar_text: rgba(0xd4d4d8cc).into_color(),
-                status_bar_text_dim: rgba(0x71717aff).into_color(),
-                status_bar_button_hover: rgba(0x3f3f46ff).into_color(),
+                dialog_danger_button_bg: rgba(0xef4444ff).into(),
+                dialog_danger_button_hover: rgba(0xdc2626ff).into(),
+                dialog_danger_button_text: rgba(0xfef2f2ff).into(),
+                status_bar_background: rgba(0x1c1c1fff).into(),
+                status_bar_text: rgba(0xd4d4d8cc).into(),
+                status_bar_text_dim: rgba(0x71717aff).into(),
+                status_bar_button_hover: rgba(0x3f3f46ff).into(),
             },
             dimensions: ThemeDimensions {
                 editor_padding: 24.0,
@@ -1478,94 +1477,94 @@ impl Theme {
         Self {
             name: BUILTIN_THEME_VELOTYPE_LIGHT_NAME.into(),
             colors: ThemeColors {
-                editor_background: rgba(0xf7f8fbff).into_color(),
-                source_mode_block_bg: rgba(0xeef2f7ff).into_color(),
-                comment_bg: rgba(0xfef3c766).into_color(),
-                text_default: rgba(0x1f2937ff).into_color(),
-                text_link: rgba(0x2563ebff).into_color(),
-                text_placeholder: rgba(0x6b7280cc).into_color(),
-                text_h1: rgba(0x111827ff).into_color(),
-                text_h2: rgba(0x111827ff).into_color(),
-                text_h3: rgba(0x111827ff).into_color(),
-                text_h4: rgba(0x111827ff).into_color(),
-                text_h5: rgba(0x111827ff).into_color(),
-                text_h6: rgba(0x111827ff).into_color(),
-                border_h1: rgba(0xcbd5e1ff).into_color(),
-                border_h2: rgba(0xdbe3efff).into_color(),
-                text_quote: rgba(0x475569ff).into_color(),
-                border_quote: rgba(0x94a3b8ff).into_color(),
-                callout_note_bg: rgba(0x2563eb14).into_color(),
-                callout_note_border: rgba(0x2563ebff).into_color(),
-                callout_tip_bg: rgba(0x16a34a14).into_color(),
-                callout_tip_border: rgba(0x16a34aff).into_color(),
-                callout_important_bg: rgba(0x7c3aed14).into_color(),
-                callout_important_border: rgba(0x7c3aedff).into_color(),
-                callout_warning_bg: rgba(0xf9731614).into_color(),
-                callout_warning_border: rgba(0xf97316ff).into_color(),
-                callout_caution_bg: rgba(0xdc262614).into_color(),
-                callout_caution_border: rgba(0xdc2626ff).into_color(),
-                footnote_bg: rgba(0xffffffff).into_color(),
-                footnote_border: rgba(0xcbd5e1ff).into_color(),
-                footnote_badge_bg: rgba(0xe2e8f0ff).into_color(),
-                footnote_badge_text: rgba(0x334155ff).into_color(),
-                footnote_backref: rgba(0x2563ebff).into_color(),
-                task_checkbox_border: rgba(0x94a3b8ff).into_color(),
-                task_checkbox_bg: rgba(0xffffffff).into_color(),
-                task_checkbox_checked_bg: rgba(0x2563ebff).into_color(),
-                task_checkbox_check: rgba(0xffffffff).into_color(),
-                separator_color: rgba(0xcbd5e1ff).into_color(),
-                code_bg: rgba(0xf1f5f9ff).into_color(),
-                code_text: rgba(0x111827ff).into_color(),
-                code_language_input_bg: rgba(0xffffffff).into_color(),
-                code_language_input_border: rgba(0xcbd5e1ff).into_color(),
-                code_language_input_text: rgba(0x1f2937ff).into_color(),
-                code_language_input_placeholder: rgba(0x64748bcc).into_color(),
-                code_syntax_comment: rgba(0x6b7280ff).into_color(),
-                code_syntax_keyword: rgba(0x7c3aedff).into_color(),
-                code_syntax_string: rgba(0x15803dff).into_color(),
-                code_syntax_number: rgba(0xc2410cff).into_color(),
-                code_syntax_type: rgba(0x0f766eff).into_color(),
-                code_syntax_function: rgba(0x2563ebff).into_color(),
-                code_syntax_constant: rgba(0xb45309ff).into_color(),
-                code_syntax_variable: rgba(0x1f2937ff).into_color(),
-                code_syntax_property: rgba(0x0891b2ff).into_color(),
-                code_syntax_operator: rgba(0x9333eaff).into_color(),
-                code_syntax_punctuation: rgba(0x64748bff).into_color(),
-                table_border: rgba(0xd1d5dbff).into_color(),
-                table_header_bg: rgba(0xf1f5f9ff).into_color(),
-                table_cell_bg: rgba(0xffffffff).into_color(),
-                table_cell_active_outline: rgba(0x2563ebff).into_color(),
-                table_axis_preview_bg: rgba(0x2563eb14).into_color(),
-                table_axis_selected_bg: rgba(0x2563eb29).into_color(),
-                table_append_button_bg: rgba(0xe2e8f0ff).into_color(),
-                table_append_button_hover: rgba(0xcbd5e1ff).into_color(),
-                table_append_button_text: rgba(0x334155ff).into_color(),
-                image_placeholder_bg: rgba(0xf8fafcff).into_color(),
-                image_placeholder_border: rgba(0xcbd5e1ff).into_color(),
-                image_placeholder_text: rgba(0x475569ff).into_color(),
-                image_caption_text: rgba(0x64748bff).into_color(),
-                scrollbar_thumb: rgba(0x64748bb8).into_color(),
-                cursor: rgba(0x111827ff).into_color(),
-                selection: rgba(0xbfdbfecc).into_color(),
-                dialog_backdrop: rgba(0x0f172a66).into_color(),
-                dialog_surface: rgba(0xffffffff).into_color(),
-                dialog_border: rgba(0xd1d5dbff).into_color(),
-                dialog_title: rgba(0x111827ff).into_color(),
-                dialog_body: rgba(0x374151ff).into_color(),
-                dialog_muted: rgba(0x6b7280ff).into_color(),
-                dialog_primary_button_bg: rgba(0x2563ebff).into_color(),
-                dialog_primary_button_hover: rgba(0x1d4ed8ff).into_color(),
-                dialog_primary_button_text: rgba(0xffffffff).into_color(),
-                dialog_secondary_button_bg: rgba(0xf1f5f9ff).into_color(),
-                dialog_secondary_button_hover: rgba(0xe2e8f0ff).into_color(),
-                dialog_secondary_button_text: rgba(0x1f2937ff).into_color(),
-                dialog_danger_button_bg: rgba(0xdc2626ff).into_color(),
-                dialog_danger_button_hover: rgba(0xb91c1cff).into_color(),
-                dialog_danger_button_text: rgba(0xffffffff).into_color(),
-                status_bar_background: rgba(0xe2e8f0ff).into_color(),
-                status_bar_text: rgba(0x334155ff).into_color(),
-                status_bar_text_dim: rgba(0x64748bff).into_color(),
-                status_bar_button_hover: rgba(0xcbd5e1ff).into_color(),
+                editor_background: rgba(0xf7f8fbff).into(),
+                source_mode_block_bg: rgba(0xeef2f7ff).into(),
+                comment_bg: rgba(0xfef3c766).into(),
+                text_default: rgba(0x1f2937ff).into(),
+                text_link: rgba(0x2563ebff).into(),
+                text_placeholder: rgba(0x6b7280cc).into(),
+                text_h1: rgba(0x111827ff).into(),
+                text_h2: rgba(0x111827ff).into(),
+                text_h3: rgba(0x111827ff).into(),
+                text_h4: rgba(0x111827ff).into(),
+                text_h5: rgba(0x111827ff).into(),
+                text_h6: rgba(0x111827ff).into(),
+                border_h1: rgba(0xcbd5e1ff).into(),
+                border_h2: rgba(0xdbe3efff).into(),
+                text_quote: rgba(0x475569ff).into(),
+                border_quote: rgba(0x94a3b8ff).into(),
+                callout_note_bg: rgba(0x2563eb14).into(),
+                callout_note_border: rgba(0x2563ebff).into(),
+                callout_tip_bg: rgba(0x16a34a14).into(),
+                callout_tip_border: rgba(0x16a34aff).into(),
+                callout_important_bg: rgba(0x7c3aed14).into(),
+                callout_important_border: rgba(0x7c3aedff).into(),
+                callout_warning_bg: rgba(0xf9731614).into(),
+                callout_warning_border: rgba(0xf97316ff).into(),
+                callout_caution_bg: rgba(0xdc262614).into(),
+                callout_caution_border: rgba(0xdc2626ff).into(),
+                footnote_bg: rgba(0xffffffff).into(),
+                footnote_border: rgba(0xcbd5e1ff).into(),
+                footnote_badge_bg: rgba(0xe2e8f0ff).into(),
+                footnote_badge_text: rgba(0x334155ff).into(),
+                footnote_backref: rgba(0x2563ebff).into(),
+                task_checkbox_border: rgba(0x94a3b8ff).into(),
+                task_checkbox_bg: rgba(0xffffffff).into(),
+                task_checkbox_checked_bg: rgba(0x2563ebff).into(),
+                task_checkbox_check: rgba(0xffffffff).into(),
+                separator_color: rgba(0xcbd5e1ff).into(),
+                code_bg: rgba(0xf1f5f9ff).into(),
+                code_text: rgba(0x111827ff).into(),
+                code_language_input_bg: rgba(0xffffffff).into(),
+                code_language_input_border: rgba(0xcbd5e1ff).into(),
+                code_language_input_text: rgba(0x1f2937ff).into(),
+                code_language_input_placeholder: rgba(0x64748bcc).into(),
+                code_syntax_comment: rgba(0x6b7280ff).into(),
+                code_syntax_keyword: rgba(0x7c3aedff).into(),
+                code_syntax_string: rgba(0x15803dff).into(),
+                code_syntax_number: rgba(0xc2410cff).into(),
+                code_syntax_type: rgba(0x0f766eff).into(),
+                code_syntax_function: rgba(0x2563ebff).into(),
+                code_syntax_constant: rgba(0xb45309ff).into(),
+                code_syntax_variable: rgba(0x1f2937ff).into(),
+                code_syntax_property: rgba(0x0891b2ff).into(),
+                code_syntax_operator: rgba(0x9333eaff).into(),
+                code_syntax_punctuation: rgba(0x64748bff).into(),
+                table_border: rgba(0xd1d5dbff).into(),
+                table_header_bg: rgba(0xf1f5f9ff).into(),
+                table_cell_bg: rgba(0xffffffff).into(),
+                table_cell_active_outline: rgba(0x2563ebff).into(),
+                table_axis_preview_bg: rgba(0x2563eb14).into(),
+                table_axis_selected_bg: rgba(0x2563eb29).into(),
+                table_append_button_bg: rgba(0xe2e8f0ff).into(),
+                table_append_button_hover: rgba(0xcbd5e1ff).into(),
+                table_append_button_text: rgba(0x334155ff).into(),
+                image_placeholder_bg: rgba(0xf8fafcff).into(),
+                image_placeholder_border: rgba(0xcbd5e1ff).into(),
+                image_placeholder_text: rgba(0x475569ff).into(),
+                image_caption_text: rgba(0x64748bff).into(),
+                scrollbar_thumb: rgba(0x64748bb8).into(),
+                cursor: rgba(0x111827ff).into(),
+                selection: rgba(0xbfdbfecc).into(),
+                dialog_backdrop: rgba(0x0f172a66).into(),
+                dialog_surface: rgba(0xffffffff).into(),
+                dialog_border: rgba(0xd1d5dbff).into(),
+                dialog_title: rgba(0x111827ff).into(),
+                dialog_body: rgba(0x374151ff).into(),
+                dialog_muted: rgba(0x6b7280ff).into(),
+                dialog_primary_button_bg: rgba(0x2563ebff).into(),
+                dialog_primary_button_hover: rgba(0x1d4ed8ff).into(),
+                dialog_primary_button_text: rgba(0xffffffff).into(),
+                dialog_secondary_button_bg: rgba(0xf1f5f9ff).into(),
+                dialog_secondary_button_hover: rgba(0xe2e8f0ff).into(),
+                dialog_secondary_button_text: rgba(0x1f2937ff).into(),
+                dialog_danger_button_bg: rgba(0xdc2626ff).into(),
+                dialog_danger_button_hover: rgba(0xb91c1cff).into(),
+                dialog_danger_button_text: rgba(0xffffffff).into(),
+                status_bar_background: rgba(0xe2e8f0ff).into(),
+                status_bar_text: rgba(0x334155ff).into(),
+                status_bar_text_dim: rgba(0x64748bff).into(),
+                status_bar_button_hover: rgba(0xcbd5e1ff).into(),
             },
             dimensions: base.dimensions,
             typography: base.typography,
@@ -1992,16 +1991,15 @@ mod tests {
     use crate::config::VelotypeConfigDirs;
     use crate::host_services::EditorHostTheme;
     use gpui::rgba;
-    use palette::IntoColor;
-
+    
     #[test]
     fn host_palette_overrides_editor_semantic_colors() {
         let host = EditorHostTheme {
-            background: rgba(0x102030ff).into_color(),
-            foreground: rgba(0xe1e2e3ff).into_color(),
-            border: rgba(0x405060ff).into_color(),
-            muted: rgba(0x708090ff).into_color(),
-            accent: rgba(0x22aaffff).into_color(),
+            background: rgba(0x102030ff).into(),
+            foreground: rgba(0xe1e2e3ff).into(),
+            border: rgba(0x405060ff).into(),
+            muted: rgba(0x708090ff).into(),
+            accent: rgba(0x22aaffff).into(),
         };
 
         let theme = Theme::with_host_palette(&Theme::default_theme(), &host);
@@ -2028,7 +2026,7 @@ mod tests {
         let legacy_json = default_json.replace("source_mode_block_bg", "block_focused_bg");
 
         let theme = Theme::from_json(&legacy_json).expect("legacy theme should deserialize");
-        assert!(theme.colors.source_mode_block_bg.alpha > 0.0);
+        assert!(theme.colors.source_mode_block_bg.a > 0.0);
     }
 
     #[test]
@@ -2050,7 +2048,7 @@ mod tests {
         let json = serde_json::to_string(&object).expect("theme json should serialize");
 
         let theme = Theme::from_json(&json).expect("theme without border_h2 should deserialize");
-        assert_eq!(theme.colors.border_h2, rgba(0xe0e0e0cc).into_color());
+        assert_eq!(theme.colors.border_h2, rgba(0xe0e0e0cc).into());
     }
 
     #[test]
@@ -2072,7 +2070,7 @@ mod tests {
         let json = serde_json::to_string(&object).expect("theme json should serialize");
 
         let theme = Theme::from_json(&json).expect("theme without comment_bg should deserialize");
-        assert_eq!(theme.colors.comment_bg, rgba(0xfbbf2426).into_color());
+        assert_eq!(theme.colors.comment_bg, rgba(0xfbbf2426).into());
     }
 
     #[test]
@@ -2192,17 +2190,17 @@ mod tests {
         let json = serde_json::to_string(&object).expect("theme json should serialize");
         let theme = Theme::from_json(&json).expect("theme without footnote tokens should load");
 
-        assert_eq!(theme.colors.footnote_bg, rgba(0x212124ff).into_color());
-        assert_eq!(theme.colors.footnote_border, rgba(0x71717a52).into_color());
+        assert_eq!(theme.colors.footnote_bg, rgba(0x212124ff).into());
+        assert_eq!(theme.colors.footnote_border, rgba(0x71717a52).into());
         assert_eq!(
             theme.colors.footnote_badge_bg,
-            rgba(0xa1a1aa24).into_color()
+            rgba(0xa1a1aa24).into()
         );
         assert_eq!(
             theme.colors.footnote_badge_text,
-            rgba(0xd4d4d8cc).into_color()
+            rgba(0xd4d4d8cc).into()
         );
-        assert_eq!(theme.colors.footnote_backref, rgba(0xa1a1aaff).into_color());
+        assert_eq!(theme.colors.footnote_backref, rgba(0xa1a1aaff).into());
         assert_eq!(theme.dimensions.footnote_padding_x, 10.0);
         assert_eq!(theme.dimensions.footnote_padding_y, 6.0);
         assert_eq!(theme.dimensions.footnote_radius, 6.0);
@@ -2236,22 +2234,22 @@ mod tests {
         let theme =
             Theme::from_json(&json).expect("theme without code language palette should load");
 
-        assert_eq!(theme.colors.code_bg, rgba(0x111827ff).into_color());
+        assert_eq!(theme.colors.code_bg, rgba(0x111827ff).into());
         assert_eq!(
             theme.colors.code_language_input_bg,
-            rgba(0x343941ff).into_color()
+            rgba(0x343941ff).into()
         );
         assert_eq!(
             theme.colors.code_language_input_border,
-            rgba(0x4b5563cc).into_color()
+            rgba(0x4b5563cc).into()
         );
         assert_eq!(
             theme.colors.code_language_input_text,
-            rgba(0xe5e7ebff).into_color()
+            rgba(0xe5e7ebff).into()
         );
         assert_eq!(
             theme.colors.code_language_input_placeholder,
-            rgba(0x9ca3afcc).into_color()
+            rgba(0x9ca3afcc).into()
         );
     }
 
@@ -2260,23 +2258,23 @@ mod tests {
         let theme = Theme::default_theme();
         assert_eq!(
             theme.colors.callout_important_bg,
-            rgba(0xa78bfa1f).into_color()
+            rgba(0xa78bfa1f).into()
         );
         assert_eq!(
             theme.colors.callout_important_border,
-            rgba(0xa78bfaff).into_color()
+            rgba(0xa78bfaff).into()
         );
         assert_eq!(theme.dimensions.block_gap, 6.0);
-        assert_eq!(theme.colors.footnote_bg, rgba(0x212124ff).into_color());
+        assert_eq!(theme.colors.footnote_bg, rgba(0x212124ff).into());
         assert_eq!(theme.dimensions.footnote_padding_x, 10.0);
-        assert_eq!(theme.colors.code_bg, rgba(0x23272eff).into_color());
+        assert_eq!(theme.colors.code_bg, rgba(0x23272eff).into());
         assert_eq!(
             theme.colors.code_language_input_bg,
-            rgba(0x343941ff).into_color()
+            rgba(0x343941ff).into()
         );
         assert_eq!(
             theme.colors.code_language_input_border,
-            rgba(0x4b5563cc).into_color()
+            rgba(0x4b5563cc).into()
         );
     }
 
@@ -2288,18 +2286,18 @@ mod tests {
         assert_eq!(light.name, "Velotype Light");
         assert_eq!(
             light.colors.editor_background,
-            rgba(0xf7f8fbff).into_color()
+            rgba(0xf7f8fbff).into()
         );
-        assert_eq!(light.colors.text_default, rgba(0x1f2937ff).into_color());
-        assert_eq!(light.colors.text_link, rgba(0x2563ebff).into_color());
-        assert_eq!(light.colors.code_bg, rgba(0xf1f5f9ff).into_color());
+        assert_eq!(light.colors.text_default, rgba(0x1f2937ff).into());
+        assert_eq!(light.colors.text_link, rgba(0x2563ebff).into());
+        assert_eq!(light.colors.code_bg, rgba(0xf1f5f9ff).into());
         assert_eq!(
             light.colors.code_language_input_border,
-            rgba(0xcbd5e1ff).into_color()
+            rgba(0xcbd5e1ff).into()
         );
         assert_eq!(
             light.colors.table_cell_active_outline,
-            rgba(0x2563ebff).into_color()
+            rgba(0x2563ebff).into()
         );
         assert_eq!(light.dimensions.block_gap, dark.dimensions.block_gap);
         assert_eq!(light.typography.text_size, dark.typography.text_size);
@@ -2540,7 +2538,7 @@ mod tests {
         assert_eq!(manager.current().name, "Velotype Light");
         assert_eq!(
             manager.current().colors.editor_background,
-            rgba(0xf7f8fbff).into_color()
+            rgba(0xf7f8fbff).into()
         );
 
         assert!(manager.set_theme_by_id("velotype"));

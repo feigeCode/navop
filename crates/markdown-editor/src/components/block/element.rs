@@ -3,7 +3,6 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::*;
-use palette::IntoColor;
 
 use super::{Block, CodeHighlightPaint, InlineFootnoteHit, InlineLinkHit};
 use crate::components::HtmlCssColor;
@@ -150,7 +149,6 @@ fn build_text_runs(
             background_color,
             underline,
             strikethrough,
-            letter_spacing: base_run.letter_spacing,
         });
     }
 
@@ -164,13 +162,12 @@ fn build_text_runs(
 fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
     match color {
         HtmlCssColor::CurrentColor => current_color,
-        HtmlCssColor::Rgba(color) => Rgba::new(
-            color.red as f32 / 255.0,
-            color.green as f32 / 255.0,
-            color.blue as f32 / 255.0,
-            color.alpha.clamp(0.0, 1.0),
-        )
-        .into_color(),
+        HtmlCssColor::Rgba(color) => Hsla::from(Rgba {
+            r: color.red as f32 / 255.0,
+            g: color.green as f32 / 255.0,
+            b: color.blue as f32 / 255.0,
+            a: color.alpha.clamp(0.0, 1.0),
+        }),
     }
 }
 
@@ -243,7 +240,6 @@ fn build_code_text_runs(
                 wavy: false,
             }),
             strikethrough: None,
-            letter_spacing: base_run.letter_spacing,
         });
     }
 
@@ -717,7 +713,6 @@ impl Element for BlockTextElement {
             background_color: None,
             underline: None,
             strikethrough: None,
-            letter_spacing: style.letter_spacing,
         };
 
         let runs: Vec<TextRun> = if !is_placeholder {
@@ -843,7 +838,6 @@ impl Element for BlockTextElement {
                             background_color: None,
                             underline: None,
                             strikethrough: None,
-                            letter_spacing: style.letter_spacing,
                         }],
                         None,
                     )
@@ -856,7 +850,7 @@ impl Element for BlockTextElement {
         let cursor_opacity = input.cursor_opacity();
         let cursor_color = {
             let mut c = theme.colors.cursor;
-            c.alpha *= cursor_opacity;
+            c.a *= cursor_opacity;
             c
         };
         let cursor_width = theme.dimensions.cursor_width;
@@ -1087,8 +1081,7 @@ mod tests {
         SharedString, TestAppContext, TextAlign, TextRun, VisualTestContext, font, point, px, rgba,
         size,
     };
-    use palette::IntoColor;
-    use std::sync::Arc;
+        use std::sync::Arc;
 
     fn shaped_lines(
         text: &str,
@@ -1104,11 +1097,10 @@ mod tests {
                     &[TextRun {
                         len: text.len(),
                         font: font(".SystemUIFont"),
-                        color: rgba(0xffffffff).into_color(),
+                        color: rgba(0xffffffff).into(),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
-                        letter_spacing: None,
                     }],
                     Some(width),
                     None,
@@ -1338,29 +1330,28 @@ mod tests {
             let base_run = TextRun {
                 len: display_text.len(),
                 font: font(".SystemUIFont"),
-                color: rgba(0xffffffff).into_color(),
+                color: rgba(0xffffffff).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
-                letter_spacing: None,
             };
             let runs = super::build_text_runs(
                 block,
                 &display_text,
                 &base_run,
                 px(1.0),
-                rgba(0x0066ccff).into_color(),
-                rgba(0x111111ff).into_color(),
+                rgba(0x0066ccff).into(),
+                rgba(0x111111ff).into(),
                 true,
             );
             let marked_run = runs.last().expect("styled text should create a final run");
 
             assert_eq!(block.display_text(), "before marked");
             assert_eq!(marked_run.len, "marked".len());
-            assert_eq!(marked_run.color, rgba(0x0000ffff).into_color());
+            assert_eq!(marked_run.color, rgba(0x0000ffff).into());
             assert_eq!(
                 marked_run.background_color,
-                Some(rgba(0xffff00ff).into_color())
+                Some(rgba(0xffff00ff).into())
             );
         });
     }
@@ -1373,7 +1364,7 @@ mod tests {
                 spans: vec![CodeHighlightSpan {
                     range: 1..3,
                     style: CodeHighlightStyle {
-                        color: Some(rgba(0x33aa77ff).into_color()),
+                        color: Some(rgba(0x33aa77ff).into()),
                         font_weight: Some(FontWeight::BOLD),
                         font_style: Some(FontStyle::Italic),
                     },
@@ -1402,17 +1393,16 @@ mod tests {
             let base_run = TextRun {
                 len: display_text.len(),
                 font: font(".SystemUIFont"),
-                color: rgba(0xffffffff).into_color(),
+                color: rgba(0xffffffff).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
-                letter_spacing: None,
             };
             let runs = build_code_text_runs(block, &display_text, &base_run, px(1.0), &colors);
 
             assert_eq!(runs.len(), 3);
             assert_eq!(runs[1].len, 2);
-            assert_eq!(runs[1].color, rgba(0x33aa77ff).into_color());
+            assert_eq!(runs[1].color, rgba(0x33aa77ff).into());
             assert_eq!(runs[1].font.weight, FontWeight::BOLD);
             assert_eq!(runs[1].font.style, FontStyle::Italic);
         });

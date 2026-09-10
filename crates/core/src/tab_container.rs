@@ -2,12 +2,10 @@ use crate::background_task_panel::BackgroundTaskPanel;
 use crate::layout::TOOLBAR_WIDTH;
 use crate::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPlacement,
-    sidebar_panel_renders_header,
-};
+    sidebar_panel_renders_header};
 use crate::tab_actions::{
     TAB_TITLE_METADATA_KEY, clear_tab_activity, duplicate_tab_id, mark_tab_activity,
-    next_duplicate_tab_title, normalize_title, resolve_tab_title,
-};
+    next_duplicate_tab_title, normalize_title, resolve_tab_title};
 use crate::tab_navigation::{ActiveTabSlot, tab_number_target};
 use crate::tab_switcher::{TabSwitcherEntry, open_tab_switcher_dialog};
 use gpui::KeyBinding;
@@ -17,19 +15,15 @@ use gpui::{
     ElementId, Entity, EntityId, EventEmitter, FocusHandle, Focusable, GlobalElementId,
     InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseMoveEvent,
     MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Stateful, Style, Styled,
-    Subscription, Task, Window, WindowControlArea, div, px,
-};
+    Subscription, Task, Window, WindowControlArea, div, px};
 use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{
-    ActiveTheme, Colorize as _, Disableable, Icon, IconName, IconSize, InteractiveElementExt as _,
-    LayoutSizeTokens, Selectable as _, Sizable, Size, WindowExt as _, h_flex,
-    notification::Notification, v_flex,
-};
-use one_ui::{PanelHeader, PanelHeaderVariant};
+use gpui_component::{ActiveTheme,  Disableable, Icon, InteractiveElementExt as _, Selectable as _, Sizable, Size, WindowExt as _, h_flex, notification::Notification, v_flex};
+use one_assets::IconName;
+use one_ui::{IconSize, LayoutSizeTokens, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -53,8 +47,7 @@ const TAB_CHROME_BUDGET: f32 = 160.0;
 struct TitlebarPlatform {
     is_linux: bool,
     is_macos: bool,
-    is_windows: bool,
-}
+    is_windows: bool}
 
 gpui::actions!(
     tab_container,
@@ -92,8 +85,7 @@ pub fn init(cx: &mut App) {
 fn tab_display_number(slot: ActiveTabSlot, pinned_tab_count: usize) -> usize {
     match slot {
         ActiveTabSlot::Pinned(index) => index + 1,
-        ActiveTabSlot::Regular(index) => pinned_tab_count + index + 1,
-    }
+        ActiveTabSlot::Regular(index) => pinned_tab_count + index + 1}
 }
 
 fn render_tab_display_number(number: usize, text_color: gpui::Hsla) -> AnyElement {
@@ -143,8 +135,7 @@ fn connection_status_badges(
         Some(TabConnectionStatus::Connected) => {
             vec![(IconName::StatusConnected, t!("TabStatus.connected").into())]
         }
-        _ => Vec::new(),
-    }
+        _ => Vec::new()}
 }
 
 fn render_connection_status_badges(
@@ -265,8 +256,7 @@ pub enum TabContentEvent {
     /// close lifecycle.
     CloseRequested,
     /// Insert a tab created by the current content into this container.
-    OpenTab { tab: TabItem, mode: TabOpenMode },
-}
+    OpenTab { tab: TabItem, mode: TabOpenMode }}
 
 impl std::fmt::Debug for TabContentEvent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -282,8 +272,7 @@ impl std::fmt::Debug for TabContentEvent {
                 .debug_struct("OpenTab")
                 .field("tab_id", &tab.id())
                 .field("mode", mode)
-                .finish(),
-        }
+                .finish()}
     }
 }
 
@@ -297,21 +286,18 @@ pub enum TabContainerEvent {
     /// A tab was closed
     TabClosed { id: String },
     /// The application navigation sidebar visibility was toggled.
-    NavigationSidebarToggled { expanded: bool },
-}
+    NavigationSidebarToggled { expanded: bool }}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TabOpenMode {
     #[default]
     Activate,
-    Background,
-}
+    Background}
 
 /// Application-owned handle to the primary [`TabContainer`].
 #[derive(Clone)]
 pub struct GlobalTabContainer {
-    pub tab_container: Entity<TabContainer>,
-}
+    pub tab_container: Entity<TabContainer>}
 
 impl gpui::Global for GlobalTabContainer {}
 
@@ -331,39 +317,33 @@ pub enum TabConnectionStatus {
     /// The session is still being established.
     Connecting,
     /// The session has been terminated / lost its connection.
-    Disconnected,
-}
+    Disconnected}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SidebarPanelOverride {
     visible: bool,
-    placement: SidebarPlacement,
-}
+    placement: SidebarPlacement}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct SidebarPanelSizeOverride {
     side_width: Option<Pixels>,
-    bottom_height: Option<Pixels>,
-}
+    bottom_height: Option<Pixels>}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SidebarResizeTarget {
     id: SidebarPanelId,
-    placement: SidebarPlacement,
-}
+    placement: SidebarPlacement}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResolvedSidebarPanelState {
     visible: bool,
-    placement: SidebarPlacement,
-}
+    placement: SidebarPlacement}
 
 #[derive(Clone)]
 struct ResolvedSidebarContribution {
     contribution: SidebarContribution,
     placement: SidebarPlacement,
-    visible: bool,
-}
+    visible: bool}
 
 // ============================================================================
 // State Serialization Structures
@@ -381,8 +361,7 @@ pub struct TabContainerState {
     pub active_index: usize,
     /// Container UI configuration
     #[serde(default)]
-    pub config: TabContainerConfig,
-}
+    pub config: TabContainerConfig}
 
 impl Default for TabContainerState {
     fn default() -> Self {
@@ -390,8 +369,7 @@ impl Default for TabContainerState {
             version: Some(1),
             tabs: Vec::new(),
             active_index: 0,
-            config: TabContainerConfig::default(),
-        }
+            config: TabContainerConfig::default()}
     }
 }
 
@@ -409,8 +387,7 @@ pub struct TabItemState {
     pub metadata: HashMap<String, String>,
     /// Tab-specific data (customized by each content type)
     #[serde(default)]
-    pub data: serde_json::Value,
-}
+    pub data: serde_json::Value}
 
 /// UI configuration for TabContainer
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -423,8 +400,7 @@ pub struct TabContainerConfig {
     pub left_padding: Option<f32>,
     /// Top padding in pixels
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_padding: Option<f32>,
-}
+    pub top_padding: Option<f32>}
 
 // ============================================================================
 // TabContent Trait - Static Type Interface (like Panel)
@@ -774,8 +750,7 @@ pub struct TabItem {
     id: SharedString,
     from: SharedString,
     metadata: HashMap<String, String>,
-    content: Arc<dyn TabContentView>,
-}
+    content: Arc<dyn TabContentView>}
 
 impl TabItem {
     pub fn new<T: TabContent>(
@@ -787,8 +762,7 @@ impl TabItem {
             id: SharedString::from(id.into()),
             from: SharedString::from(from.into()),
             metadata: HashMap::new(),
-            content: Arc::new(content),
-        }
+            content: Arc::new(content)}
     }
 
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
@@ -843,8 +817,7 @@ impl TabItem {
                     .insert(TAB_TITLE_METADATA_KEY.to_string(), title);
                 true
             }
-            None => self.metadata.remove(TAB_TITLE_METADATA_KEY).is_some(),
-        }
+            None => self.metadata.remove(TAB_TITLE_METADATA_KEY).is_some()}
     }
 }
 
@@ -886,8 +859,7 @@ where
 /// Registry for TabContent builders, used to restore tabs from saved state
 #[derive(Clone)]
 pub struct TabContentRegistry {
-    builders: HashMap<SharedString, Arc<dyn TabContentBuilder>>,
-}
+    builders: HashMap<SharedString, Arc<dyn TabContentBuilder>>}
 
 impl Default for TabContentRegistry {
     fn default() -> Self {
@@ -898,8 +870,7 @@ impl Default for TabContentRegistry {
 impl TabContentRegistry {
     pub fn new() -> Self {
         Self {
-            builders: HashMap::new(),
-        }
+            builders: HashMap::new()}
     }
 
     /// Register a builder for a content type
@@ -948,8 +919,7 @@ impl gpui::Global for TabContentRegistry {}
 
 /// 窗口拖动状态，用于标题栏空白区域拖动窗口。
 struct TabBarDragState {
-    should_move: bool,
-}
+    should_move: bool}
 
 impl Render for TabBarDragState {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -1001,8 +971,7 @@ pub struct DragTab {
     pub title: SharedString,
     /// 拖拽来源 pane（split 场景下用于跨 pane 移动 tab）
     pub source_pane: Option<Entity<TabContainer>>,
-    external_source: Option<Arc<dyn ExternalTabDragSource>>,
-}
+    external_source: Option<Arc<dyn ExternalTabDragSource>>}
 
 impl DragTab {
     pub fn new(tab_index: usize, title: SharedString) -> Self {
@@ -1010,8 +979,7 @@ impl DragTab {
             tab_index,
             title,
             source_pane: None,
-            external_source: None,
-        }
+            external_source: None}
     }
 
     pub fn with_source_pane(mut self, pane: Entity<TabContainer>) -> Self {
@@ -1024,8 +992,7 @@ impl DragTab {
             tab_index: usize::MAX,
             title,
             source_pane: None,
-            external_source: Some(source),
-        }
+            external_source: Some(source)}
     }
 
     pub fn is_external(&self) -> bool {
@@ -1125,8 +1092,7 @@ pub struct TabContainer {
     sidebar_resizing: Option<SidebarResizeTarget>,
     sidebar_bounds: Bounds<Pixels>,
     /// 全局后台任务面板入口，渲染在标签栏最右侧（dropdown 之后、窗口控件之前）。
-    background_task_panel: Entity<BackgroundTaskPanel>,
-}
+    background_task_panel: Entity<BackgroundTaskPanel>}
 
 impl EventEmitter<TabContainerEvent> for TabContainer {}
 
@@ -1182,8 +1148,7 @@ impl TabContainer {
             sidebar_size_overrides: HashMap::new(),
             sidebar_resizing: None,
             sidebar_bounds: Bounds::default(),
-            background_task_panel: cx.new(|cx| BackgroundTaskPanel::new(cx)),
-        }
+            background_task_panel: cx.new(|cx| BackgroundTaskPanel::new(cx))}
     }
 
     pub fn with_inactive_tab_bg_color(mut self, color: impl Into<Option<gpui::Hsla>>) -> Self {
@@ -1266,8 +1231,7 @@ impl TabContainer {
     ) {
         let (active, on_home) = match config {
             Some((active, on_home)) => (Some(active), Some(on_home)),
-            None => (None, None),
-        };
+            None => (None, None)};
         self.home_active = active;
         self.on_home = on_home;
         cx.notify();
@@ -1380,8 +1344,7 @@ impl TabContainer {
         TitlebarPlatform {
             is_linux: cfg!(target_os = "linux") && !force_windows,
             is_macos: cfg!(target_os = "macos") && !force_windows,
-            is_windows: cfg!(target_os = "windows") || force_windows,
-        }
+            is_windows: cfg!(target_os = "windows") || force_windows}
     }
 
     pub fn with_window_close_action(
@@ -1572,8 +1535,7 @@ impl TabContainer {
                 pinned.content().focus_handle(cx).focus(window, cx);
                 cx.emit(TabContainerEvent::TabActivated {
                     index,
-                    id: pinned.id().to_string(),
-                });
+                    id: pinned.id().to_string()});
                 cx.notify();
             }
             return;
@@ -1589,8 +1551,7 @@ impl TabContainer {
             pinned.content().focus_handle(cx).focus(window, cx);
             cx.emit(TabContainerEvent::TabActivated {
                 index,
-                id: pinned.id().to_string(),
-            });
+                id: pinned.id().to_string()});
         }
         cx.emit(TabContainerEvent::LayoutChanged);
         cx.notify();
@@ -1817,8 +1778,7 @@ impl TabContainer {
         self.sync_active_presentation_obscured(cx);
         cx.emit(TabContainerEvent::TabActivated {
             index: self.active_index,
-            id,
-        });
+            id});
         cx.emit(TabContainerEvent::LayoutChanged);
         cx.notify();
     }
@@ -1894,8 +1854,7 @@ impl TabContainer {
 
         cx.emit(TabContainerEvent::TabActivated {
             index: self.active_index,
-            id,
-        });
+            id});
         cx.emit(TabContainerEvent::LayoutChanged);
         cx.notify();
     }
@@ -1996,8 +1955,7 @@ impl TabContainer {
             }
 
             cx.emit(TabContainerEvent::TabClosed {
-                id: tab_id.to_string(),
-            });
+                id: tab_id.to_string()});
             if let Some((index, id)) = activated_regular {
                 cx.emit(TabContainerEvent::TabActivated { index, id });
             }
@@ -2059,8 +2017,7 @@ impl TabContainer {
                         });
                     }
                     Ok(None) => continue,
-                    Err(_) => return false,
-                }
+                    Err(_) => return false}
             }
             true
         })
@@ -2113,8 +2070,7 @@ impl TabContainer {
                         });
                     }
                     Ok(None) => continue,
-                    Err(_) => return false,
-                }
+                    Err(_) => return false}
             }
             true
         })
@@ -2277,8 +2233,7 @@ impl TabContainer {
                         });
                     }
                     Ok(None) => continue,
-                    Err(_) => return false,
-                }
+                    Err(_) => return false}
             }
             true
         })
@@ -2337,8 +2292,7 @@ impl TabContainer {
                         });
                     }
                     Ok(None) => continue,
-                    Err(_) => return false,
-                }
+                    Err(_) => return false}
             }
             true
         })
@@ -2397,8 +2351,7 @@ impl TabContainer {
                         });
                     }
                     Ok(None) => continue,
-                    Err(_) => return false,
-                }
+                    Err(_) => return false}
             }
             true
         })
@@ -2466,8 +2419,7 @@ impl TabContainer {
                         });
                     }
                     Ok(None) => continue,
-                    Err(_) => return false,
-                }
+                    Err(_) => return false}
             }
             true
         })
@@ -2650,8 +2602,7 @@ impl TabContainer {
             id: SharedString::from(duplicate_id.clone()),
             from,
             metadata,
-            content: duplicate_content,
-        };
+            content: duplicate_content};
         duplicate.set_title_override(&duplicate_title);
         duplicate
             .content()
@@ -2675,24 +2626,21 @@ impl TabContainer {
                 from: tab.from(),
                 key: SharedString::from(tab.content().content_key(cx)),
                 metadata: tab.metadata().clone(),
-                data: tab.content().dump(cx),
-            })
+                data: tab.content().dump(cx)})
             .collect();
 
         TabContainerState {
             version: Some(1),
             tabs,
             active_index: self.active_index,
-            config: self.dump_config(),
-        }
+            config: self.dump_config()}
     }
 
     fn dump_config(&self) -> TabContainerConfig {
         TabContainerConfig {
             size: Some(self.size_to_string()),
             left_padding: self.left_padding.map(|p| f32::from(p)),
-            top_padding: self.top_padding.map(|p| f32::from(p)),
-        }
+            top_padding: self.top_padding.map(|p| f32::from(p))}
     }
 
     fn size_to_string(&self) -> String {
@@ -2701,8 +2649,7 @@ impl TabContainer {
             Size::Small => "small".to_string(),
             Size::Medium => "medium".to_string(),
             Size::Large => "large".to_string(),
-            Size::Size(pixels) => format!("{}px", f32::from(pixels)),
-        }
+            Size::Size(pixels) => format!("{}px", f32::from(pixels))}
     }
 
     fn parse_size(s: &str) -> Size {
@@ -2716,8 +2663,7 @@ impl TabContainer {
                 .parse::<f32>()
                 .map(|v| Size::Size(px(v)))
                 .unwrap_or(Size::Large),
-            _ => Size::Large,
-        }
+            _ => Size::Large}
     }
 
     pub fn load(
@@ -2736,8 +2682,7 @@ impl TabContainer {
                     id: tab_state.id.clone(),
                     from: tab_state.from.clone(),
                     metadata: tab_state.metadata.clone(),
-                    content,
-                });
+                    content});
             }
         }
 
@@ -2869,8 +2814,7 @@ impl TabContainer {
             Size::XSmall => px(60.0),
             Size::Small => px(100.0),
             Size::Medium => px(140.0),
-            Size::Large => px(180.0),
-        }
+            Size::Large => px(180.0)}
     }
 
     fn active_sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
@@ -2893,8 +2837,7 @@ impl TabContainer {
         let Some(override_state) = self.sidebar_overrides.get(id).copied() else {
             return ResolvedSidebarPanelState {
                 visible: sidebar_panel_initial_visibility(policy),
-                placement: default_placement,
-            };
+                placement: default_placement};
         };
 
         let placement =
@@ -2982,8 +2925,7 @@ impl TabContainer {
                 id,
                 SidebarPanelOverride {
                     visible: false,
-                    placement,
-                },
+                    placement},
             );
         }
     }
@@ -3025,8 +2967,7 @@ impl TabContainer {
             id,
             SidebarPanelOverride {
                 visible: false,
-                placement,
-            },
+                placement},
         );
     }
 
@@ -3046,8 +2987,7 @@ impl TabContainer {
             id,
             SidebarPanelOverride {
                 visible: true,
-                placement,
-            },
+                placement},
         );
     }
 
@@ -3063,8 +3003,7 @@ impl TabContainer {
                 ResolvedSidebarContribution {
                     contribution,
                     placement: state.placement,
-                    visible: state.visible,
-                }
+                    visible: state.visible}
             })
             .collect()
     }
@@ -3188,7 +3127,7 @@ impl TabContainer {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let contribution = panel.contribution;
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let side_width = self.sidebar_panel_side_width(&contribution, layout);
         let bottom_height = self.sidebar_panel_bottom_height(&contribution, layout);
         let can_resize = match placement {
@@ -3206,8 +3145,7 @@ impl TabContainer {
             .flex_shrink_0()
             .map(|this| match placement {
                 SidebarPlacement::Left | SidebarPlacement::Right => this.w(side_width),
-                SidebarPlacement::Bottom => this.flex_1().min_w(layout.sidebar_panel_min),
-            })
+                SidebarPlacement::Bottom => this.flex_1().min_w(layout.sidebar_panel_min)})
             .child(self.render_sidebar_panel_frame(contribution.clone(), cx))
             .when(can_resize, |this| {
                 this.child(self.render_sidebar_resize_handle(contribution.id, placement, cx))
@@ -3226,7 +3164,7 @@ impl TabContainer {
             "tab-sidebar-resize-{placement:?}-{}-{}",
             id.owner, id.local_id
         ));
-        let resize = cx.theme().geometry.resize;
+        let resize = one_ui::theme_geometry().resize;
         let hit_area = resize.hit_area();
         let line_size = resize.visible_line;
         let drag_border = cx.theme().drag_border;
@@ -3260,16 +3198,14 @@ impl TabContainer {
                     .left_0()
                     .w_full()
                     .h(hit_area)
-                    .flex(),
-            })
+                    .flex()})
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.prevent_default();
                 cx.stop_propagation();
                 container.update(cx, |container, cx| {
                     container.sidebar_resizing = Some(SidebarResizeTarget {
                         id: id.clone(),
-                        placement,
-                    });
+                        placement});
                     cx.notify();
                 });
             })
@@ -3283,8 +3219,7 @@ impl TabContainer {
                         SidebarPlacement::Left | SidebarPlacement::Right => {
                             this.h_full().w(line_size)
                         }
-                        SidebarPlacement::Bottom => this.w_full().h(line_size),
-                    }),
+                        SidebarPlacement::Bottom => this.w_full().h(line_size)}),
             )
             .into_any_element()
     }
@@ -3419,8 +3354,7 @@ impl TabContainer {
         let icon = match placement {
             SidebarPlacement::Left => IconName::PanelLeft,
             SidebarPlacement::Right => IconName::PanelRight,
-            SidebarPlacement::Bottom => IconName::PanelBottom,
-        };
+            SidebarPlacement::Bottom => IconName::PanelBottom};
         let container = cx.entity();
         Button::new(SharedString::from(format!(
             "tab-sidebar-move-{placement:?}-{}-{}",
@@ -3580,7 +3514,7 @@ impl TabContainer {
     }
 
     fn sidebar_resize_target_active(&self, target: &SidebarResizeTarget, cx: &App) -> bool {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         self.resolved_sidebar_panels(cx)
             .into_iter()
             .find(|panel| panel.visible && panel.contribution.id == target.id)
@@ -3601,8 +3535,7 @@ impl TabContainer {
                         panel.contribution.chrome,
                         None,
                         Some(self.sidebar_panel_bottom_height(&panel.contribution, layout)),
-                    ),
-                }
+                    )}
             })
     }
 
@@ -3612,7 +3545,7 @@ impl TabContainer {
         mouse_position: Point<Pixels>,
         cx: &App,
     ) {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let panel_min = layout.utility_panel_min;
         let panel_max = layout.utility_panel_max;
         let center_min = layout.sidebar_center_min;
@@ -3650,8 +3583,7 @@ impl TabContainer {
                 let left = Self::sidebar_panels_for(&panels, SidebarPlacement::Left);
                 self.sidebar_side_width(&left, layout)
             }
-            SidebarPlacement::Bottom => px(0.0),
-        };
+            SidebarPlacement::Bottom => px(0.0)};
         let max_dock_width =
             (self.sidebar_bounds.size.width - center_min - opposite_width).max(panel_min);
         let max_width = (max_dock_width - before - after_min)
@@ -3660,8 +3592,7 @@ impl TabContainer {
         let raw_width = match target.placement {
             SidebarPlacement::Left => mouse_position.x - self.sidebar_bounds.left() - before,
             SidebarPlacement::Right => self.sidebar_bounds.right() - after - mouse_position.x,
-            SidebarPlacement::Bottom => unreachable!(),
-        };
+            SidebarPlacement::Bottom => unreachable!()};
         let width = raw_width.clamp(panel_min, max_width);
         self.set_sidebar_side_width(target.id, width);
     }
@@ -3670,9 +3601,9 @@ impl TabContainer {
         &mut self,
         target: SidebarResizeTarget,
         mouse_position: Point<Pixels>,
-        cx: &App,
+        _cx: &App,
     ) {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let panel_min = layout.sidebar_panel_min;
         let center_min = layout.sidebar_center_min;
         let max_height = (self.sidebar_bounds.size.height - center_min).max(panel_min);
@@ -3704,7 +3635,7 @@ impl TabContainer {
         content: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let panels = self.resolved_sidebar_panels(cx);
         let left = Self::sidebar_panels_for(&panels, SidebarPlacement::Left);
         let right = Self::sidebar_panels_for(&panels, SidebarPlacement::Right);
@@ -3832,8 +3763,7 @@ impl TabContainer {
         }
 
         root.child(SidebarResizeEventHandler {
-            container: cx.entity(),
-        })
+            container: cx.entity()})
         .into_any_element()
     }
 
@@ -3877,8 +3807,7 @@ impl TabContainer {
                     pinned: true,
                     title: tab.title(cx),
                     icon: tab.content().icon(cx),
-                    active: self.active_pinned_index == Some(index),
-                }),
+                    active: self.active_pinned_index == Some(index)}),
         );
         entries.extend(
             self.tabs
@@ -3889,8 +3818,7 @@ impl TabContainer {
                     pinned: false,
                     title: tab.title(cx),
                     icon: tab.content().icon(cx),
-                    active: self.active_pinned_index.is_none() && index == self.active_index,
-                }),
+                    active: self.active_pinned_index.is_none() && index == self.active_index}),
         );
         entries
     }
@@ -3940,7 +3868,7 @@ impl TabContainer {
         let home_active = self.home_active;
         let on_home = self.on_home.clone();
         let titlebar_platform = self.titlebar_platform();
-        let layout = theme.geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let tab_bar_height = layout.tab_bar;
         let tab_item_height = layout.tab_item;
 
@@ -4057,8 +3985,7 @@ impl TabContainer {
                                         !this.navigation_sidebar_expanded.unwrap_or_default();
                                     this.navigation_sidebar_expanded = Some(expanded);
                                     cx.emit(TabContainerEvent::NavigationSidebarToggled {
-                                        expanded,
-                                    });
+                                        expanded});
                                     cx.notify();
                                 })),
                         ),
@@ -4346,8 +4273,7 @@ impl TabContainer {
                                     .min_w_0()
                                     .child(Input::new(&input).small().w_full())
                                     .into_any_element(),
-                                None => render_tab_title(title_clone, text_color),
-                            })
+                                None => render_tab_title(title_clone, text_color)})
                             .when(closeable && !is_locked, |el| {
                                 let view_clone = view_clone.clone();
                                 el.child(
@@ -4465,8 +4391,7 @@ impl TabContainer {
                                                 );
                                             }),
                                     ),
-                                    None => menu,
-                                })
+                                    None => menu})
                                 .map(|menu| {
                                     if !lockable {
                                         return menu;
@@ -4732,7 +4657,7 @@ impl TabContainer {
         } else {
             foreground
         };
-        let control_width = cx.theme().geometry.layout.window_control_width;
+        let control_width = one_ui::theme_geometry().layout.window_control_width;
 
         div()
             .id(id)
@@ -4795,13 +4720,13 @@ impl TabContainer {
         let background = if is_active {
             cx.theme()
                 .primary
-                .opacity(cx.theme().geometry.opacity.subtle)
+                .opacity(one_ui::theme_geometry().opacity.subtle)
         } else {
             gpui::transparent_black()
         };
         let hover_background = cx.theme().secondary_hover;
         let active_background = cx.theme().secondary_active;
-        let control_width = cx.theme().geometry.layout.window_control_width;
+        let control_width = one_ui::theme_geometry().layout.window_control_width;
 
         div()
             .id("always-on-top")
@@ -4849,8 +4774,7 @@ fn normalize_sidebar_placement(
 }
 
 struct SidebarResizeEventHandler {
-    container: Entity<TabContainer>,
-}
+    container: Entity<TabContainer>}
 
 impl IntoElement for SidebarResizeEventHandler {
     type Element = Self;
@@ -4938,7 +4862,7 @@ impl Focusable for TabContainer {
 impl Render for TabContainer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle(cx);
-        let tab_bar_height = cx.theme().geometry.layout.tab_bar;
+        let tab_bar_height = one_ui::theme_geometry().layout.tab_bar;
         let has_tabs = !self.pinned_tabs.is_empty() || !self.tabs.is_empty();
         let show_tab_bar = has_tabs || self.show_tab_bar_when_empty;
 
@@ -5010,8 +4934,7 @@ mod tests {
     use crate::tab_navigation::ActiveTabSlot;
     use gpui::{
         ObjectFit, RenderImage, StyledImage, TestAppContext, VisualTestContext, WindowBounds,
-        WindowOptions, img, size,
-    };
+        WindowOptions, img, size};
     use gpui_component::{Root, Theme, h_flex};
     use image::{ImageBuffer, Rgba};
     use std::sync::Mutex;
@@ -5022,8 +4945,7 @@ mod tests {
         frame: Option<Arc<RenderImage>>,
         status: Option<SharedString>,
         lifecycle: Option<Arc<Mutex<Vec<String>>>>,
-        presentation_obscured: bool,
-    }
+        presentation_obscured: bool}
 
     impl TestTab {
         fn new(title: &'static str, cx: &mut Context<Self>) -> Self {
@@ -5033,8 +4955,7 @@ mod tests {
                 frame: None,
                 status: None,
                 lifecycle: None,
-                presentation_obscured: false,
-            }
+                presentation_obscured: false}
         }
 
         fn with_status(
@@ -5048,8 +4969,7 @@ mod tests {
                 frame: None,
                 status: Some(status.into()),
                 lifecycle: None,
-                presentation_obscured: false,
-            }
+                presentation_obscured: false}
         }
 
         fn with_lifecycle(
@@ -5063,8 +4983,7 @@ mod tests {
                 frame: None,
                 status: None,
                 lifecycle: Some(lifecycle),
-                presentation_obscured: false,
-            }
+                presentation_obscured: false}
         }
 
         fn set_frame(&mut self, frame: Arc<RenderImage>, cx: &mut Context<Self>) {
@@ -5176,8 +5095,7 @@ mod tests {
     }
 
     struct TestWindow {
-        tab_container: Entity<TabContainer>,
-    }
+        tab_container: Entity<TabContainer>}
 
     impl Render for TestWindow {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -5237,8 +5155,7 @@ mod tests {
         maximize: Bounds<Pixels>,
         close: Bounds<Pixels>,
         tab_content: Bounds<Pixels>,
-        tab_root: Bounds<Pixels>,
-    }
+        tab_root: Bounds<Pixels>}
 
     fn window_chrome_bounds(cx: &mut VisualTestContext) -> WindowChromeBounds {
         WindowChromeBounds {
@@ -5265,8 +5182,7 @@ mod tests {
             maximize: cx.debug_bounds("maximize").expect("maximize button"),
             close: cx.debug_bounds("close").expect("close button"),
             tab_content: cx.debug_bounds("tab-content").expect("tab content"),
-            tab_root: cx.debug_bounds("test-tab-root").expect("tab root"),
-        }
+            tab_root: cx.debug_bounds("test-tab-root").expect("tab root")}
     }
 
     #[test]
@@ -5630,8 +5546,7 @@ mod tests {
                             format!("activated:{index}:{id}")
                         }
                         TabContainerEvent::LayoutChanged => "layout".to_string(),
-                        TabContainerEvent::NavigationSidebarToggled { .. } => return,
-                    };
+                        TabContainerEvent::NavigationSidebarToggled { .. } => return};
                     events_for_subscription
                         .lock()
                         .expect("events lock")
@@ -5856,8 +5771,7 @@ mod tests {
                         );
                     });
                     let root = cx.new(|_| TestWindow {
-                        tab_container: tabs,
-                    });
+                        tab_container: tabs});
                     cx.new(|cx| Root::new(root, window, cx))
                 },
             )
@@ -5916,8 +5830,7 @@ mod tests {
                         );
                     });
                     let root = cx.new(|_| TestWindow {
-                        tab_container: tabs,
-                    });
+                        tab_container: tabs});
                     cx.new(|cx| Root::new(root, window, cx))
                 },
             )
@@ -5965,8 +5878,7 @@ mod tests {
                     *container_for_window.lock().unwrap() = Some(tabs.clone());
 
                     let root = cx.new(|_| TestWindow {
-                        tab_container: tabs,
-                    });
+                        tab_container: tabs});
                     cx.new(|cx| Root::new(root, window, cx))
                 },
             )
@@ -6162,8 +6074,7 @@ mod tests {
                         container = Some(tabs.clone());
                         rdp = Some(rdp_tab);
                         let root = cx.new(|_| TestWindow {
-                            tab_container: tabs,
-                        });
+                            tab_container: tabs});
                         cx.new(|cx| Root::new(root, window, cx))
                     },
                 )

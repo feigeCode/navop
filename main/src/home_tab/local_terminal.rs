@@ -1,3 +1,4 @@
+use one_ui::IconSize;
 use super::*;
 
 impl HomePage {

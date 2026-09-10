@@ -8,17 +8,9 @@ use gpui::{
     FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, StyledExt, WindowExt as _,
-    button::{Button, ButtonVariants as _},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Editor, EditorState, Input, InputEvent, InputState},
-    notification::Notification,
-    spinner::Spinner,
-    tab::{Tab, TabBar},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt, WindowExt as _, button::{Button, ButtonVariants as _}, dialog::DialogButtonProps, h_flex, input::{Editor, EditorState, Input, InputEvent, InputState}, notification::Notification, spinner::Spinner, tab::{Tab, TabBar}, v_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use mongodb_runtime::MongoFindOptions as FindOptions;
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -2107,7 +2099,7 @@ impl CollectionView {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         let title = match (&self.database_name, &self.collection_name) {
             (Some(database), Some(collection)) => format!("{} / {}", database, collection),
             _ => t!("MongoCollection.select_collection").to_string(),
@@ -2152,7 +2144,7 @@ impl CollectionView {
     }
 
     fn render_query_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         let is_loading = self.is_loading;
         h_flex()
             .min_h(geometry.layout.command_bar)
@@ -2218,7 +2210,7 @@ impl CollectionView {
             return div().into_any_element();
         }
 
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         v_flex()
             .gap(geometry.spacing.space_2)
             .p(geometry.spacing.space_2)
@@ -2262,7 +2254,7 @@ impl CollectionView {
     }
 
     fn render_action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         let has_selection = self.selected_index.is_some();
         let is_loading = self.is_loading;
         let has_table_changes = self.document_table.read(cx).delegate().has_changes();
@@ -2696,7 +2688,7 @@ impl CollectionView {
                 .into_any_element()
         };
 
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         v_flex()
             .flex_1()
             .min_h_0()
@@ -2783,7 +2775,7 @@ impl CollectionView {
     }
 
     fn render_collapsed_detail_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         v_flex()
             .h_full()
             .w(geometry.control.default)
@@ -2853,7 +2845,7 @@ impl CollectionView {
                 .into_any_element()
         };
 
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         h_flex()
             .flex_1()
             .h_full()
@@ -2945,7 +2937,7 @@ impl CollectionView {
     }
 
     fn render_pagination_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         let inputs = self.read_query_inputs_or_default(cx);
         let page_size = inputs.page_size;
         let skip_base = inputs.skip_base;

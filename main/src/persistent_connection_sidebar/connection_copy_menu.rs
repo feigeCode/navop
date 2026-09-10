@@ -1,8 +1,6 @@
 use gpui::{ClipboardItem, Entity, Window};
-use gpui_component::{
-    IconName,
-    menu::{PopupMenu, PopupMenuItem},
-};
+use gpui_component::{menu::{PopupMenu, PopupMenuItem}};
+use one_assets::IconName;
 #[cfg(not(test))]
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::StoredConnection;

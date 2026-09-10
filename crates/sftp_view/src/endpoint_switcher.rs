@@ -5,10 +5,9 @@ use gpui::{
     ParentElement, RenderOnce, SharedString, Styled as _, Task, Window, div, px,
 };
 use gpui_component::list::{List, ListDelegate, ListState};
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, Selectable, Sizable, Size, WindowExt as _,
-    h_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Selectable, Sizable, Size, WindowExt as _, h_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use rust_i18n::t;
 
 const SWITCHER_WIDTH: f32 = 520.0;
@@ -198,7 +197,7 @@ impl RenderOnce for EndpointSwitcherItem {
         let view = self.view.clone();
         let entry = self.entry.clone();
         let selected = self.selected || entry.active;
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
 
         h_flex()
             .id(SharedString::from(format!(
@@ -264,7 +263,7 @@ fn activate_entry(
 mod tests {
     use super::{EndpointSwitcherEntry, filter_endpoint_switcher_entries};
     use crate::endpoint::LeftEndpointValue;
-    use gpui_component::IconName;
+    use one_assets::IconName;
 
     fn entry(value: LeftEndpointValue, title: &str) -> EndpointSwitcherEntry {
         let icon = match value {

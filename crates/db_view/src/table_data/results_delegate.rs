@@ -10,7 +10,7 @@ use db::{
     query_result_normalization::QueryResultNormalizationError,
 };
 use gpui::{
-    App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
+    App, AppContext, ClipboardItem, Context, Font, ImageFormat, InteractiveElement,
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement, Styled,
     Subscription, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
@@ -19,12 +19,8 @@ use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
 use gpui_component::input::{InputEvent, InputState, MaskPattern};
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{
-    ActiveTheme, IconName, Sizable as _, Size, WindowExt,
-    button::{Button, ButtonVariants},
-    h_flex,
-    notification::Notification,
-};
+use gpui_component::{ActiveTheme, Sizable as _, Size, WindowExt, button::{Button, ButtonVariants}, h_flex, notification::Notification};
+use one_assets::IconName;
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_core::storage::DatabaseType;
 use one_ui::edit_table::{

@@ -59,6 +59,7 @@ use tracing::{info, warn};
 
 struct AppAssets {
     builtin: Assets,
+    navop_icons: one_assets::Assets,
     driver: db::ipc::DriverAssetSource,
 }
 
@@ -238,6 +239,7 @@ impl AppAssets {
     fn new() -> Self {
         Self {
             builtin: Assets,
+            navop_icons: one_assets::Assets::new(),
             driver: db::ipc::DriverAssetSource::new(
                 Arc::new(db::ipc::DriverResourceLoader::new()),
                 Arc::new(db::ipc::IpcDriverRegistry::load_default()),
@@ -275,8 +277,11 @@ impl AssetSource for AppAssets {
                     info!(
                         target: "driver_icon",
                         asset_path = path,
-                        "driver asset source returned none; trying builtin assets"
+                        "driver asset source returned none; trying navop/builtin assets"
                     );
+                }
+                if let Ok(Some(asset)) = self.navop_icons.load(path) {
+                    return Ok(Some(asset));
                 }
                 self.builtin.load(path)
             }
@@ -285,8 +290,11 @@ impl AssetSource for AppAssets {
                     target: "driver_icon",
                     asset_path = path,
                     error = %error,
-                    "driver asset source failed; trying builtin assets"
+                    "driver asset source failed; trying navop/builtin assets"
                 );
+                if let Ok(Some(asset)) = self.navop_icons.load(path) {
+                    return Ok(Some(asset));
+                }
                 self.builtin.load(path)
             }
         }
@@ -294,6 +302,7 @@ impl AssetSource for AppAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut assets = self.driver.list(path).unwrap_or_default();
+        assets.extend(self.navop_icons.list(path).unwrap_or_default());
         assets.extend(self.builtin.list(path).unwrap_or_default());
         assets.sort();
         assets.dedup();

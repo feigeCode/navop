@@ -19,7 +19,8 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Selectable, Size, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Icon, Selectable, Size, h_flex, v_flex};
+use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
 use one_ui::{IconButton, IconSize as OneIconSize};
@@ -238,7 +239,7 @@ impl DatabaseSidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_active = self.active_panel == Some(panel);
-        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
         let (icon, tooltip) = match panel {
             SidebarPanel::AiChat => (IconName::AILine, t!("DatabaseSidebar.ai_chat").to_string()),
             SidebarPanel::ExecutionHistory => (

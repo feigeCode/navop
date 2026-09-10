@@ -29,23 +29,11 @@ use gpui::{
     FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    clipboard::Clipboard,
-    group_box::GroupBoxVariant,
-    h_flex,
-    input::{Input, InputState},
-    kbd::Kbd,
-    scroll::ScrollableElement,
-    select::{Select, SelectItem, SelectState},
-    setting::{
+use gpui_component::{ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, clipboard::Clipboard, group_box::GroupBoxVariant, h_flex, input::{Input, InputState}, kbd::Kbd, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, setting::{
         NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
         Settings,
-    },
-    switch::Switch,
-    v_flex,
-};
+    }, switch::Switch, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
     get_cached_team_options, personal::SyncStoreHealth,
@@ -883,7 +871,7 @@ impl SettingsPanel {
                 .group(
                     SettingGroup::new().title(t!("Settings.About.title")).item(
                         SettingItem::render(move |_options, _window, cx| render_about_section(cx))
-                            .search_texts([
+                            .keywords([
                                 t!("Settings.About.title").to_string(),
                                 t!("Settings.About.version").to_string(),
                                 t!("Settings.About.opensource_label").to_string(),
@@ -1953,7 +1941,7 @@ fn about_update_setting_group(auto_update_default: bool) -> SettingGroup {
             )
             .description(t!("Settings.About.Update.auto_update_desc").to_string()),
             SettingItem::render(move |_options, _window, cx| render_manual_update_check_item(cx))
-                .search_texts([
+                .keywords([
                     t!("Settings.About.Update.group_title").to_string(),
                     t!("Settings.About.Update.check_now").to_string(),
                     t!("Settings.About.Update.check_now_desc").to_string(),

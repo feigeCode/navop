@@ -4,9 +4,8 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, h_flex, scroll::ScrollableElement, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, h_flex, scroll::ScrollableElement, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 const COMMAND_POPOVER_WIDTH: f32 = 720.0;

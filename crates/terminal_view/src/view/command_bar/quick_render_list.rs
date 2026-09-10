@@ -5,10 +5,8 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, input::Input, scroll::ScrollableElement,
-    v_flex, v_virtual_list,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, h_flex, input::Input, scroll::ScrollableElement, v_flex, v_virtual_list};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::rc::Rc;
 

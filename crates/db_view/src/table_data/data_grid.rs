@@ -4,14 +4,8 @@ use gpui::{
     Focusable, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, PathPromptOptions,
     SharedString, Styled, Subscription, Window, actions, div, img, px,
 };
-use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size, WindowExt,
-    button::Button,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    notification::Notification,
-    v_flex,
-};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, WindowExt, button::Button, h_flex, input::{Input, InputEvent, InputState}, notification::Notification, v_flex};
+use one_assets::IconName;
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
 use one_ui::{create_large_text_editor_with_content, large_text_values_equivalent};
 use rust_i18n::t;

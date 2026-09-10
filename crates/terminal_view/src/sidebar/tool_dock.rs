@@ -4,13 +4,9 @@ use gpui::{
     Anchor, AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Pixels, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    IconName, IconSize, Sizable,
-    button::ButtonVariants as _,
-    h_flex,
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    v_flex,
-};
+use gpui_component::{Sizable, button::ButtonVariants as _, h_flex, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, v_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_ui::{IconButton, PanelHeader};

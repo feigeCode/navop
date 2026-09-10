@@ -1,11 +1,6 @@
 use gpui::{App, AppContext, IntoElement, ParentElement, PathPromptOptions, Styled, Window, div};
-use gpui_component::{
-    IconName, Sizable, WindowExt,
-    button::Button,
-    h_flex,
-    notification::Notification,
-    setting::{RenderOptions, SettingField, SettingGroup, SettingItem},
-};
+use gpui_component::{Sizable, WindowExt, button::Button, h_flex, notification::Notification, setting::{RenderOptions, SettingField, SettingGroup, SettingItem}};
+use one_assets::IconName;
 use notes::NotesStorage;
 use rust_i18n::t;
 

@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow = { workspace = true }
 dunce = "1.0"
 gpui = { workspace = true }

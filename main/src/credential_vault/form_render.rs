@@ -1,5 +1,5 @@
 use gpui::{
-    ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Sizable, Size, h_flex,

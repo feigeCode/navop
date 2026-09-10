@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gpui::{App, SharedString, Window};
-use gpui_component::IconName;
+use one_assets::IconName;
 
 pub use crate::code_block_parse::{FencedCodeBlock, extract_fenced_code_blocks};
 
