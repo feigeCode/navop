@@ -204,7 +204,6 @@ moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
 llm-connector = { path = "crates/llm-connector", features = ["streaming"] }
 redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
-taos = { version = "0.12.3", default-features = false, features = ["ws-rustls"] }
 
 # SSH and SFTP
 # dsa feature enables verifying/offering the legacy ssh-dss host-key algorithm.

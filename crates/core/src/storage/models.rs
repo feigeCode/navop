@@ -246,6 +246,9 @@ impl DatabaseType {
     pub fn external_driver_id(&self) -> Option<&str> {
         match self {
             Self::External { driver_id } => Some(driver_id),
+            // TDengine 自 v0.16 起由 tdengine IPC 驱动扩展提供,统一走外部驱动路径
+            // (连接表单/打开守卫/树菜单/IPC 协议均据此路由到驱动扩展)
+            Self::TDengine => Some("tdengine"),
             _ => None,
         }
     }
@@ -2648,6 +2651,13 @@ mod tests {
 
         // 幂等:迁移后不再是 Mqtt 类型,再次调用不再迁移
         assert!(!connection.try_migrate_legacy_middleware_connection());
+    }
+
+    #[test]
+    fn tdengine_routes_to_external_driver() {
+        assert_eq!(Some("tdengine"), DatabaseType::TDengine.external_driver_id());
+        assert!(DatabaseType::TDengine.is_external() == false);
+        assert_eq!(None, DatabaseType::MySQL.external_driver_id());
     }
 
     fn ssh_connection_with_id(id: i64, auth_method: SshAuthMethod) -> StoredConnection {
