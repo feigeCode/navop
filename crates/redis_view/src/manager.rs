@@ -4,7 +4,7 @@ use crate::connection::RedisConnection;
 use crate::types::{RedisConnectionConfig, RedisError};
 use dashmap::DashMap;
 use gpui::Global;
-use redis_runtime::RedisConnectionFactory;
+use redis_runtime::RedisConnectionImpl;
 use rust_i18n::t;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,7 +17,6 @@ type ConnectionMap = DashMap<String, Arc<RwLock<Box<dyn RedisConnection>>>>;
 pub struct GlobalRedisState {
     /// 连接映射：connection_id -> connection
     connections: Arc<ConnectionMap>,
-    factory: Arc<RwLock<RedisConnectionFactory>>,
 }
 
 impl Default for GlobalRedisState {
@@ -30,30 +29,14 @@ impl Global for GlobalRedisState {}
 
 impl GlobalRedisState {
     pub fn new() -> Self {
-        #[cfg(feature = "builtin-redis")]
-        let factory = RedisConnectionFactory::Builtin;
-        #[cfg(not(feature = "builtin-redis"))]
-        let factory = RedisConnectionFactory::Unavailable;
         Self {
             connections: Arc::new(DashMap::new()),
-            factory: Arc::new(RwLock::new(factory)),
         }
-    }
-
-    pub fn new_with_factory(factory: RedisConnectionFactory) -> Self {
-        Self {
-            connections: Arc::new(DashMap::new()),
-            factory: Arc::new(RwLock::new(factory)),
-        }
-    }
-
-    pub async fn set_factory(&self, factory: RedisConnectionFactory) {
-        *self.factory.write().await = factory;
     }
 
     pub async fn test_connection(&self, config: &RedisConnectionConfig) -> Result<(), RedisError> {
-        let factory = self.factory.read().await.clone();
-        let mut connection = factory.create(config.clone()).await?;
+        let mut connection = RedisConnectionImpl::new(config.clone());
+        connection.connect().await?;
         let ping_result = connection.ping().await;
         let disconnect_result = connection.disconnect().await;
         ping_result?;
@@ -72,9 +55,9 @@ impl GlobalRedisState {
             ));
         }
 
-        let factory = self.factory.read().await.clone();
-        let conn = factory.create(config).await?;
-        let conn_arc: Arc<RwLock<Box<dyn RedisConnection>>> = Arc::new(RwLock::new(conn));
+        let mut conn = RedisConnectionImpl::new(config);
+        conn.connect().await?;
+        let conn_arc: Arc<RwLock<Box<dyn RedisConnection>>> = Arc::new(RwLock::new(Box::new(conn)));
         self.connections.insert(connection_id.clone(), conn_arc);
 
         Ok(connection_id)
@@ -162,14 +145,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_connection_uses_the_configured_factory() {
-        let state = GlobalRedisState::new_with_factory(RedisConnectionFactory::Unavailable);
+    async fn create_connection_requires_a_connection_id() {
+        let state = GlobalRedisState::new();
         let error = state
-            .test_connection(&RedisConnectionConfig::default())
+            .create_connection(RedisConnectionConfig::default())
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RedisError::Connection { .. }));
-        assert!(error.to_string().contains("native driver is not installed"));
+        assert!(matches!(error, RedisError::Internal(_)));
     }
 }

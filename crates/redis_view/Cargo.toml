@@ -28,10 +28,6 @@ dashmap.workspace = true
 futures.workspace = true
 redis-runtime.workspace = true
 
-[features]
-default = []
-builtin-redis = ["redis-runtime/builtin-redis"]
-
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 

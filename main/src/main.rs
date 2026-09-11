@@ -854,7 +854,7 @@ mod native_driver_feature_contract_tests {
     }
 
     #[test]
-    fn builtin_native_driver_features_are_declared_and_default_off() {
+    fn builtin_mongodb_feature_is_declared_and_default_off() {
         let manifest = include_str!("../Cargo.toml");
         let features = feature_block(manifest);
         let default_line = features
@@ -862,9 +862,7 @@ mod native_driver_feature_contract_tests {
             .find(|line| line.trim_start().starts_with("default ="))
             .expect("main must declare default features");
 
-        assert!(features.contains("builtin-redis ="));
         assert!(features.contains("builtin-mongodb ="));
-        assert!(!default_line.contains("builtin-redis"));
         assert!(!default_line.contains("builtin-mongodb"));
     }
 
