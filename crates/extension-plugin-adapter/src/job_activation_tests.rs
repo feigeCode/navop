@@ -221,3 +221,43 @@ fn recovery_only_moves_the_exact_active_generation() {
     assert!(manager.recover_generation("runtime", 1, 3).is_empty());
     assert_eq!(JobState::Queued, manager.validate(&current).unwrap());
 }
+
+#[test]
+fn jobs_are_scoped_by_resource_within_one_runtime() {
+    let manager = JobActivationManager::new();
+    manager.mark_runtime_active("runtime", 1);
+    let own = manager
+        .register_start_for_resource(
+            "extension",
+            "runtime",
+            1,
+            Some("resource-a"),
+            &started("own", JobState::Running),
+        )
+        .unwrap();
+    manager
+        .register_start_for_resource(
+            "extension",
+            "runtime",
+            1,
+            Some("resource-b"),
+            &started("other", JobState::Running),
+        )
+        .unwrap();
+    manager
+        .register_start(
+            "extension",
+            "runtime",
+            1,
+            &started("legacy", JobState::Running),
+        )
+        .unwrap();
+
+    let visible = manager.snapshots_for_resource("extension", "runtime", 1, "resource-a");
+
+    assert_eq!(1, visible.len());
+    assert_eq!("own", visible[0].job_id);
+    assert_eq!(Some("resource-a".to_string()), visible[0].resource_id);
+    assert!(manager.is_owned_by_resource(&own, "resource-a"));
+    assert!(!manager.is_owned_by_resource(&own, "resource-b"));
+}

@@ -82,13 +82,24 @@ pub fn terminal_host(cx: &App) -> Option<std::rc::Rc<dyn TerminalHost>> {
         .map(|global| global.host.clone())
 }
 
-/// 按路由插值命令行占位符。
+/// 按路由与 session metadata 插值命令行占位符。
 ///
-/// 支持两种写法,二者等价:`{{id}}` 与 `{{route.id}}`。
-/// 路由里查不到的键原样保留(便于在界面上暴露 manifest 写错,而不是静默变成空串)。
-/// 路由值按 JSON 语义转成字符串:字符串取原文,数字/布尔取字面量,
-/// 对象/数组取紧凑 JSON,Null 视为未绑定。
+/// 支持三种写法,前两种等价:`{{id}}`、`{{route.id}}` 取当前路由;
+/// `{{session.docker_host}}` 取 resource/open metadata,由 provider 声明
+/// 本连接的真实目标(如 Docker daemon socket),宿主据此保证终端与
+/// 查询/操作命中同一 daemon。查不到的键原样保留(便于在界面上暴露
+/// manifest 写错,而不是静默变成空串)。路由值按 JSON 语义转成字符串:
+/// 字符串取原文,数字/布尔取字面量,对象/数组取紧凑 JSON,Null 视为未绑定。
 pub fn interpolate_route(template: &str, route: &serde_json::Value) -> String {
+    interpolate_with_session(template, route, &serde_json::Value::Null)
+}
+
+/// 同 [`interpolate_route`],叠加 session metadata 查找(`session.` 前缀)。
+pub fn interpolate_with_session(
+    template: &str,
+    route: &serde_json::Value,
+    session: &serde_json::Value,
+) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -100,8 +111,13 @@ pub fn interpolate_route(template: &str, route: &serde_json::Value) -> String {
             return out;
         };
         let key = after[..end].trim();
-        let lookup = key.strip_prefix("route.").unwrap_or(key);
-        match route.get(lookup) {
+        let resolved = if let Some(lookup) = key.strip_prefix("session.") {
+            session.get(lookup)
+        } else {
+            let lookup = key.strip_prefix("route.").unwrap_or(key);
+            route.get(lookup)
+        };
+        match resolved {
             Some(serde_json::Value::Null) | None => {
                 out.push_str(&rest[start..start + 2 + end + 2]);
             }
@@ -162,6 +178,31 @@ mod tests {
     #[test]
     fn empty_route_leaves_template_untouched() {
         let template = "docker ps";
-        assert_eq!(interpolate_route(template, &serde_json::Value::Null), template);
+        assert_eq!(
+            interpolate_route(template, &serde_json::Value::Null),
+            template
+        );
+    }
+
+    #[test]
+    fn session_prefix_resolves_from_open_metadata() {
+        let session = json!({"docker_host": "unix:///custom/docker.sock"});
+        assert_eq!(
+            interpolate_with_session("exec -it {{id}} sh", &route(), &session,),
+            "exec -it 352ecf6ac7f7 sh"
+        );
+        assert_eq!(
+            interpolate_with_session("DOCKER_HOST={{session.docker_host}}", &route(), &session,),
+            "DOCKER_HOST=unix:///custom/docker.sock"
+        );
+    }
+
+    #[test]
+    fn missing_session_key_is_left_verbatim() {
+        let session = json!({});
+        assert_eq!(
+            interpolate_with_session("{{session.docker_host}}", &route(), &session),
+            "{{session.docker_host}}"
+        );
     }
 }

@@ -8,15 +8,17 @@ use std::cmp::Ordering;
 
 use extension_runtime::extension::manifest::ResourceWorkbenchCollection;
 use gpui::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, Edges, Entity,
-    InteractiveElement as _, IntoElement, ParentElement, Pixels, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _,
-    px,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Edges, Entity, InteractiveElement as _,
+    IntoElement, ParentElement, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, StyledExt as _, h_flex, tag::Tag, v_flex,
+    ActiveTheme, Icon, IconName, Sizable, Size, StyledExt as _,
     button::Button,
+    h_flex,
     table::{Column, ColumnSort, TableDelegate, TableState},
+    tag::Tag,
+    v_flex,
 };
 use serde_json::Value;
 
@@ -223,7 +225,12 @@ impl CollectionTableDelegate {
             .unwrap_or_default();
         let row = self.row(row_ix).cloned().unwrap_or(Value::Null);
         let entity = self.view.clone();
-        let mut cell = h_flex().w_full().min_w_0().items_center().justify_end().gap_1();
+        let mut cell = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .justify_end()
+            .gap_1();
         for action in &self.actions {
             let is_running = running.as_ref().is_some_and(|running| {
                 running.operation == action.operation && running.row_key == row_key
@@ -243,18 +250,20 @@ impl CollectionTableDelegate {
             let entity = entity.clone();
             let operation = action.operation.clone();
             let payload = row.clone();
-            cell = cell.child(button.on_click(move |_event: &ClickEvent, _window, cx: &mut App| {
-                // 行操作按钮不回落到行点击(导航)。
-                cx.stop_propagation();
-                let Some(view) = entity.upgrade() else {
-                    return;
-                };
-                let operation = operation.clone();
-                let payload = payload.clone();
-                view.update(cx, |this, cx| {
-                    this.run_row_action(operation, payload, false, cx);
-                });
-            }));
+            cell = cell.child(button.on_click(
+                move |_event: &ClickEvent, _window, cx: &mut App| {
+                    // 行操作按钮不回落到行点击(导航)。
+                    cx.stop_propagation();
+                    let Some(view) = entity.upgrade() else {
+                        return;
+                    };
+                    let operation = operation.clone();
+                    let payload = payload.clone();
+                    view.update(cx, |this, cx| {
+                        this.run_row_action(operation, payload, false, cx);
+                    });
+                },
+            ));
         }
         cell.into_any_element()
     }
@@ -402,7 +411,12 @@ impl TableDelegate for CollectionTableDelegate {
             return self.render_actions(row_ix, cx);
         }
         let content = self.render_cell_content(row_ix, &column, cx);
-        h_flex().size_full().min_w_0().items_center().child(content).into_any_element()
+        h_flex()
+            .size_full()
+            .min_w_0()
+            .items_center()
+            .child(content)
+            .into_any_element()
     }
 
     fn perform_sort(
@@ -564,19 +578,38 @@ impl StatusTone {
         let normalized = value.trim().to_ascii_lowercase();
         if starts_with_any(
             &normalized,
-            &["running", "healthy", "active", "up", "ready", "ok", "started", "open"],
+            &[
+                "running", "healthy", "active", "up", "ready", "ok", "started", "open",
+            ],
         ) {
             Self::Good
         } else if starts_with_any(
             &normalized,
-            &["exit", "dead", "unhealthy", "fail", "error", "down", "crash", "remove", "stopped"],
+            &[
+                "exit",
+                "dead",
+                "unhealthy",
+                "fail",
+                "error",
+                "down",
+                "crash",
+                "remove",
+                "stopped",
+            ],
         ) {
             Self::Bad
         } else if starts_with_any(
             &normalized,
             &[
-                "paused", "restarting", "pending", "degrad", "warning", "creating", "starting",
-                "stopping", "queued",
+                "paused",
+                "restarting",
+                "pending",
+                "degrad",
+                "warning",
+                "creating",
+                "starting",
+                "stopping",
+                "queued",
             ],
         ) {
             Self::Warn

@@ -1,9 +1,16 @@
 use std::sync::Arc;
 
-use extension_protocol::resource::{ResourceCloseParams, ResourceOpenResult};
+use extension_host::CancellationToken;
+use extension_protocol::{
+    event_stream::{EventOpenParams, EventOpenResult},
+    resource::{ResourceCloseParams, ResourceOpenResult},
+};
 use std::sync::Mutex;
 
-use crate::{JobActivationHandle, JobSnapshot, ManagedUniversalPluginClient, PluginAdapterError};
+use crate::{
+    EventStreamSubscription, EventStreamSubscriptionConfig, JobActivationHandle, JobSnapshot,
+    ManagedUniversalPluginClient, PluginAdapterError,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceSessionIdentity {
@@ -26,6 +33,7 @@ pub struct ResourceScope {
     session: ResourceSessionHandle,
     page_id: String,
     mount_id: u64,
+    cancellation: CancellationToken,
 }
 
 struct ResourceSessionInner {
@@ -108,14 +116,18 @@ impl ResourceSessionHandle {
     }
 
     pub fn task_snapshots(&self) -> Vec<JobSnapshot> {
+        let Ok(resource) = self.resource_snapshot() else {
+            return Vec::new();
+        };
         self.inner
             .client
             .job_activation()
             .map(|jobs| {
-                jobs.snapshots(
+                jobs.snapshots_for_resource(
                     &self.inner.identity.extension_id,
                     &self.inner.identity.runtime_id,
                     self.inner.identity.runtime_generation,
+                    &resource.resource_id,
                 )
             })
             .unwrap_or_default()
@@ -128,6 +140,17 @@ impl ResourceSessionHandle {
             generation: self.inner.identity.runtime_generation,
             job_id: job_id.to_string(),
         };
+        let resource_id = self.resource_id().await?;
+        if !self
+            .inner
+            .client
+            .job_activation()
+            .is_some_and(|jobs| jobs.is_owned_by_resource(&handle, &resource_id))
+        {
+            return Err(PluginAdapterError::Session(
+                "job is not owned by this resource session".into(),
+            ));
+        }
         self.inner
             .client
             .cancel_job(&handle)
@@ -149,11 +172,23 @@ impl ResourceSessionHandle {
             .unwrap_or_default()
     }
 
+    /// 主资源 open 结果的 metadata（provider 声明的连接目标摘要等）。
+    /// 终端等宿主组件据此把页面操作绑定回同一连接目标。
+    pub fn metadata(&self) -> Option<serde_json::Value> {
+        self.inner
+            .resource
+            .lock()
+            .expect("resource session lock poisoned")
+            .as_ref()
+            .and_then(|resource| resource.metadata.clone())
+    }
+
     pub fn scope(&self, page_id: impl Into<String>, mount_id: u64) -> ResourceScope {
         ResourceScope {
             session: self.clone(),
             page_id: page_id.into(),
             mount_id,
+            cancellation: CancellationToken::new(),
         }
     }
 
@@ -169,6 +204,22 @@ impl ResourceSessionHandle {
 }
 
 impl ResourceScope {
+    pub async fn open_event_stream(
+        &self,
+        kind: impl Into<String>,
+        capacity: Option<u32>,
+    ) -> Result<EventOpenResult, PluginAdapterError> {
+        self.session
+            .managed_client()
+            .open_event_stream(&EventOpenParams {
+                conn_id: None,
+                kind: kind.into(),
+                capacity,
+            })
+            .await
+            .map_err(|error| PluginAdapterError::Session(error.to_string()))
+    }
+
     pub fn page_id(&self) -> &str {
         &self.page_id
     }
@@ -179,5 +230,38 @@ impl ResourceScope {
 
     pub fn session(&self) -> ResourceSessionHandle {
         self.session.clone()
+    }
+
+    pub fn cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    /// Starts a pull subscription owned by this page scope. Dropping or
+    /// cancelling the scope stops the supervisor and closes the provider stream.
+    pub fn subscribe_events(
+        &self,
+        stream: &EventOpenResult,
+        config: EventStreamSubscriptionConfig,
+    ) -> EventStreamSubscription {
+        EventStreamSubscription::spawn_with_cancel(
+            self.session.managed_client().clone(),
+            stream.stream_id.clone(),
+            config,
+            self.cancellation(),
+        )
+    }
+}
+
+impl Drop for ResourceScope {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
     }
 }

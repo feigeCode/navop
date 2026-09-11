@@ -16,26 +16,30 @@ pub use custom_page_host::{
 };
 pub use terminal_host::{
     GlobalTerminalHost, TerminalHost, TerminalMount, TerminalMountError, TerminalMountRequest,
-    interpolate_route, terminal_host,
+    interpolate_route, interpolate_with_session, terminal_host,
 };
 
 use collection_table::{CollectionTableDelegate, RowActionView, build_table_state};
 use extension_plugin_adapter::{
-    BindingContext, ResourceSessionHandle, WorkbenchDispatchError,
-    dispatch_invoke_scoped as dispatch_invoke, dispatch_job_scoped as dispatch_job,
+    BindingContext, EventStreamBatch, ResourceSessionHandle, WorkbenchDispatchError,
+    dispatch_invoke_result_scoped, dispatch_invoke_scoped as dispatch_invoke,
+    dispatch_job_scoped as dispatch_job,
 };
 use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::{ResourceWorkbenchPage, ResourceWorkbenchTemplate};
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, StyledExt as _, h_flex, spinner::Spinner,
-    tag::Tag, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
+    h_flex,
+    spinner::Spinner,
     table::{DataTable, TableState},
+    tag::Tag,
+    v_flex,
 };
 
 struct ActiveShellMount {
@@ -94,6 +98,7 @@ pub struct NativeResourceWorkbench {
     session: ResourceSessionHandle,
     selected_page: String,
     route: serde_json::Value,
+    paging: serde_json::Value,
     page_state: PageState,
     load_revision: u64,
     focus_handle: FocusHandle,
@@ -124,6 +129,11 @@ pub struct NativeResourceWorkbench {
     status_bar_loading: bool,
     renderer_error: Option<String>,
     task_error: Option<String>,
+    active_request_cancel: Option<extension_host::CancellationToken>,
+    event_batches: Vec<serde_json::Value>,
+    event_dropped: u64,
+    event_closed: bool,
+    event_error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -162,6 +172,7 @@ impl NativeResourceWorkbench {
             session,
             selected_page,
             route: serde_json::Value::Null,
+            paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
             page_state: PageState::Idle,
             load_revision: 0,
             focus_handle: cx.focus_handle(),
@@ -182,12 +193,20 @@ impl NativeResourceWorkbench {
             status_bar_loading: false,
             renderer_error: None,
             task_error: None,
+            active_request_cancel: None,
+            event_batches: Vec::new(),
+            event_dropped: 0,
+            event_closed: false,
+            event_error: None,
             _subscriptions: Vec::new(),
         };
         this._subscriptions
             .push(cx.on_release(|this, cx| this.dispose_shell_mount(cx)));
         this._subscriptions
             .push(cx.on_release(|this, cx| this.dispose_terminal_mount(cx)));
+        this._subscriptions.push(cx.on_release(|this, _cx| {
+            this.cancel_active_request();
+        }));
         this.load_current_page(cx);
         this.load_status_bar(cx);
         this
@@ -200,22 +219,113 @@ impl NativeResourceWorkbench {
         }
     }
 
+    fn paging_context(&self) -> serde_json::Value {
+        self.paging.clone()
+    }
+
+    fn cancel_active_request(&mut self) {
+        if let Some(cancel) = self.active_request_cancel.take() {
+            cancel.cancel();
+        }
+    }
+
+    fn collection_page(&self, page: &ResourceWorkbenchPage) -> Option<u64> {
+        (page.template == ResourceWorkbenchTemplate::Collection)
+            .then(|| page.collection.as_ref())
+            .flatten()
+            .filter(|collection| collection.pagination.kind != "none")
+            .and_then(|_| self.paging.get("page").and_then(serde_json::Value::as_u64))
+    }
+
+    /// cursor 分页:上次 load 返回的 nextCursor;None 表示页码式或没有更多。
+    fn collection_cursor(&self, page: &ResourceWorkbenchPage) -> Option<String> {
+        let collection = (page.template == ResourceWorkbenchTemplate::Collection)
+            .then(|| page.collection.as_ref())
+            .flatten()?;
+        if collection.pagination.kind != "cursor" {
+            return None;
+        }
+        self.paging
+            .get("cursor")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    }
+
+    fn change_collection_page(&mut self, delta: i64, cx: &mut Context<Self>) {
+        let Some(page) = self.current_page().cloned() else {
+            return;
+        };
+        let Some(current) = self.collection_page(&page) else {
+            return;
+        };
+        let next = if delta.is_negative() {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            current.saturating_add(delta as u64)
+        };
+        if next == 0 || next == current {
+            return;
+        }
+        let is_cursor_kind = self.collection_cursor(&page).is_some()
+            || page
+                .collection
+                .as_ref()
+                .is_some_and(|collection| collection.pagination.kind == "cursor");
+        let existing_cursor = self.paging.get("cursor").cloned();
+        if let Some(object) = self.paging.as_object_mut() {
+            object.insert("page".into(), serde_json::json!(next));
+            // cursor 分页向后翻沿用上次返回的 nextCursor;向前翻回到起点。
+            let cursor = if delta.is_negative() || !is_cursor_kind {
+                serde_json::Value::Null
+            } else {
+                existing_cursor.unwrap_or(serde_json::Value::Null)
+            };
+            object.insert("cursor".into(), cursor);
+        }
+        self.load_current_page(cx);
+    }
+
+    /// 从 collection load 结果读回 nextCursor,推进 cursor 分页状态。
+    fn advance_collection_cursor(&mut self, value: &serde_json::Value) {
+        let Some(page) = self.current_page() else {
+            return;
+        };
+        if page
+            .collection
+            .as_ref()
+            .is_none_or(|collection| collection.pagination.kind != "cursor")
+        {
+            return;
+        }
+        let next_cursor = ["/nextCursor", "/pageInfo/nextCursor", "/cursor"]
+            .iter()
+            .find_map(|path| value.pointer(path))
+            .and_then(|cursor| cursor.as_str())
+            .map(str::to_owned);
+        if let Some(object) = self.paging.as_object_mut() {
+            object.insert(
+                "cursor".into(),
+                match next_cursor {
+                    Some(cursor) => serde_json::json!(cursor),
+                    None => serde_json::Value::Null,
+                },
+            );
+        }
+    }
+
     /// 进入终端页前记录来源页;离开终端页时清除。
     /// 终端控制台隐藏了侧边栏,返回按钮是唯一的原路返回入口。
     fn track_terminal_return(&mut self, target_page_id: &str) {
-        let target_is_terminal = self
-            .descriptor
-            .pages
-            .iter()
-            .any(|page| page.id == target_page_id && page.template == ResourceWorkbenchTemplate::Terminal);
+        let target_is_terminal = self.descriptor.pages.iter().any(|page| {
+            page.id == target_page_id && page.template == ResourceWorkbenchTemplate::Terminal
+        });
         if target_is_terminal {
             let already_terminal = self
                 .current_page()
                 .map(|page| page.template == ResourceWorkbenchTemplate::Terminal)
                 .unwrap_or(false);
             if !already_terminal {
-                self.terminal_return =
-                    Some((self.selected_page.clone(), self.route.clone()));
+                self.terminal_return = Some((self.selected_page.clone(), self.route.clone()));
             }
         } else {
             self.terminal_return = None;
@@ -228,10 +338,16 @@ impl NativeResourceWorkbench {
             return;
         }
         self.track_terminal_return(&page_id);
+        self.cancel_active_request();
+        self.event_batches.clear();
+        self.event_dropped = 0;
+        self.event_closed = false;
+        self.event_error = None;
         self.dispose_shell_mount(cx);
         self.dispose_terminal_mount(cx);
         self.selected_page = page_id;
         self.route = serde_json::Value::Null;
+        self.paging = serde_json::json!({"page": 1, "limit": 50, "cursor": null});
         self.query_result = None;
         self.json_views.clear();
         self.collection_table = None;
@@ -253,10 +369,16 @@ impl NativeResourceWorkbench {
             return;
         }
         self.track_terminal_return(&page_id);
+        self.cancel_active_request();
+        self.event_batches.clear();
+        self.event_dropped = 0;
+        self.event_closed = false;
+        self.event_error = None;
         self.dispose_shell_mount(cx);
         self.dispose_terminal_mount(cx);
         self.selected_page = page_id;
         self.route = route;
+        self.paging = serde_json::json!({"page": 1, "limit": 50, "cursor": null});
         self.query_result = None;
         self.json_views.clear();
         self.collection_table = None;
@@ -316,23 +438,31 @@ impl NativeResourceWorkbench {
             }
         }
         self.dispose_terminal_mount(cx);
+        // session metadata 由 provider 在 resource/open 时声明,terminal 声明可
+        // 通过 {{session.docker_host}} 等占位符引用,保证与查询/操作同一目标。
+        let session_metadata = self.session.metadata().unwrap_or(serde_json::Value::Null);
         let request = TerminalMountRequest {
             title: page.title.clone(),
-            command: declaration.command.clone(),
+            command: interpolate_with_session(&declaration.command, &self.route, &session_metadata),
             args: declaration
                 .args
                 .iter()
-                .map(|arg| interpolate_route(arg, &self.route))
+                .map(|arg| interpolate_with_session(arg, &self.route, &session_metadata))
                 .collect(),
             env: declaration
                 .env
                 .iter()
-                .map(|(key, value)| (key.clone(), interpolate_route(value, &self.route)))
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        interpolate_with_session(value, &self.route, &session_metadata),
+                    )
+                })
                 .collect(),
             working_dir: declaration
                 .working_dir
                 .as_deref()
-                .map(|dir| interpolate_route(dir, &self.route)),
+                .map(|dir| interpolate_with_session(dir, &self.route, &session_metadata)),
         };
         match host.mount(request, window, cx) {
             Ok(mount) => {
@@ -358,7 +488,11 @@ impl NativeResourceWorkbench {
         let Some(status_bar) = self.descriptor.status_bar.clone() else {
             return;
         };
-        if !self.descriptor.operations.contains_key(&status_bar.operation) {
+        if !self
+            .descriptor
+            .operations
+            .contains_key(&status_bar.operation)
+        {
             self.status_bar = Some(Err(format!(
                 "unknown status operation `{}`",
                 status_bar.operation
@@ -376,8 +510,10 @@ impl NativeResourceWorkbench {
             input: serde_json::Value::Null,
             route: serde_json::Value::Null,
             selection: serde_json::Value::Null,
+            paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
         };
         let operation = status_bar.operation;
+        self.active_request_cancel = Some(scope.cancellation());
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
             let result = tokio
@@ -450,8 +586,9 @@ impl NativeResourceWorkbench {
             cx.notify();
             return;
         };
+        let template = page.template;
         if matches!(
-            page.template,
+            template,
             ResourceWorkbenchTemplate::Tasks | ResourceWorkbenchTemplate::Query
         ) {
             self.page_state = PageState::Idle;
@@ -470,19 +607,91 @@ impl NativeResourceWorkbench {
 
         let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let scope = self.session.scope(self.selected_page.clone(), mount_id);
+        self.active_request_cancel = Some(scope.cancellation());
         let workbench = self.descriptor.clone();
         let context = BindingContext {
             input: serde_json::Value::Null,
             route: self.route.clone(),
             selection: serde_json::Value::Null,
+            paging: self.paging_context(),
         };
         let operation = action.operation;
         let tokio = self.tokio.clone();
+        if template == ResourceWorkbenchTemplate::Events {
+            let this_scope = scope;
+            let this = cx.entity().downgrade();
+            let workbench_for_event = workbench.clone();
+            let context_for_event = context.clone();
+            cx.spawn(async move |_, cx| {
+                let result = dispatch_invoke_result_scoped(
+                    &this_scope,
+                    &workbench_for_event,
+                    &operation,
+                    &context_for_event,
+                    false,
+                )
+                .await;
+                let stream_id = match result {
+                    Ok(extension_protocol::resource::ResourceInvokeResult {
+                        result: extension_protocol::result_ref::ResultRef::EventStream { id },
+                    }) => id,
+                    Ok(_) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.event_error =
+                                Some("events operation did not return an event stream".into());
+                            this.page_state = PageState::Failed(
+                                "events operation did not return an event stream".into(),
+                            );
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.event_error = Some(error.to_string());
+                            this.page_state = PageState::Failed(error.to_string());
+                            cx.notify();
+                        });
+                        return;
+                    }
+                };
+                let stream = extension_protocol::event_stream::EventOpenResult { stream_id };
+                let mut subscription = this_scope.subscribe_events(
+                    &stream,
+                    extension_plugin_adapter::EventStreamSubscriptionConfig::default(),
+                );
+                while let Some(batch) = subscription.recv().await {
+                    let _ = this.update(cx, |this, cx| {
+                        match batch {
+                            Ok(EventStreamBatch {
+                                events,
+                                dropped_count,
+                                closed,
+                            }) => {
+                                this.event_batches.extend(events);
+                                const MAX_RETAINED_EVENTS: usize = 1000;
+                                if this.event_batches.len() > MAX_RETAINED_EVENTS {
+                                    let overflow = this.event_batches.len() - MAX_RETAINED_EVENTS;
+                                    this.event_batches.drain(..overflow);
+                                    this.event_dropped += overflow as u64;
+                                }
+                                this.event_dropped += dropped_count;
+                                this.event_closed = closed;
+                            }
+                            Err(error) => this.event_error = Some(error.to_string()),
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+            return;
+        }
         cx.spawn(async move |this, cx| {
             let result = tokio
-                .spawn(
-                    async move { dispatch_invoke(&scope, &workbench, &operation, &context, false).await },
-                )
+                .spawn(async move {
+                    dispatch_invoke(&scope, &workbench, &operation, &context, false).await
+                })
                 .await
                 .unwrap_or_else(|join_error| {
                     Err(WorkbenchDispatchError::Provider(join_error.to_string()))
@@ -492,7 +701,10 @@ impl NativeResourceWorkbench {
                     return;
                 }
                 this.page_state = match result {
-                    Ok(value) => PageState::Loaded(value),
+                    Ok(value) => {
+                        this.advance_collection_cursor(&value);
+                        PageState::Loaded(value)
+                    }
                     Err(error) => PageState::Failed(error.to_string()),
                 };
                 cx.notify();
@@ -518,7 +730,8 @@ impl NativeResourceWorkbench {
             return;
         };
         // 危险操作先请求确认;确认通过后带 confirmed=true 重新执行。
-        let effect = extension_plugin_adapter::operation_effect(&self.descriptor, &action.operation);
+        let effect =
+            extension_plugin_adapter::operation_effect(&self.descriptor, &action.operation);
         if effect.is_some_and(extension_plugin_adapter::requires_confirmation) {
             self.pending_confirm = Some(PendingConfirm::Query(action.operation.clone()));
             cx.notify();
@@ -565,12 +778,16 @@ impl NativeResourceWorkbench {
         confirmed: bool,
         cx: &mut Context<Self>,
     ) {
-        let is_job = self.descriptor.operations.get(&operation).is_some_and(|op| {
-            matches!(
-                op.mode,
-                extension_runtime::extension::manifest::ResourceWorkbenchOperationMode::Job
-            )
-        });
+        let is_job = self
+            .descriptor
+            .operations
+            .get(&operation)
+            .is_some_and(|op| {
+                matches!(
+                    op.mode,
+                    extension_runtime::extension::manifest::ResourceWorkbenchOperationMode::Job
+                )
+            });
         // 组装 input 值:从输入 state 读取声明字段的当前值。
         let mut input = serde_json::Map::new();
         let input_state = match self.query_inputs.get(&self.selected_page) {
@@ -600,11 +817,13 @@ impl NativeResourceWorkbench {
         let revision = self.load_revision;
         let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let scope = self.session.scope(self.selected_page.clone(), mount_id);
+        self.active_request_cancel = Some(scope.cancellation());
         let workbench = self.descriptor.clone();
         let context = BindingContext {
             input: serde_json::Value::Object(input),
             route: self.route.clone(),
             selection: serde_json::Value::Null,
+            paging: self.paging_context(),
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -662,8 +881,7 @@ impl NativeResourceWorkbench {
             return;
         }
         if !confirmed {
-            let effect =
-                extension_plugin_adapter::operation_effect(&self.descriptor, &operation);
+            let effect = extension_plugin_adapter::operation_effect(&self.descriptor, &operation);
             if effect.is_some_and(extension_plugin_adapter::requires_confirmation) {
                 self.pending_confirm = Some(PendingConfirm::RowAction {
                     operation: operation.clone(),
@@ -688,11 +906,13 @@ impl NativeResourceWorkbench {
         let page_id = self.selected_page.clone();
         let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let scope = self.session.scope(page_id.clone(), mount_id);
+        self.active_request_cancel = Some(scope.cancellation());
         let workbench = self.descriptor.clone();
         let context = BindingContext {
             input: serde_json::Value::Null,
             route: self.route.clone(),
             selection: row,
+            paging: self.paging_context(),
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -811,7 +1031,9 @@ impl NativeResourceWorkbench {
                     .min_h_0()
                     .child(view)
                     .into_any_element();
-                return self.render_shell_page_frame(&page, body, cx).into_any_element();
+                return self
+                    .render_shell_page_frame(&page, body, cx)
+                    .into_any_element();
             }
             if page.renderer.fallback.as_deref() != Some("native") {
                 let error = self
@@ -819,7 +1041,9 @@ impl NativeResourceWorkbench {
                     .clone()
                     .unwrap_or_else(|| "Shell renderer is unavailable".into());
                 let body = div().p_4().child(error).into_any_element();
-                return self.render_shell_page_frame(&page, body, cx).into_any_element();
+                return self
+                    .render_shell_page_frame(&page, body, cx)
+                    .into_any_element();
             }
         }
         if page.template == ResourceWorkbenchTemplate::Query {
@@ -828,12 +1052,16 @@ impl NativeResourceWorkbench {
         if page.template == ResourceWorkbenchTemplate::Tasks {
             return self.render_tasks_page(&page, cx).into_any_element();
         }
+        if page.template == ResourceWorkbenchTemplate::Events {
+            return self.render_events_page(&page, cx).into_any_element();
+        }
         // terminal 模板由 render() 直接接管,不进入工作台框架。
 
         let theme = cx.theme().clone();
         let state = self.page_state_snapshot();
         let is_collection = page.template == ResourceWorkbenchTemplate::Collection;
-        let busy = self.row_action_running.is_some() || matches!(self.page_state, PageState::Loading);
+        let busy =
+            self.row_action_running.is_some() || matches!(self.page_state, PageState::Loading);
 
         // 工具栏:标题 + 行数徽章 + 路由上下文(右侧为页面动作)。
         let mut toolbar = h_flex()
@@ -872,6 +1100,42 @@ impl NativeResourceWorkbench {
                     .text_color(theme.muted_foreground)
                     .child(summary),
             );
+        }
+        if let Some(page_number) = self.collection_page(&page) {
+            // cursor 分页:没有 nextCursor 时禁用 Next,防止空翻页。
+            let has_more = match self.collection_cursor(&page) {
+                Some(_) => true,
+                None => page
+                    .collection
+                    .as_ref()
+                    .is_some_and(|collection| collection.pagination.kind != "cursor"),
+            };
+            toolbar = toolbar
+                .child(
+                    Button::new("page-previous")
+                        .with_size(Size::Small)
+                        .ghost()
+                        .icon(IconName::ArrowLeft)
+                        .disabled(page_number <= 1)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.change_collection_page(-1, cx);
+                        })),
+                )
+                .child(
+                    Tag::secondary()
+                        .with_size(Size::Small)
+                        .child(format!("Page {page_number}")),
+                )
+                .child(
+                    Button::new("page-next")
+                        .with_size(Size::Small)
+                        .ghost()
+                        .icon(IconName::ArrowRight)
+                        .disabled(!has_more)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.change_collection_page(1, cx);
+                        })),
+                );
         }
         toolbar = toolbar.child(div().flex_1());
         // detail 页 links(如 Index → Mapping)。
@@ -1034,8 +1298,15 @@ impl NativeResourceWorkbench {
         if let Some(strip) = self.render_tab_strip(page, cx) {
             view = view.child(strip);
         }
-        view.child(div().flex_1().min_h_0().min_w_0().overflow_hidden().child(body))
-            .into_any_element()
+        view.child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .child(body),
+        )
+        .into_any_element()
     }
 
     /// 页面 tab 条:Docker Desktop 式下划线标签,当前页高亮。
@@ -1165,15 +1436,20 @@ impl NativeResourceWorkbench {
                 .child(page.title.clone()),
         );
         if let Some(command) = page.terminal.as_ref().map(|terminal| {
+            let session_metadata = self.session.metadata().unwrap_or(serde_json::Value::Null);
             let args = terminal
                 .args
                 .iter()
-                .map(|arg| interpolate_route(arg, &self.route))
+                .map(|arg| interpolate_with_session(arg, &self.route, &session_metadata))
                 .collect::<Vec<_>>();
-            std::iter::once(terminal.command.clone())
-                .chain(args)
-                .collect::<Vec<_>>()
-                .join(" ")
+            std::iter::once(interpolate_with_session(
+                &terminal.command,
+                &self.route,
+                &session_metadata,
+            ))
+            .chain(args)
+            .collect::<Vec<_>>()
+            .join(" ")
         }) {
             header = header.child(
                 div()
@@ -1231,7 +1507,11 @@ impl NativeResourceWorkbench {
             .text_color(theme.muted_foreground);
 
         // 左:引擎状态指示点 + 文案。
-        let dot_color = if engine_ok { theme.success } else { theme.danger };
+        let dot_color = if engine_ok {
+            theme.success
+        } else {
+            theme.danger
+        };
         bar = bar
             .child(div().size(px(8.)).rounded_full().bg(dot_color))
             .child(div().text_color(theme.foreground).child(if engine_ok {
@@ -1359,19 +1639,24 @@ impl NativeResourceWorkbench {
                     .px_4()
                     .py_3()
                     .child(input_state)
-                    .child(h_flex().w_full().justify_end().child(
-                        Button::new("query-execute")
-                            .with_size(Size::Small)
-                            .primary()
-                            .icon(IconName::Play)
-                            .label("Run")
-                            .loading(self.query_running)
-                            .on_click(cx.listener(
-                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                                    this.execute_query(cx);
-                                },
-                            )),
-                    )),
+                    .child(
+                        h_flex().w_full().justify_end().child(
+                            Button::new("query-execute")
+                                .with_size(Size::Small)
+                                .primary()
+                                .icon(IconName::Play)
+                                .label("Run")
+                                .loading(self.query_running)
+                                .on_click(cx.listener(
+                                    move |this: &mut Self,
+                                          _event: &gpui::ClickEvent,
+                                          _window,
+                                          cx| {
+                                        this.execute_query(cx);
+                                    },
+                                )),
+                        ),
+                    ),
             );
         // 危险操作确认条:确认/取消后继续或放弃本次写操作。
         if self.pending_confirm.is_some() {
@@ -1408,7 +1693,11 @@ impl NativeResourceWorkbench {
             .border_1()
             .border_color(theme.warning.opacity(0.45))
             .bg(theme.warning.opacity(0.12))
-            .child(Icon::new(IconName::TriangleAlert).size_4().text_color(theme.warning))
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .size_4()
+                    .text_color(theme.warning),
+            )
             .child(
                 div()
                     .flex_1()
@@ -1449,7 +1738,11 @@ impl NativeResourceWorkbench {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(Icon::new(IconName::TriangleAlert).size_6().text_color(theme.danger))
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .size_6()
+                    .text_color(theme.danger),
+            )
             .child(
                 div()
                     .text_sm()
@@ -1565,10 +1858,7 @@ impl NativeResourceWorkbench {
                             .icon(IconName::Close)
                             .label("Cancel")
                             .on_click(cx.listener(
-                                move |this: &mut Self,
-                                    _event: &gpui::ClickEvent,
-                                    _window,
-                                    cx| {
+                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
                                     this.cancel_task(job_id.clone(), cx);
                                 },
                             )),
@@ -1615,20 +1905,131 @@ impl NativeResourceWorkbench {
                     ),
             );
         if let Some(error) = self.task_error.clone() {
-            view = view.child(
-                h_flex()
-                    .w_full()
-                    .px_4()
-                    .py_2()
-                    .child(alert_bar(
-                        AlertTone::Danger,
-                        IconName::CircleX,
-                        error,
-                        &theme,
-                    )),
+            view = view.child(h_flex().w_full().px_4().py_2().child(alert_bar(
+                AlertTone::Danger,
+                IconName::CircleX,
+                error,
+                &theme,
+            )));
+        }
+        view.child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .child(body),
+        )
+    }
+
+    /// events 模板页:消费 load operation 返回的事件流。
+    /// 事件批次由 scope-owned subscription 持续写入;这里只渲染当前快照。
+    fn render_events_page(
+        &mut self,
+        page: &ResourceWorkbenchPage,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let theme = cx.theme().clone();
+        let mut header = h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2p5()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_base()
+                    .font_semibold()
+                    .child(page.title.clone()),
+            )
+            .child(div().flex_1());
+        if self.event_dropped > 0 {
+            header = header.child(
+                Tag::secondary()
+                    .with_size(Size::Small)
+                    .child(format!("{} dropped", self.event_dropped)),
             );
         }
-        view.child(div().flex_1().min_h_0().min_w_0().overflow_hidden().child(body))
+        if self.event_closed {
+            header = header.child(Tag::secondary().with_size(Size::Small).child("Closed"));
+        }
+        header = header
+            .child(
+                Button::new("events-clear")
+                    .with_size(Size::Small)
+                    .ghost()
+                    .label("Clear")
+                    .disabled(self.event_batches.is_empty())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.event_batches.clear();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("events-stop")
+                    .with_size(Size::Small)
+                    .ghost()
+                    .label("Stop")
+                    .disabled(self.event_closed)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.cancel_active_request();
+                        this.event_closed = true;
+                        cx.notify();
+                    })),
+            );
+        let mut view = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .bg(theme.background)
+            .child(header);
+        if let Some(error) = self.event_error.clone() {
+            view = view.child(h_flex().w_full().px_4().py_2().child(alert_bar(
+                AlertTone::Danger,
+                IconName::CircleX,
+                error,
+                &theme,
+            )));
+        }
+        let body: AnyElement = if self.event_batches.is_empty() {
+            empty_state(
+                IconName::Inbox,
+                "Waiting for events",
+                "Events from this connection will appear here.",
+                &theme,
+            )
+        } else {
+            let mut list = v_flex().w_full();
+            for (index, event) in self.event_batches.iter().rev().take(500).enumerate() {
+                list = list.child(
+                    div()
+                        .id(("event-row", index))
+                        .w_full()
+                        .min_w_0()
+                        .px_4()
+                        .py_1p5()
+                        .border_b_1()
+                        .border_color(theme.table_row_border)
+                        .font_family(theme.mono_font_family.clone())
+                        .text_xs()
+                        .child(plain_text(event)),
+                );
+            }
+            list.into_any_element()
+        };
+        view.child(
+            div()
+                .id("events-body")
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_y_scroll()
+                .child(body),
+        )
     }
 }
 
@@ -1640,7 +2041,12 @@ enum AlertTone {
 }
 
 /// 页面内提示条:图标 + 文案,描边染色而不是实心色块。
-fn alert_bar(tone: AlertTone, icon: IconName, message: String, theme: &gpui_component::Theme) -> AnyElement {
+fn alert_bar(
+    tone: AlertTone,
+    icon: IconName,
+    message: String,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
     let accent = match tone {
         AlertTone::Warning => theme.warning,
         AlertTone::Danger => theme.danger,
@@ -1774,8 +2180,7 @@ impl NativeResourceWorkbench {
         let needs_reset = match self.json_views.get(page_id) {
             Some(view) => {
                 let view = view.read(cx);
-                view.mode() == json_view::JsonDisplayMode::Tree
-                    && view.snapshot() != Some(&value)
+                view.mode() == json_view::JsonDisplayMode::Tree && view.snapshot() != Some(&value)
             }
             None => true,
         };
@@ -1783,8 +2188,7 @@ impl NativeResourceWorkbench {
             if let Some(existing) = self.json_views.get(page_id).cloned() {
                 existing.update(cx, |view, cx| view.set_value(value.clone(), window, cx));
             } else {
-                let view =
-                    cx.new(|cx| json_view::JsonValueView::new(value.clone(), window, cx));
+                let view = cx.new(|cx| json_view::JsonValueView::new(value.clone(), window, cx));
                 self.json_views.insert(page_id.to_string(), view);
             }
         }

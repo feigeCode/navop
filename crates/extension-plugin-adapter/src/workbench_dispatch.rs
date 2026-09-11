@@ -47,12 +47,13 @@ pub struct WorkbenchRequest {
     pub params: serde_json::Value,
 }
 
-/// 参数绑定上下文:literal/input/route/selection 四种来源。
+/// 参数绑定上下文:literal/input/route/selection/paging 五种来源。
 #[derive(Debug, Clone, Default)]
 pub struct BindingContext {
     pub input: serde_json::Value,
     pub route: serde_json::Value,
     pub selection: serde_json::Value,
+    pub paging: serde_json::Value,
 }
 
 impl BindingContext {
@@ -66,7 +67,7 @@ impl BindingContext {
             S::Input => Some(&self.input),
             S::Route => Some(&self.route),
             S::Selection => Some(&self.selection),
-            S::Paging => None,
+            S::Paging => Some(&self.paging),
         }
     }
 }
@@ -273,6 +274,18 @@ pub async fn dispatch_invoke(
     context: &BindingContext,
     confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
+    let result =
+        dispatch_invoke_result(session, workbench, operation_id, context, confirmed).await?;
+    decode_result(session.client(), &result).await
+}
+
+pub async fn dispatch_invoke_result(
+    session: &ResourceSessionHandle,
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+    context: &BindingContext,
+    confirmed: bool,
+) -> Result<ResourceInvokeResult, WorkbenchDispatchError> {
     guard_effect(workbench, operation_id, confirmed)?;
     let request = build_request(workbench, operation_id, context)?;
     let client = session.client();
@@ -294,7 +307,7 @@ pub async fn dispatch_invoke(
         })
         .await
         .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
-    decode_result(client, &result).await
+    Ok(result)
 }
 
 /// scope 变体:页面作用域内执行,便于后续挂 request revision/cancellation。
@@ -305,7 +318,45 @@ pub async fn dispatch_invoke_scoped(
     context: &BindingContext,
     confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
-    dispatch_invoke(&scope.session(), workbench, operation_id, context, confirmed).await
+    let result =
+        dispatch_invoke_result_scoped(scope, workbench, operation_id, context, confirmed).await?;
+    decode_result(scope.session().client(), &result).await
+}
+
+pub async fn dispatch_invoke_result_scoped(
+    scope: &ResourceScope,
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+    context: &BindingContext,
+    confirmed: bool,
+) -> Result<ResourceInvokeResult, WorkbenchDispatchError> {
+    let session = scope.session();
+    let cancellation = scope.cancellation();
+    guard_effect(workbench, operation_id, confirmed)?;
+    let request = build_request(workbench, operation_id, context)?;
+    ensure_capabilities(workbench, operation_id, session.capabilities())?;
+    let resource_id = session
+        .resource_id()
+        .await
+        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+    let operation = workbench
+        .operations
+        .get(operation_id)
+        .ok_or_else(|| WorkbenchDispatchError::UnknownOperation(operation_id.to_string()))?;
+    let result = session
+        .client()
+        .client()
+        .invoke_resource_with_options(
+            &ResourceInvokeParams {
+                resource_id,
+                method: operation.method.clone(),
+                params: request.params,
+            },
+            extension_host::RequestOptions::default().with_cancel(cancellation),
+        )
+        .await
+        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+    Ok(result)
 }
 
 /// 副作用门控:非 read 操作未确认时 fail closed。
@@ -335,6 +386,17 @@ pub async fn dispatch_job(
     operation_id: &str,
     context: &BindingContext,
     confirmed: bool,
+) -> Result<serde_json::Value, WorkbenchDispatchError> {
+    dispatch_job_with_cancel(session, workbench, operation_id, context, confirmed, None).await
+}
+
+async fn dispatch_job_with_cancel(
+    session: &ResourceSessionHandle,
+    workbench: &extension_runtime::RegisteredResourceWorkbenchContribution,
+    operation_id: &str,
+    context: &BindingContext,
+    confirmed: bool,
+    cancellation: Option<extension_host::CancellationToken>,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
     use extension_protocol::job::JobState;
 
@@ -381,7 +443,18 @@ pub async fn dispatch_job(
                 }
                 JobState::Queued | JobState::Running => {}
             }
-            tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+            if let Some(cancellation) = &cancellation {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)) => {}
+                    _ = cancellation.cancelled() => {
+                        let _ = client.cancel_job(&handle).await;
+                        let _ = client.close_job(&handle).await;
+                        break 'poll Err(WorkbenchDispatchError::Provider("job cancelled with scope".into()));
+                    }
+                }
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+            }
         }
         // 上限保护:不无限轮询。
         Err(WorkbenchDispatchError::Provider(
@@ -420,7 +493,16 @@ pub async fn dispatch_job_scoped(
     context: &BindingContext,
     confirmed: bool,
 ) -> Result<serde_json::Value, WorkbenchDispatchError> {
-    dispatch_job(&scope.session(), workbench, operation_id, context, confirmed).await
+    let session = scope.session();
+    dispatch_job_with_cancel(
+        &session,
+        workbench,
+        operation_id,
+        context,
+        confirmed,
+        Some(scope.cancellation()),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -455,6 +537,26 @@ mod tests {
                 .collect(),
             },
         );
+        operations.insert(
+            "pagedList".to_string(),
+            ResourceWorkbenchOperation {
+                mode: ResourceWorkbenchOperationMode::Invoke,
+                method: "example/list".into(),
+                requires: vec![],
+                effect: ResourceWorkbenchEffect::Read,
+                params: [(
+                    "page".to_string(),
+                    ResourceWorkbenchBinding {
+                        source: ResourceWorkbenchBindingSource::Paging,
+                        path: "/page".into(),
+                        value_type: ResourceWorkbenchValueType::Number,
+                        value: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
         RegisteredResourceWorkbenchContribution {
             extension_id: "com.example".into(),
             id: "workbench".into(),
@@ -479,6 +581,26 @@ mod tests {
         };
         let request = build_request(&workbench(), "indexInfo", &context).unwrap();
         assert_eq!(serde_json::json!({"name": "orders-2026"}), request.params);
+    }
+
+    #[test]
+    fn build_request_binds_paging_params() {
+        let context = BindingContext {
+            paging: serde_json::json!({"page": 3, "limit": 50, "cursor": null}),
+            ..Default::default()
+        };
+        let request = build_request(&workbench(), "pagedList", &context).unwrap();
+        assert_eq!(serde_json::json!({"page": 3}), request.params);
+    }
+
+    #[test]
+    fn build_request_rejects_paging_param_without_paging_state() {
+        let error =
+            build_request(&workbench(), "pagedList", &BindingContext::default()).unwrap_err();
+        assert!(matches!(
+            error,
+            WorkbenchDispatchError::BindingMissing { param } if param == "page"
+        ));
     }
 
     #[test]

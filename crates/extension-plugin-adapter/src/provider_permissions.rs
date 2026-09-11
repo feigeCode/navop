@@ -68,12 +68,7 @@ impl NetworkEndpoint {
             let port = url
                 .port_or_known_default()
                 .ok_or_else(|| ProviderPermissionError::InvalidUrl)?;
-            if !url.username().is_empty()
-                || url.password().is_some()
-                || url.path() != "/"
-                || url.query().is_some()
-                || url.fragment().is_some()
-            {
+            if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
                 return Err(ProviderPermissionError::InvalidUrl);
             }
             return Ok(Self {
@@ -238,8 +233,10 @@ fn resource_endpoints(config: &Value) -> Result<Vec<NetworkEndpoint>, ProviderPe
         values.push(Value::String(format!("{host}:{port}")));
     }
 
+    // Local resources and credential/resource-id based resources may not have
+    // a network endpoint in their open configuration.
     if values.is_empty() {
-        return Err(ProviderPermissionError::InvalidUrl);
+        return Ok(Vec::new());
     }
     values
         .iter()
@@ -451,6 +448,29 @@ mod tests {
             ProviderPermissionError::NetworkDenied,
             authorizer.authorize(&denied).unwrap_err()
         );
+    }
+
+    #[test]
+    fn local_resource_without_endpoint_does_not_require_network_permission() {
+        ResourceOpenAuthorizer::new(std::iter::empty::<&str>())
+            .authorize(&ResourceOpenParams {
+                resource_type: "file".into(),
+                config: serde_json::json!({"path": "/tmp/example.txt"}),
+                metadata: None,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn http_endpoint_keeps_path_and_query_outside_network_authorization() {
+        let authorizer = ResourceOpenAuthorizer::new(["net:tcp:example.com:443"]);
+        authorizer
+            .authorize(&ResourceOpenParams {
+                resource_type: "api".into(),
+                config: serde_json::json!({"endpoint": "https://example.com/v1?tenant=acme"}),
+                metadata: None,
+            })
+            .unwrap();
     }
 
     #[test]

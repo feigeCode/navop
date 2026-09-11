@@ -8,6 +8,7 @@ edition.workspace = true
 extension-plugin-adapter.workspace = true
 extension-protocol.workspace = true
 extension-runtime.workspace = true
+extension-host.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 json_view.workspace = true

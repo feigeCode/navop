@@ -317,10 +317,11 @@ impl ManagedUniversalPluginClient {
                 job_id: result.job_id,
             });
         };
-        match jobs.register_start(
+        match jobs.register_start_for_resource(
             &self.extension_id,
             &self.runtime_id,
             self.generation,
+            params.resource_id.as_deref(),
             &result,
         ) {
             Ok(handle) => Ok(handle),

@@ -48,6 +48,10 @@ pub(super) fn workbench_module(
                 input,
                 route,
                 selection,
+                paging: page_context
+                    .get("paging")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({"page": 1, "limit": 50, "cursor": null})),
             };
             let operation = descriptor.operations.get(&operation_id).ok_or_else(|| {
                 HostError::new(format!("unknown workbench operation `{operation_id}`"))

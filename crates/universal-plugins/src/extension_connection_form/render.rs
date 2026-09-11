@@ -1,9 +1,19 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, px,
+    App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
+    div, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, checkbox::Checkbox, form::{field, v_form}, h_flex, input::Input, scroll::ScrollableElement, select::Select, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Sizable,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    form::{field, v_form},
+    h_flex,
+    input::Input,
+    scroll::ScrollableElement,
+    select::Select,
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

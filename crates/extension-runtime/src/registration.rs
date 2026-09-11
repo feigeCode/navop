@@ -759,7 +759,10 @@ fn validate_resource_workbench(
         return Err(invalid("defaultPage references an unknown page"));
     }
     for page in &workbench.pages {
-        if let Some(action) = page.load.as_ref().or(page.execute.as_ref()) {
+        for action in [page.load.as_ref(), page.execute.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             if !workbench.operations.contains_key(&action.operation) {
                 return Err(invalid("page references an unknown operation"));
             }
@@ -774,9 +777,7 @@ fn validate_resource_workbench(
         if let Some(collection) = page.collection.as_ref() {
             for action in &collection.actions {
                 if !workbench.operations.contains_key(&action.operation) {
-                    return Err(invalid(
-                        "collection action references an unknown operation",
-                    ));
+                    return Err(invalid("collection action references an unknown operation"));
                 }
                 if action.id.trim().is_empty() || action.label.trim().is_empty() {
                     return Err(invalid("collection action id and label must not be empty"));

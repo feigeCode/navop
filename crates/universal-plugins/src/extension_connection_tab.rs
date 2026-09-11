@@ -1,7 +1,5 @@
 use extension_host::CancellationToken;
-use extension_plugin_adapter::{
-    ActivationHandle, ResourceSessionOwner, RuntimeMonitorEvent,
-};
+use extension_plugin_adapter::{ActivationHandle, ResourceSessionOwner, RuntimeMonitorEvent};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, SharedString, Styled, Task, Window, div,
@@ -231,7 +229,9 @@ impl ExtensionConnectionTab {
     fn reconnect(&mut self, cx: &mut Context<Self>) {
         let stale = match std::mem::replace(&mut self.state, State::Connecting) {
             State::Connected {
-                activation, session, ..
+                activation,
+                session,
+                ..
             } => Some((activation, session)),
             other => {
                 // 未处于已连接状态:没有可释放的旧连接,状态原样放回。

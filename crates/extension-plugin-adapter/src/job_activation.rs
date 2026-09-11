@@ -31,6 +31,7 @@ pub struct JobSnapshot {
     pub generation: u64,
     pub job_id: String,
     pub state: JobState,
+    pub resource_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +87,17 @@ impl JobActivationManager {
         generation: u64,
         result: &JobStartResult,
     ) -> HostResult<JobActivationHandle> {
+        self.register_start_for_resource(extension_id, runtime_id, generation, None, result)
+    }
+
+    pub fn register_start_for_resource(
+        &self,
+        extension_id: &str,
+        runtime_id: &str,
+        generation: u64,
+        resource_id: Option<&str>,
+        result: &JobStartResult,
+    ) -> HostResult<JobActivationHandle> {
         let handle = JobActivationHandle {
             extension_id: extension_id.into(),
             runtime_id: runtime_id.into(),
@@ -103,6 +115,7 @@ impl JobActivationManager {
             handle.clone(),
             JobRecord {
                 state: result.state,
+                resource_id: resource_id.map(str::to_owned),
                 result_observed: false,
                 blob_ids: BTreeSet::new(),
             },
@@ -280,8 +293,30 @@ impl JobActivationManager {
                 generation: handle.generation,
                 job_id: handle.job_id.clone(),
                 state: record.state,
+                resource_id: record.resource_id.clone(),
             })
             .collect()
+    }
+
+    pub fn snapshots_for_resource(
+        &self,
+        extension_id: &str,
+        runtime_id: &str,
+        generation: u64,
+        resource_id: &str,
+    ) -> Vec<JobSnapshot> {
+        self.snapshots(extension_id, runtime_id, generation)
+            .into_iter()
+            .filter(|snapshot| snapshot.resource_id.as_deref() == Some(resource_id))
+            .collect()
+    }
+
+    pub fn is_owned_by_resource(&self, handle: &JobActivationHandle, resource_id: &str) -> bool {
+        self.state
+            .lock()
+            .jobs
+            .get(handle)
+            .is_some_and(|record| record.resource_id.as_deref() == Some(resource_id))
     }
 }
 
