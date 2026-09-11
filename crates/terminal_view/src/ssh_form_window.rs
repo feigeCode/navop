@@ -224,6 +224,7 @@ pub struct SshFormWindow {
     keepalive_interval_input: Entity<InputState>,
     keepalive_max_input: Entity<InputState>,
     allow_legacy_algorithms: bool,
+    disable_shell_integration: bool,
 
     // 初始化
     init_script_input: Entity<TextareaState>,
@@ -738,6 +739,7 @@ impl SshFormWindow {
         let mut sync_enabled = true; // 默认启用云同步
         let mut x11_forwarding = false;
         let mut allow_legacy_algorithms = false;
+        let mut disable_shell_integration = false;
         let mut sftp_account_use_custom = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
@@ -828,6 +830,7 @@ impl SshFormWindow {
                 }
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
+                disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 terminal_encoding_select.update(cx, |select, cx| {
                     select.set_selected_value(&params.terminal_encoding, window, cx);
                 });
@@ -1007,6 +1010,7 @@ impl SshFormWindow {
             keepalive_interval_input,
             keepalive_max_input,
             allow_legacy_algorithms,
+            disable_shell_integration,
             init_script_input,
             default_directory_input,
             sftp_default_directory_input,
@@ -1294,7 +1298,11 @@ impl SshFormWindow {
             default_directory,
             init_script,
             sftp_default_directory,
-            disable_shell_integration: None,
+            disable_shell_integration: if self.disable_shell_integration {
+                Some(true)
+            } else {
+                None
+            },
             x11_forwarding: if self.x11_forwarding {
                 Some(true)
             } else {
@@ -2943,6 +2951,34 @@ impl SshFormWindow {
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("SSH.allow_legacy_algorithms_desc").to_string()),
+                        ),
+                ),
+            )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.disable_shell_integration"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("disable-shell-integration")
+                                    .checked(self.disable_shell_integration)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.disable_shell_integration =
+                                            !this.disable_shell_integration;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.disable_shell_integration_desc").to_string()),
                         ),
                 ),
             )

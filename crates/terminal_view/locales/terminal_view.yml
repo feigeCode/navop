@@ -494,6 +494,14 @@ SSH:
     en: Enable legacy key-exchange and host-key algorithms, including ssh-dss. Keep disabled unless the server requires them.
     zh-CN: 启用旧版密钥交换和主机密钥算法，包括 ssh-dss。仅在服务器确有需要时开启。
     zh-HK: 啟用舊版金鑰交換和主機金鑰演算法，包括 ssh-dss。僅在伺服器確有需要時開啟。
+  disable_shell_integration:
+    en: Disable Shell Integration
+    zh-CN: 禁用 Shell 集成
+    zh-HK: 停用 Shell 整合
+  disable_shell_integration_desc:
+    en: Skip the shell-integration probe and injection for this connection. Recommended for network devices (firewalls, switches) and industrial hosts that reject extra SSH channels. Loses prompt hook and command recording.
+    zh-CN: 连接时跳过 Shell 集成探测与注入。建议网络设备（防火墙、交换机等仅允许单个 SSH 会话）和工控主机开启。将失去提示符感知与命令记录。
+    zh-HK: 連線時跳過 Shell 整合探測與注入。建議網路設備（防火牆、交換器等僅允許單一 SSH 會話）和工控主機開啟。將失去提示符感知與命令記錄。
   # 初始化
   init_script:
     en: Init Script
