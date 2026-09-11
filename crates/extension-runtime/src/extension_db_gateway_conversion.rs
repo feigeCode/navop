@@ -82,6 +82,7 @@ fn map_typed_value(value: &db_value::DbValue) -> Result<DbValue, DbError> {
         },
         // 精确小数点/时间/标识以文本保真,避免精度或格式损失。
         Typed::Decimal(text)
+        | Typed::BitString(text)
         | Typed::Date(text)
         | Typed::Time(text)
         | Typed::DateTime(text)

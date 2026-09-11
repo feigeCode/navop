@@ -16,6 +16,8 @@ pub enum DbValue {
         width: FloatWidth,
     },
     Decimal(String),
+    /// Fixed-width bit string (for example MySQL BIT) rendered as `0`/`1` digits.
+    BitString(String),
     Text(String),
     /// Text inherited from the legacy string-only result contract.
     LegacyText(String),
@@ -149,6 +151,7 @@ impl ResultBatch {
             DbValue::Integer(value)
             | DbValue::Unsigned(value)
             | DbValue::Decimal(value)
+            | DbValue::BitString(value)
             | DbValue::Text(value)
             | DbValue::LegacyText(value)
             | DbValue::Date(value)
@@ -247,6 +250,15 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, ValueModelError::DuplicateRowId(1));
+    }
+
+    #[test]
+    fn bit_string_is_distinct_from_text_of_the_same_digits() {
+        assert_ne!(
+            DbValue::BitString("0010".into()),
+            DbValue::Text("0010".into())
+        );
+        assert_eq!(DbValue::BitString("0010".into()).to_string(), "0010");
     }
 
     #[test]

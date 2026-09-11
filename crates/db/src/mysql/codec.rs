@@ -72,7 +72,7 @@ pub(crate) fn decode_cell(
     if column.column_type() == ColumnType::MYSQL_TYPE_BIT {
         let display = format_bit_bytes(&bytes, column.column_length());
         return (
-            CellState::Decoded(DbValue::Text(display.clone())),
+            CellState::Decoded(DbValue::BitString(display.clone())),
             Some(display),
         );
     }
@@ -532,13 +532,16 @@ mod tests {
     }
 
     #[test]
-    fn bit_column_value_decodes_as_fixed_width_bit_text() {
+    fn bit_column_value_decodes_as_fixed_width_bit_string() {
         let column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_BIT).with_column_length(4);
 
         let (state, display) = decode_cell(Value::Bytes(vec![0b0010]), Some(&column));
 
         assert_eq!(display.as_deref(), Some("0010"));
-        assert_eq!(state, CellState::Decoded(DbValue::Text("0010".to_string())));
+        assert_eq!(
+            state,
+            CellState::Decoded(DbValue::BitString("0010".to_string()))
+        );
         assert!(!is_binary_wire_value(
             column.column_type(),
             column.flags(),
