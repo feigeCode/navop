@@ -11,7 +11,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::Button;
-use gpui_component::input::{InputEvent, Textarea, TextareaState};
+use gpui_component::input::{Editor, EditorState, InputEvent};
 use gpui_component::{ActiveTheme, Selectable as _, Sizable as _, h_flex, v_flex};
 use rust_i18n::t;
 
@@ -41,7 +41,7 @@ pub struct JsonValueView {
     rows: Arc<Vec<FlatRow>>,
     expanded: HashSet<NodePath>,
     list_state: ListState,
-    editor: Option<Entity<TextareaState>>,
+    editor: Option<Entity<EditorState>>,
     focus_handle: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -197,7 +197,10 @@ impl JsonValueView {
         }
         let raw = self.raw.clone();
         let editor = cx.new(|cx| {
-            let mut state = TextareaState::new(window, cx);
+            let mut state = EditorState::new(window, cx)
+                .language("json")
+                .soft_wrap(true)
+                .line_number(false);
             state.set_value(raw, window, cx);
             state
         });
@@ -425,7 +428,7 @@ impl Render for JsonValueView {
                 .border_color(theme.border)
                 .rounded(px(4.))
                 .overflow_hidden()
-                .child(Textarea::new(&editor).h_full())
+                .child(Editor::new(&editor).h_full())
                 .into_any_element()
         };
 

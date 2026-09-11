@@ -6938,6 +6938,7 @@ dependencies = [
  "gpui-component",
  "gpui-pre",
  "one-core",
+ "ropey",
  "rust-i18n",
  "serde_json",
 ]

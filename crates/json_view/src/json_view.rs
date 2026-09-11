@@ -445,6 +445,33 @@ impl Render for JsonFormatterView {
 
 #[cfg(test)]
 mod tests {
+    /// 输入框高亮契约:JSON 语法必须能在注册表中解析并产出带颜色的样式。
+    ///
+    /// 若此测试失败,说明 gpui-component 的 `tree-sitter` feature 未在构建中
+    /// 启用(feature unification 由 extension-runtime / notes 等 crate 提供),
+    /// 或上游 LanguageRegistry 的内置 json 语法注册发生变化。
+    #[test]
+    fn json_input_grammar_produces_colored_spans() {
+        use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
+
+        let source = r#"{"name": "navop", "count": 42, "ok": true, "nested": {"a": [1, 2]}}"#;
+        let mut highlighter = SyntaxHighlighter::new("json");
+        assert_eq!(
+            "json",
+            highlighter.language().as_ref(),
+            "json grammar must be registered in the LanguageRegistry"
+        );
+        assert!(
+            highlighter.update(None, &ropey::Rope::from_str(source), None),
+            "small JSON input must parse synchronously"
+        );
+        let styles = highlighter.styles(&(0..source.len()), &*HighlightTheme::default_light());
+        assert!(
+            styles.iter().any(|(_, style)| style.color.is_some()),
+            "json highlights.scm must produce colored spans for keys/strings/numbers"
+        );
+    }
+
     #[test]
     fn renderer_keeps_tree_list_full_size_and_input_resizable() {
         let source = include_str!("json_view.rs");
