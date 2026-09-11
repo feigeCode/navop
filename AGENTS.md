@@ -603,6 +603,13 @@
 - **验证方式**：`cargo test -p redis_view --lib <测试名>`（含变异验证一次），`cargo clippy -p redis_view --all-targets` 无新增告警。
 - **适用范围**：`crates/redis_view/src/{key_value_view.rs,value_table_columns.rs}`，以及任何 GPUI 表格 / 滚动 / 拖拽布局改动。
 
+- **标题**：懒加载树的搜索：本地过滤不能叠在服务端结果上，过滤态必须保留结构锚点
+- **触发信号**：用户报「redis 搜不到 key」「搜索结果为空」，但服务端确实存在匹配的键；搜索时左侧树面板整个变空，连连接 / 数据库节点都消失。
+- **根因 / 约束**：`crates/redis_view/src/redis_tree_view.rs` 的搜索是两层——输入时按**单个树节点名**做本地子串过滤，回车 / 搜索按钮才走服务端 SCAN。三个坑：① 本地匹配的粒度是节点名、服务端匹配的是**整键**，所以 `*we*` 命中 `flow:east:1`（`we` 跨过 `:`）这类键会被服务端返回、又被本地二次过滤藏掉；② 过滤态下 `local_search_visibility` 会把「自身与子树都不匹配」的节点全剔除，连接 / 数据库一起消失，用户看到全空面板；而键列表是按需加载且上限 `SCAN_TARGET_KEYS = 500`，「本地没命中」是常态而非异常；③ 「搜索态自动展开」（issue #9）原来挂在「本地过滤生效」上，一旦关掉本地过滤，搜索结果会折叠成不可见。
+- **正确做法**：把两个状态拆开——`server_search_keyword`（最近一次交给服务端 SCAN 的关键词）与 `search_keyword`；两者相等时列表即服务端权威结果，`local_filter_keyword()` 直接返回 `None` 不做二次过滤。「自动展开」改用 `is_search_active()`（关键词非空），与「是否本地过滤」解耦。过滤态把 Connection / Database 当结构锚点无条件保留（`LocalSearchInput.is_structural`），并在「关键词非空但没有任何可见键」时区分提示「本地没匹配 → 引导回车扫描服务端」与「服务端也没匹配」。入口收敛到 `trigger_search`（回车与按钮共用，避免漂移），目标库用 `resolve_search_targets`（选中库优先，否则回退所有已连接库），避免未选中节点时回车静默无反应。
+- **验证方式**：`cargo test -p redis_view`；纯函数测试覆盖 `search_filter_keyword` / `resolve_search_targets` / `local_search_visibility`，另有一个用 `set_node_children` 搭真实节点树的 gpui 测试（服务端命中跨命名空间键时可见 + 无服务端扫描记录时被隐藏的对照分支，防空跑），并跑一遍 `render` 覆盖新提示分支。改动做变异验证：分别去掉「免二次过滤」「结构锚点保留」「搜索态展开」，测试都转红。
+- **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及任何「先本地过滤已加载子集、再服务端扫描」的懒加载树（其他 tree_view 同类结构）。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
