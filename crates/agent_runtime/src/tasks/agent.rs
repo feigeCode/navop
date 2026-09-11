@@ -14,7 +14,7 @@
 use crate::error::RuntimeError;
 use crate::ids::{ToolCallId, TurnId};
 use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
-use crate::planner::history_to_messages;
+use crate::planner::{history_to_messages, normalize_system_messages};
 use crate::resource::ResourceContext;
 use crate::risk::RiskLevel;
 use crate::runtime::{
@@ -194,6 +194,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             ctx.session.current_plan().as_ref(),
         ))];
         messages.extend(history_to_messages(&ctx.session.history_snapshot()));
+        let messages = normalize_system_messages(messages);
 
         let mut request = ModelRequest::new(messages);
         if !tools.is_empty() {

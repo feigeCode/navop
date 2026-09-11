@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use agent_runtime::error::ToolError;
 use agent_runtime::model::{
-    MockModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, function_tool_call,
+    MockModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, Role,
+    function_tool_call,
 };
 use agent_runtime::tools::builtin::{EchoTool, default_agent_tools};
 use agent_runtime::tools::{
@@ -491,6 +492,22 @@ async fn agent_loop_compacts_large_history_before_model_request() {
             .messages
             .iter()
             .any(|message| message.content_as_text().contains("旧上下文说明用户要部署"))
+    );
+    assert_eq!(Role::System, requests[1].messages[0].role);
+    assert_eq!(
+        1,
+        requests[1]
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::System)
+            .count(),
+        "压缩后请求只能有一条 system 且必须位于开头,否则 Qwen 等严格后端报 \
+         `System message must be at the beginning`: {:?}",
+        requests[1]
+            .messages
+            .iter()
+            .map(|message| &message.role)
+            .collect::<Vec<_>>()
     );
     assert!(
         session
