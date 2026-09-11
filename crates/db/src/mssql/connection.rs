@@ -217,6 +217,10 @@ impl MssqlDbConnection {
                 let s = v.to_string();
                 (DbValue::Integer(s.clone()), s)
             }),
+            // Driver limitation: tiberius decodes TDS money as `ColumnData::F64`
+            // after already losing the exact scaled integer, so large money values
+            // cannot be recovered with full precision here. Kept as Decimal text
+            // for display; not claimed as exact.
             ColumnType::Money | ColumnType::Money4 => {
                 Self::try_cell(row.try_get::<f64, _>(index), column_type, |v| {
                     let s = v.to_string();
