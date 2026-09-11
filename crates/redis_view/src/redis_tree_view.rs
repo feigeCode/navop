@@ -1,12 +1,13 @@
 //! Redis 树形视图
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use connection_form::credential::resolve_connection_for_runtime;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div,
+    SharedString, StatefulInteractiveElement, Styled, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{ActiveTheme, Disableable, Icon, Side, Sizable, Size, button::{Button, ButtonVariants as _}, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, scroll::ScrollableElement, spinner::Spinner, v_flex};
@@ -26,6 +27,12 @@ const SCAN_BATCH_SIZE: usize = 500;
 const SCAN_TARGET_KEYS: usize = 500;
 const KEY_TYPES_BATCH_SIZE: usize = 200;
 const DEFAULT_REDIS_DATABASE_COUNT: usize = 16;
+
+/// 输入停顿多久后自动向服务端发起一次 SCAN。
+///
+/// 输入瞬间先用本地已加载的键给出即时反馈，停顿后才交给服务端覆盖结果：
+/// 用户既不必按回车，也不会每敲一个键就发一次请求。
+const SEARCH_INPUT_DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// 树形视图事件
 #[derive(Clone, Debug)]
@@ -185,6 +192,17 @@ fn resolve_search_targets(
     targets
 }
 
+/// 判断一次输入停顿后是否需要向服务端发起 SCAN。
+///
+/// 返回 `false` 的两种情况：
+/// 1. 关键词为空——本地的完整列表就是正确结果，不该再发 SCAN；
+/// 2. 这个关键词已经（或正在）由服务端扫描——重复发起只是浪费一次往返。
+///    用户来回增删字符时会反复落到这个分支，所以这个判断同时充当了去重。
+fn should_scan_after_input(keyword: &str, server_search_keyword: Option<&str>) -> bool {
+    let keyword = keyword.trim();
+    !keyword.is_empty() && server_search_keyword != Some(keyword)
+}
+
 fn apply_redis_selection_state(
     selected_node: &mut Option<String>,
     context_menu_node_id: &mut Option<String>,
@@ -239,6 +257,12 @@ pub struct RedisTreeView {
     server_search_keyword: Option<String>,
     /// 搜索请求序号（node_id -> token）
     search_tokens: HashMap<String, u64>,
+    /// 待触发的「输入停顿后自动搜索」定时任务
+    ///
+    /// 每次输入都会替换它：被替换掉的 `Task` 一旦 drop，其未到期的定时器就不会
+    /// 再执行（见 `dropping_the_debounce_task_cancels_its_pending_timer`），
+    /// 于是只有最后一次输入能提交搜索，这就是防抖。
+    search_debounce: Option<Task<()>>,
     /// 数据库总键数（db_node_id -> total）
     db_total_key_counts: HashMap<String, i64>,
     /// 当前每个连接显示的数据库（connection_id -> db_index）
@@ -277,6 +301,8 @@ impl RedisTreeView {
                 this.search_collapsed_nodes.clear();
                 this.rebuild_flat_entries();
                 this.update_local_search_counts();
+                // 敲字停顿后自动扫服务端，用户不必再按回车。
+                this.schedule_search_after_input(cx);
                 cx.notify();
             }
 
@@ -297,6 +323,7 @@ impl RedisTreeView {
             search_keyword: String::new(),
             server_search_keyword: None,
             search_tokens: HashMap::new(),
+            search_debounce: None,
             db_total_key_counts: HashMap::new(),
             selected_databases: HashMap::new(),
             database_infos: HashMap::new(),
@@ -773,24 +800,26 @@ impl RedisTreeView {
     ///
     /// 回车与搜索按钮共用这一条路径，避免两个入口各自漂移。
     fn trigger_search(&mut self, cx: &mut Context<Self>) {
+        // 回车 / 点搜索按钮意味着「立刻搜」，撤掉还在等待的输入防抖，
+        // 否则防抖到期后会再扫一次同样的关键词。
+        self.search_debounce = None;
+
         self.search_keyword = self.search_state.read(cx).text().to_string();
         let pattern = self.search_keyword.trim().to_string();
-        let targets = self.search_target_node_ids();
 
         if pattern.is_empty() {
             // 清空关键词 = 回到「列出全部键」，同时解除服务端结果标记。
-            self.server_search_keyword = None;
-            self.search_collapsed_nodes.clear();
-            for node_id in targets {
-                self.reset_db_key_count(&node_id);
-                self.refresh_keys(node_id, cx);
-            }
-            self.rebuild_flat_entries();
-            cx.notify();
+            self.restore_full_key_list(cx);
             return;
         }
 
-        for node_id in targets {
+        // 同步标记为「已交给服务端」：事件是延迟 flush 的，若等订阅方
+        // （`handle_search_keys` → `search_keys`）来写这个标记，中间这段时间里
+        // 关键词看起来仍是「没扫过」的——回车后输入框补发的 Change 会因此
+        // 又武装一个防抖定时器，停顿后重复扫一次同样的关键词。
+        self.server_search_keyword = Some(pattern.clone());
+
+        for node_id in self.search_target_node_ids() {
             cx.emit(RedisTreeViewEvent::SearchKeys {
                 node_id,
                 pattern: pattern.clone(),
@@ -798,6 +827,46 @@ impl RedisTreeView {
         }
         self.rebuild_flat_entries();
         cx.notify();
+    }
+
+    /// 回到「列出全部键」：解除服务端结果标记并重新加载完整列表
+    ///
+    /// 服务端搜索会把键列表替换成命中结果，所以退出搜索必须重新 SCAN `*`，
+    /// 只把关键词置空是不够的。
+    fn restore_full_key_list(&mut self, cx: &mut Context<Self>) {
+        self.server_search_keyword = None;
+        self.search_collapsed_nodes.clear();
+        for node_id in self.search_target_node_ids() {
+            self.reset_db_key_count(&node_id);
+            self.refresh_keys(node_id, cx);
+        }
+        self.rebuild_flat_entries();
+        cx.notify();
+    }
+
+    /// 输入停顿后自动向服务端发起一次扫描（防抖）
+    ///
+    /// 输入瞬间先用本地已加载的键给出即时反馈，停顿后再交给服务端 SCAN 覆盖
+    /// 结果：用户既不必按回车，也不会每敲一个键就发一次请求。
+    fn schedule_search_after_input(&mut self, cx: &mut Context<Self>) {
+        // 新输入取代上一次的待触发定时器（旧的 Task 被 drop，其定时器随之取消）。
+        self.search_debounce = None;
+
+        if !should_scan_after_input(&self.search_keyword, self.server_search_keyword.as_deref()) {
+            // 关键词清空时，只有「上一轮是服务端结果」才需要重新加载完整列表。
+            if self.search_keyword.trim().is_empty() && self.server_search_keyword.is_some() {
+                self.restore_full_key_list(cx);
+            }
+            return;
+        }
+
+        self.search_debounce = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_INPUT_DEBOUNCE).await;
+            let _ = this.update(cx, |this, cx| {
+                this.search_debounce = None;
+                this.trigger_search(cx);
+            });
+        }));
     }
 
     /// 本次搜索应该扫描哪些数据库节点
@@ -2888,6 +2957,212 @@ mod tests {
     use super::*;
     use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
     use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// 在测试里搭建「一个已连接的连接 + 它的 db0」，返回 db 节点 id
+    fn mount_connected_db(tree: &mut RedisTreeView, cx: &mut Context<RedisTreeView>) -> String {
+        let db_node_id = RedisTreeView::db_node_id("conn", 0);
+        tree.connected_nodes.insert("conn".to_string());
+        tree.expanded_nodes.insert("conn".to_string());
+        tree.expanded_nodes.insert(db_node_id.clone());
+        tree.nodes.insert(
+            "conn".to_string(),
+            RedisNode::new("conn", "redis-master", RedisNodeType::Connection, "conn", 0),
+        );
+        tree.set_node_children(
+            "conn",
+            vec![RedisNode::new(
+                db_node_id.clone(),
+                "db0",
+                RedisNodeType::Database(0),
+                "conn",
+                0,
+            )],
+            cx,
+        );
+        db_node_id
+    }
+
+    #[gpui::test]
+    fn dropping_the_debounce_task_cancels_its_pending_timer(cx: &mut TestAppContext) {
+        // 对照分支：不被 drop 时，定时器必须会执行——否则下面的断言就是空跑。
+        let control_ran = Rc::new(RefCell::new(false));
+        let control_flag = control_ran.clone();
+        let control = cx.spawn(|cx| async move {
+            cx.background_executor().timer(SEARCH_INPUT_DEBOUNCE).await;
+            *control_flag.borrow_mut() = true;
+        });
+
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE * 3);
+        cx.run_until_parked();
+        assert!(
+            *control_ran.borrow(),
+            "对照分支：未被 drop 的定时任务应当执行，否则本测试说明不了任何问题"
+        );
+        drop(control);
+
+        // 输入防抖靠「替换字段 = drop 掉上一次输入的 Task」来取消上一次输入，
+        // 所以这里必须确认 drop 真的会让未到期的定时器不再执行。
+        let ran = Rc::new(RefCell::new(false));
+        let flag = ran.clone();
+        let task = cx.spawn(|cx| async move {
+            cx.background_executor().timer(SEARCH_INPUT_DEBOUNCE).await;
+            *flag.borrow_mut() = true;
+        });
+        drop(task);
+
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE * 3);
+        cx.run_until_parked();
+
+        assert!(
+            !*ran.borrow(),
+            "被 drop 的定时任务仍然执行了：输入防抖会漏出过期请求，必须改用显式代次守卫"
+        );
+    }
+
+    #[gpui::test]
+    fn clearing_the_search_box_cancels_the_pending_debounce(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            tree.search_keyword = "we".to_string();
+            tree.schedule_search_after_input(cx);
+            assert!(
+                tree.search_debounce.is_some(),
+                "输入新关键词后应有一个待触发的防抖定时器"
+            );
+
+            tree.search_keyword = String::new();
+            tree.schedule_search_after_input(cx);
+            assert!(
+                tree.search_debounce.is_none(),
+                "搜索框清空后，上一个关键词的防抖必须被撤掉，否则停顿后还会补一次刷新"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn typing_in_the_search_box_scans_the_server_after_a_pause(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+
+        // 记录真正发往服务端的搜索请求。
+        //
+        // 真实链路里事件由 `handle_search_keys` 接住并调用 `search_keys`（后者会
+        // 发起一次真实 SCAN，并顺手把关键词标记为「已交给服务端」）。测试里只复刻
+        // 这个状态副作用，不碰网络。
+        let scanned: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = scanned.clone();
+        cx.update(|cx| {
+            cx.subscribe(&tree, move |tree, event: &RedisTreeViewEvent, cx| {
+                let RedisTreeViewEvent::SearchKeys { pattern, .. } = event else {
+                    return;
+                };
+                sink.borrow_mut().push(pattern.clone());
+                let pattern = pattern.clone();
+                tree.update(cx, |tree, _| {
+                    tree.server_search_keyword = Some(pattern);
+                });
+            })
+            .detach();
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            mount_connected_db(tree, cx);
+        });
+        let focus_handle = tree.read_with(&cx, |tree, cx| {
+            tree.search_state.read(cx).focus_handle(cx).clone()
+        });
+
+        cx.update(|window, cx| window.focus(&focus_handle, cx));
+        cx.run_until_parked();
+
+        // 1) 敲字：只做本地过滤，不该马上打服务端
+        cx.simulate_input("we");
+        assert!(
+            scanned.borrow().is_empty(),
+            "输入后应等输入停顿，而不是每敲一个键就发一次 SCAN（实际 {:?}）",
+            scanned.borrow()
+        );
+        assert_eq!(
+            "we",
+            tree.read_with(&cx, |tree, _| tree.search_keyword.clone()),
+            "输入应立刻更新关键词，用于本地即时过滤"
+        );
+
+        // 2) 停顿到期：自动扫一次服务端
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE);
+        cx.run_until_parked();
+        assert_eq!(
+            vec!["we".to_string()],
+            scanned.borrow().clone(),
+            "输入停顿后应自动向服务端发起一次搜索（这就是「不用按回车」的路径）"
+        );
+
+        // 3) 继续敲字后停顿：扫的是新关键词
+        cx.simulate_input("b");
+        assert_eq!(
+            1,
+            scanned.borrow().len(),
+            "新输入还没到停顿时间，不该发出请求"
+        );
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE);
+        cx.run_until_parked();
+        assert_eq!(
+            vec!["we".to_string(), "web".to_string()],
+            scanned.borrow().clone()
+        );
+
+        // 4) 回车：立刻搜，并撤掉待触发的防抖（不能重复扫描同一关键词）
+        cx.simulate_input("3");
+        let before_enter = scanned.borrow().len();
+        cx.simulate_keystrokes("enter");
+        assert!(
+            scanned.borrow().len() > before_enter,
+            "回车应立即搜索，不等防抖"
+        );
+        let after_enter = scanned.borrow().len();
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE);
+        cx.run_until_parked();
+        assert_eq!(
+            after_enter,
+            scanned.borrow().len(),
+            "回车已提交过，防抖到期不能再补一次同样的 SCAN"
+        );
+    }
 
     #[test]
     fn context_menu_target_updates_selection_and_clears_on_normal_selection() {
@@ -3110,6 +3385,42 @@ mod tests {
             None,
             search_filter_keyword("key*", None),
             "含通配符的关键词只能交给服务端 SCAN"
+        );
+    }
+
+    #[test]
+    fn input_debounce_skips_empty_and_already_scanned_keywords() {
+        assert!(
+            !should_scan_after_input("", None),
+            "清空搜索框应恢复完整列表，而不是拿空关键词去 SCAN"
+        );
+        assert!(
+            !should_scan_after_input("   ", Some("we")),
+            "只有空白的关键词等同于清空"
+        );
+        assert!(
+            !should_scan_after_input("we", Some("we")),
+            "同一关键词已经扫过（或正在扫），不该重复发起"
+        );
+        assert!(
+            !should_scan_after_input("  we  ", Some("we")),
+            "两端空白不该让同一个关键词被判定成「新关键词」而重复 SCAN"
+        );
+    }
+
+    #[test]
+    fn input_debounce_scans_the_server_for_a_new_keyword() {
+        assert!(
+            should_scan_after_input("we", None),
+            "首次输入关键词，停顿后应自动扫服务端（这正是用户不需要按回车的路径）"
+        );
+        assert!(
+            should_scan_after_input("web", Some("we")),
+            "关键词变化后要重新扫服务端"
+        );
+        assert!(
+            should_scan_after_input("key*", None),
+            "通配符关键词同样交给服务端，本地无法匹配"
         );
     }
 

@@ -610,6 +610,13 @@
 - **验证方式**：`cargo test -p redis_view`；纯函数测试覆盖 `search_filter_keyword` / `resolve_search_targets` / `local_search_visibility`，另有一个用 `set_node_children` 搭真实节点树的 gpui 测试（服务端命中跨命名空间键时可见 + 无服务端扫描记录时被隐藏的对照分支，防空跑），并跑一遍 `render` 覆盖新提示分支。改动做变异验证：分别去掉「免二次过滤」「结构锚点保留」「搜索态展开」，测试都转红。
 - **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及任何「先本地过滤已加载子集、再服务端扫描」的懒加载树（其他 tree_view 同类结构）。
 
+- **标题**：GPUI 输入防抖：替换 `Option<Task>` 就等于取消定时器，别凭空加代次守卫；但 `emit` 是延迟 effect
+- **触发信号**：要给输入框 / 编辑器做「停止输入一小段时间后再发请求」的防抖；或者视图自己依赖「事件订阅方回写的状态」做去重时出现重复请求；也适用于怀疑「drop 掉 `Task` 是否真的取消定时器」而准备额外加 generation 代次守卫时。
+- **根因 / 约束**：本仓 gpui fork 里，`Task` 被 drop 后其 `cx.background_executor().timer(..)` 未到期部分**不会**再执行（已用对照测试验证：不 drop 时必然执行，drop 后不执行）。所以防抖只需「`Option<Task<()>>` 存字段 + 每次输入覆盖」，额外加的 generation 代次守卫是**死代码**（变异验证删掉它测试并不转红）。另一侧的坑更隐蔽：`Context::emit` 只是往 `pending_effects` 里塞一条 `Effect::Emit`，订阅者（如 `handle_search_keys` → `search_keys`）要等 flush 才跑，于是**订阅方回写的状态标记会滞后于 emit**；视图在 emit 之后立刻读这个标记做去重，会读到旧值。测试驱动输入用 `cx.simulate_input("we")` + `cx.executor().advance_clock(DEBOUNCE)` + `cx.run_until_parked()`；先 `cx.update(|window, cx| window.focus(&handle, cx))`，handle 用 `search_state.read(cx).focus_handle(cx)` 取（`Focusable` 的同名方法带 `cx` 参数会遮蔽零参版本）；断言事件用 `cx.subscribe(&entity, |entity, event, cx| ..)`，回调里可 `entity.update(cx, ..)`（emit 已 deferred，不会重入）。
+- **正确做法**：防抖状态机 = `Option<Task<()>>` + 纯函数判定 `should_scan_after_input(keyword, server_search_keyword)`（空关键词或已扫过 → 不发）；「立刻搜」入口（回车 / 搜索按钮）先 `self.search_debounce = None`，并在**同一函数内同步**写入「已交给服务端」的标记，不要指望事件兜一圈回来由订阅方补写；每次输入都替换 `Task` 字段即完成取消。
+- **验证方式**：`cargo test -p redis_view`；端到端用 `simulate_input` + `advance_clock` 断言「停顿前 0 次、停顿后 1 次、回车后不再补发」，并单独加一个对照分支测试证明 `drop(Task)` 会取消定时器——这样「多写一个代次守卫」这类死代码才会在变异验证里暴露。
+- **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及任何 GPUI 视图中的输入防抖、定时器 + 事件订阅组合。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
